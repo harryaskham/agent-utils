@@ -1,0 +1,18 @@
+{
+  "name": "web-search",
+  "version": "0.1.0",
+  "description": "Tiny GitHub Copilot-backed web search MCP server via stdio.",
+  "author": {
+    "name": "Harry Askham"
+  },
+  "mcpServers": {
+    "web-search": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd \"${AGENT_UTILS_WEB_SEARCH_DIR:-$HOME/cosmos/projects/agent-utils/web-search}\" && exec uv run web-search-mcp --token-file \"${WEB_SEARCH_COPILOT_TOKEN_FILE:-$HOME/.config/gh-auth-tokens/copilot.token}\" --model \"${WEB_SEARCH_MODEL:-gpt-5.2-codex}\" --max-output-tokens \"${WEB_SEARCH_MAX_OUTPUT_TOKENS:-16000}\""
+      ]
+    }
+  }
+}

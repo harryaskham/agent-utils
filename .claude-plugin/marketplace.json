@@ -1,0 +1,13 @@
+{
+  "name": "agent-utils",
+  "owner": {
+    "name": "Harry Askham"
+  },
+  "plugins": [
+    {
+      "name": "web-search",
+      "source": "./web-search/plugins/web-search",
+      "description": "GitHub Copilot-backed web search MCP server via stdio"
+    }
+  ]
+}

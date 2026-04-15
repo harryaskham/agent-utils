@@ -1,0 +1,38 @@
+{
+  "name": "agent-utils",
+  "version": "1.0.0",
+  "description": "Agent utilities, MCP servers, and prompt templates",
+  "keywords": [
+    "pi-package"
+  ],
+  "author": {
+    "name": "Harry Askham"
+  },
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    ".claude-plugin",
+    "extensions",
+    "prompts",
+    "web-search",
+    "README.md",
+    "flake.nix"
+  ],
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
+  }
+}
