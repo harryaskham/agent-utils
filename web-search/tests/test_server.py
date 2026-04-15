@@ -14,7 +14,7 @@ def test_build_request_payload_forces_web_search() -> None:
         "model": DEFAULT_MODEL,
         "input": "latest AI news",
         "tool_choice": "required",
-        "tools": [{"type": "web_search"}],
+        "tools": [{"type": "web_search", "search_context_size": "high"}],
         "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
     }
 

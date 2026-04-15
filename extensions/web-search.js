@@ -125,7 +125,7 @@ export default function webSearchExtension(pi) {
         model: params.model || config.model,
         input: params.query,
         tool_choice: "required",
-        tools: [{ type: "web_search" }],
+        tools: [{ type: "web_search", search_context_size: "high" }],
         max_output_tokens: params.maxOutputTokens || config.maxOutputTokens,
       };
 
