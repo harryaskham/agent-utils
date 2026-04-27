@@ -74,12 +74,16 @@ test("forced anchoring overrides cursor placement for side overlays", () => {
   assert.equal(shouldUseUnicodePlaceholders({ placementMode: "cursor", env: {}, forceAnchored: true }), true);
 });
 
-test("kitty image preview advertises a non-capturing right-side overlay placement", async () => {
+test("kitty image preview advertises a fixed right-side panel with tmux inline fallback", async () => {
   const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
 
   assert.match(source, /SIDE_OVERLAY_PLACEMENT = "rightOverlay"/);
-  assert.match(source, /PREVIEW_PLACEMENTS = \[\.\.\.WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT\]/);
-  assert.match(source, /anchor: "right-center"/);
+  assert.match(source, /PREVIEW_PLACEMENTS = \[AUTO_PLACEMENT, \.\.\.WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT\]/);
+  assert.match(source, /SIDE_PANEL_MAX_WIDTH_RATIO = 0\.5/);
+  assert.match(source, /function renderTuiWithSidePanel/);
+  assert.match(source, /function shouldUseInlineRightPlacement/);
+  assert.match(source, /function resolvePlacement/);
+  assert.match(source, /rightOverlay is inline inside tmux passthrough/);
   assert.match(source, /nonCapturing: true/);
-  assert.match(source, /forceAnchored: options\.forceUnicodePlaceholders \|\| isSideOverlayPlacement\(state\.config\.placement\)/);
+  assert.match(source, /options\.forceSideOverlay !== false && isSideOverlayPlacement\(placement\)/);
 });

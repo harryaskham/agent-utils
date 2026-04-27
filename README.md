@@ -35,7 +35,7 @@ Key capabilities:
 - Unicode placeholder placement under tmux so the image is anchored to the widget text cells and scrolls with the pane instead of floating at the outer terminal cursor.
 - First-party screenshot capture via `tendril capture --output`, saved under a per-session `kitty-image-preview-screenshots` folder by default.
 - Persistent Pi widget mounted above or below the editor with configurable cell width/height and captioning.
-- Fixed right-side preview placement via `placement: "rightOverlay"`, rendered as a non-capturing Pi overlay when supported so screenshots can remain visible outside the scrolling editor area. This side placement always uses Unicode placeholder anchoring, even if `placementMode` is set to `"cursor"`.
+- Automatic screenshot-friendly placement via `placement: "auto"` (the default): outside tmux on wide terminals it uses a right-side side panel sized to the current image, capped by 50% of terminal width and the visible height above the input box, so chat text reflows beside it; inside tmux or on narrow terminals it falls back to the inline above-editor widget.
 - Negative z-index rendering by default for direct cursor placement so images can sit underneath text; `background: true` uses an extra-low z-index for background-style placement. In tmux placeholder mode, image stacking follows kitty's placeholder rendering semantics.
 - Alpha/transparency support through PNG/APNG and kitty's compositor.
 - Lightweight animation support by cycling folder/series frames at configurable intervals.
@@ -47,8 +47,8 @@ Example image tool use:
 {
   "path": "./artifacts/preview.png",
   "config": {
-    "columns": 72,
-    "placement": "belowEditor",
+    "columns": 48,
+    "placement": "auto",
     "transferMode": "auto",
     "passthrough": "auto",
     "placementMode": "auto",
@@ -64,8 +64,8 @@ Example screenshot capture tool use:
   "targetKind": "display",
   "maxWidth": 1200,
   "config": {
-    "columns": 80,
-    "placement": "belowEditor"
+    "columns": 48,
+    "placement": "auto"
   }
 }
 ```
@@ -78,14 +78,13 @@ Example fixed right-side screenshot preview:
   "maxWidth": 1200,
   "config": {
     "columns": 48,
-    "rows": 20,
     "placement": "rightOverlay",
     "transferMode": "auto"
   }
 }
 ```
 
-The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placementMode: "auto"` preserves direct kitty cursor placement outside tmux and switches to Unicode placeholders when tmux passthrough is detected; use `"unicode"` or `"cursor"` only for debugging or terminal-specific workarounds. The `rightOverlay` placement deliberately ignores cursor placement and renders anchored Unicode placeholder cells in a fixed non-capturing overlay column; if the active Pi runtime does not expose overlays, it falls back to the above-editor widget.
+The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placement: "auto"` chooses the fixed right-side panel only when it should be ergonomic; use `"rightOverlay"`, `"aboveEditor"`, or `"belowEditor"` to force a location. `placementMode: "auto"` uses anchored Unicode placeholders by default so previews update in-place without moving the terminal cursor or flooding scrollback; use `"cursor"` only for debugging terminal-specific behavior. The right-side panel dynamically fits the image to the available frame, clamps total reserved width (including left padding) to 50% of the terminal, never exceeds the visible height above the editor/input area, and bottom-aligns the image immediately above that input area. If tmux passthrough or an older Pi runtime prevents side-panel rendering, it falls back to the inline above-editor widget.
 
 ## GitHub Pages tool inventory
 

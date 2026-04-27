@@ -23,14 +23,19 @@ import {
 
 const TOOL_PREFIX = "kitty_image_preview";
 const WIDGET_ID = "kitty-image-preview";
+const AUTO_PLACEMENT = "auto";
 const SIDE_OVERLAY_PLACEMENT = "rightOverlay";
 const DEFAULT_Z_INDEX = -10;
 const DEFAULT_BG_Z_INDEX = -1073741824;
 const DEFAULT_COLUMNS = 48;
 const DEFAULT_MAX_ROWS = 24;
+const SIDE_PANEL_LAYOUT_SYMBOL = Symbol.for("agent-utils.kittyImagePreview.sidePanelLayout");
+const SIDE_PANEL_MAX_WIDTH_RATIO = 0.5;
+const SIDE_PANEL_LEFT_PADDING = 2;
+const AUTO_SIDE_MIN_COLUMNS = 100;
 const SUPPORTED_EXTENSIONS = new Set([".png", ".apng"]);
 const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"];
-const PREVIEW_PLACEMENTS = [...WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT];
+const PREVIEW_PLACEMENTS = [AUTO_PLACEMENT, ...WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT];
 
 function stringEnum(values, description) {
   return StringEnum(values, { description });
@@ -125,16 +130,54 @@ function renderPlaceholderLines(width, rows, text) {
   return output;
 }
 
+function renderCurrentImageLines(state, current, {
+  columns,
+  rows,
+  lineWidth = columns,
+  useUnicodePlaceholders = false,
+  leadingSpaces = 0,
+} = {}) {
+  const command = buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders);
+  const label = state.config.showCaption
+    ? `kitty image ${state.index + 1}/${state.items.length}: ${current.label}`
+    : "";
+  const imageLines = useUnicodePlaceholders
+    ? buildKittyUnicodePlaceholderLines({
+      imageId: current.id,
+      placementId: state.config.placementId,
+      columns,
+      rows,
+      width: lineWidth,
+      caption: label,
+    })
+    : renderPlaceholderLines(lineWidth, rows, label);
+  const leftPadding = " ".repeat(Math.max(0, leadingSpaces));
+  const commandPrefix = `${state.lastDeleteCommand || ""}${command}`;
+  state.lastDeleteCommand = "";
+  return imageLines.map((line, index) => `${leftPadding}${index === 0 ? commandPrefix : ""}${line}`);
+}
+
 export function isSideOverlayPlacement(placement) {
   return placement === SIDE_OVERLAY_PLACEMENT;
 }
 
 function shouldRenderUnicodePlaceholders(state, options = {}) {
+  const placement = options.placement ?? state.config.placement;
+  const forceAnchored = options.forceUnicodePlaceholders || (
+    // For this preview extension, anchored placeholders are the safe default.
+    // Direct cursor placement can move the real terminal cursor while Pi is
+    // differentially redrawing, which creates duplicate full-screen scrollback
+    // entries on image/frame updates. Keep direct cursor mode available only as
+    // an explicit debugging override with placementMode: "cursor".
+    state.config.placementMode === "auto" && options.preferAnchored !== false
+  ) || (
+    options.forceSideOverlay !== false && isSideOverlayPlacement(placement)
+  );
   return shouldUseUnicodePlaceholders({
     placementMode: state.config.placementMode,
     passthrough: state.config.passthrough,
     env: process.env,
-    forceAnchored: options.forceUnicodePlaceholders || isSideOverlayPlacement(state.config.placement),
+    forceAnchored,
   });
 }
 
@@ -150,7 +193,10 @@ export class KittyImagePreviewWidget {
     const current = state.items[state.index];
     const availableWidth = Math.max(1, Math.trunc(width || 1));
     const columns = Math.min(availableWidth, clampInteger(state.config.columns, DEFAULT_COLUMNS, 1, 4096));
-    const useUnicodePlaceholders = shouldRenderUnicodePlaceholders(state, this.options);
+    const useUnicodePlaceholders = shouldRenderUnicodePlaceholders(state, {
+      ...this.options,
+      placement: this.options.placement ?? resolvePlacement(state),
+    });
     const rows = clampInteger(
       state.config.rows || estimateRowsForImage({
         imageWidth: current.width,
@@ -164,23 +210,12 @@ export class KittyImagePreviewWidget {
       useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200,
     );
 
-    const command = buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders);
-    const label = state.config.showCaption
-      ? `kitty image ${state.index + 1}/${state.items.length}: ${current.label}`
-      : "";
-    const lines = useUnicodePlaceholders
-      ? buildKittyUnicodePlaceholderLines({
-        imageId: current.id,
-        placementId: state.config.placementId,
-        columns,
-        rows,
-        width: availableWidth,
-        caption: label,
-      })
-      : renderPlaceholderLines(availableWidth, rows, label);
-    lines[0] = `${state.lastDeleteCommand || ""}${command}${lines[0]}`;
-    state.lastDeleteCommand = "";
-    return lines;
+    return renderCurrentImageLines(state, current, {
+      columns,
+      rows,
+      lineWidth: availableWidth,
+      useUnicodePlaceholders,
+    });
   }
 
   invalidate() {}
@@ -192,6 +227,91 @@ function sideOverlayWidth(state) {
 
 function sideOverlayMaxHeight(state) {
   return clampInteger(state.config.rows || state.config.maxRows, DEFAULT_MAX_ROWS, 1, MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1);
+}
+
+function configuredPassthroughMode(state) {
+  return state.config.passthrough === "auto" ? detectKittyPassthroughMode(process.env) : state.config.passthrough;
+}
+
+function shouldUseInlineRightPlacement(state) {
+  return configuredPassthroughMode(state) === "tmux";
+}
+
+function currentTerminalColumns() {
+  const columns = Number(process.stdout?.columns ?? process.env.COLUMNS);
+  return Number.isFinite(columns) && columns > 0 ? Math.trunc(columns) : undefined;
+}
+
+function shouldAutoUseSidePanel(state) {
+  if (shouldUseInlineRightPlacement(state)) return false;
+  const columns = currentTerminalColumns();
+  return columns === undefined || columns >= AUTO_SIDE_MIN_COLUMNS;
+}
+
+function resolvePlacement(state) {
+  if (state.config.placement !== AUTO_PLACEMENT) return state.config.placement;
+  return shouldAutoUseSidePanel(state) ? SIDE_OVERLAY_PLACEMENT : "aboveEditor";
+}
+
+function estimatedRowsForColumns(item, columns) {
+  const columnCount = Math.max(1, Math.trunc(columns || 1));
+  if (!item?.width || !item?.height) return Math.max(1, Math.ceil(columnCount * 0.5));
+  return estimateRowsForImage({
+    imageWidth: item.width,
+    imageHeight: item.height,
+    columns: columnCount,
+    maxRows: MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1,
+    minRows: 1,
+  });
+}
+
+function fitImageColumnsForRows(item, maxColumns, maxRows) {
+  const columnLimit = Math.max(1, Math.trunc(maxColumns || 1));
+  const rowLimit = Math.max(1, Math.trunc(maxRows || 1));
+  let low = 1;
+  let high = columnLimit;
+  let best = 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (estimatedRowsForColumns(item, mid) <= rowLimit) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
+
+export function buildSidePanelLayout(state, terminalWidth, availableRows = DEFAULT_MAX_ROWS) {
+  const width = Math.max(1, Math.trunc(terminalWidth || 1));
+  // Keep at least one text column. On absurdly narrow terminals, disable the
+  // side rail rather than generating lines wider than the terminal.
+  const maxTotalWidth = Math.max(0, Math.min(Math.floor(width * SIDE_PANEL_MAX_WIDTH_RATIO), width - 1));
+  const rowLimit = Math.max(0, Math.trunc(availableRows || 0));
+  if (maxTotalWidth < 1 || rowLimit < 1) {
+    return { mainWidth: width, imageWidth: 0, imageRows: 0, padding: 0, totalWidth: 0 };
+  }
+  const maxRows = Math.min(
+    state.config.rows === undefined ? rowLimit : clampInteger(state.config.rows, rowLimit, 1, rowLimit),
+    MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1,
+  );
+  if (maxRows < 1) {
+    return { mainWidth: width, imageWidth: 0, imageRows: 0, padding: 0, totalWidth: 0 };
+  }
+  const padding = Math.min(SIDE_PANEL_LEFT_PADDING, Math.max(0, maxTotalWidth - 1));
+  const maxImageWidth = Math.max(1, maxTotalWidth - padding);
+  const current = state.items[state.index];
+  const imageWidth = fitImageColumnsForRows(current, maxImageWidth, maxRows);
+  const imageRows = Math.min(maxRows, estimatedRowsForColumns(current, imageWidth));
+  const totalWidth = Math.min(maxTotalWidth, imageWidth + padding);
+  return {
+    mainWidth: Math.max(1, width - totalWidth),
+    imageWidth,
+    imageRows,
+    padding: Math.max(0, totalWidth - imageWidth),
+    totalWidth,
+  };
 }
 
 export function buildSideOverlayOptions(state) {
@@ -209,6 +329,30 @@ function requestSideOverlayRender(state) {
   state.sideOverlay?.tui?.requestRender?.();
 }
 
+function requestSidePanelRender(state, { force = false } = {}) {
+  state.sidePanel?.component?.invalidate?.();
+  state.sidePanel?.tui?.requestRender?.(force);
+}
+
+function uninstallSidePanelLayout(panel) {
+  const tui = panel?.tui;
+  const installed = tui?.[SIDE_PANEL_LAYOUT_SYMBOL];
+  if (!tui || installed?.owner !== panel) return;
+  tui.render = installed.originalRender;
+  delete tui[SIDE_PANEL_LAYOUT_SYMBOL];
+  tui.requestRender?.();
+}
+
+function clearSidePanel(state) {
+  const panel = state.sidePanel;
+  if (!panel) return;
+  state.sidePanel = undefined;
+  panel.cancelled = true;
+  uninstallSidePanelLayout(panel);
+  panel.handle?.hide?.();
+  panel.component?.dispose?.();
+}
+
 function clearSideOverlay(state) {
   const overlay = state.sideOverlay;
   if (!overlay) return;
@@ -218,13 +362,196 @@ function clearSideOverlay(state) {
   overlay.component?.dispose?.();
 }
 
-function fallbackSideWidget(ctx, state) {
-  const componentFactory = () => new KittyImagePreviewWidget(state, { forceUnicodePlaceholders: true });
+function clearSidePresentation(state) {
+  clearSideOverlay(state);
+  clearSidePanel(state);
+}
+
+function fallbackSideWidget(ctx, state, reason = "rightOverlay is unavailable", { warn = true } = {}) {
+  const componentFactory = () => new KittyImagePreviewWidget(state, {
+    forceUnicodePlaceholders: shouldUseInlineRightPlacement(state),
+    forceSideOverlay: false,
+  });
   ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement: "aboveEditor" });
-  if (!state.sideOverlayUnavailableWarned) {
-    state.sideOverlayUnavailableWarned = true;
-    ctx.ui.notify?.("kitty image rightOverlay needs Pi overlay support; falling back to the above-editor widget.", "warning");
+  if (warn && !state.sideInlineFallbackWarned) {
+    state.sideInlineFallbackWarned = true;
+    ctx.ui.notify?.(`kitty image ${reason}; using the inline above-editor widget.`, "warning");
   }
+}
+
+function componentContains(root, target, seen = new Set()) {
+  if (!root || !target || seen.has(root)) return false;
+  if (root === target) return true;
+  seen.add(root);
+  if (!Array.isArray(root.children)) return false;
+  return root.children.some((child) => componentContains(child, target, seen));
+}
+
+function findEditorBoundaryIndex(tui) {
+  const children = Array.isArray(tui?.children) ? tui.children : [];
+  const focusedIndex = children.findIndex((child) => componentContains(child, tui.focusedComponent));
+  if (focusedIndex >= 0) return focusedIndex;
+  // Pi's interactive layout ends with editorContainer, widgetBelow, footer.
+  return Math.max(0, children.length - 3);
+}
+
+function renderChildren(children, width) {
+  const lines = [];
+  for (const child of children) lines.push(...child.render(width));
+  return lines;
+}
+
+function renderSidePanelImageLines(state, rows, layout) {
+  const current = state.items[state.index];
+  const blank = " ".repeat(layout.totalWidth);
+  if (!current || rows <= 0) return [];
+  // Side-panel rendering must not use direct cursor placement. Direct kitty
+  // placement can move the terminal cursor while Pi is doing differential
+  // redraws, which pushes full-screen copies into scrollback on every update
+  // and is especially bad during animation. Virtual placement + Unicode
+  // placeholders anchors the image to these cells without scrolling.
+  const useUnicodePlaceholders = shouldRenderUnicodePlaceholders(state, {
+    forceUnicodePlaceholders: true,
+    forceSideOverlay: false,
+  });
+  const maxRows = useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200;
+  const imageRows = Math.max(1, Math.min(rows, layout.imageRows || rows, maxRows));
+  const imageLines = renderCurrentImageLines(state, current, {
+    columns: layout.imageWidth,
+    rows: imageRows,
+    lineWidth: layout.imageWidth,
+    useUnicodePlaceholders,
+    leadingSpaces: layout.padding,
+  });
+  // Bottom-align the image in the reserved side frame so the preview is pinned
+  // immediately above the editor/input area instead of drifting at the top of
+  // the scrollback viewport.
+  const topBlankRows = Math.max(0, rows - imageLines.length);
+  return Array.from({ length: rows }, (_unused, index) => imageLines[index - topBlankRows] ?? blank);
+}
+
+function renderTuiWithSidePanel(tui, originalRender, width, state) {
+  const placement = resolvePlacement(state);
+  if (!state.visible || state.items.length === 0 || !isSideOverlayPlacement(placement) || shouldUseInlineRightPlacement(state)) {
+    return originalRender.call(tui, width);
+  }
+  const terminalWidth = Math.max(1, Math.trunc(width || tui?.terminal?.columns || 1));
+  const terminalHeight = Math.max(1, Math.trunc(tui?.terminal?.rows || 1));
+  const children = Array.isArray(tui.children) ? tui.children : [];
+  const editorBoundary = findEditorBoundaryIndex(tui);
+  const bottomLines = renderChildren(children.slice(editorBoundary), terminalWidth);
+  const bottomVisibleRows = Math.min(bottomLines.length, Math.max(0, terminalHeight - 1));
+  const panelRows = Math.max(0, terminalHeight - bottomVisibleRows);
+  if (panelRows <= 0) return originalRender.call(tui, width);
+
+  let layout = buildSidePanelLayout(state, terminalWidth, panelRows);
+  if (layout.totalWidth < 1 || layout.imageRows < 1) return originalRender.call(tui, width);
+  let topLines = renderChildren(children.slice(0, editorBoundary), layout.mainWidth);
+  let combined = [];
+  let visiblePanelRows = 0;
+  let panelStart = 0;
+
+  const calculateVisiblePanel = () => {
+    combined = [
+      ...topLines.map((line) => `${line}\x1b[${layout.mainWidth + 1}G${" ".repeat(layout.totalWidth)}`),
+      ...bottomLines,
+    ];
+    const viewportTop = Math.max(0, combined.length - terminalHeight);
+    panelStart = Math.min(topLines.length, viewportTop);
+    const panelEnd = Math.min(topLines.length, panelStart + panelRows);
+    visiblePanelRows = Math.max(0, panelEnd - panelStart);
+  };
+
+  calculateVisiblePanel();
+  if (visiblePanelRows === 0) return combined;
+
+  const refinedLayout = buildSidePanelLayout(state, terminalWidth, visiblePanelRows);
+  if (refinedLayout.totalWidth >= 1 && refinedLayout.imageRows >= 1 && (
+    refinedLayout.mainWidth !== layout.mainWidth || refinedLayout.imageRows !== layout.imageRows
+  )) {
+    layout = refinedLayout;
+    topLines = renderChildren(children.slice(0, editorBoundary), layout.mainWidth);
+    calculateVisiblePanel();
+    if (visiblePanelRows === 0) return combined;
+  }
+
+  const moveToPanel = `\x1b[${layout.mainWidth + 1}G`;
+  const blankPanel = " ".repeat(layout.totalWidth);
+  const panelLines = renderSidePanelImageLines(state, visiblePanelRows, layout);
+  for (let index = 0; index < visiblePanelRows; index += 1) {
+    const lineIndex = panelStart + index;
+    combined[lineIndex] = `${topLines[lineIndex]}${moveToPanel}${panelLines[index] ?? blankPanel}`;
+  }
+  return combined;
+}
+
+function installSidePanelLayout(tui, state, panel) {
+  if (!tui || tui[SIDE_PANEL_LAYOUT_SYMBOL]?.owner === panel) return;
+  if (tui[SIDE_PANEL_LAYOUT_SYMBOL]) uninstallSidePanelLayout(tui[SIDE_PANEL_LAYOUT_SYMBOL].owner);
+  const originalRender = tui.render;
+  tui[SIDE_PANEL_LAYOUT_SYMBOL] = { owner: panel, originalRender };
+  tui.render = function patchedKittyImagePreviewRender(width) {
+    return renderTuiWithSidePanel(this, originalRender, width, state);
+  };
+}
+
+function ensureSidePanel(ctx, state) {
+  if (state.sidePanel?.tui) {
+    installSidePanelLayout(state.sidePanel.tui, state, state.sidePanel);
+    requestSidePanelRender(state);
+    return;
+  }
+  if (state.sidePanel?.pending) return;
+  if (typeof ctx.ui.custom !== "function") {
+    fallbackSideWidget(ctx, state, "rightOverlay needs Pi custom UI support");
+    return;
+  }
+
+  const panel = {
+    pending: true,
+    cancelled: false,
+    handle: undefined,
+    component: undefined,
+    tui: undefined,
+  };
+  panel.component = {
+    render() { return []; },
+    invalidate() {},
+    dispose() { uninstallSidePanelLayout(panel); },
+  };
+  state.sidePanel = panel;
+
+  let promise;
+  try {
+    promise = ctx.ui.custom((tui) => {
+      panel.pending = false;
+      panel.tui = tui;
+      installSidePanelLayout(tui, state, panel);
+      return panel.component;
+    }, {
+      overlay: true,
+      overlayOptions: { anchor: "top-right", width: 1, maxHeight: 1, visible: () => false, nonCapturing: true },
+      onHandle: (handle) => {
+        panel.handle = handle;
+        handle.unfocus?.();
+        // The hidden overlay is only a supported way to get the TUI instance
+        // from Pi. Remove it immediately so normal overlay compositing does not
+        // pad the buffer or affect side-panel viewport math.
+        handle.hide?.();
+      },
+    });
+  } catch (error) {
+    if (state.sidePanel === panel) state.sidePanel = undefined;
+    fallbackSideWidget(ctx, state, "rightOverlay side panel failed to initialize");
+    ctx.ui.notify?.(`kitty image rightOverlay side panel failed: ${error.message}`, "warning");
+    return;
+  }
+
+  promise?.catch?.((error) => {
+    if (state.sidePanel === panel) state.sidePanel = undefined;
+    uninstallSidePanelLayout(panel);
+    ctx.ui.notify?.(`kitty image rightOverlay side panel closed: ${error.message}`, "warning");
+  });
 }
 
 function ensureSideOverlay(ctx, state) {
@@ -280,18 +607,25 @@ export function syncWidget(ctx, state) {
   if (!ctx?.hasUI) return;
   if (!state.visible || state.items.length === 0) {
     ctx.ui.setWidget(WIDGET_ID, undefined);
-    clearSideOverlay(state);
+    clearSidePresentation(state);
     ctx.ui.setStatus(WIDGET_ID, undefined);
     return;
   }
   const current = state.items[state.index];
-  if (isSideOverlayPlacement(state.config.placement)) {
-    ctx.ui.setWidget(WIDGET_ID, undefined);
-    ensureSideOverlay(ctx, state);
-  } else {
+  const placement = resolvePlacement(state);
+  if (isSideOverlayPlacement(placement)) {
     clearSideOverlay(state);
-    const componentFactory = () => new KittyImagePreviewWidget(state);
-    ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement: state.config.placement });
+    ctx.ui.setWidget(WIDGET_ID, undefined);
+    if (shouldUseInlineRightPlacement(state)) {
+      clearSidePanel(state);
+      fallbackSideWidget(ctx, state, "rightOverlay is inline inside tmux passthrough", { warn: false });
+    } else {
+      ensureSidePanel(ctx, state);
+    }
+  } else {
+    clearSidePresentation(state);
+    const componentFactory = () => new KittyImagePreviewWidget(state, { placement });
+    ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement });
   }
   const animation = state.animation?.running ? " ▶" : "";
   ctx.ui.setStatus(WIDGET_ID, `🖼${animation} ${state.index + 1}/${state.items.length} ${current?.label ?? ""}`);
@@ -300,7 +634,7 @@ export function syncWidget(ctx, state) {
 function flashDeleteWidget(ctx, state, deleteCommand) {
   if (!ctx?.hasUI) return;
   if (isSideOverlayPlacement(state.config.placement)) {
-    clearSideOverlay(state);
+    clearSidePresentation(state);
     const flashComponent = {
       render(width) {
         return [`${deleteCommand}${" ".repeat(Math.max(1, width))}`];
@@ -623,7 +957,7 @@ export default function kittyImagePreviewExtension(pi) {
       background: false,
       showCaption: true,
       clearPrevious: true,
-      placement: "aboveEditor",
+      placement: AUTO_PLACEMENT,
       placementId: stableKittyImageId("agent-utils-kitty-image-preview-placement"),
       transferMode: "auto",
       passthrough: "auto",
@@ -677,7 +1011,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean({ description: "Use an extremely negative z-index suitable for background-image style placement." })),
         showCaption: Type.Optional(Type.Boolean({ description: "Render a text caption over the reserved image area." })),
         clearPrevious: Type.Optional(Type.Boolean({ description: "Delete previous visible placements before drawing the current image." })),
-        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: auto, above/below the editor widget, or the fixed right-side panel.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport. auto uses memory inside tmux, file otherwise.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode. auto detects tmux.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux and cursor placement otherwise.")),
@@ -717,7 +1051,7 @@ export default function kittyImagePreviewExtension(pi) {
       outputDir: Type.Optional(Type.String({ description: "Screenshot output directory. Defaults to a kitty-image-preview-screenshots folder beside the Pi session file." })),
       filename: Type.Optional(Type.String({ description: "Optional output filename, with or without .png. Defaults to timestamp-target.png." })),
       label: Type.Optional(Type.String({ description: "Optional preview label. Defaults to a screenshot label with target and time." })),
-      replace: Type.Optional(Type.Boolean({ description: "Replace the current preview list with this screenshot. Defaults to false." })),
+      replace: Type.Optional(Type.Boolean({ description: "Replace the current preview list with this screenshot. Defaults to true; set false to append." })),
       maxWidth: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-width in pixels." })),
       maxHeight: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-height in pixels." })),
       compression: Type.Optional(Type.String({ description: "Optional Tendril capture --compression value." })),
@@ -731,7 +1065,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean()),
         showCaption: Type.Optional(Type.Boolean()),
         clearPrevious: Type.Optional(Type.Boolean()),
-        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: auto, above/below the editor widget, or the fixed right-side panel.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
@@ -750,7 +1084,7 @@ export default function kittyImagePreviewExtension(pi) {
         timeout: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) + 5_000,
       });
       const item = await buildItem(ctx.cwd, output.path, params.label || defaultScreenshotLabel(target, now));
-      if (params.replace) {
+      if (params.replace !== false) {
         stopAnimation(state);
         state.items = [];
       }
@@ -795,7 +1129,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean()),
         showCaption: Type.Optional(Type.Boolean()),
         clearPrevious: Type.Optional(Type.Boolean()),
-        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: auto, above/below the editor widget, or the fixed right-side panel.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
@@ -842,7 +1176,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean()),
         showCaption: Type.Optional(Type.Boolean()),
         clearPrevious: Type.Optional(Type.Boolean()),
-        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: auto, above/below the editor widget, or the fixed right-side panel.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
