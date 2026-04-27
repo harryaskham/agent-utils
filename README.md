@@ -39,6 +39,7 @@ Key capabilities:
 - Negative z-index rendering by default for direct cursor placement so images can sit underneath text; `background: true` uses an extra-low z-index for background-style placement. In tmux placeholder mode, image stacking follows kitty's placeholder rendering semantics.
 - Alpha/transparency support through PNG/APNG and kitty's compositor.
 - Lightweight animation support by cycling folder/series frames at configurable intervals.
+- Optional `describe: true` on still-image tools to send just that image to a VLM for an objective visual description. Defaults to `litellm-anthropic/claude-opus-4-7`, override with `describeModel` or `KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL`.
 - Session-state reconstruction from prior tool results so loaded image lists survive Pi session reloads.
 
 Example image tool use:
@@ -84,7 +85,7 @@ Example fixed right-side screenshot preview:
 }
 ```
 
-The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placement: "auto"` chooses the fixed right-side panel only when it should be ergonomic; use `"rightOverlay"`, `"aboveEditor"`, or `"belowEditor"` to force a location. `placementMode: "auto"` uses anchored Unicode placeholders by default so previews update in-place without moving the terminal cursor or flooding scrollback; use `"cursor"` only for debugging terminal-specific behavior. The right-side panel dynamically fits the image to the available frame, clamps total reserved width (including left padding) to 50% of the terminal, never exceeds the visible height above the editor/input area, and bottom-aligns the image immediately above that input area. If tmux passthrough or an older Pi runtime prevents side-panel rendering, it falls back to the inline above-editor widget.
+The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placement: "auto"` chooses the fixed right-side panel only when it should be ergonomic; use `"rightOverlay"`, `"aboveEditor"`, or `"belowEditor"` to force a location. `placementMode: "auto"` uses anchored Unicode placeholders by default so previews update in-place without moving the terminal cursor or flooding scrollback; use `"cursor"` only for debugging terminal-specific behavior. The right-side panel dynamically fits the image to the available frame, clamps total reserved width (including left padding) to 50% of the terminal, never exceeds the visible height above the editor/input area, and bottom-aligns the image immediately above that input area. If tmux passthrough or an older Pi runtime prevents side-panel rendering, it falls back to the inline above-editor widget. Preview images stay out of model context unless `describe: true` is explicitly requested for a still image.
 
 ## GitHub Pages tool inventory
 

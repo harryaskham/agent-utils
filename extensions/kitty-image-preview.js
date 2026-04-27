@@ -2,7 +2,7 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { StringEnum } from "@mariozechner/pi-ai";
+import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 
 import {
@@ -29,10 +29,22 @@ const DEFAULT_Z_INDEX = -10;
 const DEFAULT_BG_Z_INDEX = -1073741824;
 const DEFAULT_COLUMNS = 48;
 const DEFAULT_MAX_ROWS = 24;
+const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
 const SIDE_PANEL_LAYOUT_SYMBOL = Symbol.for("agent-utils.kittyImagePreview.sidePanelLayout");
 const SIDE_PANEL_MAX_WIDTH_RATIO = 0.5;
 const SIDE_PANEL_LEFT_PADDING = 2;
 const AUTO_SIDE_MIN_COLUMNS = 100;
+const IMAGE_DESCRIPTION_PROMPT = `Describe this image objectively and exhaustively for an AI agent that cannot see it.
+
+Focus on absolute, verifiable visual facts:
+- image type/context (screenshot, UI, diagram, photo, etc.)
+- visible text, labels, numbers, paths, buttons, controls, icons, and warnings
+- spatial layout using positions such as top-left, center, right side, bottom bar
+- relationships between elements and apparent state/selection/focus
+- colors, shapes, charts, images, and notable visual details
+- if it is a UI screenshot, identify active app/window/pane and anything that appears actionable
+
+Do not infer hidden intent. Do not say what you cannot know. Be concise but detailed.`;
 const SUPPORTED_EXTENSIONS = new Set([".png", ".apng"]);
 const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"];
 const PREVIEW_PLACEMENTS = [AUTO_PLACEMENT, ...WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT];
@@ -840,6 +852,79 @@ function makeContent(state, extraLines = []) {
   return [{ type: "text", text: [summarizeCurrent(state), ...extraLines].filter(Boolean).join("\n") }];
 }
 
+function describeParameterSchema() {
+  return {
+    describe: Type.Optional(Type.Boolean({ description: "Send this still image to a vision model and include an objective visual description in the tool result. Defaults to false." })),
+    describeModel: Type.Optional(Type.String({ description: `Vision model as provider/model. Defaults to KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL or ${DEFAULT_DESCRIBE_MODEL}.` })),
+    describePrompt: Type.Optional(Type.String({ description: "Optional extra instruction appended to the default objective image-description prompt." })),
+    describeMaxTokens: Type.Optional(Type.Number({ description: "Maximum output tokens for image description. Defaults to 1200." })),
+  };
+}
+
+function parseModelSpec(spec) {
+  if (!spec) return undefined;
+  const slash = String(spec).indexOf("/");
+  if (slash <= 0 || slash === String(spec).length - 1) throw new Error(`Vision model must be provider/model, got: ${spec}`);
+  return { provider: String(spec).slice(0, slash), modelId: String(spec).slice(slash + 1) };
+}
+
+function resolveVisionModel(ctx, params = {}) {
+  const spec = parseModelSpec(params.describeModel || process.env.KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL || DEFAULT_DESCRIBE_MODEL);
+  const model = spec ? ctx.modelRegistry?.find?.(spec.provider, spec.modelId) : ctx.model;
+  if (!model) {
+    throw new Error(`Vision model ${params.describeModel || process.env.KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL || DEFAULT_DESCRIBE_MODEL} is not registered. Pass describeModel as provider/model.`);
+  }
+  if (Array.isArray(model.input) && !model.input.includes("image")) {
+    throw new Error(`Model ${model.provider}/${model.id} does not advertise image input support. Pass describeModel with an image-capable model.`);
+  }
+  return model;
+}
+
+async function describeImageFile(filePath, item, ctx, params = {}, signal) {
+  const model = resolveVisionModel(ctx, params);
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
+  const extra = params.describePrompt ? `\n\nAdditional instruction: ${params.describePrompt}` : "";
+  const response = await complete(
+    model,
+    {
+      systemPrompt: "You are a precise visual description assistant. Return only objective visual observations.",
+      messages: [{
+        role: "user",
+        timestamp: Date.now(),
+        content: [
+          { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}${extra}\n\nImage label: ${item?.label || path.basename(filePath)}${item?.width && item?.height ? ` (${item.width}×${item.height})` : ""}` },
+          { type: "image", data: await fileToBase64(filePath), mimeType: item?.mediaType || "image/png" },
+        ],
+      }],
+    },
+    {
+      apiKey: auth.apiKey,
+      headers: auth.headers,
+      signal,
+      maxTokens: clampInteger(params.describeMaxTokens, 1200, 128, 8000),
+    },
+  );
+  if (response.stopReason === "aborted") throw new Error("Image description aborted.");
+  const text = response.content
+    .filter((content) => content.type === "text")
+    .map((content) => content.text)
+    .join("\n")
+    .trim();
+  return {
+    text,
+    model: `${model.provider}/${model.id}`,
+    usage: response.usage,
+    stopReason: response.stopReason,
+  };
+}
+
+async function maybeDescribeImage(item, ctx, params = {}, signal, onUpdate) {
+  if (!params.describe) return undefined;
+  onUpdate?.({ content: [{ type: "text", text: `Describing ${item.label} with a vision model...` }] });
+  return describeImageFile(item.path, item, ctx, params, signal);
+}
+
 function parseJsonEnvelope(stdout, commandName) {
   const trimmed = String(stdout || "").trim();
   if (!trimmed) throw new Error(`${commandName} returned no JSON output`);
@@ -1002,6 +1087,7 @@ export default function kittyImagePreviewExtension(pi) {
       path: Type.String({ description: "Path to a PNG/APNG image. Leading @ is accepted and stripped." }),
       label: Type.Optional(Type.String({ description: "Optional display label. Defaults to a path relative to cwd." })),
       show: Type.Optional(Type.Boolean({ description: "Show this image immediately. Defaults to true." })),
+      ...describeParameterSchema(),
       config: Type.Optional(Type.Object({
         columns: Type.Optional(Type.Number({ description: "Target image width in terminal cells." })),
         rows: Type.Optional(Type.Number({ description: "Target image height in terminal cells. If omitted, aspect ratio is estimated." })),
@@ -1017,7 +1103,7 @@ export default function kittyImagePreviewExtension(pi) {
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux and cursor placement otherwise.")),
       })),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       applyConfig(state, params.config);
       const item = await buildItem(ctx.cwd, params.path, params.label);
       state.items.push(item);
@@ -1027,9 +1113,13 @@ export default function kittyImagePreviewExtension(pi) {
         await prepareCurrentImage(state, ctx, { forceReload: true });
       }
       syncWidget(ctx, state);
+      const description = await maybeDescribeImage(item, ctx, params, signal, onUpdate);
       return {
-        content: makeContent(state, [`Added ${item.label}.`]),
-        details: makeDetails(state, { added: item }),
+        content: makeContent(state, [
+          `Added ${item.label}.`,
+          description?.text ? `Description (${description.model}):\n${description.text}` : "",
+        ]),
+        details: makeDetails(state, { added: item, description }),
       };
     },
   });
@@ -1056,6 +1146,7 @@ export default function kittyImagePreviewExtension(pi) {
       maxHeight: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-height in pixels." })),
       compression: Type.Optional(Type.String({ description: "Optional Tendril capture --compression value." })),
       timeoutMs: Type.Optional(Type.Number({ description: "Tendril list/capture timeout in milliseconds. Defaults to 30000." })),
+      ...describeParameterSchema(),
       config: Type.Optional(Type.Object({
         columns: Type.Optional(Type.Number()),
         rows: Type.Optional(Type.Number()),
@@ -1093,8 +1184,12 @@ export default function kittyImagePreviewExtension(pi) {
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
       syncWidget(ctx, state);
+      const description = await maybeDescribeImage(item, ctx, params, signal, onUpdate);
       return {
-        content: makeContent(state, [`Captured ${target.kind} ${target.id} to ${output.path}.`]),
+        content: makeContent(state, [
+          `Captured ${target.kind} ${target.id} to ${output.path}.`,
+          description?.text ? `Description (${description.model}):\n${description.text}` : "",
+        ]),
         details: makeDetails(state, {
           capture: {
             target: { kind: target.kind, id: target.id, title: target.title, name: target.name, appName: target.app_name },
@@ -1104,6 +1199,7 @@ export default function kittyImagePreviewExtension(pi) {
             tendril: capture,
           },
           added: item,
+          description,
         }),
       };
     },
@@ -1120,6 +1216,7 @@ export default function kittyImagePreviewExtension(pi) {
       limit: Type.Optional(Type.Number({ description: "Maximum images to add. Defaults to 200." })),
       replace: Type.Optional(Type.Boolean({ description: "Replace the existing preview list instead of appending. Defaults to false." })),
       showIndex: Type.Optional(Type.Number({ description: "Zero-based index among newly added images to show. Defaults to 0." })),
+      ...describeParameterSchema(),
       config: Type.Optional(Type.Object({
         columns: Type.Optional(Type.Number()),
         rows: Type.Optional(Type.Number()),
@@ -1135,7 +1232,7 @@ export default function kittyImagePreviewExtension(pi) {
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
       })),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       applyConfig(state, params.config);
       const directory = resolveUserPath(ctx.cwd, params.path);
       const files = await collectPngFiles(directory, {
@@ -1152,9 +1249,14 @@ export default function kittyImagePreviewExtension(pi) {
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
       syncWidget(ctx, state);
+      const current = state.items[state.index];
+      const description = current ? await maybeDescribeImage(current, ctx, params, signal, onUpdate) : undefined;
       return {
-        content: makeContent(state, [`Added ${items.length} image(s) from ${relativeLabel(ctx.cwd, directory)}.`]),
-        details: makeDetails(state, { addedCount: items.length, added: items }),
+        content: makeContent(state, [
+          `Added ${items.length} image(s) from ${relativeLabel(ctx.cwd, directory)}.`,
+          description?.text ? `Description (${description.model}):\n${description.text}` : "",
+        ]),
+        details: makeDetails(state, { addedCount: items.length, added: items, description }),
       };
     },
   });
@@ -1167,6 +1269,7 @@ export default function kittyImagePreviewExtension(pi) {
     parameters: Type.Object({
       action: stringEnum(["current", "next", "previous", "index", "first", "last", "hide", "clear"], "Preview navigation action."),
       index: Type.Optional(Type.Number({ description: "Zero-based image index for action=index." })),
+      ...describeParameterSchema(),
       config: Type.Optional(Type.Object({
         columns: Type.Optional(Type.Number()),
         rows: Type.Optional(Type.Number()),
@@ -1182,7 +1285,7 @@ export default function kittyImagePreviewExtension(pi) {
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
       })),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       applyConfig(state, params.config);
       if (params.action === "clear") {
         state.lastDeleteCommand = buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough });
@@ -1211,7 +1314,12 @@ export default function kittyImagePreviewExtension(pi) {
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
       syncWidget(ctx, state);
-      return { content: makeContent(state), details: makeDetails(state) };
+      const current = state.items[state.index];
+      const description = current ? await maybeDescribeImage(current, ctx, params, signal, onUpdate) : undefined;
+      return {
+        content: makeContent(state, [description?.text ? `Description (${description.model}):\n${description.text}` : ""]),
+        details: makeDetails(state, { description }),
+      };
     },
   });
 
