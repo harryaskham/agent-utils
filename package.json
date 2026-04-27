@@ -20,8 +20,10 @@
   ],
   "scripts": {
     "clean": "echo 'nothing to clean'",
-    "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'"
+    "build": "npm run docs:build",
+    "check": "npm run docs:check",
+    "docs:build": "node scripts/render-pages.mjs",
+    "docs:check": "node scripts/render-pages.mjs --check"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",

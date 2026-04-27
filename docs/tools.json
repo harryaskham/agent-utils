@@ -1,0 +1,196 @@
+{
+  "title": "Agent Utils tool inventory",
+  "description": "Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.",
+  "lastReviewed": "2026-04-27",
+  "publishing": {
+    "githubPagesPath": "Repository Settings → Pages → Deploy from branch: main, folder: /docs",
+    "localPreview": "npm run docs:build && python3 -m http.server --directory docs 8000",
+    "validation": "npm run docs:check"
+  },
+  "sections": [
+    {
+      "name": "Cacophony first-party surfaces",
+      "summary": "Managed lifecycle, work tracking, validation, and operator coordination surfaces provided by caco.",
+      "tools": [
+        {
+          "name": "Beads",
+          "command": "caco bd",
+          "audience": "agents, controllers, operators",
+          "purpose": "Track tasks, bugs, epics, ownership, dependencies, and status.",
+          "commonActions": ["show", "list", "search", "create", "claim", "update"],
+          "sourceOfTruth": "Cacophony bead database"
+        },
+        {
+          "name": "Agent lifecycle",
+          "command": "caco agent",
+          "audience": "managed agents, controllers",
+          "purpose": "Report status, inspect diffs, reintegrate work, and complete or discard managed runs.",
+          "commonActions": ["status", "status set", "diff", "reintegrate", "complete"],
+          "sourceOfTruth": "Cacophony daemon agent registry"
+        },
+        {
+          "name": "Messaging and speech",
+          "command": "caco msg",
+          "audience": "agents, operators",
+          "purpose": "Read inboxes, send coordination messages, broadcast ownership, and narrate progress via speech.",
+          "commonActions": ["inbox", "speak", "send", "broadcast"],
+          "sourceOfTruth": "Cacophony message bus"
+        },
+        {
+          "name": "Scratchpad notes",
+          "command": "caco scratch",
+          "audience": "agents, controllers",
+          "purpose": "Persist structured notes across restarts without ad-hoc temp files.",
+          "commonActions": ["write", "append", "show", "list", "connect"],
+          "sourceOfTruth": "Cacophony scratchpad store"
+        },
+        {
+          "name": "Test queue",
+          "command": "caco test",
+          "audience": "agents, queue runners, operators",
+          "purpose": "Queue, inspect, and retrieve daemon-managed test jobs when queued execution is required.",
+          "commonActions": ["run", "show", "logs", "list", "cancel"],
+          "sourceOfTruth": "Cacophony test daemon"
+        },
+        {
+          "name": "Build queue",
+          "command": "caco build",
+          "audience": "agents, queue runners, operators",
+          "purpose": "Queue, inspect, and retrieve daemon-managed build jobs when queued execution is required.",
+          "commonActions": ["run", "show", "logs", "list", "cancel"],
+          "sourceOfTruth": "Cacophony build daemon"
+        },
+        {
+          "name": "Operator choices",
+          "command": "caco choices",
+          "audience": "agents, operators",
+          "purpose": "Present explicit choices when a real operator decision is needed and record the selected option.",
+          "commonActions": ["present", "current", "show", "list", "resolve"],
+          "sourceOfTruth": "Cacophony choices store"
+        },
+        {
+          "name": "Managed cron",
+          "command": "caco cron",
+          "audience": "controllers, operators",
+          "purpose": "Run or inspect scheduled project tasks through Cacophony instead of system cron.",
+          "commonActions": ["list", "run"],
+          "sourceOfTruth": "Cacophony cron configuration"
+        },
+        {
+          "name": "Image generation",
+          "command": "caco image generate",
+          "audience": "agents, operators",
+          "purpose": "Generate configured project images and avatars, optionally postprocess and commit them.",
+          "commonActions": ["generate --preset", "generate --prompt", "generate --commit"],
+          "sourceOfTruth": ".cacophony/generation.yaml in projects that enable image presets"
+        }
+      ]
+    },
+    {
+      "name": "Pi runtime and agent self-ops",
+      "summary": "Pi-native commands and skills that keep long-running managed agents healthy and recyclable.",
+      "tools": [
+        {
+          "name": "Pi recurring loop",
+          "command": "/loop",
+          "audience": "Pi agents, operators",
+          "purpose": "Schedule repeated prompts inside a Pi session for inbox checks, health sweeps, or reminders.",
+          "commonActions": ["/loop 5m …", "/loop status", "/loop off"],
+          "sourceOfTruth": "Pi runtime loop extension"
+        },
+        {
+          "name": "Pi self-nudge",
+          "command": "pi-self-nudge skill",
+          "audience": "persistent Pi agents",
+          "purpose": "Perform periodic health, inbox, and small follow-up checks without relying on daemon cron.",
+          "commonActions": ["verify wake path", "check inbox", "speak degraded autonomy if needed"],
+          "sourceOfTruth": ".pi-agent/skills/pi-self-nudge/SKILL.md in managed checkouts"
+        },
+        {
+          "name": "Pi self-ops",
+          "command": "/bead-claim, /self-idle, /pool-register",
+          "audience": "pool-eligible Pi workers",
+          "purpose": "Rotate workers through beads with handoff notes, compaction, idle registration, and pool eligibility.",
+          "commonActions": ["/bead-claim", "/bead-handoff-note", "/self-idle", "/pool-register"],
+          "sourceOfTruth": ".pi-agent/skills/pi-self-ops/SKILL.md in managed checkouts"
+        },
+        {
+          "name": "Pi package entry points",
+          "command": "pi install git:github.com/harryaskham/agent-utils@v1",
+          "audience": "Pi users, agents",
+          "purpose": "Install this repository as a Pi package that contributes prompt templates and extensions.",
+          "commonActions": ["install package", "load prompts", "load extensions"],
+          "sourceOfTruth": "package.json pi.extensions and pi.prompts"
+        }
+      ]
+    },
+    {
+      "name": "Interactive and UI automation helpers",
+      "summary": "Tools for sessions that need a real terminal, screenshots, or desktop input automation.",
+      "tools": [
+        {
+          "name": "tmux-cli",
+          "command": "tmux-cli",
+          "audience": "agents",
+          "purpose": "Launch a real TTY pane, send commands reliably, wait for idle output, capture the pane, and clean it up.",
+          "commonActions": ["launch", "send", "wait_idle", "capture", "kill"],
+          "sourceOfTruth": ".pi-agent/skills/tmux-cli/SKILL.md in managed checkouts"
+        },
+        {
+          "name": "Tendril MCP",
+          "command": "tendril_list, tendril_capture, tendril_run, tendril_listen",
+          "audience": "agents automating desktop UI",
+          "purpose": "List windows, capture screenshots, send keyboard or mouse actions, and observe UI events.",
+          "commonActions": ["list windows", "capture before action", "run DSL actions", "capture after action"],
+          "sourceOfTruth": "Tendril MCP server and managed tendril profile"
+        }
+      ]
+    },
+    {
+      "name": "Repo-local tools",
+      "summary": "Utilities provided directly by this repository and kept installable without project secrets.",
+      "tools": [
+        {
+          "name": "Live web search Pi extension",
+          "command": "search_web",
+          "audience": "Pi agents",
+          "purpose": "Search the live web through GitHub Copilot Responses API and return grounded answers with citations.",
+          "commonActions": ["query current information", "prefer for freshness-sensitive answers"],
+          "sourceOfTruth": "extensions/web-search.js"
+        },
+        {
+          "name": "Web search prompt template",
+          "command": "/web-search",
+          "audience": "Pi users, agents",
+          "purpose": "Prompt template for web-search-assisted answers.",
+          "commonActions": ["invoke prompt template"],
+          "sourceOfTruth": "prompts/web-search.md"
+        },
+        {
+          "name": "web-search MCP server",
+          "command": "web-search-mcp",
+          "audience": "MCP-compatible agents",
+          "purpose": "Expose web search as an MCP server packaged by the repository flake.",
+          "commonActions": ["nix run .#web-search-mcp", "nix build .#web-search-mcp"],
+          "sourceOfTruth": "web-search/src/web_search_mcp/server.py"
+        },
+        {
+          "name": "Nix package collator",
+          "command": "nix build .",
+          "audience": "operators, release automation",
+          "purpose": "Build the aggregate agent-utils package and expose repo tools as flake packages and apps.",
+          "commonActions": ["nix build .", "nix run .#web-search-mcp"],
+          "sourceOfTruth": "flake.nix"
+        },
+        {
+          "name": "GitHub Pages inventory generator",
+          "command": "npm run docs:build",
+          "audience": "maintainers",
+          "purpose": "Regenerate this static Pages site from docs/tools.json and verify it remains publishable from /docs.",
+          "commonActions": ["npm run docs:build", "npm run docs:check"],
+          "sourceOfTruth": "scripts/render-pages.mjs and docs/tools.json"
+        }
+      ]
+    }
+  ]
+}

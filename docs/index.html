@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Utils tool inventory</title>
+    <meta name="description" content="Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.">
+    <link rel="stylesheet" href="assets/styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <nav aria-label="Tool inventory sections">
+        <a class="brand" href="./">agent-utils</a>
+        <div class="nav-links">
+          <a href="#cacophony-first-party-surfaces">Cacophony first-party surfaces</a>
+          <a href="#pi-runtime-and-agent-self-ops">Pi runtime and agent self-ops</a>
+          <a href="#interactive-and-ui-automation-helpers">Interactive and UI automation helpers</a>
+          <a href="#repo-local-tools">Repo-local tools</a>
+        </div>
+      </nav>
+      <div class="hero">
+        <p class="eyebrow">GitHub Pages · tool inventory</p>
+        <h1>Agent Utils tool inventory</h1>
+        <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
+        <div class="hero-stats" aria-label="Inventory summary">
+          <span><strong>4</strong> sections</span>
+          <span><strong>20</strong> tools and surfaces</span>
+          <span><strong>2026-04-27</strong> reviewed</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="publishing-note" aria-labelledby="publishing-heading">
+        <h2 id="publishing-heading">Publishing and preview</h2>
+        <div class="publishing-grid">
+          <p><strong>GitHub Pages path:</strong> Repository Settings → Pages → Deploy from branch: main, folder: /docs</p>
+          <p><strong>Local preview:</strong> <code>npm run docs:build &amp;&amp; python3 -m http.server --directory docs 8000</code></p>
+          <p><strong>Validation:</strong> <code>npm run docs:check</code></p>
+        </div>
+        <p class="small">The rendered page is static HTML/CSS generated from <code>docs/tools.json</code>, so GitHub Pages can publish it without secrets, build services, or local-only daemon state.</p>
+      </section>
+
+
+      <section class="inventory-section" id="cacophony-first-party-surfaces">
+        <div class="section-heading">
+          <h2>Cacophony first-party surfaces</h2>
+          <p>Managed lifecycle, work tracking, validation, and operator coordination surfaces provided by caco.</p>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Beads</h3>
+              <code>caco bd</code>
+            </div>
+            <p>Track tasks, bugs, epics, ownership, dependencies, and status.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents, controllers, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony bead database</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>show</code></li>
+              <li><code>list</code></li>
+              <li><code>search</code></li>
+              <li><code>create</code></li>
+              <li><code>claim</code></li>
+              <li><code>update</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Agent lifecycle</h3>
+              <code>caco agent</code>
+            </div>
+            <p>Report status, inspect diffs, reintegrate work, and complete or discard managed runs.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>managed agents, controllers</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony daemon agent registry</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>status</code></li>
+              <li><code>status set</code></li>
+              <li><code>diff</code></li>
+              <li><code>reintegrate</code></li>
+              <li><code>complete</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Messaging and speech</h3>
+              <code>caco msg</code>
+            </div>
+            <p>Read inboxes, send coordination messages, broadcast ownership, and narrate progress via speech.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony message bus</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>inbox</code></li>
+              <li><code>speak</code></li>
+              <li><code>send</code></li>
+              <li><code>broadcast</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Scratchpad notes</h3>
+              <code>caco scratch</code>
+            </div>
+            <p>Persist structured notes across restarts without ad-hoc temp files.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents, controllers</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony scratchpad store</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>write</code></li>
+              <li><code>append</code></li>
+              <li><code>show</code></li>
+              <li><code>list</code></li>
+              <li><code>connect</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Test queue</h3>
+              <code>caco test</code>
+            </div>
+            <p>Queue, inspect, and retrieve daemon-managed test jobs when queued execution is required.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents, queue runners, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony test daemon</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>run</code></li>
+              <li><code>show</code></li>
+              <li><code>logs</code></li>
+              <li><code>list</code></li>
+              <li><code>cancel</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Build queue</h3>
+              <code>caco build</code>
+            </div>
+            <p>Queue, inspect, and retrieve daemon-managed build jobs when queued execution is required.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents, queue runners, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony build daemon</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>run</code></li>
+              <li><code>show</code></li>
+              <li><code>logs</code></li>
+              <li><code>list</code></li>
+              <li><code>cancel</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Operator choices</h3>
+              <code>caco choices</code>
+            </div>
+            <p>Present explicit choices when a real operator decision is needed and record the selected option.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony choices store</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>present</code></li>
+              <li><code>current</code></li>
+              <li><code>show</code></li>
+              <li><code>list</code></li>
+              <li><code>resolve</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Managed cron</h3>
+              <code>caco cron</code>
+            </div>
+            <p>Run or inspect scheduled project tasks through Cacophony instead of system cron.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>controllers, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Cacophony cron configuration</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>list</code></li>
+              <li><code>run</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Image generation</h3>
+              <code>caco image generate</code>
+            </div>
+            <p>Generate configured project images and avatars, optionally postprocess and commit them.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>.cacophony/generation.yaml in projects that enable image presets</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>generate --preset</code></li>
+              <li><code>generate --prompt</code></li>
+              <li><code>generate --commit</code></li>
+              </ul>
+            </details>
+          </article>
+        </div>
+      </section>
+
+      <section class="inventory-section" id="pi-runtime-and-agent-self-ops">
+        <div class="section-heading">
+          <h2>Pi runtime and agent self-ops</h2>
+          <p>Pi-native commands and skills that keep long-running managed agents healthy and recyclable.</p>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Pi recurring loop</h3>
+              <code>/loop</code>
+            </div>
+            <p>Schedule repeated prompts inside a Pi session for inbox checks, health sweeps, or reminders.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Pi runtime loop extension</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/loop 5m …</code></li>
+              <li><code>/loop status</code></li>
+              <li><code>/loop off</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Pi self-nudge</h3>
+              <code>pi-self-nudge skill</code>
+            </div>
+            <p>Perform periodic health, inbox, and small follow-up checks without relying on daemon cron.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>persistent Pi agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>.pi-agent/skills/pi-self-nudge/SKILL.md in managed checkouts</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>verify wake path</code></li>
+              <li><code>check inbox</code></li>
+              <li><code>speak degraded autonomy if needed</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Pi self-ops</h3>
+              <code>/bead-claim, /self-idle, /pool-register</code>
+            </div>
+            <p>Rotate workers through beads with handoff notes, compaction, idle registration, and pool eligibility.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>pool-eligible Pi workers</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>.pi-agent/skills/pi-self-ops/SKILL.md in managed checkouts</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/bead-claim</code></li>
+              <li><code>/bead-handoff-note</code></li>
+              <li><code>/self-idle</code></li>
+              <li><code>/pool-register</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Pi package entry points</h3>
+              <code>pi install git:github.com/harryaskham/agent-utils@v1</code>
+            </div>
+            <p>Install this repository as a Pi package that contributes prompt templates and extensions.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi users, agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>package.json pi.extensions and pi.prompts</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>install package</code></li>
+              <li><code>load prompts</code></li>
+              <li><code>load extensions</code></li>
+              </ul>
+            </details>
+          </article>
+        </div>
+      </section>
+
+      <section class="inventory-section" id="interactive-and-ui-automation-helpers">
+        <div class="section-heading">
+          <h2>Interactive and UI automation helpers</h2>
+          <p>Tools for sessions that need a real terminal, screenshots, or desktop input automation.</p>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>tmux-cli</h3>
+              <code>tmux-cli</code>
+            </div>
+            <p>Launch a real TTY pane, send commands reliably, wait for idle output, capture the pane, and clean it up.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>.pi-agent/skills/tmux-cli/SKILL.md in managed checkouts</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>launch</code></li>
+              <li><code>send</code></li>
+              <li><code>wait_idle</code></li>
+              <li><code>capture</code></li>
+              <li><code>kill</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Tendril MCP</h3>
+              <code>tendril_list, tendril_capture, tendril_run, tendril_listen</code>
+            </div>
+            <p>List windows, capture screenshots, send keyboard or mouse actions, and observe UI events.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>agents automating desktop UI</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>Tendril MCP server and managed tendril profile</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>list windows</code></li>
+              <li><code>capture before action</code></li>
+              <li><code>run DSL actions</code></li>
+              <li><code>capture after action</code></li>
+              </ul>
+            </details>
+          </article>
+        </div>
+      </section>
+
+      <section class="inventory-section" id="repo-local-tools">
+        <div class="section-heading">
+          <h2>Repo-local tools</h2>
+          <p>Utilities provided directly by this repository and kept installable without project secrets.</p>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Live web search Pi extension</h3>
+              <code>search_web</code>
+            </div>
+            <p>Search the live web through GitHub Copilot Responses API and return grounded answers with citations.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/web-search.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>query current information</code></li>
+              <li><code>prefer for freshness-sensitive answers</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Web search prompt template</h3>
+              <code>/web-search</code>
+            </div>
+            <p>Prompt template for web-search-assisted answers.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi users, agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>prompts/web-search.md</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>invoke prompt template</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>web-search MCP server</h3>
+              <code>web-search-mcp</code>
+            </div>
+            <p>Expose web search as an MCP server packaged by the repository flake.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>MCP-compatible agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>web-search/src/web_search_mcp/server.py</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>nix run .#web-search-mcp</code></li>
+              <li><code>nix build .#web-search-mcp</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Nix package collator</h3>
+              <code>nix build .</code>
+            </div>
+            <p>Build the aggregate agent-utils package and expose repo tools as flake packages and apps.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>operators, release automation</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>flake.nix</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>nix build .</code></li>
+              <li><code>nix run .#web-search-mcp</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>GitHub Pages inventory generator</h3>
+              <code>npm run docs:build</code>
+            </div>
+            <p>Regenerate this static Pages site from docs/tools.json and verify it remains publishable from /docs.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>maintainers</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>scripts/render-pages.mjs and docs/tools.json</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>npm run docs:build</code></li>
+              <li><code>npm run docs:check</code></li>
+              </ul>
+            </details>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Generated from <code>docs/tools.json</code>. Update the JSON and run <code>npm run docs:build</code> to refresh this page.</p>
+    </footer>
+  </body>
+</html>
