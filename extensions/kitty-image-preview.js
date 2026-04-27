@@ -23,11 +23,14 @@ import {
 
 const TOOL_PREFIX = "kitty_image_preview";
 const WIDGET_ID = "kitty-image-preview";
+const SIDE_OVERLAY_PLACEMENT = "rightOverlay";
 const DEFAULT_Z_INDEX = -10;
 const DEFAULT_BG_Z_INDEX = -1073741824;
 const DEFAULT_COLUMNS = 48;
 const DEFAULT_MAX_ROWS = 24;
 const SUPPORTED_EXTENSIONS = new Set([".png", ".apng"]);
+const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"];
+const PREVIEW_PLACEMENTS = [...WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT];
 
 function stringEnum(values, description) {
   return StringEnum(values, { description });
@@ -122,9 +125,23 @@ function renderPlaceholderLines(width, rows, text) {
   return output;
 }
 
-class KittyImagePreviewWidget {
-  constructor(state) {
+export function isSideOverlayPlacement(placement) {
+  return placement === SIDE_OVERLAY_PLACEMENT;
+}
+
+function shouldRenderUnicodePlaceholders(state, options = {}) {
+  return shouldUseUnicodePlaceholders({
+    placementMode: state.config.placementMode,
+    passthrough: state.config.passthrough,
+    env: process.env,
+    forceAnchored: options.forceUnicodePlaceholders || isSideOverlayPlacement(state.config.placement),
+  });
+}
+
+export class KittyImagePreviewWidget {
+  constructor(state, options = {}) {
     this.state = state;
+    this.options = options;
   }
 
   render(width) {
@@ -133,11 +150,7 @@ class KittyImagePreviewWidget {
     const current = state.items[state.index];
     const availableWidth = Math.max(1, Math.trunc(width || 1));
     const columns = Math.min(availableWidth, clampInteger(state.config.columns, DEFAULT_COLUMNS, 1, 4096));
-    const useUnicodePlaceholders = shouldUseUnicodePlaceholders({
-      placementMode: state.config.placementMode,
-      passthrough: state.config.passthrough,
-      env: process.env,
-    });
+    const useUnicodePlaceholders = shouldRenderUnicodePlaceholders(state, this.options);
     const rows = clampInteger(
       state.config.rows || estimateRowsForImage({
         imageWidth: current.width,
@@ -173,22 +186,150 @@ class KittyImagePreviewWidget {
   invalidate() {}
 }
 
-function syncWidget(ctx, state) {
+function sideOverlayWidth(state) {
+  return clampInteger(state.config.columns, DEFAULT_COLUMNS, 1, 4096);
+}
+
+function sideOverlayMaxHeight(state) {
+  return clampInteger(state.config.rows || state.config.maxRows, DEFAULT_MAX_ROWS, 1, MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1);
+}
+
+export function buildSideOverlayOptions(state) {
+  return {
+    anchor: "right-center",
+    width: sideOverlayWidth(state),
+    maxHeight: sideOverlayMaxHeight(state),
+    margin: { right: 0 },
+    nonCapturing: true,
+  };
+}
+
+function requestSideOverlayRender(state) {
+  state.sideOverlay?.component?.invalidate?.();
+  state.sideOverlay?.tui?.requestRender?.();
+}
+
+function clearSideOverlay(state) {
+  const overlay = state.sideOverlay;
+  if (!overlay) return;
+  state.sideOverlay = undefined;
+  overlay.cancelled = true;
+  overlay.handle?.hide?.();
+  overlay.component?.dispose?.();
+}
+
+function fallbackSideWidget(ctx, state) {
+  const componentFactory = () => new KittyImagePreviewWidget(state, { forceUnicodePlaceholders: true });
+  ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement: "aboveEditor" });
+  if (!state.sideOverlayUnavailableWarned) {
+    state.sideOverlayUnavailableWarned = true;
+    ctx.ui.notify?.("kitty image rightOverlay needs Pi overlay support; falling back to the above-editor widget.", "warning");
+  }
+}
+
+function ensureSideOverlay(ctx, state) {
+  if (state.sideOverlay?.handle || state.sideOverlay?.pending) {
+    state.sideOverlay.handle?.setHidden?.(false);
+    requestSideOverlayRender(state);
+    return;
+  }
+  if (typeof ctx.ui.custom !== "function") {
+    fallbackSideWidget(ctx, state);
+    return;
+  }
+
+  const overlay = {
+    pending: true,
+    cancelled: false,
+    handle: undefined,
+    component: undefined,
+    tui: undefined,
+  };
+  state.sideOverlay = overlay;
+
+  let promise;
+  try {
+    promise = ctx.ui.custom((_tui, _theme, _keybindings, _done) => {
+      overlay.pending = false;
+      overlay.tui = _tui;
+      overlay.component = new KittyImagePreviewWidget(state, { forceUnicodePlaceholders: true });
+      return overlay.component;
+    }, {
+      overlay: true,
+      overlayOptions: () => buildSideOverlayOptions(state),
+      onHandle: (handle) => {
+        overlay.handle = handle;
+        handle.unfocus?.();
+        if (overlay.cancelled) handle.hide?.();
+      },
+    });
+  } catch (error) {
+    if (state.sideOverlay === overlay) state.sideOverlay = undefined;
+    fallbackSideWidget(ctx, state);
+    ctx.ui.notify?.(`kitty image rightOverlay failed: ${error.message}`, "warning");
+    return;
+  }
+
+  promise?.catch?.((error) => {
+    if (state.sideOverlay === overlay) state.sideOverlay = undefined;
+    ctx.ui.notify?.(`kitty image rightOverlay closed: ${error.message}`, "warning");
+  });
+}
+
+export function syncWidget(ctx, state) {
   if (!ctx?.hasUI) return;
   if (!state.visible || state.items.length === 0) {
     ctx.ui.setWidget(WIDGET_ID, undefined);
+    clearSideOverlay(state);
     ctx.ui.setStatus(WIDGET_ID, undefined);
     return;
   }
-  const componentFactory = () => new KittyImagePreviewWidget(state);
-  ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement: state.config.placement });
   const current = state.items[state.index];
+  if (isSideOverlayPlacement(state.config.placement)) {
+    ctx.ui.setWidget(WIDGET_ID, undefined);
+    ensureSideOverlay(ctx, state);
+  } else {
+    clearSideOverlay(state);
+    const componentFactory = () => new KittyImagePreviewWidget(state);
+    ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement: state.config.placement });
+  }
   const animation = state.animation?.running ? " ▶" : "";
   ctx.ui.setStatus(WIDGET_ID, `🖼${animation} ${state.index + 1}/${state.items.length} ${current?.label ?? ""}`);
 }
 
 function flashDeleteWidget(ctx, state, deleteCommand) {
   if (!ctx?.hasUI) return;
+  if (isSideOverlayPlacement(state.config.placement)) {
+    clearSideOverlay(state);
+    const flashComponent = {
+      render(width) {
+        return [`${deleteCommand}${" ".repeat(Math.max(1, width))}`];
+      },
+      invalidate() {},
+    };
+    if (typeof ctx.ui.custom === "function") {
+      let handle;
+      try {
+        const promise = ctx.ui.custom(() => flashComponent, {
+          overlay: true,
+          overlayOptions: () => buildSideOverlayOptions(state),
+          onHandle: (overlayHandle) => {
+            handle = overlayHandle;
+          },
+        });
+        promise?.catch?.(() => {});
+        setTimeout(() => handle?.hide?.(), 100);
+      } catch {
+        ctx.ui.setWidget(WIDGET_ID, () => flashComponent, { placement: "aboveEditor" });
+        setTimeout(() => ctx.ui.setWidget(WIDGET_ID, undefined), 100);
+      }
+    } else {
+      ctx.ui.setWidget(WIDGET_ID, () => flashComponent, { placement: "aboveEditor" });
+      setTimeout(() => ctx.ui.setWidget(WIDGET_ID, undefined), 100);
+    }
+    ctx.ui.setStatus(WIDGET_ID, undefined);
+    return;
+  }
   ctx.ui.setWidget(WIDGET_ID, () => ({
     render(width) {
       return [`${deleteCommand}${" ".repeat(Math.max(1, width))}`];
@@ -345,7 +486,7 @@ function applyConfig(state, config = {}) {
   if (typeof config.background === "boolean") state.config.background = config.background;
   if (typeof config.showCaption === "boolean") state.config.showCaption = config.showCaption;
   if (typeof config.clearPrevious === "boolean") state.config.clearPrevious = config.clearPrevious;
-  if (["aboveEditor", "belowEditor"].includes(config.placement)) state.config.placement = config.placement;
+  if (PREVIEW_PLACEMENTS.includes(config.placement)) state.config.placement = config.placement;
   if (["auto", "memory", "file"].includes(config.transferMode)) state.config.transferMode = config.transferMode;
   if (["auto", "tmux", "none"].includes(config.passthrough)) state.config.passthrough = config.passthrough;
   if (["auto", "unicode", "cursor"].includes(config.placementMode)) state.config.placementMode = config.placementMode;
@@ -536,7 +677,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean({ description: "Use an extremely negative z-index suitable for background-image style placement." })),
         showCaption: Type.Optional(Type.Boolean({ description: "Render a text caption over the reserved image area." })),
         clearPrevious: Type.Optional(Type.Boolean({ description: "Delete previous visible placements before drawing the current image." })),
-        placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport. auto uses memory inside tmux, file otherwise.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode. auto detects tmux.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux and cursor placement otherwise.")),
@@ -590,7 +731,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean()),
         showCaption: Type.Optional(Type.Boolean()),
         clearPrevious: Type.Optional(Type.Boolean()),
-        placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
@@ -654,7 +795,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean()),
         showCaption: Type.Optional(Type.Boolean()),
         clearPrevious: Type.Optional(Type.Boolean()),
-        placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
@@ -701,7 +842,7 @@ export default function kittyImagePreviewExtension(pi) {
         background: Type.Optional(Type.Boolean()),
         showCaption: Type.Optional(Type.Boolean()),
         clearPrevious: Type.Optional(Type.Boolean()),
-        placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: above/below the editor widget, or a fixed right-side overlay.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
         placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),

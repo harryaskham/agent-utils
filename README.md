@@ -35,6 +35,7 @@ Key capabilities:
 - Unicode placeholder placement under tmux so the image is anchored to the widget text cells and scrolls with the pane instead of floating at the outer terminal cursor.
 - First-party screenshot capture via `tendril capture --output`, saved under a per-session `kitty-image-preview-screenshots` folder by default.
 - Persistent Pi widget mounted above or below the editor with configurable cell width/height and captioning.
+- Fixed right-side preview placement via `placement: "rightOverlay"`, rendered as a non-capturing Pi overlay when supported so screenshots can remain visible outside the scrolling editor area. This side placement always uses Unicode placeholder anchoring, even if `placementMode` is set to `"cursor"`.
 - Negative z-index rendering by default for direct cursor placement so images can sit underneath text; `background: true` uses an extra-low z-index for background-style placement. In tmux placeholder mode, image stacking follows kitty's placeholder rendering semantics.
 - Alpha/transparency support through PNG/APNG and kitty's compositor.
 - Lightweight animation support by cycling folder/series frames at configurable intervals.
@@ -69,7 +70,22 @@ Example screenshot capture tool use:
 }
 ```
 
-The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placementMode: "auto"` preserves direct kitty cursor placement outside tmux and switches to Unicode placeholders when tmux passthrough is detected; use `"unicode"` or `"cursor"` only for debugging or terminal-specific workarounds.
+Example fixed right-side screenshot preview:
+
+```json
+{
+  "targetKind": "display",
+  "maxWidth": 1200,
+  "config": {
+    "columns": 48,
+    "rows": 20,
+    "placement": "rightOverlay",
+    "transferMode": "auto"
+  }
+}
+```
+
+The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placementMode: "auto"` preserves direct kitty cursor placement outside tmux and switches to Unicode placeholders when tmux passthrough is detected; use `"unicode"` or `"cursor"` only for debugging or terminal-specific workarounds. The `rightOverlay` placement deliberately ignores cursor placement and renders anchored Unicode placeholder cells in a fixed non-capturing overlay column; if the active Pi runtime does not expose overlays, it falls back to the above-editor widget.
 
 ## GitHub Pages tool inventory
 

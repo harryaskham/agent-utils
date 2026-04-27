@@ -148,7 +148,8 @@ function placeholderPlacementId(placementId) {
   return normalized % 0x1000000 || 1;
 }
 
-export function shouldUseUnicodePlaceholders({ placementMode = "auto", passthrough = "auto", env = process.env } = {}) {
+export function shouldUseUnicodePlaceholders({ placementMode = "auto", passthrough = "auto", env = process.env, forceAnchored = false } = {}) {
+  if (forceAnchored) return true;
   if (placementMode === "unicode") return true;
   if (placementMode === "cursor" || placementMode === "display") return false;
   if (placementMode !== "auto") throw new Error(`Unsupported kitty graphics placement mode: ${placementMode}`);

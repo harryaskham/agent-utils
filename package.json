@@ -1,6 +1,6 @@
 {
   "name": "agent-utils",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Agent utilities, MCP servers, and prompt templates",
   "keywords": [
     "pi-package"

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -67,4 +68,18 @@ test("auto placement mode uses Unicode placeholders only for tmux passthrough", 
   assert.equal(shouldUseUnicodePlaceholders({ env: {} }), false);
   assert.equal(shouldUseUnicodePlaceholders({ placementMode: "unicode", env: {} }), true);
   assert.equal(shouldUseUnicodePlaceholders({ placementMode: "cursor", env: { TMUX: "1" } }), false);
+});
+
+test("forced anchoring overrides cursor placement for side overlays", () => {
+  assert.equal(shouldUseUnicodePlaceholders({ placementMode: "cursor", env: {}, forceAnchored: true }), true);
+});
+
+test("kitty image preview advertises a non-capturing right-side overlay placement", async () => {
+  const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+
+  assert.match(source, /SIDE_OVERLAY_PLACEMENT = "rightOverlay"/);
+  assert.match(source, /PREVIEW_PLACEMENTS = \[\.\.\.WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT\]/);
+  assert.match(source, /anchor: "right-center"/);
+  assert.match(source, /nonCapturing: true/);
+  assert.match(source, /forceAnchored: options\.forceUnicodePlaceholders \|\| isSideOverlayPlacement\(state\.config\.placement\)/);
 });
