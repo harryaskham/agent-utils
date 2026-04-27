@@ -159,6 +159,14 @@
           "sourceOfTruth": "extensions/web-search.js"
         },
         {
+          "name": "Kitty image preview Pi extension",
+          "command": "kitty_image_preview_add, kitty_image_preview_show, kitty_image_preview_animate",
+          "audience": "Pi agents, operators using kitty-compatible terminals",
+          "purpose": "Display persistent terminal image previews from Pi using the kitty graphics protocol, with series navigation, animation, tmux passthrough, negative z-index, and configurable widget placement.",
+          "commonActions": ["add a PNG/APNG preview", "add a folder as an image series", "show next or previous image", "animate a loaded series", "hide or clear the preview widget"],
+          "sourceOfTruth": "extensions/kitty-image-preview.js and extensions/kitty-graphics.js"
+        },
+        {
           "name": "Web search prompt template",
           "command": "/web-search",
           "audience": "Pi users, agents",

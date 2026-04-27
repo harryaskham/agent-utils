@@ -26,12 +26,14 @@
     "docs:check": "node scripts/render-pages.mjs --check"
   },
   "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions/web-search.js",
+      "./extensions/kitty-image-preview.js"
     ],
     "prompts": [
       "./prompts"
