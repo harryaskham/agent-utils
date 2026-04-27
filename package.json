@@ -21,6 +21,7 @@
   "scripts": {
     "clean": "echo 'nothing to clean'",
     "build": "npm run docs:build",
+    "test": "node --test",
     "check": "npm run docs:check",
     "docs:build": "node scripts/render-pages.mjs",
     "docs:check": "node scripts/render-pages.mjs --check"

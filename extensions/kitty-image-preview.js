@@ -6,14 +6,18 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 
 import {
+  MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
   buildDeleteCommand,
+  buildKittyUnicodePlaceholderLines,
   buildPngDisplayCommand,
+  buildPngVirtualPlacementCommand,
   detectKittyPassthroughMode,
   estimateRowsForImage,
   fileToBase64,
   isSupportedKittyPngPath,
   readPngDimensions,
   shouldUseInMemoryTransfer,
+  shouldUseUnicodePlaceholders,
   stableKittyImageId,
 } from "./kitty-graphics.js";
 
@@ -108,7 +112,7 @@ function summarizeCurrent(state) {
   if (!current) return "No image is loaded.";
   const dims = current.width && current.height ? ` (${current.width}×${current.height})` : "";
   const mode = state.config.transferMode === "auto" ? "auto" : state.config.transferMode;
-  return `Showing ${state.index + 1}/${state.items.length}: ${current.label}${dims}; placement=${state.config.placement}, transfer=${mode}, z=${state.config.zIndex}.`;
+  return `Showing ${state.index + 1}/${state.items.length}: ${current.label}${dims}; placement=${state.config.placement}, transfer=${mode}, graphicsPlacement=${state.config.placementMode}, z=${state.config.zIndex}.`;
 }
 
 function renderPlaceholderLines(width, rows, text) {
@@ -127,7 +131,13 @@ class KittyImagePreviewWidget {
     const state = this.state;
     if (!state.visible || state.items.length === 0) return [];
     const current = state.items[state.index];
-    const columns = Math.min(width, clampInteger(state.config.columns, DEFAULT_COLUMNS, 1, 4096));
+    const availableWidth = Math.max(1, Math.trunc(width || 1));
+    const columns = Math.min(availableWidth, clampInteger(state.config.columns, DEFAULT_COLUMNS, 1, 4096));
+    const useUnicodePlaceholders = shouldUseUnicodePlaceholders({
+      placementMode: state.config.placementMode,
+      passthrough: state.config.passthrough,
+      env: process.env,
+    });
     const rows = clampInteger(
       state.config.rows || estimateRowsForImage({
         imageWidth: current.width,
@@ -138,14 +148,23 @@ class KittyImagePreviewWidget {
       }),
       12,
       1,
-      200,
+      useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200,
     );
 
-    const command = buildCurrentDisplayCommand(state, current, columns, rows);
+    const command = buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders);
     const label = state.config.showCaption
       ? `kitty image ${state.index + 1}/${state.items.length}: ${current.label}`
       : "";
-    const lines = renderPlaceholderLines(width, rows, label);
+    const lines = useUnicodePlaceholders
+      ? buildKittyUnicodePlaceholderLines({
+        imageId: current.id,
+        placementId: state.config.placementId,
+        columns,
+        rows,
+        width: availableWidth,
+        caption: label,
+      })
+      : renderPlaceholderLines(availableWidth, rows, label);
     lines[0] = `${state.lastDeleteCommand || ""}${command}${lines[0]}`;
     state.lastDeleteCommand = "";
     return lines;
@@ -215,22 +234,34 @@ function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
   }, Math.max(50, intervalMs));
 }
 
-function buildCurrentDisplayCommand(state, current, columns, rows) {
+function buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders = false) {
   const prepared = state.currentCommand;
   if (!prepared || prepared.itemId !== current.id) return "";
-  const signature = `${columns}:${rows}:${prepared.zIndex}:${prepared.transport}:${prepared.passthrough}:${prepared.chunkSize}`;
+  const placementMode = useUnicodePlaceholders ? "unicode" : "cursor";
+  const signature = `${columns}:${rows}:${prepared.zIndex}:${prepared.transport}:${prepared.passthrough}:${prepared.chunkSize}:${placementMode}:${state.config.placementId}`;
   if (prepared.rendered?.signature === signature) return prepared.rendered.command;
-  const command = buildPngDisplayCommand({
-    imageId: current.id,
-    placementId: state.config.placementId,
-    pngBase64: prepared.pngBase64,
-    filePath: prepared.filePath,
-    columns,
-    rows,
-    zIndex: prepared.zIndex,
-    passthrough: prepared.passthrough,
-    chunkSize: prepared.chunkSize,
-  });
+  const command = useUnicodePlaceholders
+    ? buildPngVirtualPlacementCommand({
+      imageId: current.id,
+      placementId: state.config.placementId,
+      pngBase64: prepared.pngBase64,
+      filePath: prepared.filePath,
+      columns,
+      rows,
+      passthrough: prepared.passthrough,
+      chunkSize: prepared.chunkSize,
+    })
+    : buildPngDisplayCommand({
+      imageId: current.id,
+      placementId: state.config.placementId,
+      pngBase64: prepared.pngBase64,
+      filePath: prepared.filePath,
+      columns,
+      rows,
+      zIndex: prepared.zIndex,
+      passthrough: prepared.passthrough,
+      chunkSize: prepared.chunkSize,
+    });
   prepared.rendered = { signature, command };
   return command;
 }
@@ -317,6 +348,7 @@ function applyConfig(state, config = {}) {
   if (["aboveEditor", "belowEditor"].includes(config.placement)) state.config.placement = config.placement;
   if (["auto", "memory", "file"].includes(config.transferMode)) state.config.transferMode = config.transferMode;
   if (["auto", "tmux", "none"].includes(config.passthrough)) state.config.passthrough = config.passthrough;
+  if (["auto", "unicode", "cursor"].includes(config.placementMode)) state.config.placementMode = config.placementMode;
   if (config.placementId !== undefined) state.config.placementId = clampInteger(config.placementId, state.config.placementId, 1, 2147483647);
   if (config.chunkSize !== undefined) state.config.chunkSize = clampInteger(config.chunkSize, state.config.chunkSize, 512, 65536);
   state.currentCommand = undefined;
@@ -454,6 +486,7 @@ export default function kittyImagePreviewExtension(pi) {
       placementId: stableKittyImageId("agent-utils-kitty-image-preview-placement"),
       transferMode: "auto",
       passthrough: "auto",
+      placementMode: "auto",
       chunkSize: 4096,
     },
   };
@@ -506,6 +539,7 @@ export default function kittyImagePreviewExtension(pi) {
         placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport. auto uses memory inside tmux, file otherwise.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode. auto detects tmux.")),
+        placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux and cursor placement otherwise.")),
       })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -559,6 +593,7 @@ export default function kittyImagePreviewExtension(pi) {
         placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
+        placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
       })),
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -622,6 +657,7 @@ export default function kittyImagePreviewExtension(pi) {
         placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
+        placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
       })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -668,6 +704,7 @@ export default function kittyImagePreviewExtension(pi) {
         placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
         transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
         passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
+        placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
       })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

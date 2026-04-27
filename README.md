@@ -32,9 +32,10 @@ Available tools:
 Key capabilities:
 
 - Native kitty graphics APC serialization with chunking, PNG file or in-memory transfer, and tmux DCS passthrough autodetection.
+- Unicode placeholder placement under tmux so the image is anchored to the widget text cells and scrolls with the pane instead of floating at the outer terminal cursor.
 - First-party screenshot capture via `tendril capture --output`, saved under a per-session `kitty-image-preview-screenshots` folder by default.
 - Persistent Pi widget mounted above or below the editor with configurable cell width/height and captioning.
-- Negative z-index rendering by default so images can sit underneath text; `background: true` uses an extra-low z-index for background-style placement.
+- Negative z-index rendering by default for direct cursor placement so images can sit underneath text; `background: true` uses an extra-low z-index for background-style placement. In tmux placeholder mode, image stacking follows kitty's placeholder rendering semantics.
 - Alpha/transparency support through PNG/APNG and kitty's compositor.
 - Lightweight animation support by cycling folder/series frames at configurable intervals.
 - Session-state reconstruction from prior tool results so loaded image lists survive Pi session reloads.
@@ -49,6 +50,7 @@ Example image tool use:
     "placement": "belowEditor",
     "transferMode": "auto",
     "passthrough": "auto",
+    "placementMode": "auto",
     "zIndex": -10
   }
 }
@@ -67,7 +69,7 @@ Example screenshot capture tool use:
 }
 ```
 
-The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly.
+The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placementMode: "auto"` preserves direct kitty cursor placement outside tmux and switches to Unicode placeholders when tmux passthrough is detected; use `"unicode"` or `"cursor"` only for debugging or terminal-specific workarounds.
 
 ## GitHub Pages tool inventory
 
