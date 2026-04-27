@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -47,6 +47,17 @@ function resolveUserPath(cwd, inputPath) {
 function relativeLabel(cwd, absolutePath) {
   const relative = path.relative(cwd, absolutePath);
   return relative && !relative.startsWith("..") ? relative : absolutePath;
+}
+
+function sanitizeFilenamePart(value) {
+  return String(value || "item")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "item";
+}
+
+function timestampForFilename(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, "-");
 }
 
 function clampInteger(value, fallback, min, max) {
@@ -322,6 +333,105 @@ function makeContent(state, extraLines = []) {
   return [{ type: "text", text: [summarizeCurrent(state), ...extraLines].filter(Boolean).join("\n") }];
 }
 
+function parseJsonEnvelope(stdout, commandName) {
+  const trimmed = String(stdout || "").trim();
+  if (!trimmed) throw new Error(`${commandName} returned no JSON output`);
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
+    throw new Error(`${commandName} returned invalid JSON: ${error.message}`);
+  }
+}
+
+async function runTendrilJson(pi, args, { signal, timeout = 30_000 } = {}) {
+  const result = await pi.exec("tendril", args, { signal, timeout });
+  const envelope = parseJsonEnvelope(result.stdout, `tendril ${args[0] || ""}`);
+  if (result.code !== 0 || envelope.status === "error") {
+    const message = envelope.error?.message || result.stderr || `tendril exited with code ${result.code}`;
+    const code = envelope.error?.code ? ` (${envelope.error.code})` : "";
+    throw new Error(`tendril ${args[0] || "command"} failed${code}: ${message}`);
+  }
+  return envelope;
+}
+
+function targetText(target) {
+  return [target.title, target.name, target.app_name, target.id].filter(Boolean).join(" ").toLowerCase();
+}
+
+async function resolveTendrilTarget(pi, params, signal) {
+  if (params.window && params.display) throw new Error("Specify only one of window or display.");
+  if (params.window) return { kind: "window", id: String(params.window), source: "explicit" };
+  if (params.display) return { kind: "display", id: String(params.display), source: "explicit" };
+
+  const envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) });
+  let targets = Array.isArray(envelope.data?.targets) ? envelope.data.targets : [];
+  targets = targets.filter((target) => target?.capabilities?.capture && target.id && target.kind);
+  if (params.targetName) {
+    const needle = String(params.targetName).toLowerCase();
+    targets = targets.filter((target) => targetText(target).includes(needle));
+  }
+  const targetKind = params.targetKind || "display";
+  const kinds = targetKind === "auto" ? ["display", "window"] : [targetKind];
+  for (const kind of kinds) {
+    const match = targets.find((target) => target.kind === kind);
+    if (match) return { ...match, id: String(match.id), source: "list" };
+  }
+  const fallback = targets[0];
+  if (fallback) return { ...fallback, id: String(fallback.id), source: "list" };
+  throw new Error("No capture-capable Tendril targets found.");
+}
+
+function getSessionScreenshotDir(ctx, outputDir) {
+  if (outputDir) return resolveUserPath(ctx.cwd, outputDir);
+  if (process.env.KITTY_IMAGE_PREVIEW_SCREENSHOT_DIR) {
+    return resolveUserPath(ctx.cwd, process.env.KITTY_IMAGE_PREVIEW_SCREENSHOT_DIR);
+  }
+  const sessionFile = ctx.sessionManager?.getSessionFile?.();
+  if (sessionFile) {
+    const sessionId = sanitizeFilenamePart(path.basename(sessionFile).replace(/\.jsonl?$/i, ""));
+    return path.join(path.dirname(sessionFile), "kitty-image-preview-screenshots", sessionId);
+  }
+  return path.join(os.tmpdir(), "pi-kitty-image-preview", `pid-${process.pid}`);
+}
+
+function buildScreenshotOutputPath(ctx, params, target, date = new Date()) {
+  const dir = getSessionScreenshotDir(ctx, params.outputDir);
+  const filename = params.filename
+    ? sanitizeFilenamePart(params.filename.replace(/\.png$/i, ""))
+    : `${timestampForFilename(date)}-${sanitizeFilenamePart(target.kind)}-${sanitizeFilenamePart(target.id)}`;
+  return {
+    dir,
+    path: path.join(dir, `${filename}.png`),
+  };
+}
+
+function buildTendrilCaptureArgs(params, target, outputPath) {
+  const args = [
+    "capture",
+    "--json",
+    "--format",
+    "png",
+    "--output",
+    outputPath,
+    "--timeout-ms",
+    String(clampInteger(params.timeoutMs, 30_000, 1_000, 120_000)),
+    target.kind === "window" ? "--window" : "--display",
+    String(target.id),
+  ];
+  if (params.maxWidth !== undefined) args.push("--max-width", String(clampInteger(params.maxWidth, 0, 1, 100_000)));
+  if (params.maxHeight !== undefined) args.push("--max-height", String(clampInteger(params.maxHeight, 0, 1, 100_000)));
+  if (params.compression !== undefined) args.push("--compression", String(params.compression));
+  return args;
+}
+
+function defaultScreenshotLabel(target, date = new Date()) {
+  const name = target.title || target.name || target.app_name || target.id;
+  return `screenshot ${target.kind} ${name} ${date.toLocaleTimeString()}`;
+}
+
 export default function kittyImagePreviewExtension(pi) {
   const state = {
     visible: false,
@@ -411,6 +521,80 @@ export default function kittyImagePreviewExtension(pi) {
       return {
         content: makeContent(state, [`Added ${item.label}.`]),
         details: makeDetails(state, { added: item }),
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "kitty_image_preview_capture",
+    label: "Kitty Image Preview Capture",
+    description: "Capture a screenshot with the first-party tendril CLI into the Pi session screenshot folder, add it to the kitty preview list, and show it immediately.",
+    promptSnippet: "Capture a current Tendril screenshot and immediately show it in the kitty terminal preview widget.",
+    promptGuidelines: [
+      "Use kitty_image_preview_capture when the user asks to show the current screen, window, UI state, or latest screenshot in the terminal.",
+      "If no target is provided, it automatically chooses the first capture-capable display from tendril list.",
+    ],
+    parameters: Type.Object({
+      window: Type.Optional(Type.String({ description: "Explicit Tendril window id to capture. Mutually exclusive with display." })),
+      display: Type.Optional(Type.String({ description: "Explicit Tendril display id to capture. Mutually exclusive with window." })),
+      targetKind: Type.Optional(stringEnum(["auto", "display", "window"], "Target kind to auto-select from tendril list when window/display is omitted. Defaults to display.")),
+      targetName: Type.Optional(Type.String({ description: "Case-insensitive substring matched against Tendril target title/name/app_name/id during auto-selection." })),
+      outputDir: Type.Optional(Type.String({ description: "Screenshot output directory. Defaults to a kitty-image-preview-screenshots folder beside the Pi session file." })),
+      filename: Type.Optional(Type.String({ description: "Optional output filename, with or without .png. Defaults to timestamp-target.png." })),
+      label: Type.Optional(Type.String({ description: "Optional preview label. Defaults to a screenshot label with target and time." })),
+      replace: Type.Optional(Type.Boolean({ description: "Replace the current preview list with this screenshot. Defaults to false." })),
+      maxWidth: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-width in pixels." })),
+      maxHeight: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-height in pixels." })),
+      compression: Type.Optional(Type.String({ description: "Optional Tendril capture --compression value." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Tendril list/capture timeout in milliseconds. Defaults to 30000." })),
+      config: Type.Optional(Type.Object({
+        columns: Type.Optional(Type.Number()),
+        rows: Type.Optional(Type.Number()),
+        maxRows: Type.Optional(Type.Number()),
+        minRows: Type.Optional(Type.Number()),
+        zIndex: Type.Optional(Type.Number()),
+        background: Type.Optional(Type.Boolean()),
+        showCaption: Type.Optional(Type.Boolean()),
+        clearPrevious: Type.Optional(Type.Boolean()),
+        placement: Type.Optional(stringEnum(["aboveEditor", "belowEditor"], "Where Pi should mount the widget.")),
+        transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
+        passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
+      })),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      applyConfig(state, params.config);
+      const target = await resolveTendrilTarget(pi, params, signal);
+      const now = new Date();
+      const output = buildScreenshotOutputPath(ctx, params, target, now);
+      await mkdir(output.dir, { recursive: true });
+      onUpdate?.({ content: [{ type: "text", text: `Capturing ${target.kind} ${target.id} with Tendril...` }] });
+      const args = buildTendrilCaptureArgs(params, target, output.path);
+      const capture = await runTendrilJson(pi, args, {
+        signal,
+        timeout: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) + 5_000,
+      });
+      const item = await buildItem(ctx.cwd, output.path, params.label || defaultScreenshotLabel(target, now));
+      if (params.replace) {
+        stopAnimation(state);
+        state.items = [];
+      }
+      state.items.push(item);
+      state.index = state.items.length - 1;
+      state.visible = true;
+      await prepareCurrentImage(state, ctx, { forceReload: true });
+      syncWidget(ctx, state);
+      return {
+        content: makeContent(state, [`Captured ${target.kind} ${target.id} to ${output.path}.`]),
+        details: makeDetails(state, {
+          capture: {
+            target: { kind: target.kind, id: target.id, title: target.title, name: target.name, appName: target.app_name },
+            outputPath: output.path,
+            outputDir: output.dir,
+            tendrilArgs: args,
+            tendril: capture,
+          },
+          added: item,
+        }),
       };
     },
   });
