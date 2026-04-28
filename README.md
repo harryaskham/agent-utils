@@ -27,6 +27,8 @@ Available tools:
 - `kitty_image_preview_add_folder` — add a sorted image series from a directory, optionally recursively.
 - `kitty_image_preview_show` — navigate `current`, `next`, `previous`, `first`, `last`, `index`, `hide`, or `clear`.
 - `kitty_image_preview_animate` — start or stop lightweight frame animation by cycling a loaded image series.
+- `kitty_image_preview_stream_start` / `kitty_image_preview_stream_stop` / `kitty_image_preview_stream_status` — show an ephemeral Tendril screenshot stream using a two-file temp buffer so frames do not accumulate on disk or in model context.
+- `kitty_image_preview_stream_sample` — persist one selected stream frame, optionally with `describe: true`.
 - `kitty_image_preview_status` — inspect loaded images, active index, transfer mode, and passthrough detection.
 
 Key capabilities:
@@ -40,6 +42,7 @@ Key capabilities:
 - Alpha/transparency support through PNG/APNG and kitty's compositor.
 - Lightweight animation support by cycling folder/series frames at configurable intervals.
 - Optional `describe: true` on still-image tools to send just that image to a VLM for an objective visual description. Defaults to `litellm-anthropic/claude-opus-4-7`, override with `describeModel` or `KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL`.
+- Optional stream descriptions with `describe: true` or `describeIntervalSecs`, recorded as text metadata only.
 - Session-state reconstruction from prior tool results so loaded image lists survive Pi session reloads.
 
 Example image tool use:

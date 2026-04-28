@@ -1,4 +1,4 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -29,6 +29,8 @@ const DEFAULT_Z_INDEX = -10;
 const DEFAULT_BG_Z_INDEX = -1073741824;
 const DEFAULT_COLUMNS = 48;
 const DEFAULT_MAX_ROWS = 24;
+const DEFAULT_STREAM_INTERVAL_MS = 1000;
+const DEFAULT_DESCRIBE_INTERVAL_SECONDS = 30;
 const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
 const SIDE_PANEL_LAYOUT_SYMBOL = Symbol.for("agent-utils.kittyImagePreview.sidePanelLayout");
 const SIDE_PANEL_MAX_WIDTH_RATIO = 0.5;
@@ -861,6 +863,16 @@ function describeParameterSchema() {
   };
 }
 
+function streamDescribeParameterSchema() {
+  return {
+    describe: Type.Optional(Type.Boolean({ description: "Describe the first stream frame with a vision model. Defaults to false unless describeIntervalSecs is set." })),
+    describeIntervalSecs: Type.Optional(Type.Number({ description: "If set, describe the first stream frame and then the next completed frame after each interval. Descriptions are status metadata only, not image attachments." })),
+    describeModel: Type.Optional(Type.String({ description: `Vision model as provider/model. Defaults to KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL or ${DEFAULT_DESCRIBE_MODEL}.` })),
+    describePrompt: Type.Optional(Type.String({ description: "Optional extra instruction appended to the default objective image-description prompt." })),
+    describeMaxTokens: Type.Optional(Type.Number({ description: "Maximum output tokens for stream frame descriptions. Defaults to 1200." })),
+  };
+}
+
 function parseModelSpec(spec) {
   if (!spec) return undefined;
   const slash = String(spec).indexOf("/");
@@ -1024,6 +1036,115 @@ function defaultScreenshotLabel(target, date = new Date()) {
   return `screenshot ${target.kind} ${name} ${date.toLocaleTimeString()}`;
 }
 
+function getStreamDir(ctx) {
+  const sessionFile = ctx.sessionManager?.getSessionFile?.();
+  const sessionId = sessionFile
+    ? sanitizeFilenamePart(path.basename(sessionFile).replace(/\.jsonl?$/i, ""))
+    : `pid-${process.pid}`;
+  return path.join(os.tmpdir(), "pi-kitty-image-preview-stream", sessionId);
+}
+
+async function unlinkIfExists(filePath) {
+  if (!filePath) return;
+  await unlink(filePath).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+  });
+}
+
+async function cleanupStreamFiles(stream) {
+  if (!stream) return;
+  await Promise.all([stream.framePaths?.[0], stream.framePaths?.[1]].filter(Boolean).map((file) => unlinkIfExists(file)));
+}
+
+function streamStatusLine(stream) {
+  if (!stream?.running) return "No kitty image preview stream is running.";
+  const elapsedSeconds = Math.max(0.001, (Date.now() - stream.startedAt) / 1000);
+  const fps = stream.frameCount / elapsedSeconds;
+  return `Streaming ${stream.target.kind} ${stream.target.id}: frames=${stream.frameCount} fps=${fps.toFixed(2)} interval=${stream.intervalMs}ms latest=${stream.latestPath || "none"}`;
+}
+
+async function maybeDescribeStreamFrame(state, ctx, stream, item, params, signal) {
+  const intervalSeconds = params.describeIntervalSecs === undefined
+    ? (params.describe ? DEFAULT_DESCRIBE_INTERVAL_SECONDS : undefined)
+    : clampInteger(params.describeIntervalSecs, DEFAULT_DESCRIBE_INTERVAL_SECONDS, 1, 86_400);
+  if (!params.describe && intervalSeconds === undefined) return;
+  const now = Date.now();
+  if (stream.descriptionInFlight) return;
+  if (stream.lastDescriptionAt && intervalSeconds !== undefined && now - stream.lastDescriptionAt < intervalSeconds * 1000) return;
+  stream.lastDescriptionAt = now;
+  stream.descriptionInFlight = true;
+  describeImageFile(item.path, item, ctx, params, signal)
+    .then((description) => {
+      stream.latestDescription = { ...description, frame: stream.frameCount, path: item.path, at: Date.now() };
+      ctx.ui?.setStatus?.(WIDGET_ID, `🖼 stream ${stream.frameCount} • described`);
+    })
+    .catch((error) => {
+      stream.lastDescriptionError = error.message;
+    })
+    .finally(() => {
+      stream.descriptionInFlight = false;
+    });
+}
+
+async function captureStreamFrame(pi, ctx, state, stream) {
+  if (!stream?.running || stream.capturing) return;
+  stream.capturing = true;
+  const frameIndex = stream.nextFrameIndex % 2;
+  stream.nextFrameIndex += 1;
+  const outputPath = stream.framePaths[frameIndex];
+  const controller = new AbortController();
+  stream.currentController = controller;
+  try {
+    await unlinkIfExists(outputPath);
+    const args = buildTendrilCaptureArgs(stream.params, stream.target, outputPath);
+    await runTendrilJson(pi, args, {
+      signal: controller.signal,
+      timeout: clampInteger(stream.params.timeoutMs, 30_000, 1_000, 120_000) + 5_000,
+    });
+    if (!stream.running) return;
+    const item = await buildItem(ctx.cwd, outputPath, `stream ${stream.target.kind} ${stream.target.id} frame ${stream.frameCount + 1}`);
+    state.items = [item];
+    state.index = 0;
+    state.visible = true;
+    stream.latestPath = outputPath;
+    stream.latestItem = item;
+    stream.frameCount += 1;
+    stream.lastFrameAt = Date.now();
+    stream.lastError = undefined;
+    await prepareCurrentImage(state, ctx, { forceReload: true });
+    syncWidget(ctx, state);
+    await maybeDescribeStreamFrame(state, ctx, stream, item, stream.params, controller.signal);
+    const previousPath = stream.framePaths[1 - frameIndex];
+    if (previousPath !== stream.latestPath) await unlinkIfExists(previousPath).catch(() => {});
+  } catch (error) {
+    if (!stream.running || controller.signal.aborted) return;
+    stream.lastError = error.message;
+    ctx.ui?.notify?.(`kitty image stream frame failed: ${error.message}`, "warning");
+  } finally {
+    stream.capturing = false;
+    stream.currentController = undefined;
+  }
+}
+
+function scheduleNextStreamFrame(pi, ctx, state, stream) {
+  if (!stream?.running) return;
+  stream.timer = setTimeout(async () => {
+    await captureStreamFrame(pi, ctx, state, stream);
+    scheduleNextStreamFrame(pi, ctx, state, stream);
+  }, stream.intervalMs);
+}
+
+async function stopStream(state, { cleanup = false } = {}) {
+  const stream = state.stream;
+  if (!stream) return undefined;
+  state.stream = undefined;
+  stream.running = false;
+  if (stream.timer) clearTimeout(stream.timer);
+  stream.currentController?.abort?.();
+  if (cleanup) await cleanupStreamFiles(stream).catch(() => {});
+  return stream;
+}
+
 export default function kittyImagePreviewExtension(pi) {
   const state = {
     visible: false,
@@ -1033,6 +1154,7 @@ export default function kittyImagePreviewExtension(pi) {
     lastDeleteCommand: "",
     animationTimer: undefined,
     animation: { running: false },
+    stream: undefined,
     config: {
       columns: DEFAULT_COLUMNS,
       rows: undefined,
@@ -1067,6 +1189,7 @@ export default function kittyImagePreviewExtension(pi) {
 
   pi.on("session_shutdown", (_event, ctx) => {
     stopAnimation(state);
+    void stopStream(state, { cleanup: true });
     state.visible = false;
     if (ctx?.hasUI) {
       flashDeleteWidget(ctx, state, buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough }));
@@ -1350,6 +1473,171 @@ export default function kittyImagePreviewExtension(pi) {
       return {
         content: makeContent(state, [`Started animation at ${state.animation.intervalMs}ms per frame.`]),
         details: makeDetails(state, { animation: { ...state.animation } }),
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "kitty_image_preview_stream_start",
+    label: "Kitty Image Preview Stream Start",
+    description: "Start a lightweight Tendril screenshot stream into the kitty preview using a two-file temp buffer. Frames are UI-only and are not added to agent context.",
+    promptSnippet: "Start an ephemeral screen/window stream in the kitty image preview without accumulating images in context or on disk.",
+    parameters: Type.Object({
+      window: Type.Optional(Type.String({ description: "Explicit Tendril window id to capture. Mutually exclusive with display." })),
+      display: Type.Optional(Type.String({ description: "Explicit Tendril display id to capture. Mutually exclusive with window." })),
+      targetKind: Type.Optional(stringEnum(["auto", "display", "window"], "Target kind to auto-select from tendril list when window/display is omitted. Defaults to display.")),
+      targetName: Type.Optional(Type.String({ description: "Case-insensitive substring matched against Tendril target title/name/app_name/id during auto-selection." })),
+      maxWidth: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-width in pixels." })),
+      maxHeight: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-height in pixels." })),
+      compression: Type.Optional(Type.String({ description: "Optional Tendril capture --compression value." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Tendril list/capture timeout in milliseconds. Defaults to 30000." })),
+      intervalMs: Type.Optional(Type.Number({ description: "Requested delay between completed captures. Defaults to 1000ms. Captures never overlap." })),
+      ...streamDescribeParameterSchema(),
+      config: Type.Optional(Type.Object({
+        columns: Type.Optional(Type.Number()),
+        rows: Type.Optional(Type.Number()),
+        maxRows: Type.Optional(Type.Number()),
+        minRows: Type.Optional(Type.Number()),
+        zIndex: Type.Optional(Type.Number()),
+        background: Type.Optional(Type.Boolean()),
+        showCaption: Type.Optional(Type.Boolean()),
+        clearPrevious: Type.Optional(Type.Boolean()),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: auto, above/below the editor widget, or the fixed right-side panel.")),
+        transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
+        passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
+        placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
+      })),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      await stopStream(state, { cleanup: true });
+      stopAnimation(state);
+      applyConfig(state, params.config);
+      const target = await resolveTendrilTarget(pi, params, signal);
+      const dir = getStreamDir(ctx);
+      await mkdir(dir, { recursive: true });
+      const stream = {
+        running: true,
+        target,
+        params: { ...params, timeoutMs: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) },
+        dir,
+        framePaths: [path.join(dir, "frame-a.png"), path.join(dir, "frame-b.png")],
+        intervalMs: clampInteger(params.intervalMs, DEFAULT_STREAM_INTERVAL_MS, 250, 60_000),
+        nextFrameIndex: 0,
+        frameCount: 0,
+        startedAt: Date.now(),
+        latestPath: undefined,
+        latestItem: undefined,
+        timer: undefined,
+        capturing: false,
+        currentController: undefined,
+        latestDescription: undefined,
+        lastDescriptionAt: undefined,
+        descriptionInFlight: false,
+      };
+      state.stream = stream;
+      onUpdate?.({ content: [{ type: "text", text: `Starting stream from ${target.kind} ${target.id}...` }] });
+      await captureStreamFrame(pi, ctx, state, stream);
+      scheduleNextStreamFrame(pi, ctx, state, stream);
+      return {
+        content: makeContent(state, [streamStatusLine(stream), "Frames use a two-file temp buffer and are not appended to session context."]),
+        details: makeDetails(state, { stream: { target, dir, intervalMs: stream.intervalMs, latestPath: stream.latestPath } }),
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "kitty_image_preview_stream_stop",
+    label: "Kitty Image Preview Stream Stop",
+    description: "Stop the active kitty screenshot stream. Optionally hide the preview and clean temporary frame files.",
+    promptSnippet: "Stop the active ephemeral kitty screenshot stream.",
+    parameters: Type.Object({
+      hide: Type.Optional(Type.Boolean({ description: "Hide the preview after stopping. Defaults to false." })),
+      cleanup: Type.Optional(Type.Boolean({ description: "Delete stream temp frame files. Defaults to true when hide=true, otherwise false so the latest visible frame remains valid." })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cleanup = params.cleanup ?? Boolean(params.hide);
+      const stream = await stopStream(state, { cleanup });
+      if (params.hide) {
+        state.visible = false;
+        flashDeleteWidget(ctx, state, buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough }));
+      } else {
+        syncWidget(ctx, state);
+      }
+      return {
+        content: [{ type: "text", text: stream ? `Stopped stream. ${streamStatusLine({ ...stream, running: true })}` : "No stream was running." }],
+        details: makeDetails(state, { stoppedStream: stream ? { frameCount: stream.frameCount, latestPath: stream.latestPath, cleanup } : undefined }),
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "kitty_image_preview_stream_status",
+    label: "Kitty Image Preview Stream Status",
+    description: "Report the active kitty screenshot stream status, including latest frame path and latest VLM description metadata if enabled.",
+    promptSnippet: "Inspect the active ephemeral kitty screenshot stream.",
+    parameters: Type.Object({}),
+    async execute() {
+      const stream = state.stream;
+      const lines = [
+        streamStatusLine(stream),
+        stream?.lastError ? `lastError=${stream.lastError}` : "",
+        stream?.lastDescriptionError ? `lastDescriptionError=${stream.lastDescriptionError}` : "",
+        stream?.latestDescription?.text ? `latestDescription (${stream.latestDescription.model}, frame ${stream.latestDescription.frame}):\n${stream.latestDescription.text}` : "",
+      ].filter(Boolean);
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: makeDetails(state, { stream: stream ? {
+          running: stream.running,
+          target: stream.target,
+          intervalMs: stream.intervalMs,
+          frameCount: stream.frameCount,
+          latestPath: stream.latestPath,
+          lastFrameAt: stream.lastFrameAt,
+          latestDescription: stream.latestDescription,
+          lastError: stream.lastError,
+        } : undefined }),
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "kitty_image_preview_stream_sample",
+    label: "Kitty Image Preview Stream Sample",
+    description: "Persist the latest stream frame to the session screenshot folder and optionally describe it with a vision model.",
+    promptSnippet: "Persist or describe one selected frame from the active ephemeral stream.",
+    parameters: Type.Object({
+      outputDir: Type.Optional(Type.String({ description: "Optional output directory. Defaults to the session screenshot folder." })),
+      filename: Type.Optional(Type.String({ description: "Optional output filename, with or without .png." })),
+      label: Type.Optional(Type.String({ description: "Optional sample label." })),
+      addToGallery: Type.Optional(Type.Boolean({ description: "Add the persisted sample to the preview gallery. Defaults to false while streaming." })),
+      ...describeParameterSchema(),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const stream = state.stream;
+      if (!stream?.latestPath || !stream.latestItem) throw new Error("No stream frame is available to sample.");
+      const target = stream.target;
+      const now = new Date();
+      const output = buildScreenshotOutputPath(ctx, {
+        outputDir: params.outputDir,
+        filename: params.filename || `stream-sample-${timestampForFilename(now)}`,
+      }, target, now);
+      await mkdir(output.dir, { recursive: true });
+      await copyFile(stream.latestPath, output.path);
+      const item = await buildItem(ctx.cwd, output.path, params.label || `stream sample ${target.kind} ${target.id} ${now.toLocaleTimeString()}`);
+      if (params.addToGallery) {
+        state.items.push(item);
+        state.index = state.items.length - 1;
+        state.visible = true;
+        await prepareCurrentImage(state, ctx, { forceReload: true });
+        syncWidget(ctx, state);
+      }
+      const description = await maybeDescribeImage(item, ctx, params, signal, onUpdate);
+      return {
+        content: makeContent(state, [
+          `Sampled latest stream frame to ${output.path}.`,
+          description?.text ? `Description (${description.model}):\n${description.text}` : "",
+        ]),
+        details: makeDetails(state, { sample: item, outputPath: output.path, description }),
       };
     },
   });
