@@ -27,7 +27,7 @@ Available tools:
 - `kitty_image_preview_add_folder` — add a sorted image series from a directory, optionally recursively.
 - `kitty_image_preview_show` — navigate `current`, `next`, `previous`, `first`, `last`, `index`, `hide`, or `clear`.
 - `kitty_image_preview_animate` — start or stop lightweight frame animation by cycling a loaded image series.
-- `kitty_image_preview_stream_start` / `kitty_image_preview_stream_stop` / `kitty_image_preview_stream_status` — show an ephemeral Tendril screenshot stream using a two-file temp buffer so frames do not accumulate on disk or in model context.
+- `kitty_image_preview_stream_start` / `kitty_image_preview_stream_stop` / `kitty_image_preview_stream_status` — show an ephemeral Tendril screenshot stream using a two-file temp buffer so frames do not accumulate on disk or in model context. Set `intervalMs: 0` for max non-overlapping Tendril capture rate.
 - `kitty_image_preview_stream_sample` — persist one selected stream frame, optionally with `describe: true`.
 - `kitty_image_preview_status` — inspect loaded images, active index, transfer mode, and passthrough detection.
 
@@ -41,8 +41,8 @@ Key capabilities:
 - Negative z-index rendering by default for direct cursor placement so images can sit underneath text; `background: true` uses an extra-low z-index for background-style placement. In tmux placeholder mode, image stacking follows kitty's placeholder rendering semantics.
 - Alpha/transparency support through PNG/APNG and kitty's compositor.
 - Lightweight animation support by cycling folder/series frames at configurable intervals.
-- Optional `describe: true` on still-image tools to send just that image to a VLM for an objective visual description. Defaults to `litellm-anthropic/claude-opus-4-7`, override with `describeModel` or `KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL`.
-- Optional stream descriptions with `describe: true` or `describeIntervalSecs`, recorded as text metadata only.
+- Optional `describe: true` on still-image tools to send just that image to a VLM for an objective visual description. Screenshot descriptions use a separate full-resolution Tendril capture even when the terminal preview is downscaled. Defaults to `litellm-anthropic/claude-opus-4-7`, override with `describeModel` or `KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL`.
+- Optional stream descriptions with `describe: true` or `describeIntervalSecs`, recorded as text metadata only. Stream previews can stay low-res while description frames are captured separately at full resolution in the background.
 - Session-state reconstruction from prior tool results so loaded image lists survive Pi session reloads.
 
 Example image tool use:

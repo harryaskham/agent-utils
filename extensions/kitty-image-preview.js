@@ -937,6 +937,13 @@ async function maybeDescribeImage(item, ctx, params = {}, signal, onUpdate) {
   return describeImageFile(item.path, item, ctx, params, signal);
 }
 
+function fullResolutionDescribeParams(params = {}) {
+  const full = { ...params };
+  delete full.maxWidth;
+  delete full.maxHeight;
+  return full;
+}
+
 function parseJsonEnvelope(stdout, commandName) {
   const trimmed = String(stdout || "").trim();
   if (!trimmed) throw new Error(`${commandName} returned no JSON output`);
@@ -1036,12 +1043,43 @@ function defaultScreenshotLabel(target, date = new Date()) {
   return `screenshot ${target.kind} ${name} ${date.toLocaleTimeString()}`;
 }
 
-function getStreamDir(ctx) {
+async function describeTendrilTargetFullResolution(pi, target, ctx, params, signal, onUpdate, fallbackItem) {
+  if (!params.describe && params.describeIntervalSecs === undefined) return undefined;
+  const dir = getDescribeTempDir(ctx);
+  await mkdir(dir, { recursive: true });
+  const filePath = path.join(dir, `describe-${timestampForFilename()}-${sanitizeFilenamePart(target.kind)}-${sanitizeFilenamePart(target.id)}.png`);
+  try {
+    const fullParams = fullResolutionDescribeParams(params);
+    const args = buildTendrilCaptureArgs(fullParams, target, filePath);
+    onUpdate?.({ content: [{ type: "text", text: `Capturing full-resolution frame for VLM description...` }] });
+    await runTendrilJson(pi, args, {
+      signal,
+      timeout: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) + 5_000,
+    });
+    const item = await buildItem(ctx.cwd, filePath, `${fallbackItem?.label || defaultScreenshotLabel(target)} full-resolution description frame`);
+    return await describeImageFile(filePath, item, ctx, { ...params, describe: true }, signal);
+  } catch (error) {
+    if (!fallbackItem) throw error;
+    ctx.ui?.notify?.(`Full-resolution description capture failed; describing preview frame: ${error.message}`, "warning");
+    return describeImageFile(fallbackItem.path, fallbackItem, ctx, { ...params, describe: true }, signal);
+  } finally {
+    await unlinkIfExists(filePath).catch(() => {});
+  }
+}
+
+function sessionTempId(ctx) {
   const sessionFile = ctx.sessionManager?.getSessionFile?.();
-  const sessionId = sessionFile
+  return sessionFile
     ? sanitizeFilenamePart(path.basename(sessionFile).replace(/\.jsonl?$/i, ""))
     : `pid-${process.pid}`;
-  return path.join(os.tmpdir(), "pi-kitty-image-preview-stream", sessionId);
+}
+
+function getStreamDir(ctx) {
+  return path.join(os.tmpdir(), "pi-kitty-image-preview-stream", sessionTempId(ctx));
+}
+
+function getDescribeTempDir(ctx) {
+  return path.join(os.tmpdir(), "pi-kitty-image-preview-describe", sessionTempId(ctx));
 }
 
 async function unlinkIfExists(filePath) {
@@ -1063,7 +1101,7 @@ function streamStatusLine(stream) {
   return `Streaming ${stream.target.kind} ${stream.target.id}: frames=${stream.frameCount} fps=${fps.toFixed(2)} interval=${stream.intervalMs}ms latest=${stream.latestPath || "none"}`;
 }
 
-async function maybeDescribeStreamFrame(state, ctx, stream, item, params, signal) {
+async function maybeDescribeStreamFrame(pi, state, ctx, stream, item, params, signal) {
   const intervalSeconds = params.describeIntervalSecs === undefined
     ? (params.describe ? DEFAULT_DESCRIBE_INTERVAL_SECONDS : undefined)
     : clampInteger(params.describeIntervalSecs, DEFAULT_DESCRIBE_INTERVAL_SECONDS, 1, 86_400);
@@ -1073,7 +1111,7 @@ async function maybeDescribeStreamFrame(state, ctx, stream, item, params, signal
   if (stream.lastDescriptionAt && intervalSeconds !== undefined && now - stream.lastDescriptionAt < intervalSeconds * 1000) return;
   stream.lastDescriptionAt = now;
   stream.descriptionInFlight = true;
-  describeImageFile(item.path, item, ctx, params, signal)
+  describeTendrilTargetFullResolution(pi, stream.target, ctx, params, signal, undefined, item)
     .then((description) => {
       stream.latestDescription = { ...description, frame: stream.frameCount, path: item.path, at: Date.now() };
       ctx.ui?.setStatus?.(WIDGET_ID, `🖼 stream ${stream.frameCount} • described`);
@@ -1113,7 +1151,7 @@ async function captureStreamFrame(pi, ctx, state, stream) {
     stream.lastError = undefined;
     await prepareCurrentImage(state, ctx, { forceReload: true });
     syncWidget(ctx, state);
-    await maybeDescribeStreamFrame(state, ctx, stream, item, stream.params, controller.signal);
+    await maybeDescribeStreamFrame(pi, state, ctx, stream, item, stream.params, controller.signal);
     const previousPath = stream.framePaths[1 - frameIndex];
     if (previousPath !== stream.latestPath) await unlinkIfExists(previousPath).catch(() => {});
   } catch (error) {
@@ -1307,7 +1345,9 @@ export default function kittyImagePreviewExtension(pi) {
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
       syncWidget(ctx, state);
-      const description = await maybeDescribeImage(item, ctx, params, signal, onUpdate);
+      const description = params.describe
+        ? await describeTendrilTargetFullResolution(pi, target, ctx, params, signal, onUpdate, item)
+        : undefined;
       return {
         content: makeContent(state, [
           `Captured ${target.kind} ${target.id} to ${output.path}.`,
@@ -1491,7 +1531,7 @@ export default function kittyImagePreviewExtension(pi) {
       maxHeight: Type.Optional(Type.Number({ description: "Optional Tendril capture --max-height in pixels." })),
       compression: Type.Optional(Type.String({ description: "Optional Tendril capture --compression value." })),
       timeoutMs: Type.Optional(Type.Number({ description: "Tendril list/capture timeout in milliseconds. Defaults to 30000." })),
-      intervalMs: Type.Optional(Type.Number({ description: "Requested delay between completed captures. Defaults to 1000ms. Captures never overlap." })),
+      intervalMs: Type.Optional(Type.Number({ description: "Requested delay between completed captures. Defaults to 1000ms. Use 0 for max non-overlapping capture rate." })),
       ...streamDescribeParameterSchema(),
       config: Type.Optional(Type.Object({
         columns: Type.Optional(Type.Number()),
@@ -1521,7 +1561,7 @@ export default function kittyImagePreviewExtension(pi) {
         params: { ...params, timeoutMs: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) },
         dir,
         framePaths: [path.join(dir, "frame-a.png"), path.join(dir, "frame-b.png")],
-        intervalMs: clampInteger(params.intervalMs, DEFAULT_STREAM_INTERVAL_MS, 250, 60_000),
+        intervalMs: clampInteger(params.intervalMs, DEFAULT_STREAM_INTERVAL_MS, 0, 60_000),
         nextFrameIndex: 0,
         frameCount: 0,
         startedAt: Date.now(),
