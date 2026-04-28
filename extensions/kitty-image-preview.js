@@ -55,6 +55,10 @@ function stringEnum(values, description) {
   return StringEnum(values, { description });
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
+
 function normalizeMaybeAtPath(input) {
   if (typeof input !== "string") return input;
   return input.startsWith("@") ? input.slice(1) : input;
@@ -1643,7 +1647,9 @@ export default function kittyImagePreviewExtension(pi) {
     parameters: Type.Object({
       screenshotPath: Type.Optional(Type.String({ description: "PNG path Playwright should overwrite after actions. Defaults to a temp path returned in the tool result." })),
       pollMs: Type.Optional(Type.Number({ description: "Polling interval for screenshotPath changes. Defaults to 250ms." })),
-      fullPage: Type.Optional(Type.Boolean({ description: "Only affects the returned Playwright hook snippet. Defaults to false." })),
+      fullPage: Type.Optional(Type.Boolean({ description: "Affects returned Playwright screenshot snippets. Defaults to false." })),
+      session: Type.Optional(Type.String({ description: "Optional playwright-cli session passed as -s=<session> in the returned CLI command." })),
+      ref: Type.Optional(Type.String({ description: "Optional playwright-cli element ref for element screenshots in the returned CLI command." })),
       ...streamDescribeParameterSchema(),
       config: Type.Optional(Type.Object({
         columns: Type.Optional(Type.Number()),
@@ -1700,15 +1706,23 @@ export default function kittyImagePreviewExtension(pi) {
       state.stream = stream;
       await captureFileStreamFrame(pi, ctx, state, stream);
       scheduleNextStreamFrame(pi, ctx, state, stream);
-      const snippet = `await page.screenshot({ path: ${JSON.stringify(sourcePath)}, fullPage: ${params.fullPage === true ? "true" : "false"} });`;
+      const jsSnippet = `await page.screenshot({ path: ${JSON.stringify(sourcePath)}, fullPage: ${params.fullPage === true ? "true" : "false"} });`;
+      const cliParts = ["playwright-cli"];
+      if (params.session) cliParts.push(`-s=${shellQuote(params.session)}`);
+      cliParts.push("screenshot");
+      if (params.ref) cliParts.push(shellQuote(params.ref));
+      cliParts.push("--filename", shellQuote(sourcePath));
+      if (params.fullPage === true) cliParts.push("--full-page");
+      const cliCommand = cliParts.join(" ");
       return {
         content: makeContent(state, [
           `Started Playwright visual mirror watching ${sourcePath}.`,
           stream.frameCount === 0 ? "Waiting for Playwright to write the first PNG." : streamStatusLine(stream),
-          `After DOM-changing Playwright actions, run: ${snippet}`,
+          `After DOM-changing playwright-cli actions, run: ${cliCommand}`,
+          `If using raw Playwright JS instead, run: ${jsSnippet}`,
           "Frames are display-only unless sampled/described explicitly.",
         ]),
-        details: makeDetails(state, { playwrightMirror: { sourcePath, pollMs: stream.intervalMs, snippet } }),
+        details: makeDetails(state, { playwrightMirror: { sourcePath, pollMs: stream.intervalMs, cliCommand, jsSnippet } }),
       };
     },
   });
