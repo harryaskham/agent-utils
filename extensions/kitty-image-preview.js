@@ -1252,7 +1252,9 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
 }
 
 async function captureAnyStreamFrame(pi, ctx, state, stream) {
-  if (stream?.source === "playwright-file") return captureFileStreamFrame(pi, ctx, state, stream);
+  if (stream?.source === "playwright-file" || stream?.source === "playwright-cli") {
+    return captureFileStreamFrame(pi, ctx, state, stream);
+  }
   return captureTendrilStreamFrame(pi, ctx, state, stream);
 }
 
@@ -1269,7 +1271,10 @@ async function stopStream(state, { cleanup = false } = {}) {
   if (!stream) return undefined;
   state.stream = undefined;
   stream.running = false;
-  if (stream.timer) clearTimeout(stream.timer);
+  if (stream.timer) {
+    clearTimeout(stream.timer);
+    stream.timer = undefined;
+  }
   stream.currentController?.abort?.();
   if (cleanup) await cleanupStreamFiles(stream).catch(() => {});
   return stream;
