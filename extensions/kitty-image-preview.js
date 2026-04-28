@@ -1091,7 +1091,9 @@ async function unlinkIfExists(filePath) {
 
 async function cleanupStreamFiles(stream) {
   if (!stream) return;
-  await Promise.all([stream.framePaths?.[0], stream.framePaths?.[1]].filter(Boolean).map((file) => unlinkIfExists(file)));
+  const files = [stream.framePaths?.[0], stream.framePaths?.[1]];
+  if (stream.ownsSourcePath) files.push(stream.sourcePath);
+  await Promise.all(files.filter(Boolean).map((file) => unlinkIfExists(file)));
 }
 
 function streamStatusLine(stream) {
@@ -1667,6 +1669,11 @@ export default function kittyImagePreviewExtension(pi) {
       const sourcePath = params.screenshotPath
         ? resolveUserPath(ctx.cwd, params.screenshotPath)
         : path.join(dir, "playwright-source.png");
+      state.items = [];
+      state.index = 0;
+      state.visible = false;
+      state.currentCommand = undefined;
+      syncWidget(ctx, state);
       const stream = {
         running: true,
         source: "playwright-file",
@@ -1674,6 +1681,7 @@ export default function kittyImagePreviewExtension(pi) {
         params,
         dir,
         sourcePath,
+        ownsSourcePath: !params.screenshotPath,
         describeSourcePath: sourcePath,
         framePaths: [path.join(dir, "playwright-frame-a.png"), path.join(dir, "playwright-frame-b.png")],
         intervalMs: clampInteger(params.pollMs, 250, 50, 60_000),
