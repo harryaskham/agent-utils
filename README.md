@@ -44,7 +44,7 @@ Key capabilities:
 - Lightweight animation support by cycling folder/series frames at configurable intervals.
 - Optional `describe: true` on still-image tools to send just that image to a VLM for an objective visual description. Screenshot descriptions use a separate full-resolution Tendril capture even when the terminal preview is downscaled. Defaults to `litellm-anthropic/claude-opus-4-7`, override with `describeModel` or `KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL`.
 - Optional stream descriptions with `describe: true` or `describeIntervalSecs`, recorded as text metadata only. Stream previews can stay low-res while description frames are captured separately at full resolution in the background.
-- Playwright visual mirroring is file-based for headless/in-memory browsers: start the mirror, then have Playwright overwrite the returned screenshot path after DOM-changing actions. Frames remain display-only unless sampled.
+- Playwright visual mirroring can automatically run `playwright-cli screenshot --filename <temp>` on an interval for the active/session browser, or can watch a screenshot path written by external Playwright code when `autoScreenshot: false`. Frames remain display-only unless sampled.
 - Session-state reconstruction from prior tool results so loaded image lists survive Pi session reloads.
 
 Example image tool use:

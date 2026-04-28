@@ -1107,6 +1107,37 @@ function streamStatusLine(stream) {
   return `Streaming ${stream.target.kind} ${stream.target.id}: frames=${stream.frameCount} fps=${fps.toFixed(2)} interval=${stream.intervalMs}ms latest=${stream.latestPath || "none"}`;
 }
 
+function buildPlaywrightCliScreenshotArgs(params = {}, sourcePath) {
+  const args = [];
+  if (params.session) args.push(`-s=${String(params.session)}`);
+  args.push("screenshot");
+  if (params.ref) args.push(String(params.ref));
+  args.push("--filename", sourcePath);
+  if (params.fullPage === true) args.push("--full-page");
+  return args;
+}
+
+function buildPlaywrightCliScreenshotCommand(params = {}, sourcePath) {
+  const parts = ["playwright-cli"];
+  if (params.session) parts.push(`-s=${shellQuote(params.session)}`);
+  parts.push("screenshot");
+  if (params.ref) parts.push(shellQuote(params.ref));
+  parts.push("--filename", shellQuote(sourcePath));
+  if (params.fullPage === true) parts.push("--full-page");
+  return parts.join(" ");
+}
+
+async function runPlaywrightCliScreenshot(pi, stream) {
+  const args = buildPlaywrightCliScreenshotArgs(stream.params, stream.sourcePath);
+  const result = await pi.exec("playwright-cli", args, {
+    timeout: clampInteger(stream.params.timeoutMs, 30_000, 1_000, 120_000),
+  });
+  if (result.code !== 0) {
+    const message = String(result.stderr || result.stdout || `playwright-cli exited with code ${result.code}`).trim();
+    throw new Error(message);
+  }
+}
+
 async function maybeDescribeStreamFrame(pi, state, ctx, stream, item, params, signal) {
   const intervalSeconds = params.describeIntervalSecs === undefined
     ? (params.describe ? DEFAULT_DESCRIBE_INTERVAL_SECONDS : undefined)
@@ -1178,6 +1209,7 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
   stream.capturing = true;
   const sourcePath = stream.sourcePath;
   try {
+    if (stream.source === "playwright-cli") await runPlaywrightCliScreenshot(pi, stream);
     const sourceInfo = await stat(sourcePath);
     if (!sourceInfo.isFile()) throw new Error(`Playwright screenshot path is not a file: ${sourcePath}`);
     const signature = `${sourceInfo.mtimeMs}:${sourceInfo.size}`;
@@ -1197,6 +1229,7 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
     stream.frameCount += 1;
     stream.lastFrameAt = Date.now();
     stream.lastError = undefined;
+    stream.consecutiveErrors = 0;
     await prepareCurrentImage(state, ctx, { forceReload: true });
     syncWidget(ctx, state);
     await maybeDescribeStreamFrame(pi, state, ctx, stream, item, stream.params, stream.currentController?.signal);
@@ -1204,9 +1237,15 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
     if (previousPath !== stream.latestPath) await unlinkIfExists(previousPath).catch(() => {});
   } catch (error) {
     if (!stream.running) return;
+    stream.consecutiveErrors = (stream.consecutiveErrors || 0) + 1;
     stream.lastError = error?.code === "ENOENT"
       ? `Waiting for Playwright screenshot at ${sourcePath}`
       : error.message;
+    if (stream.source === "playwright-cli" && stream.stopAfterErrors && stream.consecutiveErrors >= stream.stopAfterErrors) {
+      stream.running = false;
+      if (stream.timer) clearTimeout(stream.timer);
+      stream.lastError = `${stream.lastError} (stopped after ${stream.consecutiveErrors} consecutive errors)`;
+    }
   } finally {
     stream.capturing = false;
   }
@@ -1645,11 +1684,14 @@ export default function kittyImagePreviewExtension(pi) {
     description: "Start a Playwright visual mirror by watching a PNG file that Playwright overwrites after DOM actions. The user sees browser state while the agent can continue using DOM-only context.",
     promptSnippet: "Mirror a Playwright browser screenshot file into the kitty preview without adding frames to model context.",
     parameters: Type.Object({
-      screenshotPath: Type.Optional(Type.String({ description: "PNG path Playwright should overwrite after actions. Defaults to a temp path returned in the tool result." })),
-      pollMs: Type.Optional(Type.Number({ description: "Polling interval for screenshotPath changes. Defaults to 250ms." })),
+      screenshotPath: Type.Optional(Type.String({ description: "PNG path for screenshots. Defaults to a temp path returned in the tool result." })),
+      pollMs: Type.Optional(Type.Number({ description: "Polling/capture interval. Defaults to 250ms." })),
+      autoScreenshot: Type.Optional(Type.Boolean({ description: "Automatically run playwright-cli screenshot on every poll. Defaults to true. Set false to only watch a file written by external Playwright code." })),
+      stopAfterErrors: Type.Optional(Type.Number({ description: "Stop auto screenshot mode after this many consecutive playwright-cli errors. Defaults to 20; set 0 to keep retrying." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "playwright-cli screenshot timeout in milliseconds. Defaults to 30000." })),
       fullPage: Type.Optional(Type.Boolean({ description: "Affects returned Playwright screenshot snippets. Defaults to false." })),
-      session: Type.Optional(Type.String({ description: "Optional playwright-cli session passed as -s=<session> in the returned CLI command." })),
-      ref: Type.Optional(Type.String({ description: "Optional playwright-cli element ref for element screenshots in the returned CLI command." })),
+      session: Type.Optional(Type.String({ description: "Optional playwright-cli session passed as -s=<session>." })),
+      ref: Type.Optional(Type.String({ description: "Optional playwright-cli element ref for element screenshots." })),
       ...streamDescribeParameterSchema(),
       config: Type.Optional(Type.Object({
         columns: Type.Optional(Type.Number()),
@@ -1680,9 +1722,10 @@ export default function kittyImagePreviewExtension(pi) {
       state.visible = false;
       state.currentCommand = undefined;
       syncWidget(ctx, state);
+      const autoScreenshot = params.autoScreenshot !== false;
       const stream = {
         running: true,
-        source: "playwright-file",
+        source: autoScreenshot ? "playwright-cli" : "playwright-file",
         target: { kind: "playwright", id: path.basename(sourcePath), source: "file" },
         params,
         dir,
@@ -1699,6 +1742,8 @@ export default function kittyImagePreviewExtension(pi) {
         timer: undefined,
         capturing: false,
         currentController: new AbortController(),
+        stopAfterErrors: clampInteger(params.stopAfterErrors, 20, 0, 10_000) || undefined,
+        consecutiveErrors: 0,
         latestDescription: undefined,
         lastDescriptionAt: undefined,
         descriptionInFlight: false,
@@ -1707,22 +1752,16 @@ export default function kittyImagePreviewExtension(pi) {
       await captureFileStreamFrame(pi, ctx, state, stream);
       scheduleNextStreamFrame(pi, ctx, state, stream);
       const jsSnippet = `await page.screenshot({ path: ${JSON.stringify(sourcePath)}, fullPage: ${params.fullPage === true ? "true" : "false"} });`;
-      const cliParts = ["playwright-cli"];
-      if (params.session) cliParts.push(`-s=${shellQuote(params.session)}`);
-      cliParts.push("screenshot");
-      if (params.ref) cliParts.push(shellQuote(params.ref));
-      cliParts.push("--filename", shellQuote(sourcePath));
-      if (params.fullPage === true) cliParts.push("--full-page");
-      const cliCommand = cliParts.join(" ");
+      const cliCommand = buildPlaywrightCliScreenshotCommand(params, sourcePath);
       return {
         content: makeContent(state, [
-          `Started Playwright visual mirror watching ${sourcePath}.`,
-          stream.frameCount === 0 ? "Waiting for Playwright to write the first PNG." : streamStatusLine(stream),
-          `After DOM-changing playwright-cli actions, run: ${cliCommand}`,
+          `Started Playwright visual mirror ${autoScreenshot ? "capturing via playwright-cli" : "watching"} ${sourcePath}.`,
+          stream.frameCount === 0 ? (autoScreenshot ? `Waiting for playwright-cli screenshot to succeed. ${stream.lastError || ""}` : "Waiting for Playwright to write the first PNG.") : streamStatusLine(stream),
+          autoScreenshot ? `Auto-running: ${cliCommand}` : `After DOM-changing playwright-cli actions, run: ${cliCommand}`,
           `If using raw Playwright JS instead, run: ${jsSnippet}`,
           "Frames are display-only unless sampled/described explicitly.",
         ]),
-        details: makeDetails(state, { playwrightMirror: { sourcePath, pollMs: stream.intervalMs, cliCommand, jsSnippet } }),
+        details: makeDetails(state, { playwrightMirror: { sourcePath, pollMs: stream.intervalMs, autoScreenshot, cliCommand, jsSnippet, lastError: stream.lastError } }),
       };
     },
   });
