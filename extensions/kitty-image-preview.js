@@ -1111,7 +1111,10 @@ async function maybeDescribeStreamFrame(pi, state, ctx, stream, item, params, si
   if (stream.lastDescriptionAt && intervalSeconds !== undefined && now - stream.lastDescriptionAt < intervalSeconds * 1000) return;
   stream.lastDescriptionAt = now;
   stream.descriptionInFlight = true;
-  describeTendrilTargetFullResolution(pi, stream.target, ctx, params, signal, undefined, item)
+  const describePromise = stream.source === "tendril"
+    ? describeTendrilTargetFullResolution(pi, stream.target, ctx, params, signal, undefined, item)
+    : describeImageFile(stream.describeSourcePath || item.path, item, ctx, { ...params, describe: true }, signal);
+  describePromise
     .then((description) => {
       stream.latestDescription = { ...description, frame: stream.frameCount, path: item.path, at: Date.now() };
       ctx.ui?.setStatus?.(WIDGET_ID, `🖼 stream ${stream.frameCount} • described`);
@@ -1124,7 +1127,7 @@ async function maybeDescribeStreamFrame(pi, state, ctx, stream, item, params, si
     });
 }
 
-async function captureStreamFrame(pi, ctx, state, stream) {
+async function captureTendrilStreamFrame(pi, ctx, state, stream) {
   if (!stream?.running || stream.capturing) return;
   stream.capturing = true;
   const frameIndex = stream.nextFrameIndex % 2;
@@ -1164,10 +1167,54 @@ async function captureStreamFrame(pi, ctx, state, stream) {
   }
 }
 
+async function captureFileStreamFrame(pi, ctx, state, stream) {
+  if (!stream?.running || stream.capturing) return;
+  stream.capturing = true;
+  const sourcePath = stream.sourcePath;
+  try {
+    const sourceInfo = await stat(sourcePath);
+    if (!sourceInfo.isFile()) throw new Error(`Playwright screenshot path is not a file: ${sourcePath}`);
+    const signature = `${sourceInfo.mtimeMs}:${sourceInfo.size}`;
+    if (signature === stream.sourceSignature) return;
+    stream.sourceSignature = signature;
+    const frameIndex = stream.nextFrameIndex % 2;
+    stream.nextFrameIndex += 1;
+    const outputPath = stream.framePaths[frameIndex];
+    await copyFile(sourcePath, outputPath);
+    if (!stream.running) return;
+    const item = await buildItem(ctx.cwd, outputPath, `playwright mirror frame ${stream.frameCount + 1}`);
+    state.items = [item];
+    state.index = 0;
+    state.visible = true;
+    stream.latestPath = outputPath;
+    stream.latestItem = item;
+    stream.frameCount += 1;
+    stream.lastFrameAt = Date.now();
+    stream.lastError = undefined;
+    await prepareCurrentImage(state, ctx, { forceReload: true });
+    syncWidget(ctx, state);
+    await maybeDescribeStreamFrame(pi, state, ctx, stream, item, stream.params, stream.currentController?.signal);
+    const previousPath = stream.framePaths[1 - frameIndex];
+    if (previousPath !== stream.latestPath) await unlinkIfExists(previousPath).catch(() => {});
+  } catch (error) {
+    if (!stream.running) return;
+    stream.lastError = error?.code === "ENOENT"
+      ? `Waiting for Playwright screenshot at ${sourcePath}`
+      : error.message;
+  } finally {
+    stream.capturing = false;
+  }
+}
+
+async function captureAnyStreamFrame(pi, ctx, state, stream) {
+  if (stream?.source === "playwright-file") return captureFileStreamFrame(pi, ctx, state, stream);
+  return captureTendrilStreamFrame(pi, ctx, state, stream);
+}
+
 function scheduleNextStreamFrame(pi, ctx, state, stream) {
   if (!stream?.running) return;
   stream.timer = setTimeout(async () => {
-    await captureStreamFrame(pi, ctx, state, stream);
+    await captureAnyStreamFrame(pi, ctx, state, stream);
     scheduleNextStreamFrame(pi, ctx, state, stream);
   }, stream.intervalMs);
 }
@@ -1557,6 +1604,7 @@ export default function kittyImagePreviewExtension(pi) {
       await mkdir(dir, { recursive: true });
       const stream = {
         running: true,
+        source: "tendril",
         target,
         params: { ...params, timeoutMs: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) },
         dir,
@@ -1576,11 +1624,83 @@ export default function kittyImagePreviewExtension(pi) {
       };
       state.stream = stream;
       onUpdate?.({ content: [{ type: "text", text: `Starting stream from ${target.kind} ${target.id}...` }] });
-      await captureStreamFrame(pi, ctx, state, stream);
+      await captureTendrilStreamFrame(pi, ctx, state, stream);
       scheduleNextStreamFrame(pi, ctx, state, stream);
       return {
         content: makeContent(state, [streamStatusLine(stream), "Frames use a two-file temp buffer and are not appended to session context."]),
         details: makeDetails(state, { stream: { target, dir, intervalMs: stream.intervalMs, latestPath: stream.latestPath } }),
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "kitty_image_preview_playwright_start",
+    label: "Kitty Image Preview Playwright Start",
+    description: "Start a Playwright visual mirror by watching a PNG file that Playwright overwrites after DOM actions. The user sees browser state while the agent can continue using DOM-only context.",
+    promptSnippet: "Mirror a Playwright browser screenshot file into the kitty preview without adding frames to model context.",
+    parameters: Type.Object({
+      screenshotPath: Type.Optional(Type.String({ description: "PNG path Playwright should overwrite after actions. Defaults to a temp path returned in the tool result." })),
+      pollMs: Type.Optional(Type.Number({ description: "Polling interval for screenshotPath changes. Defaults to 250ms." })),
+      fullPage: Type.Optional(Type.Boolean({ description: "Only affects the returned Playwright hook snippet. Defaults to false." })),
+      ...streamDescribeParameterSchema(),
+      config: Type.Optional(Type.Object({
+        columns: Type.Optional(Type.Number()),
+        rows: Type.Optional(Type.Number()),
+        maxRows: Type.Optional(Type.Number()),
+        minRows: Type.Optional(Type.Number()),
+        zIndex: Type.Optional(Type.Number()),
+        background: Type.Optional(Type.Boolean()),
+        showCaption: Type.Optional(Type.Boolean()),
+        clearPrevious: Type.Optional(Type.Boolean()),
+        placement: Type.Optional(stringEnum(PREVIEW_PLACEMENTS, "Where Pi should mount the preview: auto, above/below the editor widget, or the fixed right-side panel.")),
+        transferMode: Type.Optional(stringEnum(["auto", "memory", "file"], "Kitty transfer transport.")),
+        passthrough: Type.Optional(stringEnum(["auto", "tmux", "none"], "Escape passthrough mode.")),
+        placementMode: Type.Optional(stringEnum(["auto", "unicode", "cursor"], "Graphics placement mode. auto uses Unicode placeholders inside tmux.")),
+      })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      await stopStream(state, { cleanup: true });
+      stopAnimation(state);
+      applyConfig(state, params.config);
+      const dir = getStreamDir(ctx);
+      await mkdir(dir, { recursive: true });
+      const sourcePath = params.screenshotPath
+        ? resolveUserPath(ctx.cwd, params.screenshotPath)
+        : path.join(dir, "playwright-source.png");
+      const stream = {
+        running: true,
+        source: "playwright-file",
+        target: { kind: "playwright", id: path.basename(sourcePath), source: "file" },
+        params,
+        dir,
+        sourcePath,
+        describeSourcePath: sourcePath,
+        framePaths: [path.join(dir, "playwright-frame-a.png"), path.join(dir, "playwright-frame-b.png")],
+        intervalMs: clampInteger(params.pollMs, 250, 50, 60_000),
+        nextFrameIndex: 0,
+        frameCount: 0,
+        startedAt: Date.now(),
+        latestPath: undefined,
+        latestItem: undefined,
+        timer: undefined,
+        capturing: false,
+        currentController: new AbortController(),
+        latestDescription: undefined,
+        lastDescriptionAt: undefined,
+        descriptionInFlight: false,
+      };
+      state.stream = stream;
+      await captureFileStreamFrame(pi, ctx, state, stream);
+      scheduleNextStreamFrame(pi, ctx, state, stream);
+      const snippet = `await page.screenshot({ path: ${JSON.stringify(sourcePath)}, fullPage: ${params.fullPage === true ? "true" : "false"} });`;
+      return {
+        content: makeContent(state, [
+          `Started Playwright visual mirror watching ${sourcePath}.`,
+          stream.frameCount === 0 ? "Waiting for Playwright to write the first PNG." : streamStatusLine(stream),
+          `After DOM-changing Playwright actions, run: ${snippet}`,
+          "Frames are display-only unless sampled/described explicitly.",
+        ]),
+        details: makeDetails(state, { playwrightMirror: { sourcePath, pollMs: stream.intervalMs, snippet } }),
       };
     },
   });
