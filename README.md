@@ -27,6 +27,7 @@ Available tools:
 - `kitty_image_preview_add_folder` — add a sorted image series from a directory, optionally recursively.
 - `kitty_image_preview_show` — navigate `current`, `next`, `previous`, `first`, `last`, `index`, `hide`, or `clear`.
 - `kitty_image_preview_animate` — start or stop lightweight frame animation by cycling a loaded image series.
+- `kitty_image_preview_cycle` — start (`action: "start", intervalSeconds: 5`) or stop (`action: "stop"`) timed cycling through the loaded gallery. Slash-command equivalents: `/kitty-show-next`, `/kitty-show-prev`, `/kitty-start-cycle [seconds]`, `/kitty-stop-cycle`.
 - `kitty_image_preview_stream_start` / `kitty_image_preview_stream_stop` / `kitty_image_preview_stream_status` — show an ephemeral Tendril screenshot stream using a two-file temp buffer so frames do not accumulate on disk or in model context. Set `intervalMs: 0` for max non-overlapping Tendril capture rate.
 - `kitty_image_preview_stream_sample` — persist one selected stream frame, optionally with `describe: true`.
 - `kitty_image_preview_playwright_start` — watch a PNG path written by Playwright `page.screenshot()` calls so users see a live browser mirror while the agent can keep using DOM-only context.
@@ -46,6 +47,8 @@ Key capabilities:
 - Optional stream descriptions with `describe: true` or `describeIntervalSecs`, recorded as text metadata only. Stream previews can stay low-res while description frames are captured separately at full resolution in the background.
 - Playwright visual mirroring can automatically run `playwright-cli screenshot --filename <temp>` on an interval for the active/session browser, or can watch a screenshot path written by external Playwright code when `autoScreenshot: false`. Frames remain display-only unless sampled.
 - Session-state reconstruction from prior tool results so loaded image lists survive Pi session reloads.
+- Scoped kitty image cleanup: the extension tracks the kitty graphics image ids it transmits and only ever issues per-image deletes (`d=i,i=<id>`) for those owned ids when hiding, clearing, or shutting down. It never emits a global delete-all (`d=A`) sequence, so running it inside another kitty graphics consumer (e.g. caco) does not erase unrelated images or the surrounding UI.
+- Multiviewer navigation slash commands: `/kitty-show-next` and `/kitty-show-prev` step through the loaded gallery; `/kitty-start-cycle [seconds]` (defaults to 5s) advances on a timer until `/kitty-stop-cycle`. The same behavior is also exposed to the agent through the `kitty_image_preview_cycle` tool.
 
 Example image tool use:
 

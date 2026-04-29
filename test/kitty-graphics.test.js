@@ -7,6 +7,7 @@ import {
   buildKittyUnicodePlaceholderCell,
   buildKittyUnicodePlaceholderLines,
   buildPngVirtualPlacementCommand,
+  buildScopedDeleteCommand,
   serializeKittyGraphicsCommand,
   shouldUseUnicodePlaceholders,
 } from "../extensions/kitty-graphics.js";
@@ -86,4 +87,48 @@ test("kitty image preview advertises a fixed right-side panel with tmux inline f
   assert.match(source, /rightOverlay is inline inside tmux passthrough/);
   assert.match(source, /nonCapturing: true/);
   assert.match(source, /options\.forceSideOverlay !== false && isSideOverlayPlacement\(placement\)/);
+});
+
+test("kitty multiviewer registers explicit next/previous and cycle commands and a cycle tool", async () => {
+  const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+
+  assert.match(source, /pi\.registerCommand\("kitty-show-next"/);
+  assert.match(source, /pi\.registerCommand\("kitty-show-prev"/);
+  assert.match(source, /pi\.registerCommand\("kitty-start-cycle"/);
+  assert.match(source, /pi\.registerCommand\("kitty-stop-cycle"/);
+  assert.match(source, /name: "kitty_image_preview_cycle"/);
+  assert.match(source, /function startCycle/);
+  assert.match(source, /function stopCycle/);
+});
+
+test("kitty multiviewer scopes delete commands to images it owns", async () => {
+  const previewSource = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+  const graphicsSource = await readFile(new URL("../extensions/kitty-graphics.js", import.meta.url), "utf8");
+
+  // The extension must NEVER use a global "delete all" (d=A) escape sequence,
+  // because that erases every kitty image in the terminal — including the
+  // surrounding caco UI when this extension runs inside it.
+  assert.doesNotMatch(previewSource, /buildDeleteCommand\(\{ deleteMode: "A"/);
+  assert.match(previewSource, /buildScopedDeleteCommand/);
+  assert.match(previewSource, /ownedImageIds/);
+  // Scoped deletion uses per-image-id deletes (d=i with i=<id>) defined in the
+  // shared kitty-graphics helper.
+  assert.match(graphicsSource, /deleteMode: "i"/);
+});
+
+test("buildScopedDeleteCommand emits per-image deletes for owned ids only", () => {
+  const cmd = buildScopedDeleteCommand({
+    ownedImageIds: new Set([42, 43]),
+    placementId: 7,
+    passthrough: "none",
+    excludeIds: [43],
+  });
+  assert.match(cmd, /a=d,d=i,i=42,p=7/);
+  assert.doesNotMatch(cmd, /i=43/);
+  assert.doesNotMatch(cmd, /d=A/);
+});
+
+test("buildScopedDeleteCommand returns empty string when no images are owned", () => {
+  assert.equal(buildScopedDeleteCommand({ ownedImageIds: new Set(), passthrough: "none" }), "");
+  assert.equal(buildScopedDeleteCommand({ passthrough: "none" }), "");
 });

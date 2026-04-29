@@ -7,10 +7,10 @@ import { Type } from "@sinclair/typebox";
 
 import {
   MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
-  buildDeleteCommand,
   buildKittyUnicodePlaceholderLines,
   buildPngDisplayCommand,
   buildPngVirtualPlacementCommand,
+  buildScopedDeleteCommand as buildScopedDeleteCommandRaw,
   detectKittyPassthroughMode,
   estimateRowsForImage,
   fileToBase64,
@@ -111,7 +111,43 @@ function serializePublicState(state) {
       height: item.height,
       addedAt: item.addedAt,
     })),
+    ownedImageIds: Array.from(state.ownedImageIds || []),
   };
+}
+
+function trackOwnedItem(state, item) {
+  if (!item || typeof item.id !== "number") return item;
+  if (!state.ownedImageIds) state.ownedImageIds = new Set();
+  state.ownedImageIds.add(item.id);
+  return item;
+}
+
+export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
+  return buildScopedDeleteCommandRaw({
+    ownedImageIds: state.ownedImageIds,
+    placementId: state.config.placementId,
+    passthrough: state.config.passthrough,
+    excludeIds,
+  });
+}
+
+function clearOwnedImageIds(state) {
+  state.ownedImageIds = new Set();
+}
+
+function pushItems(state, items) {
+  for (const item of items) {
+    state.items.push(item);
+    trackOwnedItem(state, item);
+  }
+}
+
+function replaceItems(state, items) {
+  // Note: we intentionally keep previously-owned image ids registered so that
+  // pending scoped-deletes can still target them on subsequent prepare/clear
+  // cycles. Items are evicted from ownership only on explicit clear/shutdown.
+  state.items = [];
+  pushItems(state, items);
 }
 
 function restorePublicState(state, details) {
@@ -131,6 +167,11 @@ function restorePublicState(state, details) {
       height: item.height,
       addedAt: item.addedAt || Date.now(),
     }));
+  state.ownedImageIds = new Set(
+    Array.isArray(snapshot.ownedImageIds) && snapshot.ownedImageIds.length > 0
+      ? snapshot.ownedImageIds.filter((id) => Number.isFinite(id))
+      : state.items.map((item) => item.id),
+  );
 }
 
 function summarizeCurrent(state) {
@@ -646,7 +687,8 @@ export function syncWidget(ctx, state) {
     ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement });
   }
   const animation = state.animation?.running ? " ▶" : "";
-  ctx.ui.setStatus(WIDGET_ID, `🖼${animation} ${state.index + 1}/${state.items.length} ${current?.label ?? ""}`);
+  const cycle = state.cycle?.running ? ` ⟳${Math.round((state.cycle.intervalMs || 0) / 1000)}s` : "";
+  ctx.ui.setStatus(WIDGET_ID, `🖼${animation}${cycle} ${state.index + 1}/${state.items.length} ${current?.label ?? ""}`);
 }
 
 function flashDeleteWidget(ctx, state, deleteCommand) {
@@ -698,6 +740,46 @@ function stopAnimation(state) {
   if (state.animationTimer) clearInterval(state.animationTimer);
   state.animationTimer = undefined;
   state.animation = { running: false };
+}
+
+function stopCycle(state) {
+  if (state.cycleTimer) clearInterval(state.cycleTimer);
+  state.cycleTimer = undefined;
+  state.cycle = { running: false };
+}
+
+function advanceIndex(state, direction = 1) {
+  if (state.items.length === 0) return false;
+  const next = (state.index + direction + state.items.length) % state.items.length;
+  state.index = next;
+  return true;
+}
+
+function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true } = {}) {
+  stopCycle(state);
+  state.cycle = { running: true, intervalMs, direction, loop };
+  state.cycleTimer = setInterval(() => {
+    if (!state.visible || state.items.length === 0) {
+      stopCycle(state);
+      syncWidget(ctx, state);
+      return;
+    }
+    const next = state.index + direction;
+    if (next < 0 || next >= state.items.length) {
+      if (!loop) {
+        stopCycle(state);
+        syncWidget(ctx, state);
+        return;
+      }
+      state.index = (next + state.items.length) % state.items.length;
+    } else {
+      state.index = next;
+    }
+    prepareCurrentImage(state, ctx, { forceReload: true }).catch((error) => {
+      stopCycle(state);
+      ctx?.ui?.notify?.(`kitty image cycle stopped: ${error.message}`, "warning");
+    });
+  }, Math.max(50, intervalMs));
 }
 
 function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
@@ -773,7 +855,7 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
 
   const pngBase64 = useMemory ? await fileToBase64(current.path) : undefined;
   state.lastDeleteCommand = state.config.clearPrevious
-    ? buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough })
+    ? buildScopedDeleteCommand(state, { excludeIds: [current.id] })
     : "";
   state.currentCommand = {
     itemId: current.id,
@@ -817,6 +899,9 @@ async function buildItem(cwd, inputPath, label) {
     throw new Error(`Native kitty preview currently accepts PNG/APNG files. Convert to PNG first: ${absolutePath}`);
   }
   const dimensions = await readPngDimensions(absolutePath).catch(() => undefined);
+  // Add a per-mtime/size suffix so re-captured stream frames at the same path
+  // get unique kitty image ids. This keeps scoped-delete able to evict the
+  // previous frame without affecting unrelated images in the terminal.
   return {
     id: stableKittyImageId(`${absolutePath}:${info.mtimeMs}:${info.size}`),
     path: absolutePath,
@@ -1181,7 +1266,7 @@ async function captureTendrilStreamFrame(pi, ctx, state, stream) {
     });
     if (!stream.running) return;
     const item = await buildItem(ctx.cwd, outputPath, `stream ${stream.target.kind} ${stream.target.id} frame ${stream.frameCount + 1}`);
-    state.items = [item];
+    replaceItems(state, [item]);
     state.index = 0;
     state.visible = true;
     stream.latestPath = outputPath;
@@ -1221,7 +1306,7 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
     await copyFile(sourcePath, outputPath);
     if (!stream.running) return;
     const item = await buildItem(ctx.cwd, outputPath, `playwright mirror frame ${stream.frameCount + 1}`);
-    state.items = [item];
+    replaceItems(state, [item]);
     state.index = 0;
     state.visible = true;
     stream.latestPath = outputPath;
@@ -1289,7 +1374,10 @@ export default function kittyImagePreviewExtension(pi) {
     lastDeleteCommand: "",
     animationTimer: undefined,
     animation: { running: false },
+    cycleTimer: undefined,
+    cycle: { running: false },
     stream: undefined,
+    ownedImageIds: new Set(),
     config: {
       columns: DEFAULT_COLUMNS,
       rows: undefined,
@@ -1324,11 +1412,16 @@ export default function kittyImagePreviewExtension(pi) {
 
   pi.on("session_shutdown", (_event, ctx) => {
     stopAnimation(state);
+    stopCycle(state);
     void stopStream(state, { cleanup: true });
     state.visible = false;
     if (ctx?.hasUI) {
-      flashDeleteWidget(ctx, state, buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough }));
+      const ownedDelete = buildScopedDeleteCommand(state);
+      clearOwnedImageIds(state);
+      if (ownedDelete) flashDeleteWidget(ctx, state, ownedDelete);
       ctx.ui.setStatus(WIDGET_ID, undefined);
+    } else {
+      clearOwnedImageIds(state);
     }
   });
 
@@ -1364,7 +1457,7 @@ export default function kittyImagePreviewExtension(pi) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       applyConfig(state, params.config);
       const item = await buildItem(ctx.cwd, params.path, params.label);
-      state.items.push(item);
+      pushItems(state, [item]);
       if (params.show !== false) {
         state.index = state.items.length - 1;
         state.visible = true;
@@ -1435,9 +1528,10 @@ export default function kittyImagePreviewExtension(pi) {
       const item = await buildItem(ctx.cwd, output.path, params.label || defaultScreenshotLabel(target, now));
       if (params.replace !== false) {
         stopAnimation(state);
+        stopCycle(state);
         state.items = [];
       }
-      state.items.push(item);
+      pushItems(state, [item]);
       state.index = state.items.length - 1;
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
@@ -1504,7 +1598,7 @@ export default function kittyImagePreviewExtension(pi) {
       for (const file of files) items.push(await buildItem(ctx.cwd, file));
       if (params.replace) state.items = [];
       const startIndex = state.items.length;
-      state.items.push(...items);
+      pushItems(state, items);
       state.index = startIndex + clampInteger(params.showIndex, 0, 0, items.length - 1);
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
@@ -1548,20 +1642,23 @@ export default function kittyImagePreviewExtension(pi) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       applyConfig(state, params.config);
       if (params.action === "clear") {
-        state.lastDeleteCommand = buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough });
+        state.lastDeleteCommand = buildScopedDeleteCommand(state);
+        clearOwnedImageIds(state);
         state.visible = false;
         state.items = [];
         state.index = 0;
         state.currentCommand = undefined;
         syncWidget(ctx, state);
         stopAnimation(state);
+        stopCycle(state);
         flashDeleteWidget(ctx, state, state.lastDeleteCommand);
         return { content: [{ type: "text", text: "Cleared kitty image preview." }], details: makeDetails(state) };
       }
       if (params.action === "hide") {
-        state.lastDeleteCommand = buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough });
+        state.lastDeleteCommand = buildScopedDeleteCommand(state);
         state.visible = false;
         stopAnimation(state);
+        stopCycle(state);
         flashDeleteWidget(ctx, state, state.lastDeleteCommand);
         return { content: [{ type: "text", text: "Hid kitty image preview." }], details: makeDetails(state) };
       }
@@ -1785,7 +1882,7 @@ export default function kittyImagePreviewExtension(pi) {
       const stream = await stopStream(state, { cleanup });
       if (params.hide) {
         state.visible = false;
-        flashDeleteWidget(ctx, state, buildDeleteCommand({ deleteMode: "A", passthrough: state.config.passthrough }));
+        flashDeleteWidget(ctx, state, buildScopedDeleteCommand(state));
       } else {
         syncWidget(ctx, state);
       }
@@ -1851,7 +1948,7 @@ export default function kittyImagePreviewExtension(pi) {
       await copyFile(stream.latestPath, output.path);
       const item = await buildItem(ctx.cwd, output.path, params.label || `stream sample ${target.kind} ${target.id} ${now.toLocaleTimeString()}`);
       if (params.addToGallery) {
-        state.items.push(item);
+        pushItems(state, [item]);
         state.index = state.items.length - 1;
         state.visible = true;
         await prepareCurrentImage(state, ctx, { forceReload: true });
@@ -1888,11 +1985,98 @@ export default function kittyImagePreviewExtension(pi) {
     },
   });
 
+  pi.registerTool({
+    name: "kitty_image_preview_cycle",
+    label: "Kitty Image Preview Cycle",
+    description: "Start or stop a timed cycling mode that advances through the loaded preview images on a fixed interval. Equivalent to /kitty-start-cycle and /kitty-stop-cycle.",
+    promptSnippet: "Start or stop timed cycling through the kitty image preview gallery.",
+    parameters: Type.Object({
+      action: stringEnum(["start", "stop"], "Cycle control action."),
+      intervalSeconds: Type.Optional(Type.Number({ description: "Seconds between transitions when action=start. Defaults to 5." })),
+      direction: Type.Optional(stringEnum(["forward", "backward"], "Cycle direction. Defaults to forward.")),
+      loop: Type.Optional(Type.Boolean({ description: "Wrap around at gallery edges. Defaults to true." })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (params.action === "stop") {
+        stopCycle(state);
+        syncWidget(ctx, state);
+        return { content: [{ type: "text", text: "Stopped kitty image preview cycle." }], details: makeDetails(state) };
+      }
+      if (state.items.length === 0) throw new Error("No images have been added yet.");
+      state.visible = true;
+      await prepareCurrentImage(state, ctx, { forceReload: true });
+      const intervalSeconds = clampInteger(params.intervalSeconds, 5, 1, 3600);
+      startCycle(state, ctx, {
+        intervalMs: intervalSeconds * 1000,
+        direction: params.direction === "backward" ? -1 : 1,
+        loop: params.loop !== false,
+      });
+      syncWidget(ctx, state);
+      return {
+        content: makeContent(state, [`Started cycling every ${intervalSeconds}s ${params.direction === "backward" ? "backward" : "forward"}.`]),
+        details: makeDetails(state, { cycle: { ...state.cycle } }),
+      };
+    },
+  });
+
+  async function navigateCommand(ctx, direction) {
+    if (state.items.length === 0) {
+      ctx.ui?.notify?.("No kitty preview images loaded.", "warning");
+      return;
+    }
+    advanceIndex(state, direction);
+    state.visible = true;
+    await prepareCurrentImage(state, ctx, { forceReload: true });
+    syncWidget(ctx, state);
+    ctx.ui?.notify?.(summarizeCurrent(state), "info");
+  }
+
   pi.registerCommand("kitty-image-preview", {
     description: "Show kitty image preview extension status and quick usage.",
     handler: async (_args, ctx) => {
       syncWidget(ctx, state);
       ctx.ui.notify(summarizeCurrent(state), "info");
+    },
+  });
+
+  pi.registerCommand("kitty-show-next", {
+    description: "Show the next image in the kitty multiviewer gallery.",
+    handler: async (_args, ctx) => navigateCommand(ctx, 1),
+  });
+
+  pi.registerCommand("kitty-show-prev", {
+    description: "Show the previous image in the kitty multiviewer gallery.",
+    handler: async (_args, ctx) => navigateCommand(ctx, -1),
+  });
+
+  pi.registerCommand("kitty-show-previous", {
+    description: "Alias of /kitty-show-prev.",
+    handler: async (_args, ctx) => navigateCommand(ctx, -1),
+  });
+
+  pi.registerCommand("kitty-start-cycle", {
+    description: "Start cycling kitty multiviewer images. Optional argument: interval in seconds (default 5).",
+    handler: async (args, ctx) => {
+      if (state.items.length === 0) {
+        ctx.ui?.notify?.("No kitty preview images loaded.", "warning");
+        return;
+      }
+      const arg = Array.isArray(args) ? args[0] : args;
+      const seconds = clampInteger(arg, 5, 1, 3600);
+      state.visible = true;
+      await prepareCurrentImage(state, ctx, { forceReload: true });
+      startCycle(state, ctx, { intervalMs: seconds * 1000, direction: 1, loop: true });
+      syncWidget(ctx, state);
+      ctx.ui?.notify?.(`Cycling kitty preview every ${seconds}s.`, "info");
+    },
+  });
+
+  pi.registerCommand("kitty-stop-cycle", {
+    description: "Stop the kitty multiviewer cycling timer.",
+    handler: async (_args, ctx) => {
+      stopCycle(state);
+      syncWidget(ctx, state);
+      ctx.ui?.notify?.("Stopped kitty preview cycle.", "info");
     },
   });
 }

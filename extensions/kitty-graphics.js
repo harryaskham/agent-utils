@@ -357,3 +357,26 @@ export function estimateRowsForImage({ imageWidth, imageHeight, columns, maxRows
 export function isSupportedKittyPngPath(filePath) {
   return /\.(png|apng)$/i.test(String(filePath));
 }
+
+export function buildScopedDeleteCommand({
+  ownedImageIds,
+  placementId,
+  passthrough = "auto",
+  excludeIds = [],
+  env = process.env,
+} = {}) {
+  if (!ownedImageIds || (typeof ownedImageIds[Symbol.iterator] !== "function")) return "";
+  const skip = new Set(excludeIds);
+  let cmd = "";
+  for (const id of ownedImageIds) {
+    if (skip.has(id)) continue;
+    cmd += buildDeleteCommand({
+      imageId: id,
+      placementId,
+      deleteMode: "i",
+      passthrough,
+      env,
+    });
+  }
+  return cmd;
+}
