@@ -24,7 +24,7 @@
         <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
         <div class="hero-stats" aria-label="Inventory summary">
           <span><strong>4</strong> sections</span>
-          <span><strong>21</strong> tools and surfaces</span>
+          <span><strong>22</strong> tools and surfaces</span>
           <span><strong>2026-04-27</strong> reviewed</span>
         </div>
       </div>
@@ -529,6 +529,33 @@
               <li><code>show next or previous image</code></li>
               <li><code>animate a loaded series</code></li>
               <li><code>hide or clear the preview widget</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Pi graphics theme + extension</h3>
+              <code>pi_graphics_render_prompt_enclosure, pi_graphics_render_message_border, pi_graphics_clear, /pi-graphics-status, /pi-graphics-demo</code>
+            </div>
+            <p>Ship a Nord-flavoured Pi theme (themes/kitty-graphics.json) paired with an extension that renders graphical UI affordances (gradient prompt enclosures, translucent message/code borders) through the kitty graphics protocol and Unicode placeholder placement, with scoped image ownership for safe cleanup.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents, operators using kitty-compatible terminals</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/pi-graphics.js, extensions/pi-graphics/, themes/kitty-graphics.json</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>select theme</code></li>
+              <li><code>render gradient prompt rule</code></li>
+              <li><code>frame a tool/code block</code></li>
+              <li><code>scoped clear of owned images</code></li>
               </ul>
             </details>
           </article>

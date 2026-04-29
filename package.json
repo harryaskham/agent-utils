@@ -14,6 +14,7 @@
     ".claude-plugin",
     "extensions",
     "prompts",
+    "themes",
     "web-search",
     "README.md",
     "flake.nix"
@@ -34,10 +35,14 @@
   "pi": {
     "extensions": [
       "./extensions/web-search.js",
-      "./extensions/kitty-image-preview.js"
+      "./extensions/kitty-image-preview.js",
+      "./extensions/pi-graphics.js"
     ],
     "prompts": [
       "./prompts"
+    ],
+    "themes": [
+      "./themes/kitty-graphics.json"
     ]
   }
 }
