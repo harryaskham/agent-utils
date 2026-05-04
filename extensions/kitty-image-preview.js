@@ -182,6 +182,45 @@ function summarizeCurrent(state) {
   return `Showing ${state.index + 1}/${state.items.length}: ${current.label}${dims}; placement=${state.config.placement}, transfer=${mode}, graphicsPlacement=${state.config.placementMode}, z=${state.config.zIndex}.`;
 }
 
+function pluralizeImages(count) {
+  return count === 1 ? "image" : "images";
+}
+
+function truncatePlainText(value, width, ellipsis = "…") {
+  const text = String(value ?? "");
+  const max = Math.max(0, Math.trunc(width || 0));
+  if (max <= 0) return "";
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  if (max <= ellipsis.length) return ellipsis.slice(0, max);
+  return `${chars.slice(0, max - ellipsis.length).join("")}${ellipsis}`;
+}
+
+function imageControlHint(state, { includeCount = false } = {}) {
+  if (state.items.length === 0) return "/image-status";
+  if (!state.visible) {
+    const count = includeCount ? ` ${state.items.length} ${pluralizeImages(state.items.length)}` : "";
+    return `/image-show /image-clear${count}`;
+  }
+  const nav = state.items.length > 1 ? "/image-prev /image-next " : "";
+  const count = includeCount ? ` ${state.index + 1}/${state.items.length}` : "";
+  return `${nav}/image-hide /image-clear${count}`;
+}
+
+function imageControlsLine(state, width) {
+  if (state.items.length === 0) return "";
+  return truncatePlainText(`controls: ${imageControlHint(state, { includeCount: true })}`, width);
+}
+
+function imageStatusLine(state, current) {
+  if (state.items.length === 0) return undefined;
+  if (!state.visible) return `🖼 hidden ${state.items.length} ${pluralizeImages(state.items.length)} — /image-show /image-clear`;
+  const animation = state.animation?.running ? " ▶" : "";
+  const cycle = state.cycle?.running ? ` ⟳${Math.round((state.cycle.intervalMs || 0) / 1000)}s` : "";
+  const label = current?.label ? ` ${current.label}` : "";
+  return `🖼${animation}${cycle} ${state.index + 1}/${state.items.length}${label} — ${imageControlHint(state)}`;
+}
+
 function renderPlaceholderLines(width, rows, text) {
   const line = " ".repeat(Math.max(1, width));
   const output = Array.from({ length: Math.max(1, rows) }, () => line);
@@ -269,12 +308,14 @@ export class KittyImagePreviewWidget {
       useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200,
     );
 
-    return renderCurrentImageLines(state, current, {
+    const lines = renderCurrentImageLines(state, current, {
       columns,
       rows,
       lineWidth: availableWidth,
       useUnicodePlaceholders,
     });
+    const controls = imageControlsLine(state, availableWidth);
+    return controls ? [...lines, controls] : lines;
   }
 
   invalidate() {}
@@ -664,10 +705,16 @@ function ensureSideOverlay(ctx, state) {
 
 export function syncWidget(ctx, state) {
   if (!ctx?.hasUI) return;
-  if (!state.visible || state.items.length === 0) {
+  if (state.items.length === 0) {
     ctx.ui.setWidget(WIDGET_ID, undefined);
     clearSidePresentation(state);
     ctx.ui.setStatus(WIDGET_ID, undefined);
+    return;
+  }
+  if (!state.visible) {
+    ctx.ui.setWidget(WIDGET_ID, undefined);
+    clearSidePresentation(state);
+    ctx.ui.setStatus(WIDGET_ID, imageStatusLine(state));
     return;
   }
   const current = state.items[state.index];
@@ -686,9 +733,7 @@ export function syncWidget(ctx, state) {
     const componentFactory = () => new KittyImagePreviewWidget(state, { placement });
     ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement });
   }
-  const animation = state.animation?.running ? " ▶" : "";
-  const cycle = state.cycle?.running ? ` ⟳${Math.round((state.cycle.intervalMs || 0) / 1000)}s` : "";
-  ctx.ui.setStatus(WIDGET_ID, `🖼${animation}${cycle} ${state.index + 1}/${state.items.length} ${current?.label ?? ""}`);
+  ctx.ui.setStatus(WIDGET_ID, imageStatusLine(state, current));
 }
 
 function flashDeleteWidget(ctx, state, deleteCommand) {
@@ -1660,7 +1705,8 @@ export default function kittyImagePreviewExtension(pi) {
         stopAnimation(state);
         stopCycle(state);
         flashDeleteWidget(ctx, state, state.lastDeleteCommand);
-        return { content: [{ type: "text", text: "Hid kitty image preview." }], details: makeDetails(state) };
+        setTimeout(() => syncWidget(ctx, state), 120);
+        return { content: [{ type: "text", text: "Hid kitty image preview. Use /image-show to restore it." }], details: makeDetails(state) };
       }
       if (state.items.length === 0) throw new Error("No images have been added yet.");
       if (params.action === "next") state.index = (state.index + 1) % state.items.length;
@@ -1883,6 +1929,7 @@ export default function kittyImagePreviewExtension(pi) {
       if (params.hide) {
         state.visible = false;
         flashDeleteWidget(ctx, state, buildScopedDeleteCommand(state));
+        setTimeout(() => syncWidget(ctx, state), 120);
       } else {
         syncWidget(ctx, state);
       }
@@ -2019,64 +2066,140 @@ export default function kittyImagePreviewExtension(pi) {
     },
   });
 
+  function registerImageCommand(names, description, handler) {
+    for (const name of names) pi.registerCommand(name, { description, handler });
+  }
+
+  function noImages(ctx) {
+    ctx.ui?.notify?.("No kitty preview images loaded.", "warning");
+  }
+
   async function navigateCommand(ctx, direction) {
     if (state.items.length === 0) {
-      ctx.ui?.notify?.("No kitty preview images loaded.", "warning");
+      noImages(ctx);
       return;
     }
     advanceIndex(state, direction);
     state.visible = true;
     await prepareCurrentImage(state, ctx, { forceReload: true });
     syncWidget(ctx, state);
-    ctx.ui?.notify?.(summarizeCurrent(state), "info");
+    ctx.ui?.notify?.(`${summarizeCurrent(state)} ${imageControlHint(state, { includeCount: true })}`, "info");
   }
 
-  pi.registerCommand("kitty-image-preview", {
-    description: "Show kitty image preview extension status and quick usage.",
-    handler: async (_args, ctx) => {
-      syncWidget(ctx, state);
-      ctx.ui.notify(summarizeCurrent(state), "info");
-    },
-  });
+  async function showCommand(ctx) {
+    if (state.items.length === 0) {
+      noImages(ctx);
+      return;
+    }
+    state.visible = true;
+    await prepareCurrentImage(state, ctx, { forceReload: true });
+    syncWidget(ctx, state);
+    ctx.ui?.notify?.(`${summarizeCurrent(state)} ${imageControlHint(state, { includeCount: true })}`, "info");
+  }
 
-  pi.registerCommand("kitty-show-next", {
-    description: "Show the next image in the kitty multiviewer gallery.",
-    handler: async (_args, ctx) => navigateCommand(ctx, 1),
-  });
+  function hideCommand(ctx) {
+    if (state.items.length === 0) {
+      noImages(ctx);
+      return;
+    }
+    state.lastDeleteCommand = buildScopedDeleteCommand(state);
+    state.visible = false;
+    stopAnimation(state);
+    stopCycle(state);
+    flashDeleteWidget(ctx, state, state.lastDeleteCommand);
+    setTimeout(() => syncWidget(ctx, state), 120);
+    ctx.ui?.notify?.(`Hid kitty preview. Use /image-show to restore ${state.items.length} ${pluralizeImages(state.items.length)}.`, "info");
+  }
 
-  pi.registerCommand("kitty-show-prev", {
-    description: "Show the previous image in the kitty multiviewer gallery.",
-    handler: async (_args, ctx) => navigateCommand(ctx, -1),
-  });
+  function clearCommand(ctx) {
+    if (state.items.length === 0) {
+      noImages(ctx);
+      return;
+    }
+    state.lastDeleteCommand = buildScopedDeleteCommand(state);
+    clearOwnedImageIds(state);
+    state.visible = false;
+    state.items = [];
+    state.index = 0;
+    state.currentCommand = undefined;
+    stopAnimation(state);
+    stopCycle(state);
+    syncWidget(ctx, state);
+    flashDeleteWidget(ctx, state, state.lastDeleteCommand);
+    ctx.ui?.notify?.("Cleared kitty image preview.", "info");
+  }
 
-  pi.registerCommand("kitty-show-previous", {
-    description: "Alias of /kitty-show-prev.",
-    handler: async (_args, ctx) => navigateCommand(ctx, -1),
-  });
+  function statusCommand(ctx) {
+    syncWidget(ctx, state);
+    const controls = imageControlHint(state, { includeCount: true });
+    ctx.ui?.notify?.(`${summarizeCurrent(state)} Controls: ${controls}`, "info");
+  }
 
-  pi.registerCommand("kitty-start-cycle", {
-    description: "Start cycling kitty multiviewer images. Optional argument: interval in seconds (default 5).",
-    handler: async (args, ctx) => {
-      if (state.items.length === 0) {
-        ctx.ui?.notify?.("No kitty preview images loaded.", "warning");
-        return;
-      }
-      const arg = Array.isArray(args) ? args[0] : args;
-      const seconds = clampInteger(arg, 5, 1, 3600);
-      state.visible = true;
-      await prepareCurrentImage(state, ctx, { forceReload: true });
-      startCycle(state, ctx, { intervalMs: seconds * 1000, direction: 1, loop: true });
-      syncWidget(ctx, state);
-      ctx.ui?.notify?.(`Cycling kitty preview every ${seconds}s.`, "info");
-    },
-  });
+  async function startCycleCommand(args, ctx) {
+    if (state.items.length === 0) {
+      noImages(ctx);
+      return;
+    }
+    const arg = Array.isArray(args) ? args[0] : args;
+    const seconds = clampInteger(arg, 5, 1, 3600);
+    state.visible = true;
+    await prepareCurrentImage(state, ctx, { forceReload: true });
+    startCycle(state, ctx, { intervalMs: seconds * 1000, direction: 1, loop: true });
+    syncWidget(ctx, state);
+    ctx.ui?.notify?.(`Cycling kitty preview every ${seconds}s. Use /image-stop-cycle to stop.`, "info");
+  }
 
-  pi.registerCommand("kitty-stop-cycle", {
-    description: "Stop the kitty multiviewer cycling timer.",
-    handler: async (_args, ctx) => {
-      stopCycle(state);
-      syncWidget(ctx, state);
-      ctx.ui?.notify?.("Stopped kitty preview cycle.", "info");
-    },
-  });
+  function stopCycleCommand(ctx) {
+    stopCycle(state);
+    syncWidget(ctx, state);
+    ctx.ui?.notify?.("Stopped kitty preview cycle.", "info");
+  }
+
+  registerImageCommand(["kitty-image-preview", "image-status", "image-preview"],
+    "Show kitty image preview extension status and quick usage.",
+    async (_args, ctx) => statusCommand(ctx));
+
+  registerImageCommand(["kitty-show-next", "image-next"],
+    "Show the next image in the kitty multiviewer gallery.",
+    async (_args, ctx) => navigateCommand(ctx, 1));
+
+  registerImageCommand(["kitty-show-prev", "kitty-show-previous", "image-prev", "image-previous"],
+    "Show the previous image in the kitty multiviewer gallery.",
+    async (_args, ctx) => navigateCommand(ctx, -1));
+
+  registerImageCommand(["image-first"],
+    "Show the first image in the kitty multiviewer gallery.",
+    async (_args, ctx) => {
+      if (state.items.length === 0) return noImages(ctx);
+      state.index = 0;
+      return showCommand(ctx);
+    });
+
+  registerImageCommand(["image-last"],
+    "Show the last image in the kitty multiviewer gallery.",
+    async (_args, ctx) => {
+      if (state.items.length === 0) return noImages(ctx);
+      state.index = state.items.length - 1;
+      return showCommand(ctx);
+    });
+
+  registerImageCommand(["image-show", "kitty-show"],
+    "Show or restore the current kitty image preview.",
+    async (_args, ctx) => showCommand(ctx));
+
+  registerImageCommand(["image-hide", "kitty-hide"],
+    "Hide the kitty image preview without forgetting the loaded gallery.",
+    async (_args, ctx) => hideCommand(ctx));
+
+  registerImageCommand(["image-clear", "kitty-clear"],
+    "Clear the kitty image preview gallery and delete its terminal placements.",
+    async (_args, ctx) => clearCommand(ctx));
+
+  registerImageCommand(["kitty-start-cycle", "image-start-cycle", "image-cycle"],
+    "Start cycling kitty multiviewer images. Optional argument: interval in seconds (default 5).",
+    startCycleCommand);
+
+  registerImageCommand(["kitty-stop-cycle", "image-stop-cycle"],
+    "Stop the kitty multiviewer cycling timer.",
+    async (_args, ctx) => stopCycleCommand(ctx));
 }

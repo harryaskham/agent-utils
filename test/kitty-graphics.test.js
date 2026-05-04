@@ -89,13 +89,18 @@ test("kitty image preview advertises a fixed right-side panel with tmux inline f
   assert.match(source, /options\.forceSideOverlay !== false && isSideOverlayPlacement\(placement\)/);
 });
 
-test("kitty multiviewer registers explicit next/previous and cycle commands and a cycle tool", async () => {
+test("kitty multiviewer registers discoverable image commands, controls, and a cycle tool", async () => {
   const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
 
-  assert.match(source, /pi\.registerCommand\("kitty-show-next"/);
-  assert.match(source, /pi\.registerCommand\("kitty-show-prev"/);
-  assert.match(source, /pi\.registerCommand\("kitty-start-cycle"/);
-  assert.match(source, /pi\.registerCommand\("kitty-stop-cycle"/);
+  assert.match(source, /registerImageCommand\(\["kitty-show-next", "image-next"\]/);
+  assert.match(source, /"image-prev", "image-previous"/);
+  assert.match(source, /"image-show", "kitty-show"/);
+  assert.match(source, /"image-hide", "kitty-hide"/);
+  assert.match(source, /"image-clear", "kitty-clear"/);
+  assert.match(source, /"kitty-start-cycle", "image-start-cycle", "image-cycle"/);
+  assert.match(source, /"kitty-stop-cycle", "image-stop-cycle"/);
+  assert.match(source, /function imageControlsLine/);
+  assert.match(source, /controls: \$\{imageControlHint/);
   assert.match(source, /name: "kitty_image_preview_cycle"/);
   assert.match(source, /function startCycle/);
   assert.match(source, /function stopCycle/);
