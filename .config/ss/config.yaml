@@ -1,0 +1,33 @@
+# skill-server (ss) host configuration.
+# Override this path with `SS_CONFIG=/path/to/config.yaml` or `ss --config ...`.
+
+# Directories scanned for lightweight skill files (.md, .json, .yaml, .yml).
+# A file named web-search.md is discoverable through domain `web` and name `web-search`.
+skill_paths:
+  - prompts
+  - web-search/plugins/web-search/commands
+
+# Host MCP stdio servers that `/ss <domain> <query>` can discover and route to.
+mcp_servers:
+  - name: web-search
+    description: Live web search via GitHub Copilot Responses API.
+    domains: [web, search]
+    command: web-search-mcp
+    args: []
+    tools:
+      - name: search_web
+        aliases: [query, web_search]
+        description: Search the live web and return cited results.
+
+  - name: caco
+    description: Cacophony daemon control surface exposed over MCP stdio.
+    domains: [caco, cacophony, beads, agents]
+    command: caco
+    args: [mcp, stdio]
+    tools:
+      - name: caco_bd_list
+        aliases: [bd_list, beads]
+        description: List Cacophony beads.
+      - name: caco_msg_speak
+        aliases: [speak, status]
+        description: Send operator-facing progress narration.

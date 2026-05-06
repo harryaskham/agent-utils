@@ -15,6 +15,21 @@ It currently provides:
 - `/web-search` prompt template
 - `search_web` native Pi tool for live web lookups via GitHub Copilot Responses API
 - `kitty_image_preview_*` native Pi tools for persistent terminal image previews via the kitty graphics protocol
+- `skill-server` / `ss`, a Rust CLI + MCP stdio meta-tool for dynamic skill and host MCP server discovery
+
+## skill-server (`ss`)
+
+`skill-server` is a Rust utility that lets agents discover configured skill files and host MCP stdio servers without reloading. It supports a `/ss`-style CLI shorthand and an MCP stdio server built on the same `mcp-cli` plumbing used by Tendril.
+
+```bash
+cargo build -p skill-server
+ss --help
+ss list --json
+ss web query latest Rust MCP crate
+ss mcp stdio
+```
+
+Configuration defaults to [`.config/ss/config.yaml`](.config/ss/config.yaml) and can be overridden with `SS_CONFIG` or `--config`. See [docs/skill-server/README.md](docs/skill-server/README.md) for the config schema, MCP tools, and build/test commands.
 
 ## Kitty image preview Pi extension
 

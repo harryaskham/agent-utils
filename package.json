@@ -16,6 +16,10 @@
     "prompts",
     "themes",
     "web-search",
+    "crates",
+    ".config/ss/config.yaml",
+    "Cargo.toml",
+    "Cargo.lock",
     "README.md",
     "flake.nix"
   ],

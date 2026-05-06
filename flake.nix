@@ -41,8 +41,17 @@
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
+          skillServer = pkgs.rustPlatform.buildRustPackage {
+            pname = "skill-server";
+            version = "0.1.0";
+            src = ./.;
+            cargoLock.lockFile = ./Cargo.lock;
+            cargoBuildFlags = [ "-p" "skill-server" ];
+            cargoTestFlags = [ "-p" "skill-server" ];
+          };
           allPackages = [
             web-search.packages.${system}.web-search-mcp
+            skillServer
           ];
         in {
           default = pkgs.symlinkJoin {
@@ -51,6 +60,8 @@
           };
           all = self.packages.${system}.default;
           web-search-mcp = web-search.packages.${system}.web-search-mcp;
+          skill-server = skillServer;
+          ss = skillServer;
         });
 
       apps = forAllSystems (system: {
@@ -59,6 +70,14 @@
           program = "${self.packages.${system}.web-search-mcp}/bin/web-search-mcp";
         };
         web-search-mcp = self.apps.${system}.default;
+        skill-server = {
+          type = "app";
+          program = "${self.packages.${system}.skill-server}/bin/skill-server";
+        };
+        ss = {
+          type = "app";
+          program = "${self.packages.${system}.skill-server}/bin/ss";
+        };
       });
 
       devShells = forAllSystems (system:
@@ -69,6 +88,10 @@
             packages = [
               pkgs.nixd
               pkgs.nixfmt-rfc-style
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.rustfmt
+              pkgs.clippy
             ];
           };
         });
