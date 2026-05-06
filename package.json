@@ -40,7 +40,8 @@
     "extensions": [
       "./extensions/web-search.js",
       "./extensions/kitty-image-preview.js",
-      "./extensions/pi-graphics.js"
+      "./extensions/pi-graphics.js",
+      "./extensions/firecracker-vm.js"
     ],
     "prompts": [
       "./prompts"

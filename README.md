@@ -15,6 +15,7 @@ It currently provides:
 - `/web-search` prompt template
 - `search_web` native Pi tool for live web lookups via GitHub Copilot Responses API
 - `kitty_image_preview_*` native Pi tools for persistent terminal image previews via the kitty graphics protocol
+- `firecracker_vm_*` native Pi tools for preparing, spawning, inspecting, and stopping Firecracker VM workloads for Tendril-visible services
 - `skill-server` / `ss`, a Rust CLI + MCP stdio meta-tool for dynamic skill and host MCP server discovery
 
 ## skill-server (`ss`)
@@ -30,6 +31,44 @@ ss mcp stdio
 ```
 
 Configuration defaults to [`.config/ss/config.yaml`](.config/ss/config.yaml) and can be overridden with `SS_CONFIG` or `--config`. See [docs/skill-server/README.md](docs/skill-server/README.md) for the config schema, MCP tools, and build/test commands.
+
+## Firecracker VM Pi extension
+
+The Firecracker VM extension is loaded from [`extensions/firecracker-vm.js`](extensions/firecracker-vm.js). It gives Pi agents a first-class control plane for microVM workloads that should be visible and controllable by Tendril agents. Firecracker itself is headless, so the extension tracks both serial-console output and any declared host-visible screen/control services such as VNC, noVNC, browser debug endpoints, or web apps.
+
+Available tools:
+
+- `firecracker_vm_start` — create a VM workspace, write `firecracker-config.json` and `tendril-firecracker-manifest.json`, and optionally spawn `firecracker --api-sock ... --config-file ...`. Use `dryRun: true` on hosts without Firecracker/KVM to generate the config and manifest only.
+- `firecracker_vm_status` / `firecracker_vm_list` — list tracked VMs, lifecycle state, process liveness, manifest paths, service endpoints, logs, and sockets.
+- `firecracker_vm_screen` — return the serial-console tail plus declared graphical service endpoints that Tendril/browser automation can open or capture.
+- `firecracker_vm_stop` — stop a tracked VM with SIGTERM followed by bounded SIGKILL and persist lifecycle metadata.
+- `/firecracker-vms` — operator command that summarizes tracked VMs in the TUI.
+
+Key capabilities:
+
+- Configurable VM boot inputs: kernel, optional initrd, rootfs, CPU/memory sizing, kernel args, rootfs read-only mode, logging, metrics, and optional TAP networking.
+- Tendril manifest generation with lifecycle metadata, API socket path, serial-console log path, and declared screen/control service URLs.
+- Browser/workload configuration via `services`, e.g. a noVNC endpoint with `{ "name": "novnc", "protocol": "http", "hostPort": 6080, "path": "/vnc.html", "screen": true }`.
+- Visible output access through `firecracker_vm_screen`: serial console for all VMs, plus VNC/noVNC/browser URLs for graphical guests.
+- Lifecycle tracking inside the Pi session with autostop on session shutdown by default.
+
+Example dry-run config/manifest generation:
+
+```json
+{
+  "id": "browser-vm",
+  "dryRun": true,
+  "kernelPath": "./vm/vmlinux",
+  "rootfsPath": "./vm/rootfs.ext4",
+  "cpuCount": 2,
+  "memMiB": 2048,
+  "tapName": "tap0",
+  "services": [
+    { "name": "novnc", "protocol": "http", "hostPort": 6080, "guestPort": 6080, "path": "/vnc.html", "screen": true },
+    { "name": "browser-debug", "protocol": "http", "hostPort": 9222, "guestPort": 9222 }
+  ]
+}
+```
 
 ## Kitty image preview Pi extension
 

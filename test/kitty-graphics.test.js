@@ -137,3 +137,19 @@ test("buildScopedDeleteCommand returns empty string when no images are owned", (
   assert.equal(buildScopedDeleteCommand({ ownedImageIds: new Set(), passthrough: "none" }), "");
   assert.equal(buildScopedDeleteCommand({ passthrough: "none" }), "");
 });
+
+test("firecracker VM extension is packaged and exposes lifecycle, screen, and Tendril manifest controls", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const source = await readFile(new URL("../extensions/firecracker-vm.js", import.meta.url), "utf8");
+
+  assert.ok(packageJson.pi.extensions.includes("./extensions/firecracker-vm.js"));
+  assert.match(source, /name: "firecracker_vm_start"/);
+  assert.match(source, /name: "firecracker_vm_status"/);
+  assert.match(source, /name: "firecracker_vm_list"/);
+  assert.match(source, /name: "firecracker_vm_screen"/);
+  assert.match(source, /name: "firecracker_vm_stop"/);
+  assert.match(source, /tendril-firecracker-manifest\.json/);
+  assert.match(source, /serial-console-log/);
+  assert.match(source, /firecracker --api-sock/);
+  assert.match(source, /pi\.registerCommand\("firecracker-vms"/);
+});

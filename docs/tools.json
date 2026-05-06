@@ -175,6 +175,14 @@
           "sourceOfTruth": "extensions/pi-graphics.js, extensions/pi-graphics/, themes/kitty-graphics.json"
         },
         {
+          "name": "Firecracker VM Pi extension",
+          "command": "firecracker_vm_start, firecracker_vm_status, firecracker_vm_list, firecracker_vm_screen, firecracker_vm_stop, /firecracker-vms",
+          "audience": "Pi agents orchestrating Tendril-controllable VM workloads",
+          "purpose": "Prepare and lifecycle-manage Firecracker microVM workspaces with config files, API sockets, serial-console logs, Tendril manifests, and declared browser/VNC/noVNC service endpoints for visible screen access.",
+          "commonActions": ["prepare or spawn a VM", "declare browser/noVNC screen endpoints", "inspect serial console output", "list VM lifecycle state", "stop a VM"],
+          "sourceOfTruth": "extensions/firecracker-vm.js"
+        },
+        {
           "name": "Web search prompt template",
           "command": "/web-search",
           "audience": "Pi users, agents",

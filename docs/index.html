@@ -24,7 +24,7 @@
         <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
         <div class="hero-stats" aria-label="Inventory summary">
           <span><strong>4</strong> sections</span>
-          <span><strong>22</strong> tools and surfaces</span>
+          <span><strong>23</strong> tools and surfaces</span>
           <span><strong>2026-04-27</strong> reviewed</span>
         </div>
       </div>
@@ -556,6 +556,34 @@
               <li><code>render gradient prompt rule</code></li>
               <li><code>frame a tool/code block</code></li>
               <li><code>scoped clear of owned images</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>Firecracker VM Pi extension</h3>
+              <code>firecracker_vm_start, firecracker_vm_status, firecracker_vm_list, firecracker_vm_screen, firecracker_vm_stop, /firecracker-vms</code>
+            </div>
+            <p>Prepare and lifecycle-manage Firecracker microVM workspaces with config files, API sockets, serial-console logs, Tendril manifests, and declared browser/VNC/noVNC service endpoints for visible screen access.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents orchestrating Tendril-controllable VM workloads</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/firecracker-vm.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>prepare or spawn a VM</code></li>
+              <li><code>declare browser/noVNC screen endpoints</code></li>
+              <li><code>inspect serial console output</code></li>
+              <li><code>list VM lifecycle state</code></li>
+              <li><code>stop a VM</code></li>
               </ul>
             </details>
           </article>
