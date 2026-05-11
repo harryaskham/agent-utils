@@ -63,6 +63,9 @@
 //   PI_RT_AZURE_PROTOCOL=v1|beta                  default v1
 //   PI_RT_REASONING_EFFORT=off|minimal|low|medium|high
 //   PI_RT_SEND_REASONING=1                        explicitly send reasoning.effort through proxy
+//   PI_RT_VAD_THRESHOLD                           server VAD sensitivity threshold (default 0.7)
+//   PI_RT_VAD_SILENCE_MS                          server VAD stop-after-silence (default 1100)
+//   PI_RT_VAD_PREFIX_PADDING_MS                   server VAD prefix padding (default 300)
 //   PI_RT_DEBUG=1                                 verbose event logging
 
 import WebSocket from "ws";
@@ -158,6 +161,22 @@ async function eventDataToString(data) {
   if (Buffer.isBuffer(data)) return data.toString("utf8");
   if (data && typeof data.text === "function") return await data.text();
   return String(data);
+}
+
+function numberEnv(name, fallback) {
+  const value = Number(env(name) ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+export function buildServerVadTurnDetection() {
+  return {
+    type: "server_vad",
+    create_response: false,
+    interrupt_response: true,
+    threshold: numberEnv("PI_RT_VAD_THRESHOLD", 0.7),
+    prefix_padding_ms: numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300),
+    silence_duration_ms: numberEnv("PI_RT_VAD_SILENCE_MS", 1100),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -709,13 +728,7 @@ class RealtimeSession {
     // create_response stays false so Pi still owns the response turn (so tools,
     // history, approvals all flow through the normal agent loop).
     if (this.mic && (this.micMode === "vad" || this.micMode === "continuous")) {
-      return {
-        type: "server_vad",
-        create_response: false,
-        interrupt_response: true,
-        prefix_padding_ms: 300,
-        silence_duration_ms: Number(env("PI_RT_VAD_SILENCE_MS") || 650),
-      };
+      return buildServerVadTurnDetection();
     }
     return null;
   }
@@ -1730,6 +1743,7 @@ function diagnosticLines(session, config) {
     `audioBackend: ${backend} · ${audioOutputBackendLabel(config)}/${audioInputBackendLabel(config)}`,
     `pulse: ${pulse}`,
     `commands: ${requirements}`,
+    `vad: threshold:${numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
     `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length}`,
     `lastResponseError: ${session.lastResponseError || "<none>"}`,
     `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,

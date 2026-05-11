@@ -3,14 +3,18 @@ import assert from "node:assert/strict";
 
 import { readFile } from "node:fs/promises";
 
-async function loadRealtimeExtensionForTest() {
+async function loadRealtimeModuleForTest() {
   const source = await readFile(new URL("../extensions/realtime-agent.js", import.meta.url), "utf8");
   const testableSource = source.replace(
     'import WebSocket from "ws";',
     'class WebSocket { static OPEN = 1; constructor() { this.readyState = WebSocket.OPEN; } on() {} once() {} off() {} send() {} close() {} }',
   );
   const encoded = Buffer.from(testableSource, "utf8").toString("base64");
-  const module = await import(`data:text/javascript;base64,${encoded}`);
+  return import(`data:text/javascript;base64,${encoded}`);
+}
+
+async function loadRealtimeExtensionForTest() {
+  const module = await loadRealtimeModuleForTest();
   return module.default;
 }
 
@@ -113,4 +117,33 @@ test("/rt-status full emits the same diagnostics without requiring a live realti
   assert.match(message, /Realtime doctor/);
   assert.match(message, /record:/);
   assert.match(message, /playback:/);
+});
+
+test("server VAD turn detection honors threshold, silence, and prefix env controls", async () => {
+  const previous = {
+    threshold: process.env.PI_RT_VAD_THRESHOLD,
+    silence: process.env.PI_RT_VAD_SILENCE_MS,
+    prefix: process.env.PI_RT_VAD_PREFIX_PADDING_MS,
+  };
+  process.env.PI_RT_VAD_THRESHOLD = "0.42";
+  process.env.PI_RT_VAD_SILENCE_MS = "900";
+  process.env.PI_RT_VAD_PREFIX_PADDING_MS = "250";
+  try {
+    const module = await loadRealtimeModuleForTest();
+    assert.deepEqual(module.buildServerVadTurnDetection(), {
+      type: "server_vad",
+      create_response: false,
+      interrupt_response: true,
+      threshold: 0.42,
+      prefix_padding_ms: 250,
+      silence_duration_ms: 900,
+    });
+  } finally {
+    if (previous.threshold === undefined) delete process.env.PI_RT_VAD_THRESHOLD;
+    else process.env.PI_RT_VAD_THRESHOLD = previous.threshold;
+    if (previous.silence === undefined) delete process.env.PI_RT_VAD_SILENCE_MS;
+    else process.env.PI_RT_VAD_SILENCE_MS = previous.silence;
+    if (previous.prefix === undefined) delete process.env.PI_RT_VAD_PREFIX_PADDING_MS;
+    else process.env.PI_RT_VAD_PREFIX_PADDING_MS = previous.prefix;
+  }
 });
