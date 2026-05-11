@@ -1,6 +1,12 @@
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  buildPngDisplayCommand,
+  estimateRowsForImage,
+  readPngDimensions,
+  stableKittyImageId,
+} from "./kitty-graphics.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
@@ -184,6 +190,27 @@ function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, desc
   });
 }
 
+async function previewInKitty(pngBase64, outputPath) {
+  if (process.env.TENDRIL_SHARE_PREVIEW === "0" || !process.stdout?.isTTY) return;
+  try {
+    const columns = clampInteger(process.env.TENDRIL_SHARE_PREVIEW_COLUMNS, 64, 8, 200);
+    const dims = await readPngDimensions(outputPath).catch(() => ({ width: 1280, height: 720 }));
+    const rows = estimateRowsForImage({ imageWidth: dims.width, imageHeight: dims.height, columns, maxRows: 24, minRows: 4 });
+    const imageId = stableKittyImageId(`tendril-share:${outputPath}`);
+    const sequence = buildPngDisplayCommand({
+      imageId,
+      placementId: 1,
+      pngBase64,
+      columns,
+      rows,
+      passthrough: "auto",
+    });
+    process.stdout.write(`\n${sequence}\n`);
+  } catch {
+    // best-effort preview; ignore failures (non-kitty terminal, etc.)
+  }
+}
+
 async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight }, signal) {
   const resolved = await resolveTendrilTarget(pi, { kind, target }, signal);
   const dir = getCaptureDir(ctx);
@@ -210,10 +237,11 @@ async function captureTarget(pi, ctx, { kind, target, id, prompt }, signal) {
   const text = prompt?.trim() || defaultPrompt;
   const content = [
     { type: "text", text },
-    { type: "image", source: { type: "base64", mediaType: PNG_MIME, data: captured.data } },
+    { type: "image", data: captured.data, mimeType: PNG_MIME },
   ];
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(content, options);
+  await previewInKitty(captured.data, captured.outputPath);
   emitCaptureHistory(pi, { action: "screenshot", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options });
   return { ...captured, queued: !!options };
 }
@@ -235,6 +263,7 @@ async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
           { type: "image", data, mimeType: PNG_MIME },
         ],
       }],
+      // describe-only call (no kitty preview from VLM request itself)
     },
     {
       apiKey: auth.apiKey,
@@ -259,6 +288,7 @@ async function describeTarget(pi, ctx, { kind, target, id, prompt }, signal) {
   const message = `Tendril ${kind} ${captured.target.id} screenshot description from ${description.model}:${focus}\n\n${description.text}`;
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(message, options);
+  await previewInKitty(captured.data, captured.outputPath);
   emitCaptureHistory(pi, { action: "description", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options, descriptionModel: description.model });
   return { ...captured, description, queued: !!options };
 }
@@ -275,8 +305,9 @@ async function sendStreamFrame(pi, ctx, stream) {
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage([
     { type: "text", text },
-    { type: "image", source: { type: "base64", mediaType: PNG_MIME, data: captured.data } },
+    { type: "image", data: captured.data, mimeType: PNG_MIME },
   ], options);
+  await previewInKitty(captured.data, captured.outputPath);
   emitCaptureHistory(pi, { action: `stream frame ${stream.frame}`, kind: stream.kind, target: stream.target, outputPath: captured.outputPath, queued: !!options });
   stream.lastFrameAt = Date.now();
   stream.lastOutputPath = captured.outputPath;

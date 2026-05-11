@@ -93,8 +93,8 @@ test("/tendril window captures and sends image content to the model", async () =
     assert.equal(userMessages.length, 1);
     assert.equal(userMessages[0].content[0].text, "what is visible?");
     assert.equal(userMessages[0].content[1].type, "image");
-    assert.equal(userMessages[0].content[1].source.mediaType, "image/png");
-    assert.equal(userMessages[0].content[1].source.data, ONE_PIXEL_PNG.toString("base64"));
+    assert.equal(userMessages[0].content[1].mimeType, "image/png");
+    assert.equal(userMessages[0].content[1].data, ONE_PIXEL_PNG.toString("base64"));
     assert.equal(userMessages[0].options, undefined);
     assert.match(notifications.at(-1).message, /Sent Tendril window 4 screenshot/);
   } finally {
