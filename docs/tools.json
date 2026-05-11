@@ -159,6 +159,14 @@
           "sourceOfTruth": "extensions/web-search.js"
         },
         {
+          "name": "Tendril share Pi extension",
+          "command": "/tendril list, /tendril window <id>, /tendril display <id>",
+          "audience": "Pi users sharing local visual context with image-capable models",
+          "purpose": "Let the user list Tendril targets and send captured window/display screenshots to the model as image user messages.",
+          "commonActions": ["list windows and displays", "capture a window for the model", "capture a display for the model", "queue screenshot context as a follow-up while the agent is busy"],
+          "sourceOfTruth": "extensions/tendril-share.js"
+        },
+        {
           "name": "Kitty image preview Pi extension",
           "command": "kitty_image_preview_capture, kitty_image_preview_add, kitty_image_preview_show",
           "audience": "Pi agents, operators using kitty-compatible terminals",

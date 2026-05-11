@@ -71,6 +71,19 @@ Example dry-run config/manifest generation:
 }
 ```
 
+## Tendril share Pi extension
+
+The Tendril share extension is loaded from [`extensions/tendril-share.js`](extensions/tendril-share.js). It gives the user a slash-command path for showing the model a current screen/window, complementing the agent-facing Tendril tools that let the model inspect or control UI.
+
+Available commands:
+
+- `/tendril list` — runs `tendril list --json` and shows readable display/window targets.
+- `/tendril window <id> [prompt]` — captures a Tendril window to PNG and sends a user message containing the screenshot image plus optional prompt text.
+- `/tendril display <id> [prompt]` — captures a Tendril display to PNG and sends it to the model.
+- `/tendril screen <id> [prompt]` — alias for `/tendril display`.
+
+Captures are written under the active Pi session directory when available, or a process-scoped temp folder otherwise. If the agent is already streaming, screenshot messages are queued as follow-ups so the user can share visual context without interrupting the current turn.
+
 ## Kitty image preview Pi extension
 
 The kitty image preview extension is loaded from [`extensions/kitty-image-preview.js`](extensions/kitty-image-preview.js) and uses shared protocol helpers in [`extensions/kitty-graphics.js`](extensions/kitty-graphics.js). It is a first-class Pi package extension like `search_web`: install this repo as a Pi package, then the tools become available to the agent without shelling out to `kitty icat`.

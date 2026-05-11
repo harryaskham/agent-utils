@@ -43,7 +43,8 @@
       "./extensions/kitty-image-preview.js",
       "./extensions/pi-graphics.js",
       "./extensions/firecracker-vm.js",
-      "./extensions/realtime-agent.js"
+      "./extensions/realtime-agent.js",
+      "./extensions/tendril-share.js"
     ],
     "prompts": [
       "./prompts"
