@@ -71,7 +71,6 @@
 //   PI_RT_VAD_PREFIX_PADDING_MS                   server VAD prefix padding (default 300)
 //   PI_RT_DEBUG=1                                 verbose event logging
 
-import WebSocket from "ws";
 import { spawn, spawnSync } from "node:child_process";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
@@ -103,6 +102,25 @@ const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
 const TOOL_OUTPUT_CAP = 16_000;
+
+let realtimeWebSocketConstructor = null;
+let realtimeWebSocketOpenState = 1;
+
+export function setRealtimeWebSocketConstructor(ctor) {
+  realtimeWebSocketConstructor = ctor;
+  realtimeWebSocketOpenState = Number.isFinite(Number(ctor?.OPEN)) ? ctor.OPEN : 1;
+  return realtimeWebSocketConstructor;
+}
+
+async function getRealtimeWebSocketConstructor() {
+  if (realtimeWebSocketConstructor) return realtimeWebSocketConstructor;
+  const mod = await import("ws");
+  return setRealtimeWebSocketConstructor(mod.default || mod.WebSocket || mod);
+}
+
+function isRealtimeWebSocketOpen(ws) {
+  return !!ws && ws.readyState === realtimeWebSocketOpenState;
+}
 
 // ---------------------------------------------------------------------------
 // Tiny helpers
@@ -600,7 +618,8 @@ class RealtimeSession {
           "User-Agent": "Python/3.13 websockets/15.0.1",
         };
 
-    const ws = new WebSocket(url, {
+    const WebSocketImpl = await getRealtimeWebSocketConstructor();
+    const ws = new WebSocketImpl(url, {
       perMessageDeflate: false,
       handshakeTimeout: 15000,
       headers,
@@ -655,7 +674,7 @@ class RealtimeSession {
   }
 
   send(obj) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!isRealtimeWebSocketOpen(this.ws)) {
       throw new Error("Realtime WebSocket is not open");
     }
     this.ws.send(JSON.stringify(obj));
@@ -740,7 +759,7 @@ class RealtimeSession {
   }
 
   sendTurnDetectionUpdate() {
-    if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.connected || !isRealtimeWebSocketOpen(this.ws)) return;
     const turnDetection = this.currentTurnDetection();
     const sessionPayload = this.sessionShape === "ga"
       ? { type: "realtime", audio: { input: { turn_detection: turnDetection } } }
@@ -1477,7 +1496,7 @@ class RealtimeSession {
     await this.maybeApplySession({ systemPrompt: "", tools: [] });
 
     proc.stdout.on("data", (chunk) => {
-      if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      if (!this.connected || !isRealtimeWebSocketOpen(this.ws)) return;
       // Half-duplex guard: don't feed mic audio back into the WSS while Pi is
       // mid-turn or during a brief post-speech grace window (speakers leak into
       // mic). "thinking|speaking|replaying|transcribing" covers the whole
@@ -1515,7 +1534,7 @@ class RealtimeSession {
     this.micMode = null;
     this.sendTurnDetectionUpdate();
     this.updateStatus();
-    if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.connected || !isRealtimeWebSocketOpen(this.ws)) return;
     if (commit) {
       if (this.lastMicBytes <= 0) {
         this.setPhase("idle");

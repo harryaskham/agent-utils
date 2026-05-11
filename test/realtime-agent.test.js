@@ -1,22 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { readFile } from "node:fs/promises";
+import realtimeAgentExtension, {
+  buildServerVadTurnDetection,
+  setRealtimeWebSocketConstructor,
+} from "../extensions/realtime-agent.js";
 
-async function loadRealtimeModuleForTest() {
-  const source = await readFile(new URL("../extensions/realtime-agent.js", import.meta.url), "utf8");
-  const testableSource = source.replace(
-    'import WebSocket from "ws";',
-    'class WebSocket { static OPEN = 1; constructor() { this.readyState = WebSocket.OPEN; } on() {} once() {} off() {} send() {} close() {} }',
-  );
-  const encoded = Buffer.from(testableSource, "utf8").toString("base64");
-  return import(`data:text/javascript;base64,${encoded}`);
+class FakeWebSocket {
+  static OPEN = 1;
+  constructor() { this.readyState = FakeWebSocket.OPEN; }
+  on() {}
+  once() {}
+  off() {}
+  send() {}
+  close() {}
 }
 
-async function loadRealtimeExtensionForTest() {
-  const module = await loadRealtimeModuleForTest();
-  return module.default;
-}
+setRealtimeWebSocketConstructor(FakeWebSocket);
 
 function makeHarness() {
   const commands = new Map();
@@ -55,7 +55,6 @@ function makeHarness() {
 }
 
 test("/rt-hide-status keeps the realtime widget hidden across later status updates", async () => {
-  const realtimeAgentExtension = await loadRealtimeExtensionForTest();
   const { pi, commands, handlers, widgets, ctx } = makeHarness();
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
@@ -71,7 +70,6 @@ test("/rt-hide-status keeps the realtime widget hidden across later status updat
 });
 
 test("/rt-off clears realtime widget and footer statuses", async () => {
-  const realtimeAgentExtension = await loadRealtimeExtensionForTest();
   const { pi, commands, handlers, widgets, statuses, ctx } = makeHarness();
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
@@ -88,7 +86,6 @@ test("/rt-off clears realtime widget and footer statuses", async () => {
 });
 
 test("/rt-doctor surfaces provider, Pulse, command, and hint diagnostics", async () => {
-  const realtimeAgentExtension = await loadRealtimeExtensionForTest();
   const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
@@ -107,7 +104,6 @@ test("/rt-doctor surfaces provider, Pulse, command, and hint diagnostics", async
 });
 
 test("/rt-status full emits the same diagnostics without requiring a live realtime connection", async () => {
-  const realtimeAgentExtension = await loadRealtimeExtensionForTest();
   const { pi, commands, handlers, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
@@ -130,8 +126,7 @@ test("server VAD turn detection honors threshold, silence, and prefix env contro
   process.env.PI_RT_VAD_SILENCE_MS = "900";
   process.env.PI_RT_VAD_PREFIX_PADDING_MS = "250";
   try {
-    const module = await loadRealtimeModuleForTest();
-    assert.deepEqual(module.buildServerVadTurnDetection(), {
+    assert.deepEqual(buildServerVadTurnDetection(), {
       type: "server_vad",
       create_response: false,
       interrupt_response: true,
