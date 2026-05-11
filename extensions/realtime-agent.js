@@ -1931,7 +1931,7 @@ export function createRealtimeControls({ pi, session, config }) {
     },
 
     setVoice(voice, ctx) {
-      const next = String(voice || "").trim();
+      const next = String(voice || "").trim().toLowerCase();
       if (!REALTIME_VOICES.has(next)) throw new Error(`Unsupported realtime voice: ${voice}`);
       config.voice = next;
       // Voice is part of session.update but not part of the old update cache key;

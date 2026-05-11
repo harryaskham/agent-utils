@@ -321,7 +321,7 @@ test("/rt tuning subcommands validate voice, backend, and reasoning", async () =
     realtimeAgentExtension(pi);
     handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
-    await commands.get("rt").handler("voice verse", ctx);
+    await commands.get("rt").handler("voice Verse", ctx);
     assert.equal(pi.realtime.snapshot().voice, "verse");
     assert.match(notifications.at(-1).message, /Realtime voice verse/);
 
