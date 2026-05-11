@@ -360,6 +360,23 @@ test("legacy realtime aliases route through the unified /rt command surface", as
   assert.equal(widgets.has("realtime-status"), false);
 });
 
+test("/rt rejects unsupported start, mic, and stt modes without falling through", async () => {
+  const { pi, commands, handlers, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt").handler("start banana", ctx);
+  assert.match(notifications.at(-1).message, /Unsupported realtime start mode/);
+  assert.equal(!!pi.realtime.snapshot().state.connected, false);
+
+  await commands.get("rt").handler("mic banana", ctx);
+  assert.match(notifications.at(-1).message, /Unsupported realtime mic mode/);
+
+  await commands.get("rt").handler("stt banana", ctx);
+  assert.match(notifications.at(-1).message, /Unsupported realtime STT mode/);
+  assert.equal(pi.realtime.snapshot().sttOnly, false);
+});
+
 test("/rt help reports unified usage and /rt stt stop exits transcription mode", async () => {
   const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);

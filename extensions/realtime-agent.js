@@ -103,6 +103,8 @@ const REALTIME_AUDIO_BACKENDS = new Set([
   "auto", "coreaudio", "audiotoolbox", "sox", "rec", "play", "ffplay", "ffmpeg",
 ]);
 const REALTIME_REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "high"]);
+const REALTIME_START_MODES = new Set(["vad", "ptt", "nolisten"]);
+const REALTIME_MIC_MODES = new Set(["vad", "ptt", "off", "stop", "cancel"]);
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -2135,8 +2137,13 @@ export default function realtimeAgentExtension(pi) {
     if (verb === "stt" && (!value || value === "start" || value === "vad" || value === "ptt")) {
       return startRealtime(ctx, { sttOnly: true, listenMode: value === "ptt" ? "ptt" : "vad" });
     }
+    if (verb === "stt") { ctx.ui.notify("Unsupported realtime STT mode. Use /rt stt [vad|ptt|stop].", "warning"); return; }
 
-    if (verb === "start" || verb === "on") return startRealtime(ctx, { listenMode: value || "vad" });
+    if (verb === "start" || verb === "on") {
+      const mode = value || "vad";
+      if (!REALTIME_START_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime start mode. Use /rt start [vad|ptt|nolisten].", "warning"); return; }
+      return startRealtime(ctx, { listenMode: mode });
+    }
     if (verb === "stop" || verb === "off") { await controls.disable(ctx, { restoreModel: true }); ctx.ui.notify("Realtime off", "info"); return; }
     if (verb === "doctor") { const lines = controls.diagnostics(); ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" }); ctx.ui.notify(lines.join("\n"), "info"); return; }
     if (verb === "status") { const full = value === "full"; controls.showStatus(ctx); const lines = full ? controls.diagnostics() : controls.statusLines(); ctx.ui.notify(full ? lines.join("\n") : lines[0], "info"); return; }
@@ -2153,9 +2160,11 @@ export default function realtimeAgentExtension(pi) {
       return;
     }
     if (verb === "mic" || verb === "listen") {
-      if (value === "off" || value === "stop" || value === "cancel") { await controls.cancelMic(ctx); ctx.ui.notify("Realtime mic cancelled", "info"); return; }
-      await controls.listen(ctx, value === "ptt" ? "ptt" : "vad");
-      ctx.ui.notify(value === "ptt" ? "PTT recording. Press Enter/Space/Esc or /rt mic off." : "VAD listening. Speak; silence should transcribe.", "info");
+      const mode = value || "vad";
+      if (!REALTIME_MIC_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime mic mode. Use /rt mic [vad|ptt|off].", "warning"); return; }
+      if (mode === "off" || mode === "stop" || mode === "cancel") { await controls.cancelMic(ctx); ctx.ui.notify("Realtime mic cancelled", "info"); return; }
+      await controls.listen(ctx, mode);
+      ctx.ui.notify(mode === "ptt" ? "PTT recording. Press Enter/Space/Esc or /rt mic off." : "VAD listening. Speak; silence should transcribe.", "info");
       return;
     }
     if (verb === "voice") {

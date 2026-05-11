@@ -168,7 +168,7 @@ Unified `/rt` controls:
 /rt help                       show the unified command usage
 ```
 
-`/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
+`/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, and `/rt stt <mode>` are also rejected instead of falling through to a default mic mode. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
 
 Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`).
 
