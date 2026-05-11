@@ -106,6 +106,7 @@ const REALTIME_REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "
 const REALTIME_START_MODES = new Set(["vad", "ptt", "nolisten"]);
 const REALTIME_MIC_MODES = new Set(["vad", "ptt", "off", "stop", "cancel"]);
 const REALTIME_STT_MODES = new Set(["start", "vad", "ptt", "stop", "off", "cancel"]);
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -1876,6 +1877,9 @@ function truncateVisible(s, width) {
 
 export function createRealtimeControls({ pi, session, config }) {
   const controls = {
+    usage() { return REALTIME_USAGE; },
+    help() { return this.usage(); },
+
     options() {
       return {
         voices: [...REALTIME_VOICES],
@@ -2121,10 +2125,8 @@ export default function realtimeAgentExtension(pi) {
     return true;
   }
 
-  const rtUsage = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
-
   function showRtUsage(ctx) {
-    ctx.ui.notify(rtUsage, "info");
+    ctx.ui.notify(controls.usage(), "info");
   }
 
   async function handleRtCommand(args, ctx) {

@@ -179,6 +179,7 @@ The extension also exposes a unified control object at `pi.realtime` and emits i
 Useful methods include:
 
 - `snapshot()` — current model, audio/STT flags, voice, backend, reasoning effort, previous model, and lifecycle state. The nested `state` object includes `connection`, boolean `connected`/`connecting` flags, `phase`, `micMode`, `widgetVisible`, and the derived user-facing `mode`.
+- `usage()` / `help()` — canonical `/rt` usage text for UI/help surfaces.
 - `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, `reasoningEfforts`, `startModes`, `micModes`, and `sttModes` for building UI affordances.
 - `diagnostics()` and `statusLines()` — the same content used by `/rt-doctor` and `/rt-status`.
 - `showStatus(ctx)`, `hideStatus(ctx)`, `clearUi(ctx)` — widget/footer lifecycle controls.
