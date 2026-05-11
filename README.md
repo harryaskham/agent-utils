@@ -16,6 +16,7 @@ It currently provides:
 - `search_web` native Pi tool for live web lookups via GitHub Copilot Responses API
 - `kitty_image_preview_*` native Pi tools for persistent terminal image previews via the kitty graphics protocol
 - `firecracker_vm_*` native Pi tools for preparing, spawning, inspecting, and stopping Firecracker VM workloads for Tendril-visible services
+- OpenAI Realtime provider and voice commands (`/rt`, `/rt-listen`, `/rt-doctor`, `/rt-status full`, `/rt-off`) via [`extensions/realtime-agent.js`](extensions/realtime-agent.js). See the [Realtime Agent guide](docs/realtime-agent.md) for recommended workflows, Pulse/phone routing, VAD tuning, replay, and troubleshooting.
 - `skill-server` / `skill-search`, a Rust CLI + MCP stdio meta-tool for dynamic skill and host MCP server discovery
 
 ## skill-server (`skill-search`)
