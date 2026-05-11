@@ -158,13 +158,14 @@ Unified `/rt` controls:
 /rt stop                       stop realtime and restore the previous model
 /rt mic [vad|ptt|off]          start or cancel microphone capture
 /rt audio [on|off|toggle]      control audio output
-/rt stt [vad|ptt]              speech-to-text into the current model
+/rt stt [vad|ptt|stop]         speech-to-text into the current model, or stop STT mode
 /rt widget [show|hide]         show or hide the realtime widget
 /rt status [full]              compact or full status
 /rt doctor                     diagnostics
 /rt voice <voice>              set realtime output voice
 /rt backend <backend>          set audio backend for new mic/playback commands
 /rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high
+/rt help                       show the unified command usage
 ```
 
 `/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.

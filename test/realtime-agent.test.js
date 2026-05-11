@@ -331,6 +331,26 @@ test("/rt tuning subcommands validate voice, backend, and reasoning", async () =
   }
 });
 
+test("/rt help reports unified usage and /rt stt stop exits transcription mode", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt").handler("help", ctx);
+  assert.match(notifications.at(-1).message, /Usage: \/rt start/);
+  assert.match(notifications.at(-1).message, /\/rt stt \[vad\|ptt\|stop\]/);
+
+  pi.realtime.setSttOnly(true, ctx);
+  pi.realtime.showStatus(ctx);
+  assert.equal(pi.realtime.snapshot().sttOnly, true);
+  assert.ok(widgets.has("realtime-status"));
+
+  await commands.get("rt").handler("stt stop", ctx);
+  assert.equal(pi.realtime.snapshot().sttOnly, false);
+  assert.equal(widgets.has("realtime-status"), false);
+  assert.match(notifications.at(-1).message, /Realtime STT stopped/);
+});
+
 test("/rt status full and doctor subcommands expose diagnostics", async () => {
   const { pi, commands, handlers, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);

@@ -2104,13 +2104,25 @@ export default function realtimeAgentExtension(pi) {
     return true;
   }
 
+  const rtUsage = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
+
+  function showRtUsage(ctx) {
+    ctx.ui.notify(rtUsage, "info");
+  }
+
   async function handleRtCommand(args, ctx) {
     const tokens = String(args || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
     const verb = tokens[0] || "start";
     const value = tokens[1] || "";
 
     // Compatibility aliases from the original rough UX.
+    if (["help", "usage", "?"].includes(verb)) { showRtUsage(ctx); return; }
     if (["vad", "ptt", "nolisten"].includes(verb)) return startRealtime(ctx, { listenMode: verb });
+    if (verb === "stt" && ["stop", "off", "cancel"].includes(value)) {
+      await controls.disable(ctx, { restoreModel: true });
+      ctx.ui.notify("Realtime STT stopped", "info");
+      return;
+    }
     if (verb === "stt" && (!value || value === "start" || value === "vad" || value === "ptt")) {
       return startRealtime(ctx, { sttOnly: true, listenMode: value === "ptt" ? "ptt" : "vad" });
     }
@@ -2156,11 +2168,11 @@ export default function realtimeAgentExtension(pi) {
       return;
     }
 
-    ctx.ui.notify("Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt], /rt widget [show|hide], /rt status [full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>", "info");
+    showRtUsage(ctx);
   }
 
   pi.registerCommand("rt", {
-    description: "Realtime control. Usage: /rt start|stop|mic|audio|stt|widget|status|doctor ...",
+    description: "Realtime control. Usage: /rt start|stop|mic|audio|stt|widget|status|doctor|voice|backend|reasoning ...",
     handler: handleRtCommand,
   });
 
