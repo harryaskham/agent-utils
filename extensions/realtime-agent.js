@@ -508,6 +508,23 @@ class RealtimeSession {
     } catch {}
   }
 
+  showStatusWidget(ctx = this.lastCtx) {
+    this.config.statusWidgetVisible = true;
+    this.updateStatus(ctx);
+  }
+
+  hideStatusWidget(ctx = this.lastCtx) {
+    this.config.statusWidgetVisible = false;
+    try { ctx?.ui?.setWidget?.("realtime-status", undefined); } catch {}
+  }
+
+  clearRealtimeUi(ctx = this.lastCtx) {
+    this.config.statusWidgetVisible = false;
+    try { ctx?.ui?.setWidget?.("realtime-status", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("realtime", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("rt-audio", undefined); } catch {}
+  }
+
   // -------------------------------------------------------------------------
   // Connection
   // -------------------------------------------------------------------------
@@ -1711,9 +1728,10 @@ export default function realtimeAgentExtension(pi) {
     session.lastCtx = ctx;
     if (isRealtimeModel(ctx.model)) {
       config.model = ctx.model.id;
-      config.statusWidgetVisible = true;
+      session.showStatusWidget(ctx);
+    } else {
+      session.updateStatus(ctx);
     }
-    session.updateStatus(ctx);
 
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = ctx.ui.onTerminalInput?.((data) => {
@@ -1741,8 +1759,7 @@ export default function realtimeAgentExtension(pi) {
   pi.on("model_select", (event, ctx) => {
     if (isRealtimeModel(event.model)) {
       config.model = event.model.id;
-      config.statusWidgetVisible = true;
-      session.updateStatus(ctx);
+      session.showStatusWidget(ctx);
       // History pointer must reset whenever the model changes — otherwise we
       // would skip replaying the prior conversation into the WSS.
       session.forwardedMessageCount = 0;
@@ -1752,9 +1769,7 @@ export default function realtimeAgentExtension(pi) {
       session.callIdsEmittedByModel.clear();
       ctx.ui.notify(`Realtime: ${event.model.provider}/${event.model.id} selected`, "info");
     } else {
-      config.statusWidgetVisible = false;
-      ctx.ui.setWidget("realtime-status", undefined);
-      ctx.ui.setStatus?.("rt-audio", undefined);
+      session.clearRealtimeUi(ctx);
     }
   });
 
@@ -1780,7 +1795,7 @@ export default function realtimeAgentExtension(pi) {
         // disable audio reply, route transcripts as user messages to Pi.
         config.audioEnabled = false;
         config.sttOnly = true;
-        config.statusWidgetVisible = true;
+        session.showStatusWidget(ctx);
       } else {
         // Full realtime: remember the prior Pi model so /rt-off can restore it,
         // then switch to gpt-realtime-2.
@@ -1795,7 +1810,7 @@ export default function realtimeAgentExtension(pi) {
         }
         config.audioEnabled = true;
         config.sttOnly = false;
-        config.statusWidgetVisible = true;
+        session.showStatusWidget(ctx);
       }
 
       try { await session.connect(ctx); }
@@ -1845,6 +1860,7 @@ export default function realtimeAgentExtension(pi) {
   pi.registerCommand("rt-off", {
     description: "Exit realtime: stop mic, disable audio, restore previous Pi model.",
     handler: async (_args, ctx) => {
+      session.hideStatusWidget(ctx);
       try { await session.stopMic({ commit: false }); } catch {}
       try { await session.close(false); } catch {}
       config.audioEnabled = false;
@@ -1859,7 +1875,7 @@ export default function realtimeAgentExtension(pi) {
           try { await pi.setModel(m); } catch {}
         }
       }
-      session.updateStatus(ctx);
+      session.clearRealtimeUi(ctx);
       ctx.ui.notify("Realtime off", "info");
     },
   });
@@ -1963,14 +1979,14 @@ export default function realtimeAgentExtension(pi) {
     handler: async (_args, ctx) => {
       // Keep the widget short; Pi truncates tall widgets with
       // "... (widget truncated)". Full details are available in debug logs/env.
+      session.showStatusWidget(ctx);
       const lines = statusLines(session, config);
-      ctx.ui.setWidget("realtime-status", lines, { placement: "belowEditor" });
       ctx.ui.notify(lines[0], "info");
     },
   });
 
   pi.registerCommand("rt-hide-status", {
     description: "Hide the realtime status widget.",
-    handler: async (_args, ctx) => ctx.ui.setWidget("realtime-status", undefined),
+    handler: async (_args, ctx) => session.hideStatusWidget(ctx),
   });
 }
