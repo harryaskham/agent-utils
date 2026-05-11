@@ -1871,6 +1871,14 @@ function truncateVisible(s, width) {
 
 export function createRealtimeControls({ pi, session, config }) {
   const controls = {
+    options() {
+      return {
+        voices: [...REALTIME_VOICES],
+        audioBackends: [...REALTIME_AUDIO_BACKENDS],
+        reasoningEfforts: [...REALTIME_REASONING_EFFORTS],
+      };
+    },
+
     snapshot() {
       return {
         model: config.model,
@@ -1884,6 +1892,7 @@ export function createRealtimeControls({ pi, session, config }) {
       };
     },
 
+    supportedOptions() { return this.options(); },
     diagnostics() { return diagnosticLines(session, config); },
     statusLines(options) { return statusLines(session, config, options); },
     showStatus(ctx) { session.showStatusWidget(ctx); return this.snapshot(); },
@@ -1920,7 +1929,7 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = String(backend || "").trim().toLowerCase();
       if (!next) throw new Error("Audio backend is required");
       if (!REALTIME_AUDIO_BACKENDS.has(next)) {
-        throw new Error(`Unsupported realtime audio backend: ${backend}. Use one of: ${[...REALTIME_AUDIO_BACKENDS].join(", ")}`);
+        throw new Error(`Unsupported realtime audio backend: ${backend}. Use one of: ${this.options().audioBackends.join(", ")}`);
       }
       process.env.PI_RT_AUDIO_BACKEND = next;
       config.recordCommand = env("PI_RT_RECORD_CMD");
@@ -1934,7 +1943,7 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = String(effort || "").trim().toLowerCase();
       if (!next) return this.snapshot();
       if (!REALTIME_REASONING_EFFORTS.has(next)) {
-        throw new Error(`Unsupported realtime reasoning effort: ${effort}. Use one of: ${[...REALTIME_REASONING_EFFORTS].join(", ")}`);
+        throw new Error(`Unsupported realtime reasoning effort: ${effort}. Use one of: ${this.options().reasoningEfforts.join(", ")}`);
       }
       config.reasoningEffort = next;
       session.reasoningRejected = false;
@@ -2150,19 +2159,19 @@ export default function realtimeAgentExtension(pi) {
       return;
     }
     if (verb === "voice") {
-      if (!value) { ctx.ui.notify(`Realtime voice ${controls.snapshot().voice}. Options: ${[...REALTIME_VOICES].join(", ")}`, "info"); return; }
+      if (!value) { ctx.ui.notify(`Realtime voice ${controls.snapshot().voice}. Options: ${controls.options().voices.join(", ")}`, "info"); return; }
       try { controls.setVoice(value, ctx); ctx.ui.notify(`Realtime voice ${value}`, "info"); }
       catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }
     if (verb === "backend") {
-      if (!value) { ctx.ui.notify(`Realtime audio backend ${controls.snapshot().audioBackend}. Options: ${[...REALTIME_AUDIO_BACKENDS].join(", ")}`, "info"); return; }
+      if (!value) { ctx.ui.notify(`Realtime audio backend ${controls.snapshot().audioBackend}. Options: ${controls.options().audioBackends.join(", ")}`, "info"); return; }
       try { controls.setAudioBackend(value, ctx); ctx.ui.notify(`Realtime audio backend ${value}`, "info"); }
       catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }
     if (verb === "reasoning") {
-      if (!value) { ctx.ui.notify(`Realtime reasoning effort ${controls.snapshot().reasoningEffort}. Options: ${[...REALTIME_REASONING_EFFORTS].join(", ")}`, "info"); return; }
+      if (!value) { ctx.ui.notify(`Realtime reasoning effort ${controls.snapshot().reasoningEffort}. Options: ${controls.options().reasoningEfforts.join(", ")}`, "info"); return; }
       try { controls.setReasoningEffort(value, ctx); ctx.ui.notify(`Realtime reasoning effort: ${value}`, "info"); }
       catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;

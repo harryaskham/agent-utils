@@ -172,6 +172,19 @@ Unified `/rt` controls:
 
 Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`).
 
+## Pi control API
+
+The extension also exposes a unified control object at `pi.realtime` and emits it on `pi.events` as `realtime:controls` for future UI/extensions that should not reach into realtime session internals directly.
+
+Useful methods include:
+
+- `snapshot()` — current model, audio/STT flags, voice, backend, reasoning effort, previous model, and lifecycle state.
+- `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, and `reasoningEfforts` for building UI affordances.
+- `diagnostics()` and `statusLines()` — the same content used by `/rt-doctor` and `/rt-status`.
+- `showStatus(ctx)`, `hideStatus(ctx)`, `clearUi(ctx)` — widget/footer lifecycle controls.
+- `setAudio(enabled, ctx)`, `toggleAudio(ctx)`, `setSttOnly(enabled, ctx)`, `setVoice(voice, ctx)`, `setAudioBackend(backend, ctx)`, and `setReasoningEffort(effort, ctx)` — guarded state changes.
+- `listen(ctx, mode)`, `stopMic(ctx, { commit })`, `cancelMic(ctx)`, and `disable(ctx)` — microphone/session lifecycle helpers.
+
 Widget controls:
 
 ```text
