@@ -153,6 +153,7 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.deepEqual(pi.realtime.options().audioModes, ["on", "off", "toggle"]);
   assert.ok(pi.realtime.options().widgetModes.includes("hide"));
   assert.deepEqual(pi.realtime.options().statusModes, ["compact", "full"]);
+  assert.deepEqual(pi.realtime.options().listenModes, ["vad", "ptt", "continuous"]);
   const snapshot = pi.realtime.snapshot();
   assert.equal(snapshot.health.lastResponseError, null);
   assert.equal(snapshot.health.lastPlaybackError, null);
@@ -178,6 +179,18 @@ test("unified realtime controls mutate audio, voice, and widget state", () => {
   snapshot = pi.realtime.hideStatus(ctx);
   assert.equal(snapshot.state.widgetVisible, false);
   assert.equal(widgets.has("realtime-status"), false);
+});
+
+test("unified realtime controls reject unsupported direct listen modes", async () => {
+  const { pi, handlers, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await assert.rejects(
+    () => pi.realtime.listen(ctx, "banana"),
+    /Unsupported realtime listen mode: banana/,
+  );
+  assert.equal(pi.realtime.snapshot().state.micMode, null);
 });
 
 test("/rt-hide-status keeps the realtime widget hidden across later status updates", async () => {

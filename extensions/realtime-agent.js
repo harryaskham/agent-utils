@@ -109,6 +109,7 @@ const REALTIME_STT_MODES = new Set(["start", "vad", "ptt", "stop", "off", "cance
 const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
+const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
 const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
@@ -1894,6 +1895,7 @@ export function createRealtimeControls({ pi, session, config }) {
         audioModes: [...REALTIME_AUDIO_MODES],
         widgetModes: [...REALTIME_WIDGET_MODES],
         statusModes: [...REALTIME_STATUS_MODES],
+        listenModes: [...REALTIME_LISTEN_MODES],
       };
     },
 
@@ -1979,7 +1981,11 @@ export function createRealtimeControls({ pi, session, config }) {
     },
 
     async listen(ctx, mode = "ptt") {
-      const vad = mode === "vad" || mode === "continuous";
+      const next = String(mode || "ptt").trim().toLowerCase();
+      if (!REALTIME_LISTEN_MODES.has(next)) {
+        throw new Error(`Unsupported realtime listen mode: ${mode}. Use one of: ${this.options().listenModes.join(", ")}`);
+      }
+      const vad = next === "vad" || next === "continuous";
       await session.startMic(ctx, vad ? "vad" : "ptt");
       return this.snapshot();
     },
