@@ -2252,7 +2252,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   pi.registerCommand("rt", {
-    description: "Realtime control. Usage: /rt start|stop|mic|audio|stt|widget|status|doctor|voice|backend|reasoning ...",
+    description: "Realtime control. Usage: /rt start|stop|mic|listen|audio|stt|widget|status|doctor|voice|backend|reasoning ...",
     handler: handleRtCommand,
   });
 
@@ -2331,7 +2331,7 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.registerCommand("rt-listen", {
-    description: "Start mic capture. Usage: /rt-listen [ptt|vad]. Stop with /rt-stop; discard with /rt-cancel.",
+    description: "Start mic capture. Usage: /rt-listen [ptt|vad|continuous]. Stop with /rt-stop; discard with /rt-cancel.",
     handler: async (args, ctx) => {
       const suffix = String(args || "").trim() || "ptt";
       return handleRtCommand(`mic ${suffix === "continuous" ? "vad" : suffix}`, ctx);

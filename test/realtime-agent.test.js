@@ -132,9 +132,11 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
 }
 
 test("extension exposes unified realtime controls on pi and the event bus", () => {
-  const { pi, emittedEvents } = makeHarness();
+  const { pi, commands, emittedEvents } = makeHarness();
   realtimeAgentExtension(pi);
 
+  assert.match(commands.get("rt").description, /mic\|listen\|audio/);
+  assert.match(commands.get("rt-listen").description, /ptt\|vad\|continuous/);
   assert.equal(typeof pi.realtime.snapshot, "function");
   assert.equal(typeof pi.realtime.setAudio, "function");
   assert.equal(typeof pi.realtime.setVoice, "function");
