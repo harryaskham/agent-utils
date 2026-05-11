@@ -50,10 +50,13 @@
 //   PI_RT_PLAYBACK_CHUNK_MS                       continuous jitter-buffer flush interval (default 80)
 //   PI_RT_RECORD_CMD                              shell -> raw pcm16 24k mono stdout
 //   PI_RT_PLAYBACK_CMD                            shell reading raw pcm16 24k mono stdin
-//   PI_RT_AUDIO_BACKEND=auto|pulse|coreaudio|sox|ffplay|ffmpeg
-//                                                  auto = pacat/parec when PULSE_SERVER set,
-//                                                  else ffplay + sox `rec`. Pulse honors
-//                                                  PULSE_SERVER / PULSE_SINK / PULSE_SOURCE.
+//   PI_RT_AUDIO_BACKEND=pulse|auto|coreaudio|sox|ffplay|ffmpeg
+//                                                  default pulse. This is intentional: the
+//                                                  common Pi voice setup uses Pulse even on
+//                                                  macOS, often with a phone as sink/source.
+//                                                  Pulse honors PULSE_SERVER / PULSE_SINK /
+//                                                  PULSE_SOURCE. Use auto only for local
+//                                                  fallback routing outside that setup.
 //   PI_RT_DISABLE_AUDIO=1                         disable playback by default
 //   PI_RT_DIRECT_AZURE=1                          bypass LiteLLM proxy
 //   PI_RT_AZURE_ENDPOINT                          azure cognitive services endpoint
@@ -78,7 +81,9 @@ const DEFAULT_VOICE = "marin";
 
 // Sensible defaults for this extension. Anything already set in the env wins,
 // so users can still override per-launch. These match the recommended config
-// for the canonical Pi + realtime experience.
+// for the canonical Pi + realtime experience: Pulse is deliberately first-class
+// even on macOS because many operator setups route voice through a phone-backed
+// Pulse sink/source rather than local CoreAudio devices.
 function setEnvDefault(key, value) {
   if (process.env[key] === undefined || process.env[key] === "") {
     process.env[key] = value;
@@ -270,8 +275,9 @@ function defaultPlaybackCommand() {
   if (process.env.PI_RT_PLAYBACK_CMD) return process.env.PI_RT_PLAYBACK_CMD;
   const backend = (process.env.PI_RT_AUDIO_BACKEND || "").toLowerCase();
   const outDevice = process.env.PI_RT_OUTPUT_DEVICE || process.env.PI_RT_SPEAKER_DEVICE || "";
-  // Explicit backend always wins over PULSE_SERVER. Only auto mode should route
-  // to Pulse because PULSE_SERVER exists.
+  // Explicit backend always wins over PULSE_SERVER. The default is explicitly
+  // set to pulse above; only the separate auto mode should infer Pulse merely
+  // because PULSE_SERVER exists.
   if (["pulse", "pulseaudio", "pacat", "paplay"].includes(backend)) {
     return "pacat --playback --raw --format=s16le --rate=24000 --channels=1";
   }
@@ -1733,7 +1739,9 @@ function diagnosticLines(session, config) {
   if (/\bparec\b/.test(record) && !commandAvailable("parec")) hints.push("install PulseAudio tools or set PI_RT_RECORD_CMD");
   if (/\bpacat\b/.test(playback) && !commandAvailable("pacat")) hints.push("install PulseAudio tools or set PI_RT_PLAYBACK_CMD");
   if (/ffmpeg|ffplay/.test(`${record}\n${playback}`) && !commandAvailable("ffmpeg") && !commandAvailable("ffplay")) hints.push("install ffmpeg for CoreAudio/ffplay backend");
-  if (backend === "pulse" && !process.env.PULSE_SERVER) hints.push("Pulse backend selected; if using phone sink/source, confirm PULSE_SERVER/SINK/SOURCE env");
+  if (backend === "pulse") hints.push(process.env.PULSE_SERVER
+    ? "Pulse-first setup active; confirm phone sink/source with PULSE_SINK/PULSE_SOURCE if audio routes incorrectly"
+    : "Pulse is the default backend; if using phone sink/source, set/confirm PULSE_SERVER/SINK/SOURCE, or override PI_RT_AUDIO_BACKEND for local devices");
   if (session.phase === "transcribing" && session.pendingCommitTimer) hints.push("waiting for transcription; /rt-cancel discards stuck mic input");
 
   return [

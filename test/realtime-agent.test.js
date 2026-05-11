@@ -102,6 +102,7 @@ test("/rt-doctor surfaces provider, Pulse, command, and hint diagnostics", async
   assert.match(message, /pulse: PULSE_SERVER=/);
   assert.match(message, /commands:/);
   assert.match(message, /hint:/);
+  assert.match(message, /Pulse is the default backend|Pulse-first setup active/);
   assert.ok(widgets.has("realtime-status"));
 });
 
