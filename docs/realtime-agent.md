@@ -179,7 +179,7 @@ The extension also exposes a unified control object at `pi.realtime` and emits i
 Useful methods include:
 
 - `snapshot()` — current model, audio/STT flags, voice, backend, reasoning effort, previous model, and lifecycle state.
-- `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, and `reasoningEfforts` for building UI affordances.
+- `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, `reasoningEfforts`, `startModes`, `micModes`, and `sttModes` for building UI affordances.
 - `diagnostics()` and `statusLines()` — the same content used by `/rt-doctor` and `/rt-status`.
 - `showStatus(ctx)`, `hideStatus(ctx)`, `clearUi(ctx)` — widget/footer lifecycle controls.
 - `setAudio(enabled, ctx)`, `toggleAudio(ctx)`, `setSttOnly(enabled, ctx)`, `setVoice(voice, ctx)`, `setAudioBackend(backend, ctx)`, and `setReasoningEffort(effort, ctx)` — guarded state changes.

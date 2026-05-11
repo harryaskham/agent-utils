@@ -105,6 +105,7 @@ const REALTIME_AUDIO_BACKENDS = new Set([
 const REALTIME_REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "high"]);
 const REALTIME_START_MODES = new Set(["vad", "ptt", "nolisten"]);
 const REALTIME_MIC_MODES = new Set(["vad", "ptt", "off", "stop", "cancel"]);
+const REALTIME_STT_MODES = new Set(["start", "vad", "ptt", "stop", "off", "cancel"]);
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -1878,6 +1879,9 @@ export function createRealtimeControls({ pi, session, config }) {
         voices: [...REALTIME_VOICES],
         audioBackends: [...REALTIME_AUDIO_BACKENDS],
         reasoningEfforts: [...REALTIME_REASONING_EFFORTS],
+        startModes: [...REALTIME_START_MODES],
+        micModes: [...REALTIME_MIC_MODES],
+        sttModes: [...REALTIME_STT_MODES],
       };
     },
 
@@ -2134,7 +2138,7 @@ export default function realtimeAgentExtension(pi) {
       ctx.ui.notify("Realtime STT stopped", "info");
       return;
     }
-    if (verb === "stt" && (!value || value === "start" || value === "vad" || value === "ptt")) {
+    if (verb === "stt" && (!value || ["start", "vad", "ptt"].includes(value))) {
       return startRealtime(ctx, { sttOnly: true, listenMode: value === "ptt" ? "ptt" : "vad" });
     }
     if (verb === "stt") { ctx.ui.notify("Unsupported realtime STT mode. Use /rt stt [vad|ptt|stop].", "warning"); return; }

@@ -140,6 +140,9 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.ok(pi.realtime.options().voices.includes("marin"));
   assert.ok(pi.realtime.options().audioBackends.includes("pulse"));
   assert.ok(pi.realtime.options().reasoningEfforts.includes("low"));
+  assert.deepEqual(pi.realtime.options().startModes, ["vad", "ptt", "nolisten"]);
+  assert.ok(pi.realtime.options().micModes.includes("cancel"));
+  assert.ok(pi.realtime.options().sttModes.includes("stop"));
   assert.equal(emittedEvents.at(-1)?.name, "realtime:controls");
   assert.equal(emittedEvents.at(-1)?.payload, pi.realtime);
 });
