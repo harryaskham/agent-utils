@@ -1824,6 +1824,24 @@ export default function realtimeAgentExtension(pi) {
     },
   });
 
+  pi.registerCommand("stt", {
+    description: "Alias for /rt stt: transcription-only mic into current Pi model.",
+    handler: async (_args, ctx) => {
+      const cmd = pi.getCommand?.("rt")?.handler || null;
+      if (typeof cmd === "function") return cmd("stt", ctx);
+      // Fallback: same body inline.
+      try { await session.startMic(ctx, "vad"); } catch (e) { ctx.ui.notify(`stt: ${e.message}`, "error"); }
+    },
+  });
+
+  pi.registerCommand("rt-stt", {
+    description: "Alias for /rt stt.",
+    handler: async (_args, ctx) => {
+      const cmd = pi.getCommand?.("rt")?.handler;
+      if (typeof cmd === "function") return cmd("stt", ctx);
+    },
+  });
+
   pi.registerCommand("rt-off", {
     description: "Exit realtime: stop mic, disable audio, restore previous Pi model.",
     handler: async (_args, ctx) => {
