@@ -110,7 +110,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -2214,10 +2214,17 @@ export default function realtimeAgentExtension(pi) {
       ctx.ui.notify(`Realtime audio ${snapshot.audioEnabled ? "ON" : "OFF"}`, "info");
       return;
     }
-    if (verb === "mic" || verb === "listen") {
+    if (verb === "mic") {
       const mode = value || "vad";
       if (!REALTIME_MIC_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime mic mode. Use /rt mic [vad|ptt|off].", "warning"); return; }
       if (mode === "off" || mode === "stop" || mode === "cancel") { await controls.cancelMic(ctx); ctx.ui.notify("Realtime mic cancelled", "info"); return; }
+      await controls.listen(ctx, mode);
+      ctx.ui.notify(mode === "ptt" ? "PTT recording. Press Enter/Space/Esc or /rt mic off." : "VAD listening. Speak; silence should transcribe.", "info");
+      return;
+    }
+    if (verb === "listen") {
+      const mode = value || "vad";
+      if (!REALTIME_LISTEN_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime listen mode. Use /rt listen [vad|ptt|continuous].", "warning"); return; }
       await controls.listen(ctx, mode);
       ctx.ui.notify(mode === "ptt" ? "PTT recording. Press Enter/Space/Esc or /rt mic off." : "VAD listening. Speak; silence should transcribe.", "info");
       return;

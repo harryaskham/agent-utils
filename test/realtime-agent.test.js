@@ -143,6 +143,7 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.equal(typeof pi.realtime.usage, "function");
   assert.equal(pi.realtime.help(), pi.realtime.usage());
   assert.match(pi.realtime.usage(), /\/rt start \[vad\|ptt\|nolisten\]/);
+  assert.match(pi.realtime.usage(), /\/rt listen \[vad\|ptt\|continuous\]/);
   assert.deepEqual(pi.realtime.supportedOptions(), pi.realtime.options());
   assert.ok(pi.realtime.options().voices.includes("marin"));
   assert.ok(pi.realtime.options().audioBackends.includes("pulse"));
@@ -390,6 +391,29 @@ test("legacy realtime aliases route through the unified /rt command surface", as
 
   await commands.get("rt-hide-status").handler("", ctx);
   assert.equal(widgets.has("realtime-status"), false);
+});
+
+test("/rt listen accepts the same continuous mode as direct controls", async () => {
+  const originalRecordCmd = process.env.PI_RT_RECORD_CMD;
+  process.env.PI_RT_RECORD_CMD = `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 1000)"`;
+  try {
+    const { pi, commands, handlers, notifications, ctx } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+    await commands.get("rt").handler("listen continuous", ctx);
+    assert.equal(pi.realtime.snapshot().state.micMode, "vad");
+    assert.match(notifications.at(-1).message, /VAD listening/);
+
+    await commands.get("rt").handler("listen banana", ctx);
+    assert.match(notifications.at(-1).message, /Unsupported realtime listen mode/);
+    assert.equal(pi.realtime.snapshot().state.micMode, "vad");
+
+    await pi.realtime.cancelMic(ctx);
+  } finally {
+    if (originalRecordCmd === undefined) delete process.env.PI_RT_RECORD_CMD;
+    else process.env.PI_RT_RECORD_CMD = originalRecordCmd;
+  }
 });
 
 test("/rt rejects unsupported start, mic, and stt modes without falling through", async () => {
