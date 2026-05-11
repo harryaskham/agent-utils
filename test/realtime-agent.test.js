@@ -82,3 +82,35 @@ test("/rt-off clears realtime widget and footer statuses", async () => {
   assert.equal(statuses.has("realtime"), false);
   assert.equal(statuses.has("rt-audio"), false);
 });
+
+test("/rt-doctor surfaces provider, Pulse, command, and hint diagnostics", async () => {
+  const realtimeAgentExtension = await loadRealtimeExtensionForTest();
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt-doctor").handler("", ctx);
+
+  const message = notifications.at(-1)?.message || "";
+  assert.match(message, /Realtime doctor/);
+  assert.match(message, /provider:/);
+  assert.match(message, /audioBackend: pulse/);
+  assert.match(message, /pulse: PULSE_SERVER=/);
+  assert.match(message, /commands:/);
+  assert.match(message, /hint:/);
+  assert.ok(widgets.has("realtime-status"));
+});
+
+test("/rt-status full emits the same diagnostics without requiring a live realtime connection", async () => {
+  const realtimeAgentExtension = await loadRealtimeExtensionForTest();
+  const { pi, commands, handlers, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt-status").handler("full", ctx);
+
+  const message = notifications.at(-1)?.message || "";
+  assert.match(message, /Realtime doctor/);
+  assert.match(message, /record:/);
+  assert.match(message, /playback:/);
+});

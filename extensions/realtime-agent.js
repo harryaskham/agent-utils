@@ -66,7 +66,7 @@
 //   PI_RT_DEBUG=1                                 verbose event logging
 
 import WebSocket from "ws";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
@@ -1686,6 +1686,56 @@ function statusLines(session, config, { full = false } = {}) {
   ];
 }
 
+function commandAvailable(name) {
+  const result = spawnSync("/bin/sh", ["-lc", `command -v ${name} >/dev/null 2>&1`], { encoding: "utf8" });
+  return result.status === 0;
+}
+
+function envPresent(...names) {
+  return names.find((name) => !!process.env[name]);
+}
+
+function diagnosticLines(session, config) {
+  const provider = config.directAzure ? "azure" : "openai/proxy";
+  const backend = process.env.PI_RT_AUDIO_BACKEND || "pulse";
+  const record = config.recordCommand || defaultRecordCommand();
+  const playback = config.playbackCommand || defaultPlaybackCommand();
+  const apiKey = config.directAzure
+    ? envPresent("PI_RT_AZURE_API_KEY", "AZURE_CANADACENTRAL_API_KEY", "AZURE_OPENAI_API_KEY")
+    : envPresent("PI_RT_API_KEY", "OPENAI_API_KEY");
+  const requirements = [
+    `parec:${commandAvailable("parec") ? "ok" : "missing"}`,
+    `pacat:${commandAvailable("pacat") ? "ok" : "missing"}`,
+    `ffmpeg:${commandAvailable("ffmpeg") ? "ok" : "missing"}`,
+    `ffplay:${commandAvailable("ffplay") ? "ok" : "missing"}`,
+    `sox-rec:${commandAvailable("rec") ? "ok" : "missing"}`,
+  ].join(" · ");
+  const pulse = [
+    `PULSE_SERVER=${process.env.PULSE_SERVER || "<unset>"}`,
+    `PULSE_SOURCE=${process.env.PULSE_SOURCE || "<default>"}`,
+    `PULSE_SINK=${process.env.PULSE_SINK || "<default>"}`,
+  ].join(" · ");
+  const hints = [];
+  if (!apiKey) hints.push(config.directAzure ? "set PI_RT_AZURE_API_KEY" : "set OPENAI_API_KEY or PI_RT_API_KEY");
+  if (/\bparec\b/.test(record) && !commandAvailable("parec")) hints.push("install PulseAudio tools or set PI_RT_RECORD_CMD");
+  if (/\bpacat\b/.test(playback) && !commandAvailable("pacat")) hints.push("install PulseAudio tools or set PI_RT_PLAYBACK_CMD");
+  if (/ffmpeg|ffplay/.test(`${record}\n${playback}`) && !commandAvailable("ffmpeg") && !commandAvailable("ffplay")) hints.push("install ffmpeg for CoreAudio/ffplay backend");
+  if (backend === "pulse" && !process.env.PULSE_SERVER) hints.push("Pulse backend selected; if using phone sink/source, confirm PULSE_SERVER/SINK/SOURCE env");
+  if (session.phase === "transcribing" && session.pendingCommitTimer) hints.push("waiting for transcription; /rt-cancel discards stuck mic input");
+
+  return [
+    "Realtime doctor",
+    ...statusLines(session, config, { full: true }),
+    `provider: ${provider} · apiKey:${apiKey || "<missing>"}`,
+    `audioBackend: ${backend} · ${audioOutputBackendLabel(config)}/${audioInputBackendLabel(config)}`,
+    `pulse: ${pulse}`,
+    `commands: ${requirements}`,
+    `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length}`,
+    `lastResponseError: ${session.lastResponseError || "<none>"}`,
+    `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,
+  ];
+}
+
 function stripAnsi(s) {
   return String(s).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
@@ -1884,7 +1934,6 @@ export default function realtimeAgentExtension(pi) {
     description: "List CoreAudio devices (macOS) for PI_RT_INPUT_DEVICE / PI_RT_OUTPUT_DEVICE.",
     handler: async (_args, ctx) => {
       try {
-        const { spawnSync } = await import("node:child_process");
         const av = spawnSync("ffmpeg", ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], { encoding: "utf8" });
         const at = spawnSync("sh", ["-lc", "ffmpeg -hide_banner -nostats -loglevel info -f lavfi -i 'anullsrc=r=24000:cl=mono' -t 0.05 -f audiotoolbox -list_devices true - 2>&1 || true"], { encoding: "utf8" });
         const out = [
@@ -1975,13 +2024,22 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.registerCommand("rt-status", {
-    description: "Show realtime status and settings.",
-    handler: async (_args, ctx) => {
-      // Keep the widget short; Pi truncates tall widgets with
-      // "... (widget truncated)". Full details are available in debug logs/env.
+    description: "Show realtime status and settings. Usage: /rt-status [full]",
+    handler: async (args, ctx) => {
+      const full = String(args || "").trim().toLowerCase() === "full";
       session.showStatusWidget(ctx);
-      const lines = statusLines(session, config);
-      ctx.ui.notify(lines[0], "info");
+      const lines = full ? diagnosticLines(session, config) : statusLines(session, config);
+      if (full) ctx.ui.notify(lines.join("\n"), "info");
+      else ctx.ui.notify(lines[0], "info");
+    },
+  });
+
+  pi.registerCommand("rt-doctor", {
+    description: "Show realtime provider/audio diagnostics and troubleshooting hints.",
+    handler: async (_args, ctx) => {
+      const lines = diagnosticLines(session, config);
+      ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" });
+      ctx.ui.notify(lines.join("\n"), "info");
     },
   });
 
