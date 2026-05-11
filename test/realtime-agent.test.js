@@ -425,6 +425,25 @@ test("/rt rejects unsupported audio and widget modes without toggling state", as
   assert.equal(widgets.has("realtime-status"), false);
 });
 
+test("/rt rejects unexpected extra subcommand arguments", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt").handler("start ptt typo", ctx);
+  assert.match(notifications.at(-1).message, /Unexpected extra realtime argument/);
+  assert.equal(pi.realtime.snapshot().state.connected, false);
+
+  pi.realtime.setAudio(true, ctx);
+  await commands.get("rt").handler("audio off typo", ctx);
+  assert.match(notifications.at(-1).message, /Unexpected extra realtime argument/);
+  assert.equal(pi.realtime.snapshot().audioEnabled, true);
+
+  await commands.get("rt").handler("doctor now", ctx);
+  assert.match(notifications.at(-1).message, /Unexpected realtime argument/);
+  assert.equal(widgets.has("realtime-status"), false);
+});
+
 test("/rt rejects unsupported status modes without showing the widget", async () => {
   const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);

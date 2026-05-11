@@ -2154,6 +2154,20 @@ export default function realtimeAgentExtension(pi) {
     const tokens = String(args || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
     const verb = tokens[0] || "start";
     const value = tokens[1] || "";
+    const extra = tokens.slice(2);
+    const singleValueVerbs = new Set([
+      "start", "on", "stt", "status", "widget", "audio", "mic", "listen",
+      "voice", "backend", "reasoning",
+    ]);
+    const noValueVerbs = new Set(["help", "usage", "?", "stop", "off", "doctor", "vad", "ptt", "nolisten"]);
+    if (value && noValueVerbs.has(verb)) {
+      ctx.ui.notify(`Unexpected realtime argument for /rt ${verb}: ${value}`, "warning");
+      return;
+    }
+    if (extra.length && singleValueVerbs.has(verb)) {
+      ctx.ui.notify(`Unexpected extra realtime argument(s) for /rt ${verb}: ${extra.join(" ")}`, "warning");
+      return;
+    }
 
     // Compatibility aliases from the original rough UX.
     if (["help", "usage", "?"].includes(verb)) { showRtUsage(ctx); return; }

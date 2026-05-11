@@ -168,7 +168,7 @@ Unified `/rt` controls:
 /rt help                       show the unified command usage
 ```
 
-`/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Voice names are normalized case-insensitively before validation, so `/rt voice Verse` selects `verse`. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, `/rt stt <mode>`, `/rt audio <mode>`, `/rt widget <mode>`, and `/rt status <mode>` are also rejected instead of falling through to a default action. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
+`/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Voice names are normalized case-insensitively before validation, so `/rt voice Verse` selects `verse`. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, `/rt stt <mode>`, `/rt audio <mode>`, `/rt widget <mode>`, and `/rt status <mode>` are also rejected instead of falling through to a default action. Unexpected extra arguments, such as `/rt start ptt typo`, are rejected before changing realtime state. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
 
 Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`).
 
