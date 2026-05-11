@@ -455,6 +455,23 @@ test("/rt rejects unsupported status modes without showing the widget", async ()
   assert.equal(widgets.has("realtime-status"), false);
 });
 
+test("STT legacy aliases pass arguments through unified /rt stt handling", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  pi.realtime.setSttOnly(true, ctx);
+  pi.realtime.showStatus(ctx);
+  await commands.get("rt-stt").handler("stop", ctx);
+  assert.equal(pi.realtime.snapshot().sttOnly, false);
+  assert.equal(widgets.has("realtime-status"), false);
+  assert.match(notifications.at(-1).message, /Realtime STT stopped/);
+
+  pi.realtime.setSttOnly(true, ctx);
+  await commands.get("stt").handler("banana", ctx);
+  assert.match(notifications.at(-1).message, /Unsupported realtime STT mode/);
+});
+
 test("/rt help reports unified usage and /rt stt stop exits transcription mode", async () => {
   const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);

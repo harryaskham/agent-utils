@@ -2256,9 +2256,10 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("stt", {
     description: "Alias for /rt stt: transcription-only mic into current Pi model.",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
+      const suffix = String(args || "").trim();
       const cmd = pi.getCommand?.("rt")?.handler || null;
-      if (typeof cmd === "function") return cmd("stt", ctx);
+      if (typeof cmd === "function") return cmd(`stt${suffix ? ` ${suffix}` : ""}`, ctx);
       // Fallback: same body inline.
       try { await controls.listen(ctx, "vad"); } catch (e) { ctx.ui.notify(`stt: ${e.message}`, "error"); }
     },
@@ -2266,9 +2267,10 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-stt", {
     description: "Alias for /rt stt.",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
+      const suffix = String(args || "").trim();
       const cmd = pi.getCommand?.("rt")?.handler;
-      if (typeof cmd === "function") return cmd("stt", ctx);
+      if (typeof cmd === "function") return cmd(`stt${suffix ? ` ${suffix}` : ""}`, ctx);
     },
   });
 
