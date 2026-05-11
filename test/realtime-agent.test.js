@@ -297,6 +297,40 @@ test("/rt subcommands provide explicit audio and widget controls", async () => {
   assert.equal(widgets.has("realtime-status"), false);
 });
 
+test("/rt tuning subcommands validate voice, backend, and reasoning", async () => {
+  const previousBackend = process.env.PI_RT_AUDIO_BACKEND;
+  const { pi, commands, handlers, notifications, ctx } = makeHarness();
+  try {
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+    await commands.get("rt").handler("voice verse", ctx);
+    assert.equal(pi.realtime.snapshot().voice, "verse");
+    assert.match(notifications.at(-1).message, /Realtime voice verse/);
+
+    await commands.get("rt").handler("voice bogus", ctx);
+    assert.equal(pi.realtime.snapshot().voice, "verse");
+    assert.match(notifications.at(-1).message, /Unsupported realtime voice/);
+
+    await commands.get("rt").handler("backend audiotoolbox", ctx);
+    assert.equal(pi.realtime.snapshot().audioBackend, "audiotoolbox");
+
+    await commands.get("rt").handler("backend bogus", ctx);
+    assert.equal(pi.realtime.snapshot().audioBackend, "audiotoolbox");
+    assert.match(notifications.at(-1).message, /Unsupported realtime audio backend/);
+
+    await commands.get("rt").handler("reasoning low", ctx);
+    assert.equal(pi.realtime.snapshot().reasoningEffort, "low");
+
+    await commands.get("rt").handler("reasoning maximum", ctx);
+    assert.equal(pi.realtime.snapshot().reasoningEffort, "low");
+    assert.match(notifications.at(-1).message, /Unsupported realtime reasoning effort/);
+  } finally {
+    if (previousBackend === undefined) delete process.env.PI_RT_AUDIO_BACKEND;
+    else process.env.PI_RT_AUDIO_BACKEND = previousBackend;
+  }
+});
+
 test("/rt status full and doctor subcommands expose diagnostics", async () => {
   const { pi, commands, handlers, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);

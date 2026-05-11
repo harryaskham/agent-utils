@@ -98,6 +98,11 @@ const REALTIME_VOICES = new Set([
   "alloy", "ash", "ballad", "coral", "echo",
   "sage", "shimmer", "verse", "marin", "cedar",
 ]);
+const REALTIME_AUDIO_BACKENDS = new Set([
+  "pulse", "pulseaudio", "pacat", "paplay", "parec",
+  "auto", "coreaudio", "audiotoolbox", "sox", "rec", "play", "ffplay", "ffmpeg",
+]);
+const REALTIME_REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "high"]);
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -1914,6 +1919,9 @@ export function createRealtimeControls({ pi, session, config }) {
     setAudioBackend(backend, ctx) {
       const next = String(backend || "").trim().toLowerCase();
       if (!next) throw new Error("Audio backend is required");
+      if (!REALTIME_AUDIO_BACKENDS.has(next)) {
+        throw new Error(`Unsupported realtime audio backend: ${backend}. Use one of: ${[...REALTIME_AUDIO_BACKENDS].join(", ")}`);
+      }
       process.env.PI_RT_AUDIO_BACKEND = next;
       config.recordCommand = env("PI_RT_RECORD_CMD");
       config.playbackCommand = env("PI_RT_PLAYBACK_CMD");
@@ -1925,6 +1933,9 @@ export function createRealtimeControls({ pi, session, config }) {
     setReasoningEffort(effort, ctx) {
       const next = String(effort || "").trim().toLowerCase();
       if (!next) return this.snapshot();
+      if (!REALTIME_REASONING_EFFORTS.has(next)) {
+        throw new Error(`Unsupported realtime reasoning effort: ${effort}. Use one of: ${[...REALTIME_REASONING_EFFORTS].join(", ")}`);
+      }
       config.reasoningEffort = next;
       session.reasoningRejected = false;
       session.updateStatus(ctx);
@@ -2126,10 +2137,26 @@ export default function realtimeAgentExtension(pi) {
       ctx.ui.notify(value === "ptt" ? "PTT recording. Press Enter/Space/Esc or /rt mic off." : "VAD listening. Speak; silence should transcribe.", "info");
       return;
     }
-    if (verb === "voice") { controls.setVoice(value, ctx); ctx.ui.notify(`Realtime voice ${value}`, "info"); return; }
-    if (verb === "backend") { controls.setAudioBackend(value, ctx); ctx.ui.notify(`Realtime audio backend ${value}`, "info"); return; }
+    if (verb === "voice") {
+      if (!value) { ctx.ui.notify(`Realtime voice ${controls.snapshot().voice}. Options: ${[...REALTIME_VOICES].join(", ")}`, "info"); return; }
+      try { controls.setVoice(value, ctx); ctx.ui.notify(`Realtime voice ${value}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    if (verb === "backend") {
+      if (!value) { ctx.ui.notify(`Realtime audio backend ${controls.snapshot().audioBackend}. Options: ${[...REALTIME_AUDIO_BACKENDS].join(", ")}`, "info"); return; }
+      try { controls.setAudioBackend(value, ctx); ctx.ui.notify(`Realtime audio backend ${value}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    if (verb === "reasoning") {
+      if (!value) { ctx.ui.notify(`Realtime reasoning effort ${controls.snapshot().reasoningEffort}. Options: ${[...REALTIME_REASONING_EFFORTS].join(", ")}`, "info"); return; }
+      try { controls.setReasoningEffort(value, ctx); ctx.ui.notify(`Realtime reasoning effort: ${value}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
 
-    ctx.ui.notify("Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt], /rt widget [show|hide], /rt status [full], /rt doctor", "info");
+    ctx.ui.notify("Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt], /rt widget [show|hide], /rt status [full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>", "info");
   }
 
   pi.registerCommand("rt", {
@@ -2207,8 +2234,8 @@ export default function realtimeAgentExtension(pi) {
     handler: async (args, ctx) => {
       const effort = String(args || "").trim().toLowerCase();
       if (!effort) { ctx.ui.notify(`reasoning=${controls.snapshot().reasoningEffort}`, "info"); return; }
-      controls.setReasoningEffort(effort, ctx);
-      ctx.ui.notify(`Realtime reasoning effort: ${effort}`, "info");
+      try { controls.setReasoningEffort(effort, ctx); ctx.ui.notify(`Realtime reasoning effort: ${effort}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
     },
   });
 
