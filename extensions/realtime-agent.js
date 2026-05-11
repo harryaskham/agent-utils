@@ -2249,9 +2249,19 @@ export default function realtimeAgentExtension(pi) {
     handler: handleRtCommand,
   });
 
+  function rejectLegacyAliasArgs(name, args, ctx) {
+    const suffix = String(args || "").trim();
+    if (!suffix) return false;
+    ctx.ui.notify(`Unexpected argument for ${name}: ${suffix}`, "warning");
+    return true;
+  }
+
   pi.registerCommand("rt-on", {
     description: "Enable realtime audio output.",
-    handler: async (_args, ctx) => handleRtCommand("audio on", ctx),
+    handler: async (args, ctx) => {
+      if (rejectLegacyAliasArgs("/rt-on", args, ctx)) return;
+      return handleRtCommand("audio on", ctx);
+    },
   });
 
   pi.registerCommand("stt", {
@@ -2276,12 +2286,16 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-off", {
     description: "Exit realtime: stop mic, disable audio, restore previous Pi model.",
-    handler: async (_args, ctx) => handleRtCommand("stop", ctx),
+    handler: async (args, ctx) => {
+      if (rejectLegacyAliasArgs("/rt-off", args, ctx)) return;
+      return handleRtCommand("stop", ctx);
+    },
   });
 
   pi.registerCommand("rt-devices", {
     description: "List CoreAudio devices (macOS) for PI_RT_INPUT_DEVICE / PI_RT_OUTPUT_DEVICE.",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
+      if (rejectLegacyAliasArgs("/rt-devices", args, ctx)) return;
       try {
         const av = spawnSync("ffmpeg", ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], { encoding: "utf8" });
         const at = spawnSync("sh", ["-lc", "ffmpeg -hide_banner -nostats -loglevel info -f lavfi -i 'anullsrc=r=24000:cl=mono' -t 0.05 -f audiotoolbox -list_devices true - 2>&1 || true"], { encoding: "utf8" });
@@ -2312,14 +2326,15 @@ export default function realtimeAgentExtension(pi) {
   pi.registerCommand("rt-listen", {
     description: "Start mic capture. Usage: /rt-listen [ptt|vad]. Stop with /rt-stop; discard with /rt-cancel.",
     handler: async (args, ctx) => {
-      const mode = (String(args || "").trim().split(/\s+/)[0] || "ptt").toLowerCase();
-      return handleRtCommand(`mic ${mode === "continuous" ? "vad" : mode}`, ctx);
+      const suffix = String(args || "").trim() || "ptt";
+      return handleRtCommand(`mic ${suffix === "continuous" ? "vad" : suffix}`, ctx);
     },
   });
 
   pi.registerCommand("rt-stop", {
     description: "Stop mic; if recording PTT, commit audio for transcription. If no mic, close WebSocket.",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
+      if (rejectLegacyAliasArgs("/rt-stop", args, ctx)) return;
       if (session.mic) {
         await controls.stopMic(ctx, { commit: true });
         ctx.ui.notify("Realtime mic stopped", "info");
@@ -2332,7 +2347,10 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-cancel", {
     description: "Stop realtime mic without committing audio.",
-    handler: async (_args, ctx) => handleRtCommand("mic off", ctx),
+    handler: async (args, ctx) => {
+      if (rejectLegacyAliasArgs("/rt-cancel", args, ctx)) return;
+      return handleRtCommand("mic off", ctx);
+    },
   });
 
   pi.registerCommand("rt-play", {
@@ -2355,11 +2373,17 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-doctor", {
     description: "Show realtime provider/audio diagnostics and troubleshooting hints.",
-    handler: async (_args, ctx) => handleRtCommand("doctor", ctx),
+    handler: async (args, ctx) => {
+      if (rejectLegacyAliasArgs("/rt-doctor", args, ctx)) return;
+      return handleRtCommand("doctor", ctx);
+    },
   });
 
   pi.registerCommand("rt-hide-status", {
     description: "Hide the realtime status widget.",
-    handler: async (_args, ctx) => handleRtCommand("widget hide", ctx),
+    handler: async (args, ctx) => {
+      if (rejectLegacyAliasArgs("/rt-hide-status", args, ctx)) return;
+      return handleRtCommand("widget hide", ctx);
+    },
   });
 }

@@ -455,6 +455,25 @@ test("/rt rejects unsupported status modes without showing the widget", async ()
   assert.equal(widgets.has("realtime-status"), false);
 });
 
+test("legacy realtime aliases reject unexpected arguments before state changes", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  pi.realtime.setAudio(false, ctx);
+  await commands.get("rt-on").handler("now", ctx);
+  assert.match(notifications.at(-1).message, /Unexpected argument for \/rt-on/);
+  assert.equal(pi.realtime.snapshot().audioEnabled, false);
+
+  await commands.get("rt-doctor").handler("please", ctx);
+  assert.match(notifications.at(-1).message, /Unexpected argument for \/rt-doctor/);
+  assert.equal(widgets.has("realtime-status"), false);
+
+  await commands.get("rt-listen").handler("vad typo", ctx);
+  assert.match(notifications.at(-1).message, /Unexpected extra realtime argument/);
+  assert.equal(pi.realtime.snapshot().state.micMode, null);
+});
+
 test("STT legacy aliases pass arguments through unified /rt stt handling", async () => {
   const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);
