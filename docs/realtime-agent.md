@@ -168,7 +168,7 @@ Unified `/rt` controls:
 /rt help                       show the unified command usage
 ```
 
-`/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, and `/rt stt <mode>` are also rejected instead of falling through to a default mic mode. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
+`/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, `/rt stt <mode>`, `/rt audio <mode>`, and `/rt widget <mode>` are also rejected instead of falling through to a default action. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
 
 Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`).
 
@@ -180,7 +180,7 @@ Useful methods include:
 
 - `snapshot()` — current model, audio/STT flags, voice, backend, reasoning effort, previous model, and lifecycle state. The nested `state` object includes `connection`, boolean `connected`/`connecting` flags, `phase`, `micMode`, `widgetVisible`, and the derived user-facing `mode`.
 - `usage()` / `help()` — canonical `/rt` usage text for UI/help surfaces.
-- `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, `reasoningEfforts`, `startModes`, `micModes`, and `sttModes` for building UI affordances.
+- `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, `reasoningEfforts`, `startModes`, `micModes`, `sttModes`, `audioModes`, and `widgetModes` for building UI affordances.
 - `diagnostics()` and `statusLines()` — the same content used by `/rt-doctor` and `/rt-status`.
 - `showStatus(ctx)`, `hideStatus(ctx)`, `clearUi(ctx)` — widget/footer lifecycle controls.
 - `setAudio(enabled, ctx)`, `toggleAudio(ctx)`, `setSttOnly(enabled, ctx)`, `setVoice(voice, ctx)`, `setAudioBackend(backend, ctx)`, and `setReasoningEffort(effort, ctx)` — guarded state changes.

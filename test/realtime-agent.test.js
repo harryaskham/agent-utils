@@ -150,6 +150,8 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.deepEqual(pi.realtime.options().startModes, ["vad", "ptt", "nolisten"]);
   assert.ok(pi.realtime.options().micModes.includes("cancel"));
   assert.ok(pi.realtime.options().sttModes.includes("stop"));
+  assert.deepEqual(pi.realtime.options().audioModes, ["on", "off", "toggle"]);
+  assert.ok(pi.realtime.options().widgetModes.includes("hide"));
   assert.equal(emittedEvents.at(-1)?.name, "realtime:controls");
   assert.equal(emittedEvents.at(-1)?.payload, pi.realtime);
 });
@@ -385,6 +387,22 @@ test("/rt rejects unsupported start, mic, and stt modes without falling through"
   await commands.get("rt").handler("stt banana", ctx);
   assert.match(notifications.at(-1).message, /Unsupported realtime STT mode/);
   assert.equal(pi.realtime.snapshot().sttOnly, false);
+});
+
+test("/rt rejects unsupported audio and widget modes without toggling state", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  pi.realtime.setAudio(true, ctx);
+  await commands.get("rt").handler("audio banana", ctx);
+  assert.match(notifications.at(-1).message, /Unsupported realtime audio mode/);
+  assert.equal(pi.realtime.snapshot().audioEnabled, true);
+
+  pi.realtime.hideStatus(ctx);
+  await commands.get("rt").handler("widget banana", ctx);
+  assert.match(notifications.at(-1).message, /Unsupported realtime widget mode/);
+  assert.equal(widgets.has("realtime-status"), false);
 });
 
 test("/rt help reports unified usage and /rt stt stop exits transcription mode", async () => {

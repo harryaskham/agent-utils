@@ -106,6 +106,8 @@ const REALTIME_REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "
 const REALTIME_START_MODES = new Set(["vad", "ptt", "nolisten"]);
 const REALTIME_MIC_MODES = new Set(["vad", "ptt", "off", "stop", "cancel"]);
 const REALTIME_STT_MODES = new Set(["start", "vad", "ptt", "stop", "off", "cancel"]);
+const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
+const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
@@ -1888,6 +1890,8 @@ export function createRealtimeControls({ pi, session, config }) {
         startModes: [...REALTIME_START_MODES],
         micModes: [...REALTIME_MIC_MODES],
         sttModes: [...REALTIME_STT_MODES],
+        audioModes: [...REALTIME_AUDIO_MODES],
+        widgetModes: [...REALTIME_WIDGET_MODES],
       };
     },
 
@@ -2156,13 +2160,17 @@ export default function realtimeAgentExtension(pi) {
     if (verb === "doctor") { const lines = controls.diagnostics(); ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" }); ctx.ui.notify(lines.join("\n"), "info"); return; }
     if (verb === "status") { const full = value === "full"; controls.showStatus(ctx); const lines = full ? controls.diagnostics() : controls.statusLines(); ctx.ui.notify(full ? lines.join("\n") : lines[0], "info"); return; }
     if (verb === "widget") {
-      if (value === "hide" || value === "off") controls.hideStatus(ctx);
+      const mode = value || "show";
+      if (!REALTIME_WIDGET_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime widget mode. Use /rt widget [show|hide].", "warning"); return; }
+      if (mode === "hide" || mode === "off") controls.hideStatus(ctx);
       else controls.showStatus(ctx);
       return;
     }
     if (verb === "audio") {
-      const snapshot = value === "on" ? controls.setAudio(true, ctx)
-        : value === "off" ? controls.setAudio(false, ctx)
+      const mode = value || "toggle";
+      if (!REALTIME_AUDIO_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime audio mode. Use /rt audio [on|off|toggle].", "warning"); return; }
+      const snapshot = mode === "on" ? controls.setAudio(true, ctx)
+        : mode === "off" ? controls.setAudio(false, ctx)
         : controls.toggleAudio(ctx);
       ctx.ui.notify(`Realtime audio ${snapshot.audioEnabled ? "ON" : "OFF"}`, "info");
       return;
