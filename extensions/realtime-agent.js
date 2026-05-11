@@ -1907,6 +1907,15 @@ export function createRealtimeControls({ pi, session, config }) {
         reasoningEffort: config.reasoningEffort,
         previousModel: config.previousModel || null,
         state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled }),
+        health: {
+          lastResponseError: session.lastResponseError || null,
+          lastPlaybackError: config.lastPlaybackError || null,
+          lastPlaybackExit: config.lastPlaybackExit || null,
+          lastPlaybackStartedAt: config.lastPlaybackStartedAt || null,
+          lastMicBytes: session.lastMicBytes || 0,
+          pendingTranscriptCount: session.pendingSpokenTranscripts?.length || 0,
+          micMuteRemainingMs: Math.max(0, (session.micMuteUntilTs || 0) - Date.now()),
+        },
       };
     },
 
