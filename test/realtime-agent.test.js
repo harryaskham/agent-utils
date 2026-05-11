@@ -331,6 +331,30 @@ test("/rt tuning subcommands validate voice, backend, and reasoning", async () =
   }
 });
 
+test("legacy realtime aliases route through the unified /rt command surface", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt-on").handler("", ctx);
+  assert.equal(pi.realtime.snapshot().audioEnabled, true);
+  assert.match(notifications.at(-1).message, /Realtime audio ON/);
+
+  await commands.get("rt-audio").handler("off", ctx);
+  assert.equal(pi.realtime.snapshot().audioEnabled, false);
+  assert.match(notifications.at(-1).message, /Realtime audio OFF/);
+
+  await commands.get("rt-reasoning").handler("medium", ctx);
+  assert.equal(pi.realtime.snapshot().reasoningEffort, "medium");
+
+  await commands.get("rt-doctor").handler("", ctx);
+  assert.match(notifications.at(-1).message, /Realtime doctor/);
+  assert.ok(widgets.has("realtime-status"));
+
+  await commands.get("rt-hide-status").handler("", ctx);
+  assert.equal(widgets.has("realtime-status"), false);
+});
+
 test("/rt help reports unified usage and /rt stt stop exits transcription mode", async () => {
   const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);

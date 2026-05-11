@@ -2129,7 +2129,7 @@ export default function realtimeAgentExtension(pi) {
 
     if (verb === "start" || verb === "on") return startRealtime(ctx, { listenMode: value || "vad" });
     if (verb === "stop" || verb === "off") { await controls.disable(ctx, { restoreModel: true }); ctx.ui.notify("Realtime off", "info"); return; }
-    if (verb === "doctor") { const lines = controls.diagnostics(); ctx.ui.notify(lines.join("\n"), "info"); return; }
+    if (verb === "doctor") { const lines = controls.diagnostics(); ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" }); ctx.ui.notify(lines.join("\n"), "info"); return; }
     if (verb === "status") { const full = value === "full"; controls.showStatus(ctx); const lines = full ? controls.diagnostics() : controls.statusLines(); ctx.ui.notify(full ? lines.join("\n") : lines[0], "info"); return; }
     if (verb === "widget") {
       if (value === "hide" || value === "off") controls.hideStatus(ctx);
@@ -2178,10 +2178,7 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-on", {
     description: "Enable realtime audio output.",
-    handler: async (_args, ctx) => {
-      controls.setAudio(true, ctx);
-      ctx.ui.notify("Realtime audio ON", "info");
-    },
+    handler: async (_args, ctx) => handleRtCommand("audio on", ctx),
   });
 
   pi.registerCommand("stt", {
@@ -2204,10 +2201,7 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-off", {
     description: "Exit realtime: stop mic, disable audio, restore previous Pi model.",
-    handler: async (_args, ctx) => {
-      await controls.disable(ctx, { restoreModel: true });
-      ctx.ui.notify("Realtime off", "info");
-    },
+    handler: async (_args, ctx) => handleRtCommand("stop", ctx),
   });
 
   pi.registerCommand("rt-devices", {
@@ -2232,36 +2226,19 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-audio", {
     description: "Toggle realtime audio output. Usage: /rt-audio [on|off|toggle]",
-    handler: async (args, ctx) => {
-      const arg = String(args || "").trim().toLowerCase();
-      const snapshot = arg === "on" ? controls.setAudio(true, ctx)
-        : arg === "off" ? controls.setAudio(false, ctx)
-        : controls.toggleAudio(ctx);
-      ctx.ui.notify(`Realtime audio ${snapshot.audioEnabled ? "ON" : "OFF"}`, "info");
-    },
+    handler: async (args, ctx) => handleRtCommand(`audio ${String(args || "").trim()}`, ctx),
   });
 
   pi.registerCommand("rt-reasoning", {
     description: "Set realtime reasoning effort: off|minimal|low|medium|high",
-    handler: async (args, ctx) => {
-      const effort = String(args || "").trim().toLowerCase();
-      if (!effort) { ctx.ui.notify(`reasoning=${controls.snapshot().reasoningEffort}`, "info"); return; }
-      try { controls.setReasoningEffort(effort, ctx); ctx.ui.notify(`Realtime reasoning effort: ${effort}`, "info"); }
-      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
-    },
+    handler: async (args, ctx) => handleRtCommand(`reasoning ${String(args || "").trim()}`, ctx),
   });
 
   pi.registerCommand("rt-listen", {
     description: "Start mic capture. Usage: /rt-listen [ptt|vad]. Stop with /rt-stop; discard with /rt-cancel.",
     handler: async (args, ctx) => {
       const mode = (String(args || "").trim().split(/\s+/)[0] || "ptt").toLowerCase();
-      const vad = mode === "vad" || mode === "continuous";
-      try { await controls.listen(ctx, vad ? "vad" : "ptt"); }
-      catch (e) { ctx.ui.notify(`Realtime mic failed: ${e.message}`, "error"); return; }
-      ctx.ui.notify(vad
-        ? "VAD listening. Speak; silence should transcribe. /rt-stop stops, /rt-cancel discards."
-        : "PTT recording. Type /rt-stop to send, /rt-cancel to discard.", "info");
-      session.updateStatus(ctx);
+      return handleRtCommand(`mic ${mode === "continuous" ? "vad" : mode}`, ctx);
     },
   });
 
@@ -2280,10 +2257,7 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-cancel", {
     description: "Stop realtime mic without committing audio.",
-    handler: async (_args, ctx) => {
-      await controls.cancelMic(ctx);
-      ctx.ui.notify("Realtime mic cancelled", "info");
-    },
+    handler: async (_args, ctx) => handleRtCommand("mic off", ctx),
   });
 
   pi.registerCommand("rt-play", {
@@ -2301,26 +2275,16 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-status", {
     description: "Show realtime status and settings. Usage: /rt-status [full]",
-    handler: async (args, ctx) => {
-      const full = String(args || "").trim().toLowerCase() === "full";
-      controls.showStatus(ctx);
-      const lines = full ? controls.diagnostics() : controls.statusLines();
-      if (full) ctx.ui.notify(lines.join("\n"), "info");
-      else ctx.ui.notify(lines[0], "info");
-    },
+    handler: async (args, ctx) => handleRtCommand(`status ${String(args || "").trim()}`, ctx),
   });
 
   pi.registerCommand("rt-doctor", {
     description: "Show realtime provider/audio diagnostics and troubleshooting hints.",
-    handler: async (_args, ctx) => {
-      const lines = controls.diagnostics();
-      ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" });
-      ctx.ui.notify(lines.join("\n"), "info");
-    },
+    handler: async (_args, ctx) => handleRtCommand("doctor", ctx),
   });
 
   pi.registerCommand("rt-hide-status", {
     description: "Hide the realtime status widget.",
-    handler: async (_args, ctx) => controls.hideStatus(ctx),
+    handler: async (_args, ctx) => handleRtCommand("widget hide", ctx),
   });
 }
