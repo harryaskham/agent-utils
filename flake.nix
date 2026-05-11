@@ -61,7 +61,7 @@
           all = self.packages.${system}.default;
           web-search-mcp = web-search.packages.${system}.web-search-mcp;
           skill-server = skillServer;
-          ss = skillServer;
+          skill-search = skillServer;
         });
 
       apps = forAllSystems (system: {
@@ -74,9 +74,9 @@
           type = "app";
           program = "${self.packages.${system}.skill-server}/bin/skill-server";
         };
-        ss = {
+        skill-search = {
           type = "app";
-          program = "${self.packages.${system}.skill-server}/bin/ss";
+          program = "${self.packages.${system}.skill-server}/bin/skill-search";
         };
       });
 

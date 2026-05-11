@@ -18,10 +18,10 @@ pub const ENV_CONFIG_PATH: &str = "SS_CONFIG";
 
 #[derive(Debug, Clone, Parser)]
 #[command(
-    name = "ss",
-    bin_name = "ss",
+    name = "skill-search",
+    bin_name = "skill-search",
     about = "Discover local skills and host MCP tools without reloading the agent",
-    long_about = "skill-server (ss) provides one CLI and MCP stdio surface for dynamic skill/tool discovery.\n\nExamples:\n  ss list --json\n  ss web query latest Rust MCP crate\n  ss call web --query 'query latest Rust MCP crate' --json\n  ss mcp stdio",
+    long_about = "skill-server (skill-search) provides one CLI and MCP stdio surface for dynamic skill/tool discovery.\n\nExamples:\n  skill-search list --json\n  skill-search web query latest Rust MCP crate\n  skill-search call web --query 'query latest Rust MCP crate' --json\n  skill-search mcp stdio",
     allow_external_subcommands = true
 )]
 pub struct SkillServerCli {
@@ -39,11 +39,11 @@ pub struct SkillServerCli {
 pub enum Command {
     /// List discovered skills, domains, and MCP server/tool routes.
     List,
-    /// Execute the /ss-style meta request explicitly.
+    /// Execute the skill-search-style meta request explicitly.
     Call(CallCommand),
     /// Serve the meta-tool over MCP stdio.
     Mcp(McpCommand),
-    /// Dynamic /ss shorthand: ss <domain> <query-or-command...>.
+    /// Dynamic shorthand: skill-search <domain> <query-or-command...>.
     #[command(external_subcommand)]
     External(Vec<OsString>),
 }
@@ -80,7 +80,7 @@ pub enum McpSubcommand {
 pub struct SkillServerConfig {
     /// Directories that contain Pi/Cacophony/agent skill files to scan.
     pub skill_paths: Vec<PathBuf>,
-    /// Host MCP stdio servers that ss can discover and route toward.
+    /// Host MCP stdio servers that skill-search can discover and route toward.
     pub mcp_servers: Vec<McpServerDefinition>,
 }
 
@@ -135,7 +135,7 @@ pub struct RuntimeContext {
 pub struct MetaRequest {
     /// Domain/server/tool selector, e.g. `web`, `search_web`, `caco`, or `docs`.
     pub domain: String,
-    /// Query or command payload after /ss <domain>.
+    /// Query or command payload after skill-search <domain>.
     pub query: String,
     /// Optional explicit tool name/alias preference.
     pub tool: Option<String>,
@@ -296,13 +296,13 @@ pub fn dispatch(cli: &SkillServerCli) -> Result<CommandOutput, SkillServerError>
         Some(Command::Call(command)) => {
             let request = meta_request_from_call(command)?;
             let response = execute_meta_request(&context, request);
-            render_output("ss", cli.json, &response, render_meta_human)
+            render_output("skill-search", cli.json, &response, render_meta_human)
         }
         Some(Command::External(words)) => {
             let (request, external_json) = meta_request_from_external(words)?;
             let response = execute_meta_request(&context, request);
             render_output(
-                "ss",
+                "skill-search",
                 cli.json || external_json,
                 &response,
                 render_meta_human,
@@ -333,8 +333,8 @@ pub fn build_mcp_server() -> McpServer<RuntimeContext> {
 fn build_tool_router() -> ToolRouter<RuntimeContext> {
     let mut router = ToolRouter::new();
     router.add_typed_tool(
-        "ss",
-        "Route a /ss <domain> <query-or-command> meta request to a configured skill or MCP server.",
+        "skill_search",
+        "Route a skill-search <domain> <query-or-command> meta request to a configured skill or MCP server.",
         |context: &RuntimeContext, request: MetaRequest| {
             Ok::<MetaResponse, SkillServerError>(execute_meta_request(context, request))
         },
@@ -407,7 +407,7 @@ pub fn execute_meta_request(context: &RuntimeContext, request: MetaRequest) -> M
     };
     let message = match (&status, &selected) {
         (RouteStatus::Routed, Some(route)) => format!(
-            "routed /ss {} to {} `{}`; host should call the listed MCP command/tool with the query payload",
+            "routed skill-search {} to {} `{}`; host should call the listed MCP command/tool with the query payload",
             request.domain,
             route.kind.as_str(),
             route.name
@@ -589,7 +589,7 @@ fn meta_request_from_call(command: &CallCommand) -> Result<MetaRequest, SkillSer
 fn meta_request_from_external(words: &[OsString]) -> Result<(MetaRequest, bool), SkillServerError> {
     let Some((domain, rest)) = words.split_first() else {
         return Err(SkillServerError::Validation(
-            "expected /ss-style input: ss <domain> <query-or-command>".to_owned(),
+            "expected skill-search-style input: skill-search <domain> <query-or-command>".to_owned(),
         ));
     };
     let domain = domain.to_string_lossy().to_string();
@@ -704,7 +704,7 @@ fn render_meta_human(response: &MetaResponse) -> String {
 }
 
 fn help_text() -> String {
-    "skill-server (ss) dynamic discovery utility\n\nUsage:\n  ss --help\n  ss list [--json]\n  ss call <domain> --query <text> [--tool <tool>] [--json]\n  ss <domain> <query-or-command...>\n  ss mcp stdio\n\nConfiguration defaults to .config/ss/config.yaml, override with --config or SS_CONFIG.\n".to_owned()
+    "skill-server (skill-search) dynamic discovery utility\n\nUsage:\n  skill-search --help\n  skill-search list [--json]\n  skill-search call <domain> --query <text> [--tool <tool>] [--json]\n  skill-search <domain> <query-or-command...>\n  skill-search mcp stdio\n\nConfiguration defaults to .config/ss/config.yaml, override with --config or SS_CONFIG.\n".to_owned()
 }
 
 impl RouteKind {
@@ -781,7 +781,7 @@ mcp_servers:
             .into_iter()
             .map(|tool| tool.name)
             .collect();
-        assert_eq!(names, vec!["ss", "skill_server_list"]);
+        assert_eq!(names, vec!["skill_search", "skill_server_list"]);
     }
 
     #[test]
@@ -799,7 +799,7 @@ mcp_servers:
                     "id": 1,
                     "method": "tools/call",
                     "params": {
-                        "name": "ss",
+                        "name": "skill_search",
                         "arguments": {
                             "domain": "web",
                             "query": "query rust mcp",

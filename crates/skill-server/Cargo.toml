@@ -24,8 +24,8 @@ name = "skill-server"
 path = "src/main.rs"
 
 [[bin]]
-name = "ss"
-path = "src/bin/ss.rs"
+name = "skill-search"
+path = "src/bin/skill_search.rs"
 
 [lints]
 workspace = true

@@ -1,5 +1,5 @@
-# skill-server (ss) host configuration.
-# Override this path with `SS_CONFIG=/path/to/config.yaml` or `ss --config ...`.
+# skill-server (skill-search) host configuration.
+# Override this path with `SS_CONFIG=/path/to/config.yaml` or `skill-search --config ...`.
 
 # Directories scanned for lightweight skill files (.md, .json, .yaml, .yml).
 # A file named web-search.md is discoverable through domain `web` and name `web-search`.
@@ -7,7 +7,7 @@ skill_paths:
   - prompts
   - web-search/plugins/web-search/commands
 
-# Host MCP stdio servers that `/ss <domain> <query>` can discover and route to.
+# Host MCP stdio servers that `skill-search <domain> <query>` can discover and route to.
 mcp_servers:
   - name: web-search
     description: Live web search via GitHub Copilot Responses API.

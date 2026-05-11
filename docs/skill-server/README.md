@@ -1,19 +1,19 @@
-# skill-server (`ss`)
+# skill-server (`skill-search`)
 
 `skill-server` is a Rust utility for dynamic agent skill and MCP tool discovery. It exposes one shared implementation through:
 
-- a CLI (`ss` or `skill-server`), including `/ss`-style shorthand: `ss <domain> <query-or-command...>`
-- an MCP stdio server: `ss mcp stdio`
+- a CLI (`skill-search` or `skill-server`), including shorthand: `skill-search <domain> <query-or-command...>`
+- an MCP stdio server: `skill-search mcp stdio`
 
 The MCP surface is built with the local `mcp-cli` crate copied from the Tendril pattern, so CLI JSON envelopes and MCP tool responses share the same shape.
 
 ## Configuration
 
-By default `ss` reads `.config/ss/config.yaml`. Override with either:
+By default `skill-search` reads `.config/ss/config.yaml`. Override with either:
 
 ```bash
-SS_CONFIG=/path/to/config.yaml ss list
-ss --config /path/to/config.yaml list
+SS_CONFIG=/path/to/config.yaml skill-search list
+skill-search --config /path/to/config.yaml list
 ```
 
 Minimal config:
@@ -42,11 +42,11 @@ mcp_servers:
 ## CLI examples
 
 ```bash
-ss --help
-ss list
-ss list --json
-ss web query latest Rust MCP crate
-ss call web --tool query --query "latest Rust MCP crate" --json
+skill-search --help
+skill-search list
+skill-search list --json
+skill-search web query latest Rust MCP crate
+skill-search call web --tool query --query "latest Rust MCP crate" --json
 ```
 
 A successful meta request returns the selected server/tool plus its command vector. A miss returns a structured `not_found` response instead of guessing.
@@ -56,12 +56,12 @@ A successful meta request returns the selected server/tool plus its command vect
 Start the server with:
 
 ```bash
-ss mcp stdio
+skill-search mcp stdio
 ```
 
 Tools exposed:
 
-- `ss` — accepts `{ "domain": "web", "query": "query ...", "tool": "query" }` and returns route metadata.
+- `skill_search` — accepts `{ "domain": "web", "query": "query ...", "tool": "query" }` and returns route metadata.
 - `skill_server_list` — lists configured MCP servers and scanned skill files.
 
 The stdio transport uses MCP `Content-Length` framing via `mcp-cli`, matching Tendril's `mcp stdio` structure.
