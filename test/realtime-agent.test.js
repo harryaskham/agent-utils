@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import realtimeAgentExtension, {
+  RealtimeStateController,
   buildServerVadTurnDetection,
   setRealtimeWebSocketConstructor,
 } from "../extensions/realtime-agent.js";
@@ -55,6 +56,33 @@ class FakeWebSocket {
 }
 
 setRealtimeWebSocketConstructor(FakeWebSocket);
+
+test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
+  const state = new RealtimeStateController();
+  assert.deepEqual(state.snapshot({ sttOnly: false }), {
+    connection: "off",
+    phase: "idle",
+    micMode: null,
+    widgetVisible: false,
+    mode: "off",
+    sttOnly: false,
+  });
+
+  state.setConnection("connected");
+  assert.equal(state.mode(), "connected");
+
+  state.setMicMode("vad");
+  state.setPhase("recording");
+  assert.equal(state.mode(), "listen:vad");
+  assert.equal(state.mode({ sttOnly: true }), "stt:vad");
+
+  state.setPhase("thinking");
+  assert.equal(state.mode(), "responding");
+  state.setPhase("speaking");
+  assert.equal(state.mode(), "speaking");
+  state.setConnection("off");
+  assert.equal(state.mode(), "off");
+});
 
 function makeHarness({ models = new Map(), initialModel } = {}) {
   const commands = new Map();

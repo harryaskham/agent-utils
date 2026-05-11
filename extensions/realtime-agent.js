@@ -478,6 +478,64 @@ class AudioPlayer {
 }
 
 // ---------------------------------------------------------------------------
+// RealtimeStateController — single explicit lifecycle state for connection,
+// microphone, visible phase, and widget visibility. Runtime config still owns
+// tunable settings such as model, voice, and audio enablement; this controller
+// owns the session state machine that the UI and commands observe.
+// ---------------------------------------------------------------------------
+
+export class RealtimeStateController {
+  constructor() {
+    this.connection = "off";             // off|connecting|connected|error
+    this.phase = "idle";                 // idle|connecting|thinking|speaking|recording|transcribing|replaying|error
+    this.micMode = null;                 // null|ptt|vad|continuous
+    this.widgetVisible = false;
+  }
+
+  setConnection(connection) {
+    this.connection = connection || "off";
+    if (this.connection === "connecting") this.phase = "connecting";
+    if (this.connection === "off" && this.phase !== "replaying") this.phase = "idle";
+    if (this.connection === "error") this.phase = "error";
+  }
+
+  setPhase(phase) {
+    this.phase = phase || "idle";
+    if (this.phase === "connecting") this.connection = "connecting";
+    if (this.phase === "error") this.connection = "error";
+  }
+
+  setMicMode(mode) { this.micMode = mode || null; }
+  setWidgetVisible(visible) { this.widgetVisible = !!visible; }
+
+  get connected() { return this.connection === "connected"; }
+  get connecting() { return this.connection === "connecting"; }
+
+  mode({ sttOnly = false } = {}) {
+    if (this.connection === "off") return "off";
+    if (this.connection === "connecting") return "connecting";
+    if (this.connection === "error") return "error";
+    if (this.phase === "recording" && this.micMode) return sttOnly ? `stt:${this.micMode}` : `listen:${this.micMode}`;
+    if (this.phase === "transcribing") return "transcribing";
+    if (this.phase === "thinking") return "responding";
+    if (this.phase === "speaking") return "speaking";
+    if (this.phase === "replaying") return "replaying";
+    return sttOnly ? "stt" : "connected";
+  }
+
+  snapshot(extra = {}) {
+    return {
+      connection: this.connection,
+      phase: this.phase,
+      micMode: this.micMode,
+      widgetVisible: this.widgetVisible,
+      mode: this.mode(extra),
+      ...extra,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // RealtimeSession — owns the persistent WSS, translates events into
 // AssistantMessageEvents.  One per Pi session; `streamSimple()` is the
 // per-turn entry point.
@@ -487,6 +545,7 @@ class RealtimeSession {
   constructor(pi, config) {
     this.pi = pi;
     this.config = config;
+    this.state = new RealtimeStateController();
     this.ws = null;
     this.connected = false;
     this.connecting = null;
@@ -516,10 +575,17 @@ class RealtimeSession {
     this.pendingCommitTimer = null;
     this.lastMicBytes = 0;
     this.micMuteUntilTs = 0;
-    this.phase = "idle";                    // idle|connecting|thinking|speaking|recording|transcribing|replaying|error
+    this.phase = "idle";
     this.lastReasoningPayload = null;        // for reasoning auto-retry
     this.lastResponseObject = null;
   }
+
+  get connected() { return this.state.connected; }
+  set connected(value) { this.state.setConnection(value ? "connected" : "off"); }
+  get phase() { return this.state.phase; }
+  set phase(value) { this.state.setPhase(value); }
+  get micMode() { return this.state.micMode; }
+  set micMode(value) { this.state.setMicMode(value); }
 
   // -------------------------------------------------------------------------
   // Status / context
@@ -538,7 +604,8 @@ class RealtimeSession {
     const conn = this.connected ? "●" : (this.connecting ? "◐" : "○");
     const audio = this.config.audioEnabled ? "audio:on" : "audio:off";
     const mic = this.mic ? `mic:${this.micMode || "on"}` : "mic:off";
-    const phase = this.phase && this.phase !== "idle" ? ` ${this.phase}` : "";
+    const mode = this.state.mode({ sttOnly: this.config.sttOnly });
+    const phase = mode && mode !== "off" && mode !== "connected" ? ` ${mode}` : "";
     return `${conn} rt ${this.config.model} ${audio} ${mic}${phase}`;
   }
 
@@ -553,16 +620,19 @@ class RealtimeSession {
 
   showStatusWidget(ctx = this.lastCtx) {
     this.config.statusWidgetVisible = true;
+    this.state.setWidgetVisible(true);
     this.updateStatus(ctx);
   }
 
   hideStatusWidget(ctx = this.lastCtx) {
     this.config.statusWidgetVisible = false;
+    this.state.setWidgetVisible(false);
     try { ctx?.ui?.setWidget?.("realtime-status", undefined); } catch {}
   }
 
   clearRealtimeUi(ctx = this.lastCtx) {
     this.config.statusWidgetVisible = false;
+    this.state.setWidgetVisible(false);
     try { ctx?.ui?.setWidget?.("realtime-status", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("realtime", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("rt-audio", undefined); } catch {}
@@ -1704,10 +1774,10 @@ function statusLines(session, config, { full = false } = {}) {
     : ` · reason:${config.reasoningEffort}${session.reasoningRejected ? "!" : ""}${(!config.directAzure && !config.sendReasoning) ? " unsent" : ""}`;
   const phase = session.phase && session.phase !== "idle" ? ` · ${session.phase}` : "";
   const clip = session.latestClipId ? ` · clip:${session.latestClipId}` : "";
-  const mode = config.sttOnly ? "stt" : "full";
+  const mode = session.state?.mode?.({ sttOnly: config.sttOnly }) || (config.sttOnly ? "stt" : "connected");
   const restore = config.previousModel ? ` · ↩${config.previousModel.provider}/${config.previousModel.id}` : "";
   const compact = [
-    `${conn} rt ${config.model} · ${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · ${outBackend}/${inBackend}${phase}`,
+    `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · ${outBackend}/${inBackend}${phase}`,
     `trans:${config.transcriptionModel} · voice:${config.voice} · hist:${session.forwardedMessageCount} · ${provider}${reason}${clip}${restore}`,
   ];
   if (!full) return compact;
@@ -1771,6 +1841,7 @@ function diagnosticLines(session, config) {
     `pulse: ${pulse}`,
     `commands: ${requirements}`,
     `vad: threshold:${numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
+    `state: ${JSON.stringify(session.state?.snapshot?.({ sttOnly: config.sttOnly, audioEnabled: config.audioEnabled }) || {})}`,
     `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length}`,
     `lastResponseError: ${session.lastResponseError || "<none>"}`,
     `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,
