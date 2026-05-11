@@ -34,14 +34,16 @@
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
-    "@sinclair/typebox": "*"
+    "@sinclair/typebox": "*",
+    "ws": "*"
   },
   "pi": {
     "extensions": [
       "./extensions/web-search.js",
       "./extensions/kitty-image-preview.js",
       "./extensions/pi-graphics.js",
-      "./extensions/firecracker-vm.js"
+      "./extensions/firecracker-vm.js",
+      "./extensions/realtime-agent.js"
     ],
     "prompts": [
       "./prompts"
