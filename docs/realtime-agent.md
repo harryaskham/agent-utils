@@ -54,6 +54,8 @@ Run `/rt-doctor` inside Pi to see the resolved backend, Pulse variables, command
 
 ```text
 /rt
+# explicit equivalent:
+/rt start vad
 ```
 
 This switches to `openai-realtime/gpt-realtime-2`, enables audio output, opens the realtime WebSocket, and starts server-VAD microphone capture. Speak, then pause; the server commits/transcribes the speech, Pi receives it as a user message, and the normal Pi agent loop responds.
@@ -72,6 +74,8 @@ Useful controls while running:
 
 ```text
 /rt ptt
+# explicit equivalent:
+/rt start ptt
 ```
 
 PTT records until you commit. Press `Enter`, `Space`, or `Esc`, or run `/rt-stop`, to commit recorded audio. Press `Ctrl-C` or run `/rt-cancel` to discard.
@@ -82,6 +86,8 @@ Use PTT when server VAD is over-eager, under-eager, or when background noise cau
 
 ```text
 /rt nolisten
+# explicit equivalent:
+/rt start nolisten
 ```
 
 This switches to the realtime model and pre-warms the WebSocket without opening the microphone. It is useful for typed realtime turns or for checking connection/API setup before starting audio capture.
@@ -89,6 +95,9 @@ This switches to the realtime model and pre-warms the WebSocket without opening 
 Start listening later with:
 
 ```text
+/rt mic vad
+/rt mic ptt
+# legacy aliases remain:
 /rt-listen vad
 /rt-listen ptt
 ```
@@ -97,7 +106,8 @@ Start listening later with:
 
 ```text
 /rt stt
-# or
+/rt stt ptt
+# or legacy alias:
 /stt
 ```
 
@@ -141,12 +151,27 @@ Diagnostics include:
 - last playback error/exit details
 - actionable hints for common setup issues
 
+Unified `/rt` controls:
+
+```text
+/rt start [vad|ptt|nolisten]   start realtime conversation mode
+/rt stop                       stop realtime and restore the previous model
+/rt mic [vad|ptt|off]          start or cancel microphone capture
+/rt audio [on|off|toggle]      control audio output
+/rt stt [vad|ptt]              speech-to-text into the current model
+/rt widget [show|hide]         show or hide the realtime widget
+/rt status [full]              compact or full status
+/rt doctor                     diagnostics
+```
+
+Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`).
+
 Widget controls:
 
 ```text
-/rt-hide-status  hide the realtime widget until explicitly shown again
-/rt-status       show the realtime widget again
-/rt-off          clear realtime widget and footer statuses
+/rt widget hide  hide the realtime widget until explicitly shown again
+/rt widget show  show the realtime widget again
+/rt stop         clear realtime widget and footer statuses
 ```
 
 ## Tuning server VAD

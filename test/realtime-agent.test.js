@@ -278,6 +278,37 @@ test("context hook strips realtime custom messages before provider context", () 
   assert.deepEqual(result.messages.map((m) => m.role === "custom" ? m.customType : m.role), ["user", "other-extension"]);
 });
 
+test("/rt subcommands provide explicit audio and widget controls", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt").handler("widget show", ctx);
+  assert.ok(widgets.has("realtime-status"));
+
+  await commands.get("rt").handler("audio off", ctx);
+  assert.equal(pi.realtime.snapshot().audioEnabled, false);
+  assert.match(notifications.at(-1).message, /Realtime audio OFF/);
+
+  await commands.get("rt").handler("audio on", ctx);
+  assert.equal(pi.realtime.snapshot().audioEnabled, true);
+
+  await commands.get("rt").handler("widget hide", ctx);
+  assert.equal(widgets.has("realtime-status"), false);
+});
+
+test("/rt status full and doctor subcommands expose diagnostics", async () => {
+  const { pi, commands, handlers, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  await commands.get("rt").handler("status full", ctx);
+  assert.match(notifications.at(-1).message, /Realtime doctor/);
+
+  await commands.get("rt").handler("doctor", ctx);
+  assert.match(notifications.at(-1).message, /Realtime doctor/);
+});
+
 test("/rt nolisten switches to realtime, connects through injected WebSocket, and restores previous model on /rt-off", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_API_KEY = "test-key";

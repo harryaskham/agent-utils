@@ -2048,61 +2048,93 @@ export default function realtimeAgentExtension(pi) {
     }
   });
 
-  // /rt — modes:
-  //   /rt           full realtime: switch model + audio + VAD mic + widget
-  //   /rt ptt       same but push-to-talk mic
-  //   /rt nolisten  connect + widget but don't open mic
-  //   /rt stt       transcription-only mic into the CURRENT model (no switch,
-  //                 no audio reply). /rt-off restores previous model.
+  async function ensureRealtimeProvider(ctx) {
+    if (!ctx.modelRegistry.find?.("openai-realtime", "gpt-realtime-2")) {
+      try { registerRealtimeProvider(pi, session); } catch {}
+    }
+  }
+
+  async function startRealtime(ctx, { listenMode = "vad", sttOnly = false } = {}) {
+    await ensureRealtimeProvider(ctx);
+
+    if (sttOnly) {
+      // Transcription-only: keep current Pi model, open WSS just for STT,
+      // disable audio reply, route transcripts as user messages to Pi.
+      controls.setAudio(false, ctx);
+      controls.setSttOnly(true, ctx);
+      controls.showStatus(ctx);
+    } else {
+      // Full realtime: remember the prior Pi model so /rt-off can restore it,
+      // then switch to gpt-realtime-2.
+      const current = ctx.model;
+      if (current && !isRealtimeModel(current)) {
+        config.previousModel = { provider: current.provider, id: current.id };
+      }
+      const m = ctx.modelRegistry.find?.("openai-realtime", "gpt-realtime-2");
+      if (m) {
+        const ok = await pi.setModel(m);
+        if (!ok) { ctx.ui.notify("No API key for openai-realtime", "error"); return false; }
+      }
+      controls.setAudio(true, ctx);
+      controls.setSttOnly(false, ctx);
+      controls.showStatus(ctx);
+    }
+
+    try { await session.connect(ctx); }
+    catch (e) { ctx.ui.notify(`Realtime connect: ${e.message}`, "error"); return false; }
+
+    if (listenMode && listenMode !== "off" && listenMode !== "nolisten") {
+      try { await controls.listen(ctx, listenMode === "ptt" ? "ptt" : "vad"); }
+      catch (e) { ctx.ui.notify(`Realtime mic failed: ${e.message}`, "error"); }
+    }
+
+    try { ctx.ui.setWidget("realtime-status", controls.statusLines(), { placement: "belowEditor" }); } catch {}
+    session.updateStatus(ctx);
+    return true;
+  }
+
+  async function handleRtCommand(args, ctx) {
+    const tokens = String(args || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const verb = tokens[0] || "start";
+    const value = tokens[1] || "";
+
+    // Compatibility aliases from the original rough UX.
+    if (["vad", "ptt", "nolisten"].includes(verb)) return startRealtime(ctx, { listenMode: verb });
+    if (verb === "stt" && (!value || value === "start" || value === "vad" || value === "ptt")) {
+      return startRealtime(ctx, { sttOnly: true, listenMode: value === "ptt" ? "ptt" : "vad" });
+    }
+
+    if (verb === "start" || verb === "on") return startRealtime(ctx, { listenMode: value || "vad" });
+    if (verb === "stop" || verb === "off") { await controls.disable(ctx, { restoreModel: true }); ctx.ui.notify("Realtime off", "info"); return; }
+    if (verb === "doctor") { const lines = controls.diagnostics(); ctx.ui.notify(lines.join("\n"), "info"); return; }
+    if (verb === "status") { const full = value === "full"; controls.showStatus(ctx); const lines = full ? controls.diagnostics() : controls.statusLines(); ctx.ui.notify(full ? lines.join("\n") : lines[0], "info"); return; }
+    if (verb === "widget") {
+      if (value === "hide" || value === "off") controls.hideStatus(ctx);
+      else controls.showStatus(ctx);
+      return;
+    }
+    if (verb === "audio") {
+      const snapshot = value === "on" ? controls.setAudio(true, ctx)
+        : value === "off" ? controls.setAudio(false, ctx)
+        : controls.toggleAudio(ctx);
+      ctx.ui.notify(`Realtime audio ${snapshot.audioEnabled ? "ON" : "OFF"}`, "info");
+      return;
+    }
+    if (verb === "mic" || verb === "listen") {
+      if (value === "off" || value === "stop" || value === "cancel") { await controls.cancelMic(ctx); ctx.ui.notify("Realtime mic cancelled", "info"); return; }
+      await controls.listen(ctx, value === "ptt" ? "ptt" : "vad");
+      ctx.ui.notify(value === "ptt" ? "PTT recording. Press Enter/Space/Esc or /rt mic off." : "VAD listening. Speak; silence should transcribe.", "info");
+      return;
+    }
+    if (verb === "voice") { controls.setVoice(value, ctx); ctx.ui.notify(`Realtime voice ${value}`, "info"); return; }
+    if (verb === "backend") { controls.setAudioBackend(value, ctx); ctx.ui.notify(`Realtime audio backend ${value}`, "info"); return; }
+
+    ctx.ui.notify("Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt], /rt widget [show|hide], /rt status [full], /rt doctor", "info");
+  }
+
   pi.registerCommand("rt", {
-    description: "Realtime modes. Args: [vad|ptt|nolisten|stt]",
-    handler: async (args, ctx) => {
-      const arg = String(args || "").trim().toLowerCase();
-      const sttMode = arg === "stt";
-
-      // Ensure provider is registered (lazy-register path may have skipped it).
-      if (!ctx.modelRegistry.find?.("openai-realtime", "gpt-realtime-2")) {
-        try { registerRealtimeProvider(pi, session); } catch {}
-      }
-
-      if (sttMode) {
-        // Transcription-only: keep current Pi model, open WSS just for STT,
-        // disable audio reply, route transcripts as user messages to Pi.
-        controls.setAudio(false, ctx);
-        controls.setSttOnly(true, ctx);
-        controls.showStatus(ctx);
-      } else {
-        // Full realtime: remember the prior Pi model so /rt-off can restore it,
-        // then switch to gpt-realtime-2.
-        const current = ctx.model;
-        if (current && !isRealtimeModel(current)) {
-          config.previousModel = { provider: current.provider, id: current.id };
-        }
-        const m = ctx.modelRegistry.find?.("openai-realtime", "gpt-realtime-2");
-        if (m) {
-          const ok = await pi.setModel(m);
-          if (!ok) { ctx.ui.notify("No API key for openai-realtime", "error"); return; }
-        }
-        controls.setAudio(true, ctx);
-        controls.setSttOnly(false, ctx);
-        controls.showStatus(ctx);
-      }
-
-      try { await session.connect(ctx); }
-      catch (e) { ctx.ui.notify(`Realtime connect: ${e.message}`, "error"); return; }
-
-      if (arg !== "nolisten") {
-        const micMode = arg === "ptt" ? "ptt" : "vad";
-        try { await session.startMic(ctx, micMode); }
-        catch (e) { ctx.ui.notify(`Realtime mic failed: ${e.message}`, "error"); }
-      }
-
-      try {
-        const lines = controls.statusLines();
-        ctx.ui.setWidget("realtime-status", lines, { placement: "belowEditor" });
-      } catch {}
-      session.updateStatus(ctx);
-    },
+    description: "Realtime control. Usage: /rt start|stop|mic|audio|stt|widget|status|doctor ...",
+    handler: handleRtCommand,
   });
 
   pi.registerCommand("rt-on", {
