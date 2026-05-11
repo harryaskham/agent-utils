@@ -78,13 +78,15 @@ The Tendril share extension is loaded from [`extensions/tendril-share.js`](exten
 Available commands:
 
 - `/tendril list` — runs `tendril list --json` and shows readable display/window targets.
-- `/tendril window <id> [prompt]` — captures a Tendril window to PNG and sends a user message containing the screenshot image plus optional prompt text.
-- `/tendril display <id> [prompt]` — captures a Tendril display to PNG and sends it to the model.
-- `/tendril screen <id> [prompt]` — alias for `/tendril display`.
-- `/tendril describe window <id> [prompt]` / `/tendril describe display <id> [prompt]` — captures the target, describes it with a configurable image-capable model, and sends the textual description to the active model.
-- `/tendril-describe window <id> [prompt]` / `/tendril-describe display <id> [prompt]` — shortcut aliases for the describe path.
+- `/tendril window <id-or-name> [prompt]` — captures a Tendril window to PNG and sends a user message containing the screenshot image plus optional prompt text.
+- `/tendril display <id-or-name> [prompt]` — captures a Tendril display to PNG and sends it to the model.
+- `/tendril screen <id-or-name> [prompt]` — alias for `/tendril display`.
+- `/tendril describe window <id-or-name> [prompt]` / `/tendril describe display <id-or-name> [prompt]` — captures the target, describes it with a configurable image-capable model, and sends the textual description to the active model.
+- `/tendril-describe window <id-or-name> [prompt]` / `/tendril-describe display <id-or-name> [prompt]` — shortcut aliases for the describe path.
+- `/tendril stream window <id-or-name> [seconds] [prompt]` / `/tendril stream display <id-or-name> [seconds] [prompt]` — starts low-resolution periodic screenshot sharing. Defaults to 30 seconds, clamps to at least 10 seconds, and captures at 640×360.
+- `/tendril stream status` / `/tendril stream stop` — inspect or stop the active screenshot stream.
 
-Captures are written under the active Pi session directory when available, or a process-scoped temp folder otherwise. If the agent is already streaming, screenshot messages are queued as follow-ups so the user can share visual context without interrupting the current turn. Description commands default to `litellm-anthropic/claude-opus-4-7`; override with `TENDRIL_SHARE_DESCRIBE_MODEL=provider/model`.
+Capture targets can be exact ids or unique case-insensitive substrings from Tendril target titles, names, or app names (for example `/tendril window Safari`). Captures are written under the active Pi session directory when available, or a process-scoped temp folder otherwise, and the extension records a visible history message with the saved file path. If the agent is already streaming, screenshot messages are queued as follow-ups so the user can share visual context without interrupting the current turn. Description commands default to `litellm-anthropic/claude-opus-4-7`; override with `TENDRIL_SHARE_DESCRIBE_MODEL=provider/model`.
 
 ## Kitty image preview Pi extension
 

@@ -20,6 +20,7 @@ function makeHarness({ idle = true } = {}) {
   const notifications = [];
   const execCalls = [];
   const userMessages = [];
+  const customMessages = [];
   const ctx = {
     cwd: process.cwd(),
     signal: undefined,
@@ -57,8 +58,10 @@ function makeHarness({ idle = true } = {}) {
       return { code: 1, stdout: JSON.stringify({ status: "error", error: { message: "bad command" } }), stderr: "" };
     },
     sendUserMessage(content, options) { userMessages.push({ content, options }); },
+    sendMessage(message) { customMessages.push(message); },
+    on() {},
   };
-  return { pi, commands, notifications, execCalls, userMessages, ctx };
+  return { pi, commands, notifications, execCalls, userMessages, customMessages, ctx };
 }
 
 test("/tendril list formats Tendril targets", async () => {
@@ -165,6 +168,60 @@ test("/tendril-describe aliases the describe command and queues while busy", asy
   }
 });
 
+test("/tendril resolves unique target name matches and records capture history", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, commands, execCalls, userMessages, customMessages, ctx } = makeHarness();
+    tendrilShareExtension(pi);
+
+    await commands.get("tendril").handler("window browser inspect tab", ctx);
+
+    const captureCall = execCalls.find((call) => call.args[0] === "capture");
+    assert.ok(captureCall.args.includes("--window"));
+    assert.ok(captureCall.args.includes("4"));
+    assert.equal(userMessages[0].content[0].text, "inspect tab");
+    assert.equal(customMessages.length, 1);
+    assert.equal(customMessages[0].customType, "tendril-share");
+    assert.match(customMessages[0].content, /Browser/);
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("/tendril stream sends low-resolution frames and can be stopped", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, commands, notifications, execCalls, userMessages, ctx } = makeHarness();
+    tendrilShareExtension(pi);
+
+    await commands.get("tendril").handler("stream window browser 10 watch the page", ctx);
+
+    const captureCall = execCalls.find((call) => call.args[0] === "capture");
+    assert.ok(captureCall.args.includes("--max-width"));
+    assert.ok(captureCall.args.includes("640"));
+    assert.ok(captureCall.args.includes("--max-height"));
+    assert.ok(captureCall.args.includes("360"));
+    assert.equal(userMessages.length, 1);
+    assert.equal(userMessages[0].content[0].text, "watch the page");
+    assert.match(notifications.at(-1).message, /every 10s/);
+
+    await commands.get("tendril").handler("stream status", ctx);
+    assert.match(notifications.at(-1).message, /Tendril stream active/);
+    await commands.get("tendril").handler("stream stop", ctx);
+    assert.match(notifications.at(-1).message, /Stopped Tendril stream/);
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("/tendril display queues follow-up image message when agent is busy", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
   const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
@@ -189,20 +246,34 @@ test("tendril share helpers parse commands and JSON envelopes", () => {
   assert.deepEqual(__tendrilShareTest.parseCaptureArgs("screen 2 inspect"), {
     action: "capture",
     kind: "display",
+    target: "2",
     id: "2",
+    intervalSeconds: undefined,
     prompt: "inspect",
   });
   assert.deepEqual(__tendrilShareTest.parseCaptureArgs("describe window 4 errors"), {
     action: "describe",
     kind: "window",
+    target: "4",
     id: "4",
+    intervalSeconds: undefined,
     prompt: "errors",
   });
   assert.deepEqual(__tendrilShareTest.parseCaptureArgs("display 1", "describe"), {
     action: "describe",
     kind: "display",
+    target: "1",
     id: "1",
+    intervalSeconds: undefined,
     prompt: "",
+  });
+  assert.deepEqual(__tendrilShareTest.parseCaptureArgs("stream window browser 45 watch"), {
+    action: "stream",
+    kind: "window",
+    target: "browser",
+    id: "browser",
+    intervalSeconds: 45,
+    prompt: "watch",
   });
   assert.equal(__tendrilShareTest.parseJsonEnvelope("log\n{\"status\":\"ok\"}\n").status, "ok");
   assert.match(__tendrilShareTest.listTargetsText({ data: { targets: [] } }), /none/);

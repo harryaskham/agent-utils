@@ -507,9 +507,9 @@
           <article class="tool-card">
             <div class="tool-card__header">
               <h3>Tendril share Pi extension</h3>
-              <code>/tendril list, /tendril window &lt;id&gt;, /tendril display &lt;id&gt;, /tendril describe window &lt;id&gt;, /tendril-describe window &lt;id&gt;</code>
+              <code>/tendril list, /tendril window &lt;id-or-name&gt;, /tendril display &lt;id-or-name&gt;, /tendril describe window &lt;id-or-name&gt;, /tendril stream window &lt;id-or-name&gt;</code>
             </div>
-            <p>Let the user list Tendril targets, send captured window/display screenshots to image-capable models, or send VLM-generated screenshot descriptions to the active model.</p>
+            <p>Let the user list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.</p>
             <dl>
               <div>
                 <dt>Audience</dt>
@@ -527,6 +527,8 @@
               <li><code>capture a window for the model</code></li>
               <li><code>capture a display for the model</code></li>
               <li><code>describe a screenshot with a vision model</code></li>
+              <li><code>look up targets by id or name</code></li>
+              <li><code>stream low-resolution screenshots periodically</code></li>
               <li><code>queue screenshot context as a follow-up while the agent is busy</code></li>
               </ul>
             </details>

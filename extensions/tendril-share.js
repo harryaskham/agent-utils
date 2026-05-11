@@ -6,15 +6,23 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
 const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
 const IMAGE_DESCRIPTION_PROMPT = "Describe the screenshot objectively for another AI assistant that cannot see it directly. Include visible apps/windows, text, UI state, errors, and any actionable context. Do not speculate beyond the image.";
+const DEFAULT_STREAM_INTERVAL_MS = 30_000;
+const MIN_STREAM_INTERVAL_MS = 10_000;
+const MAX_STREAM_INTERVAL_MS = 3_600_000;
+const STREAM_MAX_WIDTH = 640;
+const STREAM_MAX_HEIGHT = 360;
 const USAGE = `Usage:
-/tendril list                         list Tendril windows/displays
-/tendril window <id> [prompt]          capture a window and send it to the model
-/tendril display <id> [prompt]         capture a display and send it to the model
-/tendril screen <id> [prompt]          alias for /tendril display
-/tendril describe window <id> [prompt] capture, describe with a VLM, and send text context
-/tendril describe display <id> [prompt]
-/tendril-describe window <id> [prompt] alias for /tendril describe
-/tendril help                         show this help`;
+/tendril list                                      list Tendril windows/displays
+/tendril window <id-or-name> [prompt]              capture a window and send it to the model
+/tendril display <id-or-name> [prompt]             capture a display and send it to the model
+/tendril screen <id-or-name> [prompt]              alias for /tendril display
+/tendril describe window <id-or-name> [prompt]     capture, describe with a VLM, and send text context
+/tendril describe display <id-or-name> [prompt]
+/tendril-describe window <id-or-name> [prompt]     alias for /tendril describe
+/tendril stream window <id-or-name> [seconds]      low-res periodic screenshot sharing, default 30s
+/tendril stream display <id-or-name> [seconds]
+/tendril stream status|stop                        inspect or stop active stream
+/tendril help                                      show this help`;
 
 let completeForDescribe = null;
 
@@ -82,6 +90,10 @@ function targetLabel(target) {
   return [target.title, target.name, target.app_name].filter(Boolean).join(" — ") || target.id || "unknown";
 }
 
+function targetSearchText(target) {
+  return [target.id, target.title, target.name, target.app_name].filter(Boolean).join(" ").toLowerCase();
+}
+
 function formatTarget(target) {
   const caps = target.capabilities?.capture ? "capture" : "no-capture";
   return `${target.kind || "?"} ${target.id || "?"} [${caps}] ${targetLabel(target)}`;
@@ -100,10 +112,24 @@ function parseCaptureArgs(args, forcedAction) {
   if (subcommand === "describe") {
     action = "describe";
     subcommand = (tokens.shift() || "").toLowerCase();
+  } else if (subcommand === "stream") {
+    action = "stream";
+    const maybeControl = (tokens[0] || "").toLowerCase();
+    if (["stop", "off", "status"].includes(maybeControl)) return { action: `stream-${tokens.shift().toLowerCase()}` };
+    subcommand = (tokens.shift() || "").toLowerCase();
   }
   if (subcommand === "window" || subcommand === "display" || subcommand === "screen") {
-    const id = tokens.shift();
-    return { action, kind: subcommand === "screen" ? "display" : subcommand, id, prompt: tokens.join(" ") };
+    const target = tokens.shift();
+    let intervalSeconds;
+    if (action === "stream" && tokens[0] && /^\d+$/.test(tokens[0])) intervalSeconds = Number(tokens.shift());
+    return {
+      action,
+      kind: subcommand === "screen" ? "display" : subcommand,
+      target,
+      id: target,
+      intervalSeconds,
+      prompt: tokens.join(" "),
+    };
   }
   return { action: subcommand || action };
 }
@@ -126,27 +152,61 @@ function resolveVisionModel(ctx) {
   return model;
 }
 
-async function capturePngTarget(pi, ctx, { kind, id }, signal) {
-  if (!id) throw new Error(`Missing ${kind} id. Use /tendril ${kind} <id> [prompt].`);
+async function resolveTendrilTarget(pi, { kind, target }, signal) {
+  if (!target) throw new Error(`Missing ${kind} target. Use /tendril ${kind} <id-or-name> [prompt].`);
+  const fallback = { kind, id: String(target), label: String(target), source: "explicit" };
+  let envelope;
+  try {
+    envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: DEFAULT_TIMEOUT_MS });
+  } catch {
+    return fallback;
+  }
+  const targets = (Array.isArray(envelope.data?.targets) ? envelope.data.targets : [])
+    .filter((candidate) => candidate.kind === kind && candidate.id && candidate.capabilities?.capture);
+  const needle = String(target).toLowerCase();
+  const exact = targets.find((candidate) => String(candidate.id).toLowerCase() === needle)
+    || targets.find((candidate) => targetLabel(candidate).toLowerCase() === needle);
+  if (exact) return { ...exact, id: String(exact.id), label: targetLabel(exact), source: "list" };
+  const matches = targets.filter((candidate) => targetSearchText(candidate).includes(needle));
+  if (matches.length === 1) return { ...matches[0], id: String(matches[0].id), label: targetLabel(matches[0]), source: "list" };
+  if (matches.length > 1) {
+    throw new Error(`Ambiguous Tendril ${kind} target "${target}". Matches: ${matches.map(formatTarget).join("; ")}`);
+  }
+  return fallback;
+}
+
+function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, descriptionModel }) {
+  pi.sendMessage?.({
+    customType: "tendril-share",
+    display: true,
+    content: `${queued ? "Queued" : "Sent"} Tendril ${kind} ${target.id}${target.label && target.label !== target.id ? ` (${target.label})` : ""} ${action}: ${outputPath}`,
+    details: { action, kind, target, outputPath, descriptionModel },
+  });
+}
+
+async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight }, signal) {
+  const resolved = await resolveTendrilTarget(pi, { kind, target }, signal);
   const dir = getCaptureDir(ctx);
   await mkdir(dir, { recursive: true });
-  const outputPath = path.join(dir, `${timestampForFilename()}-${sanitizeFilenamePart(kind)}-${sanitizeFilenamePart(id)}.png`);
+  const outputPath = path.join(dir, `${timestampForFilename()}-${sanitizeFilenamePart(kind)}-${sanitizeFilenamePart(resolved.id)}.png`);
   const args = [
     "capture",
     "--json",
     "--format", "png",
     "--output", outputPath,
     "--timeout-ms", String(clampInteger(process.env.TENDRIL_SHARE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 120_000)),
-    kind === "window" ? "--window" : "--display", String(id),
+    kind === "window" ? "--window" : "--display", String(resolved.id),
   ];
+  if (maxWidth !== undefined) args.push("--max-width", String(maxWidth));
+  if (maxHeight !== undefined) args.push("--max-height", String(maxHeight));
   const envelope = await runTendrilJson(pi, args, { signal, timeout: DEFAULT_TIMEOUT_MS + 5_000 });
   const data = await readFile(outputPath, "base64");
-  return { outputPath, envelope, data };
+  return { outputPath, envelope, data, target: resolved };
 }
 
-async function captureTarget(pi, ctx, { kind, id, prompt }, signal) {
-  const captured = await capturePngTarget(pi, ctx, { kind, id }, signal);
-  const defaultPrompt = `Please inspect this Tendril ${kind} screenshot (${id}).`;
+async function captureTarget(pi, ctx, { kind, target, id, prompt }, signal) {
+  const captured = await capturePngTarget(pi, ctx, { kind, target: target || id }, signal);
+  const defaultPrompt = `Please inspect this Tendril ${kind} screenshot (${captured.target.id}).`;
   const text = prompt?.trim() || defaultPrompt;
   const content = [
     { type: "text", text },
@@ -154,6 +214,7 @@ async function captureTarget(pi, ctx, { kind, id, prompt }, signal) {
   ];
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(content, options);
+  emitCaptureHistory(pi, { action: "screenshot", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options });
   return { ...captured, queued: !!options };
 }
 
@@ -191,17 +252,85 @@ async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
   return { text, model: `${model.provider}/${model.id}`, usage: response.usage, stopReason: response.stopReason };
 }
 
-async function describeTarget(pi, ctx, { kind, id, prompt }, signal) {
-  const captured = await capturePngTarget(pi, ctx, { kind, id }, signal);
-  const description = await describeImageData(ctx, { kind, id, prompt, data: captured.data }, signal);
+async function describeTarget(pi, ctx, { kind, target, id, prompt }, signal) {
+  const captured = await capturePngTarget(pi, ctx, { kind, target: target || id }, signal);
+  const description = await describeImageData(ctx, { kind, id: captured.target.id, prompt, data: captured.data }, signal);
   const focus = prompt?.trim() ? `\n\nUser focus: ${prompt.trim()}` : "";
-  const message = `Tendril ${kind} ${id} screenshot description from ${description.model}:${focus}\n\n${description.text}`;
+  const message = `Tendril ${kind} ${captured.target.id} screenshot description from ${description.model}:${focus}\n\n${description.text}`;
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(message, options);
+  emitCaptureHistory(pi, { action: "description", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options, descriptionModel: description.model });
   return { ...captured, description, queued: !!options };
 }
 
-async function handleTendrilCommand(pi, args, ctx, forcedAction) {
+async function sendStreamFrame(pi, ctx, stream) {
+  stream.frame += 1;
+  const captured = await capturePngTarget(pi, ctx, {
+    kind: stream.kind,
+    target: stream.target.id,
+    maxWidth: STREAM_MAX_WIDTH,
+    maxHeight: STREAM_MAX_HEIGHT,
+  }, ctx.signal);
+  const text = stream.prompt || `Tendril stream frame ${stream.frame} from ${stream.kind} ${stream.target.id}.`;
+  const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
+  pi.sendUserMessage([
+    { type: "text", text },
+    { type: "image", source: { type: "base64", mediaType: PNG_MIME, data: captured.data } },
+  ], options);
+  emitCaptureHistory(pi, { action: `stream frame ${stream.frame}`, kind: stream.kind, target: stream.target, outputPath: captured.outputPath, queued: !!options });
+  stream.lastFrameAt = Date.now();
+  stream.lastOutputPath = captured.outputPath;
+  return captured;
+}
+
+function streamStatusText(stream) {
+  if (!stream) return "No active Tendril stream.";
+  const last = stream.lastFrameAt ? new Date(stream.lastFrameAt).toLocaleTimeString() : "never";
+  return `Tendril stream active: ${stream.kind} ${stream.target.id} (${stream.target.label || stream.target.id}), every ${Math.round(stream.intervalMs / 1000)}s, frames sent ${stream.frame}, last frame ${last}.`;
+}
+
+export function createTendrilShareState() {
+  return { stream: null };
+}
+
+async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, prompt }) {
+  const resolved = await resolveTendrilTarget(pi, { kind, target: target || id }, ctx.signal);
+  if (state.stream?.timer) clearInterval(state.stream.timer);
+  const intervalMs = clampInteger(
+    intervalSeconds === undefined ? process.env.TENDRIL_SHARE_STREAM_INTERVAL_MS : Number(intervalSeconds) * 1000,
+    DEFAULT_STREAM_INTERVAL_MS,
+    MIN_STREAM_INTERVAL_MS,
+    MAX_STREAM_INTERVAL_MS,
+  );
+  const stream = {
+    kind,
+    target: resolved,
+    intervalMs,
+    prompt: prompt?.trim() || "",
+    frame: 0,
+    lastFrameAt: null,
+    lastOutputPath: null,
+    timer: null,
+  };
+  state.stream = stream;
+  await sendStreamFrame(pi, ctx, stream);
+  stream.timer = setInterval(() => {
+    sendStreamFrame(pi, ctx, stream).catch((error) => {
+      ctx.ui?.notify?.(`Tendril stream frame failed: ${error.message || String(error)}`, "error");
+    });
+  }, intervalMs);
+  stream.timer.unref?.();
+  return stream;
+}
+
+function stopStream(state) {
+  const stream = state.stream;
+  if (stream?.timer) clearInterval(stream.timer);
+  state.stream = null;
+  return stream;
+}
+
+async function handleTendrilCommand(pi, args, ctx, state, forcedAction) {
   const parsed = parseCaptureArgs(args, forcedAction);
   try {
     if (["help", "usage", "?"].includes(parsed.action)) {
@@ -215,12 +344,26 @@ async function handleTendrilCommand(pi, args, ctx, forcedAction) {
     }
     if (parsed.action === "capture") {
       const result = await captureTarget(pi, ctx, parsed, ctx.signal);
-      ctx.ui.notify(`${result.queued ? "Queued" : "Sent"} Tendril ${parsed.kind} ${parsed.id} screenshot to the model: ${result.outputPath}`, "info");
+      ctx.ui.notify(`${result.queued ? "Queued" : "Sent"} Tendril ${parsed.kind} ${result.target.id} screenshot to the model: ${result.outputPath}`, "info");
       return;
     }
     if (parsed.action === "describe") {
       const result = await describeTarget(pi, ctx, parsed, ctx.signal);
-      ctx.ui.notify(`${result.queued ? "Queued" : "Sent"} Tendril ${parsed.kind} ${parsed.id} description from ${result.description.model}: ${result.outputPath}`, "info");
+      ctx.ui.notify(`${result.queued ? "Queued" : "Sent"} Tendril ${parsed.kind} ${result.target.id} description from ${result.description.model}: ${result.outputPath}`, "info");
+      return;
+    }
+    if (parsed.action === "stream") {
+      const stream = await startStream(pi, ctx, state, parsed);
+      ctx.ui.notify(`Started low-res Tendril stream for ${stream.kind} ${stream.target.id} every ${Math.round(stream.intervalMs / 1000)}s. Use /tendril stream stop to stop.`, "info");
+      return;
+    }
+    if (parsed.action === "stream-status") {
+      ctx.ui.notify(streamStatusText(state.stream), "info");
+      return;
+    }
+    if (parsed.action === "stream-stop" || parsed.action === "stream-off") {
+      const stopped = stopStream(state);
+      ctx.ui.notify(stopped ? `Stopped Tendril stream for ${stopped.kind} ${stopped.target.id}.` : "No active Tendril stream.", "info");
       return;
     }
     ctx.ui.notify(USAGE, "warning");
@@ -230,14 +373,17 @@ async function handleTendrilCommand(pi, args, ctx, forcedAction) {
 }
 
 export default function tendrilShareExtension(pi) {
+  const state = createTendrilShareState();
+  pi.on?.("session_shutdown", () => stopStream(state));
+
   pi.registerCommand("tendril", {
-    description: "Share Tendril windows/displays with the model. Usage: /tendril list|window <id>|display <id>|describe window <id>",
-    handler: async (args, ctx) => handleTendrilCommand(pi, args, ctx),
+    description: "Share Tendril windows/displays with the model. Usage: /tendril list|window <id-or-name>|display <id-or-name>|describe window <id>|stream window <id>",
+    handler: async (args, ctx) => handleTendrilCommand(pi, args, ctx, state),
   });
 
   pi.registerCommand("tendril-describe", {
     description: "Capture a Tendril window/display, describe it with a vision model, and send text context to the model.",
-    handler: async (args, ctx) => handleTendrilCommand(pi, args, ctx, "describe"),
+    handler: async (args, ctx) => handleTendrilCommand(pi, args, ctx, state, "describe"),
   });
 }
 
@@ -246,4 +392,7 @@ export const __tendrilShareTest = {
   listTargetsText,
   parseJsonEnvelope,
   parseModelSpec,
+  resolveTendrilTarget,
+  streamStatusText,
+  stopStream,
 };
