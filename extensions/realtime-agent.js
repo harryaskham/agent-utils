@@ -1859,12 +1859,125 @@ function truncateVisible(s, width) {
 }
 
 // ---------------------------------------------------------------------------
+// Unified control surface — one Pi-facing API for commands and future UI
+// affordances to inspect and mutate realtime state without reaching into
+// session/config internals directly.
+// ---------------------------------------------------------------------------
+
+export function createRealtimeControls({ pi, session, config }) {
+  const controls = {
+    snapshot() {
+      return {
+        model: config.model,
+        audioEnabled: config.audioEnabled,
+        sttOnly: !!config.sttOnly,
+        voice: config.voice,
+        audioBackend: process.env.PI_RT_AUDIO_BACKEND || "pulse",
+        reasoningEffort: config.reasoningEffort,
+        previousModel: config.previousModel || null,
+        state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled }),
+      };
+    },
+
+    diagnostics() { return diagnosticLines(session, config); },
+    statusLines(options) { return statusLines(session, config, options); },
+    showStatus(ctx) { session.showStatusWidget(ctx); return this.snapshot(); },
+    hideStatus(ctx) { session.hideStatusWidget(ctx); return this.snapshot(); },
+    clearUi(ctx) { session.clearRealtimeUi(ctx); return this.snapshot(); },
+
+    setAudio(enabled, ctx) {
+      config.audioEnabled = !!enabled;
+      if (!config.audioEnabled) session.player.interrupt();
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    toggleAudio(ctx) { return this.setAudio(!config.audioEnabled, ctx); },
+
+    setSttOnly(enabled, ctx) {
+      config.sttOnly = !!enabled;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setVoice(voice, ctx) {
+      const next = String(voice || "").trim();
+      if (!REALTIME_VOICES.has(next)) throw new Error(`Unsupported realtime voice: ${voice}`);
+      config.voice = next;
+      // Voice is part of session.update but not part of the old update cache key;
+      // force the next turn/listen setup to refresh session config.
+      session.audioModeApplied = null;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setAudioBackend(backend, ctx) {
+      const next = String(backend || "").trim().toLowerCase();
+      if (!next) throw new Error("Audio backend is required");
+      process.env.PI_RT_AUDIO_BACKEND = next;
+      config.recordCommand = env("PI_RT_RECORD_CMD");
+      config.playbackCommand = env("PI_RT_PLAYBACK_CMD");
+      session.player.interrupt();
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setReasoningEffort(effort, ctx) {
+      const next = String(effort || "").trim().toLowerCase();
+      if (!next) return this.snapshot();
+      config.reasoningEffort = next;
+      session.reasoningRejected = false;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    async listen(ctx, mode = "ptt") {
+      const vad = mode === "vad" || mode === "continuous";
+      await session.startMic(ctx, vad ? "vad" : "ptt");
+      return this.snapshot();
+    },
+
+    async cancelMic(ctx) {
+      await session.stopMic({ commit: false });
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    async stopMic(ctx, { commit = true } = {}) {
+      await session.stopMic({ commit });
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    async disable(ctx, { restoreModel = true } = {}) {
+      session.hideStatusWidget(ctx);
+      await session.stopMic({ commit: false }).catch(() => {});
+      await session.close(false).catch(() => {});
+      this.setAudio(false, ctx);
+      config.sttOnly = false;
+      const prev = config.previousModel;
+      if (restoreModel && prev) {
+        config.previousModel = null;
+        const m = ctx?.modelRegistry?.find?.(prev.provider, prev.id);
+        if (m) { try { await pi.setModel(m); } catch {} }
+      }
+      session.clearRealtimeUi(ctx);
+      return this.snapshot();
+    },
+  };
+  return controls;
+}
+
+// ---------------------------------------------------------------------------
 // Extension entry point
 // ---------------------------------------------------------------------------
 
 export default function realtimeAgentExtension(pi) {
   const config = makeInitialConfig();
   const session = new RealtimeSession(pi, config);
+  const controls = createRealtimeControls({ pi, session, config });
+  try { pi.realtime = controls; } catch {}
+  try { pi.events?.emit?.("realtime:controls", controls); } catch {}
   let terminalInputUnsub = null;
 
   // Register provider lazily so users who never use realtime aren't affected
@@ -1955,9 +2068,9 @@ export default function realtimeAgentExtension(pi) {
       if (sttMode) {
         // Transcription-only: keep current Pi model, open WSS just for STT,
         // disable audio reply, route transcripts as user messages to Pi.
-        config.audioEnabled = false;
-        config.sttOnly = true;
-        session.showStatusWidget(ctx);
+        controls.setAudio(false, ctx);
+        controls.setSttOnly(true, ctx);
+        controls.showStatus(ctx);
       } else {
         // Full realtime: remember the prior Pi model so /rt-off can restore it,
         // then switch to gpt-realtime-2.
@@ -1970,9 +2083,9 @@ export default function realtimeAgentExtension(pi) {
           const ok = await pi.setModel(m);
           if (!ok) { ctx.ui.notify("No API key for openai-realtime", "error"); return; }
         }
-        config.audioEnabled = true;
-        config.sttOnly = false;
-        session.showStatusWidget(ctx);
+        controls.setAudio(true, ctx);
+        controls.setSttOnly(false, ctx);
+        controls.showStatus(ctx);
       }
 
       try { await session.connect(ctx); }
@@ -1985,7 +2098,7 @@ export default function realtimeAgentExtension(pi) {
       }
 
       try {
-        const lines = statusLines(session, config);
+        const lines = controls.statusLines();
         ctx.ui.setWidget("realtime-status", lines, { placement: "belowEditor" });
       } catch {}
       session.updateStatus(ctx);
@@ -1995,8 +2108,7 @@ export default function realtimeAgentExtension(pi) {
   pi.registerCommand("rt-on", {
     description: "Enable realtime audio output.",
     handler: async (_args, ctx) => {
-      config.audioEnabled = true;
-      session.updateStatus(ctx);
+      controls.setAudio(true, ctx);
       ctx.ui.notify("Realtime audio ON", "info");
     },
   });
@@ -2007,7 +2119,7 @@ export default function realtimeAgentExtension(pi) {
       const cmd = pi.getCommand?.("rt")?.handler || null;
       if (typeof cmd === "function") return cmd("stt", ctx);
       // Fallback: same body inline.
-      try { await session.startMic(ctx, "vad"); } catch (e) { ctx.ui.notify(`stt: ${e.message}`, "error"); }
+      try { await controls.listen(ctx, "vad"); } catch (e) { ctx.ui.notify(`stt: ${e.message}`, "error"); }
     },
   });
 
@@ -2022,22 +2134,7 @@ export default function realtimeAgentExtension(pi) {
   pi.registerCommand("rt-off", {
     description: "Exit realtime: stop mic, disable audio, restore previous Pi model.",
     handler: async (_args, ctx) => {
-      session.hideStatusWidget(ctx);
-      try { await session.stopMic({ commit: false }); } catch {}
-      try { await session.close(false); } catch {}
-      config.audioEnabled = false;
-      config.sttOnly = false;
-      session.player.interrupt();
-      // Restore the prior Pi model if /rt switched away from it.
-      const prev = config.previousModel;
-      if (prev) {
-        config.previousModel = null;
-        const m = ctx.modelRegistry.find?.(prev.provider, prev.id);
-        if (m) {
-          try { await pi.setModel(m); } catch {}
-        }
-      }
-      session.clearRealtimeUi(ctx);
+      await controls.disable(ctx, { restoreModel: true });
       ctx.ui.notify("Realtime off", "info");
     },
   });
@@ -2066,12 +2163,10 @@ export default function realtimeAgentExtension(pi) {
     description: "Toggle realtime audio output. Usage: /rt-audio [on|off|toggle]",
     handler: async (args, ctx) => {
       const arg = String(args || "").trim().toLowerCase();
-      if (arg === "on") config.audioEnabled = true;
-      else if (arg === "off") config.audioEnabled = false;
-      else config.audioEnabled = !config.audioEnabled;
-      if (!config.audioEnabled) session.player.interrupt();
-      session.updateStatus(ctx);
-      ctx.ui.notify(`Realtime audio ${config.audioEnabled ? "ON" : "OFF"}`, "info");
+      const snapshot = arg === "on" ? controls.setAudio(true, ctx)
+        : arg === "off" ? controls.setAudio(false, ctx)
+        : controls.toggleAudio(ctx);
+      ctx.ui.notify(`Realtime audio ${snapshot.audioEnabled ? "ON" : "OFF"}`, "info");
     },
   });
 
@@ -2079,9 +2174,8 @@ export default function realtimeAgentExtension(pi) {
     description: "Set realtime reasoning effort: off|minimal|low|medium|high",
     handler: async (args, ctx) => {
       const effort = String(args || "").trim().toLowerCase();
-      if (!effort) { ctx.ui.notify(`reasoning=${config.reasoningEffort}`, "info"); return; }
-      config.reasoningEffort = effort;
-      session.reasoningRejected = false;
+      if (!effort) { ctx.ui.notify(`reasoning=${controls.snapshot().reasoningEffort}`, "info"); return; }
+      controls.setReasoningEffort(effort, ctx);
       ctx.ui.notify(`Realtime reasoning effort: ${effort}`, "info");
     },
   });
@@ -2091,7 +2185,7 @@ export default function realtimeAgentExtension(pi) {
     handler: async (args, ctx) => {
       const mode = (String(args || "").trim().split(/\s+/)[0] || "ptt").toLowerCase();
       const vad = mode === "vad" || mode === "continuous";
-      try { await session.startMic(ctx, vad ? "vad" : "ptt"); }
+      try { await controls.listen(ctx, vad ? "vad" : "ptt"); }
       catch (e) { ctx.ui.notify(`Realtime mic failed: ${e.message}`, "error"); return; }
       ctx.ui.notify(vad
         ? "VAD listening. Speak; silence should transcribe. /rt-stop stops, /rt-cancel discards."
@@ -2104,7 +2198,7 @@ export default function realtimeAgentExtension(pi) {
     description: "Stop mic; if recording PTT, commit audio for transcription. If no mic, close WebSocket.",
     handler: async (_args, ctx) => {
       if (session.mic) {
-        await session.stopMic({ commit: true });
+        await controls.stopMic(ctx, { commit: true });
         ctx.ui.notify("Realtime mic stopped", "info");
       } else {
         await session.close(true);
@@ -2116,9 +2210,8 @@ export default function realtimeAgentExtension(pi) {
   pi.registerCommand("rt-cancel", {
     description: "Stop realtime mic without committing audio.",
     handler: async (_args, ctx) => {
-      await session.stopMic({ commit: false });
+      await controls.cancelMic(ctx);
       ctx.ui.notify("Realtime mic cancelled", "info");
-      session.updateStatus(ctx);
     },
   });
 
@@ -2139,8 +2232,8 @@ export default function realtimeAgentExtension(pi) {
     description: "Show realtime status and settings. Usage: /rt-status [full]",
     handler: async (args, ctx) => {
       const full = String(args || "").trim().toLowerCase() === "full";
-      session.showStatusWidget(ctx);
-      const lines = full ? diagnosticLines(session, config) : statusLines(session, config);
+      controls.showStatus(ctx);
+      const lines = full ? controls.diagnostics() : controls.statusLines();
       if (full) ctx.ui.notify(lines.join("\n"), "info");
       else ctx.ui.notify(lines[0], "info");
     },
@@ -2149,7 +2242,7 @@ export default function realtimeAgentExtension(pi) {
   pi.registerCommand("rt-doctor", {
     description: "Show realtime provider/audio diagnostics and troubleshooting hints.",
     handler: async (_args, ctx) => {
-      const lines = diagnosticLines(session, config);
+      const lines = controls.diagnostics();
       ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" });
       ctx.ui.notify(lines.join("\n"), "info");
     },
@@ -2157,6 +2250,6 @@ export default function realtimeAgentExtension(pi) {
 
   pi.registerCommand("rt-hide-status", {
     description: "Hide the realtime status widget.",
-    handler: async (_args, ctx) => session.hideStatusWidget(ctx),
+    handler: async (_args, ctx) => controls.hideStatus(ctx),
   });
 }

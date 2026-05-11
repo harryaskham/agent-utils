@@ -91,6 +91,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const statuses = new Map();
   const notifications = [];
   const setModelCalls = [];
+  const emittedEvents = [];
 
   const ctx = {
     model: initialModel || { provider: "litellm-anthropic", id: "claude-sonnet-4-5" },
@@ -114,6 +115,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     getCommand(name) { return commands.get(name); },
     registerMessageRenderer() {},
     registerProvider() {},
+    events: { emit: (name, payload) => emittedEvents.push({ name, payload }) },
     on(event, handler) { handlers.set(event, handler); },
     setModel: async (model) => {
       setModelCalls.push(model);
@@ -122,8 +124,37 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     },
   };
 
-  return { pi, commands, handlers, widgets, statuses, notifications, setModelCalls, ctx };
+  return { pi, commands, handlers, widgets, statuses, notifications, setModelCalls, emittedEvents, ctx };
 }
+
+test("extension exposes unified realtime controls on pi and the event bus", () => {
+  const { pi, emittedEvents } = makeHarness();
+  realtimeAgentExtension(pi);
+
+  assert.equal(typeof pi.realtime.snapshot, "function");
+  assert.equal(typeof pi.realtime.setAudio, "function");
+  assert.equal(typeof pi.realtime.setVoice, "function");
+  assert.equal(typeof pi.realtime.diagnostics, "function");
+  assert.equal(emittedEvents.at(-1)?.name, "realtime:controls");
+  assert.equal(emittedEvents.at(-1)?.payload, pi.realtime);
+});
+
+test("unified realtime controls mutate audio, voice, and widget state", () => {
+  const { pi, handlers, widgets, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  let snapshot = pi.realtime.setAudio(false, ctx);
+  assert.equal(snapshot.audioEnabled, false);
+  snapshot = pi.realtime.setVoice("verse", ctx);
+  assert.equal(snapshot.voice, "verse");
+  snapshot = pi.realtime.showStatus(ctx);
+  assert.equal(snapshot.state.widgetVisible, true);
+  assert.ok(widgets.has("realtime-status"));
+  snapshot = pi.realtime.hideStatus(ctx);
+  assert.equal(snapshot.state.widgetVisible, false);
+  assert.equal(widgets.has("realtime-status"), false);
+});
 
 test("/rt-hide-status keeps the realtime widget hidden across later status updates", async () => {
   const { pi, commands, handlers, widgets, ctx } = makeHarness();
