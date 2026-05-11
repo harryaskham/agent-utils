@@ -152,6 +152,7 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.ok(pi.realtime.options().sttModes.includes("stop"));
   assert.deepEqual(pi.realtime.options().audioModes, ["on", "off", "toggle"]);
   assert.ok(pi.realtime.options().widgetModes.includes("hide"));
+  assert.deepEqual(pi.realtime.options().statusModes, ["compact", "full"]);
   assert.equal(emittedEvents.at(-1)?.name, "realtime:controls");
   assert.equal(emittedEvents.at(-1)?.payload, pi.realtime);
 });
@@ -402,6 +403,17 @@ test("/rt rejects unsupported audio and widget modes without toggling state", as
   pi.realtime.hideStatus(ctx);
   await commands.get("rt").handler("widget banana", ctx);
   assert.match(notifications.at(-1).message, /Unsupported realtime widget mode/);
+  assert.equal(widgets.has("realtime-status"), false);
+});
+
+test("/rt rejects unsupported status modes without showing the widget", async () => {
+  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+  pi.realtime.hideStatus(ctx);
+
+  await commands.get("rt").handler("status ful", ctx);
+  assert.match(notifications.at(-1).message, /Unsupported realtime status mode/);
   assert.equal(widgets.has("realtime-status"), false);
 });
 

@@ -108,7 +108,8 @@ const REALTIME_MIC_MODES = new Set(["vad", "ptt", "off", "stop", "cancel"]);
 const REALTIME_STT_MODES = new Set(["start", "vad", "ptt", "stop", "off", "cancel"]);
 const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
+const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -1892,6 +1893,7 @@ export function createRealtimeControls({ pi, session, config }) {
         sttModes: [...REALTIME_STT_MODES],
         audioModes: [...REALTIME_AUDIO_MODES],
         widgetModes: [...REALTIME_WIDGET_MODES],
+        statusModes: [...REALTIME_STATUS_MODES],
       };
     },
 
@@ -2158,7 +2160,15 @@ export default function realtimeAgentExtension(pi) {
     }
     if (verb === "stop" || verb === "off") { await controls.disable(ctx, { restoreModel: true }); ctx.ui.notify("Realtime off", "info"); return; }
     if (verb === "doctor") { const lines = controls.diagnostics(); ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" }); ctx.ui.notify(lines.join("\n"), "info"); return; }
-    if (verb === "status") { const full = value === "full"; controls.showStatus(ctx); const lines = full ? controls.diagnostics() : controls.statusLines(); ctx.ui.notify(full ? lines.join("\n") : lines[0], "info"); return; }
+    if (verb === "status") {
+      const mode = value || "compact";
+      if (!REALTIME_STATUS_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime status mode. Use /rt status [compact|full].", "warning"); return; }
+      const full = mode === "full";
+      controls.showStatus(ctx);
+      const lines = full ? controls.diagnostics() : controls.statusLines();
+      ctx.ui.notify(full ? lines.join("\n") : lines[0], "info");
+      return;
+    }
     if (verb === "widget") {
       const mode = value || "show";
       if (!REALTIME_WIDGET_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime widget mode. Use /rt widget [show|hide].", "warning"); return; }
