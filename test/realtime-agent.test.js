@@ -61,6 +61,8 @@ test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
   const state = new RealtimeStateController();
   assert.deepEqual(state.snapshot({ sttOnly: false }), {
     connection: "off",
+    connected: false,
+    connecting: false,
     phase: "idle",
     micMode: null,
     widgetVisible: false,
@@ -70,6 +72,8 @@ test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
 
   state.setConnection("connected");
   assert.equal(state.mode(), "connected");
+  assert.equal(state.snapshot().connected, true);
+  assert.equal(state.snapshot().connecting, false);
 
   state.setMicMode("vad");
   state.setPhase("recording");
@@ -370,7 +374,7 @@ test("/rt rejects unsupported start, mic, and stt modes without falling through"
 
   await commands.get("rt").handler("start banana", ctx);
   assert.match(notifications.at(-1).message, /Unsupported realtime start mode/);
-  assert.equal(!!pi.realtime.snapshot().state.connected, false);
+  assert.equal(pi.realtime.snapshot().state.connected, false);
 
   await commands.get("rt").handler("mic banana", ctx);
   assert.match(notifications.at(-1).message, /Unsupported realtime mic mode/);

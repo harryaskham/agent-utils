@@ -534,6 +534,8 @@ export class RealtimeStateController {
   snapshot(extra = {}) {
     return {
       connection: this.connection,
+      connected: this.connected,
+      connecting: this.connecting,
       phase: this.phase,
       micMode: this.micMode,
       widgetVisible: this.widgetVisible,
