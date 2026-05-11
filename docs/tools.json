@@ -160,10 +160,10 @@
         },
         {
           "name": "Tendril share Pi extension",
-          "command": "/tendril list, /tendril window <id>, /tendril display <id>",
+          "command": "/tendril list, /tendril window <id>, /tendril display <id>, /tendril describe window <id>, /tendril-describe window <id>",
           "audience": "Pi users sharing local visual context with image-capable models",
-          "purpose": "Let the user list Tendril targets and send captured window/display screenshots to the model as image user messages.",
-          "commonActions": ["list windows and displays", "capture a window for the model", "capture a display for the model", "queue screenshot context as a follow-up while the agent is busy"],
+          "purpose": "Let the user list Tendril targets, send captured window/display screenshots to image-capable models, or send VLM-generated screenshot descriptions to the active model.",
+          "commonActions": ["list windows and displays", "capture a window for the model", "capture a display for the model", "describe a screenshot with a vision model", "queue screenshot context as a follow-up while the agent is busy"],
           "sourceOfTruth": "extensions/tendril-share.js"
         },
         {

@@ -81,8 +81,10 @@ Available commands:
 - `/tendril window <id> [prompt]` — captures a Tendril window to PNG and sends a user message containing the screenshot image plus optional prompt text.
 - `/tendril display <id> [prompt]` — captures a Tendril display to PNG and sends it to the model.
 - `/tendril screen <id> [prompt]` — alias for `/tendril display`.
+- `/tendril describe window <id> [prompt]` / `/tendril describe display <id> [prompt]` — captures the target, describes it with a configurable image-capable model, and sends the textual description to the active model.
+- `/tendril-describe window <id> [prompt]` / `/tendril-describe display <id> [prompt]` — shortcut aliases for the describe path.
 
-Captures are written under the active Pi session directory when available, or a process-scoped temp folder otherwise. If the agent is already streaming, screenshot messages are queued as follow-ups so the user can share visual context without interrupting the current turn.
+Captures are written under the active Pi session directory when available, or a process-scoped temp folder otherwise. If the agent is already streaming, screenshot messages are queued as follow-ups so the user can share visual context without interrupting the current turn. Description commands default to `litellm-anthropic/claude-opus-4-7`; override with `TENDRIL_SHARE_DESCRIBE_MODEL=provider/model`.
 
 ## Kitty image preview Pi extension
 
