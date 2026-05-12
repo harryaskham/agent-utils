@@ -338,6 +338,7 @@ export async function collectSnapshotLinks({ root, app, query, freshness, kind, 
   const limitedLinks = links.slice(0, limit);
   return {
     ...listed,
+    scannedArtifactCount: listed.artifacts.length,
     query: query || null,
     freshness: freshness || null,
     kind: normalizedKind,
@@ -422,7 +423,9 @@ export function renderSnapshotLinks(summary) {
   const appCountsText = Object.entries(appCounts).sort(([a], [b]) => a.localeCompare(b)).map(([app, count]) => `${app}=${count}`).join(",");
   const kindCountsText = Object.entries(kindCounts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, count]) => `${kind}=${count}`).join(",");
   const matchedText = summary.matchedCount != null && summary.matchedCount !== counts.total ? ` matched=${summary.matchedCount}` : "";
-  const lines = [`links total=${counts.total}${matchedText} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${summary.sort ? ` sort=${summary.sort}` : ""}${renderSnapshotLinkHeaderFilters(summary)}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}`];
+  const scannedCount = summary.scannedArtifactCount ?? summary.artifacts?.length;
+  const scannedText = scannedCount != null ? ` scanned=${scannedCount}` : "";
+  const lines = [`links total=${counts.total}${matchedText}${scannedText} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${summary.sort ? ` sort=${summary.sort}` : ""}${renderSnapshotLinkHeaderFilters(summary)}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}`];
   lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${renderSnapshotLinkContext(link.context)}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
   if (summary.truncated) lines.push(`truncated at ${summary.links.length}${summary.matchedCount != null ? ` of ${summary.matchedCount}` : ""} links`);
   return lines.join("\n");
