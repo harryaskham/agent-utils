@@ -297,6 +297,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_start`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_bundle_start`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_bundle_run_once`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_stale_run_once`/);
   assert.match(source, /Return planned refresh bundle actions/);
   assert.match(source, /DEFAULT_REFRESH_BUNDLE/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_status`/);

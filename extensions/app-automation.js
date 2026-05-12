@@ -681,6 +681,60 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_refresh_stale_run_once`,
+    label: "App Automation Refresh Stale Run Once",
+    description: "Run standard Slack, Outlook, and Teams snapshot refresh actions once only for apps whose snapshots are stale or missing.",
+    promptSnippet: "Use this when you want to refresh only stale or missing work-app snapshots instead of running the full bundle.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to check. Defaults to the standard refresh bundle apps." }))),
+      actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to include from the default refresh bundle." }))),
+      staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale snapshots. Defaults to 60 minutes." })),
+      params: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Shared action parameters such as session/playwrightSession." })),
+      dryRun: Type.Optional(Type.Boolean({ description: "Return stale refresh decisions without executing browser automation. Defaults to false." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Per-action command timeout in milliseconds. Defaults to 30000." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const catalog = await resolveCatalog(params);
+      const wantedApps = new Set((params.apps || []).map((value) => String(value)));
+      const wantedActions = new Set((params.actions || []).map((value) => String(value)));
+      const candidateApps = Array.from(new Set(DEFAULT_REFRESH_BUNDLE.map((target) => target.app)))
+        .filter((app) => !wantedApps.size || wantedApps.has(app));
+      const staleness = await snapshotStalenessReport({ root: stateRoot(), apps: candidateApps, staleAfterMinutes: params.staleAfterMinutes || 60 });
+      const staleApps = new Set(staleness.entries.filter((entry) => entry.status !== "fresh").map((entry) => entry.app));
+      const targets = DEFAULT_REFRESH_BUNDLE.filter((target) => (
+        staleApps.has(target.app)
+        && (!wantedActions.size || wantedActions.has(target.action))
+      ));
+      const runs = [];
+      const skipped = staleness.entries
+        .filter((entry) => entry.status === "fresh")
+        .map((entry) => ({ app: entry.app, reason: "fresh", latestArtifact: entry.latestArtifact, ageMinutes: entry.ageMinutes }));
+      for (const target of targets) {
+        const plan = buildActionPlan({ app: target.app, action: target.action, params: params.params || {}, catalog: catalog.apps });
+        if (!plan.execution.executable) {
+          skipped.push({ app: target.app, action: target.action, reason: plan.execution.missingParams.length ? `missing ${plan.execution.missingParams.join(",")}` : "plan is not executable", blockedSteps: plan.execution.blockedSteps });
+          continue;
+        }
+        if (params.dryRun) {
+          runs.push({ app: target.app, action: target.action, status: "dry_run", executable: true, staleStatus: staleness.entries.find((entry) => entry.app === target.app)?.status, steps: plan.execution.stepCommands.map((step) => ({ kind: step.kind, internal: step.internal, command: step.command, args: step.args })) });
+          continue;
+        }
+        const run = await runPlan(pi, plan, { signal, timeoutMs: params.timeoutMs });
+        runs.push({ app: target.app, action: target.action, status: run.status, latestRunPath: run.latestRunPath, results: run.results });
+      }
+      const failed = runs.filter((run) => !["ok", "dry_run"].includes(run.status)).length;
+      return textResult(`${params.dryRun ? "dry-run planned" : "ran"} ${runs.length} stale app automation refresh actions${failed ? `; ${failed} failed` : ""}${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+        dryRun: Boolean(params.dryRun),
+        runs,
+        skipped,
+        staleness,
+        defaultBundle: DEFAULT_REFRESH_BUNDLE,
+      });
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_refresh_bundle_start`,
     label: "App Automation Refresh Bundle Start",
     description: "Start a standard bundle of Slack, Outlook, and Teams snapshot refreshers from the blessed catalog.",

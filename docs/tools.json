@@ -298,7 +298,7 @@
         },
         {
           "name": "App automation Pi extension",
-          "command": "app_automation_list, app_automation_doctor, app_automation_overview, app_automation_plan, app_automation_run, app_automation_open_bundle_run_once, app_automation_refresh_start, app_automation_refresh_bundle_start, app_automation_refresh_bundle_run_once, app_automation_refresh_status, app_automation_refresh_stop, app_automation_snapshots_list, app_automation_snapshots_digest, app_automation_snapshots_staleness, app_automation_snapshot_read, app_automation_status, /tendril-app",
+          "command": "app_automation_list, app_automation_doctor, app_automation_overview, app_automation_plan, app_automation_run, app_automation_open_bundle_run_once, app_automation_refresh_start, app_automation_refresh_bundle_start, app_automation_refresh_bundle_run_once, app_automation_refresh_stale_run_once, app_automation_refresh_status, app_automation_refresh_stop, app_automation_snapshots_list, app_automation_snapshots_digest, app_automation_snapshots_staleness, app_automation_snapshot_read, app_automation_status, /tendril-app",
           "audience": "Pi agents driving API-less web apps through blessed Playwright/Tendril workflows",
           "purpose": "Expose a deterministic catalog and conservative runner for app automation plans covering Slack, Markdown canvas sync, Outlook, and Teams before agents fall back to raw browser/UI automation.",
           "commonActions": [
@@ -312,7 +312,7 @@
             "list/digest/freshness-check/read persisted app snapshots",
             "start/inspect/stop periodic app refreshers",
             "open Slack/Outlook/Teams browser surfaces once",
-            "arm or run once the standard Slack/Outlook/Teams refresh bundle"
+            "arm, run once, or stale-refresh the standard Slack/Outlook/Teams refresh bundle"
           ],
           "sourceOfTruth": "extensions/app-automation.js, extensions/app-automation/catalog.js, docs/app-automation.md"
         },
