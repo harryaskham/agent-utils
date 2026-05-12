@@ -240,10 +240,12 @@
         },
         {
           "name": "Tendril share Pi extension",
-          "command": "/tendril list, /tendril window <id-or-name>, /tendril display <id-or-name>, /tendril describe window <id-or-name>, /tendril stream window <id-or-name>",
-          "audience": "Pi users sharing local visual context with image-capable models",
-          "purpose": "Let the user list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.",
+          "command": "tendril_bridge_doctor, /tendril list, /tendril window <id-or-name>, /tendril display <id-or-name>, /tendril describe window <id-or-name>, /tendril stream window <id-or-name>",
+          "audience": "Pi users sharing local, remote, or WSL-tunnelled visual context with image-capable models",
+          "purpose": "Let the user inspect Tendril bridge settings, list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.",
           "commonActions": [
+            "diagnose configured Tendril command, remote target, and WSL tunnel",
+            "probe target discovery through the configured bridge",
             "list windows and displays",
             "capture a window for the model",
             "capture a display for the model",
@@ -303,7 +305,8 @@
           "purpose": "Expose a deterministic catalog and conservative runner for app automation plans covering Slack, Markdown canvas sync, Calendar, Outlook, and Teams before agents fall back to raw browser/UI automation.",
           "commonActions": [
             "list blessed and local app configs",
-            "diagnose catalog and Playwright setup",
+            "diagnose catalog, Playwright setup, and Tendril bridge routing",
+            "optionally probe Tendril target discovery from app_automation_doctor",
             "summarize work-app refreshers and snapshots",
             "plan Slack notification snapshot",
             "dry-run or execute allowlisted runner steps",

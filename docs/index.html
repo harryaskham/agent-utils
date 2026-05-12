@@ -507,13 +507,13 @@
           <article class="tool-card">
             <div class="tool-card__header">
               <h3>Tendril share Pi extension</h3>
-              <code>/tendril list, /tendril window &lt;id-or-name&gt;, /tendril display &lt;id-or-name&gt;, /tendril describe window &lt;id-or-name&gt;, /tendril stream window &lt;id-or-name&gt;</code>
+              <code>tendril_bridge_doctor, /tendril list, /tendril window &lt;id-or-name&gt;, /tendril display &lt;id-or-name&gt;, /tendril describe window &lt;id-or-name&gt;, /tendril stream window &lt;id-or-name&gt;</code>
             </div>
-            <p>Let the user list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.</p>
+            <p>Let the user inspect Tendril bridge settings, list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.</p>
             <dl>
               <div>
                 <dt>Audience</dt>
-                <dd>Pi users sharing local visual context with image-capable models</dd>
+                <dd>Pi users sharing local, remote, or WSL-tunnelled visual context with image-capable models</dd>
               </div>
               <div>
                 <dt>Source of truth</dt>
@@ -523,6 +523,8 @@
             <details>
               <summary>Common actions</summary>
               <ul>
+              <li><code>diagnose configured Tendril command, remote target, and WSL tunnel</code></li>
+              <li><code>probe target discovery through the configured bridge</code></li>
               <li><code>list windows and displays</code></li>
               <li><code>capture a window for the model</code></li>
               <li><code>capture a display for the model</code></li>
@@ -638,7 +640,8 @@
               <summary>Common actions</summary>
               <ul>
               <li><code>list blessed and local app configs</code></li>
-              <li><code>diagnose catalog and Playwright setup</code></li>
+              <li><code>diagnose catalog, Playwright setup, and Tendril bridge routing</code></li>
+              <li><code>optionally probe Tendril target discovery from app_automation_doctor</code></li>
               <li><code>summarize work-app refreshers and snapshots</code></li>
               <li><code>plan Slack notification snapshot</code></li>
               <li><code>dry-run or execute allowlisted runner steps</code></li>
