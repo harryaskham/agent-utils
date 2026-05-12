@@ -312,9 +312,9 @@
             "dry-run or execute allowlisted runner steps",
             "plan Markdown-to-canvas sync",
             "inspect canonical app automation state root",
-            "list/digest/query timestamped snapshot links with freshness/app/kind counts, source context, explicit kind filtering, optional newest/oldest/freshest/stalest sorting, and clear empty-filter output",
+            "list/digest/query timestamped snapshot links with freshness/app/kind counts, source context, exact-or-aliased kind filtering, optional newest/oldest/freshest/stalest sorting, and clear empty-filter output",
             "list/freshness-check/cleanup-plan/read persisted app snapshots",
-            "use flexible /tendril-app links filters with optional app selector, such as fresh kind:events.snapshot sort:newest standup",
+            "use flexible /tendril-app links filters with optional app selector, such as fresh kind:events sort:newest standup",
             "start/inspect/stop periodic app refreshers",
             "open Slack/Calendar/Outlook/Teams browser surfaces once",
             "arm, run once, inspect per-action staleness, or stale-refresh the standard Slack/Calendar/Outlook/Teams refresh bundle"

@@ -197,10 +197,23 @@ function linkMatchesFreshness(link, freshness) {
   return link.freshness === wanted;
 }
 
+function normalizeLinkKind(kind) {
+  const value = String(kind || "").trim().toLowerCase();
+  if (!value) return null;
+  const aliases = {
+    event: "events.snapshot",
+    events: "events.snapshot",
+    notification: "notifications.snapshot",
+    notifications: "notifications.snapshot",
+    calendar: "calendar.snapshot",
+  };
+  return aliases[value] || value;
+}
+
 function linkMatchesKind(link, kind) {
-  const wanted = String(kind || "").trim().toLowerCase();
+  const wanted = normalizeLinkKind(kind);
   if (!wanted) return true;
-  return String(link.kind || "unknown").toLowerCase() === wanted;
+  return normalizeLinkKind(link.kind || "unknown") === wanted;
 }
 
 function normalizeLinkSort(sort) {
@@ -286,6 +299,7 @@ function summarizeLinkKinds(links = []) {
 
 export async function collectSnapshotLinks({ root, app, query, freshness, kind, sort, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const appSelector = normalizeSnapshotAppSelector(app);
+  const normalizedKind = normalizeLinkKind(kind);
   const normalizedSort = normalizeLinkSort(sort);
   const listed = await listSnapshotArtifacts({ root, app: appSelector, limit: artifactLimit });
   const links = [];
@@ -313,7 +327,7 @@ export async function collectSnapshotLinks({ root, app, query, freshness, kind, 
           artifactModifiedAt,
           ...linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes, now }),
         };
-        if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness) || !linkMatchesKind(link, kind)) continue;
+        if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness) || !linkMatchesKind(link, normalizedKind)) continue;
         links.push(link);
       }
     }
@@ -326,7 +340,7 @@ export async function collectSnapshotLinks({ root, app, query, freshness, kind, 
     ...listed,
     query: query || null,
     freshness: freshness || null,
-    kind: kind || null,
+    kind: normalizedKind,
     sort: normalizedSort,
     freshnessCounts: summarizeLinkFreshness(limitedLinks),
     appCounts: summarizeLinkApps(limitedLinks),
