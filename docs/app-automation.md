@@ -60,8 +60,10 @@ The implementation performs the source/export/persist part and records whether t
 
 ### Outlook and Teams
 
-`outlook` and `teams` provide conservative read-only examples for notification and calendar/meeting snapshots:
+`outlook` and `teams` provide interactive open actions plus conservative read-only notification and calendar/meeting snapshots:
 
+- `open` — open or reuse the primary Outlook/Teams web surface.
+- `calendar.open` — open or reuse the calendar surface.
 - `notifications.snapshot` — normalize supplied mail/chat/activity extraction text or JSON into canonical JSON and Markdown.
 - `calendar.snapshot` — normalize supplied calendar/meeting extraction text or JSON into canonical JSON and Markdown.
 

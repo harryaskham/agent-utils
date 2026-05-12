@@ -112,6 +112,30 @@ export const BLESSED_APPS = [
     auth: { strategy: "reuse-browser-session", notes: ["Use existing Microsoft web auth where available."] },
     actions: [
       {
+        id: "open",
+        label: "Open Outlook mail",
+        mode: "interactive",
+        driver: "playwright",
+        description: "Open or reuse Outlook web mail in a Playwright-controlled browser for later DOM extraction or Tendril interaction.",
+        outputs: ["browser-session"],
+        plan: [
+          { kind: "browser.open", url: "https://outlook.office.com/mail/", reuseSession: true },
+          { kind: "wait", condition: "mail-or-login-visible" },
+        ],
+      },
+      {
+        id: "calendar.open",
+        label: "Open Outlook calendar",
+        mode: "interactive",
+        driver: "playwright",
+        description: "Open or reuse Outlook web calendar in a Playwright-controlled browser.",
+        outputs: ["browser-session"],
+        plan: [
+          { kind: "browser.open", url: "https://outlook.office.com/calendar/", reuseSession: true },
+          { kind: "wait", condition: "calendar-or-login-visible" },
+        ],
+      },
+      {
         id: "notifications.snapshot",
         label: "Snapshot mail notifications",
         mode: "read",
@@ -146,6 +170,30 @@ export const BLESSED_APPS = [
     category: "messaging-meetings",
     auth: { strategy: "reuse-browser-session", notes: ["Use existing Microsoft web auth where available."] },
     actions: [
+      {
+        id: "open",
+        label: "Open Teams",
+        mode: "interactive",
+        driver: "playwright",
+        description: "Open or reuse Teams web in a Playwright-controlled browser for later DOM extraction or Tendril interaction.",
+        outputs: ["browser-session"],
+        plan: [
+          { kind: "browser.open", url: "https://teams.microsoft.com/v2/", reuseSession: true },
+          { kind: "wait", condition: "teams-or-login-visible" },
+        ],
+      },
+      {
+        id: "calendar.open",
+        label: "Open Teams calendar",
+        mode: "interactive",
+        driver: "playwright",
+        description: "Open or reuse Teams calendar in a Playwright-controlled browser.",
+        outputs: ["browser-session"],
+        plan: [
+          { kind: "browser.open", url: "https://teams.microsoft.com/v2/calendar", reuseSession: true },
+          { kind: "wait", condition: "calendar-or-login-visible" },
+        ],
+      },
       {
         id: "notifications.snapshot",
         label: "Snapshot chat/meeting notifications",

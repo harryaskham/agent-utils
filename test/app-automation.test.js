@@ -205,12 +205,14 @@ test("Slack notification snapshot parses unread and mention lines", () => {
 test("Outlook and Teams expose concrete notification and calendar snapshot actions", () => {
   const outlook = listAppConfigs().find((app) => app.id === "outlook");
   const teams = listAppConfigs().find((app) => app.id === "teams");
-  assert.deepEqual(outlook.actions.map((action) => action.id), ["notifications.snapshot", "calendar.snapshot"]);
-  assert.deepEqual(teams.actions.map((action) => action.id), ["notifications.snapshot", "calendar.snapshot"]);
+  assert.deepEqual(outlook.actions.map((action) => action.id), ["open", "calendar.open", "notifications.snapshot", "calendar.snapshot"]);
+  assert.deepEqual(teams.actions.map((action) => action.id), ["open", "calendar.open", "notifications.snapshot", "calendar.snapshot"]);
   const outlookCalendar = buildActionPlan({ app: "outlook", action: "calendar.snapshot", params: { session: "agent" } });
   const teamsNotifications = buildActionPlan({ app: "teams", action: "notifications.snapshot", params: { session: "agent" } });
   assert.equal(outlookCalendar.execution.executable, true);
   assert.equal(teamsNotifications.execution.executable, true);
+  assert.equal(buildActionPlan({ app: "outlook", action: "calendar.open", params: { session: "agent" } }).execution.executable, true);
+  assert.deepEqual(buildActionPlan({ app: "teams", action: "open", params: { session: "agent" } }).execution.stepCommands[0].args, ["-s=agent", "open", "https://teams.microsoft.com/v2/"]);
   assert.deepEqual(outlookCalendar.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
   assert.deepEqual(teamsNotifications.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
   assert.match(microsoftExtractorScript({ app: "teams", includePatterns: ["unread"] }), /includePatterns/);
