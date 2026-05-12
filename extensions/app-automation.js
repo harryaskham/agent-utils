@@ -15,6 +15,7 @@ import {
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
+import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { authMissingHint, prepareDomExtractStep, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import {
   buildSlackNotificationSnapshot,
@@ -101,7 +102,7 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
     }
     if (step.internal === "generic.notifications.snapshot") {
       const stepSpec = plan.steps[step.index] || {};
-      const input = plan.params.extraction || plan.params.sourceJson || plan.params.sourceText || plan.params.items || {};
+      const input = plan.params.extraction || plan.params.sourceJson || plan.params.sourceText || plan.params.items || results.find((result) => result.extraction)?.extraction || {};
       const snapshot = buildGenericSnapshot({
         app: stepSpec.app || plan.app.id,
         kind: plan.action.id,
@@ -160,7 +161,14 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       const prepared = await prepareDomExtractStep(sourceStep, plan.params, {
         snapshotDir: plan.snapshotDir,
         actionId: plan.action.id,
-        scripts: { slackExtractorScript: slackExtractorScript() },
+        scripts: {
+          slackExtractorScript: slackExtractorScript(),
+          microsoftExtractorScript: microsoftExtractorScript({
+            app: sourceStep.app || plan.app.id,
+            kind: plan.action.id,
+            includePatterns: sourceStep.includePatterns || [],
+          }),
+        },
       });
       if (prepared.paths.scriptPath || prepared.paths.outputPath) {
         step.scriptPath = prepared.paths.scriptPath || step.scriptPath;

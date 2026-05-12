@@ -118,7 +118,11 @@ export const BLESSED_APPS = [
         driver: "playwright",
         description: "Conservative read-only normalization of supplied Outlook mail notification extraction text/JSON.",
         outputs: ["snapshots/outlook/notifications.snapshot.json", "snapshots/outlook/notifications.snapshot.md"],
-        plan: [{ kind: "generic.notifications.snapshot", app: "outlook", includePatterns: ["unread", "mention", "flag", "important", "meeting", "calendar", "invite"] }],
+        plan: [
+          { kind: "browser.open", url: "https://outlook.office.com/mail/", reuseSession: true },
+          { kind: "dom.extract", script: "microsoftExtractorScript", output: "outlook-notifications-extraction.json", app: "outlook", includePatterns: ["unread", "mention", "flag", "important", "meeting", "calendar", "invite"] },
+          { kind: "generic.notifications.snapshot", app: "outlook", includePatterns: ["unread", "mention", "flag", "important", "meeting", "calendar", "invite"] },
+        ],
       },
       {
         id: "calendar.snapshot",
@@ -127,7 +131,11 @@ export const BLESSED_APPS = [
         driver: "playwright",
         description: "Conservative read-only normalization of supplied Outlook calendar extraction text/JSON.",
         outputs: ["snapshots/outlook/calendar.snapshot.json", "snapshots/outlook/calendar.snapshot.md"],
-        plan: [{ kind: "generic.notifications.snapshot", app: "outlook", includePatterns: ["meeting", "calendar", "today", "tomorrow", "starts", "accepted", "tentative"] }],
+        plan: [
+          { kind: "browser.open", url: "https://outlook.office.com/calendar/", reuseSession: true },
+          { kind: "dom.extract", script: "microsoftExtractorScript", output: "outlook-calendar-extraction.json", app: "outlook", includePatterns: ["meeting", "calendar", "today", "tomorrow", "starts", "accepted", "tentative"] },
+          { kind: "generic.notifications.snapshot", app: "outlook", includePatterns: ["meeting", "calendar", "today", "tomorrow", "starts", "accepted", "tentative"] },
+        ],
       },
     ],
   },
@@ -145,7 +153,11 @@ export const BLESSED_APPS = [
         driver: "playwright",
         description: "Conservative read-only normalization of supplied Teams chat and meeting notification extraction text/JSON.",
         outputs: ["snapshots/teams/notifications.snapshot.json", "snapshots/teams/notifications.snapshot.md"],
-        plan: [{ kind: "generic.notifications.snapshot", app: "teams", includePatterns: ["unread", "mention", "chat", "meeting", "call", "reply", "activity"] }],
+        plan: [
+          { kind: "browser.open", url: "https://teams.microsoft.com/v2/", reuseSession: true },
+          { kind: "dom.extract", script: "microsoftExtractorScript", output: "teams-notifications-extraction.json", app: "teams", includePatterns: ["unread", "mention", "chat", "meeting", "call", "reply", "activity"] },
+          { kind: "generic.notifications.snapshot", app: "teams", includePatterns: ["unread", "mention", "chat", "meeting", "call", "reply", "activity"] },
+        ],
       },
       {
         id: "calendar.snapshot",
@@ -154,7 +166,11 @@ export const BLESSED_APPS = [
         driver: "playwright",
         description: "Conservative read-only normalization of supplied Teams calendar or meeting extraction text/JSON.",
         outputs: ["snapshots/teams/calendar.snapshot.json", "snapshots/teams/calendar.snapshot.md"],
-        plan: [{ kind: "generic.notifications.snapshot", app: "teams", includePatterns: ["meeting", "calendar", "starts", "join", "today", "tomorrow"] }],
+        plan: [
+          { kind: "browser.open", url: "https://teams.microsoft.com/v2/calendar", reuseSession: true },
+          { kind: "dom.extract", script: "microsoftExtractorScript", output: "teams-calendar-extraction.json", app: "teams", includePatterns: ["meeting", "calendar", "starts", "join", "today", "tomorrow"] },
+          { kind: "generic.notifications.snapshot", app: "teams", includePatterns: ["meeting", "calendar", "starts", "join", "today", "tomorrow"] },
+        ],
       },
     ],
   },

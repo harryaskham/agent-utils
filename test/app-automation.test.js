@@ -19,6 +19,7 @@ import {
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
+import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
 import {
   authMissingHint,
   buildBrowserOpenCommand,
@@ -184,8 +185,13 @@ test("Outlook and Teams expose concrete notification and calendar snapshot actio
   const teams = listAppConfigs().find((app) => app.id === "teams");
   assert.deepEqual(outlook.actions.map((action) => action.id), ["notifications.snapshot", "calendar.snapshot"]);
   assert.deepEqual(teams.actions.map((action) => action.id), ["notifications.snapshot", "calendar.snapshot"]);
-  assert.equal(buildActionPlan({ app: "outlook", action: "calendar.snapshot" }).execution.executable, true);
-  assert.equal(buildActionPlan({ app: "teams", action: "notifications.snapshot" }).execution.executable, true);
+  const outlookCalendar = buildActionPlan({ app: "outlook", action: "calendar.snapshot", params: { session: "agent" } });
+  const teamsNotifications = buildActionPlan({ app: "teams", action: "notifications.snapshot", params: { session: "agent" } });
+  assert.equal(outlookCalendar.execution.executable, true);
+  assert.equal(teamsNotifications.execution.executable, true);
+  assert.deepEqual(outlookCalendar.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
+  assert.deepEqual(teamsNotifications.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
+  assert.match(microsoftExtractorScript({ app: "teams", includePatterns: ["unread"] }), /includePatterns/);
 });
 
 test("generic notification snapshots filter supplied extraction text", () => {

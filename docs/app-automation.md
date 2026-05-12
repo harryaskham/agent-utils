@@ -63,7 +63,7 @@ The implementation performs the source/export/persist part and records whether t
 - `notifications.snapshot` — normalize supplied mail/chat/activity extraction text or JSON into canonical JSON and Markdown.
 - `calendar.snapshot` — normalize supplied calendar/meeting extraction text or JSON into canonical JSON and Markdown.
 
-These examples intentionally start with supplied extraction input and pattern filtering. Live DOM selectors can be layered behind the same action ids later without changing the artifact contract.
+These examples use the same live extraction shape as Slack: `browser.open`, `dom.extract` with a conservative Microsoft extractor snippet, then `generic.notifications.snapshot` for canonical JSON/Markdown artifacts. They still accept supplied extraction input as a fallback, and selector maintenance can improve behind the same action ids later without changing the artifact contract.
 
 ## Config loader
 
