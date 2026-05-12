@@ -2,6 +2,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { buildTendrilCommand } from "../tendril-command.js";
 import { buildBrowserOpenCommand, buildDomExtractCommand } from "./playwright-bridge.js";
 
 export const APP_AUTOMATION_SPEC_VERSION = 1;
@@ -383,14 +384,15 @@ function coerceArg(value, params) {
   return String(value ?? "");
 }
 
-export function buildStepCommand(step, params = {}) {
+export function buildStepCommand(step, params = {}, env = process.env) {
   if (!step || typeof step !== "object") return { executable: false, reason: "step is not an object" };
   if (step.kind === "browser.open") return buildBrowserOpenCommand(step, params);
   if (step.kind === "tendril.run") {
     const target = resolveParamValue(step, "target", params);
     const dsl = resolveParamValue(step, "dsl", params);
     if (!target || !dsl) return { executable: false, reason: "tendril.run requires target and dsl" };
-    return { executable: true, command: "tendril", args: ["run", "--window", String(target), String(dsl)] };
+    const tendril = buildTendrilCommand(["run", "--window", String(target), String(dsl)], env);
+    return { executable: true, command: tendril.command, args: tendril.args, remote: tendril.remote, wslTunnel: tendril.wslTunnel };
   }
   if (step.kind === "cli.exec") {
     const command = String(step.command || "");
@@ -411,8 +413,8 @@ export function buildStepCommand(step, params = {}) {
   return { executable: false, reason: `no runner for step kind: ${step.kind || "unknown"}` };
 }
 
-export function buildExecutionPlan(plan) {
-  const stepCommands = plan.steps.map((step, index) => ({ index, kind: step.kind || "unknown", ...buildStepCommand(step, plan.params) }));
+export function buildExecutionPlan(plan, env = process.env) {
+  const stepCommands = plan.steps.map((step, index) => ({ index, kind: step.kind || "unknown", ...buildStepCommand(step, plan.params, env) }));
   const executable = plan.action.missingParams.length === 0 && stepCommands.every((step) => step.executable);
   return {
     executable,
@@ -456,7 +458,7 @@ export function buildActionPlan({ app: appId, action: actionId, params = {}, env
       "High-level browser.open, dom.extract, document.export, and editor.replace steps remain planned until app-specific driver beads land.",
     ],
   };
-  plan.execution = buildExecutionPlan(plan);
+  plan.execution = buildExecutionPlan(plan, env);
   plan.executable = plan.execution.executable;
   return plan;
 }

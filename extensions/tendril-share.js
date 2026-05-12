@@ -7,6 +7,7 @@ import {
   readPngDimensions,
   stableKittyImageId,
 } from "./kitty-graphics.js";
+import { buildTendrilCommand, tendrilCommandSummary } from "./tendril-command.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
@@ -72,7 +73,8 @@ function parseJsonEnvelope(stdout, commandName = "tendril") {
 }
 
 async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEOUT_MS } = {}) {
-  const result = await pi.exec("tendril", args, { signal, timeout });
+  const tendril = buildTendrilCommand(args);
+  const result = await pi.exec(tendril.command, tendril.args, { signal, timeout });
   const envelope = parseJsonEnvelope(result.stdout, `tendril ${args[0] || ""}`);
   if (result.code !== 0 || envelope.status === "error") {
     const message = envelope.error?.message || result.stderr || `tendril exited with code ${result.code}`;
@@ -408,7 +410,7 @@ export default function tendrilShareExtension(pi) {
   pi.on?.("session_shutdown", () => stopStream(state));
 
   pi.registerCommand("tendril", {
-    description: "Share Tendril windows/displays with the model. Usage: /tendril list|window <id-or-name>|display <id-or-name>|describe window <id>|stream window <id>",
+    description: `Share Tendril windows/displays with the model. Usage: /tendril list|window <id-or-name>|display <id-or-name>|describe window <id>|stream window <id>. Bridge: ${JSON.stringify(tendrilCommandSummary())}`,
     handler: async (args, ctx) => handleTendrilCommand(pi, args, ctx, state),
   });
 
@@ -426,4 +428,6 @@ export const __tendrilShareTest = {
   resolveTendrilTarget,
   streamStatusText,
   stopStream,
+  buildTendrilCommand,
+  tendrilCommandSummary,
 };

@@ -277,4 +277,13 @@ test("tendril share helpers parse commands and JSON envelopes", () => {
   });
   assert.equal(__tendrilShareTest.parseJsonEnvelope("log\n{\"status\":\"ok\"}\n").status, "ok");
   assert.match(__tendrilShareTest.listTargetsText({ data: { targets: [] } }), /none/);
+  assert.deepEqual(__tendrilShareTest.buildTendrilCommand(["list", "--json"], {
+    AGENT_UTILS_TENDRIL_REMOTE: "ms-dev",
+    AGENT_UTILS_TENDRIL_WSL_TUNNEL: "1",
+  }), {
+    command: "tendril",
+    args: ["--remote", "ms-dev", "--wsl-tunnel", "list", "--json"],
+    remote: "ms-dev",
+    wslTunnel: true,
+  });
 });

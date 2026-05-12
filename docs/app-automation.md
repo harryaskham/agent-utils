@@ -128,7 +128,7 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - high-level `browser.open`, `dom.extract`, and `editor.replace` steps are executable through the Playwright bridge when their required parameters are present; optional steps are skipped when no target URL or selector is supplied, and skipped optional steps do not make an otherwise successful run fail.
 4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.
-   - Use Tendril capture/run when visual verification or native input is needed.
+   - Use Tendril capture/run when visual verification or native input is needed. For WSL-to-Windows-host control, set `AGENT_UTILS_TENDRIL_WSL_TUNNEL=1`; combine with `AGENT_UTILS_TENDRIL_REMOTE=<host>` when a controller should SSH to a WSL host such as ms-dev before Tendril performs its Windows tunnel.
    - Keep paste/import/write actions explicit and parameterized.
 5. **Artifacts** always land under the app automation state root unless a future action explicitly accepts a workspace output path.
 

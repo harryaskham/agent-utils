@@ -165,6 +165,11 @@ test("execution planning allowlists deterministic cli and tendril commands", () 
   assert.deepEqual(ok, { executable: true, command: "pandoc", args: ["notes.md"] });
   assert.equal(buildStepCommand({ kind: "cli.exec", command: "bash", args: ["-lc", "echo nope"] }).executable, false);
   assert.equal(buildStepCommand({ kind: "tendril.run", target: "Slack", dsl: "send(\"hi\")" }).command, "tendril");
+  assert.deepEqual(buildStepCommand(
+    { kind: "tendril.run", target: "Slack", dsl: "send(\"hi\")" },
+    {},
+    { AGENT_UTILS_TENDRIL_REMOTE: "ms-dev", AGENT_UTILS_TENDRIL_WSL_TUNNEL: "1" },
+  ).args, ["--remote", "ms-dev", "--wsl-tunnel", "run", "--window", "Slack", "send(\"hi\")"]);
 });
 
 test("execution plan allows high-level browser.open when bridge command can be built", () => {
