@@ -23,7 +23,7 @@ import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
-import { authMissingHint, prepareDomExtractStep, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
+import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -193,7 +193,8 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       }
     }
     const result = await pi.exec(step.command, step.args, { signal, timeout: timeoutMs });
-    results.push({
+    const authRequired = result.code !== 0 && authMissingHint(result);
+    const runResult = {
       index: step.index,
       kind: step.kind,
       command: step.command,
@@ -202,8 +203,15 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       stdout: result.stdout,
       stderr: result.stderr,
       status: result.code === 0 ? "ok" : "error",
-      authRequired: result.code !== 0 && authMissingHint(result),
-    });
+      authRequired,
+    };
+    if (authRequired) {
+      const diagnostic = buildAuthRequiredDiagnostic({ app: plan.app.id, action: plan.action.id, step, result });
+      const authPath = path.join(plan.snapshotDir, "auth-required.json");
+      await writeFile(authPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+      runResult.authRequiredPath = authPath;
+    }
+    results.push(runResult);
     if (step.kind === "dom.extract" && result.code === 0) {
       try {
         const extractionText = await readFile(step.outputPath, "utf8");

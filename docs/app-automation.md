@@ -138,7 +138,7 @@ Periodic actions stay Pi-native and controllable rather than using daemon-global
 ## Safety rules
 
 - Prefer blessed app/action plans before raw browser commands.
-- Do not persist web auth secrets in snapshots or git.
+- Do not persist web auth secrets in snapshots or git. Auth-required diagnostics are redacted and only record the failing step, status, and operator hint.
 - Treat write actions (`sync-markdown`) as explicit and parameterized.
 - Keep selectors and app-specific heuristics in app configs, not scattered across agent prompts.
 - Store snapshots in canonical state paths so later agents can inspect the latest known app state.

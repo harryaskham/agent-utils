@@ -29,6 +29,7 @@ import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-a
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
 import {
   authMissingHint,
+  buildAuthRequiredDiagnostic,
   buildBrowserOpenCommand,
   buildDomExtractCommand,
   playwrightSessionArgs,
@@ -110,6 +111,20 @@ test("Playwright bridge builds deterministic browser and DOM extraction commands
   assert.equal(buildDomExtractCommand({ scriptFile: "extract.js" }, { extractionOutputPath: "out.json" }).executable, true);
   assert.equal(buildDomExtractCommand({ script: "inline", output: "out.json" }, {}).executable, true);
   assert.equal(authMissingHint({ stderr: "Please sign in to continue" }), true);
+});
+
+test("auth-required diagnostics redact sessions and secrets", () => {
+  const diagnostic = buildAuthRequiredDiagnostic({
+    app: "slack",
+    action: "notifications.snapshot",
+    step: { index: 0, kind: "browser.open", command: "playwright-cli", args: ["-s=harry", "open", "https://app.slack.com/client"] },
+    result: { stderr: "login required token=abc123 Bearer abc.def" },
+    now: new Date("2026-05-12T00:00:00Z"),
+  });
+  assert.equal(diagnostic.status, "auth_required");
+  assert.deepEqual(diagnostic.step.args, ["-s=[redacted-session]", "open", "https://app.slack.com/client"]);
+  assert.match(diagnostic.stderr, /token=\[redacted\]/);
+  assert.match(diagnostic.stderr, /Bearer \[redacted\]/);
 });
 
 test("execution planning allowlists deterministic cli and tendril commands", () => {

@@ -66,3 +66,29 @@ export function authMissingHint(result = {}) {
   const text = `${result.stdout || ""}\n${result.stderr || ""}`.toLowerCase();
   return /sign in|signin|login|log in|auth|unauthorized|forbidden/.test(text);
 }
+
+function redactPotentialSecrets(text) {
+  return String(text || "")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/(token|cookie|secret|password)=([^\s&]+)/gi, "$1=[redacted]")
+    .slice(0, 4000);
+}
+
+export function buildAuthRequiredDiagnostic({ app, action, step = {}, result = {}, now = new Date() } = {}) {
+  return {
+    version: 1,
+    status: "auth_required",
+    app,
+    action,
+    step: {
+      index: step.index,
+      kind: step.kind,
+      command: step.command,
+      args: Array.isArray(step.args) ? step.args.map((arg) => String(arg).replace(/-s=.+/, "-s=[redacted-session]")) : [],
+    },
+    detectedAt: now.toISOString(),
+    hint: "Open or reuse an authenticated browser session, then rerun the app automation action.",
+    stdout: redactPotentialSecrets(result.stdout),
+    stderr: redactPotentialSecrets(result.stderr),
+  };
+}
