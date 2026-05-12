@@ -17,6 +17,7 @@ import {
   sanitizeId,
 } from "../extensions/app-automation/catalog.js";
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
+import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -127,6 +128,26 @@ test("Slack notification snapshot parses unread and mention lines", () => {
   assert.equal(snapshot.counts.mentions, 1);
   assert.match(renderSlackNotificationMarkdown(snapshot), /#general/);
   assert.match(slackExtractorScript(), /querySelectorAll/);
+});
+
+test("Outlook and Teams expose concrete notification and calendar snapshot actions", () => {
+  const outlook = listAppConfigs().find((app) => app.id === "outlook");
+  const teams = listAppConfigs().find((app) => app.id === "teams");
+  assert.deepEqual(outlook.actions.map((action) => action.id), ["notifications.snapshot", "calendar.snapshot"]);
+  assert.deepEqual(teams.actions.map((action) => action.id), ["notifications.snapshot", "calendar.snapshot"]);
+  assert.equal(buildActionPlan({ app: "outlook", action: "calendar.snapshot" }).execution.executable, true);
+  assert.equal(buildActionPlan({ app: "teams", action: "notifications.snapshot" }).execution.executable, true);
+});
+
+test("generic notification snapshots filter supplied extraction text", () => {
+  const snapshot = buildGenericSnapshot({
+    app: "teams",
+    kind: "notifications.snapshot",
+    input: "quiet\n3 unread in Ops\nteam lunch",
+    includePatterns: ["unread", "mention"],
+  });
+  assert.equal(snapshot.count, 1);
+  assert.match(renderGenericMarkdown(snapshot), /3 unread in Ops/);
 });
 
 test("extension is packaged and exposes list, plan, run, refresh, status tools plus /tendril-app", async () => {

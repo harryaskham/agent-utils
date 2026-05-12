@@ -107,12 +107,21 @@ export const BLESSED_APPS = [
     actions: [
       {
         id: "notifications.snapshot",
-        label: "Snapshot mail/calendar notifications",
+        label: "Snapshot mail notifications",
         mode: "read",
         driver: "playwright",
-        description: "Future blessed read-only action for inbox/calendar notification summaries.",
-        outputs: ["snapshots/outlook/notifications.json"],
-        plan: [{ kind: "placeholder", nextBead: "bd-a7835e" }],
+        description: "Conservative read-only normalization of supplied Outlook mail notification extraction text/JSON.",
+        outputs: ["snapshots/outlook/notifications.snapshot.json", "snapshots/outlook/notifications.snapshot.md"],
+        plan: [{ kind: "generic.notifications.snapshot", app: "outlook", includePatterns: ["unread", "mention", "flag", "important", "meeting", "calendar", "invite"] }],
+      },
+      {
+        id: "calendar.snapshot",
+        label: "Snapshot Outlook calendar items",
+        mode: "read",
+        driver: "playwright",
+        description: "Conservative read-only normalization of supplied Outlook calendar extraction text/JSON.",
+        outputs: ["snapshots/outlook/calendar.snapshot.json", "snapshots/outlook/calendar.snapshot.md"],
+        plan: [{ kind: "generic.notifications.snapshot", app: "outlook", includePatterns: ["meeting", "calendar", "today", "tomorrow", "starts", "accepted", "tentative"] }],
       },
     ],
   },
@@ -128,9 +137,18 @@ export const BLESSED_APPS = [
         label: "Snapshot chat/meeting notifications",
         mode: "read",
         driver: "playwright",
-        description: "Future blessed read-only action for Teams notification summaries.",
-        outputs: ["snapshots/teams/notifications.json"],
-        plan: [{ kind: "placeholder", nextBead: "bd-a7835e" }],
+        description: "Conservative read-only normalization of supplied Teams chat and meeting notification extraction text/JSON.",
+        outputs: ["snapshots/teams/notifications.snapshot.json", "snapshots/teams/notifications.snapshot.md"],
+        plan: [{ kind: "generic.notifications.snapshot", app: "teams", includePatterns: ["unread", "mention", "chat", "meeting", "call", "reply", "activity"] }],
+      },
+      {
+        id: "calendar.snapshot",
+        label: "Snapshot Teams calendar/meeting items",
+        mode: "read",
+        driver: "playwright",
+        description: "Conservative read-only normalization of supplied Teams calendar or meeting extraction text/JSON.",
+        outputs: ["snapshots/teams/calendar.snapshot.json", "snapshots/teams/calendar.snapshot.md"],
+        plan: [{ kind: "generic.notifications.snapshot", app: "teams", includePatterns: ["meeting", "calendar", "starts", "join", "today", "tomorrow"] }],
       },
     ],
   },
@@ -287,6 +305,7 @@ export function buildStepCommand(step, params = {}) {
   if (step.kind === "snapshot.write") return { executable: true, internal: "snapshot.write", args: [] };
   if (step.kind === "slack.notifications.snapshot") return { executable: true, internal: "slack.notifications.snapshot", args: [] };
   if (step.kind === "canvas.sync-markdown") return { executable: true, internal: "canvas.sync-markdown", args: [] };
+  if (step.kind === "generic.notifications.snapshot") return { executable: true, internal: "generic.notifications.snapshot", args: [] };
   return { executable: false, reason: `no runner for step kind: ${step.kind || "unknown"}` };
 }
 

@@ -58,7 +58,12 @@ The current implementation performs the source/export/persist part and records w
 
 ### Outlook and Teams
 
-`outlook` and `teams` are placeholder blessed configs for follow-up work. They establish app ids, auth expectations, and notification snapshot action names so agents can reference stable contracts while selectors and extraction logic are built.
+`outlook` and `teams` provide conservative read-only examples for notification and calendar/meeting snapshots:
+
+- `notifications.snapshot` — normalize supplied mail/chat/activity extraction text or JSON into canonical JSON and Markdown.
+- `calendar.snapshot` — normalize supplied calendar/meeting extraction text or JSON into canonical JSON and Markdown.
+
+These examples intentionally start with supplied extraction input and pattern filtering. Live DOM selectors can be layered behind the same action ids later without changing the artifact contract.
 
 ## Config loader
 
@@ -97,6 +102,7 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - `snapshot.write` persists run metadata under the app snapshot directory.
    - `slack.notifications.snapshot` normalizes Slack extraction text/JSON and writes canonical JSON, Markdown, and the browser-side extractor snippet.
    - `canvas.sync-markdown` reads Markdown and writes canonical Markdown, HTML, paste text, and sync metadata with a browser paste plan.
+   - `generic.notifications.snapshot` normalizes Outlook/Teams-style supplied extraction text/JSON with conservative include-pattern filters.
    - high-level steps such as `browser.open`, `dom.extract`, `document.export`, and `editor.replace` remain planned until app-specific driver beads implement them.
 4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.

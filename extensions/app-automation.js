@@ -13,6 +13,7 @@ import {
   stateRoot,
 } from "./app-automation/catalog.js";
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
+import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -93,6 +94,26 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
         syncStatus: metadata.status,
         outputs: metadata.outputs,
         pastePlan: metadata.pastePlan,
+      });
+      continue;
+    }
+    if (step.internal === "generic.notifications.snapshot") {
+      const stepSpec = plan.steps[step.index] || {};
+      const input = plan.params.extraction || plan.params.sourceJson || plan.params.sourceText || plan.params.items || {};
+      const snapshot = buildGenericSnapshot({
+        app: stepSpec.app || plan.app.id,
+        kind: plan.action.id,
+        input,
+        includePatterns: stepSpec.includePatterns || [],
+      });
+      const outputs = await writeGenericSnapshot(plan.snapshotDir, snapshot);
+      results.push({
+        index: step.index,
+        kind: step.kind,
+        status: "ok",
+        snapshotStatus: snapshot.status,
+        outputs,
+        count: snapshot.count,
       });
       continue;
     }
