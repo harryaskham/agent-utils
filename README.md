@@ -1,6 +1,10 @@
 # agent-utils
 Tools, skills, agents, MCP servers, etc
 
+## Cacophony workflow notes
+
+Agent/operator bead-filing conventions live in [`docs/bead-workflow.md`](docs/bead-workflow.md), including the distinction between parent epics and blocking `dependencies`.
+
 ## Pi package
 
 This repo is also a Pi package.
