@@ -302,7 +302,7 @@
           "name": "App automation Pi extension",
           "command": "app_automation_list, app_automation_doctor, app_automation_overview, app_automation_plan, app_automation_run, app_automation_open_bundle_run_once, app_automation_refresh_start, app_automation_refresh_bundle_start, app_automation_refresh_bundle_run_once, app_automation_refresh_staleness, app_automation_refresh_stale_run_once, app_automation_refresh_status, app_automation_refresh_stop, app_automation_snapshots_list, app_automation_snapshots_digest, app_automation_snapshot_links, app_automation_snapshots_staleness, app_automation_snapshots_cleanup_plan, app_automation_snapshot_read, app_automation_status, /tendril-app",
           "audience": "Pi agents driving API-less web apps through blessed Playwright/Tendril workflows",
-          "purpose": "Expose a deterministic catalog and conservative runner for app automation plans covering Slack, Markdown canvas sync, Calendar, Outlook, and Teams before agents fall back to raw browser/UI automation; persisted snapshot links include freshness, sorting, app/kind counts, source context, and safe URL redaction.",
+          "purpose": "Expose a deterministic catalog and conservative runner for app automation plans covering Slack, Markdown canvas sync, Calendar, Outlook, and Teams before agents fall back to raw browser/UI automation; persisted snapshot links include freshness, sorting, app/kind counts, source context including page-title fallback, and safe URL redaction.",
           "commonActions": [
             "list blessed and local app configs",
             "diagnose catalog, Playwright setup, and Tendril bridge routing",

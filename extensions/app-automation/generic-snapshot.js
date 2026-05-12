@@ -53,10 +53,10 @@ function compactMetadata(value, limit = 120) {
   return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
 }
 
-function contextFields(item = {}) {
+function contextFields(item = {}, fallbackContext = {}) {
   const context = {};
   for (const [target, candidates] of Object.entries({
-    source: [item.channel, item.team, item.folder, item.calendar, item.source],
+    source: [item.channel, item.team, item.folder, item.calendar, item.source, fallbackContext.source],
     from: [item.from, item.sender, item.organizer, item.author],
     time: [item.time, item.timestamp, item.start, item.startTime, item.date, item.when],
   })) {
@@ -66,14 +66,20 @@ function contextFields(item = {}) {
   return context;
 }
 
-function normalizeItem(item) {
+function normalizeItem(item, fallbackContext = {}) {
   if (!item || typeof item !== "object") return { text: normalizeWhitespace(item), urls: [] };
   const text = normalizeWhitespace(item.text || item.label || item.ariaLabel || item.title || "");
-  return { text, urls: collectUrls(item), context: contextFields(item) };
+  return { text, urls: collectUrls(item), context: contextFields(item, fallbackContext) };
+}
+
+function inputFallbackContext(input = {}) {
+  const source = compactMetadata(input.title);
+  return source ? { source } : {};
 }
 
 function parseItems(input = {}) {
-  if (Array.isArray(input.items)) return input.items.map(normalizeItem).filter((item) => item.text);
+  const fallbackContext = input && typeof input === "object" && !Array.isArray(input) ? inputFallbackContext(input) : {};
+  if (Array.isArray(input.items)) return input.items.map((item) => normalizeItem(item, fallbackContext)).filter((item) => item.text);
   if (Array.isArray(input)) return input.map(normalizeItem).filter((item) => item.text);
   if (typeof input === "string") return splitSourceText(input);
   if (typeof input.sourceText === "string") return splitSourceText(input.sourceText);

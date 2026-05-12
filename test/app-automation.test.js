@@ -300,19 +300,23 @@ test("generic app snapshots preserve redacted meeting and message links", () => 
     app: "calendar",
     kind: "events.snapshot",
     input: {
+      title: "Calendar - Work",
       items: [
         { text: "Team standup join", calendar: "Work", organizer: "Ada", start: "09:00", hrefs: ["https://meet.google.com/abc-defg-hij?authuser=0#secret"] },
         { text: "Ops meeting", source: "Teams", from: "Ops", time: "10:00", url: "https://teams.microsoft.com/l/meetup-join/abc?token=secret" },
+        { text: "Planning meeting", href: "https://outlook.office.com/calendar/item/123?token=secret#frag" },
         { text: "ignored javascript", href: "javascript:alert(1)" },
       ],
     },
     includePatterns: ["join", "meeting"],
   });
-  assert.equal(snapshot.count, 2);
+  assert.equal(snapshot.count, 3);
   assert.equal(snapshot.items[0].url, "https://meet.google.com/abc-defg-hij");
   assert.deepEqual({ source: snapshot.items[0].source, from: snapshot.items[0].from, time: snapshot.items[0].time }, { source: "Work", from: "Ada", time: "09:00" });
   assert.equal(snapshot.items[1].url, "https://teams.microsoft.com/l/meetup-join/abc");
   assert.deepEqual({ source: snapshot.items[1].source, from: snapshot.items[1].from, time: snapshot.items[1].time }, { source: "Teams", from: "Ops", time: "10:00" });
+  assert.equal(snapshot.items[2].url, "https://outlook.office.com/calendar/item/123");
+  assert.equal(snapshot.items[2].source, "Calendar - Work");
   assert.doesNotMatch(JSON.stringify(snapshot), /token=secret|authuser=0|#secret/);
   assert.match(renderGenericMarkdown(snapshot), /\[Team standup join\]\(https:\/\/meet\.google\.com\/abc-defg-hij\) — source: Work; from: Ada; time: 09:00/);
   const calendarExtractor = calendarExtractorScript({ includePatterns: ["standup"] });
