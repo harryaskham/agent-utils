@@ -288,7 +288,7 @@ function refreshPublicEntry(entry) {
   };
 }
 
-function renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, root }) {
+function renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, refreshStaleness, root }) {
   const lines = [`app automation overview stateRoot=${root}`];
   lines.push(`apps: ${apps.map((app) => `${app.id}(${app.actions?.length || 0} actions)`).join(", ") || "none"}`);
   lines.push(refreshers.length
@@ -297,6 +297,10 @@ function renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStal
   if (snapshotStaleness) {
     lines.push("staleness:");
     lines.push(...renderSnapshotStaleness(snapshotStaleness).split("\n").map((line) => `  ${line}`));
+  }
+  if (refreshStaleness) {
+    lines.push("refresh action staleness:");
+    lines.push(...renderSnapshotTargetStaleness(refreshStaleness).split("\n").map((line) => `  ${line}`));
   }
   for (const digest of snapshotDigests) {
     const rendered = renderSnapshotDigest(digest).split("\n").slice(0, 5).join("\n  ");
@@ -482,6 +486,7 @@ export default function appAutomationExtension(pi) {
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include. Defaults to slack, outlook, teams, canvas." }))),
       includeSnapshots: Type.Optional(Type.Boolean({ description: "Include snapshot digest summaries. Defaults to true." })),
       includeStaleness: Type.Optional(Type.Boolean({ description: "Include fresh/stale/missing snapshot status. Defaults to true." })),
+      includeRefreshStaleness: Type.Optional(Type.Boolean({ description: "Include per-action standard refresh bundle staleness. Defaults to true." })),
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale snapshots. Defaults to 60 minutes." })),
       snapshotLimitPerApp: Type.Optional(Type.Number({ description: "Readable snapshot artifacts to summarize per app. Defaults to 3." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
@@ -509,11 +514,13 @@ export default function appAutomationExtension(pi) {
         apps: apps.map((app) => app.id),
         staleAfterMinutes: params.staleAfterMinutes || 60,
       });
-      return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, root }), {
+      const refreshStaleness = params.includeRefreshStaleness === false ? null : await buildRefreshBundleStaleness({ catalog, params: { ...params, apps: wantedIds.filter((id) => id !== "canvas") } });
+      return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, refreshStaleness, root }), {
         apps,
         refreshers,
         snapshotDigests,
         snapshotStaleness,
+        refreshStaleness,
         external: catalog.external,
         stateRoot: root,
       });
@@ -1044,7 +1051,8 @@ export default function appAutomationExtension(pi) {
           .filter((entry) => wantedIds.includes(entry.app))
           .map(refreshPublicEntry);
         const snapshotStaleness = await snapshotStalenessReport({ root, apps: apps.map((app) => app.id), staleAfterMinutes: 60 });
-        ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, root }), "info");
+        const refreshStaleness = await buildRefreshBundleStaleness({ catalog, params: { apps: wantedIds.filter((id) => id !== "canvas"), staleAfterMinutes: 60 } });
+        ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, refreshStaleness, root }), "info");
         return;
       }
       if (words[0] === "staleness") {

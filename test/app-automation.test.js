@@ -356,6 +356,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
   assert.match(source, /includeStaleness/);
+  assert.match(source, /includeRefreshStaleness/);
+  assert.match(source, /refresh action staleness/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_plan`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_run`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_open_bundle_run_once`/);
