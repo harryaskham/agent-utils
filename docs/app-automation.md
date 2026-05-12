@@ -152,7 +152,7 @@ Periodic actions stay Pi-native and controllable rather than using daemon-global
 - `app_automation_refresh_bundle_run_once` runs that same standard bundle once without creating timers, for explicit refresh-now workflows. Pass `dryRun` to inspect planned snapshot actions first.
 - `app_automation_refresh_staleness` reports fresh/stale/partial/missing status for each standard Slack, Calendar, Outlook, and Teams refresh action without opening browser surfaces; `partial` means at least one expected artifact exists but another expected JSON/Markdown artifact is missing.
 - `app_automation_refresh_stale_run_once` checks expected snapshot artifacts for each standard app/action first and runs only the refresh actions whose own outputs are stale, partial, or missing. Pass `dryRun` to inspect executable steps first.
-- `app_automation_refresh_status` lists active refreshers, run counts, total errors, consecutive errors, last success time, and last snapshot status.
+- `app_automation_refresh_status` lists active refreshers, run counts, total errors, consecutive errors, last success time, last error text when present, and last snapshot status.
 - `app_automation_refresh_stop` stops one refresher or all refreshers.
 - Runs are bounded and non-overlapping: if a previous refresh is still in flight, the next tick is skipped.
 - Refreshers are session-local and are cleaned up on Pi session shutdown.

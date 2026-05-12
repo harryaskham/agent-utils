@@ -895,7 +895,13 @@ export default function appAutomationExtension(pi) {
         : Array.from(refreshState.refreshers.values());
       const publicEntries = entries.map(refreshPublicEntry);
       const text = publicEntries.length
-        ? publicEntries.map((entry) => `${entry.id}: ${entry.app}.${entry.action} every ${entry.intervalSeconds}s status=${entry.lastStatus} runs=${entry.runCount} errors=${entry.errorCount} consecutiveErrors=${entry.consecutiveErrorCount}`).join("\n")
+        ? publicEntries.map((entry) => {
+          const details = [
+            `lastSuccess=${entry.lastSuccessAt || "never"}`,
+            entry.lastError ? `lastError=${String(entry.lastError).slice(0, 120)}` : null,
+          ].filter(Boolean).join(" ");
+          return `${entry.id}: ${entry.app}.${entry.action} every ${entry.intervalSeconds}s status=${entry.lastStatus} runs=${entry.runCount} errors=${entry.errorCount} consecutiveErrors=${entry.consecutiveErrorCount} ${details}`;
+        }).join("\n")
         : "No active app automation refreshers.";
       return textResult(text, { refreshers: publicEntries });
     },

@@ -383,6 +383,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /consecutiveErrorCount/);
   assert.match(source, /lastSuccessAt/);
   assert.match(source, /consecutiveErrors=/);
+  assert.match(source, /lastSuccess=/);
+  assert.match(source, /lastError=/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_stop`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_list`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_digest`/);
