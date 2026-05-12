@@ -59,24 +59,39 @@ export async function readSnapshotArtifact({ root, file, maxBytes = 64_000 } = {
   return { path: fullPath, relativePath: relativeTo(root, fullPath), size: info.size, modifiedAt: info.mtime.toISOString(), truncated, content, extension };
 }
 
-function countSnapshotLinks(value) {
+function linkedRows(value) {
   const rows = [];
   if (Array.isArray(value.items)) rows.push(...value.items);
   if (Array.isArray(value.notifications)) rows.push(...value.notifications);
+  return rows;
+}
+
+function rowUrls(row) {
+  const urls = new Set();
+  if (row?.url) urls.add(row.url);
+  if (Array.isArray(row?.urls)) {
+    for (const url of row.urls) if (url) urls.add(url);
+  }
+  return [...urls];
+}
+
+function countSnapshotLinks(value) {
   let links = 0;
   let linkItems = 0;
-  for (const row of rows) {
-    const rowLinks = new Set();
-    if (row?.url) rowLinks.add(row.url);
-    if (Array.isArray(row?.urls)) {
-      for (const url of row.urls) if (url) rowLinks.add(url);
-    }
-    if (rowLinks.size) {
+  for (const row of linkedRows(value)) {
+    const urls = rowUrls(row);
+    if (urls.length) {
       linkItems += 1;
-      links += rowLinks.size;
+      links += urls.length;
     }
   }
   return { links, linkItems };
+}
+
+function snapshotLinkLabel(row, fallback = "snapshot item") {
+  const candidates = [row?.label, row?.title, row?.subject, row?.summary, row?.name, row?.channel, row?.from, row?.text];
+  const label = candidates.map((value) => String(value || "").trim()).find(Boolean) || fallback;
+  return label.length > 120 ? `${label.slice(0, 117)}...` : label;
 }
 
 function summarizeJson(value) {
@@ -139,6 +154,34 @@ export async function digestSnapshotArtifacts({ root, app, limit = 20, maxBytes 
   return { ...listed, artifacts };
 }
 
+export async function collectSnapshotLinks({ root, app, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000 } = {}) {
+  const listed = await listSnapshotArtifacts({ root, app, limit: artifactLimit });
+  const links = [];
+  for (const artifact of listed.artifacts.filter((entry) => entry.extension === ".json")) {
+    const read = await readSnapshotArtifact({ root, file: artifact.relativePath, maxBytes });
+    let value;
+    try { value = JSON.parse(read.content); }
+    catch { continue; }
+    let rowIndex = 0;
+    for (const row of linkedRows(value)) {
+      rowIndex += 1;
+      const urls = rowUrls(row);
+      for (const url of urls) {
+        links.push({
+          app: value.app || app || artifact.relativePath.split("/")[1] || "unknown",
+          kind: value.kind || value.action || null,
+          artifact: artifact.relativePath,
+          row: rowIndex,
+          label: snapshotLinkLabel(row, `${artifact.relativePath}#${rowIndex}`),
+          url,
+        });
+        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, links, truncated: true };
+      }
+    }
+  }
+  return { ...listed, links, truncated: false };
+}
+
 export function renderArtifactList(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
   if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${summary.snapshotRoot}.`;
@@ -149,6 +192,14 @@ export function renderSnapshotDigest(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
   if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${summary.snapshotRoot}.`;
   return summary.artifacts.map((artifact) => `${artifact.relativePath}: ${artifact.summary}${artifact.truncated ? " (truncated)" : ""}`).join("\n");
+}
+
+export function renderSnapshotLinks(summary) {
+  if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
+  if (!summary.links.length) return `No snapshot links found at ${summary.snapshotRoot}.`;
+  const lines = summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact})`);
+  if (summary.truncated) lines.push(`truncated at ${summary.links.length} links`);
+  return lines.join("\n");
 }
 
 export async function snapshotStalenessReport({ root, apps = [], staleAfterMinutes = 60, now = new Date() } = {}) {

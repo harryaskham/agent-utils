@@ -5,12 +5,14 @@ import { setInterval, clearInterval } from "node:timers";
 import { Type } from "@sinclair/typebox";
 
 import {
+  collectSnapshotLinks,
   digestSnapshotArtifacts,
   listSnapshotArtifacts,
   readSnapshotArtifact,
   renderArtifactList,
   renderSnapshotCleanupPlan,
   renderSnapshotDigest,
+  renderSnapshotLinks,
   renderSnapshotStaleness,
   renderSnapshotTargetStaleness,
   snapshotStalenessReport,
@@ -1002,6 +1004,22 @@ export default function appAutomationExtension(pi) {
       const root = stateRoot();
       const digest = await digestSnapshotArtifacts({ root, app: params.app, limit: params.limit, maxBytes: params.maxBytes });
       return textResult(renderSnapshotDigest(digest), { digest });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_snapshot_links`,
+    label: "App Automation Snapshot Links",
+    description: "List safe links preserved in Slack, Outlook, Teams, calendar, or canvas JSON snapshots.",
+    promptSnippet: "Use this to find actionable Slack message, Outlook/Teams meeting, or Calendar links from canonical snapshots without ad-hoc filesystem reads.",
+    parameters: Type.Object({
+      app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, or calendar." })),
+      artifactLimit: Type.Optional(Type.Number({ description: "Maximum JSON artifacts to scan. Defaults to 100." })),
+      linkLimit: Type.Optional(Type.Number({ description: "Maximum links to return. Defaults to 100." })),
+    }),
+    async execute(_toolCallId, params) {
+      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100 });
+      return textResult(renderSnapshotLinks(summary), { links: summary });
     },
   });
 

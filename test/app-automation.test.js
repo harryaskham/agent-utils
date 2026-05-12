@@ -17,6 +17,7 @@ import {
   sanitizeId,
 } from "../extensions/app-automation/catalog.js";
 import {
+  collectSnapshotLinks,
   digestSnapshotArtifacts,
   listSnapshotArtifacts,
   readSnapshotArtifact,
@@ -24,6 +25,7 @@ import {
   renderArtifactList,
   renderSnapshotCleanupPlan,
   renderSnapshotDigest,
+  renderSnapshotLinks,
   renderSnapshotStaleness,
   renderSnapshotTargetStaleness,
   snapshotStalenessReport,
@@ -325,6 +327,10 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const renderedDigest = renderSnapshotDigest(digest);
   assert.match(renderedDigest, /counts=items=2/);
   assert.match(renderedDigest, /links=2 linkItems=1/);
+  const links = await collectSnapshotLinks({ root, app: "slack" });
+  assert.equal(links.links.length, 2);
+  assert.equal(links.links[0].url, "https://app.slack.com/client/T/C");
+  assert.match(renderSnapshotLinks(links), /#general: https:\/\/app\.slack\.com\/client\/T\/C/);
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
   const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
@@ -399,6 +405,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_stop`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_list`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_digest`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshot_links`/);
+  assert.match(source, /renderSnapshotLinks/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_staleness`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_cleanup_plan`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshot_read`/);
