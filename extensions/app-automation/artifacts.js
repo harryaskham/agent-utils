@@ -220,16 +220,21 @@ export async function snapshotTargetStalenessReport({ root, targets = [], staleA
     }
     const modifiedMs = new Date(latest.modifiedAt).getTime();
     const ageMinutes = Math.max(0, Math.round((nowMs - modifiedMs) / 60000));
+    const expectedPaths = expectedArtifacts.map((artifact) => artifact.relativePath);
+    const existingPaths = existing.map((artifact) => artifact.relativePath);
+    const missingArtifacts = expectedPaths.filter((relativePath) => !existingPaths.includes(relativePath));
     entries.push({
       app: target.app,
       action: target.action,
       key: targetKey(target),
-      status: ageMinutes > threshold ? "stale" : "fresh",
+      status: missingArtifacts.length ? "partial" : (ageMinutes > threshold ? "stale" : "fresh"),
       staleAfterMinutes: threshold,
       latestArtifact: latest.relativePath,
       latestModifiedAt: latest.modifiedAt,
       ageMinutes,
-      expectedArtifacts: expectedArtifacts.map((artifact) => artifact.relativePath),
+      expectedArtifacts: expectedPaths,
+      existingArtifacts: existingPaths,
+      missingArtifacts,
     });
   }
   return { root, staleAfterMinutes: threshold, checkedAt: new Date(nowMs).toISOString(), entries };
@@ -240,6 +245,7 @@ export function renderSnapshotTargetStaleness(report) {
   return report.entries.map((entry) => {
     const label = `${entry.app}.${entry.action}`;
     if (entry.status === "missing") return `${label}: missing expected snapshots ${entry.expectedArtifacts.join(", ") || "none"}`;
+    if (entry.status === "partial") return `${label}: partial age=${entry.ageMinutes}m latest=${entry.latestArtifact} missing=${entry.missingArtifacts.join(", ") || "unknown"}`;
     return `${label}: ${entry.status} age=${entry.ageMinutes}m latest=${entry.latestArtifact} modified=${entry.latestModifiedAt}`;
   }).join("\n");
 }

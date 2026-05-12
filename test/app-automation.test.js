@@ -322,6 +322,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.match(renderSnapshotStaleness(staleness), /outlook: missing/);
   await mkdir(path.join(root, "snapshots", "outlook"), { recursive: true });
   await writeFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), JSON.stringify({ app: "outlook", kind: "notifications.snapshot", status: "ok" }), "utf8");
+  await writeFile(path.join(root, "snapshots", "outlook", "calendar.snapshot.json"), JSON.stringify({ app: "outlook", kind: "calendar.snapshot", status: "ok" }), "utf8");
   const targetStaleness = await snapshotTargetStalenessReport({
     root,
     targets: [
@@ -330,9 +331,10 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
     ],
     staleAfterMinutes: 60,
   });
-  assert.equal(targetStaleness.entries.find((entry) => entry.action === "notifications.snapshot").status, "fresh");
-  assert.equal(targetStaleness.entries.find((entry) => entry.action === "calendar.snapshot").status, "missing");
-  assert.match(renderSnapshotTargetStaleness(targetStaleness), /outlook\.calendar\.snapshot: missing/);
+  assert.equal(targetStaleness.entries.find((entry) => entry.action === "notifications.snapshot").status, "partial");
+  assert.equal(targetStaleness.entries.find((entry) => entry.action === "calendar.snapshot").status, "partial");
+  assert.deepEqual(targetStaleness.entries.find((entry) => entry.action === "calendar.snapshot").missingArtifacts, ["snapshots/outlook/calendar.snapshot.md"]);
+  assert.match(renderSnapshotTargetStaleness(targetStaleness), /outlook\.calendar\.snapshot: partial/);
   const cleanup = await planSnapshotCleanup({ root, app: "slack", keepLatest: 1 });
   assert.equal(cleanup.candidateCount, 1);
   assert.match(renderSnapshotCleanupPlan(cleanup), /candidates=1/);
