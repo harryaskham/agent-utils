@@ -278,6 +278,8 @@ test("Outlook and Teams expose concrete notification and calendar snapshot actio
   const microsoftExtractor = microsoftExtractorScript({ app: "teams", includePatterns: ["unread"] });
   assert.match(microsoftExtractor, /includePatterns/);
   assert.match(microsoftExtractor, /hrefs/);
+  assert.match(microsoftExtractor, /timeFor/);
+  assert.match(microsoftExtractor, /datetime/);
 });
 
 test("generic notification snapshots filter supplied extraction text", () => {
@@ -311,6 +313,10 @@ test("generic app snapshots preserve redacted meeting and message links", () => 
   assert.deepEqual({ source: snapshot.items[1].source, from: snapshot.items[1].from, time: snapshot.items[1].time }, { source: "Teams", from: "Ops", time: "10:00" });
   assert.doesNotMatch(JSON.stringify(snapshot), /token=secret|authuser=0|#secret/);
   assert.match(renderGenericMarkdown(snapshot), /\[Team standup join\]\(https:\/\/meet\.google\.com\/abc-defg-hij\) — source: Work; from: Ada; time: 09:00/);
+  const calendarExtractor = calendarExtractorScript({ includePatterns: ["standup"] });
+  assert.match(calendarExtractor, /timeFor/);
+  assert.match(calendarExtractor, /data-start-time/);
+  assert.match(calendarExtractor, /datetime/);
 });
 
 test("snapshot artifact helpers list and read bounded readable files", async () => {

@@ -36,6 +36,20 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
     for (const link of element.querySelectorAll?.('a[href]') || []) add(link.getAttribute('href'));
     return urls;
   };
+  const compact = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const timeFor = (element) => {
+    const candidates = [
+      element.getAttribute?.('datetime'),
+      element.getAttribute?.('data-start'),
+      element.getAttribute?.('data-start-time'),
+      element.getAttribute?.('data-date'),
+      element.querySelector?.('time')?.getAttribute?.('datetime'),
+      element.querySelector?.('time')?.textContent,
+      element.closest?.('time')?.getAttribute?.('datetime'),
+      element.closest?.('time')?.textContent
+    ].map(compact).filter(Boolean);
+    return candidates[0] || null;
+  };
   for (const selector of selectors) {
     for (const element of document.querySelectorAll(selector)) {
       const text = [
@@ -44,11 +58,12 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
         element.getAttribute('title') || ''
       ].join(' ').replace(/\\s+/g, ' ').trim();
       const hrefs = linksFor(element);
-      const key = text + '|' + hrefs.join('|');
+      const time = timeFor(element);
+      const key = text + '|' + hrefs.join('|') + '|' + (time || '');
       if (!text || seen.has(key)) continue;
       if (includePatterns.length && !includePatterns.some((pattern) => pattern.test(text))) continue;
       seen.add(key);
-      items.push({ text, selector, hrefs });
+      items.push({ text, selector, hrefs, ...(time ? { time } : {}) });
     }
   }
   return { source: 'playwright-dom', app: ${JSON.stringify(app)}, kind: ${JSON.stringify(kind)}, url: location.href, title: document.title, items };
