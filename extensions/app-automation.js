@@ -282,7 +282,9 @@ function refreshPublicEntry(entry) {
     inFlight: entry.inFlight,
     runCount: entry.runCount,
     errorCount: entry.errorCount,
+    consecutiveErrorCount: entry.consecutiveErrorCount,
     lastRunAt: entry.lastRunAt,
+    lastSuccessAt: entry.lastSuccessAt,
     lastStatus: entry.lastStatus,
     lastError: entry.lastError,
   };
@@ -386,9 +388,17 @@ export default function appAutomationExtension(pi) {
       entry.runCount += 1;
       entry.lastStatus = run.status;
       entry.lastError = run.reason || (run.status === "error" ? "refresh run returned error" : null);
+      if (run.status === "ok") {
+        entry.lastSuccessAt = entry.lastRunAt;
+        entry.consecutiveErrorCount = 0;
+      } else {
+        entry.errorCount += 1;
+        entry.consecutiveErrorCount += 1;
+      }
       entry.lastRun = run;
     } catch (error) {
       entry.errorCount += 1;
+      entry.consecutiveErrorCount += 1;
       entry.lastStatus = "error";
       entry.lastError = error.message;
     } finally {
@@ -852,7 +862,9 @@ export default function appAutomationExtension(pi) {
           inFlight: false,
           runCount: 0,
           errorCount: 0,
+          consecutiveErrorCount: 0,
           lastRunAt: null,
+          lastSuccessAt: null,
           lastStatus: "pending",
           lastError: null,
           lastRun: null,
@@ -883,7 +895,7 @@ export default function appAutomationExtension(pi) {
         : Array.from(refreshState.refreshers.values());
       const publicEntries = entries.map(refreshPublicEntry);
       const text = publicEntries.length
-        ? publicEntries.map((entry) => `${entry.id}: ${entry.app}.${entry.action} every ${entry.intervalSeconds}s status=${entry.lastStatus} runs=${entry.runCount} errors=${entry.errorCount}`).join("\n")
+        ? publicEntries.map((entry) => `${entry.id}: ${entry.app}.${entry.action} every ${entry.intervalSeconds}s status=${entry.lastStatus} runs=${entry.runCount} errors=${entry.errorCount} consecutiveErrors=${entry.consecutiveErrorCount}`).join("\n")
         : "No active app automation refreshers.";
       return textResult(text, { refreshers: publicEntries });
     },
