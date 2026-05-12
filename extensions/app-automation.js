@@ -261,6 +261,14 @@ function renderWorkAppOverview({ apps, refreshers, snapshotDigests, root }) {
   return lines.join("\n");
 }
 
+function renderDefaultRefreshBundle() {
+  return [
+    "default app automation refresh bundle:",
+    ...DEFAULT_REFRESH_BUNDLE.map((target) => `- ${target.app}.${target.action}`),
+    "Use app_automation_refresh_bundle_start to arm these refreshers, or /tendril-app overview to inspect current state.",
+  ].join("\n");
+}
+
 function nextRefreshId(state, app, action) {
   state.refreshSeq = (state.refreshSeq || 0) + 1;
   return `${app}-${action.replace(/[^a-zA-Z0-9._-]+/g, "-")}-${state.refreshSeq}`;
@@ -643,10 +651,31 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List or plan blessed API-less app automation actions. Usage: /tendril-app [app] [action]",
+    description: "List, overview, or plan blessed API-less app automation actions. Usage: /tendril-app [overview|bundle|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
+      if (words[0] === "overview") {
+        const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "outlook", "teams", "canvas"];
+        const apps = wantedIds
+          .map((id) => catalog.apps.find((app) => app.id === id))
+          .filter(Boolean)
+          .map((app) => ({ id: app.id, label: app.label, category: app.category, actions: app.actions.map((action) => action.id) }));
+        const root = stateRoot();
+        const snapshotDigests = [];
+        for (const app of apps) {
+          snapshotDigests.push({ ...(await digestSnapshotArtifacts({ root, app: app.id, limit: 3 })), app: app.id });
+        }
+        const refreshers = Array.from(refreshState.refreshers.values())
+          .filter((entry) => wantedIds.includes(entry.app))
+          .map(refreshPublicEntry);
+        ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, root }), "info");
+        return;
+      }
+      if (words[0] === "bundle") {
+        ctx.ui.notify(renderDefaultRefreshBundle(), "info");
+        return;
+      }
       if (words.length >= 2) {
         const plan = buildActionPlan({ app: words[0], action: words[1], catalog: catalog.apps });
         ctx.ui.notify(renderPlan(plan), "info");
@@ -657,7 +686,7 @@ export default function appAutomationExtension(pi) {
         ctx.ui.notify(app ? renderAppList([app]) : `Unknown app: ${words[0]}`, app ? "info" : "warning");
         return;
       }
-      ctx.ui.notify(renderAppList(catalog.apps), "info");
+      ctx.ui.notify(`${renderAppList(catalog.apps)}\n\n${renderDefaultRefreshBundle()}`, "info");
     },
   });
 }

@@ -27,7 +27,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
 - `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including a standard Slack/Outlook/Teams bundle.
 - `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshot_read` — list, summarize, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
-- `/tendril-app [app] [action]` — operator/agent-facing command for quick app/action discovery.
+- `/tendril-app [overview|bundle|app action]` — operator/agent-facing command for quick app/action discovery, work-app overview, and default bundle discovery.
 
 ## Blessed initial configs
 
@@ -124,7 +124,7 @@ Snapshots are persisted under:
 ${APP_AUTOMATION_STATE_ROOT:-~/.local/state/agent-utils/app-automation}/snapshots/<app>/...
 ```
 
-Agents should prefer `app_automation_overview` for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. The digest tool extracts compact status/count/first-line summaries. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
+Agents should prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. The digest tool extracts compact status/count/first-line summaries. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
 
 ## Periodic refresh model
 
