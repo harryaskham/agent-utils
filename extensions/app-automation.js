@@ -289,7 +289,15 @@ function renderDefaultRefreshBundle() {
   return [
     "default app automation refresh bundle:",
     ...DEFAULT_REFRESH_BUNDLE.map((target) => `- ${target.app}.${target.action}`),
-    "Use app_automation_refresh_bundle_start to arm these refreshers, or /tendril-app overview to inspect current state.",
+    "Use app_automation_refresh_bundle_start to arm these refreshers, app_automation_refresh_bundle_run_once to refresh once, or /tendril-app overview to inspect current state.",
+  ].join("\n");
+}
+
+function renderDefaultOpenBundle() {
+  return [
+    "default app automation open bundle:",
+    ...DEFAULT_OPEN_BUNDLE.map((target) => `- ${target.app}.${target.action}`),
+    "Use app_automation_open_bundle_run_once to warm these browser sessions before snapshot extraction.",
   ].join("\n");
 }
 
@@ -818,10 +826,29 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, overview, or plan blessed API-less app automation actions. Usage: /tendril-app [overview|bundle|app action]",
+    description: "List, doctor, overview, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|bundle|open-bundle|app action]"
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
+      if (words[0] === "doctor") {
+        const rootSummary = await pathSummary(stateRoot());
+        const actionDiagnostics = DEFAULT_DOCTOR_ACTIONS.map((target) => {
+          try {
+            const plan = buildActionPlan({ app: target.app, action: target.action, catalog: catalog.apps });
+            return {
+              app: target.app,
+              action: target.action,
+              executable: plan.execution.executable,
+              missingParams: plan.execution.missingParams,
+              blockedSteps: plan.execution.blockedSteps,
+            };
+          } catch (error) {
+            return { app: target.app, action: target.action, executable: false, error: error.message };
+          }
+        });
+        ctx.ui.notify(renderDoctorReport({ rootSummary, catalog, playwrightCli: playwrightCliCommand(), actionDiagnostics }), "info");
+        return;
+      }
       if (words[0] === "overview") {
         const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "outlook", "teams", "canvas"];
         const apps = wantedIds
@@ -843,6 +870,10 @@ export default function appAutomationExtension(pi) {
         ctx.ui.notify(renderDefaultRefreshBundle(), "info");
         return;
       }
+      if (words[0] === "open-bundle") {
+        ctx.ui.notify(renderDefaultOpenBundle(), "info");
+        return;
+      }
       if (words.length >= 2) {
         const plan = buildActionPlan({ app: words[0], action: words[1], catalog: catalog.apps });
         ctx.ui.notify(renderPlan(plan), "info");
@@ -853,7 +884,7 @@ export default function appAutomationExtension(pi) {
         ctx.ui.notify(app ? renderAppList([app]) : `Unknown app: ${words[0]}`, app ? "info" : "warning");
         return;
       }
-      ctx.ui.notify(`${renderAppList(catalog.apps)}\n\n${renderDefaultRefreshBundle()}`, "info");
+      ctx.ui.notify(`${renderAppList(catalog.apps)}\n\n${renderDefaultOpenBundle()}\n\n${renderDefaultRefreshBundle()}`, "info");
     },
   });
 }

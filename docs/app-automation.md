@@ -29,7 +29,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_open_bundle_run_once` — open Slack, Outlook mail/calendar, and Teams browser surfaces once to warm authenticated sessions.
 - `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including standard Slack/Outlook/Teams bundle start and one-shot refresh paths.
 - `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshot_read` — list, summarize, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
-- `/tendril-app [overview|bundle|app action]` — operator/agent-facing command for quick app/action discovery, work-app overview, and default bundle discovery.
+- `/tendril-app [doctor|overview|bundle|open-bundle|app action]` — operator/agent-facing command for quick diagnostics, work-app overview, default bundle discovery, and app/action planning.
 
 ## Blessed initial configs
 
@@ -126,7 +126,7 @@ Snapshots are persisted under:
 ${APP_AUTOMATION_STATE_ROOT:-~/.local/state/agent-utils/app-automation}/snapshots/<app>/...
 ```
 
-Agents should run `app_automation_doctor` when setup is unclear, then prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. Each executed action writes a safe `latest-run.json` manifest in its snapshot directory with statuses/counts/paths but without command stdout/stderr. The digest tool extracts compact status/count/action/result/auth-required summaries from JSON artifacts and first-line summaries from text artifacts. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
+Agents should run `app_automation_doctor` (or `/tendril-app doctor`) when setup is unclear, then prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. Each executed action writes a safe `latest-run.json` manifest in its snapshot directory with statuses/counts/paths but without command stdout/stderr. The digest tool extracts compact status/count/action/result/auth-required summaries from JSON artifacts and first-line summaries from text artifacts. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
 
 ## Periodic refresh model
 
