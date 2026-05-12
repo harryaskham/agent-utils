@@ -155,6 +155,73 @@ export async function snapshotStalenessReport({ root, apps = [], staleAfterMinut
   return { root, staleAfterMinutes: threshold, checkedAt: new Date(nowMs).toISOString(), entries };
 }
 
+function targetKey(target = {}) {
+  return `${target.app}:${target.action}`;
+}
+
+function expectedTargetArtifacts(root, target = {}) {
+  const outputs = Array.isArray(target.outputs) && target.outputs.length
+    ? target.outputs
+    : [`snapshots/${target.app}/${target.action}.json`, `snapshots/${target.app}/${target.action}.md`];
+  const seen = new Set();
+  const artifacts = [];
+  for (const output of outputs) {
+    const value = String(output || "");
+    const extension = path.extname(value).toLowerCase();
+    if (!READABLE_EXTENSIONS.has(extension)) continue;
+    const relativePath = value.startsWith("snapshots/") ? value : path.join("snapshots", String(target.app), value).split(path.sep).join("/");
+    if (seen.has(relativePath)) continue;
+    seen.add(relativePath);
+    artifacts.push({ relativePath, path: assertInside(root, relativePath), extension });
+  }
+  return artifacts;
+}
+
+export async function snapshotTargetStalenessReport({ root, targets = [], staleAfterMinutes = 60, now = new Date() } = {}) {
+  if (!root) throw new Error("root is required");
+  const threshold = Math.max(1, Number(staleAfterMinutes) || 60);
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const entries = [];
+  for (const target of targets) {
+    const expectedArtifacts = expectedTargetArtifacts(root, target);
+    const existing = [];
+    for (const artifact of expectedArtifacts) {
+      const info = await stat(artifact.path).catch(() => null);
+      if (!info?.isFile()) continue;
+      existing.push({ ...artifact, size: info.size, modifiedAt: info.mtime.toISOString() });
+    }
+    existing.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || a.relativePath.localeCompare(b.relativePath));
+    const latest = existing[0];
+    if (!latest) {
+      entries.push({ app: target.app, action: target.action, key: targetKey(target), status: "missing", staleAfterMinutes: threshold, expectedArtifacts: expectedArtifacts.map((artifact) => artifact.relativePath) });
+      continue;
+    }
+    const modifiedMs = new Date(latest.modifiedAt).getTime();
+    const ageMinutes = Math.max(0, Math.round((nowMs - modifiedMs) / 60000));
+    entries.push({
+      app: target.app,
+      action: target.action,
+      key: targetKey(target),
+      status: ageMinutes > threshold ? "stale" : "fresh",
+      staleAfterMinutes: threshold,
+      latestArtifact: latest.relativePath,
+      latestModifiedAt: latest.modifiedAt,
+      ageMinutes,
+      expectedArtifacts: expectedArtifacts.map((artifact) => artifact.relativePath),
+    });
+  }
+  return { root, staleAfterMinutes: threshold, checkedAt: new Date(nowMs).toISOString(), entries };
+}
+
+export function renderSnapshotTargetStaleness(report) {
+  if (!report.entries.length) return "No app actions requested for staleness reporting.";
+  return report.entries.map((entry) => {
+    const label = `${entry.app}.${entry.action}`;
+    if (entry.status === "missing") return `${label}: missing expected snapshots ${entry.expectedArtifacts.join(", ") || "none"}`;
+    return `${label}: ${entry.status} age=${entry.ageMinutes}m latest=${entry.latestArtifact} modified=${entry.latestModifiedAt}`;
+  }).join("\n");
+}
+
 export function renderSnapshotStaleness(report) {
   if (!report.entries.length) return "No apps requested for staleness reporting.";
   return report.entries.map((entry) => {

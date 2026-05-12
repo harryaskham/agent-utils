@@ -25,7 +25,9 @@ import {
   renderSnapshotCleanupPlan,
   renderSnapshotDigest,
   renderSnapshotStaleness,
+  renderSnapshotTargetStaleness,
   snapshotStalenessReport,
+  snapshotTargetStalenessReport,
 } from "../extensions/app-automation/artifacts.js";
 import { calendarExtractorScript } from "../extensions/app-automation/calendar.js";
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
@@ -309,6 +311,19 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
   assert.match(renderSnapshotStaleness(staleness), /slack: stale/);
   assert.match(renderSnapshotStaleness(staleness), /outlook: missing/);
+  await mkdir(path.join(root, "snapshots", "outlook"), { recursive: true });
+  await writeFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), JSON.stringify({ app: "outlook", kind: "notifications.snapshot", status: "ok" }), "utf8");
+  const targetStaleness = await snapshotTargetStalenessReport({
+    root,
+    targets: [
+      { app: "outlook", action: "notifications.snapshot", outputs: ["snapshots/outlook/notifications.snapshot.json", "snapshots/outlook/notifications.snapshot.md"] },
+      { app: "outlook", action: "calendar.snapshot", outputs: ["snapshots/outlook/calendar.snapshot.json", "snapshots/outlook/calendar.snapshot.md"] },
+    ],
+    staleAfterMinutes: 60,
+  });
+  assert.equal(targetStaleness.entries.find((entry) => entry.action === "notifications.snapshot").status, "fresh");
+  assert.equal(targetStaleness.entries.find((entry) => entry.action === "calendar.snapshot").status, "missing");
+  assert.match(renderSnapshotTargetStaleness(targetStaleness), /outlook\.calendar\.snapshot: missing/);
   const cleanup = await planSnapshotCleanup({ root, app: "slack", keepLatest: 1 });
   assert.equal(cleanup.candidateCount, 1);
   assert.match(renderSnapshotCleanupPlan(cleanup), /candidates=1/);

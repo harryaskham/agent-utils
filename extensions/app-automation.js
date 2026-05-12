@@ -12,7 +12,9 @@ import {
   renderSnapshotCleanupPlan,
   renderSnapshotDigest,
   renderSnapshotStaleness,
+  renderSnapshotTargetStaleness,
   snapshotStalenessReport,
+  snapshotTargetStalenessReport,
   planSnapshotCleanup,
 } from "./app-automation/artifacts.js";
 import {
@@ -322,8 +324,8 @@ function renderDefaultOpenBundle() {
 function renderDefaultStaleRefresh() {
   return [
     "default app automation stale-refresh flow:",
-    "1. app_automation_snapshots_staleness checks Slack, Calendar, Outlook, Teams, and canvas freshness.",
-    "2. app_automation_refresh_stale_run_once runs only standard Slack/Calendar/Outlook/Teams refresh actions whose app snapshots are stale or missing.",
+    "1. app_automation_snapshots_staleness checks Slack, Calendar, Outlook, Teams, and canvas app freshness.",
+    "2. app_automation_refresh_stale_run_once checks each standard Slack/Calendar/Outlook/Teams action output and runs only stale or missing snapshot actions.",
     "Use dryRun=true first to preview stale-refresh decisions before browser automation.",
   ].join("\n");
 }
@@ -719,18 +721,22 @@ export default function appAutomationExtension(pi) {
       const catalog = await resolveCatalog(params);
       const wantedApps = new Set((params.apps || []).map((value) => String(value)));
       const wantedActions = new Set((params.actions || []).map((value) => String(value)));
-      const candidateApps = Array.from(new Set(DEFAULT_REFRESH_BUNDLE.map((target) => target.app)))
-        .filter((app) => !wantedApps.size || wantedApps.has(app));
-      const staleness = await snapshotStalenessReport({ root: stateRoot(), apps: candidateApps, staleAfterMinutes: params.staleAfterMinutes || 60 });
-      const staleApps = new Set(staleness.entries.filter((entry) => entry.status !== "fresh").map((entry) => entry.app));
-      const targets = DEFAULT_REFRESH_BUNDLE.filter((target) => (
-        staleApps.has(target.app)
+      const candidateTargets = DEFAULT_REFRESH_BUNDLE.filter((target) => (
+        (!wantedApps.size || wantedApps.has(target.app))
         && (!wantedActions.size || wantedActions.has(target.action))
       ));
+      const stalenessTargets = candidateTargets.map((target) => {
+        const appConfig = catalog.apps.find((app) => app.id === target.app);
+        const actionConfig = appConfig?.actions.find((action) => action.id === target.action);
+        return { ...target, outputs: actionConfig?.outputs || [] };
+      });
+      const staleness = await snapshotTargetStalenessReport({ root: stateRoot(), targets: stalenessTargets, staleAfterMinutes: params.staleAfterMinutes || 60 });
+      const staleKeys = new Set(staleness.entries.filter((entry) => entry.status !== "fresh").map((entry) => entry.key));
+      const targets = candidateTargets.filter((target) => staleKeys.has(`${target.app}:${target.action}`));
       const runs = [];
       const skipped = staleness.entries
         .filter((entry) => entry.status === "fresh")
-        .map((entry) => ({ app: entry.app, reason: "fresh", latestArtifact: entry.latestArtifact, ageMinutes: entry.ageMinutes }));
+        .map((entry) => ({ app: entry.app, action: entry.action, reason: "fresh", latestArtifact: entry.latestArtifact, ageMinutes: entry.ageMinutes }));
       for (const target of targets) {
         const plan = buildActionPlan({ app: target.app, action: target.action, params: params.params || {}, catalog: catalog.apps });
         if (!plan.execution.executable) {
@@ -738,7 +744,7 @@ export default function appAutomationExtension(pi) {
           continue;
         }
         if (params.dryRun) {
-          runs.push({ app: target.app, action: target.action, status: "dry_run", executable: true, staleStatus: staleness.entries.find((entry) => entry.app === target.app)?.status, steps: plan.execution.stepCommands.map((step) => ({ kind: step.kind, internal: step.internal, command: step.command, args: step.args })) });
+          runs.push({ app: target.app, action: target.action, status: "dry_run", executable: true, staleStatus: staleness.entries.find((entry) => entry.key === `${target.app}:${target.action}`)?.status, steps: plan.execution.stepCommands.map((step) => ({ kind: step.kind, internal: step.internal, command: step.command, args: step.args })) });
           continue;
         }
         const run = await runPlan(pi, plan, { signal, timeoutMs: params.timeoutMs });
@@ -750,6 +756,7 @@ export default function appAutomationExtension(pi) {
         runs,
         skipped,
         staleness,
+        stalenessText: renderSnapshotTargetStaleness(staleness),
         defaultBundle: DEFAULT_REFRESH_BUNDLE,
       });
     },
