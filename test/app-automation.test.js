@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { parseLinkCommandFilters } from "../extensions/app-automation/link-command.js";
 import {
   APP_AUTOMATION_SPEC_VERSION,
   buildActionPlan,
@@ -319,6 +320,19 @@ test("generic app snapshots preserve redacted meeting and message links", () => 
   assert.match(calendarExtractor, /datetime/);
 });
 
+test("/tendril-app link filter parser accepts flexible token order", () => {
+  assert.deepEqual(parseLinkCommandFilters(["kind:events.snapshot", "fresh", "standup"]), {
+    freshness: "fresh",
+    kind: "events.snapshot",
+    query: "standup",
+  });
+  assert.deepEqual(parseLinkCommandFilters(["Ops", "freshness=stale", "kind=notifications.snapshot", "Bot"]), {
+    freshness: "stale",
+    kind: "notifications.snapshot",
+    query: "Ops Bot",
+  });
+});
+
 test("snapshot artifact helpers list and read bounded readable files", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-artifacts-${Date.now()}`), { recursive: true });
   const slackDir = path.join(root, "snapshots", "slack");
@@ -475,7 +489,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /all/);
   assert.match(source, /query: Type\.Optional/);
   assert.match(source, /kind: Type\.Optional/);
-  assert.match(source, /kind\[:=\]/);
+  assert.match(source, /parseLinkCommandFilters/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /staleAfterMinutes: Type\.Optional/);
   assert.match(source, /snapshotStalenessReport/);

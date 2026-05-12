@@ -31,6 +31,7 @@ import { calendarExtractorScript } from "./app-automation/calendar.js";
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
+import { parseLinkCommandFilters } from "./app-automation/link-command.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
@@ -75,6 +76,7 @@ const DEFAULT_DOCTOR_ACTIONS = [
   { app: "teams", action: "calendar.snapshot" },
   { app: "canvas", action: "sync-markdown" },
 ];
+
 
 async function pathSummary(root) {
   const exists = await stat(root).then(() => true, () => false);
@@ -1175,17 +1177,8 @@ export default function appAutomationExtension(pi) {
       if (words[0] === "links") {
         const maybeLimit = Number(words.at(-1));
         const hasLimit = Number.isFinite(maybeLimit) && words.length > 2;
-        const rest = words.slice(2, hasLimit ? -1 : undefined);
-        const freshnessWords = new Set(["fresh", "stale", "unknown"]);
-        const freshness = freshnessWords.has(rest[0]) ? rest.shift() : undefined;
-        let kind;
-        const filteredRest = rest.filter((word) => {
-          const match = word.match(/^kind[:=](.+)$/);
-          if (!match) return true;
-          kind = match[1];
-          return false;
-        });
-        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: filteredRest.join(" "), freshness, kind, linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
+        const filters = parseLinkCommandFilters(words.slice(2, hasLimit ? -1 : undefined));
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: filters.query, freshness: filters.freshness, kind: filters.kind, linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }
