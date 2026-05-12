@@ -125,7 +125,7 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - `slack.notifications.snapshot` normalizes Slack extraction text/JSON and writes canonical JSON, Markdown, and the browser-side extractor snippet.
    - `canvas.sync-markdown` reads Markdown and writes canonical Markdown, HTML, paste text, and sync metadata with a browser paste plan; `editor.replace` can turn that paste artifact into a browser-side replacement script.
    - `generic.notifications.snapshot` normalizes Outlook/Teams/calendar-style supplied extraction text/JSON with conservative include-pattern filters and safe link preservation.
-   - high-level `browser.open`, `dom.extract`, and `editor.replace` steps are executable through the Playwright bridge when their required parameters are present; optional steps are skipped when no target URL or selector is supplied.
+   - high-level `browser.open`, `dom.extract`, and `editor.replace` steps are executable through the Playwright bridge when their required parameters are present; optional steps are skipped when no target URL or selector is supplied, and skipped optional steps do not make an otherwise successful run fail.
 4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.
    - Use Tendril capture/run when visual verification or native input is needed.

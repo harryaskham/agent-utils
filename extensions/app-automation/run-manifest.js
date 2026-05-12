@@ -1,6 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
+export function runStatusFromResults(results = []) {
+  return results.every((result) => ["ok", "skipped"].includes(result?.status)) ? "ok" : "error";
+}
+
 function summarizeResult(result = {}) {
   const summary = {
     index: result.index,

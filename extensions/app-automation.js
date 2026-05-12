@@ -31,7 +31,7 @@ import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
-import { buildSafeRunManifest, writeLatestRunManifest } from "./app-automation/run-manifest.js";
+import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -260,7 +260,7 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
     if (result.code !== 0) break;
   }
   const run = {
-    status: results.every((result) => result.status === "ok") ? "ok" : "error",
+    status: runStatusFromResults(results),
     results,
   };
   const manifest = buildSafeRunManifest({ plan, run });

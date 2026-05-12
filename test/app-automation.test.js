@@ -34,7 +34,7 @@ import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-auto
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
-import { buildSafeRunManifest } from "../extensions/app-automation/run-manifest.js";
+import { buildSafeRunManifest, runStatusFromResults } from "../extensions/app-automation/run-manifest.js";
 import {
   authMissingHint,
   buildAuthRequiredDiagnostic,
@@ -120,6 +120,11 @@ test("Playwright bridge builds deterministic browser and DOM extraction commands
   assert.equal(buildDomExtractCommand({ scriptFile: "extract.js" }, { extractionOutputPath: "out.json" }).executable, true);
   assert.equal(buildDomExtractCommand({ script: "inline", output: "out.json" }, {}).executable, true);
   assert.equal(authMissingHint({ stderr: "Please sign in to continue" }), true);
+});
+
+test("run status treats optional skipped steps as non-failures", () => {
+  assert.equal(runStatusFromResults([{ status: "ok" }, { status: "skipped" }]), "ok");
+  assert.equal(runStatusFromResults([{ status: "ok" }, { status: "error" }]), "error");
 });
 
 test("safe run manifests omit command output while preserving useful status", () => {
