@@ -358,10 +358,12 @@ export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries =
   const links = summaries.flatMap((summary) => summary.links || []);
   const compare = compareSnapshotLinks(normalizedSort);
   if (compare) links.sort(compare);
+  const artifactCount = summaries.reduce((total, summary) => total + (summary.artifacts?.length || 0), 0);
   return {
     root,
     snapshotRoot,
     exists: summaries.some((summary) => summary.exists),
+    artifacts: Array.from({ length: artifactCount }, (_, index) => ({ relativePath: `aggregate#${index + 1}` })),
     links,
     query: query || null,
     freshness: freshness || null,

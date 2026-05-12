@@ -307,7 +307,7 @@
             "list blessed and local app configs",
             "diagnose catalog, Playwright setup, and Tendril bridge routing",
             "optionally probe Tendril target discovery from app_automation_doctor",
-            "summarize work-app refreshers and snapshots with optional overview link query/kind/freshness filters, sorting, link limits, stale thresholds, and aggregate matched/truncated counts across app samples",
+            "summarize work-app refreshers and snapshots with optional overview link query/kind/freshness filters, sorting, link limits, stale thresholds, and aggregate matched/truncated/scanned counts across app samples",
             "plan Slack notification snapshot",
             "dry-run or execute allowlisted runner steps",
             "plan Markdown-to-canvas sync",
