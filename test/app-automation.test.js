@@ -482,7 +482,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(aggregatedLinks.links[0].app, "calendar");
   assert.equal(aggregatedLinks.matchedCount, 4);
   assert.equal(aggregatedLinks.returnedCount, 2);
-  assert.match(renderSnapshotLinks(aggregatedLinks), /links total=2 matched=4 fresh=2 stale=0 unknown=0 sort=newest/);
+  assert.match(renderSnapshotLinks(aggregatedLinks), /links total=2 matched=4 fresh=2 stale=0 unknown=0 sort=newest freshness=fresh kind=events\.snapshot query="standup"/);
   assert.match(renderSnapshotLinks(aggregatedLinks), /truncated at 2 of 4 links/);
   const emptyAggregatedLinks = aggregateSnapshotLinkSummaries({
     root,
