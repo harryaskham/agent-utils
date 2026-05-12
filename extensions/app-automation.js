@@ -14,6 +14,7 @@ import {
 } from "./app-automation/catalog.js";
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
+import { authMissingHint, prepareDomExtractStep } from "./app-automation/playwright-bridge.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -117,6 +118,10 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       });
       continue;
     }
+    if (step.internal === "wait") {
+      results.push({ index: step.index, kind: step.kind, status: "ok", skipped: true });
+      continue;
+    }
     if (step.internal === "snapshot.write") {
       const payload = {
         version: 1,
@@ -133,6 +138,13 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       results.push({ index: step.index, kind: step.kind, status: "ok", outputPath });
       continue;
     }
+    if (step.kind === "dom.extract" && !step.scriptPath) {
+      const sourceStep = plan.steps[step.index] || {};
+      const prepared = await prepareDomExtractStep(sourceStep, plan.params, { snapshotDir: plan.snapshotDir, actionId: plan.action.id });
+      if (prepared.paths.scriptPath) {
+        step.args = step.args.map((arg) => arg === sourceStep.scriptFile ? prepared.paths.scriptPath : arg);
+      }
+    }
     const result = await pi.exec(step.command, step.args, { signal, timeout: timeoutMs });
     results.push({
       index: step.index,
@@ -143,6 +155,7 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       stdout: result.stdout,
       stderr: result.stderr,
       status: result.code === 0 ? "ok" : "error",
+      authRequired: result.code !== 0 && authMissingHint(result),
     });
     if (result.code !== 0) break;
   }

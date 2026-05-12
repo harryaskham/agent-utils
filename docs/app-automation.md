@@ -97,6 +97,8 @@ The architecture deliberately keeps a thin bridge between app actions and browse
 1. **Catalog and validation** live in `extensions/app-automation/catalog.js` and are pure enough to unit test without Pi runtime dependencies.
 2. **Pi extension registration** lives in `extensions/app-automation.js` and exposes tools/commands.
 3. **Core execution** is deterministic and conservative:
+   - `browser.open` builds a `playwright-cli` invocation with optional session reuse (`session`, `playwrightSession`, or `APP_AUTOMATION_PLAYWRIGHT_SESSION`).
+   - `dom.extract` builds a `playwright-cli evaluate --script-file ... --output ...` invocation when a script/output path is supplied, or writes an inline script to the snapshot directory before running.
    - `cli.exec` runs only allowlisted commands: `playwright-cli`, `tendril`, and `pandoc`.
    - `tendril.run` builds a structured `tendril run --window <target> <dsl>` invocation.
    - `snapshot.write` persists run metadata under the app snapshot directory.

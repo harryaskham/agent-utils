@@ -19,6 +19,12 @@ import {
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
 import {
+  authMissingHint,
+  buildBrowserOpenCommand,
+  buildDomExtractCommand,
+  playwrightSessionArgs,
+} from "../extensions/app-automation/playwright-bridge.js";
+import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
   slackExtractorScript,
@@ -80,11 +86,37 @@ test("normalization rejects malformed dynamic actions", () => {
   assert.throws(() => normalizeAppConfig({ id: "bad", actions: [{}] }), /requires id/);
 });
 
+test("Playwright bridge builds deterministic browser and DOM extraction commands", () => {
+  assert.deepEqual(playwrightSessionArgs({ session: "agent" }), ["-s=agent"]);
+  assert.deepEqual(buildBrowserOpenCommand({ url: "https://example.invalid" }, { session: "agent" }), {
+    executable: true,
+    command: "playwright-cli",
+    args: ["-s=agent", "open", "https://example.invalid"],
+  });
+  assert.deepEqual(buildDomExtractCommand({}, {}), {
+    executable: false,
+    reason: "dom.extract requires a scriptFile, extractorPath, or generated script",
+  });
+  assert.equal(buildDomExtractCommand({ scriptFile: "extract.js" }, { extractionOutputPath: "out.json" }).executable, true);
+  assert.equal(authMissingHint({ stderr: "Please sign in to continue" }), true);
+});
+
 test("execution planning allowlists deterministic cli and tendril commands", () => {
   const ok = buildStepCommand({ kind: "cli.exec", command: "pandoc", args: ["$params.source"] }, { source: "notes.md" });
   assert.deepEqual(ok, { executable: true, command: "pandoc", args: ["notes.md"] });
   assert.equal(buildStepCommand({ kind: "cli.exec", command: "bash", args: ["-lc", "echo nope"] }).executable, false);
   assert.equal(buildStepCommand({ kind: "tendril.run", target: "Slack", dsl: "send(\"hi\")" }).command, "tendril");
+});
+
+test("execution plan allows high-level browser.open when bridge command can be built", () => {
+  const plan = buildActionPlan({
+    app: "slack",
+    action: "open",
+    params: { session: "agent" },
+  });
+  const execution = buildExecutionPlan(plan);
+  assert.equal(execution.executable, true);
+  assert.deepEqual(execution.stepCommands[0].args, ["-s=agent", "open", "https://app.slack.com/client"]);
 });
 
 test("execution plan allows Slack notification snapshot internal runner", () => {

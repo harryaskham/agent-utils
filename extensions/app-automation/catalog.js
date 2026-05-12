@@ -2,6 +2,8 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { buildBrowserOpenCommand, buildDomExtractCommand } from "./playwright-bridge.js";
+
 export const APP_AUTOMATION_SPEC_VERSION = 1;
 export const DEFAULT_STATE_ROOT = "~/.local/state/agent-utils/app-automation";
 export const DEFAULT_CONFIG_DIR = "~/.config/agent-utils/app-automation/apps.d";
@@ -281,15 +283,7 @@ function coerceArg(value, params) {
 
 export function buildStepCommand(step, params = {}) {
   if (!step || typeof step !== "object") return { executable: false, reason: "step is not an object" };
-  if (step.kind === "browser.open") {
-    const url = resolveParamValue(step, "url", params);
-    return {
-      executable: false,
-      command: "playwright-cli",
-      args: ["open", String(url || "about:blank")],
-      reason: "browser.open is planned but not executed until the Playwright bridge is implemented",
-    };
-  }
+  if (step.kind === "browser.open") return buildBrowserOpenCommand(step, params);
   if (step.kind === "tendril.run") {
     const target = resolveParamValue(step, "target", params);
     const dsl = resolveParamValue(step, "dsl", params);
@@ -302,6 +296,8 @@ export function buildStepCommand(step, params = {}) {
     if (!allowlist.has(command)) return { executable: false, reason: `command not in allowlist: ${command}` };
     return { executable: true, command, args: ensureArray(step.args).map((arg) => coerceArg(arg, params)) };
   }
+  if (step.kind === "dom.extract") return { ...buildDomExtractCommand(step, params), kind: "dom.extract" };
+  if (step.kind === "wait") return { executable: true, internal: "wait", args: [] };
   if (step.kind === "snapshot.write") return { executable: true, internal: "snapshot.write", args: [] };
   if (step.kind === "slack.notifications.snapshot") return { executable: true, internal: "slack.notifications.snapshot", args: [] };
   if (step.kind === "canvas.sync-markdown") return { executable: true, internal: "canvas.sync-markdown", args: [] };
