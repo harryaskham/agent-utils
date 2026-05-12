@@ -1016,9 +1016,10 @@ export default function appAutomationExtension(pi) {
       app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, or calendar." })),
       artifactLimit: Type.Optional(Type.Number({ description: "Maximum JSON artifacts to scan. Defaults to 100." })),
       linkLimit: Type.Optional(Type.Number({ description: "Maximum links to return. Defaults to 100." })),
+      query: Type.Optional(Type.String({ description: "Optional case-insensitive filter over app, kind, artifact path, label, and URL." })),
     }),
     async execute(_toolCallId, params) {
-      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100 });
+      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100 });
       return textResult(renderSnapshotLinks(summary), { links: summary });
     },
   });
@@ -1096,7 +1097,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app] [query]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1140,7 +1141,10 @@ export default function appAutomationExtension(pi) {
         return;
       }
       if (words[0] === "links") {
-        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], linkLimit: Number(words[2]) || 100 });
+        const maybeLimit = Number(words.at(-1));
+        const hasLimit = Number.isFinite(maybeLimit) && words.length > 2;
+        const queryWords = words.slice(2, hasLimit ? -1 : undefined);
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: queryWords.join(" "), linkLimit: hasLimit ? maybeLimit : 100 });
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }

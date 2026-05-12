@@ -331,6 +331,9 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(links.links.length, 2);
   assert.equal(links.links[0].url, "https://app.slack.com/client/T/C");
   assert.match(renderSnapshotLinks(links), /#general: https:\/\/app\.slack\.com\/client\/T\/C/);
+  const filteredLinks = await collectSnapshotLinks({ root, app: "slack", query: "/D" });
+  assert.equal(filteredLinks.links.length, 1);
+  assert.equal(filteredLinks.links[0].url, "https://app.slack.com/client/T/D");
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
   const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
@@ -418,6 +421,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /words\[0\] === "overview"/);
   assert.match(source, /words\[0\] === "links"/);
   assert.match(source, /collectSnapshotLinks/);
+  assert.match(source, /query: Type\.Optional/);
   assert.match(source, /snapshotStalenessReport/);
   assert.match(source, /words\[0\] === "staleness"/);
   assert.match(source, /words\[0\] === "bundle"/);

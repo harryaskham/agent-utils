@@ -154,7 +154,14 @@ export async function digestSnapshotArtifacts({ root, app, limit = 20, maxBytes 
   return { ...listed, artifacts };
 }
 
-export async function collectSnapshotLinks({ root, app, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000 } = {}) {
+function linkMatchesQuery(link, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return true;
+  return [link.app, link.kind, link.artifact, link.label, link.url]
+    .some((value) => String(value || "").toLowerCase().includes(needle));
+}
+
+export async function collectSnapshotLinks({ root, app, query, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000 } = {}) {
   const listed = await listSnapshotArtifacts({ root, app, limit: artifactLimit });
   const links = [];
   for (const artifact of listed.artifacts.filter((entry) => entry.extension === ".json")) {
@@ -167,19 +174,21 @@ export async function collectSnapshotLinks({ root, app, artifactLimit = 100, lin
       rowIndex += 1;
       const urls = rowUrls(row);
       for (const url of urls) {
-        links.push({
+        const link = {
           app: value.app || app || artifact.relativePath.split("/")[1] || "unknown",
           kind: value.kind || value.action || null,
           artifact: artifact.relativePath,
           row: rowIndex,
           label: snapshotLinkLabel(row, `${artifact.relativePath}#${rowIndex}`),
           url,
-        });
-        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, links, truncated: true };
+        };
+        if (!linkMatchesQuery(link, query)) continue;
+        links.push(link);
+        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, links, truncated: true };
       }
     }
   }
-  return { ...listed, links, truncated: false };
+  return { ...listed, query: query || null, links, truncated: false };
 }
 
 export function renderArtifactList(summary) {
