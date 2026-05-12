@@ -319,6 +319,17 @@ test("generic app snapshots preserve redacted meeting and message links", () => 
   assert.equal(snapshot.items[2].source, "Calendar - Work");
   assert.doesNotMatch(JSON.stringify(snapshot), /token=secret|authuser=0|#secret/);
   assert.match(renderGenericMarkdown(snapshot), /\[Team standup join\]\(https:\/\/meet\.google\.com\/abc-defg-hij\) — source: Work; from: Ada; time: 09:00/);
+  const hostFallbackSnapshot = buildGenericSnapshot({
+    app: "outlook",
+    kind: "calendar.snapshot",
+    input: {
+      url: "https://outlook.office.com/calendar/?token=secret#frag",
+      items: [{ text: "Planning join", href: "https://outlook.office.com/calendar/item/456?token=secret#frag" }],
+    },
+    includePatterns: ["planning"],
+  });
+  assert.equal(hostFallbackSnapshot.items[0].source, "outlook.office.com");
+  assert.doesNotMatch(JSON.stringify(hostFallbackSnapshot), /token=secret|#frag/);
   const calendarExtractor = calendarExtractorScript({ includePatterns: ["standup"] });
   assert.match(calendarExtractor, /timeFor/);
   assert.match(calendarExtractor, /data-start-time/);

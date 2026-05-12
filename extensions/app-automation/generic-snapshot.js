@@ -73,8 +73,18 @@ function normalizeItem(item, fallbackContext = {}) {
 }
 
 function inputFallbackContext(input = {}) {
-  const source = compactMetadata(input.title);
-  return source ? { source } : {};
+  const title = compactMetadata(input.title);
+  if (title) return { source: title };
+  const sanitizedUrl = sanitizeSnapshotUrl(input.url);
+  if (sanitizedUrl) {
+    try {
+      const host = compactMetadata(new URL(sanitizedUrl).hostname);
+      if (host) return { source: host };
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
 function parseItems(input = {}) {
