@@ -94,10 +94,27 @@ function countSnapshotLinks(value) {
   return { links, linkItems };
 }
 
+function compactContextValue(value, limit = 80) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+}
+
 function snapshotLinkLabel(row, fallback = "snapshot item") {
   const candidates = [row?.label, row?.title, row?.subject, row?.summary, row?.name, row?.channel, row?.from, row?.text];
-  const label = candidates.map((value) => String(value || "").trim()).find(Boolean) || fallback;
-  return label.length > 120 ? `${label.slice(0, 117)}...` : label;
+  const label = candidates.map((value) => compactContextValue(value, 120)).find(Boolean) || fallback;
+  return label;
+}
+
+function snapshotLinkContext(row = {}) {
+  const context = {};
+  const source = [row.channel, row.team, row.folder, row.calendar, row.source].map((value) => compactContextValue(value)).find(Boolean);
+  const from = [row.from, row.sender, row.organizer, row.author].map((value) => compactContextValue(value)).find(Boolean);
+  const time = [row.time, row.timestamp, row.start, row.startTime, row.date, row.when].map((value) => compactContextValue(value)).find(Boolean);
+  if (source) context.source = source;
+  if (from) context.from = from;
+  if (time) context.time = time;
+  return context;
 }
 
 function snapshotTimestamp(value = {}) {
@@ -221,6 +238,7 @@ export async function collectSnapshotLinks({ root, app, query, freshness, artifa
           row: rowIndex,
           label: snapshotLinkLabel(row, `${artifact.relativePath}#${rowIndex}`),
           url,
+          context: snapshotLinkContext(row),
           snapshotAt,
           artifactModifiedAt,
           ...linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes, now }),
@@ -253,12 +271,17 @@ function renderSnapshotLinkFilters(summary = {}) {
   return filters.length ? ` matching ${filters.join(" ")}` : "";
 }
 
+function renderSnapshotLinkContext(context = {}) {
+  const entries = Object.entries(context).filter(([, value]) => value);
+  return entries.length ? ` context=${entries.map(([key, value]) => `${key}:${JSON.stringify(value)}`).join(" ")}` : "";
+}
+
 export function renderSnapshotLinks(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
   if (!summary.links.length) return `No snapshot links${renderSnapshotLinkFilters(summary)} found at ${summary.snapshotRoot} (scanned ${summary.artifacts?.length || 0} artifacts).`;
   const counts = summary.freshnessCounts || summarizeLinkFreshness(summary.links);
   const lines = [`links total=${counts.total} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}`];
-  lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
+  lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${renderSnapshotLinkContext(link.context)}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
   if (summary.truncated) lines.push(`truncated at ${summary.links.length} links`);
   return lines.join("\n");
 }
