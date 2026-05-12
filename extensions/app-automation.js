@@ -560,6 +560,46 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_refresh_bundle_run_once`,
+    label: "App Automation Refresh Bundle Run Once",
+    description: "Run the standard Slack, Outlook, and Teams snapshot refresh bundle once without starting periodic timers.",
+    promptSnippet: "Use this when you need an explicit refresh-now pass for Slack, Outlook mail/calendar, and Teams notification/calendar snapshots without arming timers.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default bundle." }))),
+      actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to include from the default bundle." }))),
+      params: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Shared action parameters such as session/playwrightSession." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Per-action command timeout in milliseconds. Defaults to 30000." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const catalog = await resolveCatalog(params);
+      const wantedApps = new Set((params.apps || []).map((value) => String(value)));
+      const wantedActions = new Set((params.actions || []).map((value) => String(value)));
+      const targets = DEFAULT_REFRESH_BUNDLE.filter((target) => (
+        (!wantedApps.size || wantedApps.has(target.app))
+        && (!wantedActions.size || wantedActions.has(target.action))
+      ));
+      const runs = [];
+      const skipped = [];
+      for (const target of targets) {
+        const plan = buildActionPlan({ app: target.app, action: target.action, params: params.params || {}, catalog: catalog.apps });
+        if (!plan.execution.executable) {
+          skipped.push({ app: target.app, action: target.action, reason: plan.execution.missingParams.length ? `missing ${plan.execution.missingParams.join(",")}` : "plan is not executable", blockedSteps: plan.execution.blockedSteps });
+          continue;
+        }
+        const run = await runPlan(pi, plan, { signal, timeoutMs: params.timeoutMs });
+        runs.push({ app: target.app, action: target.action, status: run.status, latestRunPath: run.latestRunPath, results: run.results });
+      }
+      const failed = runs.filter((run) => run.status !== "ok").length;
+      return textResult(`ran ${runs.length} app automation bundle actions once${failed ? `; ${failed} failed` : ""}${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+        runs,
+        skipped,
+        defaultBundle: DEFAULT_REFRESH_BUNDLE,
+      });
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_refresh_bundle_start`,
     label: "App Automation Refresh Bundle Start",
     description: "Start a standard bundle of Slack, Outlook, and Teams snapshot refreshers from the blessed catalog.",

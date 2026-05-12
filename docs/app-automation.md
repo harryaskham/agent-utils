@@ -26,7 +26,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_plan` — return the deterministic plan for an app/action without executing browser automation.
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
 - `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
-- `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including a standard Slack/Outlook/Teams bundle.
+- `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including standard Slack/Outlook/Teams bundle start and one-shot refresh paths.
 - `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshot_read` — list, summarize, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
 - `/tendril-app [overview|bundle|app action]` — operator/agent-facing command for quick app/action discovery, work-app overview, and default bundle discovery.
 
@@ -133,6 +133,7 @@ Periodic actions stay Pi-native and controllable rather than using daemon-global
 
 - `app_automation_refresh_start` starts one app/action interval and optionally runs immediately.
 - `app_automation_refresh_bundle_start` starts the standard Slack notifications, Outlook mail/calendar, and Teams notification/calendar bundle. It defaults `runImmediately` to `false` so agents can arm the bundle without opening several authenticated apps at once.
+- `app_automation_refresh_bundle_run_once` runs that same standard bundle once without creating timers, for explicit refresh-now workflows.
 - `app_automation_refresh_status` lists active refreshers, run counts, errors, and last snapshot status.
 - `app_automation_refresh_stop` stops one refresher or all refreshers.
 - Runs are bounded and non-overlapping: if a previous refresh is still in flight, the next tick is skipped.
