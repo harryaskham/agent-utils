@@ -272,7 +272,15 @@ async function resolveCatalog(params = {}) {
   return loadCatalog({ includeExternal: params.includeExternal !== false });
 }
 
+function refreshAuthSummary(run = {}) {
+  const results = Array.isArray(run.results) ? run.results : [];
+  const authRequired = results.filter((result) => result?.authRequired);
+  const paths = [...new Set(authRequired.map((result) => result.authRequiredPath).filter(Boolean))];
+  return { authRequiredCount: authRequired.length, authRequiredPaths: paths };
+}
+
 function refreshPublicEntry(entry) {
+  const authSummary = refreshAuthSummary(entry.lastRun);
   return {
     id: entry.id,
     app: entry.app,
@@ -287,6 +295,8 @@ function refreshPublicEntry(entry) {
     lastSuccessAt: entry.lastSuccessAt,
     lastStatus: entry.lastStatus,
     lastError: entry.lastError,
+    authRequiredCount: authSummary.authRequiredCount,
+    authRequiredPaths: authSummary.authRequiredPaths,
   };
 }
 
@@ -898,6 +908,8 @@ export default function appAutomationExtension(pi) {
         ? publicEntries.map((entry) => {
           const details = [
             `lastSuccess=${entry.lastSuccessAt || "never"}`,
+            entry.authRequiredCount ? `authRequired=${entry.authRequiredCount}` : null,
+            entry.authRequiredPaths?.length ? `authPaths=${entry.authRequiredPaths.join(",")}` : null,
             entry.lastError ? `lastError=${String(entry.lastError).slice(0, 120)}` : null,
           ].filter(Boolean).join(" ");
           return `${entry.id}: ${entry.app}.${entry.action} every ${entry.intervalSeconds}s status=${entry.lastStatus} runs=${entry.runCount} errors=${entry.errorCount} consecutiveErrors=${entry.consecutiveErrorCount} ${details}`;
