@@ -352,13 +352,17 @@ export async function collectSnapshotLinks({ root, app, query, freshness, kind, 
   };
 }
 
-export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries = [] } = {}) {
+export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries = [], sort } = {}) {
+  const normalizedSort = normalizeLinkSort(sort);
   const links = summaries.flatMap((summary) => summary.links || []);
+  const compare = compareSnapshotLinks(normalizedSort);
+  if (compare) links.sort(compare);
   return {
     root,
     snapshotRoot,
     exists: summaries.some((summary) => summary.exists),
     links,
+    sort: normalizedSort,
     matchedCount: summaries.reduce((total, summary) => total + (summary.matchedCount ?? summary.links?.length ?? 0), 0),
     returnedCount: links.length,
     freshnessCounts: summarizeLinkFreshness(links),

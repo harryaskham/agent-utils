@@ -454,14 +454,17 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const aggregatedLinks = aggregateSnapshotLinkSummaries({
     root,
     snapshotRoot: path.join(root, "snapshots"),
+    sort: "newest",
     summaries: [
       await collectSnapshotLinks({ root, app: "slack", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") }),
       await collectSnapshotLinks({ root, app: "calendar", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") }),
     ],
   });
+  assert.equal(aggregatedLinks.sort, "newest");
+  assert.equal(aggregatedLinks.links[0].app, "calendar");
   assert.equal(aggregatedLinks.matchedCount, 4);
   assert.equal(aggregatedLinks.returnedCount, 2);
-  assert.match(renderSnapshotLinks(aggregatedLinks), /links total=2 matched=4/);
+  assert.match(renderSnapshotLinks(aggregatedLinks), /links total=2 matched=4 fresh=2 stale=0 unknown=0 sort=newest/);
   assert.match(renderSnapshotLinks(aggregatedLinks), /truncated at 2 of 4 links/);
   assert.ok(allLinks.links.some((link) => link.app === "calendar" && link.url === "https://calendar.example/events/standup"));
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);

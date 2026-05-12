@@ -588,7 +588,7 @@ export default function appAutomationExtension(pi) {
         for (const app of apps) {
           summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3, sort: params.linkSort, staleAfterMinutes: params.staleAfterMinutes || 60 }));
         }
-        snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries });
+        snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries, sort: params.linkSort });
       }
       return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), {
         apps,
@@ -1167,7 +1167,7 @@ export default function appAutomationExtension(pi) {
           for (const app of apps) {
             summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: overviewArgs.linkLimitPerApp || 3, sort: overviewArgs.linkSort, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 }));
           }
-          snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries });
+          snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries, sort: overviewArgs.linkSort });
         }
         ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), "info");
         return;
