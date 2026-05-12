@@ -142,14 +142,17 @@ test("auth-required diagnostics redact sessions and secrets", () => {
   const diagnostic = buildAuthRequiredDiagnostic({
     app: "slack",
     action: "notifications.snapshot",
-    step: { index: 0, kind: "browser.open", command: "playwright-cli", args: ["-s=harry", "open", "https://app.slack.com/client"] },
-    result: { stderr: "login required token=abc123 Bearer abc.def" },
+    step: { index: 0, kind: "browser.open", command: "playwright-cli", args: ["-s=harry", "open", "https://user:pass@app.slack.com/client/T/C?token=secret#frag"] },
+    result: { stdout: "visit https://outlook.office.com/mail/?auth=secret#session", stderr: "login required token=abc123 Bearer abc.def https://teams.microsoft.com/v2/?tenant=secret#frag" },
     now: new Date("2026-05-12T00:00:00Z"),
   });
   assert.equal(diagnostic.status, "auth_required");
-  assert.deepEqual(diagnostic.step.args, ["-s=[redacted-session]", "open", "https://app.slack.com/client"]);
+  assert.deepEqual(diagnostic.step.args, ["-s=[redacted-session]", "open", "https://app.slack.com/client/T/C"]);
   assert.match(diagnostic.stderr, /token=\[redacted\]/);
   assert.match(diagnostic.stderr, /Bearer \[redacted\]/);
+  assert.match(diagnostic.stderr, /https:\/\/teams\.microsoft\.com\/v2\//);
+  assert.match(diagnostic.stdout, /https:\/\/outlook\.office\.com\/mail\//);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /user:pass|auth=secret|tenant=secret|#frag|#session/);
 });
 
 test("execution planning allowlists deterministic cli and tendril commands", () => {

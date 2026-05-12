@@ -67,11 +67,32 @@ export function authMissingHint(result = {}) {
   return /sign in|signin|login|log in|auth|unauthorized|forbidden/.test(text);
 }
 
+function redactUrlSecrets(text) {
+  return String(text || "").replace(/https?:\/\/[^\s"'<>]+/gi, (match) => {
+    try {
+      const parsed = new URL(match);
+      parsed.username = "";
+      parsed.password = "";
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString();
+    } catch {
+      return match;
+    }
+  });
+}
+
 function redactPotentialSecrets(text) {
-  return String(text || "")
+  return redactUrlSecrets(String(text || "")
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
-    .replace(/(token|cookie|secret|password)=([^\s&]+)/gi, "$1=[redacted]")
+    .replace(/(token|cookie|secret|password)=([^\s&]+)/gi, "$1=[redacted]"))
     .slice(0, 4000);
+}
+
+function redactDiagnosticArg(arg) {
+  const value = String(arg);
+  if (/^-s=.+/.test(value)) return "-s=[redacted-session]";
+  return redactPotentialSecrets(value);
 }
 
 export function buildAuthRequiredDiagnostic({ app, action, step = {}, result = {}, now = new Date() } = {}) {
@@ -84,7 +105,7 @@ export function buildAuthRequiredDiagnostic({ app, action, step = {}, result = {
       index: step.index,
       kind: step.kind,
       command: step.command,
-      args: Array.isArray(step.args) ? step.args.map((arg) => String(arg).replace(/-s=.+/, "-s=[redacted-session]")) : [],
+      args: Array.isArray(step.args) ? step.args.map(redactDiagnosticArg) : [],
     },
     detectedAt: now.toISOString(),
     hint: "Open or reuse an authenticated browser session, then rerun the app automation action.",
