@@ -124,7 +124,7 @@ Snapshots are persisted under:
 ${APP_AUTOMATION_STATE_ROOT:-~/.local/state/agent-utils/app-automation}/snapshots/<app>/...
 ```
 
-Agents should prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. The digest tool extracts compact status/count/first-line summaries. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
+Agents should prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. Each executed action writes a safe `latest-run.json` manifest in its snapshot directory with statuses/counts/paths but without command stdout/stderr. The digest tool extracts compact status/count/first-line summaries. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
 
 ## Periodic refresh model
 
@@ -140,7 +140,7 @@ Periodic actions stay Pi-native and controllable rather than using daemon-global
 ## Safety rules
 
 - Prefer blessed app/action plans before raw browser commands.
-- Do not persist web auth secrets in snapshots or git. Auth-required diagnostics are redacted and only record the failing step, status, and operator hint.
+- Do not persist web auth secrets in snapshots or git. Auth-required diagnostics are redacted and only record the failing step, status, and operator hint. Latest-run manifests intentionally omit command stdout/stderr.
 - Treat write actions (`sync-markdown`) as explicit and parameterized.
 - Keep selectors and app-specific heuristics in app configs, not scattered across agent prompts.
 - Store snapshots in canonical state paths so later agents can inspect the latest known app state.

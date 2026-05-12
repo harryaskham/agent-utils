@@ -27,6 +27,7 @@ import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-auto
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
+import { buildSafeRunManifest } from "../extensions/app-automation/run-manifest.js";
 import {
   authMissingHint,
   buildAuthRequiredDiagnostic,
@@ -111,6 +112,22 @@ test("Playwright bridge builds deterministic browser and DOM extraction commands
   assert.equal(buildDomExtractCommand({ scriptFile: "extract.js" }, { extractionOutputPath: "out.json" }).executable, true);
   assert.equal(buildDomExtractCommand({ script: "inline", output: "out.json" }, {}).executable, true);
   assert.equal(authMissingHint({ stderr: "Please sign in to continue" }), true);
+});
+
+test("safe run manifests omit command output while preserving useful status", () => {
+  const manifest = buildSafeRunManifest({
+    plan: { app: { id: "slack" }, action: { id: "notifications.snapshot" } },
+    run: {
+      status: "error",
+      results: [{ index: 0, kind: "browser.open", status: "error", code: 1, stdout: "secret", stderr: "token=abc", authRequired: true, authRequiredPath: "/state/auth-required.json" }],
+    },
+    now: new Date("2026-05-12T00:00:00Z"),
+  });
+  assert.equal(manifest.app, "slack");
+  assert.equal(manifest.results[0].authRequired, true);
+  assert.equal(manifest.results[0].authRequiredPath, "/state/auth-required.json");
+  assert.equal("stdout" in manifest.results[0], false);
+  assert.equal("stderr" in manifest.results[0], false);
 });
 
 test("auth-required diagnostics redact sessions and secrets", () => {
