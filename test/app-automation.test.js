@@ -484,6 +484,8 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
       await collectSnapshotLinks({ root, app: "calendar", query: "missing", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") }),
     ],
   });
+  assert.equal(emptyAggregatedLinks.scannedArtifactCount, 6);
+  assert.equal(emptyAggregatedLinks.artifacts, undefined);
   assert.match(renderSnapshotLinks(emptyAggregatedLinks), /No snapshot links matching query="missing" found .*scanned 6 artifacts/);
   assert.ok(allLinks.links.some((link) => link.app === "calendar" && link.url === "https://calendar.example/events/standup"));
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);

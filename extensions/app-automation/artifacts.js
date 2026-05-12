@@ -358,12 +358,12 @@ export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries =
   const links = summaries.flatMap((summary) => summary.links || []);
   const compare = compareSnapshotLinks(normalizedSort);
   if (compare) links.sort(compare);
-  const artifactCount = summaries.reduce((total, summary) => total + (summary.artifacts?.length || 0), 0);
+  const artifactCount = summaries.reduce((total, summary) => total + (summary.scannedArtifactCount ?? summary.artifacts?.length ?? 0), 0);
   return {
     root,
     snapshotRoot,
     exists: summaries.some((summary) => summary.exists),
-    artifacts: Array.from({ length: artifactCount }, (_, index) => ({ relativePath: `aggregate#${index + 1}` })),
+    scannedArtifactCount: artifactCount,
     links,
     query: query || null,
     freshness: freshness || null,
@@ -405,7 +405,7 @@ function renderSnapshotLinkContext(context = {}) {
 
 export function renderSnapshotLinks(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
-  if (!summary.links.length) return `No snapshot links${renderSnapshotLinkFilters(summary)} found at ${summary.snapshotRoot} (scanned ${summary.artifacts?.length || 0} artifacts).`;
+  if (!summary.links.length) return `No snapshot links${renderSnapshotLinkFilters(summary)} found at ${summary.snapshotRoot} (scanned ${summary.scannedArtifactCount ?? summary.artifacts?.length ?? 0} artifacts).`;
   const counts = summary.freshnessCounts || summarizeLinkFreshness(summary.links);
   const appCounts = summary.appCounts || summarizeLinkApps(summary.links);
   const kindCounts = summary.kindCounts || summarizeLinkKinds(summary.links);
