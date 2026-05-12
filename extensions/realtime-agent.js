@@ -74,6 +74,7 @@
 import { spawn, spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
+import { ToolSchema } from "./lib/tool-schema.js";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
@@ -117,11 +118,6 @@ const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
 const TOOL_OUTPUT_CAP = 16_000;
-const Type = {
-  String(options = {}) { return { type: "string", ...options }; },
-  Optional(schema) { return schema; },
-  Object(properties) { return { type: "object", properties, required: [] }; },
-};
 
 let realtimeWebSocketConstructor = null;
 let realtimeWebSocketOpenState = 1;
@@ -2436,21 +2432,21 @@ export default function realtimeAgentExtension(pi) {
       description: "Control Pi realtime/STT lifecycle and runtime Pulse routing for the current session.",
       promptSnippet: "Use realtime_agent_control to start/stop realtime calls or STT and to set Pulse server/source/sink at runtime.",
       promptGuidelines: ["Use realtime_agent_control instead of asking the operator to type /rt when you need to manage realtime calls, STT, or Pulse routing."],
-      parameters: Type.Object({
-        action: Type.Optional(Type.String({ description: "Lifecycle action: start, stop, off, vad, ptt, nolisten, or status." })),
-        start: Type.Optional(Type.String({ description: "Start full realtime with vad, ptt, or nolisten." })),
-        stt: Type.Optional(Type.String({ description: "Start transcription-only mode with vad or ptt." })),
-        mic: Type.Optional(Type.String({ description: "Start mic capture with vad or ptt." })),
-        listen: Type.Optional(Type.String({ description: "Listen mode: vad, ptt, or continuous." })),
-        audio: Type.Optional(Type.String({ description: "Audio output mode: on, off, or toggle." })),
-        backend: Type.Optional(Type.String({ description: "Audio backend such as pulse, coreaudio, audiotoolbox, sox, ffplay, or auto." })),
-        pulseServer: Type.Optional(Type.String({ description: "Runtime PULSE_SERVER for new Pulse record/playback processes. Empty string unsets." })),
-        pulseSource: Type.Optional(Type.String({ description: "Runtime PULSE_SOURCE for new Pulse record processes. Empty string unsets." })),
-        pulseSink: Type.Optional(Type.String({ description: "Runtime PULSE_SINK for new Pulse playback processes. Empty string unsets." })),
-        voice: Type.Optional(Type.String({ description: "Realtime output voice." })),
-        reasoning: Type.Optional(Type.String({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
-        widget: Type.Optional(Type.String({ description: "Widget mode: show or hide." })),
-        status: Type.Optional(Type.String({ description: "Return status: compact or full." })),
+      parameters: ToolSchema.object({
+        action: ToolSchema.optional(ToolSchema.string({ description: "Lifecycle action: start, stop, off, vad, ptt, nolisten, or status." })),
+        start: ToolSchema.optional(ToolSchema.string({ description: "Start full realtime with vad, ptt, or nolisten." })),
+        stt: ToolSchema.optional(ToolSchema.string({ description: "Start transcription-only mode with vad or ptt." })),
+        mic: ToolSchema.optional(ToolSchema.string({ description: "Start mic capture with vad or ptt." })),
+        listen: ToolSchema.optional(ToolSchema.string({ description: "Listen mode: vad, ptt, or continuous." })),
+        audio: ToolSchema.optional(ToolSchema.string({ description: "Audio output mode: on, off, or toggle." })),
+        backend: ToolSchema.optional(ToolSchema.string({ description: "Audio backend such as pulse, coreaudio, audiotoolbox, sox, ffplay, or auto." })),
+        pulseServer: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SERVER for new Pulse record/playback processes. Empty string unsets." })),
+        pulseSource: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SOURCE for new Pulse record processes. Empty string unsets." })),
+        pulseSink: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SINK for new Pulse playback processes. Empty string unsets." })),
+        voice: ToolSchema.optional(ToolSchema.string({ description: "Realtime output voice." })),
+        reasoning: ToolSchema.optional(ToolSchema.string({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
+        widget: ToolSchema.optional(ToolSchema.string({ description: "Widget mode: show or hide." })),
+        status: ToolSchema.optional(ToolSchema.string({ description: "Return status: compact or full." })),
       }),
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         const action = String(params.action || "").toLowerCase();
