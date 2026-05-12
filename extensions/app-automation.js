@@ -583,6 +583,7 @@ export default function appAutomationExtension(pi) {
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default open bundle." }))),
       actions: Type.Optional(Type.Array(Type.String({ description: "Optional open action ids to include from the default open bundle." }))),
       params: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Shared action parameters such as session/playwrightSession." })),
+      dryRun: Type.Optional(Type.Boolean({ description: "Return planned open bundle actions without executing browser automation. Defaults to false." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
       timeoutMs: Type.Optional(Type.Number({ description: "Per-action command timeout in milliseconds. Defaults to 30000." })),
     }),
@@ -602,11 +603,16 @@ export default function appAutomationExtension(pi) {
           skipped.push({ app: target.app, action: target.action, reason: plan.execution.missingParams.length ? `missing ${plan.execution.missingParams.join(",")}` : "plan is not executable", blockedSteps: plan.execution.blockedSteps });
           continue;
         }
+        if (params.dryRun) {
+          runs.push({ app: target.app, action: target.action, status: "dry_run", executable: true, steps: plan.execution.stepCommands.map((step) => ({ kind: step.kind, internal: step.internal, command: step.command, args: step.args })) });
+          continue;
+        }
         const run = await runPlan(pi, plan, { signal, timeoutMs: params.timeoutMs });
         runs.push({ app: target.app, action: target.action, status: run.status, latestRunPath: run.latestRunPath, results: run.results });
       }
-      const failed = runs.filter((run) => run.status !== "ok").length;
-      return textResult(`opened ${runs.length} app automation surfaces once${failed ? `; ${failed} failed` : ""}${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+      const failed = runs.filter((run) => !["ok", "dry_run"].includes(run.status)).length;
+      return textResult(`${params.dryRun ? "dry-run planned" : "opened"} ${runs.length} app automation surfaces once${failed ? `; ${failed} failed` : ""}${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+        dryRun: Boolean(params.dryRun),
         runs,
         skipped,
         defaultBundle: DEFAULT_OPEN_BUNDLE,
@@ -623,6 +629,7 @@ export default function appAutomationExtension(pi) {
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default bundle." }))),
       actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to include from the default bundle." }))),
       params: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Shared action parameters such as session/playwrightSession." })),
+      dryRun: Type.Optional(Type.Boolean({ description: "Return planned refresh bundle actions without executing browser automation. Defaults to false." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
       timeoutMs: Type.Optional(Type.Number({ description: "Per-action command timeout in milliseconds. Defaults to 30000." })),
     }),
@@ -642,11 +649,16 @@ export default function appAutomationExtension(pi) {
           skipped.push({ app: target.app, action: target.action, reason: plan.execution.missingParams.length ? `missing ${plan.execution.missingParams.join(",")}` : "plan is not executable", blockedSteps: plan.execution.blockedSteps });
           continue;
         }
+        if (params.dryRun) {
+          runs.push({ app: target.app, action: target.action, status: "dry_run", executable: true, steps: plan.execution.stepCommands.map((step) => ({ kind: step.kind, internal: step.internal, command: step.command, args: step.args })) });
+          continue;
+        }
         const run = await runPlan(pi, plan, { signal, timeoutMs: params.timeoutMs });
         runs.push({ app: target.app, action: target.action, status: run.status, latestRunPath: run.latestRunPath, results: run.results });
       }
-      const failed = runs.filter((run) => run.status !== "ok").length;
-      return textResult(`ran ${runs.length} app automation bundle actions once${failed ? `; ${failed} failed` : ""}${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+      const failed = runs.filter((run) => !["ok", "dry_run"].includes(run.status)).length;
+      return textResult(`${params.dryRun ? "dry-run planned" : "ran"} ${runs.length} app automation bundle actions once${failed ? `; ${failed} failed` : ""}${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+        dryRun: Boolean(params.dryRun),
         runs,
         skipped,
         defaultBundle: DEFAULT_REFRESH_BUNDLE,

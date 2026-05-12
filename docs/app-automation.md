@@ -132,10 +132,10 @@ Agents should run `app_automation_doctor` (or `/tendril-app doctor`) when setup 
 
 Periodic actions stay Pi-native and controllable rather than using daemon-global cron or unmanaged shell loops:
 
-- `app_automation_open_bundle_run_once` opens Slack, Outlook mail/calendar, and Teams browser surfaces once without snapshot extraction or timers, useful for warming authenticated sessions.
+- `app_automation_open_bundle_run_once` opens Slack, Outlook mail/calendar, and Teams browser surfaces once without snapshot extraction or timers, useful for warming authenticated sessions. Pass `dryRun` to inspect planned browser actions first.
 - `app_automation_refresh_start` starts one app/action interval and optionally runs immediately.
 - `app_automation_refresh_bundle_start` starts the standard Slack notifications, Outlook mail/calendar, and Teams notification/calendar bundle. It defaults `runImmediately` to `false` so agents can arm the bundle without opening several authenticated apps at once.
-- `app_automation_refresh_bundle_run_once` runs that same standard bundle once without creating timers, for explicit refresh-now workflows.
+- `app_automation_refresh_bundle_run_once` runs that same standard bundle once without creating timers, for explicit refresh-now workflows. Pass `dryRun` to inspect planned snapshot actions first.
 - `app_automation_refresh_status` lists active refreshers, run counts, errors, and last snapshot status.
 - `app_automation_refresh_stop` stops one refresher or all refreshers.
 - Runs are bounded and non-overlapping: if a previous refresh is still in flight, the next tick is skipped.
