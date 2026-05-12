@@ -330,12 +330,13 @@ test("/tendril-app overview parser keeps links option out of app ids", () => {
     includeLinks: true,
     apps: ["slack"],
   });
-  assert.deepEqual(parseOverviewCommandArgs(["fresh", "kind:events", "link-limit:5", "link-sort:newest", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
+  assert.deepEqual(parseOverviewCommandArgs(["fresh", "kind:events", "query:standup", "link-limit:5", "link-sort:newest", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
     includeLinks: true,
     apps: ["calendar"],
     linkFreshness: "fresh",
     linkKind: "events",
     linkLimitPerApp: 5,
+    linkQuery: "standup",
     linkSort: "newest",
     staleAfterMinutes: 1440,
   });
@@ -456,6 +457,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const aggregatedLinks = aggregateSnapshotLinkSummaries({
     root,
     snapshotRoot: path.join(root, "snapshots"),
+    query: "standup",
     freshness: "fresh",
     kind: "events",
     sort: "newest",
@@ -464,6 +466,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
       await collectSnapshotLinks({ root, app: "calendar", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") }),
     ],
   });
+  assert.equal(aggregatedLinks.query, "standup");
   assert.equal(aggregatedLinks.freshness, "fresh");
   assert.equal(aggregatedLinks.kind, "events.snapshot");
   assert.equal(aggregatedLinks.sort, "newest");
@@ -570,6 +573,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /parseOverviewCommandArgs/);
   assert.match(source, /linkFreshness/);
   assert.match(source, /linkKind/);
+  assert.match(source, /linkQuery/);
   assert.match(source, /linkSort/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /sort: Type\.Optional/);
