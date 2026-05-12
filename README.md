@@ -27,6 +27,7 @@ The app automation extension is loaded from [`extensions/app-automation.js`](ext
 Available tools:
 
 - `app_automation_list` — list configured apps and high-level actions.
+- `app_automation_overview` — summarize configured work apps, active refreshers, and latest snapshot digests.
 - `app_automation_plan` — return the deterministic action plan for an app/action without executing browser automation.
 - `app_automation_run` — dry-run or execute deterministic allowlisted runner steps such as `cli.exec`, `tendril.run`, and `snapshot.write`.
 - `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_status` / `app_automation_refresh_stop` — run non-overlapping Pi-session-local periodic app actions for snapshot refreshes, including a standard Slack/Outlook/Teams bundle.

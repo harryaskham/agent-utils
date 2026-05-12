@@ -240,6 +240,19 @@ function refreshPublicEntry(entry) {
   };
 }
 
+function renderWorkAppOverview({ apps, refreshers, snapshotDigests, root }) {
+  const lines = [`app automation overview stateRoot=${root}`];
+  lines.push(`apps: ${apps.map((app) => `${app.id}(${app.actions?.length || 0} actions)`).join(", ") || "none"}`);
+  lines.push(refreshers.length
+    ? `refreshers: ${refreshers.map((entry) => `${entry.id}:${entry.lastStatus}/runs=${entry.runCount}`).join(", ")}`
+    : "refreshers: none");
+  for (const digest of snapshotDigests) {
+    const rendered = renderSnapshotDigest(digest).split("\n").slice(0, 5).join("\n  ");
+    lines.push(`${digest.app || "snapshots"}: ${rendered}`);
+  }
+  return lines.join("\n");
+}
+
 function nextRefreshId(state, app, action) {
   state.refreshSeq = (state.refreshSeq || 0) + 1;
   return `${app}-${action.replace(/[^a-zA-Z0-9._-]+/g, "-")}-${state.refreshSeq}`;
@@ -301,6 +314,45 @@ export default function appAutomationExtension(pi) {
         external: catalog.external,
         stateRoot: stateRoot(),
         specVersion: APP_AUTOMATION_SPEC_VERSION,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_overview`,
+    label: "App Automation Overview",
+    description: "Summarize configured work apps, active refreshers, and latest snapshot digests for Slack, Outlook, Teams, calendar, and canvas workflows.",
+    promptSnippet: "Use this first when orienting on current Slack, Outlook, Teams, calendar, or canvas app automation state.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include. Defaults to slack, outlook, teams, canvas." }))),
+      includeSnapshots: Type.Optional(Type.Boolean({ description: "Include snapshot digest summaries. Defaults to true." })),
+      snapshotLimitPerApp: Type.Optional(Type.Number({ description: "Readable snapshot artifacts to summarize per app. Defaults to 3." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+    }),
+    async execute(_toolCallId, params) {
+      const catalog = await resolveCatalog(params);
+      const wantedIds = params.apps?.length ? params.apps.map((app) => String(app)) : ["slack", "outlook", "teams", "canvas"];
+      const apps = wantedIds
+        .map((id) => catalog.apps.find((app) => app.id === id))
+        .filter(Boolean)
+        .map((app) => ({ id: app.id, label: app.label, category: app.category, actions: app.actions.map((action) => action.id) }));
+      const root = stateRoot();
+      const refreshers = Array.from(refreshState.refreshers.values())
+        .filter((entry) => wantedIds.includes(entry.app))
+        .map(refreshPublicEntry);
+      const snapshotDigests = [];
+      if (params.includeSnapshots !== false) {
+        for (const app of apps) {
+          const digest = await digestSnapshotArtifacts({ root, app: app.id, limit: params.snapshotLimitPerApp || 3 });
+          snapshotDigests.push({ ...digest, app: app.id });
+        }
+      }
+      return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, root }), {
+        apps,
+        refreshers,
+        snapshotDigests,
+        external: catalog.external,
+        stateRoot: root,
       });
     },
   });

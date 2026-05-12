@@ -233,12 +233,14 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   await rm(root, { recursive: true, force: true });
 });
 
-test("extension is packaged and exposes list, plan, run, refresh, bundle, snapshot, status tools plus /tendril-app", async () => {
+test("extension is packaged and exposes list, overview, plan, run, refresh, bundle, snapshot, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
 
   assert.ok(packageJson.pi.extensions.includes("./extensions/app-automation.js"));
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_list`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
+  assert.match(source, /renderWorkAppOverview/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_plan`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_run`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_start`/);
