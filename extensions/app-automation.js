@@ -1031,7 +1031,7 @@ export default function appAutomationExtension(pi) {
     description: "List safe links preserved in Slack, Outlook, Teams, calendar, or canvas JSON snapshots.",
     promptSnippet: "Use this to find actionable Slack message, Outlook/Teams meeting, or Calendar links from canonical snapshots without ad-hoc filesystem reads.",
     parameters: Type.Object({
-      app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, or calendar." })),
+      app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, calendar, or all." })),
       artifactLimit: Type.Optional(Type.Number({ description: "Maximum JSON artifacts to scan. Defaults to 100." })),
       linkLimit: Type.Optional(Type.Number({ description: "Maximum links to return. Defaults to 100." })),
       query: Type.Optional(Type.String({ description: "Optional case-insensitive filter over app, kind, artifact path, label, and URL." })),

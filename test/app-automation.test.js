@@ -348,6 +348,13 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const staleLinks = await collectSnapshotLinks({ root, app: "slack", freshness: "stale", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(staleLinks.links.length, 0);
   assert.deepEqual(staleLinks.freshnessCounts, { total: 0, fresh: 0, stale: 0, unknown: 0 });
+  const calendarDir = path.join(root, "snapshots", "calendar");
+  await mkdir(calendarDir, { recursive: true });
+  await writeFile(path.join(calendarDir, "events.json"), JSON.stringify({ app: "calendar", kind: "events.snapshot", status: "ok", capturedAt: "2026-05-12T00:05:00Z", items: [{ title: "Standup", url: "https://calendar.example/events/standup" }] }), "utf8");
+  const allLinks = await collectSnapshotLinks({ root, app: "all", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(allLinks.links.length, 3);
+  assert.deepEqual(allLinks.freshnessCounts, { total: 3, fresh: 3, stale: 0, unknown: 0 });
+  assert.ok(allLinks.links.some((link) => link.app === "calendar" && link.url === "https://calendar.example/events/standup"));
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
   const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
@@ -437,6 +444,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /words\[0\] === "overview"/);
   assert.match(source, /words\[0\] === "links"/);
   assert.match(source, /collectSnapshotLinks/);
+  assert.match(source, /all/);
   assert.match(source, /query: Type\.Optional/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /staleAfterMinutes: Type\.Optional/);

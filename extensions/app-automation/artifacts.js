@@ -16,6 +16,11 @@ function assertInside(root, candidate) {
   return resolved;
 }
 
+function normalizeSnapshotAppSelector(app) {
+  const value = String(app || "").trim();
+  return ["", "all", "*"].includes(value.toLowerCase()) ? undefined : value;
+}
+
 async function walkFiles(root, { depth = 4 } = {}, current = root, currentDepth = 0, out = []) {
   const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
@@ -36,7 +41,8 @@ async function walkFiles(root, { depth = 4 } = {}, current = root, currentDepth 
 
 export async function listSnapshotArtifacts({ root, app, limit = 100 } = {}) {
   if (!root) throw new Error("root is required");
-  const snapshotRoot = assertInside(root, app ? path.join("snapshots", String(app)) : "snapshots");
+  const appSelector = normalizeSnapshotAppSelector(app);
+  const snapshotRoot = assertInside(root, appSelector ? path.join("snapshots", appSelector) : "snapshots");
   const exists = await stat(snapshotRoot).then((info) => info.isDirectory(), () => false);
   if (!exists) return { root, snapshotRoot, exists: false, artifacts: [] };
   const artifacts = await walkFiles(root, {}, snapshotRoot);
@@ -193,7 +199,8 @@ function summarizeLinkFreshness(links = []) {
 }
 
 export async function collectSnapshotLinks({ root, app, query, freshness, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
-  const listed = await listSnapshotArtifacts({ root, app, limit: artifactLimit });
+  const appSelector = normalizeSnapshotAppSelector(app);
+  const listed = await listSnapshotArtifacts({ root, app: appSelector, limit: artifactLimit });
   const links = [];
   for (const artifact of listed.artifacts.filter((entry) => entry.extension === ".json")) {
     const read = await readSnapshotArtifact({ root, file: artifact.relativePath, maxBytes });
@@ -208,7 +215,7 @@ export async function collectSnapshotLinks({ root, app, query, freshness, artifa
         const snapshotAt = snapshotTimestamp(value);
         const artifactModifiedAt = artifact.modifiedAt;
         const link = {
-          app: value.app || app || artifact.relativePath.split("/")[1] || "unknown",
+          app: value.app || appSelector || artifact.relativePath.split("/")[1] || "unknown",
           kind: value.kind || value.action || null,
           artifact: artifact.relativePath,
           row: rowIndex,
