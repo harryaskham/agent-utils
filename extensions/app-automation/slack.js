@@ -9,15 +9,40 @@ const SLACK_EXTRACTOR_SCRIPT = `(() => {
   ];
   const seen = new Set();
   const items = [];
+  const absoluteHref = (href) => {
+    try {
+      const parsed = new URL(href, location.href);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+      parsed.username = '';
+      parsed.password = '';
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.toString();
+    } catch (_) {
+      return null;
+    }
+  };
+  const linksFor = (element) => {
+    const urls = [];
+    const add = (href) => {
+      const url = absoluteHref(href);
+      if (url && !urls.includes(url)) urls.push(url);
+    };
+    const ownLink = element.closest?.('a[href]');
+    if (ownLink) add(ownLink.getAttribute('href'));
+    for (const link of element.querySelectorAll?.('a[href]') || []) add(link.getAttribute('href'));
+    return urls;
+  };
   for (const selector of selectors) {
     for (const element of document.querySelectorAll(selector)) {
       const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
       const ariaLabel = (element.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
       const dataQa = element.getAttribute('data-qa') || '';
-      const key = dataQa + '|' + ariaLabel + '|' + text;
+      const hrefs = linksFor(element);
+      const key = dataQa + '|' + ariaLabel + '|' + text + '|' + hrefs.join('|');
       if ((!text && !ariaLabel) || seen.has(key)) continue;
       seen.add(key);
-      items.push({ text, ariaLabel, dataQa });
+      items.push({ text, ariaLabel, dataQa, hrefs });
     }
   }
   return { url: location.href, title: document.title, items };
@@ -31,6 +56,39 @@ function parseUnreadCount(text) {
   const normalized = normalizeWhitespace(text);
   const match = normalized.match(/(?:^|\D)(\d{1,4})(?:\s*(?:unread|new|mentions?|replies?))?(?:\D|$)/i);
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function sanitizeSnapshotUrl(value) {
+  const raw = normalizeWhitespace(value);
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (!["http:", "https:"].includes(parsed.protocol)) return null;
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function collectUrls(item = {}) {
+  const candidates = [item.url, item.href, item.link, item.canonicalUrl];
+  for (const value of [item.urls, item.hrefs, item.links]) {
+    if (Array.isArray(value)) candidates.push(...value);
+    else if (value) candidates.push(value);
+  }
+  const seen = new Set();
+  const urls = [];
+  for (const candidate of candidates) {
+    const url = sanitizeSnapshotUrl(candidate);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+  }
+  return urls;
 }
 
 function classifySlackLine(line) {
@@ -68,12 +126,12 @@ export function buildSlackNotificationSnapshot(input = {}, { now = new Date() } 
   for (const item of extraction.items) {
     const text = normalizeWhitespace([item.text, item.ariaLabel].filter(Boolean).join(" "));
     const parsed = classifySlackLine(text);
-    if (parsed) candidates.push({ ...parsed, dataQa: item.dataQa || null });
+    if (parsed) candidates.push({ ...parsed, dataQa: item.dataQa || null, urls: collectUrls(item) });
   }
   const deduped = [];
   const seen = new Set();
   for (const item of candidates) {
-    const key = item.text.toLowerCase();
+    const key = `${item.text.toLowerCase()}|${item.urls[0] || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(item);
@@ -92,7 +150,7 @@ export function buildSlackNotificationSnapshot(input = {}, { now = new Date() } 
       dms: deduped.filter((item) => item.dm).length,
       channels: deduped.filter((item) => item.channel).length,
     },
-    notifications: deduped,
+    notifications: deduped.map((item) => ({ ...item, ...(item.urls[0] ? { url: item.urls[0] } : {}) })),
   };
 }
 
@@ -116,7 +174,10 @@ export function renderSlackNotificationMarkdown(snapshot) {
         item.dm ? "dm" : null,
         item.channel ? "channel" : null,
       ].filter(Boolean).join(", ");
-      lines.push(`- ${item.label}${badges ? ` (${badges})` : ""}`);
+      const label = String(item.label || "").replace(/[\[\]]/g, "");
+      const renderedLabel = item.url ? `[${label}](${item.url})` : item.label;
+      const extraUrls = Array.isArray(item.urls) && item.urls.length > 1 ? ` — additional links: ${item.urls.slice(1).join(", ")}` : "";
+      lines.push(`- ${renderedLabel}${badges ? ` (${badges})` : ""}${extraUrls}`);
     }
   }
   lines.push("");

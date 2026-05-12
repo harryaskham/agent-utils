@@ -215,16 +215,21 @@ test("Slack notification snapshot parses unread and mention lines", () => {
     url: "https://app.slack.com/client/T/C",
     title: "Slack",
     items: [
-      { text: "#general 3 unread", ariaLabel: "", dataQa: "channel_sidebar_channel" },
-      { text: "Harry mentioned you", ariaLabel: "1 mention", dataQa: "channel_sidebar_dm" },
-      { text: "quiet channel", ariaLabel: "", dataQa: "channel_sidebar_channel" },
+      { text: "#general 3 unread", ariaLabel: "", dataQa: "channel_sidebar_channel", hrefs: ["https://app.slack.com/client/T/C?token=secret#frag"] },
+      { text: "Harry mentioned you", ariaLabel: "1 mention", dataQa: "channel_sidebar_dm", href: "https://app.slack.com/client/T/D" },
+      { text: "quiet channel", ariaLabel: "", dataQa: "channel_sidebar_channel", href: "javascript:alert(1)" },
     ],
   }, { now: new Date("2026-05-12T00:00:00Z") });
   assert.equal(snapshot.status, "ok");
   assert.equal(snapshot.counts.items, 2);
   assert.equal(snapshot.counts.mentions, 1);
-  assert.match(renderSlackNotificationMarkdown(snapshot), /#general/);
-  assert.match(slackExtractorScript(), /querySelectorAll/);
+  assert.equal(snapshot.notifications[0].url, "https://app.slack.com/client/T/C");
+  assert.doesNotMatch(JSON.stringify(snapshot), /token=secret|#frag|javascript/);
+  assert.match(renderSlackNotificationMarkdown(snapshot), /\[#general/);
+  assert.match(renderSlackNotificationMarkdown(snapshot), /https:\/\/app\.slack\.com\/client\/T\/C/);
+  const extractor = slackExtractorScript();
+  assert.match(extractor, /querySelectorAll/);
+  assert.match(extractor, /hrefs/);
 });
 
 test("calendar app exposes open and events snapshot actions", () => {

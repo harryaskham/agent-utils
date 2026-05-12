@@ -56,7 +56,7 @@ For Slack, Outlook, Teams, calendars, and canvas/editor work, prefer this sequen
   - `snapshots/slack/notifications.md`
   - `snapshots/slack/extractor.js`
 
-Slack auth should reuse a Playwright/browser profile or an already-authenticated system browser session. The extension must never persist cookies, tokens, or secrets in repo files or snapshots. Agents can pass `sourceText`, `sourceJson`, or `extraction` to `app_automation_run` for offline normalization, or use the Playwright-backed live `browser.open`/`dom.extract` plan when an authenticated session is available.
+Slack auth should reuse a Playwright/browser profile or an already-authenticated system browser session. The extension must never persist cookies, tokens, or secrets in repo files or snapshots. Slack snapshots preserve safe channel/DM links from extracted `url`, `href`, `urls`, `hrefs`, or `links` fields while stripping query strings, fragments, usernames, and passwords before writing artifacts. Agents can pass `sourceText`, `sourceJson`, or `extraction` to `app_automation_run` for offline normalization, or use the Playwright-backed live `browser.open`/`dom.extract` plan when an authenticated session is available.
 
 ### Canvas
 
