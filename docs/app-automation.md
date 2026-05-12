@@ -24,6 +24,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_plan` — return the deterministic plan for an app/action without executing browser automation.
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
 - `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
+- `app_automation_refresh_start` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes.
 - `/tendril-app [app] [action]` — operator/agent-facing command for quick app/action discovery.
 
 ## Blessed initial configs
@@ -105,14 +106,13 @@ The architecture deliberately keeps a thin bridge between app actions and browse
 
 ## Periodic refresh model
 
-Periodic actions should stay Pi-native and controllable rather than using daemon-global cron or unmanaged shell loops. The intended follow-up shape is:
+Periodic actions stay Pi-native and controllable rather than using daemon-global cron or unmanaged shell loops:
 
-- `app_automation_refresh_start` for an app/action interval.
-- `app_automation_refresh_status` to list active refreshers and last snapshot timestamps.
-- `app_automation_refresh_stop` to stop one or all refreshers.
-- bounded non-overlapping runs that skip a tick if the previous action is still active.
-
-This model is tracked by `bd-829091`.
+- `app_automation_refresh_start` starts an app/action interval and optionally runs immediately.
+- `app_automation_refresh_status` lists active refreshers, run counts, errors, and last snapshot status.
+- `app_automation_refresh_stop` stops one refresher or all refreshers.
+- Runs are bounded and non-overlapping: if a previous refresh is still in flight, the next tick is skipped.
+- Refreshers are session-local and are cleaned up on Pi session shutdown.
 
 ## Safety rules
 

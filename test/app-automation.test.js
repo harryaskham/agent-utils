@@ -129,7 +129,7 @@ test("Slack notification snapshot parses unread and mention lines", () => {
   assert.match(slackExtractorScript(), /querySelectorAll/);
 });
 
-test("extension is packaged and exposes list, plan, run, status tools plus /tendril-app", async () => {
+test("extension is packaged and exposes list, plan, run, refresh, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
 
@@ -137,7 +137,12 @@ test("extension is packaged and exposes list, plan, run, status tools plus /tend
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_list`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_plan`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_run`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_start`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_status`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_stop`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_status`/);
+  assert.match(source, /setInterval/);
+  assert.match(source, /session_shutdown/);
   assert.match(source, /registerCommand\("tendril-app"/);
 });
 

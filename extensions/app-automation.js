@@ -1,5 +1,6 @@
 import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setInterval, clearInterval } from "node:timers";
 
 import { Type } from "@sinclair/typebox";
 
@@ -19,6 +20,8 @@ import {
 } from "./app-automation/slack.js";
 
 const TOOL_PREFIX = "app_automation";
+const DEFAULT_REFRESH_INTERVAL_SECONDS = 300;
+const MIN_REFRESH_INTERVAL_SECONDS = 30;
 
 async function pathSummary(root) {
   const exists = await stat(root).then(() => true, () => false);
@@ -132,7 +135,63 @@ async function resolveCatalog(params = {}) {
   return loadCatalog({ includeExternal: params.includeExternal !== false });
 }
 
+function refreshPublicEntry(entry) {
+  return {
+    id: entry.id,
+    app: entry.app,
+    action: entry.action,
+    intervalSeconds: entry.intervalSeconds,
+    running: entry.running,
+    inFlight: entry.inFlight,
+    runCount: entry.runCount,
+    errorCount: entry.errorCount,
+    lastRunAt: entry.lastRunAt,
+    lastStatus: entry.lastStatus,
+    lastError: entry.lastError,
+  };
+}
+
+function nextRefreshId(state, app, action) {
+  state.refreshSeq = (state.refreshSeq || 0) + 1;
+  return `${app}-${action.replace(/[^a-zA-Z0-9._-]+/g, "-")}-${state.refreshSeq}`;
+}
+
 export default function appAutomationExtension(pi) {
+  const refreshState = { refreshers: new Map(), refreshSeq: 0 };
+
+  async function runRefresh(entry, signal) {
+    if (entry.inFlight || !entry.running) return;
+    entry.inFlight = true;
+    entry.lastRunAt = new Date().toISOString();
+    try {
+      const catalog = await resolveCatalog(entry);
+      const plan = buildActionPlan({ app: entry.app, action: entry.action, params: entry.params || {}, catalog: catalog.apps });
+      const run = await runPlan(pi, plan, { signal, timeoutMs: entry.timeoutMs });
+      entry.runCount += 1;
+      entry.lastStatus = run.status;
+      entry.lastError = run.reason || (run.status === "error" ? "refresh run returned error" : null);
+      entry.lastRun = run;
+    } catch (error) {
+      entry.errorCount += 1;
+      entry.lastStatus = "error";
+      entry.lastError = error.message;
+    } finally {
+      entry.inFlight = false;
+    }
+  }
+
+  function stopRefresh(id) {
+    const entry = refreshState.refreshers.get(id);
+    if (!entry) return false;
+    if (entry.timer) clearInterval(entry.timer);
+    entry.running = false;
+    refreshState.refreshers.delete(id);
+    return true;
+  }
+
+  pi.on("session_shutdown", async () => {
+    for (const id of Array.from(refreshState.refreshers.keys())) stopRefresh(id);
+  });
   pi.registerTool({
     name: `${TOOL_PREFIX}_list`,
     label: "App Automation List",
@@ -207,6 +266,96 @@ export default function appAutomationExtension(pi) {
         `run ${plan.app.id}.${plan.action.id}: ${run.status}${run.reason ? ` — ${run.reason}` : ""}`,
         { plan, run, external: catalog.external },
       );
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_refresh_start`,
+    label: "App Automation Refresh Start",
+    description: "Start a Pi-session-local periodic app automation run. Runs are non-overlapping and stopped on session shutdown.",
+    parameters: Type.Object({
+      app: Type.String({ description: "App id to refresh." }),
+      action: Type.String({ description: "Action id to refresh." }),
+      params: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Action parameters." })),
+      intervalSeconds: Type.Optional(Type.Number({ description: "Refresh interval. Defaults to 300 seconds; minimum 30 seconds." })),
+      runImmediately: Type.Optional(Type.Boolean({ description: "Run once immediately after starting. Defaults to true." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Per-refresh command timeout in milliseconds. Defaults to 30000." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const catalog = await resolveCatalog(params);
+      const plan = buildActionPlan({ app: params.app, action: params.action, params: params.params || {}, catalog: catalog.apps });
+      if (!plan.execution.executable) {
+        return textResult(`refresh not started: ${plan.execution.missingParams.length ? `missing ${plan.execution.missingParams.join(", ")}` : "plan is not executable"}`, {
+          plan,
+          blockedSteps: plan.execution.blockedSteps,
+        });
+      }
+      const intervalSeconds = Math.max(
+        MIN_REFRESH_INTERVAL_SECONDS,
+        Number.parseInt(String(params.intervalSeconds || DEFAULT_REFRESH_INTERVAL_SECONDS), 10) || DEFAULT_REFRESH_INTERVAL_SECONDS,
+      );
+      const id = nextRefreshId(refreshState, plan.app.id, plan.action.id);
+      const entry = {
+        id,
+        app: plan.app.id,
+        action: plan.action.id,
+        params: params.params || {},
+        includeExternal: params.includeExternal !== false,
+        timeoutMs: params.timeoutMs,
+        intervalSeconds,
+        running: true,
+        inFlight: false,
+        runCount: 0,
+        errorCount: 0,
+        lastRunAt: null,
+        lastStatus: "pending",
+        lastError: null,
+        lastRun: null,
+      };
+      entry.timer = setInterval(() => { void runRefresh(entry, signal); }, intervalSeconds * 1000);
+      refreshState.refreshers.set(id, entry);
+      if (params.runImmediately !== false) await runRefresh(entry, signal);
+      return textResult(`started app automation refresh ${id}: ${entry.app}.${entry.action} every ${intervalSeconds}s`, {
+        refresh: refreshPublicEntry(entry),
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_refresh_status`,
+    label: "App Automation Refresh Status",
+    description: "List active app automation periodic refreshers and their last run status.",
+    parameters: Type.Object({
+      id: Type.Optional(Type.String({ description: "Optional refresher id to inspect." })),
+    }),
+    async execute(_toolCallId, params) {
+      const entries = params.id
+        ? [refreshState.refreshers.get(params.id)].filter(Boolean)
+        : Array.from(refreshState.refreshers.values());
+      const publicEntries = entries.map(refreshPublicEntry);
+      const text = publicEntries.length
+        ? publicEntries.map((entry) => `${entry.id}: ${entry.app}.${entry.action} every ${entry.intervalSeconds}s status=${entry.lastStatus} runs=${entry.runCount} errors=${entry.errorCount}`).join("\n")
+        : "No active app automation refreshers.";
+      return textResult(text, { refreshers: publicEntries });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_refresh_stop`,
+    label: "App Automation Refresh Stop",
+    description: "Stop one or all active app automation periodic refreshers.",
+    parameters: Type.Object({
+      id: Type.Optional(Type.String({ description: "Refresher id to stop. Omit when all=true." })),
+      all: Type.Optional(Type.Boolean({ description: "Stop all refreshers." })),
+    }),
+    async execute(_toolCallId, params) {
+      const ids = params.all ? Array.from(refreshState.refreshers.keys()) : [params.id].filter(Boolean);
+      const stopped = ids.filter((id) => stopRefresh(id));
+      return textResult(stopped.length ? `stopped ${stopped.join(", ")}` : "No matching app automation refreshers stopped.", {
+        stopped,
+        remaining: Array.from(refreshState.refreshers.values()).map(refreshPublicEntry),
+      });
     },
   });
 
