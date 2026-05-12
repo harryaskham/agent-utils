@@ -22,6 +22,8 @@ import {
   readSnapshotArtifact,
   renderArtifactList,
   renderSnapshotDigest,
+  renderSnapshotStaleness,
+  snapshotStalenessReport,
 } from "../extensions/app-automation/artifacts.js";
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
@@ -265,6 +267,9 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.match(renderedDigest, /counts=items=2/);
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
+  const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
+  assert.match(renderSnapshotStaleness(staleness), /slack: stale/);
+  assert.match(renderSnapshotStaleness(staleness), /outlook: missing/);
   const artifact = await readSnapshotArtifact({ root, file: "snapshots/slack/notifications.md", maxBytes: 4 });
   assert.equal(artifact.content, "# Sl");
   assert.equal(artifact.truncated, true);
@@ -297,6 +302,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_stop`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_list`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_digest`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_staleness`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshot_read`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_status`/);
   assert.match(source, /setInterval/);

@@ -10,6 +10,8 @@ import {
   readSnapshotArtifact,
   renderArtifactList,
   renderSnapshotDigest,
+  renderSnapshotStaleness,
+  snapshotStalenessReport,
 } from "./app-automation/artifacts.js";
 import {
   APP_AUTOMATION_SPEC_VERSION,
@@ -798,6 +800,26 @@ export default function appAutomationExtension(pi) {
       const root = stateRoot();
       const digest = await digestSnapshotArtifacts({ root, app: params.app, limit: params.limit, maxBytes: params.maxBytes });
       return textResult(renderSnapshotDigest(digest), { digest });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_snapshots_staleness`,
+    label: "App Automation Snapshots Staleness",
+    description: "Report whether Slack, Outlook, Teams, calendar, and canvas snapshot artifacts are fresh, stale, or missing.",
+    promptSnippet: "Use this to decide whether to run open/refresh bundles before relying on work-app snapshots.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to check. Defaults to slack, outlook, teams, canvas." }))),
+      staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale snapshots. Defaults to 60 minutes." })),
+    }),
+    async execute(_toolCallId, params) {
+      const root = stateRoot();
+      const report = await snapshotStalenessReport({
+        root,
+        apps: params.apps?.length ? params.apps : ["slack", "outlook", "teams", "canvas"],
+        staleAfterMinutes: params.staleAfterMinutes || 60,
+      });
+      return textResult(renderSnapshotStaleness(report), { staleness: report });
     },
   });
 

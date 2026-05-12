@@ -128,3 +128,37 @@ export function renderSnapshotDigest(summary) {
   if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${summary.snapshotRoot}.`;
   return summary.artifacts.map((artifact) => `${artifact.relativePath}: ${artifact.summary}${artifact.truncated ? " (truncated)" : ""}`).join("\n");
 }
+
+export async function snapshotStalenessReport({ root, apps = [], staleAfterMinutes = 60, now = new Date() } = {}) {
+  if (!root) throw new Error("root is required");
+  const threshold = Math.max(1, Number(staleAfterMinutes) || 60);
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const entries = [];
+  for (const app of apps) {
+    const listed = await listSnapshotArtifacts({ root, app, limit: 1 });
+    const latest = listed.artifacts[0];
+    if (!listed.exists || !latest) {
+      entries.push({ app, status: "missing", staleAfterMinutes: threshold, snapshotRoot: listed.snapshotRoot });
+      continue;
+    }
+    const modifiedMs = new Date(latest.modifiedAt).getTime();
+    const ageMinutes = Math.max(0, Math.round((nowMs - modifiedMs) / 60000));
+    entries.push({
+      app,
+      status: ageMinutes > threshold ? "stale" : "fresh",
+      staleAfterMinutes: threshold,
+      latestArtifact: latest.relativePath,
+      latestModifiedAt: latest.modifiedAt,
+      ageMinutes,
+    });
+  }
+  return { root, staleAfterMinutes: threshold, checkedAt: new Date(nowMs).toISOString(), entries };
+}
+
+export function renderSnapshotStaleness(report) {
+  if (!report.entries.length) return "No apps requested for staleness reporting.";
+  return report.entries.map((entry) => {
+    if (entry.status === "missing") return `${entry.app}: missing snapshots at ${entry.snapshotRoot}`;
+    return `${entry.app}: ${entry.status} age=${entry.ageMinutes}m latest=${entry.latestArtifact} modified=${entry.latestModifiedAt}`;
+  }).join("\n");
+}
