@@ -16,6 +16,11 @@ import {
   renderPlan,
   sanitizeId,
 } from "../extensions/app-automation/catalog.js";
+import {
+  buildSlackNotificationSnapshot,
+  renderSlackNotificationMarkdown,
+  slackExtractorScript,
+} from "../extensions/app-automation/slack.js";
 
 test("app automation catalog includes Slack, canvas, Outlook, and Teams", () => {
   const apps = listAppConfigs();
@@ -31,7 +36,8 @@ test("Slack notification plan is deterministic, read-only, and snapshot-oriented
   assert.equal(plan.action.driver, "playwright");
   assert.equal(plan.snapshotDir.endsWith("snapshots/slack"), true);
   assert.deepEqual(plan.action.missingParams, []);
-  assert.deepEqual(plan.steps.map((step) => step.kind), ["browser.open", "dom.extract", "snapshot.write"]);
+  assert.deepEqual(plan.steps.map((step) => step.kind), ["slack.notifications.snapshot"]);
+  assert.equal(plan.execution.executable, true);
   assert.match(renderPlan(plan), /slack\.notifications\.snapshot/);
 });
 
@@ -81,11 +87,29 @@ test("execution planning allowlists deterministic cli and tendril commands", () 
   assert.equal(buildStepCommand({ kind: "tendril.run", target: "Slack", dsl: "send(\"hi\")" }).command, "tendril");
 });
 
-test("execution plan blocks high-level Slack browser steps until driver beads land", () => {
+test("execution plan allows Slack notification snapshot internal runner", () => {
   const plan = buildActionPlan({ app: "slack", action: "notifications.snapshot" });
   const execution = buildExecutionPlan(plan);
-  assert.equal(execution.executable, false);
-  assert.match(execution.blockedSteps[0].reason, /Playwright bridge/);
+  assert.equal(execution.executable, true);
+  assert.deepEqual(execution.blockedSteps, []);
+});
+
+test("Slack notification snapshot parses unread and mention lines", () => {
+  const snapshot = buildSlackNotificationSnapshot({
+    source: "fixture",
+    url: "https://app.slack.com/client/T/C",
+    title: "Slack",
+    items: [
+      { text: "#general 3 unread", ariaLabel: "", dataQa: "channel_sidebar_channel" },
+      { text: "Harry mentioned you", ariaLabel: "1 mention", dataQa: "channel_sidebar_dm" },
+      { text: "quiet channel", ariaLabel: "", dataQa: "channel_sidebar_channel" },
+    ],
+  }, { now: new Date("2026-05-12T00:00:00Z") });
+  assert.equal(snapshot.status, "ok");
+  assert.equal(snapshot.counts.items, 2);
+  assert.equal(snapshot.counts.mentions, 1);
+  assert.match(renderSlackNotificationMarkdown(snapshot), /#general/);
+  assert.match(slackExtractorScript(), /querySelectorAll/);
 });
 
 test("extension is packaged and exposes list, plan, run, status tools plus /tendril-app", async () => {

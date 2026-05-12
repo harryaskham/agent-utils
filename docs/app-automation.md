@@ -33,11 +33,12 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 `slack` targets <https://app.slack.com/client> and starts with:
 
 - `open` — open or reuse Slack web in a browser session.
-- `notifications.snapshot` — future read-only extraction of unread/channel/DM summaries into:
+- `notifications.snapshot` — read-only normalization of Slack unread/channel/DM summaries into:
   - `snapshots/slack/notifications.json`
   - `snapshots/slack/notifications.md`
+  - `snapshots/slack/extractor.js`
 
-Slack auth should reuse a Playwright/browser profile or an already-authenticated system browser session. The extension must never persist cookies, tokens, or secrets in repo files or snapshots.
+Slack auth should reuse a Playwright/browser profile or an already-authenticated system browser session. The extension must never persist cookies, tokens, or secrets in repo files or snapshots. Until the Playwright DOM bridge lands, agents can pass `sourceText`, `sourceJson`, or `extraction` to `app_automation_run` and use the persisted `extractor.js` helper as the browser-side DOM extraction snippet.
 
 ### Canvas
 
@@ -90,6 +91,7 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - `cli.exec` runs only allowlisted commands: `playwright-cli`, `tendril`, and `pandoc`.
    - `tendril.run` builds a structured `tendril run --window <target> <dsl>` invocation.
    - `snapshot.write` persists run metadata under the app snapshot directory.
+   - `slack.notifications.snapshot` normalizes Slack extraction text/JSON and writes canonical JSON, Markdown, and the browser-side extractor snippet.
    - high-level steps such as `browser.open`, `dom.extract`, `document.export`, and `editor.replace` remain planned until app-specific driver beads implement them.
 4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.

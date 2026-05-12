@@ -66,9 +66,7 @@ export const BLESSED_APPS = [
         description: "Extract a conservative unread/channel/DM notification summary and persist it as canonical JSON and Markdown.",
         outputs: ["snapshots/slack/notifications.json", "snapshots/slack/notifications.md"],
         plan: [
-          { kind: "browser.open", url: "https://app.slack.com/client", reuseSession: true },
-          { kind: "dom.extract", target: "workspace-sidebar", selectors: ["[data-qa]", "[aria-label]"] },
-          { kind: "snapshot.write", format: ["json", "markdown"], name: "notifications" },
+          { kind: "slack.notifications.snapshot" },
         ],
       },
     ],
@@ -291,6 +289,7 @@ export function buildStepCommand(step, params = {}) {
     return { executable: true, command, args: ensureArray(step.args).map((arg) => coerceArg(arg, params)) };
   }
   if (step.kind === "snapshot.write") return { executable: true, internal: "snapshot.write", args: [] };
+  if (step.kind === "slack.notifications.snapshot") return { executable: true, internal: "slack.notifications.snapshot", args: [] };
   return { executable: false, reason: `no runner for step kind: ${step.kind || "unknown"}` };
 }
 

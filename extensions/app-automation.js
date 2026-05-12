@@ -1,4 +1,5 @@
 import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 import { Type } from "@sinclair/typebox";
 
@@ -10,6 +11,11 @@ import {
   renderPlan,
   stateRoot,
 } from "./app-automation/catalog.js";
+import {
+  buildSlackNotificationSnapshot,
+  renderSlackNotificationMarkdown,
+  slackExtractorScript,
+} from "./app-automation/slack.js";
 
 const TOOL_PREFIX = "app_automation";
 
@@ -50,6 +56,30 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
   const results = [];
   await mkdir(plan.snapshotDir, { recursive: true });
   for (const step of plan.execution.stepCommands) {
+    if (step.internal === "slack.notifications.snapshot") {
+      let input = plan.params.extraction || plan.params.sourceJson || plan.params.sourceText || {};
+      if (typeof input === "string" && input.trim().startsWith("{")) {
+        input = JSON.parse(input);
+      }
+      const snapshot = buildSlackNotificationSnapshot(input);
+      const jsonPath = path.join(plan.snapshotDir, "notifications.json");
+      const markdownPath = path.join(plan.snapshotDir, "notifications.md");
+      const extractorPath = path.join(plan.snapshotDir, "extractor.js");
+      await writeFile(jsonPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+      await writeFile(markdownPath, renderSlackNotificationMarkdown(snapshot), "utf8");
+      await writeFile(extractorPath, `${slackExtractorScript()}\n`, "utf8");
+      results.push({
+        index: step.index,
+        kind: step.kind,
+        status: "ok",
+        snapshotStatus: snapshot.status,
+        jsonPath,
+        markdownPath,
+        extractorPath,
+        counts: snapshot.counts,
+      });
+      continue;
+    }
     if (step.internal === "snapshot.write") {
       const payload = {
         version: 1,
