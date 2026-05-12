@@ -23,7 +23,7 @@ import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
-import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
+import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, writeLatestRunManifest } from "./app-automation/run-manifest.js";
 import {
   buildSlackNotificationSnapshot,
@@ -40,6 +40,19 @@ const DEFAULT_REFRESH_BUNDLE = [
   { app: "outlook", action: "calendar.snapshot" },
   { app: "teams", action: "notifications.snapshot" },
   { app: "teams", action: "calendar.snapshot" },
+];
+const DEFAULT_DOCTOR_ACTIONS = [
+  { app: "slack", action: "open" },
+  { app: "slack", action: "notifications.snapshot" },
+  { app: "outlook", action: "open" },
+  { app: "outlook", action: "calendar.open" },
+  { app: "outlook", action: "notifications.snapshot" },
+  { app: "outlook", action: "calendar.snapshot" },
+  { app: "teams", action: "open" },
+  { app: "teams", action: "calendar.open" },
+  { app: "teams", action: "notifications.snapshot" },
+  { app: "teams", action: "calendar.snapshot" },
+  { app: "canvas", action: "sync-markdown" },
 ];
 
 async function pathSummary(root) {
@@ -273,6 +286,24 @@ function renderDefaultRefreshBundle() {
   ].join("\n");
 }
 
+function renderDoctorReport({ rootSummary, catalog, playwrightCli, actionDiagnostics, cliCheck }) {
+  const lines = [
+    `app automation doctor stateRoot=${rootSummary.root} exists=${rootSummary.exists}`,
+    `playwrightCli=${playwrightCli}`,
+    `catalogApps=${catalog.apps.map((app) => app.id).join(",")}`,
+  ];
+  if (catalog.external?.errors?.length) {
+    lines.push(`catalogErrors=${catalog.external.errors.length}`);
+    lines.push(...catalog.external.errors.slice(0, 5).map((error) => `- ${error.source || "external"}: ${error.error || error.message || String(error)}`));
+  } else {
+    lines.push("catalogErrors=0");
+  }
+  if (cliCheck) lines.push(`cliCheck=${cliCheck.status}${cliCheck.version ? ` version=${cliCheck.version}` : ""}${cliCheck.error ? ` error=${cliCheck.error}` : ""}`);
+  lines.push("actions:");
+  lines.push(...actionDiagnostics.map((entry) => `- ${entry.app}.${entry.action}: ${entry.executable ? "executable" : "not-executable"}${entry.missingParams?.length ? ` missing=${entry.missingParams.join(",")}` : ""}${entry.blockedSteps?.length ? ` blocked=${entry.blockedSteps.map((step) => step.kind).join(",")}` : ""}`));
+  return lines.join("\n");
+}
+
 function nextRefreshId(state, app, action) {
   state.refreshSeq = (state.refreshSeq || 0) + 1;
   return `${app}-${action.replace(/[^a-zA-Z0-9._-]+/g, "-")}-${state.refreshSeq}`;
@@ -334,6 +365,51 @@ export default function appAutomationExtension(pi) {
         external: catalog.external,
         stateRoot: stateRoot(),
         specVersion: APP_AUTOMATION_SPEC_VERSION,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_doctor`,
+    label: "App Automation Doctor",
+    description: "Diagnose app automation catalog, state root, Playwright CLI configuration, and standard work-app action executability.",
+    promptSnippet: "Use this before live Slack, Outlook, Teams, calendar, or canvas automation when setup or auth state is unclear.",
+    parameters: Type.Object({
+      checkCli: Type.Optional(Type.Boolean({ description: "Run the configured Playwright CLI with --version. Defaults to false." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for optional CLI check. Defaults to 5000." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const catalog = await resolveCatalog(params);
+      const rootSummary = await pathSummary(stateRoot());
+      const actionDiagnostics = DEFAULT_DOCTOR_ACTIONS.map((target) => {
+        try {
+          const plan = buildActionPlan({ app: target.app, action: target.action, catalog: catalog.apps });
+          return {
+            app: target.app,
+            action: target.action,
+            executable: plan.execution.executable,
+            missingParams: plan.execution.missingParams,
+            blockedSteps: plan.execution.blockedSteps,
+          };
+        } catch (error) {
+          return { app: target.app, action: target.action, executable: false, error: error.message };
+        }
+      });
+      let cliCheck = null;
+      const playwrightCli = playwrightCliCommand();
+      if (params.checkCli) {
+        const result = await pi.exec(playwrightCli, ["--version"], { signal, timeout: params.timeoutMs || 5000 });
+        cliCheck = result.code === 0
+          ? { status: "ok", version: String(result.stdout || "").trim().split(/\r?\n/)[0] || "unknown" }
+          : { status: "error", error: String(result.stderr || result.stdout || `exit ${result.code}`).slice(0, 300) };
+      }
+      return textResult(renderDoctorReport({ rootSummary, catalog, playwrightCli, actionDiagnostics, cliCheck }), {
+        state: rootSummary,
+        playwrightCli,
+        cliCheck,
+        actionDiagnostics,
+        external: catalog.external,
       });
     },
   });
