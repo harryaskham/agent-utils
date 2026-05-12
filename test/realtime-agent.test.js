@@ -6,6 +6,7 @@ import realtimeAgentExtension, {
   buildServerVadTurnDetection,
   setRealtimeWebSocketConstructor,
 } from "../extensions/realtime-agent.js";
+import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -90,6 +91,7 @@ test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
 
 function makeHarness({ models = new Map(), initialModel } = {}) {
   const commands = new Map();
+  const tools = new Map();
   const handlers = new Map();
   const widgets = new Map();
   const statuses = new Map();
@@ -118,7 +120,10 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     registerCommand(name, definition) { commands.set(name, definition); },
     getCommand(name) { return commands.get(name); },
     registerMessageRenderer() {},
-    registerProvider() {},
+    registerProvider(provider, definition) {
+      for (const model of definition.models || []) models.set(`${provider}/${model.id}`, { ...model, provider });
+    },
+    registerTool(definition) { tools.set(definition.name, definition); },
     events: { emit: (name, payload) => emittedEvents.push({ name, payload }) },
     on(event, handler) { handlers.set(event, handler); },
     setModel: async (model) => {
@@ -128,14 +133,24 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     },
   };
 
-  return { pi, commands, handlers, widgets, statuses, notifications, setModelCalls, emittedEvents, ctx };
+  return { pi, commands, tools, handlers, widgets, statuses, notifications, setModelCalls, emittedEvents, ctx };
 }
 
+test("env-style realtime args parse quoted key/value pairs", () => {
+  assert.deepEqual(parseEnvStyleArgs('backend=pulse source="source bluetooth" sink=vsink\\ voice'), {
+    tokens: ["backend=pulse", "source=source bluetooth", "sink=vsink voice"],
+    positionals: [],
+    values: { backend: "pulse", source: "source bluetooth", sink: "vsink voice" },
+  });
+  assert.deepEqual(parseEnvStyleArgs("start vad backend=pulse").positionals, ["start", "vad"]);
+});
+
 test("extension exposes unified realtime controls on pi and the event bus", () => {
-  const { pi, commands, emittedEvents } = makeHarness();
+  const { pi, commands, tools, emittedEvents } = makeHarness();
   realtimeAgentExtension(pi);
 
   assert.match(commands.get("rt").description, /mic\|listen\|audio/);
+  assert.ok(tools.has("realtime_agent_control"));
   assert.match(commands.get("rt-listen").description, /ptt\|vad\|continuous/);
   assert.equal(typeof pi.realtime.snapshot, "function");
   assert.equal(typeof pi.realtime.setAudio, "function");
@@ -537,6 +552,37 @@ test("/rt help reports unified usage and /rt stt stop exits transcription mode",
   assert.match(notifications.at(-1).message, /Realtime STT stopped/);
 });
 
+test("realtime connection auto-reconnects after unexpected close but not after /rt-off", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousDelay = process.env.PI_RT_RECONNECT_BASE_DELAY_MS;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_RECONNECT_BASE_DELAY_MS = "1";
+  FakeWebSocket.instances = [];
+  const { pi, commands, handlers, ctx } = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("start nolisten", ctx);
+    assert.equal(FakeWebSocket.instances.length, 1);
+    FakeWebSocket.instances[0].close();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(FakeWebSocket.instances.length >= 2);
+
+    await commands.get("rt-off").handler("", ctx);
+    const countAfterOff = FakeWebSocket.instances.length;
+    FakeWebSocket.instances.at(-1)?.close();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(FakeWebSocket.instances.length, countAfterOff);
+  } finally {
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousDelay === undefined) delete process.env.PI_RT_RECONNECT_BASE_DELAY_MS;
+    else process.env.PI_RT_RECONNECT_BASE_DELAY_MS = previousDelay;
+    try { await commands.get("rt-off").handler("", ctx); } catch {}
+  }
+});
+
 test("/rt status full and doctor subcommands expose diagnostics", async () => {
   const { pi, commands, handlers, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);
@@ -547,6 +593,50 @@ test("/rt status full and doctor subcommands expose diagnostics", async () => {
 
   await commands.get("rt").handler("doctor", ctx);
   assert.match(notifications.at(-1).message, /Realtime doctor/);
+});
+
+test("/rt start force-registers realtime provider and switches away from current text model", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  FakeWebSocket.instances = [];
+  const previousModel = { provider: "litellm-openai", id: "gpt-5.5" };
+  const { pi, commands, handlers, setModelCalls, ctx } = makeHarness({ initialModel: previousModel });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("start nolisten", ctx);
+    assert.equal(setModelCalls.at(-1)?.provider, "openai-realtime");
+    assert.equal(setModelCalls.at(-1)?.id, "gpt-realtime-2");
+    assert.equal(pi.realtime.snapshot().previousModel.id, "gpt-5.5");
+  } finally {
+    await commands.get("rt-off").handler("", ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+  }
+});
+
+test("/rt env-style args configure Pulse routing and tool exposes same control", async () => {
+  const previous = { server: process.env.PULSE_SERVER, source: process.env.PULSE_SOURCE, sink: process.env.PULSE_SINK };
+  const { pi, commands, tools, handlers, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink', ctx);
+    assert.equal(process.env.PI_RT_AUDIO_BACKEND, "pulse");
+    assert.equal(process.env.PULSE_SOURCE, "source bluetooth");
+    assert.equal(process.env.PULSE_SINK, "vsink");
+
+    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", status: "full" }, null, null, ctx);
+    assert.equal(process.env.PULSE_SERVER, "sgu24:4713");
+    assert.equal(process.env.PULSE_SOURCE, "source.bluetooth");
+  } finally {
+    for (const [key, value] of [["PULSE_SERVER", previous.server], ["PULSE_SOURCE", previous.source], ["PULSE_SINK", previous.sink]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test("/rt nolisten switches to realtime, connects through injected WebSocket, and restores previous model on /rt-off", async () => {

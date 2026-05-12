@@ -36,6 +36,15 @@ export PULSE_SINK=...      # optional; default sink if omitted
 export PULSE_SOURCE=...    # optional; default source if omitted
 ```
 
+At runtime, the unified `/rt` command also accepts env-style key/value arguments for new mic/playback processes:
+
+```text
+/rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=vsink_voice
+/rt source="source with spaces" backend=pulse
+```
+
+Order does not matter. Values may be quoted with shell-like single or double quotes. Empty runtime values unset the corresponding Pulse variable for future spawns. If a mic capture or playback process is already running, stop/cancel it and start again so the new Pulse environment is used.
+
 You can override the backend for local-device testing:
 
 ```bash
@@ -167,16 +176,56 @@ Unified `/rt` controls:
 /rt voice <voice>              set realtime output voice
 /rt backend <backend>          set audio backend for new mic/playback commands
 /rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high
+/rt backend=pulse source=...    env-style key/value form; supports server/source/sink/start/mic/stt/audio/widget/status/voice/reasoning
 /rt help                       show the unified command usage
 ```
 
 `/rt voice`, `/rt backend`, and `/rt reasoning` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Voice names are normalized case-insensitively before validation, so `/rt voice Verse` selects `verse`. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, `/rt listen <mode>`, `/rt stt <mode>`, `/rt audio <mode>`, `/rt widget <mode>`, and `/rt status <mode>` are also rejected instead of falling through to a default action. `/rt listen continuous` is accepted as a listen-mode alias for VAD, matching `pi.realtime.listen(ctx, "continuous")`. Unexpected extra arguments, such as `/rt start ptt typo`, are rejected before changing realtime state. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
+
+Env-style `/rt` arguments normalize into the same shape used by the agent tool surface. Examples:
+
+```text
+/rt backend=pulse server=sgu24:4713 source=source.bluetooth start=vad
+/rt stt=ptt source="source.bluetooth"
+/rt action=stop
+```
 
 Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/stt`, `/rt-stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`). STT aliases pass their arguments through the unified `/rt stt` path, so `/stt stop` and `/rt-stt stop` are equivalent to `/rt stt stop`. No-argument aliases such as `/rt-on`, `/rt-off`, `/rt-doctor`, and `/rt-hide-status` reject unexpected arguments instead of silently ignoring them.
 
 ## Pi control API
 
 The extension also exposes a unified control object at `pi.realtime` and emits it on `pi.events` as `realtime:controls` for future UI/extensions that should not reach into realtime session internals directly.
+
+## Agent tool workflow
+
+When the extension is loaded in a Pi runtime that supports dynamic tools, it registers `realtime_agent_control`. Agents can use this instead of asking the operator to type `/rt` commands. The tool accepts the same normalized fields as the env-style command parser:
+
+- lifecycle: `action`, `start`, `stt`, `mic`, `listen`, `status`
+- audio/config: `audio`, `backend`, `pulseServer`, `pulseSource`, `pulseSink`, `voice`, `reasoning`, `widget`
+
+Examples:
+
+```json
+{ "backend": "pulse", "pulseServer": "sgu24:4713", "pulseSource": "source.bluetooth", "start": "vad" }
+{ "stt": "ptt", "pulseSource": "source.bluetooth" }
+{ "action": "status", "status": "full" }
+{ "action": "stop" }
+```
+
+Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output.
+
+## Autoreconnect
+
+Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off`, `/rt stop`, or the tool equivalent disables reconnect.
+
+Tuning knobs:
+
+```bash
+export PI_RT_RECONNECT_MAX_ATTEMPTS=5
+export PI_RT_RECONNECT_BASE_DELAY_MS=1000
+```
+
+`/rt-status full` and `/rt-doctor` report the last disconnect reason, retry count, and next retry delay.
 
 Useful methods include:
 

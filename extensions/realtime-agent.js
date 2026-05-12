@@ -73,6 +73,8 @@
 
 import { spawn, spawnSync } from "node:child_process";
 
+import { parseEnvStyleArgs } from "./lib/env-args.js";
+
 const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
 const DEFAULT_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
@@ -110,11 +112,16 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... start=vad";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
 const TOOL_OUTPUT_CAP = 16_000;
+const Type = {
+  String(options = {}) { return { type: "string", ...options }; },
+  Optional(schema) { return schema; },
+  Object(properties) { return { type: "object", properties, required: [] }; },
+};
 
 let realtimeWebSocketConstructor = null;
 let realtimeWebSocketOpenState = 1;
@@ -595,6 +602,45 @@ class RealtimeSession {
     this.lastResponseObject = null;
   }
 
+  clearReconnectTimer() {
+    if (this.config.reconnectTimer) clearTimeout(this.config.reconnectTimer);
+    this.config.reconnectTimer = null;
+    this.config.nextReconnectAt = null;
+  }
+
+  scheduleReconnect(reason = "Realtime WebSocket closed") {
+    if (!this.config.autoReconnect || this.config.reconnectTimer) return;
+    const maxAttempts = Number.isFinite(this.config.reconnectMaxAttempts) ? this.config.reconnectMaxAttempts : 5;
+    if ((this.config.reconnectAttempts || 0) >= maxAttempts) {
+      this.config.lastDisconnectReason = `${reason}; reconnect attempts exhausted`;
+      this.notify("Realtime disconnected; reconnect attempts exhausted", "error");
+      this.updateStatus();
+      return;
+    }
+    const attempt = (this.config.reconnectAttempts || 0) + 1;
+    this.config.reconnectAttempts = attempt;
+    this.config.lastDisconnectReason = reason;
+    const baseDelay = Number.isFinite(this.config.reconnectBaseDelayMs) ? this.config.reconnectBaseDelayMs : 1000;
+    const delay = Math.min(30_000, baseDelay * (2 ** Math.max(0, attempt - 1)));
+    this.config.nextReconnectAt = Date.now() + delay;
+    this.notify(`Realtime disconnected; reconnecting in ${formatDurationMs(delay)} (attempt ${attempt}/${maxAttempts})`, "warning");
+    this.updateStatus();
+    this.config.reconnectTimer = setTimeout(async () => {
+      this.config.reconnectTimer = null;
+      this.config.nextReconnectAt = null;
+      if (!this.config.autoReconnect) return;
+      try {
+        await this.connect(this.lastCtx);
+        const mode = this.config.desiredListenMode;
+        if (mode && mode !== "off" && mode !== "nolisten" && !this.mic) {
+          await this.startMic(this.lastCtx, mode === "ptt" ? "ptt" : "vad");
+        }
+      } catch (e) {
+        this.scheduleReconnect(e.message || String(e));
+      }
+    }, delay);
+  }
+
   get connected() { return this.state.connected; }
   set connected(value) { this.state.setConnection(value ? "connected" : "off"); }
   get phase() { return this.state.phase; }
@@ -727,6 +773,9 @@ class RealtimeSession {
       first.session?.type === "realtime" || first.session?.output_modalities ? "ga" : "beta";
 
     this.connected = true;
+    this.config.reconnectAttempts = 0;
+    this.config.lastDisconnectReason = null;
+    this.clearReconnectTimer();
     this.setPhase("idle");
     // session.update happens lazily on the first streamSimple call once we have
     // the actual systemPrompt + tools.
@@ -781,12 +830,14 @@ class RealtimeSession {
       this.player.close();
       this.failPending(new Error("Realtime WebSocket closed"));
       this.updateStatus();
+      this.scheduleReconnect("Realtime WebSocket closed");
     });
     ws.on("error", (e) => {
       const err = new Error(`Realtime WebSocket error: ${e.message || "unknown"}`);
       this.setPhase("error");
       this.notify(err.message, "error");
       this.failPending(err);
+      this.scheduleReconnect(err.message);
     });
   }
 
@@ -1638,6 +1689,7 @@ class RealtimeSession {
   }
 
   async close(display = true) {
+    this.clearReconnectTimer();
     await this.stopMic({ commit: false }).catch(() => {});
     this.player.close();
     if (this.ws) {
@@ -1693,6 +1745,15 @@ function makeInitialConfig() {
     debug: envBool("PI_RT_DEBUG", false),
     recordCommand: env("PI_RT_RECORD_CMD"),
     playbackCommand: env("PI_RT_PLAYBACK_CMD"),
+    autoReconnect: false,
+    reconnectAttempts: 0,
+    reconnectMaxAttempts: Number(env("PI_RT_RECONNECT_MAX_ATTEMPTS") || 5),
+    reconnectBaseDelayMs: Number(env("PI_RT_RECONNECT_BASE_DELAY_MS") || 1000),
+    reconnectTimer: null,
+    reconnecting: false,
+    lastDisconnectReason: null,
+    nextReconnectAt: null,
+    desiredListenMode: null,
   };
 }
 
@@ -1700,7 +1761,7 @@ function makeInitialConfig() {
 // Provider registration
 // ---------------------------------------------------------------------------
 
-function registerRealtimeProvider(pi, session) {
+function registerRealtimeProvider(pi, session, { force = false } = {}) {
   const baseUrl = env("PI_RT_BASE_URL", "OPENAI_BASE_URL") || "https://api.openai.com";
   const apiKey = env("PI_RT_API_KEY") ? "PI_RT_API_KEY" : "OPENAI_API_KEY";
   const models = [
@@ -1729,6 +1790,7 @@ function registerRealtimeProvider(pi, session) {
   // Opt in by setting PI_RT_REGISTER=1, by selecting an openai-realtime model
   // on launch via --model, or by explicit /rt invocation (which re-registers).
   if (
+    !force &&
     !envBool("PI_RT_REGISTER", false) &&
     !/^openai-realtime\//.test(env("PI_MODEL") || "") &&
     !envBool("PI_RT_ALWAYS_REGISTER", false)
@@ -1858,6 +1920,7 @@ function diagnosticLines(session, config) {
     `vad: threshold:${numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
     `state: ${JSON.stringify(session.state?.snapshot?.({ sttOnly: config.sttOnly, audioEnabled: config.audioEnabled }) || {})}`,
     `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length}`,
+    `reconnect: ${config.autoReconnect ? "on" : "off"} · attempts:${config.reconnectAttempts || 0}/${config.reconnectMaxAttempts || 0} · next:${config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0}ms · last:${config.lastDisconnectReason || "<none>"}`,
     `lastResponseError: ${session.lastResponseError || "<none>"}`,
     `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,
   ];
@@ -1906,6 +1969,11 @@ export function createRealtimeControls({ pi, session, config }) {
         sttOnly: !!config.sttOnly,
         voice: config.voice,
         audioBackend: process.env.PI_RT_AUDIO_BACKEND || "pulse",
+        pulse: {
+          server: process.env.PULSE_SERVER || null,
+          source: process.env.PULSE_SOURCE || null,
+          sink: process.env.PULSE_SINK || null,
+        },
         reasoningEffort: config.reasoningEffort,
         previousModel: config.previousModel || null,
         state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled }),
@@ -1917,6 +1985,11 @@ export function createRealtimeControls({ pi, session, config }) {
           lastMicBytes: session.lastMicBytes || 0,
           pendingTranscriptCount: session.pendingSpokenTranscripts?.length || 0,
           micMuteRemainingMs: Math.max(0, (session.micMuteUntilTs || 0) - Date.now()),
+          autoReconnect: !!config.autoReconnect,
+          reconnectAttempts: config.reconnectAttempts || 0,
+          reconnectMaxAttempts: config.reconnectMaxAttempts || 0,
+          nextReconnectInMs: config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0,
+          lastDisconnectReason: config.lastDisconnectReason || null,
         },
       };
     },
@@ -1968,6 +2041,23 @@ export function createRealtimeControls({ pi, session, config }) {
       return this.snapshot();
     },
 
+    setPulseRouting({ server, source, sink } = {}, ctx) {
+      const apply = (key, value) => {
+        if (value === undefined || value === null) return;
+        const next = String(value).trim();
+        if (next) process.env[key] = next;
+        else delete process.env[key];
+      };
+      apply("PULSE_SERVER", server);
+      apply("PULSE_SOURCE", source);
+      apply("PULSE_SINK", sink);
+      config.recordCommand = env("PI_RT_RECORD_CMD");
+      config.playbackCommand = env("PI_RT_PLAYBACK_CMD");
+      session.player.interrupt();
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
     setReasoningEffort(effort, ctx) {
       const next = String(effort || "").trim().toLowerCase();
       if (!next) return this.snapshot();
@@ -2003,6 +2093,9 @@ export function createRealtimeControls({ pi, session, config }) {
     },
 
     async disable(ctx, { restoreModel = true } = {}) {
+      config.autoReconnect = false;
+      config.desiredListenMode = null;
+      session.clearReconnectTimer();
       session.hideStatusWidget(ctx);
       await session.stopMic({ commit: false }).catch(() => {});
       await session.close(false).catch(() => {});
@@ -2079,6 +2172,7 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.on("session_shutdown", async () => {
+    config.autoReconnect = false;
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = null;
     await session.close(false).catch(() => {});
@@ -2102,13 +2196,15 @@ export default function realtimeAgentExtension(pi) {
   });
 
   async function ensureRealtimeProvider(ctx) {
-    if (!ctx.modelRegistry.find?.("openai-realtime", "gpt-realtime-2")) {
-      try { registerRealtimeProvider(pi, session); } catch {}
+    if (!ctx.modelRegistry.find?.("openai-realtime", config.model || "gpt-realtime-2")) {
+      try { registerRealtimeProvider(pi, session, { force: true }); } catch {}
     }
   }
 
   async function startRealtime(ctx, { listenMode = "vad", sttOnly = false } = {}) {
     await ensureRealtimeProvider(ctx);
+    config.autoReconnect = true;
+    config.desiredListenMode = listenMode || "vad";
 
     if (sttOnly) {
       // Transcription-only: keep current Pi model, open WSS just for STT,
@@ -2123,11 +2219,11 @@ export default function realtimeAgentExtension(pi) {
       if (current && !isRealtimeModel(current)) {
         config.previousModel = { provider: current.provider, id: current.id };
       }
-      const m = ctx.modelRegistry.find?.("openai-realtime", "gpt-realtime-2");
-      if (m) {
-        const ok = await pi.setModel(m);
-        if (!ok) { ctx.ui.notify("No API key for openai-realtime", "error"); return false; }
-      }
+      const modelId = config.model || "gpt-realtime-2";
+      const m = ctx.modelRegistry.find?.("openai-realtime", modelId)
+        || { provider: "openai-realtime", id: modelId, name: modelId };
+      const ok = await pi.setModel(m);
+      if (!ok) { ctx.ui.notify("No API key for openai-realtime", "error"); return false; }
       controls.setAudio(true, ctx);
       controls.setSttOnly(false, ctx);
       controls.showStatus(ctx);
@@ -2150,8 +2246,90 @@ export default function realtimeAgentExtension(pi) {
     ctx.ui.notify(controls.usage(), "info");
   }
 
+  function normalizeRealtimeToolParams(params = {}) {
+    const out = { ...params };
+    if (out.server !== undefined && out.pulseServer === undefined) out.pulseServer = out.server;
+    if (out.source !== undefined && out.pulseSource === undefined) out.pulseSource = out.source;
+    if (out.sink !== undefined && out.pulseSink === undefined) out.pulseSink = out.sink;
+    for (const key of ["action", "start", "mic", "listen", "stt", "audio", "widget", "status", "backend", "voice", "reasoning"]) {
+      if (out[key] !== undefined && out[key] !== null) out[key] = String(out[key]).trim().toLowerCase();
+    }
+    return out;
+  }
+
+  async function applyRealtimeParams(rawParams, ctx) {
+    const params = normalizeRealtimeToolParams(rawParams);
+    if (params.backend) controls.setAudioBackend(params.backend, ctx);
+    if (params.pulseServer !== undefined || params.pulseSource !== undefined || params.pulseSink !== undefined) {
+      controls.setPulseRouting({ server: params.pulseServer, source: params.pulseSource, sink: params.pulseSink }, ctx);
+    }
+    if (params.voice) controls.setVoice(params.voice, ctx);
+    if (params.reasoning) controls.setReasoningEffort(params.reasoning, ctx);
+    if (params.audio) {
+      if (!REALTIME_AUDIO_MODES.has(params.audio)) throw new Error("Unsupported realtime audio mode");
+      if (params.audio === "toggle") controls.toggleAudio(ctx);
+      else controls.setAudio(params.audio === "on", ctx);
+    }
+    if (params.widget) {
+      if (!REALTIME_WIDGET_MODES.has(params.widget)) throw new Error("Unsupported realtime widget mode");
+      if (params.widget === "hide" || params.widget === "off") controls.hideStatus(ctx);
+      else controls.showStatus(ctx);
+    }
+    if (params.status) {
+      const full = params.status === "full";
+      controls.showStatus(ctx);
+      return { lines: full ? controls.diagnostics() : controls.statusLines(), snapshot: controls.snapshot() };
+    }
+    const action = params.action || params.start || params.mode;
+    if (action === "status" || action === "doctor") {
+      const full = action === "doctor" || params.status === "full";
+      controls.showStatus(ctx);
+      return { lines: full ? controls.diagnostics() : controls.statusLines(), snapshot: controls.snapshot() };
+    }
+    if (params.stt) return startRealtime(ctx, { sttOnly: true, listenMode: params.stt === "ptt" ? "ptt" : "vad" });
+    if (params.mic || params.listen) return controls.listen(ctx, params.mic || params.listen);
+    if (action) {
+      if (action === "stop" || action === "off") return controls.disable(ctx, { restoreModel: true });
+      if (!REALTIME_START_MODES.has(action)) throw new Error(`Unsupported realtime start mode: ${action}`);
+      return startRealtime(ctx, { listenMode: action });
+    }
+    return controls.snapshot();
+  }
+
+  function envArgsToRealtimeParams(parsed) {
+    const v = parsed.values || {};
+    return {
+      action: v.action,
+      start: v.start,
+      mode: v.mode,
+      backend: v.backend,
+      server: v.server ?? v.pulse_server ?? v.pulseserver,
+      source: v.source ?? v.pulse_source ?? v.pulsesource,
+      sink: v.sink ?? v.pulse_sink ?? v.pulsesink,
+      voice: v.voice,
+      reasoning: v.reasoning,
+      audio: v.audio,
+      widget: v.widget,
+      status: v.status,
+      mic: v.mic,
+      listen: v.listen,
+      stt: v.stt,
+    };
+  }
+
   async function handleRtCommand(args, ctx) {
-    const tokens = String(args || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let parsed;
+    try { parsed = parseEnvStyleArgs(args || ""); }
+    catch (e) { ctx.ui.notify(`Realtime argument parse error: ${e.message}`, "warning"); return; }
+    if (Object.keys(parsed.values).length) {
+      try {
+        const result = await applyRealtimeParams(envArgsToRealtimeParams(parsed), ctx);
+        if (result?.lines) ctx.ui.notify(result.lines.join("\n"), "info");
+        else ctx.ui.notify("Realtime settings updated", "info");
+      } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    const tokens = parsed.positionals.map((t) => t.toLowerCase());
     const verb = tokens[0] || "start";
     const value = tokens[1] || "";
     const extra = tokens.slice(2);
@@ -2251,6 +2429,44 @@ export default function realtimeAgentExtension(pi) {
     showRtUsage(ctx);
   }
 
+  if (typeof pi.registerTool === "function") {
+    pi.registerTool({
+      name: "realtime_agent_control",
+      label: "Realtime Agent Control",
+      description: "Control Pi realtime/STT lifecycle and runtime Pulse routing for the current session.",
+      promptSnippet: "Use realtime_agent_control to start/stop realtime calls or STT and to set Pulse server/source/sink at runtime.",
+      promptGuidelines: ["Use realtime_agent_control instead of asking the operator to type /rt when you need to manage realtime calls, STT, or Pulse routing."],
+      parameters: Type.Object({
+        action: Type.Optional(Type.String({ description: "Lifecycle action: start, stop, off, vad, ptt, nolisten, or status." })),
+        start: Type.Optional(Type.String({ description: "Start full realtime with vad, ptt, or nolisten." })),
+        stt: Type.Optional(Type.String({ description: "Start transcription-only mode with vad or ptt." })),
+        mic: Type.Optional(Type.String({ description: "Start mic capture with vad or ptt." })),
+        listen: Type.Optional(Type.String({ description: "Listen mode: vad, ptt, or continuous." })),
+        audio: Type.Optional(Type.String({ description: "Audio output mode: on, off, or toggle." })),
+        backend: Type.Optional(Type.String({ description: "Audio backend such as pulse, coreaudio, audiotoolbox, sox, ffplay, or auto." })),
+        pulseServer: Type.Optional(Type.String({ description: "Runtime PULSE_SERVER for new Pulse record/playback processes. Empty string unsets." })),
+        pulseSource: Type.Optional(Type.String({ description: "Runtime PULSE_SOURCE for new Pulse record processes. Empty string unsets." })),
+        pulseSink: Type.Optional(Type.String({ description: "Runtime PULSE_SINK for new Pulse playback processes. Empty string unsets." })),
+        voice: Type.Optional(Type.String({ description: "Realtime output voice." })),
+        reasoning: Type.Optional(Type.String({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
+        widget: Type.Optional(Type.String({ description: "Widget mode: show or hide." })),
+        status: Type.Optional(Type.String({ description: "Return status: compact or full." })),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        const action = String(params.action || "").toLowerCase();
+        let result;
+        if (action === "status") result = { lines: controls.diagnostics(), snapshot: controls.snapshot() };
+        else result = await applyRealtimeParams(params, ctx);
+        const snapshot = result?.snapshot ? result.snapshot : controls.snapshot();
+        const lines = result?.lines || controls.statusLines({ full: params.status === "full" || action === "status" });
+        return {
+          content: [{ type: "text", text: Array.isArray(lines) ? lines.join("\n") : JSON.stringify(snapshot, null, 2) }],
+          details: { snapshot, pulse: { server: process.env.PULSE_SERVER || null, source: process.env.PULSE_SOURCE || null, sink: process.env.PULSE_SINK || null } },
+        };
+      },
+    });
+  }
+
   pi.registerCommand("rt", {
     description: "Realtime control. Usage: /rt start|stop|mic|listen|audio|stt|widget|status|doctor|voice|backend|reasoning ...",
     handler: handleRtCommand,
@@ -2346,6 +2562,9 @@ export default function realtimeAgentExtension(pi) {
         await controls.stopMic(ctx, { commit: true });
         ctx.ui.notify("Realtime mic stopped", "info");
       } else {
+        config.autoReconnect = false;
+        config.desiredListenMode = null;
+        session.clearReconnectTimer();
         await session.close(true);
       }
       session.updateStatus(ctx);
