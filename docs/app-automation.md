@@ -27,9 +27,9 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
 - `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
 - `app_automation_open_bundle_run_once` — open Slack, Calendar, Outlook mail/calendar, and Teams browser surfaces once to warm authenticated sessions.
-- `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_stale_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including standard Slack/Calendar/Outlook/Teams bundle start, one-shot, and stale-only refresh paths.
+- `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_staleness` / `app_automation_refresh_stale_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including standard Slack/Calendar/Outlook/Teams bundle start, one-shot, per-action staleness, and stale-only refresh paths.
 - `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshots_staleness` / `app_automation_snapshots_cleanup_plan` / `app_automation_snapshot_read` — list, summarize, freshness-check, cleanup-plan, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
-- `/tendril-app [doctor|overview|staleness|bundle|open-bundle|stale-refresh|app action]` — operator/agent-facing command for quick diagnostics, work-app overview, snapshot freshness, default bundle discovery, and app/action planning.
+- `/tendril-app [doctor|overview|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]` — operator/agent-facing command for quick diagnostics, work-app overview, snapshot freshness, refresh-action freshness, default bundle discovery, and app/action planning.
 
 ## Recommended daily workflow
 
@@ -39,7 +39,7 @@ For Slack, Outlook, Teams, calendars, and canvas/editor work, prefer this sequen
 2. **Orient on current state** — run `app_automation_overview` or `/tendril-app overview` to see apps, active refreshers, freshness, and recent snapshot digests.
 3. **Preview browser churn** — run `app_automation_open_bundle_run_once` with `dryRun: true` before opening Slack, Calendar, Outlook mail/calendar, and Teams surfaces.
 4. **Warm sessions when needed** — run `app_automation_open_bundle_run_once` without `dryRun` if auth/session state is likely stale; inspect `auth-required.json` diagnostics if login is needed.
-5. **Refresh only what is stale** — run `app_automation_refresh_stale_run_once` with `dryRun: true`, then without `dryRun` when the stale/missing decisions look right. This stale-refresh path evaluates the expected artifacts for each standard app/action independently, so one fresh Outlook snapshot does not mask a missing Outlook calendar snapshot.
+5. **Refresh only what is stale** — run `app_automation_refresh_staleness` or `/tendril-app refresh-staleness` to preview exact action freshness, then run `app_automation_refresh_stale_run_once` with `dryRun: true`, then without `dryRun` when the stale/missing decisions look right. This stale-refresh path evaluates the expected artifacts for each standard app/action independently, so one fresh Outlook snapshot does not mask a missing Outlook calendar snapshot.
 6. **Force a full refresh only when necessary** — use `app_automation_refresh_bundle_run_once` for an explicit all-app refresh, or `app_automation_refresh_bundle_start` for periodic refreshers.
 7. **Inspect artifacts through tools** — use `app_automation_snapshots_staleness`, `app_automation_snapshots_digest`, `app_automation_snapshots_list`, and `app_automation_snapshot_read` instead of ad-hoc filesystem reads.
 8. **Plan cleanup conservatively** — use `app_automation_snapshots_cleanup_plan`; it is dry-run only and protects `latest-run.json` / `auth-required.json` by default.
@@ -150,7 +150,8 @@ Periodic actions stay Pi-native and controllable rather than using daemon-global
 - `app_automation_refresh_start` starts one app/action interval and optionally runs immediately.
 - `app_automation_refresh_bundle_start` starts the standard Slack notifications, Outlook mail/calendar, and Teams notification/calendar bundle. It defaults `runImmediately` to `false` so agents can arm the bundle without opening several authenticated apps at once.
 - `app_automation_refresh_bundle_run_once` runs that same standard bundle once without creating timers, for explicit refresh-now workflows. Pass `dryRun` to inspect planned snapshot actions first.
-- `app_automation_refresh_stale_run_once` checks expected snapshot artifacts for each standard app/action first and runs only the refresh actions whose own outputs are stale or missing. Pass `dryRun` to inspect decisions first.
+- `app_automation_refresh_staleness` reports fresh/stale/missing status for each standard Slack, Calendar, Outlook, and Teams refresh action without opening browser surfaces.
+- `app_automation_refresh_stale_run_once` checks expected snapshot artifacts for each standard app/action first and runs only the refresh actions whose own outputs are stale or missing. Pass `dryRun` to inspect executable steps first.
 - `app_automation_refresh_status` lists active refreshers, run counts, errors, and last snapshot status.
 - `app_automation_refresh_stop` stops one refresher or all refreshers.
 - Runs are bounded and non-overlapping: if a previous refresh is still in flight, the next tick is skipped.

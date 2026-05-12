@@ -324,10 +324,25 @@ function renderDefaultOpenBundle() {
 function renderDefaultStaleRefresh() {
   return [
     "default app automation stale-refresh flow:",
-    "1. app_automation_snapshots_staleness checks Slack, Calendar, Outlook, Teams, and canvas app freshness.",
+    "1. app_automation_refresh_staleness reports per-action Slack/Calendar/Outlook/Teams bundle freshness.",
     "2. app_automation_refresh_stale_run_once checks each standard Slack/Calendar/Outlook/Teams action output and runs only stale or missing snapshot actions.",
     "Use dryRun=true first to preview stale-refresh decisions before browser automation.",
   ].join("\n");
+}
+
+async function buildRefreshBundleStaleness({ catalog, params = {} } = {}) {
+  const wantedApps = new Set((params.apps || []).map((value) => String(value)));
+  const wantedActions = new Set((params.actions || []).map((value) => String(value)));
+  const targets = DEFAULT_REFRESH_BUNDLE.filter((target) => (
+    (!wantedApps.size || wantedApps.has(target.app))
+    && (!wantedActions.size || wantedActions.has(target.action))
+  ));
+  const stalenessTargets = targets.map((target) => {
+    const appConfig = catalog.apps.find((app) => app.id === target.app);
+    const actionConfig = appConfig?.actions.find((action) => action.id === target.action);
+    return { ...target, outputs: actionConfig?.outputs || [] };
+  });
+  return snapshotTargetStalenessReport({ root: stateRoot(), targets: stalenessTargets, staleAfterMinutes: params.staleAfterMinutes || 60 });
 }
 
 function renderDoctorReport({ rootSummary, catalog, playwrightCli, actionDiagnostics, cliCheck }) {
@@ -704,6 +719,32 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_refresh_staleness`,
+    label: "App Automation Refresh Staleness",
+    description: "Report per-action freshness for the standard Slack, Calendar, Outlook, and Teams snapshot refresh bundle without executing browser automation.",
+    promptSnippet: "Use this to preview exactly which standard refresh bundle actions are fresh, stale, or missing before running stale refresh.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to check. Defaults to the standard refresh bundle apps." }))),
+      actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to include from the default refresh bundle." }))),
+      staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale snapshots. Defaults to 60 minutes." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+    }),
+    async execute(_toolCallId, params) {
+      const catalog = await resolveCatalog(params);
+      const staleness = await buildRefreshBundleStaleness({ catalog, params });
+      const counts = staleness.entries.reduce((acc, entry) => {
+        acc[entry.status] = (acc[entry.status] || 0) + 1;
+        return acc;
+      }, {});
+      return textResult(renderSnapshotTargetStaleness(staleness), {
+        staleness,
+        counts,
+        defaultBundle: DEFAULT_REFRESH_BUNDLE,
+      });
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_refresh_stale_run_once`,
     label: "App Automation Refresh Stale Run Once",
     description: "Run standard Slack, Calendar, Outlook, and Teams snapshot refresh actions once only for apps whose snapshots are stale or missing.",
@@ -725,12 +766,7 @@ export default function appAutomationExtension(pi) {
         (!wantedApps.size || wantedApps.has(target.app))
         && (!wantedActions.size || wantedActions.has(target.action))
       ));
-      const stalenessTargets = candidateTargets.map((target) => {
-        const appConfig = catalog.apps.find((app) => app.id === target.app);
-        const actionConfig = appConfig?.actions.find((action) => action.id === target.action);
-        return { ...target, outputs: actionConfig?.outputs || [] };
-      });
-      const staleness = await snapshotTargetStalenessReport({ root: stateRoot(), targets: stalenessTargets, staleAfterMinutes: params.staleAfterMinutes || 60 });
+      const staleness = await buildRefreshBundleStaleness({ catalog, params });
       const staleKeys = new Set(staleness.entries.filter((entry) => entry.status !== "fresh").map((entry) => entry.key));
       const targets = candidateTargets.filter((target) => staleKeys.has(`${target.app}:${target.action}`));
       const runs = [];
@@ -970,7 +1006,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1015,6 +1051,11 @@ export default function appAutomationExtension(pi) {
         const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "calendar", "outlook", "teams", "canvas"];
         const report = await snapshotStalenessReport({ root: stateRoot(), apps: wantedIds, staleAfterMinutes: 60 });
         ctx.ui.notify(renderSnapshotStaleness(report), "info");
+        return;
+      }
+      if (words[0] === "refresh-staleness") {
+        const report = await buildRefreshBundleStaleness({ catalog, params: { apps: words.slice(1), staleAfterMinutes: 60 } });
+        ctx.ui.notify(renderSnapshotTargetStaleness(report), "info");
         return;
       }
       if (words[0] === "bundle") {

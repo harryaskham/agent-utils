@@ -365,6 +365,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_start`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_bundle_start`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_bundle_run_once`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_staleness`/);
+  assert.match(source, /renderSnapshotTargetStaleness/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_stale_run_once`/);
   assert.match(source, /Return planned refresh bundle actions/);
   assert.match(source, /DEFAULT_REFRESH_BUNDLE/);
@@ -385,6 +387,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /words\[0\] === "staleness"/);
   assert.match(source, /words\[0\] === "bundle"/);
   assert.match(source, /words\[0\] === "open-bundle"/);
+  assert.match(source, /words\[0\] === "refresh-staleness"/);
   assert.match(source, /words\[0\] === "stale-refresh"/);
   assert.match(source, /renderDefaultOpenBundle/);
   assert.match(source, /renderDefaultRefreshBundle/);
