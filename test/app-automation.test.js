@@ -412,7 +412,11 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.match(renderSnapshotLinks(newestLinks), /sort=newest/);
   const stalestLimitedLinks = await collectSnapshotLinks({ root, app: "all", sort: "stalest", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(stalestLimitedLinks.truncated, true);
+  assert.equal(stalestLimitedLinks.matchedCount, 4);
+  assert.equal(stalestLimitedLinks.returnedCount, 1);
   assert.equal(stalestLimitedLinks.links[0].app, "slack");
+  assert.match(renderSnapshotLinks(stalestLimitedLinks), /links total=1 matched=4/);
+  assert.match(renderSnapshotLinks(stalestLimitedLinks), /truncated at 1 of 4 links/);
   const eventLinks = await collectSnapshotLinks({ root, app: "all", kind: "events.snapshot", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(eventLinks.links.length, 1);
   assert.equal(eventLinks.kind, "events.snapshot");
