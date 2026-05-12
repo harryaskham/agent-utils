@@ -31,6 +31,19 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshots_staleness` / `app_automation_snapshots_cleanup_plan` / `app_automation_snapshot_read` — list, summarize, freshness-check, cleanup-plan, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
 - `/tendril-app [doctor|overview|staleness|bundle|open-bundle|stale-refresh|app action]` — operator/agent-facing command for quick diagnostics, work-app overview, snapshot freshness, default bundle discovery, and app/action planning.
 
+## Recommended daily workflow
+
+For Slack, Outlook, Teams, calendars, and canvas/editor work, prefer this sequence before raw browser commands:
+
+1. **Diagnose setup** — run `app_automation_doctor` or `/tendril-app doctor` to confirm the catalog, state root, Playwright CLI, and standard action executability.
+2. **Orient on current state** — run `app_automation_overview` or `/tendril-app overview` to see apps, active refreshers, freshness, and recent snapshot digests.
+3. **Preview browser churn** — run `app_automation_open_bundle_run_once` with `dryRun: true` before opening Slack, Outlook mail/calendar, and Teams surfaces.
+4. **Warm sessions when needed** — run `app_automation_open_bundle_run_once` without `dryRun` if auth/session state is likely stale; inspect `auth-required.json` diagnostics if login is needed.
+5. **Refresh only what is stale** — run `app_automation_refresh_stale_run_once` with `dryRun: true`, then without `dryRun` when the stale/missing decisions look right.
+6. **Force a full refresh only when necessary** — use `app_automation_refresh_bundle_run_once` for an explicit all-app refresh, or `app_automation_refresh_bundle_start` for periodic refreshers.
+7. **Inspect artifacts through tools** — use `app_automation_snapshots_staleness`, `app_automation_snapshots_digest`, `app_automation_snapshots_list`, and `app_automation_snapshot_read` instead of ad-hoc filesystem reads.
+8. **Plan cleanup conservatively** — use `app_automation_snapshots_cleanup_plan`; it is dry-run only and protects `latest-run.json` / `auth-required.json` by default.
+
 ## Blessed initial configs
 
 ### Slack
