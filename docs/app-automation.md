@@ -2,7 +2,7 @@
 
 `app-automation` is the first slice of a Pi-native surface for driving web apps that do not have usable APIs for agents. The goal is to give agents blessed, deterministic app actions before they fall back to raw Playwright or Tendril commands.
 
-Parent work: `bd-ee8e57`. The architecture scaffold landed in `bd-bf9c5e`; the core config-loader and deterministic runner surface is tracked by `bd-afa933`; app-specific browser actions follow in later beads.
+Parent work: `bd-ee8e57`. The delivered scaffold now includes the core config-loader, deterministic runner, Playwright bridge, blessed Slack/canvas/Outlook/Teams actions, periodic refreshers, and snapshot inspection tools. Future work should be filed as targeted hardening beads rather than extending the initial epic.
 
 ## Why this shape
 
@@ -141,10 +141,18 @@ Periodic actions stay Pi-native and controllable rather than using daemon-global
 - Keep selectors and app-specific heuristics in app configs, not scattered across agent prompts.
 - Store snapshots in canonical state paths so later agents can inspect the latest known app state.
 
-## Follow-up beads
+## Delivery beads
 
+The initial `bd-ee8e57` epic was delivered through small reintegrated slices:
+
+- `bd-bf9c5e` — design architecture and scaffold extension contract.
 - `bd-afa933` — implement config loader and deterministic action runner.
 - `bd-de1af2` — add Slack web notification snapshot extraction.
 - `bd-cb5a40` — add Markdown-to-canvas sync execution.
 - `bd-829091` — add periodic refresh controls and persisted snapshot storage.
 - `bd-a7835e` — add Outlook and Teams blessed config examples.
+- `bd-3fc088` — add Playwright bridge for `browser.open` and DOM extraction.
+- `bd-328a43` — wire Slack notifications to live Playwright DOM extraction.
+- `bd-53d66c` — wire Markdown canvas sync to live browser paste/import.
+- `bd-d0b4ce` — add live Outlook and Teams extraction selectors.
+- `bd-41184b` — add snapshot list/digest/read tools for persisted artifacts.
