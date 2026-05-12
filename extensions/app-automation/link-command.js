@@ -78,6 +78,9 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
   let linkKind;
   let linkLimitPerApp;
   let linkQuery;
+  let linkSource;
+  let linkFrom;
+  let linkTime;
   let linkSort;
   let staleAfterMinutes;
   const appTokens = [];
@@ -104,6 +107,15 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
     if (linkQueryMatch && !linkQuery) {
       includeLinks = true;
       linkQuery = linkQueryMatch[1];
+      continue;
+    }
+    const contextMatch = word.match(/^(source|from|time)[:=](.+)$/i);
+    if (contextMatch) {
+      includeLinks = true;
+      const key = contextMatch[1].toLowerCase();
+      if (key === "source" && !linkSource) linkSource = contextMatch[2];
+      else if (key === "from" && !linkFrom) linkFrom = contextMatch[2];
+      else if (key === "time" && !linkTime) linkTime = contextMatch[2];
       continue;
     }
     const linkLimitMatch = lower.match(/^(?:link-limit|linklimit|links-limit|linkslimit)[:=](\d+)$/);
@@ -143,6 +155,9 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
     ...(linkKind ? { linkKind } : {}),
     ...(linkLimitPerApp ? { linkLimitPerApp } : {}),
     ...(linkQuery ? { linkQuery } : {}),
+    ...(linkSource ? { linkSource } : {}),
+    ...(linkFrom ? { linkFrom } : {}),
+    ...(linkTime ? { linkTime } : {}),
     ...(linkSort ? { linkSort } : {}),
     ...(staleAfterMinutes ? { staleAfterMinutes } : {}),
   };

@@ -558,6 +558,9 @@ export default function appAutomationExtension(pi) {
       linkKind: Type.Optional(Type.String({ description: "Optional overview link kind/action filter, including aliases such as events, notifications, or calendar." })),
       linkLimitPerApp: Type.Optional(Type.Number({ description: "Snapshot links to include per app when includeLinks is true. Defaults to 3." })),
       linkQuery: Type.Optional(Type.String({ description: "Optional overview link query over app, kind, artifact path, label, URL, and source context." })),
+      linkSource: Type.Optional(Type.String({ description: "Optional overview link source-context filter such as Slack channel, Teams team, Outlook folder, or calendar name." })),
+      linkFrom: Type.Optional(Type.String({ description: "Optional overview link sender, organizer, or author context filter." })),
+      linkTime: Type.Optional(Type.String({ description: "Optional overview link time/date context filter." })),
       linkSort: Type.Optional(Type.String({ description: "Optional sort for per-app overview links: newest, oldest, freshest, stalest, app, or kind." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
     }),
@@ -589,9 +592,9 @@ export default function appAutomationExtension(pi) {
       if (params.includeLinks) {
         const summaries = [];
         for (const app of apps) {
-          summaries.push(await collectSnapshotLinks({ root, app: app.id, query: params.linkQuery, freshness: params.linkFreshness, kind: params.linkKind, linkLimit: params.linkLimitPerApp || 3, sort: params.linkSort, staleAfterMinutes: params.staleAfterMinutes || 60 }));
+          summaries.push(await collectSnapshotLinks({ root, app: app.id, query: params.linkQuery, source: params.linkSource, from: params.linkFrom, time: params.linkTime, freshness: params.linkFreshness, kind: params.linkKind, linkLimit: params.linkLimitPerApp || 3, sort: params.linkSort, staleAfterMinutes: params.staleAfterMinutes || 60 }));
         }
-        snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries, query: params.linkQuery, freshness: params.linkFreshness, kind: params.linkKind, sort: params.linkSort });
+        snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries, query: params.linkQuery, source: params.linkSource, from: params.linkFrom, time: params.linkTime, freshness: params.linkFreshness, kind: params.linkKind, sort: params.linkSort });
       }
       return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), {
         apps,
@@ -1126,7 +1129,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1171,9 +1174,9 @@ export default function appAutomationExtension(pi) {
         if (overviewArgs.includeLinks) {
           const summaries = [];
           for (const app of apps) {
-            summaries.push(await collectSnapshotLinks({ root, app: app.id, query: overviewArgs.linkQuery, freshness: overviewArgs.linkFreshness, kind: overviewArgs.linkKind, linkLimit: overviewArgs.linkLimitPerApp || 3, sort: overviewArgs.linkSort, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 }));
+            summaries.push(await collectSnapshotLinks({ root, app: app.id, query: overviewArgs.linkQuery, source: overviewArgs.linkSource, from: overviewArgs.linkFrom, time: overviewArgs.linkTime, freshness: overviewArgs.linkFreshness, kind: overviewArgs.linkKind, linkLimit: overviewArgs.linkLimitPerApp || 3, sort: overviewArgs.linkSort, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 }));
           }
-          snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries, query: overviewArgs.linkQuery, freshness: overviewArgs.linkFreshness, kind: overviewArgs.linkKind, sort: overviewArgs.linkSort });
+          snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries, query: overviewArgs.linkQuery, source: overviewArgs.linkSource, from: overviewArgs.linkFrom, time: overviewArgs.linkTime, freshness: overviewArgs.linkFreshness, kind: overviewArgs.linkKind, sort: overviewArgs.linkSort });
         }
         ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), "info");
         return;
