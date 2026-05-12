@@ -46,10 +46,29 @@ function collectUrls(item = {}) {
   return urls;
 }
 
+function compactMetadata(value, limit = 120) {
+  const text = normalizeWhitespace(value);
+  if (!text) return null;
+  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+}
+
+function contextFields(item = {}) {
+  const context = {};
+  for (const [target, candidates] of Object.entries({
+    source: [item.channel, item.team, item.folder, item.calendar, item.source],
+    from: [item.from, item.sender, item.organizer, item.author],
+    time: [item.time, item.timestamp, item.start, item.startTime, item.date, item.when],
+  })) {
+    const value = candidates.map((candidate) => compactMetadata(candidate)).find(Boolean);
+    if (value) context[target] = value;
+  }
+  return context;
+}
+
 function normalizeItem(item) {
   if (!item || typeof item !== "object") return { text: normalizeWhitespace(item), urls: [] };
   const text = normalizeWhitespace(item.text || item.label || item.ariaLabel || item.title || "");
-  return { text, urls: collectUrls(item) };
+  return { text, urls: collectUrls(item), context: contextFields(item) };
 }
 
 function parseItems(input = {}) {
@@ -81,7 +100,12 @@ export function buildGenericSnapshot({ app, kind, input = {}, includePatterns = 
     status: items.length ? "ok" : "empty",
     capturedAt: new Date().toISOString(),
     count: items.length,
-    items: items.map((item, index) => ({ index, text: item.text, ...(item.urls[0] ? { url: item.urls[0], urls: item.urls } : {}) })),
+    items: items.map((item, index) => ({
+      index,
+      text: item.text,
+      ...(Object.keys(item.context || {}).length ? item.context : {}),
+      ...(item.urls[0] ? { url: item.urls[0], urls: item.urls } : {}),
+    })),
   };
 }
 
@@ -97,11 +121,13 @@ export function renderGenericMarkdown(snapshot) {
   if (!snapshot.items.length) lines.push("No matching items were detected.");
   for (const item of snapshot.items) {
     const label = String(item.text || "").replace(/[\[\]]/g, "");
+    const context = [item.source ? `source: ${item.source}` : null, item.from ? `from: ${item.from}` : null, item.time ? `time: ${item.time}` : null].filter(Boolean).join("; ");
+    const contextText = context ? ` — ${context}` : "";
     if (item.url) {
       const extraUrls = Array.isArray(item.urls) && item.urls.length > 1 ? ` — additional links: ${item.urls.slice(1).join(", ")}` : "";
-      lines.push(`- [${label}](${item.url})${extraUrls}`);
+      lines.push(`- [${label}](${item.url})${contextText}${extraUrls}`);
     } else {
-      lines.push(`- ${item.text}`);
+      lines.push(`- ${item.text}${contextText}`);
     }
   }
   lines.push("");
