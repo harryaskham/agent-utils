@@ -314,7 +314,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const slackDir = path.join(root, "snapshots", "slack");
   await mkdir(slackDir, { recursive: true });
   await writeFile(path.join(slackDir, "notifications.md"), "# Slack\n", "utf8");
-  await writeFile(path.join(slackDir, "notifications.json"), JSON.stringify({ app: "slack", kind: "notifications.snapshot", status: "ok", counts: { items: 2 }, notifications: [{ text: "#general", url: "https://app.slack.com/client/T/C", urls: ["https://app.slack.com/client/T/C", "https://app.slack.com/client/T/D"] }] }), "utf8");
+  await writeFile(path.join(slackDir, "notifications.json"), JSON.stringify({ app: "slack", kind: "notifications.snapshot", status: "ok", capturedAt: "2026-05-12T00:00:00Z", counts: { items: 2 }, notifications: [{ text: "#general", url: "https://app.slack.com/client/T/C", urls: ["https://app.slack.com/client/T/C", "https://app.slack.com/client/T/D"] }] }), "utf8");
   await writeFile(path.join(slackDir, "latest-run.json"), JSON.stringify({ app: "slack", action: "notifications.snapshot", status: "error", results: [{ status: "error", authRequired: true }, { status: "ok" }] }), "utf8");
   await writeFile(path.join(slackDir, "auth-required.json"), JSON.stringify({ app: "slack", action: "notifications.snapshot", status: "auth_required", detectedAt: "2026-05-12T00:00:00Z" }), "utf8");
   await writeFile(path.join(slackDir, "extractor.js"), "secret-ish helper should not be listed", "utf8");
@@ -331,6 +331,9 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(links.links.length, 2);
   assert.equal(links.links[0].url, "https://app.slack.com/client/T/C");
   assert.match(renderSnapshotLinks(links), /#general: https:\/\/app\.slack\.com\/client\/T\/C/);
+  assert.equal(links.links[0].snapshotAt, "2026-05-12T00:00:00Z");
+  assert.match(renderSnapshotLinks(links), /captured=2026-05-12T00:00:00Z/);
+  assert.match(renderSnapshotLinks(links), /modified=/);
   const filteredLinks = await collectSnapshotLinks({ root, app: "slack", query: "/D" });
   assert.equal(filteredLinks.links.length, 1);
   assert.equal(filteredLinks.links[0].url, "https://app.slack.com/client/T/D");

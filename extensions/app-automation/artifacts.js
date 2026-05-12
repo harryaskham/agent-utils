@@ -94,6 +94,12 @@ function snapshotLinkLabel(row, fallback = "snapshot item") {
   return label.length > 120 ? `${label.slice(0, 117)}...` : label;
 }
 
+function snapshotTimestamp(value = {}) {
+  return [value.capturedAt, value.detectedAt, value.writtenAt, value.syncedAt]
+    .map((entry) => String(entry || "").trim())
+    .find(Boolean) || null;
+}
+
 function summarizeJson(value) {
   const parts = [];
   if (value.app) parts.push(`app=${value.app}`);
@@ -181,6 +187,8 @@ export async function collectSnapshotLinks({ root, app, query, artifactLimit = 1
           row: rowIndex,
           label: snapshotLinkLabel(row, `${artifact.relativePath}#${rowIndex}`),
           url,
+          snapshotAt: snapshotTimestamp(value),
+          artifactModifiedAt: artifact.modifiedAt,
         };
         if (!linkMatchesQuery(link, query)) continue;
         links.push(link);
@@ -206,7 +214,7 @@ export function renderSnapshotDigest(summary) {
 export function renderSnapshotLinks(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
   if (!summary.links.length) return `No snapshot links found at ${summary.snapshotRoot}.`;
-  const lines = summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact})`);
+  const lines = summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""})`);
   if (summary.truncated) lines.push(`truncated at ${summary.links.length} links`);
   return lines.join("\n");
 }
