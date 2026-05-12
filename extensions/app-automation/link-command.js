@@ -22,6 +22,11 @@ export function parseLinkCommandFilters(words = []) {
       filters.kind = kindMatch[1];
       continue;
     }
+    const contextMatch = text.match(/^(source|from|time)[:=](.+)$/i);
+    if (contextMatch && !filters[contextMatch[1].toLowerCase()]) {
+      filters[contextMatch[1].toLowerCase()] = contextMatch[2];
+      continue;
+    }
     const sortMatch = lower.match(/^(?:sort|order)[:=](.+)$/);
     if (sortMatch && !filters.sort && LINK_SORTS.has(sortMatch[1])) {
       filters.sort = sortMatch[1];

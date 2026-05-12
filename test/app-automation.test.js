@@ -357,9 +357,12 @@ test("/tendril-app link filter parser accepts flexible token order", () => {
     kind: "events.snapshot",
     query: "standup",
   });
-  assert.deepEqual(parseLinkCommandFilters(["Ops", "freshness=stale", "sort:newest", "kind=notifications.snapshot", "Bot"]), {
+  assert.deepEqual(parseLinkCommandFilters(["Ops", "freshness=stale", "sort:newest", "kind=notifications.snapshot", "source:#general", "from=Harry", "time:today", "Bot"]), {
     freshness: "stale",
     kind: "notifications.snapshot",
+    source: "#general",
+    from: "Harry",
+    time: "today",
     sort: "newest",
     query: "Ops Bot",
   });
@@ -414,6 +417,12 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const contextFilteredLinks = await collectSnapshotLinks({ root, app: "slack", query: "Ops Bot", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(contextFilteredLinks.links.length, 2);
   assert.ok(contextFilteredLinks.links.every((link) => link.context.from === "Ops Bot"));
+  const sourceFilteredLinks = await collectSnapshotLinks({ root, app: "slack", source: "general", from: "ops", time: "00:10", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(sourceFilteredLinks.links.length, 2);
+  assert.equal(sourceFilteredLinks.source, "general");
+  assert.equal(sourceFilteredLinks.from, "ops");
+  assert.equal(sourceFilteredLinks.time, "00:10");
+  assert.match(renderSnapshotLinks(sourceFilteredLinks), /source="general" from="ops" time="00:10"/);
   assert.equal(links.links[0].snapshotAt, "2026-05-12T00:00:00Z");
   assert.equal(links.links[0].freshness, "fresh");
   assert.equal(links.links[0].ageMinutes, 30);
@@ -595,6 +604,9 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /collectSnapshotLinks/);
   assert.match(source, /all/);
   assert.match(source, /query: Type\.Optional/);
+  assert.match(source, /source: Type\.Optional/);
+  assert.match(source, /from: Type\.Optional/);
+  assert.match(source, /time: Type\.Optional/);
   assert.match(source, /kind: Type\.Optional/);
   assert.match(source, /aliases like events\/notifications\/calendar\/mail\/chat\/mentions\/meetings/);
   assert.match(source, /parseLinkCommandArgs/);
