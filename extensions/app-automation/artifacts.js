@@ -197,6 +197,12 @@ function linkMatchesFreshness(link, freshness) {
   return link.freshness === wanted;
 }
 
+function linkMatchesKind(link, kind) {
+  const wanted = String(kind || "").trim().toLowerCase();
+  if (!wanted) return true;
+  return String(link.kind || "unknown").toLowerCase() === wanted;
+}
+
 function linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes = 60, now = new Date() } = {}) {
   const threshold = Math.max(1, Number(staleAfterMinutes) || 60);
   const timestamp = snapshotAt || artifactModifiedAt;
@@ -234,7 +240,7 @@ function summarizeLinkKinds(links = []) {
   return counts;
 }
 
-export async function collectSnapshotLinks({ root, app, query, freshness, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
+export async function collectSnapshotLinks({ root, app, query, freshness, kind, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const appSelector = normalizeSnapshotAppSelector(app);
   const listed = await listSnapshotArtifacts({ root, app: appSelector, limit: artifactLimit });
   const links = [];
@@ -262,13 +268,13 @@ export async function collectSnapshotLinks({ root, app, query, freshness, artifa
           artifactModifiedAt,
           ...linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes, now }),
         };
-        if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness)) continue;
+        if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness) || !linkMatchesKind(link, kind)) continue;
         links.push(link);
-        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: true };
+        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, kind: kind || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: true };
       }
     }
   }
-  return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: false };
+  return { ...listed, query: query || null, freshness: freshness || null, kind: kind || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: false };
 }
 
 export function renderArtifactList(summary) {
@@ -286,6 +292,7 @@ export function renderSnapshotDigest(summary) {
 function renderSnapshotLinkFilters(summary = {}) {
   const filters = [];
   if (summary.freshness) filters.push(`freshness=${summary.freshness}`);
+  if (summary.kind) filters.push(`kind=${summary.kind}`);
   if (summary.query) filters.push(`query=${JSON.stringify(summary.query)}`);
   return filters.length ? ` matching ${filters.join(" ")}` : "";
 }

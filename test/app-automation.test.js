@@ -372,6 +372,10 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.deepEqual(allLinks.kindCounts, { "notifications.snapshot": 3, "events.snapshot": 1 });
   assert.match(renderSnapshotLinks(allLinks), /apps=calendar=1,slack=3/);
   assert.match(renderSnapshotLinks(allLinks), /kinds=events\.snapshot=1,notifications\.snapshot=3/);
+  const eventLinks = await collectSnapshotLinks({ root, app: "all", kind: "events.snapshot", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(eventLinks.links.length, 1);
+  assert.equal(eventLinks.kind, "events.snapshot");
+  assert.match(renderSnapshotLinks(eventLinks), /kinds=events\.snapshot=1/);
   assert.ok(allLinks.links.some((link) => link.app === "calendar" && link.url === "https://calendar.example/events/standup"));
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
@@ -464,6 +468,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /collectSnapshotLinks/);
   assert.match(source, /all/);
   assert.match(source, /query: Type\.Optional/);
+  assert.match(source, /kind: Type\.Optional/);
+  assert.match(source, /kind\[:=\]/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /staleAfterMinutes: Type\.Optional/);
   assert.match(source, /snapshotStalenessReport/);

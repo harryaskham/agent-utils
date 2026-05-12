@@ -1035,11 +1035,12 @@ export default function appAutomationExtension(pi) {
       artifactLimit: Type.Optional(Type.Number({ description: "Maximum JSON artifacts to scan. Defaults to 100." })),
       linkLimit: Type.Optional(Type.Number({ description: "Maximum links to return. Defaults to 100." })),
       query: Type.Optional(Type.String({ description: "Optional case-insensitive filter over app, kind, artifact path, label, URL, and source context." })),
+      kind: Type.Optional(Type.String({ description: "Optional exact snapshot kind/action filter, for example notifications.snapshot or events.snapshot." })),
       freshness: Type.Optional(Type.String({ description: "Optional link freshness filter: fresh, stale, or unknown." })),
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for per-link freshness. Defaults to 60 minutes." })),
     }),
     async execute(_toolCallId, params) {
-      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, freshness: params.freshness, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100, staleAfterMinutes: params.staleAfterMinutes || 60 });
+      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, freshness: params.freshness, kind: params.kind, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100, staleAfterMinutes: params.staleAfterMinutes || 60 });
       return textResult(renderSnapshotLinks(summary), { links: summary });
     },
   });
@@ -1117,7 +1118,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app] [query]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app|all] [fresh|stale|unknown] [kind:<kind>] [query]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1177,7 +1178,14 @@ export default function appAutomationExtension(pi) {
         const rest = words.slice(2, hasLimit ? -1 : undefined);
         const freshnessWords = new Set(["fresh", "stale", "unknown"]);
         const freshness = freshnessWords.has(rest[0]) ? rest.shift() : undefined;
-        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: rest.join(" "), freshness, linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
+        let kind;
+        const filteredRest = rest.filter((word) => {
+          const match = word.match(/^kind[:=](.+)$/);
+          if (!match) return true;
+          kind = match[1];
+          return false;
+        });
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: filteredRest.join(" "), freshness, kind, linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }
