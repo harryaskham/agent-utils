@@ -1,8 +1,10 @@
+import { readFile, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 export const APP_AUTOMATION_SPEC_VERSION = 1;
 export const DEFAULT_STATE_ROOT = "~/.local/state/agent-utils/app-automation";
+export const DEFAULT_CONFIG_DIR = "~/.config/agent-utils/app-automation/apps.d";
 
 export function expandHome(inputPath) {
   if (!inputPath?.startsWith("~/")) return inputPath;
@@ -11,6 +13,10 @@ export function expandHome(inputPath) {
 
 export function stateRoot(env = process.env) {
   return path.resolve(expandHome(env.APP_AUTOMATION_STATE_ROOT || DEFAULT_STATE_ROOT));
+}
+
+export function configDir(env = process.env) {
+  return path.resolve(expandHome(env.APP_AUTOMATION_CONFIG_DIR || DEFAULT_CONFIG_DIR));
 }
 
 export function sanitizeId(value) {
@@ -136,33 +142,36 @@ export const BLESSED_APPS = [
   },
 ];
 
-export function listAppConfigs({ includeActions = true } = {}) {
-  return BLESSED_APPS.map((app) => {
-    const entry = {
-      id: app.id,
-      label: app.label,
-      url: app.url,
-      category: app.category,
-      auth: app.auth,
-    };
-    if (includeActions) {
-      entry.actions = app.actions.map((action) => ({
-        id: action.id,
-        label: action.label,
-        mode: action.mode,
-        driver: action.driver,
-        description: action.description,
-        params: action.params || [],
-        outputs: action.outputs || [],
-      }));
-    }
-    return entry;
-  });
+export function publicAppConfig(app, { includeActions = true } = {}) {
+  const entry = {
+    id: app.id,
+    label: app.label,
+    url: app.url,
+    category: app.category,
+    auth: app.auth,
+    source: app.source || "built-in",
+  };
+  if (includeActions) {
+    entry.actions = app.actions.map((action) => ({
+      id: action.id,
+      label: action.label,
+      mode: action.mode,
+      driver: action.driver,
+      description: action.description,
+      params: action.params || [],
+      outputs: action.outputs || [],
+    }));
+  }
+  return entry;
 }
 
-export function findApp(appId) {
+export function listAppConfigs({ includeActions = true, catalog = BLESSED_APPS } = {}) {
+  return catalog.map((app) => publicAppConfig(app, { includeActions }));
+}
+
+export function findApp(appId, catalog = BLESSED_APPS) {
   const normalized = sanitizeId(appId);
-  return BLESSED_APPS.find((app) => app.id === normalized);
+  return catalog.find((app) => app.id === normalized);
 }
 
 export function findAction(app, actionId) {
@@ -171,8 +180,133 @@ export function findAction(app, actionId) {
   return app.actions.find((action) => action.id === wanted || sanitizeId(action.id) === sanitizeId(wanted));
 }
 
-export function buildActionPlan({ app: appId, action: actionId, params = {}, env = process.env }) {
-  const app = findApp(appId);
+function ensureArray(value, fallback = []) {
+  return Array.isArray(value) ? value : fallback;
+}
+
+function normalizeStringArray(value) {
+  return ensureArray(value).filter((item) => typeof item === "string");
+}
+
+export function normalizeAppConfig(raw, { source = "external" } = {}) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("app config must be an object");
+  const id = sanitizeId(raw.id);
+  if (!id) throw new Error("app config requires a non-empty id");
+  const actions = ensureArray(raw.actions).map((action, index) => {
+    if (!action || typeof action !== "object" || Array.isArray(action)) {
+      throw new Error(`app ${id} action ${index + 1} must be an object`);
+    }
+    const actionId = String(action.id || "").trim();
+    if (!actionId) throw new Error(`app ${id} action ${index + 1} requires id`);
+    return {
+      id: actionId,
+      label: String(action.label || actionId),
+      mode: String(action.mode || "read"),
+      driver: String(action.driver || "playwright"),
+      description: String(action.description || ""),
+      params: normalizeStringArray(action.params),
+      outputs: normalizeStringArray(action.outputs),
+      plan: ensureArray(action.plan).map((step) => cloneJson(step)),
+    };
+  });
+  return {
+    id,
+    label: String(raw.label || id),
+    url: String(raw.url || "about:blank"),
+    category: String(raw.category || "custom"),
+    auth: raw.auth && typeof raw.auth === "object" ? cloneJson(raw.auth) : { strategy: "app-specific", notes: [] },
+    actions,
+    source,
+  };
+}
+
+async function readExternalConfigFile(filePath) {
+  const rawText = await readFile(filePath, "utf8");
+  const parsed = JSON.parse(rawText);
+  const rawApps = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.apps) ? parsed.apps : [parsed]);
+  return rawApps.map((app) => normalizeAppConfig(app, { source: filePath }));
+}
+
+export async function loadExternalAppConfigs({ env = process.env } = {}) {
+  const dir = configDir(env);
+  const exists = await stat(dir).then((info) => info.isDirectory(), () => false);
+  if (!exists) return { configDir: dir, apps: [], errors: [] };
+  const entries = await readdir(dir, { withFileTypes: true });
+  const apps = [];
+  const errors = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const filePath = path.join(dir, entry.name);
+    try {
+      apps.push(...await readExternalConfigFile(filePath));
+    } catch (error) {
+      errors.push({ path: filePath, message: error.message });
+    }
+  }
+  return { configDir: dir, apps, errors };
+}
+
+export async function loadCatalog({ env = process.env, includeExternal = true } = {}) {
+  const builtIns = BLESSED_APPS.map((app) => ({ ...cloneJson(app), source: app.source || "built-in" }));
+  if (!includeExternal) return { apps: builtIns, external: { configDir: configDir(env), apps: [], errors: [] } };
+  const external = await loadExternalAppConfigs({ env });
+  const byId = new Map(builtIns.map((app) => [app.id, app]));
+  for (const app of external.apps) byId.set(app.id, app);
+  return { apps: Array.from(byId.values()), external };
+}
+
+function resolveParamValue(step, key, params) {
+  if (typeof step[key] === "string") return step[key];
+  const paramKey = step[`${key}Param`];
+  if (typeof paramKey === "string") return params[paramKey];
+  return undefined;
+}
+
+function coerceArg(value, params) {
+  if (typeof value === "string" && value.startsWith("$params.")) return String(params[value.slice(8)] ?? "");
+  return String(value ?? "");
+}
+
+export function buildStepCommand(step, params = {}) {
+  if (!step || typeof step !== "object") return { executable: false, reason: "step is not an object" };
+  if (step.kind === "browser.open") {
+    const url = resolveParamValue(step, "url", params);
+    return {
+      executable: false,
+      command: "playwright-cli",
+      args: ["open", String(url || "about:blank")],
+      reason: "browser.open is planned but not executed until the Playwright bridge is implemented",
+    };
+  }
+  if (step.kind === "tendril.run") {
+    const target = resolveParamValue(step, "target", params);
+    const dsl = resolveParamValue(step, "dsl", params);
+    if (!target || !dsl) return { executable: false, reason: "tendril.run requires target and dsl" };
+    return { executable: true, command: "tendril", args: ["run", "--window", String(target), String(dsl)] };
+  }
+  if (step.kind === "cli.exec") {
+    const command = String(step.command || "");
+    const allowlist = new Set(["playwright-cli", "tendril", "pandoc"]);
+    if (!allowlist.has(command)) return { executable: false, reason: `command not in allowlist: ${command}` };
+    return { executable: true, command, args: ensureArray(step.args).map((arg) => coerceArg(arg, params)) };
+  }
+  if (step.kind === "snapshot.write") return { executable: true, internal: "snapshot.write", args: [] };
+  return { executable: false, reason: `no runner for step kind: ${step.kind || "unknown"}` };
+}
+
+export function buildExecutionPlan(plan) {
+  const stepCommands = plan.steps.map((step, index) => ({ index, kind: step.kind || "unknown", ...buildStepCommand(step, plan.params) }));
+  const executable = plan.action.missingParams.length === 0 && stepCommands.every((step) => step.executable);
+  return {
+    executable,
+    missingParams: plan.action.missingParams,
+    blockedSteps: stepCommands.filter((step) => !step.executable),
+    stepCommands,
+  };
+}
+
+export function buildActionPlan({ app: appId, action: actionId, params = {}, env = process.env, catalog = BLESSED_APPS }) {
+  const app = findApp(appId, catalog);
   if (!app) throw new Error(`Unknown app automation config: ${appId}`);
   const action = findAction(app, actionId);
   if (!action) throw new Error(`Unknown action '${actionId}' for app '${app.id}'`);
@@ -180,7 +314,7 @@ export function buildActionPlan({ app: appId, action: actionId, params = {}, env
   const requiredParams = action.params || [];
   const missingParams = requiredParams.filter((name) => params[name] === undefined || params[name] === "");
   const root = stateRoot(env);
-  return {
+  const plan = {
     version: APP_AUTOMATION_SPEC_VERSION,
     app: { id: app.id, label: app.label, url: app.url, category: app.category, auth: app.auth },
     action: {
@@ -198,13 +332,16 @@ export function buildActionPlan({ app: appId, action: actionId, params = {}, env
     snapshotDir: path.join(root, "snapshots", app.id),
     dryRun: true,
     executable: false,
-    nextImplementationBeads: ["bd-afa933", "bd-de1af2", "bd-cb5a40", "bd-829091", "bd-a7835e"],
+    nextImplementationBeads: ["bd-de1af2", "bd-cb5a40", "bd-829091", "bd-a7835e"],
     steps: cloneJson(action.plan || []),
     notes: [
-      "This scaffold intentionally returns plans only; execution lands in bd-afa933.",
-      "Agents should prefer these blessed action plans over ad-hoc Playwright/Tendril commands once execution is implemented.",
+      "Plans are deterministic. The runner executes only allowlisted cli.exec, tendril.run, and snapshot.write steps.",
+      "High-level browser.open, dom.extract, document.export, and editor.replace steps remain planned until app-specific driver beads land.",
     ],
   };
+  plan.execution = buildExecutionPlan(plan);
+  plan.executable = plan.execution.executable;
+  return plan;
 }
 
 export function renderAppList(apps) {

@@ -2,7 +2,7 @@
 
 `app-automation` is the first slice of a Pi-native surface for driving web apps that do not have usable APIs for agents. The goal is to give agents blessed, deterministic app actions before they fall back to raw Playwright or Tendril commands.
 
-Parent work: `bd-ee8e57`. This scaffold lands `bd-bf9c5e`; executable browser automation follows in `bd-afa933` and app-specific actions in later beads.
+Parent work: `bd-ee8e57`. The architecture scaffold landed in `bd-bf9c5e`; the core config-loader and deterministic runner surface is tracked by `bd-afa933`; app-specific browser actions follow in later beads.
 
 ## Why this shape
 
@@ -23,6 +23,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_list` — list blessed app configs and available high-level actions.
 - `app_automation_plan` — return the deterministic plan for an app/action without executing browser automation.
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
+- `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
 - `/tendril-app [app] [action]` — operator/agent-facing command for quick app/action discovery.
 
 ## Blessed initial configs
@@ -54,17 +55,47 @@ Planned outputs:
 
 `outlook` and `teams` are placeholder blessed configs for follow-up work. They establish app ids, auth expectations, and notification snapshot action names so agents can reference stable contracts while selectors and extraction logic are built.
 
+## Config loader
+
+The built-in catalog can be extended or overridden with JSON files in `APP_AUTOMATION_CONFIG_DIR`, defaulting to `~/.config/agent-utils/app-automation/apps.d`. Each `.json` file may contain either one app config, an array of app configs, or an object with an `apps` array. External configs with the same app id override built-ins for that Pi session, which lets operators bless local variants without patching the package.
+
+Minimal dynamic config example:
+
+```json
+{
+  "id": "example-app",
+  "label": "Example App",
+  "url": "https://example.invalid/app",
+  "actions": [
+    {
+      "id": "version",
+      "mode": "read",
+      "driver": "playwright",
+      "plan": [
+        { "kind": "cli.exec", "command": "playwright-cli", "args": ["--version"] },
+        { "kind": "snapshot.write", "name": "version" }
+      ]
+    }
+  ]
+}
+```
+
 ## Driver boundary
 
 The architecture deliberately keeps a thin bridge between app actions and browser/UI backends:
 
 1. **Catalog and validation** live in `extensions/app-automation/catalog.js` and are pure enough to unit test without Pi runtime dependencies.
 2. **Pi extension registration** lives in `extensions/app-automation.js` and exposes tools/commands.
-3. **Driver execution** will land later behind the plan vocabulary:
+3. **Core execution** is deterministic and conservative:
+   - `cli.exec` runs only allowlisted commands: `playwright-cli`, `tendril`, and `pandoc`.
+   - `tendril.run` builds a structured `tendril run --window <target> <dsl>` invocation.
+   - `snapshot.write` persists run metadata under the app snapshot directory.
+   - high-level steps such as `browser.open`, `dom.extract`, `document.export`, and `editor.replace` remain planned until app-specific driver beads implement them.
+4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.
    - Use Tendril capture/run when visual verification or native input is needed.
    - Keep paste/import/write actions explicit and parameterized.
-4. **Artifacts** always land under the app automation state root unless a future action explicitly accepts a workspace output path.
+5. **Artifacts** always land under the app automation state root unless a future action explicitly accepts a workspace output path.
 
 ## Periodic refresh model
 

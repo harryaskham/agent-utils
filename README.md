@@ -28,10 +28,11 @@ Available tools:
 
 - `app_automation_list` — list configured apps and high-level actions.
 - `app_automation_plan` — return the deterministic action plan for an app/action without executing browser automation.
+- `app_automation_run` — dry-run or execute deterministic allowlisted runner steps such as `cli.exec`, `tendril.run`, and `snapshot.write`.
 - `app_automation_status` — inspect or create the canonical app automation state root.
 - `/tendril-app [app] [action]` — quick command for app/action discovery from the Pi UI.
 
-Initial blessed configs cover Slack web notifications, Markdown-to-canvas sync, Outlook web, and Teams web. This first slice is intentionally a planning/scaffold layer; executable browser actions are tracked in follow-up beads. See [docs/app-automation.md](docs/app-automation.md) for the architecture, snapshot locations, auth policy, periodic refresh shape, and follow-up bead stack.
+Initial blessed configs cover Slack web notifications, Markdown-to-canvas sync, Outlook web, and Teams web. JSON app configs can also be loaded from `APP_AUTOMATION_CONFIG_DIR` (default `~/.config/agent-utils/app-automation/apps.d`). High-level browser actions remain planned until app-specific driver beads land, while explicitly allowlisted low-level runner steps can be executed through `app_automation_run`. See [docs/app-automation.md](docs/app-automation.md) for the architecture, snapshot locations, auth policy, periodic refresh shape, and follow-up bead stack.
 
 ## skill-server (`skill-search`)
 

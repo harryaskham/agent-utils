@@ -243,7 +243,15 @@
           "command": "/tendril list, /tendril window <id-or-name>, /tendril display <id-or-name>, /tendril describe window <id-or-name>, /tendril stream window <id-or-name>",
           "audience": "Pi users sharing local visual context with image-capable models",
           "purpose": "Let the user list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.",
-          "commonActions": ["list windows and displays", "capture a window for the model", "capture a display for the model", "describe a screenshot with a vision model", "look up targets by id or name", "stream low-resolution screenshots periodically", "queue screenshot context as a follow-up while the agent is busy"],
+          "commonActions": [
+            "list windows and displays",
+            "capture a window for the model",
+            "capture a display for the model",
+            "describe a screenshot with a vision model",
+            "look up targets by id or name",
+            "stream low-resolution screenshots periodically",
+            "queue screenshot context as a follow-up while the agent is busy"
+          ],
           "sourceOfTruth": "extensions/tendril-share.js"
         },
         {
@@ -290,12 +298,13 @@
         },
         {
           "name": "App automation Pi extension",
-          "command": "app_automation_list, app_automation_plan, app_automation_status, /tendril-app",
+          "command": "app_automation_list, app_automation_plan, app_automation_run, app_automation_status, /tendril-app",
           "audience": "Pi agents driving API-less web apps through blessed Playwright/Tendril workflows",
-          "purpose": "Expose a deterministic catalog of app automation plans for Slack, Markdown canvas sync, Outlook, and Teams before agents fall back to raw browser/UI automation.",
+          "purpose": "Expose a deterministic catalog and conservative runner for app automation plans covering Slack, Markdown canvas sync, Outlook, and Teams before agents fall back to raw browser/UI automation.",
           "commonActions": [
-            "list blessed apps",
+            "list blessed and local app configs",
             "plan Slack notification snapshot",
+            "dry-run or execute allowlisted runner steps",
             "plan Markdown-to-canvas sync",
             "inspect canonical app automation state root"
           ],

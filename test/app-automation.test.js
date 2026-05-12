@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
   APP_AUTOMATION_SPEC_VERSION,
   buildActionPlan,
+  buildExecutionPlan,
+  buildStepCommand,
   listAppConfigs,
+  loadCatalog,
+  normalizeAppConfig,
   renderAppList,
   renderPlan,
   sanitizeId,
@@ -48,13 +54,48 @@ test("canvas sync plan reports required parameters before execution exists", () 
   ]);
 });
 
-test("extension is packaged and exposes list, plan, status tools plus /tendril-app", async () => {
+test("external JSON app configs load and override built-ins by id", async () => {
+  const dir = await mkdir(path.join(os.tmpdir(), `app-automation-${Date.now()}`), { recursive: true });
+  await writeFile(path.join(dir, "slack.json"), JSON.stringify({
+    id: "slack",
+    label: "Custom Slack",
+    url: "https://example.invalid/slack",
+    actions: [{ id: "ping", mode: "read", driver: "playwright", plan: [{ kind: "cli.exec", command: "playwright-cli", args: ["--version"] }] }],
+  }), "utf8");
+
+  const catalog = await loadCatalog({ env: { APP_AUTOMATION_CONFIG_DIR: dir } });
+  const slack = catalog.apps.find((app) => app.id === "slack");
+  assert.equal(slack.label, "Custom Slack");
+  assert.equal(slack.source.endsWith("slack.json"), true);
+  assert.equal(catalog.external.errors.length, 0);
+});
+
+test("normalization rejects malformed dynamic actions", () => {
+  assert.throws(() => normalizeAppConfig({ id: "bad", actions: [{}] }), /requires id/);
+});
+
+test("execution planning allowlists deterministic cli and tendril commands", () => {
+  const ok = buildStepCommand({ kind: "cli.exec", command: "pandoc", args: ["$params.source"] }, { source: "notes.md" });
+  assert.deepEqual(ok, { executable: true, command: "pandoc", args: ["notes.md"] });
+  assert.equal(buildStepCommand({ kind: "cli.exec", command: "bash", args: ["-lc", "echo nope"] }).executable, false);
+  assert.equal(buildStepCommand({ kind: "tendril.run", target: "Slack", dsl: "send(\"hi\")" }).command, "tendril");
+});
+
+test("execution plan blocks high-level Slack browser steps until driver beads land", () => {
+  const plan = buildActionPlan({ app: "slack", action: "notifications.snapshot" });
+  const execution = buildExecutionPlan(plan);
+  assert.equal(execution.executable, false);
+  assert.match(execution.blockedSteps[0].reason, /Playwright bridge/);
+});
+
+test("extension is packaged and exposes list, plan, run, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
 
   assert.ok(packageJson.pi.extensions.includes("./extensions/app-automation.js"));
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_list`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_plan`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_run`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_status`/);
   assert.match(source, /registerCommand\("tendril-app"/);
 });
