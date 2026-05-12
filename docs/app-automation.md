@@ -124,7 +124,7 @@ Snapshots are persisted under:
 ${APP_AUTOMATION_STATE_ROOT:-~/.local/state/agent-utils/app-automation}/snapshots/<app>/...
 ```
 
-Agents should prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. Each executed action writes a safe `latest-run.json` manifest in its snapshot directory with statuses/counts/paths but without command stdout/stderr. The digest tool extracts compact status/count/first-line summaries. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
+Agents should prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. Each executed action writes a safe `latest-run.json` manifest in its snapshot directory with statuses/counts/paths but without command stdout/stderr. The digest tool extracts compact status/count/action/result/auth-required summaries from JSON artifacts and first-line summaries from text artifacts. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
 
 ## Periodic refresh model
 

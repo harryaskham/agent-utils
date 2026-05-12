@@ -62,14 +62,31 @@ export async function readSnapshotArtifact({ root, file, maxBytes = 64_000 } = {
 function summarizeJson(value) {
   const parts = [];
   if (value.app) parts.push(`app=${value.app}`);
+  if (value.action) parts.push(`action=${value.action}`);
   if (value.kind) parts.push(`kind=${value.kind}`);
   if (value.status) parts.push(`status=${value.status}`);
+  if (value.reason) parts.push(`reason=${String(value.reason).slice(0, 80)}`);
   if (value.count != null) parts.push(`count=${value.count}`);
   if (value.counts && typeof value.counts === "object") {
     const counts = Object.entries(value.counts).map(([key, count]) => `${key}=${count}`).join(",");
     if (counts) parts.push(`counts=${counts}`);
   }
   if (Array.isArray(value.items)) parts.push(`items=${value.items.length}`);
+  if (Array.isArray(value.results)) {
+    parts.push(`results=${value.results.length}`);
+    const authRequired = value.results.filter((result) => result?.authRequired).length;
+    if (authRequired) parts.push(`authRequired=${authRequired}`);
+    const statuses = value.results.reduce((counts, result) => {
+      const status = result?.status || "unknown";
+      counts[status] = (counts[status] || 0) + 1;
+      return counts;
+    }, {});
+    const statusText = Object.entries(statuses).map(([status, count]) => `${status}=${count}`).join(",");
+    if (statusText) parts.push(`resultStatuses=${statusText}`);
+  }
+  if (value.authRequiredPath) parts.push(`authRequiredPath=${value.authRequiredPath}`);
+  if (value.detectedAt) parts.push(`detectedAt=${value.detectedAt}`);
+  if (value.writtenAt) parts.push(`writtenAt=${value.writtenAt}`);
   if (value.syncedAt) parts.push(`syncedAt=${value.syncedAt}`);
   return parts.join(" ") || "JSON snapshot";
 }
