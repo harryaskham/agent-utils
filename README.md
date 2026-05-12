@@ -30,6 +30,7 @@ Available tools:
 - `app_automation_plan` — return the deterministic action plan for an app/action without executing browser automation.
 - `app_automation_run` — dry-run or execute deterministic allowlisted runner steps such as `cli.exec`, `tendril.run`, and `snapshot.write`.
 - `app_automation_refresh_start` / `app_automation_refresh_status` / `app_automation_refresh_stop` — run non-overlapping Pi-session-local periodic app actions for snapshot refreshes.
+- `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshot_read` — inspect and summarize persisted Slack, Outlook, Teams, calendar, and canvas snapshot artifacts without ad-hoc filesystem reads.
 - `app_automation_status` — inspect or create the canonical app automation state root.
 - `/tendril-app [app] [action]` — quick command for app/action discovery from the Pi UI.
 

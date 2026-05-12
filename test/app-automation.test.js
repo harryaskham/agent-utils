@@ -16,6 +16,13 @@ import {
   renderPlan,
   sanitizeId,
 } from "../extensions/app-automation/catalog.js";
+import {
+  digestSnapshotArtifacts,
+  listSnapshotArtifacts,
+  readSnapshotArtifact,
+  renderArtifactList,
+  renderSnapshotDigest,
+} from "../extensions/app-automation/artifacts.js";
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
@@ -205,7 +212,28 @@ test("generic notification snapshots filter supplied extraction text", () => {
   assert.match(renderGenericMarkdown(snapshot), /3 unread in Ops/);
 });
 
-test("extension is packaged and exposes list, plan, run, refresh, status tools plus /tendril-app", async () => {
+test("snapshot artifact helpers list and read bounded readable files", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-artifacts-${Date.now()}`), { recursive: true });
+  const slackDir = path.join(root, "snapshots", "slack");
+  await mkdir(slackDir, { recursive: true });
+  await writeFile(path.join(slackDir, "notifications.md"), "# Slack\n", "utf8");
+  await writeFile(path.join(slackDir, "notifications.json"), JSON.stringify({ app: "slack", kind: "notifications.snapshot", status: "ok", counts: { items: 2 } }), "utf8");
+  await writeFile(path.join(slackDir, "extractor.js"), "secret-ish helper should not be listed", "utf8");
+
+  const summary = await listSnapshotArtifacts({ root, app: "slack" });
+  assert.equal(summary.artifacts.length, 2);
+  assert.match(summary.artifacts.map((artifact) => artifact.relativePath).join("\n"), /snapshots\/slack\/notifications\.md/);
+  assert.match(renderArtifactList(summary), /notifications\.md/);
+  const digest = await digestSnapshotArtifacts({ root, app: "slack" });
+  assert.match(renderSnapshotDigest(digest), /counts=items=2/);
+  const artifact = await readSnapshotArtifact({ root, file: "snapshots/slack/notifications.md", maxBytes: 4 });
+  assert.equal(artifact.content, "# Sl");
+  assert.equal(artifact.truncated, true);
+  await assert.rejects(() => readSnapshotArtifact({ root, file: "../outside.md" }), /inside/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("extension is packaged and exposes list, plan, run, refresh, snapshot, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
 
@@ -216,6 +244,9 @@ test("extension is packaged and exposes list, plan, run, refresh, status tools p
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_start`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_status`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_stop`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_list`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_digest`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshot_read`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_status`/);
   assert.match(source, /setInterval/);
   assert.match(source, /session_shutdown/);

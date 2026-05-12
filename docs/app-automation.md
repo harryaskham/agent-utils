@@ -25,6 +25,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
 - `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
 - `app_automation_refresh_start` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes.
+- `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshot_read` — list, summarize, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
 - `/tendril-app [app] [action]` — operator/agent-facing command for quick app/action discovery.
 
 ## Blessed initial configs
@@ -39,7 +40,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
   - `snapshots/slack/notifications.md`
   - `snapshots/slack/extractor.js`
 
-Slack auth should reuse a Playwright/browser profile or an already-authenticated system browser session. The extension must never persist cookies, tokens, or secrets in repo files or snapshots. Until the Playwright DOM bridge lands, agents can pass `sourceText`, `sourceJson`, or `extraction` to `app_automation_run` and use the persisted `extractor.js` helper as the browser-side DOM extraction snippet.
+Slack auth should reuse a Playwright/browser profile or an already-authenticated system browser session. The extension must never persist cookies, tokens, or secrets in repo files or snapshots. Agents can pass `sourceText`, `sourceJson`, or `extraction` to `app_automation_run` for offline normalization, or use the Playwright-backed live `browser.open`/`dom.extract` plan when an authenticated session is available.
 
 ### Canvas
 
@@ -105,12 +106,22 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - `slack.notifications.snapshot` normalizes Slack extraction text/JSON and writes canonical JSON, Markdown, and the browser-side extractor snippet.
    - `canvas.sync-markdown` reads Markdown and writes canonical Markdown, HTML, paste text, and sync metadata with a browser paste plan; `editor.replace` can turn that paste artifact into a browser-side replacement script.
    - `generic.notifications.snapshot` normalizes Outlook/Teams-style supplied extraction text/JSON with conservative include-pattern filters.
-   - high-level steps such as `browser.open`, `dom.extract`, `document.export`, and `editor.replace` remain planned until app-specific driver beads implement them.
+   - high-level `browser.open`, `dom.extract`, and `editor.replace` steps are executable through the Playwright bridge when their required parameters are present; optional steps are skipped when no target URL or selector is supplied.
 4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.
    - Use Tendril capture/run when visual verification or native input is needed.
    - Keep paste/import/write actions explicit and parameterized.
 5. **Artifacts** always land under the app automation state root unless a future action explicitly accepts a workspace output path.
+
+## Snapshot inspection
+
+Snapshots are persisted under:
+
+```text
+${APP_AUTOMATION_STATE_ROOT:-~/.local/state/agent-utils/app-automation}/snapshots/<app>/...
+```
+
+Agents should prefer `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for inspection. The digest tool extracts compact status/count/first-line summaries. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
 
 ## Periodic refresh model
 

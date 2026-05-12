@@ -5,6 +5,13 @@ import { setInterval, clearInterval } from "node:timers";
 import { Type } from "@sinclair/typebox";
 
 import {
+  digestSnapshotArtifacts,
+  listSnapshotArtifacts,
+  readSnapshotArtifact,
+  renderArtifactList,
+  renderSnapshotDigest,
+} from "./app-automation/artifacts.js";
+import {
   APP_AUTOMATION_SPEC_VERSION,
   buildActionPlan,
   loadCatalog,
@@ -431,6 +438,55 @@ export default function appAutomationExtension(pi) {
         stopped,
         remaining: Array.from(refreshState.refreshers.values()).map(refreshPublicEntry),
       });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_snapshots_list`,
+    label: "App Automation Snapshots List",
+    description: "List persisted readable snapshot artifacts under the app automation state root.",
+    promptSnippet: "Use this before ad-hoc filesystem reads when checking Slack, Outlook, Teams, calendar, or canvas app automation snapshots.",
+    parameters: Type.Object({
+      app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, or canvas." })),
+      limit: Type.Optional(Type.Number({ description: "Maximum artifacts to return. Defaults to 100." })),
+    }),
+    async execute(_toolCallId, params) {
+      const root = stateRoot();
+      const summary = await listSnapshotArtifacts({ root, app: params.app, limit: params.limit });
+      return textResult(renderArtifactList(summary), { snapshots: summary });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_snapshots_digest`,
+    label: "App Automation Snapshots Digest",
+    description: "Summarize recent persisted app automation snapshot artifacts for quick agent context.",
+    promptSnippet: "Use this for a compact latest-state digest across Slack, Outlook, Teams, calendar, and canvas snapshots.",
+    parameters: Type.Object({
+      app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, or canvas." })),
+      limit: Type.Optional(Type.Number({ description: "Maximum artifacts to digest. Defaults to 20." })),
+      maxBytes: Type.Optional(Type.Number({ description: "Maximum bytes to inspect per artifact. Defaults to 16000." })),
+    }),
+    async execute(_toolCallId, params) {
+      const root = stateRoot();
+      const digest = await digestSnapshotArtifacts({ root, app: params.app, limit: params.limit, maxBytes: params.maxBytes });
+      return textResult(renderSnapshotDigest(digest), { digest });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_snapshot_read`,
+    label: "App Automation Snapshot Read",
+    description: "Read a persisted app automation snapshot artifact from the state root with path containment and size limits.",
+    promptSnippet: "Use this to read canonical Slack, Outlook, Teams, calendar, or canvas snapshot JSON/Markdown artifacts.",
+    parameters: Type.Object({
+      file: Type.String({ description: "Artifact path relative to the app automation state root, for example snapshots/slack/notifications.md." }),
+      maxBytes: Type.Optional(Type.Number({ description: "Maximum bytes to return. Defaults to 64000." })),
+    }),
+    async execute(_toolCallId, params) {
+      const root = stateRoot();
+      const artifact = await readSnapshotArtifact({ root, file: params.file, maxBytes: params.maxBytes });
+      return textResult(artifact.content, { artifact });
     },
   });
 
