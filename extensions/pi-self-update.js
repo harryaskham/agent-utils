@@ -19,6 +19,15 @@ function parseUpdateArgs(args) {
   };
 }
 
+function updateLooksReloadWorthy(result) {
+  if (result?.killed) return false;
+  if (Number(result?.code || 0) === 0) return true;
+  const combined = `${result?.stdout || ""}\n${result?.stderr || ""}`;
+  if (/Updated packages/i.test(combined)) return true;
+  if (/pi cannot self-update this installation/i.test(combined) && /install path is not writable/i.test(combined)) return true;
+  return false;
+}
+
 function runPiUpdateWithSpawn(signal) {
   return new Promise((resolve) => {
     const child = spawn("pi", ["update"], { stdio: ["ignore", "pipe", "pipe"] });
@@ -53,13 +62,13 @@ async function runPiUpdate(pi, signal) {
   return runPiUpdateWithSpawn(signal);
 }
 
-function formatUpdateResult(result, { reload }) {
+function formatUpdateResult(result, { reload, reloadWorthy }) {
   const code = result?.code ?? (result?.killed ? "killed" : "unknown");
   const stdout = truncateOutput(result?.stdout || "").trim();
   const stderr = truncateOutput(result?.stderr || "").trim();
   return [
     `pi update exited with code ${code}`,
-    reload ? "reload: requested after successful update" : "reload: skipped (--no-reload)",
+    reload ? (reloadWorthy ? "reload: requested after package update" : "reload: requested after update attempt") : "reload: skipped (--no-reload)",
     stdout ? `\nstdout:\n${stdout}` : "",
     stderr ? `\nstderr:\n${stderr}` : "",
   ].filter(Boolean).join("\n");
@@ -85,10 +94,12 @@ export default function piSelfUpdateExtension(pi) {
         ctx.ui.notify("Running pi update...", "info");
         const result = await runPiUpdate(pi);
         const ok = Number(result?.code || 0) === 0 && !result?.killed;
-        ctx.ui.notify(formatUpdateResult(result, options), ok ? "info" : "error");
-        if (!ok) return;
+        const reloadWorthy = updateLooksReloadWorthy(result);
+        ctx.ui.notify(formatUpdateResult(result, { ...options, reloadWorthy }), ok || reloadWorthy ? "info" : "error");
         if (options.reload) {
-          ctx.ui.notify("pi update succeeded; reloading Pi runtime...", "info");
+          ctx.ui.notify(reloadWorthy
+            ? "pi update completed package work; reloading Pi runtime..."
+            : "pi update did not report package success, but /update reloads after attempts; reloading Pi runtime...", "info");
           await ctx.reload();
           return;
         }
@@ -104,7 +115,7 @@ export default function piSelfUpdateExtension(pi) {
     pi.registerTool({
       name: "pi_self_update",
       label: "Pi Self Update",
-      description: "Queue /update so Pi runs `pi update` and reloads extensions/resources on success.",
+      description: "Run `pi update`, then queue /reload so updated packages are loaded in the current Pi session.",
       promptSnippet: "Queue a Pi package self-update and reload when newly landed extension/tool changes are needed in the running session.",
       promptGuidelines: ["Use pi_self_update when the user asks to update Pi packages or when a newly landed agent-utils extension/tool needs to appear in the current Pi session."],
       parameters: ToolSchema.object({
@@ -112,14 +123,16 @@ export default function piSelfUpdateExtension(pi) {
         dryRun: ToolSchema.optional(ToolSchema.boolean({ description: "Only report the command that would be queued; do not queue it." })),
       }),
       async execute(_toolCallId, params = {}) {
-        const command = params.skipReload ? "/update --no-reload" : "/update";
+        const result = await runPiUpdate(pi);
+        const reloadCommand = params.skipReload ? null : "/reload";
+        const reloadWorthy = updateLooksReloadWorthy(result);
         if (params.dryRun) {
-          return { content: [{ type: "text", text: `Would queue ${command}.` }], details: { command, queued: false } };
+          return { content: [{ type: "text", text: `Would run pi update${reloadCommand ? ` and queue ${reloadCommand}` : " without reload"}.` }], details: { reloadCommand, queued: false } };
         }
-        pi.sendUserMessage?.(command, { deliverAs: "followUp" });
+        if (reloadCommand) pi.sendUserMessage?.(reloadCommand, { deliverAs: "followUp" });
         return {
-          content: [{ type: "text", text: `Queued ${command} as a follow-up command. It will run pi update and ${params.skipReload ? "skip reload" : "reload on success"}.` }],
-          details: { command, queued: true },
+          content: [{ type: "text", text: `${formatUpdateResult(result, { reload: !params.skipReload, reloadWorthy })}\n\n${reloadCommand ? `Queued ${reloadCommand} as a follow-up command.` : "Reload skipped."}` }],
+          details: { reloadCommand, queued: !!reloadCommand, updateExitCode: result?.code ?? null, reloadWorthy },
         };
       },
     });

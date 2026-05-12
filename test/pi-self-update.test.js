@@ -45,24 +45,35 @@ test("/update --no-reload skips reload", async () => {
   assert.match(h.notifications.at(-1).message, /reload: skipped/);
 });
 
-test("/update does not reload after failed update", async () => {
+test("/update reloads even after failed update attempts", async () => {
   const h = makeHarness({ execResult: { code: 1, stdout: "", stderr: "failed" } });
   piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("", h.ctx);
 
-  assert.equal(h.reloadCount, 0);
-  assert.equal(h.notifications.at(-1).level, "error");
-  assert.match(h.notifications.at(-1).message, /failed/);
+  assert.equal(h.reloadCount, 1);
+  assert.match(h.notifications.at(-2).message, /failed/);
+  assert.match(h.notifications.at(-1).message, /reloading Pi runtime/);
 });
 
-test("pi_self_update tool queues update command as follow-up", async () => {
+test("/update treats Nix read-only self-update failure as reload-worthy", async () => {
+  const h = makeHarness({ execResult: { code: 1, stdout: "Updated packages", stderr: "error: pi cannot self-update this installation. install path is not writable" } });
+  piSelfUpdateExtension(h.pi);
+
+  await h.commands.get("update").handler("", h.ctx);
+
+  assert.equal(h.reloadCount, 1);
+  assert.equal(h.notifications.at(-2).level, "info");
+  assert.match(h.notifications.at(-2).message, /reload: requested after package update/);
+});
+
+test("pi_self_update tool runs update and queues reload follow-up", async () => {
   const h = makeHarness();
   piSelfUpdateExtension(h.pi);
 
-  const result = await h.tools.get("pi_self_update").execute("tool-1", { skipReload: true }, null, null, h.ctx);
+  const result = await h.tools.get("pi_self_update").execute("tool-1", {}, null, null, h.ctx);
 
-  assert.deepEqual(h.userMessages, [{ message: "/update --no-reload", options: { deliverAs: "followUp" } }]);
+  assert.deepEqual(h.userMessages, [{ message: "/reload", options: { deliverAs: "followUp" } }]);
   assert.equal(result.details.queued, true);
 });
 
@@ -73,5 +84,5 @@ test("pi_self_update dryRun reports without queueing", async () => {
   const result = await h.tools.get("pi_self_update").execute("tool-1", { dryRun: true }, null, null, h.ctx);
 
   assert.deepEqual(h.userMessages, []);
-  assert.match(result.content[0].text, /Would queue \/update/);
+  assert.match(result.content[0].text, /Would run pi update/);
 });
