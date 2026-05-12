@@ -348,6 +348,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const staleLinks = await collectSnapshotLinks({ root, app: "slack", freshness: "stale", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(staleLinks.links.length, 0);
   assert.deepEqual(staleLinks.freshnessCounts, { total: 0, fresh: 0, stale: 0, unknown: 0 });
+  assert.match(renderSnapshotLinks(staleLinks), /No snapshot links matching freshness=stale found .*scanned 4 artifacts/);
   const calendarDir = path.join(root, "snapshots", "calendar");
   await mkdir(calendarDir, { recursive: true });
   await writeFile(path.join(calendarDir, "events.json"), JSON.stringify({ app: "calendar", kind: "events.snapshot", status: "ok", capturedAt: "2026-05-12T00:05:00Z", items: [{ title: "Standup", url: "https://calendar.example/events/standup" }] }), "utf8");

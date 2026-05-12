@@ -246,9 +246,16 @@ export function renderSnapshotDigest(summary) {
   return summary.artifacts.map((artifact) => `${artifact.relativePath}: ${artifact.summary}${artifact.truncated ? " (truncated)" : ""}`).join("\n");
 }
 
+function renderSnapshotLinkFilters(summary = {}) {
+  const filters = [];
+  if (summary.freshness) filters.push(`freshness=${summary.freshness}`);
+  if (summary.query) filters.push(`query=${JSON.stringify(summary.query)}`);
+  return filters.length ? ` matching ${filters.join(" ")}` : "";
+}
+
 export function renderSnapshotLinks(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
-  if (!summary.links.length) return `No snapshot links found at ${summary.snapshotRoot}.`;
+  if (!summary.links.length) return `No snapshot links${renderSnapshotLinkFilters(summary)} found at ${summary.snapshotRoot} (scanned ${summary.artifacts?.length || 0} artifacts).`;
   const counts = summary.freshnessCounts || summarizeLinkFreshness(summary.links);
   const lines = [`links total=${counts.total} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}`];
   lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
