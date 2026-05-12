@@ -9,9 +9,11 @@ import {
   listSnapshotArtifacts,
   readSnapshotArtifact,
   renderArtifactList,
+  renderSnapshotCleanupPlan,
   renderSnapshotDigest,
   renderSnapshotStaleness,
   snapshotStalenessReport,
+  planSnapshotCleanup,
 } from "./app-automation/artifacts.js";
 import {
   APP_AUTOMATION_SPEC_VERSION,
@@ -895,6 +897,22 @@ export default function appAutomationExtension(pi) {
         staleAfterMinutes: params.staleAfterMinutes || 60,
       });
       return textResult(renderSnapshotStaleness(report), { staleness: report });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_snapshots_cleanup_plan`,
+    label: "App Automation Snapshots Cleanup Plan",
+    description: "Dry-run cleanup planning for old readable app automation snapshot artifacts without deleting files.",
+    promptSnippet: "Use this to inspect old Slack, Outlook, Teams, calendar, or canvas snapshot artifacts before any manual cleanup.",
+    parameters: Type.Object({
+      app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, or canvas. Omit to scan all apps." })),
+      keepLatest: Type.Optional(Type.Number({ description: "Readable artifacts to keep before marking older ones as cleanup candidates. Defaults to 20." })),
+    }),
+    async execute(_toolCallId, params) {
+      const root = stateRoot();
+      const plan = await planSnapshotCleanup({ root, app: params.app, keepLatest: params.keepLatest || 20 });
+      return textResult(renderSnapshotCleanupPlan(plan), { cleanup: plan, dryRun: true });
     },
   });
 

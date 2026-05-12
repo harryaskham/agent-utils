@@ -162,3 +162,33 @@ export function renderSnapshotStaleness(report) {
     return `${entry.app}: ${entry.status} age=${entry.ageMinutes}m latest=${entry.latestArtifact} modified=${entry.latestModifiedAt}`;
   }).join("\n");
 }
+
+export async function planSnapshotCleanup({ root, app, keepLatest = 20, protect = ["latest-run.json", "auth-required.json"] } = {}) {
+  const listed = await listSnapshotArtifacts({ root, app, limit: 10_000 });
+  const protectedNames = new Set(protect);
+  const deletable = listed.artifacts.filter((artifact) => !protectedNames.has(path.basename(artifact.relativePath)));
+  const keep = Math.max(0, Number(keepLatest) || 20);
+  const candidates = deletable.slice(keep);
+  const protectedArtifacts = listed.artifacts.filter((artifact) => protectedNames.has(path.basename(artifact.relativePath)));
+  return {
+    root,
+    app,
+    keepLatest: keep,
+    protected: [...protectedNames],
+    scanned: listed.artifacts.length,
+    candidateCount: candidates.length,
+    protectedCount: protectedArtifacts.length,
+    candidates,
+    protectedArtifacts,
+  };
+}
+
+export function renderSnapshotCleanupPlan(plan) {
+  if (!plan.scanned) return `No readable snapshot artifacts found for ${plan.app || "all apps"}.`;
+  const lines = [
+    `${plan.app || "all apps"}: scanned=${plan.scanned} keepLatest=${plan.keepLatest} candidates=${plan.candidateCount} protected=${plan.protectedCount}`,
+  ];
+  lines.push(...plan.candidates.slice(0, 20).map((artifact) => `- ${artifact.relativePath} (${artifact.size} bytes, ${artifact.modifiedAt})`));
+  if (plan.candidates.length > 20) lines.push(`... ${plan.candidates.length - 20} more candidates`);
+  return lines.join("\n");
+}

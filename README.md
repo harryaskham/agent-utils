@@ -33,7 +33,7 @@ Available tools:
 - `app_automation_run` — dry-run or execute deterministic allowlisted runner steps such as `cli.exec`, `tendril.run`, and `snapshot.write`.
 - `app_automation_open_bundle_run_once` — open Slack, Outlook mail/calendar, and Teams browser surfaces once to warm authenticated sessions; pass `dryRun` to inspect the planned browser actions first.
 - `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_stale_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — run non-overlapping Pi-session-local periodic app actions for snapshot refreshes, including standard Slack/Outlook/Teams bundle start, one-shot, and stale-only refresh paths; one-shot bundles also support `dryRun`.
-- `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshots_staleness` / `app_automation_snapshot_read` — inspect, summarize, and freshness-check persisted Slack, Outlook, Teams, calendar, and canvas snapshot artifacts without ad-hoc filesystem reads.
+- `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshots_staleness` / `app_automation_snapshots_cleanup_plan` / `app_automation_snapshot_read` — inspect, summarize, freshness-check, and cleanup-plan persisted Slack, Outlook, Teams, calendar, and canvas snapshot artifacts without ad-hoc filesystem reads.
 - `app_automation_status` — inspect or create the canonical app automation state root.
 - `/tendril-app [app] [action]` — quick command for app/action discovery from the Pi UI.
 

@@ -20,7 +20,9 @@ import {
   digestSnapshotArtifacts,
   listSnapshotArtifacts,
   readSnapshotArtifact,
+  planSnapshotCleanup,
   renderArtifactList,
+  renderSnapshotCleanupPlan,
   renderSnapshotDigest,
   renderSnapshotStaleness,
   snapshotStalenessReport,
@@ -270,6 +272,10 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
   assert.match(renderSnapshotStaleness(staleness), /slack: stale/);
   assert.match(renderSnapshotStaleness(staleness), /outlook: missing/);
+  const cleanup = await planSnapshotCleanup({ root, app: "slack", keepLatest: 1 });
+  assert.equal(cleanup.candidateCount, 1);
+  assert.match(renderSnapshotCleanupPlan(cleanup), /candidates=1/);
+  assert.equal(cleanup.protectedArtifacts.some((artifact) => artifact.relativePath.endsWith("latest-run.json")), true);
   const artifact = await readSnapshotArtifact({ root, file: "snapshots/slack/notifications.md", maxBytes: 4 });
   assert.equal(artifact.content, "# Sl");
   assert.equal(artifact.truncated, true);
@@ -305,6 +311,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_list`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_digest`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_staleness`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_cleanup_plan`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshot_read`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_status`/);
   assert.match(source, /setInterval/);
