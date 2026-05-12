@@ -330,9 +330,11 @@ test("/tendril-app overview parser keeps links option out of app ids", () => {
     includeLinks: true,
     apps: ["slack"],
   });
-  assert.deepEqual(parseOverviewCommandArgs(["link-limit:5", "link-sort:newest", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
+  assert.deepEqual(parseOverviewCommandArgs(["fresh", "kind:events", "link-limit:5", "link-sort:newest", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
     includeLinks: true,
     apps: ["calendar"],
+    linkFreshness: "fresh",
+    linkKind: "events",
     linkLimitPerApp: 5,
     linkSort: "newest",
     staleAfterMinutes: 1440,
@@ -454,12 +456,16 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const aggregatedLinks = aggregateSnapshotLinkSummaries({
     root,
     snapshotRoot: path.join(root, "snapshots"),
+    freshness: "fresh",
+    kind: "events",
     sort: "newest",
     summaries: [
       await collectSnapshotLinks({ root, app: "slack", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") }),
       await collectSnapshotLinks({ root, app: "calendar", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") }),
     ],
   });
+  assert.equal(aggregatedLinks.freshness, "fresh");
+  assert.equal(aggregatedLinks.kind, "events.snapshot");
   assert.equal(aggregatedLinks.sort, "newest");
   assert.equal(aggregatedLinks.links[0].app, "calendar");
   assert.equal(aggregatedLinks.matchedCount, 4);
@@ -562,6 +568,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /aliases like notifications\/events\/calendar/);
   assert.match(source, /parseLinkCommandArgs/);
   assert.match(source, /parseOverviewCommandArgs/);
+  assert.match(source, /linkFreshness/);
+  assert.match(source, /linkKind/);
   assert.match(source, /linkSort/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /sort: Type\.Optional/);

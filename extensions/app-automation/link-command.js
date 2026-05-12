@@ -69,6 +69,8 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
   const args = words.map((word) => String(word || "").trim()).filter(Boolean);
   const appIdSet = new Set(appIds.map(normalizeWord).filter(Boolean));
   let includeLinks = false;
+  let linkFreshness;
+  let linkKind;
   let linkLimitPerApp;
   let linkSort;
   let staleAfterMinutes;
@@ -77,6 +79,18 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
     const lower = normalizeWord(word);
     if (["links", "--links"].includes(lower)) {
       includeLinks = true;
+      continue;
+    }
+    const freshnessMatch = lower.match(/^freshness[:=](fresh|stale|unknown)$/);
+    if (!linkFreshness && (["fresh", "stale", "unknown"].includes(lower) || freshnessMatch)) {
+      includeLinks = true;
+      linkFreshness = freshnessMatch ? freshnessMatch[1] : lower;
+      continue;
+    }
+    const kindMatch = word.match(/^kind[:=](.+)$/i);
+    if (kindMatch && !linkKind) {
+      includeLinks = true;
+      linkKind = kindMatch[1];
       continue;
     }
     const linkLimitMatch = lower.match(/^(?:link-limit|linklimit|links-limit|linkslimit)[:=](\d+)$/);
@@ -105,6 +119,8 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
   return {
     includeLinks,
     apps: apps.length ? apps : defaultAppIds,
+    ...(linkFreshness ? { linkFreshness } : {}),
+    ...(linkKind ? { linkKind } : {}),
     ...(linkLimitPerApp ? { linkLimitPerApp } : {}),
     ...(linkSort ? { linkSort } : {}),
     ...(staleAfterMinutes ? { staleAfterMinutes } : {}),
