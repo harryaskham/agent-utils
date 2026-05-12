@@ -1,9 +1,9 @@
 {
   "title": "Agent Utils tool inventory",
   "description": "Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.",
-  "lastReviewed": "2026-04-27",
+  "lastReviewed": "2026-05-12",
   "publishing": {
-    "githubPagesPath": "Repository Settings → Pages → Deploy from branch: main, folder: /docs",
+    "githubPagesPath": "Repository Settings \u2192 Pages \u2192 Deploy from branch: main, folder: /docs",
     "localPreview": "npm run docs:build && python3 -m http.server --directory docs 8000",
     "validation": "npm run docs:check"
   },
@@ -17,7 +17,14 @@
           "command": "caco bd",
           "audience": "agents, controllers, operators",
           "purpose": "Track tasks, bugs, epics, ownership, dependencies, and status.",
-          "commonActions": ["show", "list", "search", "create", "claim", "update"],
+          "commonActions": [
+            "show",
+            "list",
+            "search",
+            "create",
+            "claim",
+            "update"
+          ],
           "sourceOfTruth": "Cacophony bead database"
         },
         {
@@ -25,7 +32,13 @@
           "command": "caco agent",
           "audience": "managed agents, controllers",
           "purpose": "Report status, inspect diffs, reintegrate work, and complete or discard managed runs.",
-          "commonActions": ["status", "status set", "diff", "reintegrate", "complete"],
+          "commonActions": [
+            "status",
+            "status set",
+            "diff",
+            "reintegrate",
+            "complete"
+          ],
           "sourceOfTruth": "Cacophony daemon agent registry"
         },
         {
@@ -33,7 +46,12 @@
           "command": "caco msg",
           "audience": "agents, operators",
           "purpose": "Read inboxes, send coordination messages, broadcast ownership, and narrate progress via speech.",
-          "commonActions": ["inbox", "speak", "send", "broadcast"],
+          "commonActions": [
+            "inbox",
+            "speak",
+            "send",
+            "broadcast"
+          ],
           "sourceOfTruth": "Cacophony message bus"
         },
         {
@@ -41,7 +59,13 @@
           "command": "caco scratch",
           "audience": "agents, controllers",
           "purpose": "Persist structured notes across restarts without ad-hoc temp files.",
-          "commonActions": ["write", "append", "show", "list", "connect"],
+          "commonActions": [
+            "write",
+            "append",
+            "show",
+            "list",
+            "connect"
+          ],
           "sourceOfTruth": "Cacophony scratchpad store"
         },
         {
@@ -49,7 +73,13 @@
           "command": "caco test",
           "audience": "agents, queue runners, operators",
           "purpose": "Queue, inspect, and retrieve daemon-managed test jobs when queued execution is required.",
-          "commonActions": ["run", "show", "logs", "list", "cancel"],
+          "commonActions": [
+            "run",
+            "show",
+            "logs",
+            "list",
+            "cancel"
+          ],
           "sourceOfTruth": "Cacophony test daemon"
         },
         {
@@ -57,7 +87,13 @@
           "command": "caco build",
           "audience": "agents, queue runners, operators",
           "purpose": "Queue, inspect, and retrieve daemon-managed build jobs when queued execution is required.",
-          "commonActions": ["run", "show", "logs", "list", "cancel"],
+          "commonActions": [
+            "run",
+            "show",
+            "logs",
+            "list",
+            "cancel"
+          ],
           "sourceOfTruth": "Cacophony build daemon"
         },
         {
@@ -65,7 +101,13 @@
           "command": "caco choices",
           "audience": "agents, operators",
           "purpose": "Present explicit choices when a real operator decision is needed and record the selected option.",
-          "commonActions": ["present", "current", "show", "list", "resolve"],
+          "commonActions": [
+            "present",
+            "current",
+            "show",
+            "list",
+            "resolve"
+          ],
           "sourceOfTruth": "Cacophony choices store"
         },
         {
@@ -73,7 +115,10 @@
           "command": "caco cron",
           "audience": "controllers, operators",
           "purpose": "Run or inspect scheduled project tasks through Cacophony instead of system cron.",
-          "commonActions": ["list", "run"],
+          "commonActions": [
+            "list",
+            "run"
+          ],
           "sourceOfTruth": "Cacophony cron configuration"
         },
         {
@@ -81,7 +126,11 @@
           "command": "caco image generate",
           "audience": "agents, operators",
           "purpose": "Generate configured project images and avatars, optionally postprocess and commit them.",
-          "commonActions": ["generate --preset", "generate --prompt", "generate --commit"],
+          "commonActions": [
+            "generate --preset",
+            "generate --prompt",
+            "generate --commit"
+          ],
           "sourceOfTruth": ".cacophony/generation.yaml in projects that enable image presets"
         }
       ]
@@ -95,7 +144,11 @@
           "command": "/loop",
           "audience": "Pi agents, operators",
           "purpose": "Schedule repeated prompts inside a Pi session for inbox checks, health sweeps, or reminders.",
-          "commonActions": ["/loop 5m …", "/loop status", "/loop off"],
+          "commonActions": [
+            "/loop 5m \u2026",
+            "/loop status",
+            "/loop off"
+          ],
           "sourceOfTruth": "Pi runtime loop extension"
         },
         {
@@ -103,7 +156,11 @@
           "command": "pi-self-nudge skill",
           "audience": "persistent Pi agents",
           "purpose": "Perform periodic health, inbox, and small follow-up checks without relying on daemon cron.",
-          "commonActions": ["verify wake path", "check inbox", "speak degraded autonomy if needed"],
+          "commonActions": [
+            "verify wake path",
+            "check inbox",
+            "speak degraded autonomy if needed"
+          ],
           "sourceOfTruth": ".pi-agent/skills/pi-self-nudge/SKILL.md in managed checkouts"
         },
         {
@@ -111,7 +168,12 @@
           "command": "/bead-claim, /self-idle, /pool-register",
           "audience": "pool-eligible Pi workers",
           "purpose": "Rotate workers through beads with handoff notes, compaction, idle registration, and pool eligibility.",
-          "commonActions": ["/bead-claim", "/bead-handoff-note", "/self-idle", "/pool-register"],
+          "commonActions": [
+            "/bead-claim",
+            "/bead-handoff-note",
+            "/self-idle",
+            "/pool-register"
+          ],
           "sourceOfTruth": ".pi-agent/skills/pi-self-ops/SKILL.md in managed checkouts"
         },
         {
@@ -119,7 +181,11 @@
           "command": "pi install git:github.com/harryaskham/agent-utils@v1",
           "audience": "Pi users, agents",
           "purpose": "Install this repository as a Pi package that contributes prompt templates and extensions.",
-          "commonActions": ["install package", "load prompts", "load extensions"],
+          "commonActions": [
+            "install package",
+            "load prompts",
+            "load extensions"
+          ],
           "sourceOfTruth": "package.json pi.extensions and pi.prompts"
         }
       ]
@@ -133,7 +199,13 @@
           "command": "tmux-cli",
           "audience": "agents",
           "purpose": "Launch a real TTY pane, send commands reliably, wait for idle output, capture the pane, and clean it up.",
-          "commonActions": ["launch", "send", "wait_idle", "capture", "kill"],
+          "commonActions": [
+            "launch",
+            "send",
+            "wait_idle",
+            "capture",
+            "kill"
+          ],
           "sourceOfTruth": ".pi-agent/skills/tmux-cli/SKILL.md in managed checkouts"
         },
         {
@@ -141,7 +213,12 @@
           "command": "tendril_list, tendril_capture, tendril_run, tendril_listen",
           "audience": "agents automating desktop UI",
           "purpose": "List windows, capture screenshots, send keyboard or mouse actions, and observe UI events.",
-          "commonActions": ["list windows", "capture before action", "run DSL actions", "capture after action"],
+          "commonActions": [
+            "list windows",
+            "capture before action",
+            "run DSL actions",
+            "capture after action"
+          ],
           "sourceOfTruth": "Tendril MCP server and managed tendril profile"
         }
       ]
@@ -155,7 +232,10 @@
           "command": "search_web",
           "audience": "Pi agents",
           "purpose": "Search the live web through GitHub Copilot Responses API and return grounded answers with citations.",
-          "commonActions": ["query current information", "prefer for freshness-sensitive answers"],
+          "commonActions": [
+            "query current information",
+            "prefer for freshness-sensitive answers"
+          ],
           "sourceOfTruth": "extensions/web-search.js"
         },
         {
@@ -171,7 +251,14 @@
           "command": "kitty_image_preview_capture, kitty_image_preview_add, kitty_image_preview_show",
           "audience": "Pi agents, operators using kitty-compatible terminals",
           "purpose": "Display persistent terminal image previews from Pi using the kitty graphics protocol, with Tendril screenshot capture, series navigation, animation, tmux passthrough, Unicode placeholder anchoring, negative z-index direct placement, configurable widget placement, and fixed non-capturing right-side overlay placement.",
-          "commonActions": ["capture and show a Tendril screenshot", "add a PNG/APNG preview", "add a folder as an image series", "show next or previous image", "animate a loaded series", "hide or clear the preview widget"],
+          "commonActions": [
+            "capture and show a Tendril screenshot",
+            "add a PNG/APNG preview",
+            "add a folder as an image series",
+            "show next or previous image",
+            "animate a loaded series",
+            "hide or clear the preview widget"
+          ],
           "sourceOfTruth": "extensions/kitty-image-preview.js and extensions/kitty-graphics.js"
         },
         {
@@ -179,7 +266,12 @@
           "command": "pi_graphics_render_prompt_enclosure, pi_graphics_render_message_border, pi_graphics_clear, /pi-graphics-status, /pi-graphics-demo",
           "audience": "Pi agents, operators using kitty-compatible terminals",
           "purpose": "Ship a Nord-flavoured Pi theme (themes/kitty-graphics.json) paired with an extension that renders graphical UI affordances (gradient prompt enclosures, translucent message/code borders) through the kitty graphics protocol and Unicode placeholder placement, with scoped image ownership for safe cleanup.",
-          "commonActions": ["select theme", "render gradient prompt rule", "frame a tool/code block", "scoped clear of owned images"],
+          "commonActions": [
+            "select theme",
+            "render gradient prompt rule",
+            "frame a tool/code block",
+            "scoped clear of owned images"
+          ],
           "sourceOfTruth": "extensions/pi-graphics.js, extensions/pi-graphics/, themes/kitty-graphics.json"
         },
         {
@@ -187,15 +279,36 @@
           "command": "firecracker_vm_start, firecracker_vm_status, firecracker_vm_list, firecracker_vm_screen, firecracker_vm_stop, /firecracker-vms",
           "audience": "Pi agents orchestrating Tendril-controllable VM workloads",
           "purpose": "Prepare and lifecycle-manage Firecracker microVM workspaces with config files, API sockets, serial-console logs, Tendril manifests, and declared browser/VNC/noVNC service endpoints for visible screen access.",
-          "commonActions": ["prepare or spawn a VM", "declare browser/noVNC screen endpoints", "inspect serial console output", "list VM lifecycle state", "stop a VM"],
+          "commonActions": [
+            "prepare or spawn a VM",
+            "declare browser/noVNC screen endpoints",
+            "inspect serial console output",
+            "list VM lifecycle state",
+            "stop a VM"
+          ],
           "sourceOfTruth": "extensions/firecracker-vm.js"
+        },
+        {
+          "name": "App automation Pi extension",
+          "command": "app_automation_list, app_automation_plan, app_automation_status, /tendril-app",
+          "audience": "Pi agents driving API-less web apps through blessed Playwright/Tendril workflows",
+          "purpose": "Expose a deterministic catalog of app automation plans for Slack, Markdown canvas sync, Outlook, and Teams before agents fall back to raw browser/UI automation.",
+          "commonActions": [
+            "list blessed apps",
+            "plan Slack notification snapshot",
+            "plan Markdown-to-canvas sync",
+            "inspect canonical app automation state root"
+          ],
+          "sourceOfTruth": "extensions/app-automation.js, extensions/app-automation/catalog.js, docs/app-automation.md"
         },
         {
           "name": "Web search prompt template",
           "command": "/web-search",
           "audience": "Pi users, agents",
           "purpose": "Prompt template for web-search-assisted answers.",
-          "commonActions": ["invoke prompt template"],
+          "commonActions": [
+            "invoke prompt template"
+          ],
           "sourceOfTruth": "prompts/web-search.md"
         },
         {
@@ -203,7 +316,10 @@
           "command": "web-search-mcp",
           "audience": "MCP-compatible agents",
           "purpose": "Expose web search as an MCP server packaged by the repository flake.",
-          "commonActions": ["nix run .#web-search-mcp", "nix build .#web-search-mcp"],
+          "commonActions": [
+            "nix run .#web-search-mcp",
+            "nix build .#web-search-mcp"
+          ],
           "sourceOfTruth": "web-search/src/web_search_mcp/server.py"
         },
         {
@@ -211,7 +327,10 @@
           "command": "nix build .",
           "audience": "operators, release automation",
           "purpose": "Build the aggregate agent-utils package and expose repo tools as flake packages and apps.",
-          "commonActions": ["nix build .", "nix run .#web-search-mcp"],
+          "commonActions": [
+            "nix build .",
+            "nix run .#web-search-mcp"
+          ],
           "sourceOfTruth": "flake.nix"
         },
         {
@@ -219,7 +338,10 @@
           "command": "npm run docs:build",
           "audience": "maintainers",
           "purpose": "Regenerate this static Pages site from docs/tools.json and verify it remains publishable from /docs.",
-          "commonActions": ["npm run docs:build", "npm run docs:check"],
+          "commonActions": [
+            "npm run docs:build",
+            "npm run docs:check"
+          ],
           "sourceOfTruth": "scripts/render-pages.mjs and docs/tools.json"
         }
       ]

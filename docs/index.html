@@ -24,8 +24,8 @@
         <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
         <div class="hero-stats" aria-label="Inventory summary">
           <span><strong>4</strong> sections</span>
-          <span><strong>24</strong> tools and surfaces</span>
-          <span><strong>2026-04-27</strong> reviewed</span>
+          <span><strong>25</strong> tools and surfaces</span>
+          <span><strong>2026-05-12</strong> reviewed</span>
         </div>
       </div>
     </header>
@@ -614,6 +614,33 @@
               <li><code>inspect serial console output</code></li>
               <li><code>list VM lifecycle state</code></li>
               <li><code>stop a VM</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card">
+            <div class="tool-card__header">
+              <h3>App automation Pi extension</h3>
+              <code>app_automation_list, app_automation_plan, app_automation_status, /tendril-app</code>
+            </div>
+            <p>Expose a deterministic catalog of app automation plans for Slack, Markdown canvas sync, Outlook, and Teams before agents fall back to raw browser/UI automation.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents driving API-less web apps through blessed Playwright/Tendril workflows</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/app-automation.js, extensions/app-automation/catalog.js, docs/app-automation.md</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>list blessed apps</code></li>
+              <li><code>plan Slack notification snapshot</code></li>
+              <li><code>plan Markdown-to-canvas sync</code></li>
+              <li><code>inspect canonical app automation state root</code></li>
               </ul>
             </details>
           </article>

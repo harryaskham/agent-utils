@@ -44,7 +44,8 @@
       "./extensions/pi-graphics.js",
       "./extensions/firecracker-vm.js",
       "./extensions/realtime-agent.js",
-      "./extensions/tendril-share.js"
+      "./extensions/tendril-share.js",
+      "./extensions/app-automation.js"
     ],
     "prompts": [
       "./prompts"

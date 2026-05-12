@@ -17,7 +17,21 @@ It currently provides:
 - `kitty_image_preview_*` native Pi tools for persistent terminal image previews via the kitty graphics protocol
 - `firecracker_vm_*` native Pi tools for preparing, spawning, inspecting, and stopping Firecracker VM workloads for Tendril-visible services
 - OpenAI Realtime provider and voice commands (`/rt`, `/rt-listen`, `/rt-doctor`, `/rt-status full`, `/rt-off`) via [`extensions/realtime-agent.js`](extensions/realtime-agent.js). See the [Realtime Agent guide](docs/realtime-agent.md) for recommended workflows, Pulse/phone routing, VAD tuning, replay, and troubleshooting.
+- `app_automation_*` native Pi tools plus `/tendril-app` for blessed Slack, canvas, Outlook, and Teams app automation plans
 - `skill-server` / `skill-search`, a Rust CLI + MCP stdio meta-tool for dynamic skill and host MCP server discovery
+
+## App automation Pi extension
+
+The app automation extension is loaded from [`extensions/app-automation.js`](extensions/app-automation.js). It gives agents a Pi-native catalog of blessed high-level actions for API-less web apps before they fall back to raw Playwright or Tendril commands.
+
+Available tools:
+
+- `app_automation_list` — list configured apps and high-level actions.
+- `app_automation_plan` — return the deterministic action plan for an app/action without executing browser automation.
+- `app_automation_status` — inspect or create the canonical app automation state root.
+- `/tendril-app [app] [action]` — quick command for app/action discovery from the Pi UI.
+
+Initial blessed configs cover Slack web notifications, Markdown-to-canvas sync, Outlook web, and Teams web. This first slice is intentionally a planning/scaffold layer; executable browser actions are tracked in follow-up beads. See [docs/app-automation.md](docs/app-automation.md) for the architecture, snapshot locations, auth policy, periodic refresh shape, and follow-up bead stack.
 
 ## skill-server (`skill-search`)
 
