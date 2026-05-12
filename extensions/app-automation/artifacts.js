@@ -167,6 +167,12 @@ function linkMatchesQuery(link, query) {
     .some((value) => String(value || "").toLowerCase().includes(needle));
 }
 
+function linkMatchesFreshness(link, freshness) {
+  const wanted = String(freshness || "").trim().toLowerCase();
+  if (!wanted) return true;
+  return link.freshness === wanted;
+}
+
 function linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes = 60, now = new Date() } = {}) {
   const threshold = Math.max(1, Number(staleAfterMinutes) || 60);
   const timestamp = snapshotAt || artifactModifiedAt;
@@ -177,7 +183,7 @@ function linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes = 60,
   return { freshness: ageMinutes > threshold ? "stale" : "fresh", ageMinutes, staleAfterMinutes: threshold };
 }
 
-export async function collectSnapshotLinks({ root, app, query, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
+export async function collectSnapshotLinks({ root, app, query, freshness, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const listed = await listSnapshotArtifacts({ root, app, limit: artifactLimit });
   const links = [];
   for (const artifact of listed.artifacts.filter((entry) => entry.extension === ".json")) {
@@ -203,13 +209,13 @@ export async function collectSnapshotLinks({ root, app, query, artifactLimit = 1
           artifactModifiedAt,
           ...linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes, now }),
         };
-        if (!linkMatchesQuery(link, query)) continue;
+        if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness)) continue;
         links.push(link);
-        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, links, truncated: true };
+        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, links, truncated: true };
       }
     }
   }
-  return { ...listed, query: query || null, links, truncated: false };
+  return { ...listed, query: query || null, freshness: freshness || null, links, truncated: false };
 }
 
 export function renderArtifactList(summary) {
