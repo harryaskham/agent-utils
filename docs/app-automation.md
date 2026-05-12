@@ -21,7 +21,7 @@ The extension therefore starts with a small declarative catalog:
 The package registers [`extensions/app-automation.js`](../extensions/app-automation.js), which exposes:
 
 - `app_automation_list` — list blessed app configs and available high-level actions.
-- `app_automation_doctor` — diagnose catalog errors, state-root existence, Playwright CLI configuration, Tendril remote/WSL bridge configuration, and standard action executability.
+- `app_automation_doctor` — diagnose catalog errors, state-root existence, Playwright CLI configuration, Tendril remote/WSL bridge configuration, optional Tendril target-discovery probe, and standard action executability.
 - `app_automation_overview` — summarize configured work apps, active refreshers, app-level snapshot freshness, standard refresh-action freshness, and latest snapshot digests for quick orientation.
 - `app_automation_plan` — return the deterministic plan for an app/action without executing browser automation.
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
@@ -35,7 +35,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 
 For Slack, Outlook, Teams, calendars, and canvas/editor work, prefer this sequence before raw browser commands:
 
-1. **Diagnose setup** — run `app_automation_doctor` or `/tendril-app doctor` to confirm the catalog, state root, Playwright CLI, Tendril bridge routing, and standard action executability.
+1. **Diagnose setup** — run `app_automation_doctor` or `/tendril-app doctor` to confirm the catalog, state root, Playwright CLI, Tendril bridge routing, and standard action executability. Add `probeTendrilBridge: true` (or `/tendril-app doctor probe`) when you need a safe target-count check through the configured Tendril bridge.
 2. **Orient on current state** — run `app_automation_overview` or `/tendril-app overview` to see apps, active refreshers, app-level freshness, standard refresh-action freshness, and recent snapshot digests.
 3. **Preview browser churn** — run `app_automation_open_bundle_run_once` with `dryRun: true` before opening Slack, Calendar, Outlook mail/calendar, and Teams surfaces.
 4. **Warm sessions when needed** — run `app_automation_open_bundle_run_once` without `dryRun` if auth/session state is likely stale; inspect `auth-required.json` diagnostics if login is needed.

@@ -367,6 +367,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /renderDoctorReport/);
   assert.match(source, /tendrilCommandSummary/);
   assert.match(source, /tendrilBridge command=/);
+  assert.match(source, /probeTendrilBridge/);
+  assert.match(source, /tendrilProbe=/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
   assert.match(source, /includeStaleness/);

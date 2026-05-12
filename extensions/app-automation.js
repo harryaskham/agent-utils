@@ -37,7 +37,7 @@ import {
   renderSlackNotificationMarkdown,
   slackExtractorScript,
 } from "./app-automation/slack.js";
-import { tendrilCommandSummary } from "./tendril-command.js";
+import { buildTendrilCommand, tendrilCommandSummary } from "./tendril-command.js";
 
 const TOOL_PREFIX = "app_automation";
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 300;
@@ -362,13 +362,14 @@ async function buildRefreshBundleStaleness({ catalog, params = {} } = {}) {
   return snapshotTargetStalenessReport({ root: stateRoot(), targets: stalenessTargets, staleAfterMinutes: params.staleAfterMinutes || 60 });
 }
 
-function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, actionDiagnostics, cliCheck }) {
+function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, tendrilProbe, actionDiagnostics, cliCheck }) {
   const lines = [
     `app automation doctor stateRoot=${rootSummary.root} exists=${rootSummary.exists}`,
     `playwrightCli=${playwrightCli}`,
     `tendrilBridge command=${tendrilBridge.command} remote=${tendrilBridge.remote || "none"} wslTunnel=${tendrilBridge.wslTunnel}`,
+    tendrilProbe ? `tendrilProbe=${tendrilProbe.status}${tendrilProbe.targets != null ? ` targets=${tendrilProbe.targets}` : ""}${tendrilProbe.error ? ` error=${tendrilProbe.error}` : ""}` : null,
     `catalogApps=${catalog.apps.map((app) => app.id).join(",")}`,
-  ];
+  ].filter(Boolean);
   if (catalog.external?.errors?.length) {
     lines.push(`catalogErrors=${catalog.external.errors.length}`);
     lines.push(...catalog.external.errors.slice(0, 5).map((error) => `- ${error.source || "external"}: ${error.error || error.message || String(error)}`));
@@ -379,6 +380,33 @@ function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge
   lines.push("actions:");
   lines.push(...actionDiagnostics.map((entry) => `- ${entry.app}.${entry.action}: ${entry.executable ? "executable" : "not-executable"}${entry.missingParams?.length ? ` missing=${entry.missingParams.join(",")}` : ""}${entry.blockedSteps?.length ? ` blocked=${entry.blockedSteps.map((step) => step.kind).join(",")}` : ""}`));
   return lines.join("\n");
+}
+
+function parseTendrilJsonEnvelope(stdout) {
+  const trimmed = String(stdout || "").trim();
+  if (!trimmed) throw new Error("tendril list returned no JSON output");
+  try { return JSON.parse(trimmed); }
+  catch (error) {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
+    throw new Error(`tendril list returned invalid JSON: ${error.message}`);
+  }
+}
+
+async function probeTendrilBridge(pi, { signal, timeoutMs = 5000 } = {}) {
+  const tendril = buildTendrilCommand(["list", "--json"]);
+  try {
+    const result = await pi.exec(tendril.command, tendril.args, { signal, timeout: timeoutMs });
+    const envelope = parseTendrilJsonEnvelope(result.stdout);
+    if (result.code !== 0 || envelope.status === "error") {
+      const message = envelope.error?.message || result.stderr || `tendril exited with code ${result.code}`;
+      return { status: "error", error: String(message).slice(0, 300) };
+    }
+    return { status: envelope.status || "ok", targets: envelope.data?.targets?.length || 0 };
+  } catch (error) {
+    return { status: "error", error: String(error.message || error).slice(0, 300) };
+  }
 }
 
 function nextRefreshId(state, app, action) {
@@ -461,8 +489,9 @@ export default function appAutomationExtension(pi) {
     promptSnippet: "Use this before live Slack, Outlook, Teams, calendar, or canvas automation when setup or auth state is unclear.",
     parameters: Type.Object({
       checkCli: Type.Optional(Type.Boolean({ description: "Run the configured Playwright CLI with --version. Defaults to false." })),
+      probeTendrilBridge: Type.Optional(Type.Boolean({ description: "Run tendril list --json through the configured Tendril bridge. Defaults to false." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
-      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for optional CLI check. Defaults to 5000." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for optional CLI and Tendril bridge checks. Defaults to 5000." })),
     }),
     async execute(_toolCallId, params, signal) {
       const catalog = await resolveCatalog(params);
@@ -490,10 +519,12 @@ export default function appAutomationExtension(pi) {
           : { status: "error", error: String(result.stderr || result.stdout || `exit ${result.code}`).slice(0, 300) };
       }
       const tendrilBridge = tendrilCommandSummary();
-      return textResult(renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, actionDiagnostics, cliCheck }), {
+      const tendrilProbe = params.probeTendrilBridge ? await probeTendrilBridge(pi, { signal, timeoutMs: params.timeoutMs || 5000 }) : null;
+      return textResult(renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, tendrilProbe, actionDiagnostics, cliCheck }), {
         state: rootSummary,
         playwrightCli,
         tendrilBridge,
+        tendrilProbe,
         cliCheck,
         actionDiagnostics,
         external: catalog.external,
@@ -1047,7 +1078,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1067,7 +1098,8 @@ export default function appAutomationExtension(pi) {
             return { app: target.app, action: target.action, executable: false, error: error.message };
           }
         });
-        ctx.ui.notify(renderDoctorReport({ rootSummary, catalog, playwrightCli: playwrightCliCommand(), tendrilBridge: tendrilCommandSummary(), actionDiagnostics }), "info");
+        const tendrilProbe = words.includes("probe") || words.includes("--probe") ? await probeTendrilBridge(pi, { timeoutMs: 5000 }) : null;
+        ctx.ui.notify(renderDoctorReport({ rootSummary, catalog, playwrightCli: playwrightCliCommand(), tendrilBridge: tendrilCommandSummary(), tendrilProbe, actionDiagnostics }), "info");
         return;
       }
       if (words[0] === "overview") {
