@@ -1096,7 +1096,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1137,6 +1137,11 @@ export default function appAutomationExtension(pi) {
         const snapshotStaleness = await snapshotStalenessReport({ root, apps: apps.map((app) => app.id), staleAfterMinutes: 60 });
         const refreshStaleness = await buildRefreshBundleStaleness({ catalog, params: { apps: wantedIds.filter((id) => id !== "canvas"), staleAfterMinutes: 60 } });
         ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, refreshStaleness, root }), "info");
+        return;
+      }
+      if (words[0] === "links") {
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], linkLimit: Number(words[2]) || 100 });
+        ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }
       if (words[0] === "staleness") {

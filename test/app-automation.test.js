@@ -416,6 +416,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /registerCommand\("tendril-app"/);
   assert.match(source, /words\[0\] === "doctor"/);
   assert.match(source, /words\[0\] === "overview"/);
+  assert.match(source, /words\[0\] === "links"/);
+  assert.match(source, /collectSnapshotLinks/);
   assert.match(source, /snapshotStalenessReport/);
   assert.match(source, /words\[0\] === "staleness"/);
   assert.match(source, /words\[0\] === "bundle"/);

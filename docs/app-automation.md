@@ -29,7 +29,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_open_bundle_run_once` — open Slack, Calendar, Outlook mail/calendar, and Teams browser surfaces once to warm authenticated sessions.
 - `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_staleness` / `app_automation_refresh_stale_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including standard Slack/Calendar/Outlook/Teams bundle start, one-shot, per-action staleness, and stale-only refresh paths.
 - `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshot_links` / `app_automation_snapshots_staleness` / `app_automation_snapshots_cleanup_plan` / `app_automation_snapshot_read` — list, summarize, link-list, freshness-check, cleanup-plan, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
-- `/tendril-app [doctor|overview|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]` — operator/agent-facing command for quick diagnostics, work-app overview, snapshot freshness, refresh-action freshness, default bundle discovery, and app/action planning.
+- `/tendril-app [doctor|overview|links|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]` — operator/agent-facing command for quick diagnostics, work-app overview, snapshot links, snapshot freshness, refresh-action freshness, default bundle discovery, and app/action planning.
 
 ## Recommended daily workflow
 
