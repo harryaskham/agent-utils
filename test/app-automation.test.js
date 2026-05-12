@@ -233,7 +233,9 @@ test("calendar app exposes open and events snapshot actions", () => {
   assert.equal(openPlan.execution.executable, true);
   assert.equal(snapshotPlan.execution.executable, true);
   assert.deepEqual(snapshotPlan.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
-  assert.match(calendarExtractorScript({ includePatterns: ["meeting"] }), /includePatterns/);
+  const extractor = calendarExtractorScript({ includePatterns: ["meeting"] });
+  assert.match(extractor, /includePatterns/);
+  assert.match(extractor, /hrefs/);
 });
 
 test("Outlook and Teams expose concrete notification and calendar snapshot actions", () => {
@@ -249,7 +251,9 @@ test("Outlook and Teams expose concrete notification and calendar snapshot actio
   assert.deepEqual(buildActionPlan({ app: "teams", action: "open", params: { session: "agent" } }).execution.stepCommands[0].args, ["-s=agent", "open", "https://teams.microsoft.com/v2/"]);
   assert.deepEqual(outlookCalendar.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
   assert.deepEqual(teamsNotifications.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
-  assert.match(microsoftExtractorScript({ app: "teams", includePatterns: ["unread"] }), /includePatterns/);
+  const microsoftExtractor = microsoftExtractorScript({ app: "teams", includePatterns: ["unread"] });
+  assert.match(microsoftExtractor, /includePatterns/);
+  assert.match(microsoftExtractor, /hrefs/);
 });
 
 test("generic notification snapshots filter supplied extraction text", () => {
@@ -261,6 +265,26 @@ test("generic notification snapshots filter supplied extraction text", () => {
   });
   assert.equal(snapshot.count, 1);
   assert.match(renderGenericMarkdown(snapshot), /3 unread in Ops/);
+});
+
+test("generic app snapshots preserve redacted meeting and message links", () => {
+  const snapshot = buildGenericSnapshot({
+    app: "calendar",
+    kind: "events.snapshot",
+    input: {
+      items: [
+        { text: "Team standup join", hrefs: ["https://meet.google.com/abc-defg-hij?authuser=0#secret"] },
+        { text: "Ops meeting", url: "https://teams.microsoft.com/l/meetup-join/abc?token=secret" },
+        { text: "ignored javascript", href: "javascript:alert(1)" },
+      ],
+    },
+    includePatterns: ["join", "meeting"],
+  });
+  assert.equal(snapshot.count, 2);
+  assert.equal(snapshot.items[0].url, "https://meet.google.com/abc-defg-hij");
+  assert.equal(snapshot.items[1].url, "https://teams.microsoft.com/l/meetup-join/abc");
+  assert.doesNotMatch(JSON.stringify(snapshot), /token=secret|authuser=0|#secret/);
+  assert.match(renderGenericMarkdown(snapshot), /\[Team standup join\]\(https:\/\/meet\.google\.com\/abc-defg-hij\)/);
 });
 
 test("snapshot artifact helpers list and read bounded readable files", async () => {

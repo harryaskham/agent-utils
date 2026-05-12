@@ -12,6 +12,30 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
   ];
   const seen = new Set();
   const items = [];
+  const absoluteHref = (href) => {
+    try {
+      const parsed = new URL(href, location.href);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+      parsed.username = '';
+      parsed.password = '';
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.toString();
+    } catch (_) {
+      return null;
+    }
+  };
+  const linksFor = (element) => {
+    const urls = [];
+    const add = (href) => {
+      const url = absoluteHref(href);
+      if (url && !urls.includes(url)) urls.push(url);
+    };
+    const ownLink = element.closest?.('a[href]');
+    if (ownLink) add(ownLink.getAttribute('href'));
+    for (const link of element.querySelectorAll?.('a[href]') || []) add(link.getAttribute('href'));
+    return urls;
+  };
   for (const selector of selectors) {
     for (const element of document.querySelectorAll(selector)) {
       const text = [
@@ -19,10 +43,12 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
         element.getAttribute('aria-label') || '',
         element.getAttribute('title') || ''
       ].join(' ').replace(/\\s+/g, ' ').trim();
-      if (!text || seen.has(text)) continue;
+      const hrefs = linksFor(element);
+      const key = text + '|' + hrefs.join('|');
+      if (!text || seen.has(key)) continue;
       if (includePatterns.length && !includePatterns.some((pattern) => pattern.test(text))) continue;
-      seen.add(text);
-      items.push({ text, selector });
+      seen.add(key);
+      items.push({ text, selector, hrefs });
     }
   }
   return { source: 'playwright-dom', app: ${JSON.stringify(app)}, kind: ${JSON.stringify(kind)}, url: location.href, title: document.title, items };

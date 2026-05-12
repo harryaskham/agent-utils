@@ -83,7 +83,7 @@ The implementation performs the source/export/persist part and records whether t
 - `notifications.snapshot` — normalize supplied mail/chat/activity extraction text or JSON into canonical JSON and Markdown.
 - `calendar.snapshot` — normalize supplied calendar/meeting extraction text or JSON into canonical JSON and Markdown.
 
-These examples use the same live extraction shape as Slack: `browser.open`, `dom.extract` with conservative calendar/Microsoft extractor snippets, then `generic.notifications.snapshot` for canonical JSON/Markdown artifacts. They still accept supplied extraction input as a fallback, and selector maintenance can improve behind the same action ids later without changing the artifact contract.
+These examples use the same live extraction shape as Slack: `browser.open`, `dom.extract` with conservative calendar/Microsoft extractor snippets, then `generic.notifications.snapshot` for canonical JSON/Markdown artifacts. Generic snapshots preserve safe meeting/message links from extracted `url`, `href`, `urls`, `hrefs`, or `links` fields while stripping query strings, fragments, usernames, and passwords before writing artifacts. They still accept supplied extraction input as a fallback, and selector maintenance can improve behind the same action ids later without changing the artifact contract.
 
 ## Config loader
 
@@ -124,7 +124,7 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - `snapshot.write` persists run metadata under the app snapshot directory.
    - `slack.notifications.snapshot` normalizes Slack extraction text/JSON and writes canonical JSON, Markdown, and the browser-side extractor snippet.
    - `canvas.sync-markdown` reads Markdown and writes canonical Markdown, HTML, paste text, and sync metadata with a browser paste plan; `editor.replace` can turn that paste artifact into a browser-side replacement script.
-   - `generic.notifications.snapshot` normalizes Outlook/Teams-style supplied extraction text/JSON with conservative include-pattern filters.
+   - `generic.notifications.snapshot` normalizes Outlook/Teams/calendar-style supplied extraction text/JSON with conservative include-pattern filters and safe link preservation.
    - high-level `browser.open`, `dom.extract`, and `editor.replace` steps are executable through the Playwright bridge when their required parameters are present; optional steps are skipped when no target URL or selector is supplied.
 4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.
