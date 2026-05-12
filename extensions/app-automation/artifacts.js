@@ -183,6 +183,15 @@ function linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes = 60,
   return { freshness: ageMinutes > threshold ? "stale" : "fresh", ageMinutes, staleAfterMinutes: threshold };
 }
 
+function summarizeLinkFreshness(links = []) {
+  const counts = { total: links.length, fresh: 0, stale: 0, unknown: 0 };
+  for (const link of links) {
+    const key = ["fresh", "stale", "unknown"].includes(link.freshness) ? link.freshness : "unknown";
+    counts[key] += 1;
+  }
+  return counts;
+}
+
 export async function collectSnapshotLinks({ root, app, query, freshness, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const listed = await listSnapshotArtifacts({ root, app, limit: artifactLimit });
   const links = [];
@@ -211,11 +220,11 @@ export async function collectSnapshotLinks({ root, app, query, freshness, artifa
         };
         if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness)) continue;
         links.push(link);
-        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, links, truncated: true };
+        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), links, truncated: true };
       }
     }
   }
-  return { ...listed, query: query || null, freshness: freshness || null, links, truncated: false };
+  return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), links, truncated: false };
 }
 
 export function renderArtifactList(summary) {
@@ -233,7 +242,9 @@ export function renderSnapshotDigest(summary) {
 export function renderSnapshotLinks(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
   if (!summary.links.length) return `No snapshot links found at ${summary.snapshotRoot}.`;
-  const lines = summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`);
+  const counts = summary.freshnessCounts || summarizeLinkFreshness(summary.links);
+  const lines = [`links total=${counts.total} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}`];
+  lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
   if (summary.truncated) lines.push(`truncated at ${summary.links.length} links`);
   return lines.join("\n");
 }

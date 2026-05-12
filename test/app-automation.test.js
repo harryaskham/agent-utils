@@ -329,7 +329,9 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.match(renderedDigest, /links=2 linkItems=1/);
   const links = await collectSnapshotLinks({ root, app: "slack", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(links.links.length, 2);
+  assert.deepEqual(links.freshnessCounts, { total: 2, fresh: 2, stale: 0, unknown: 0 });
   assert.equal(links.links[0].url, "https://app.slack.com/client/T/C");
+  assert.match(renderSnapshotLinks(links), /links total=2 fresh=2 stale=0 unknown=0/);
   assert.match(renderSnapshotLinks(links), /#general: https:\/\/app\.slack\.com\/client\/T\/C/);
   assert.equal(links.links[0].snapshotAt, "2026-05-12T00:00:00Z");
   assert.equal(links.links[0].freshness, "fresh");
@@ -345,6 +347,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(freshLinks.links.length, 2);
   const staleLinks = await collectSnapshotLinks({ root, app: "slack", freshness: "stale", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(staleLinks.links.length, 0);
+  assert.deepEqual(staleLinks.freshnessCounts, { total: 0, fresh: 0, stale: 0, unknown: 0 });
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
   const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
