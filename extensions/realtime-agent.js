@@ -113,11 +113,14 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... start=vad";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... summary=true start=vad";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
 const TOOL_OUTPUT_CAP = 16_000;
+const REALTIME_CONTEXT_WINDOW_TOKENS = 128_000;
+const SUMMARY_FALLBACK_MESSAGE_CAP = 40;
+const SUMMARY_FALLBACK_TEXT_CAP = 1_200;
 
 let realtimeWebSocketConstructor = null;
 let realtimeWebSocketOpenState = 1;
@@ -183,6 +186,107 @@ function truncateToolOutput(text, max = TOOL_OUTPUT_CAP) {
   const s = String(text ?? "");
   if (s.length <= max) return s;
   return s.slice(0, max) + `\n\n[truncated ${s.length - max} chars]`;
+}
+
+function parseBooleanValue(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error(`Expected boolean value, got: ${value}`);
+}
+
+function estimateRealtimeTokensForText(text) {
+  const s = String(text ?? "");
+  // Same order-of-magnitude heuristic Pi uses for preflight-style guards: a
+  // token is usually ~4 chars in English/code-ish text. Add a small floor so
+  // role/content wrappers are not free.
+  return Math.ceil(s.length / 4) + 4;
+}
+
+function messageTextContent(content) {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((c) => c?.type === "text" && typeof c.text === "string")
+    .map((c) => c.text)
+    .join("\n");
+}
+
+function messageToSummaryLine(msg) {
+  if (!msg) return "";
+  if (msg.role === "toolResult") {
+    const out = truncateToolOutput(messageTextContent(msg.content), 500);
+    return `toolResult ${msg.toolCallId || "<unknown>"}${msg.isError ? " error" : ""}: ${out}`;
+  }
+  const text = messageTextContent(msg.content).trim();
+  if (text) return `${msg.role}: ${truncateToolOutput(text, SUMMARY_FALLBACK_TEXT_CAP)}`;
+  return `${msg.role}: <non-text or empty message>`;
+}
+
+function estimateRealtimeContextTokens(context = {}) {
+  let total = estimateRealtimeTokensForText(context.systemPrompt || "");
+  for (const msg of context.messages || []) {
+    total += estimateRealtimeTokensForText(messageTextContent(msg.content));
+    if (msg.role === "toolResult") total += estimateRealtimeTokensForText(msg.toolCallId || "");
+  }
+  for (const tool of context.tools || []) {
+    total += estimateRealtimeTokensForText(JSON.stringify(tool));
+  }
+  return total;
+}
+
+function extractExistingCompactionSummaries(messages = []) {
+  const summaries = [];
+  for (const msg of messages) {
+    const text = messageTextContent(msg.content);
+    if (!text) continue;
+    const matches = [...text.matchAll(/<summary>\n?([\s\S]*?)\n?<\/summary>/g)];
+    for (const match of matches) {
+      const summary = String(match[1] || "").trim();
+      if (summary) summaries.push(summary);
+    }
+  }
+  return summaries;
+}
+
+function buildRealtimeSummaryText(messages = []) {
+  const existing = extractExistingCompactionSummaries(messages);
+  if (existing.length) {
+    return [
+      "Realtime compact context mode is enabled. Use this existing Pi compaction/branch summary as prior conversation context instead of full history.",
+      ...existing.slice(-3).map((summary, idx, arr) => `\n## Summary ${idx + 1}/${arr.length}\n${summary}`),
+    ].join("\n");
+  }
+
+  const lines = messages.slice(-SUMMARY_FALLBACK_MESSAGE_CAP).map(messageToSummaryLine).filter(Boolean);
+  return [
+    "Realtime compact context mode is enabled. No saved Pi compaction summary was present in the model context, so this is a compact role-by-role fallback summary of recent history instead of full replay.",
+    `Included recent messages: ${lines.length}/${messages.length}`,
+    "",
+    ...lines,
+  ].join("\n");
+}
+
+function splitCurrentTurn(messages = []) {
+  const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
+  if (lastUserIndex === -1) return { history: messages, currentTurn: [] };
+  return { history: messages.slice(0, lastUserIndex), currentTurn: messages.slice(lastUserIndex) };
+}
+
+function estimateRealtimeSummaryContextTokens(context = {}) {
+  const { history, currentTurn } = splitCurrentTurn(context.messages || []);
+  const summaryText = buildRealtimeSummaryText(history);
+  return estimateRealtimeContextTokens({
+    systemPrompt: context.systemPrompt || "",
+    tools: context.tools || [],
+    messages: [
+      { role: "user", content: [{ type: "text", text: summaryText }] },
+      ...currentTurn,
+    ],
+  });
 }
 
 function formatDurationMs(ms) {
@@ -1062,6 +1166,24 @@ class RealtimeSession {
     this.forwardedMessageCount = messages.length;
   }
 
+  forwardSummaryMessages(messages) {
+    if (this.forwardedMessageCount > 0) {
+      this.forwardNewMessages(messages);
+      return;
+    }
+    const { history, currentTurn } = splitCurrentTurn(messages);
+    const summaryText = buildRealtimeSummaryText(history);
+    if (summaryText.trim()) {
+      this.forwardMessage({
+        role: "user",
+        content: [{ type: "text", text: summaryText }],
+        timestamp: Date.now(),
+      });
+    }
+    for (const msg of currentTurn) this.forwardMessage(msg);
+    this.forwardedMessageCount = messages.length;
+  }
+
   // -------------------------------------------------------------------------
   // streamSimple — main entry point. Pi calls this once per turn.
   // -------------------------------------------------------------------------
@@ -1125,6 +1247,19 @@ class RealtimeSession {
       }
     }
 
+    const contextWindow = Number(model?.contextWindow || REALTIME_CONTEXT_WINDOW_TOKENS);
+    const fullContextTokens = estimateRealtimeContextTokens(context || {});
+    const estimatedTokens = this.config.summaryContext ? estimateRealtimeSummaryContextTokens(context || {}) : fullContextTokens;
+    if (estimatedTokens > contextWindow) {
+      const mode = this.config.summaryContext ? "summary context" : "full history";
+      const advice = this.config.summaryContext
+        ? "Compact the Pi session first or reduce the current turn before retrying realtime."
+        : "Run /rt summary=true to send a compact summary instead of full history.";
+      const message = `Realtime ${mode} is too large for ${selectedModel}: estimated ${estimatedTokens.toLocaleString()} tokens exceeds ${contextWindow.toLocaleString()} token context. ${advice}`;
+      this.notify(message, "error");
+      throw new Error(message);
+    }
+
     // 1. Ensure WSS
     if (!this.connected) await this.connect(this.lastCtx);
 
@@ -1135,7 +1270,8 @@ class RealtimeSession {
     });
 
     // 3. Forward new messages
-    this.forwardNewMessages(context?.messages || []);
+    if (this.config.summaryContext) this.forwardSummaryMessages(context?.messages || []);
+    else this.forwardNewMessages(context?.messages || []);
 
     // 4. Build per-response state
     const partial = this._makeBasePartial(model);
@@ -1750,6 +1886,7 @@ function makeInitialConfig() {
     lastDisconnectReason: null,
     nextReconnectAt: null,
     desiredListenMode: null,
+    summaryContext: envBool("PI_RT_SUMMARY", false),
   };
 }
 
@@ -1849,9 +1986,10 @@ function statusLines(session, config, { full = false } = {}) {
   const clip = session.latestClipId ? ` · clip:${session.latestClipId}` : "";
   const mode = session.state?.mode?.({ sttOnly: config.sttOnly }) || (config.sttOnly ? "stt" : "connected");
   const restore = config.previousModel ? ` · ↩${config.previousModel.provider}/${config.previousModel.id}` : "";
+  const summary = config.summaryContext ? "summary:on" : "summary:off";
   const compact = [
     `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · ${outBackend}/${inBackend}${phase}`,
-    `trans:${config.transcriptionModel} · voice:${config.voice} · hist:${session.forwardedMessageCount} · ${provider}${reason}${clip}${restore}`,
+    `trans:${config.transcriptionModel} · voice:${config.voice} · hist:${session.forwardedMessageCount} · ${summary} · ${provider}${reason}${clip}${restore}`,
   ];
   if (!full) return compact;
   return [
@@ -1971,6 +2109,7 @@ export function createRealtimeControls({ pi, session, config }) {
           sink: process.env.PULSE_SINK || null,
         },
         reasoningEffort: config.reasoningEffort,
+        summaryContext: !!config.summaryContext,
         previousModel: config.previousModel || null,
         state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled }),
         health: {
@@ -2062,6 +2201,19 @@ export function createRealtimeControls({ pi, session, config }) {
       }
       config.reasoningEffort = next;
       session.reasoningRejected = false;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setSummaryContext(enabled, ctx) {
+      const next = !!enabled;
+      if (config.summaryContext !== next) {
+        config.summaryContext = next;
+        // The replay shape changes between full-history and compact-summary
+        // modes, so restart the WSS history cursor for the next turn.
+        session.forwardedMessageCount = 0;
+        session.callIdsEmittedByModel.clear();
+      }
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2250,6 +2402,7 @@ export default function realtimeAgentExtension(pi) {
     for (const key of ["action", "start", "mic", "listen", "stt", "audio", "widget", "status", "backend", "voice", "reasoning"]) {
       if (out[key] !== undefined && out[key] !== null) out[key] = String(out[key]).trim().toLowerCase();
     }
+    if (out.summary !== undefined && out.summary !== null) out.summary = parseBooleanValue(out.summary);
     return out;
   }
 
@@ -2261,6 +2414,7 @@ export default function realtimeAgentExtension(pi) {
     }
     if (params.voice) controls.setVoice(params.voice, ctx);
     if (params.reasoning) controls.setReasoningEffort(params.reasoning, ctx);
+    if (params.summary !== undefined) controls.setSummaryContext(params.summary, ctx);
     if (params.audio) {
       if (!REALTIME_AUDIO_MODES.has(params.audio)) throw new Error("Unsupported realtime audio mode");
       if (params.audio === "toggle") controls.toggleAudio(ctx);
@@ -2304,6 +2458,7 @@ export default function realtimeAgentExtension(pi) {
       sink: v.sink ?? v.pulse_sink ?? v.pulsesink,
       voice: v.voice,
       reasoning: v.reasoning,
+      summary: v.summary,
       audio: v.audio,
       widget: v.widget,
       status: v.status,
@@ -2331,7 +2486,7 @@ export default function realtimeAgentExtension(pi) {
     const extra = tokens.slice(2);
     const singleValueVerbs = new Set([
       "start", "on", "stt", "status", "widget", "audio", "mic", "listen",
-      "voice", "backend", "reasoning",
+      "voice", "backend", "reasoning", "summary",
     ]);
     const noValueVerbs = new Set(["help", "usage", "?", "stop", "off", "doctor", "vad", "ptt", "nolisten"]);
     if (value && noValueVerbs.has(verb)) {
@@ -2421,6 +2576,15 @@ export default function realtimeAgentExtension(pi) {
       catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }
+    if (verb === "summary") {
+      if (!value) { ctx.ui.notify(`Realtime summary context ${controls.snapshot().summaryContext ? "true" : "false"}. Use /rt summary [true|false].`, "info"); return; }
+      try {
+        const enabled = parseBooleanValue(value);
+        controls.setSummaryContext(enabled, ctx);
+        ctx.ui.notify(`Realtime summary context ${enabled ? "true" : "false"}`, "info");
+      } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
 
     showRtUsage(ctx);
   }
@@ -2445,6 +2609,7 @@ export default function realtimeAgentExtension(pi) {
         pulseSink: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SINK for new Pulse playback processes. Empty string unsets." })),
         voice: ToolSchema.optional(ToolSchema.string({ description: "Realtime output voice." })),
         reasoning: ToolSchema.optional(ToolSchema.string({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
+        summary: ToolSchema.optional(ToolSchema.boolean({ description: "Use compact summary context instead of replaying full conversation history. Default false." })),
         widget: ToolSchema.optional(ToolSchema.string({ description: "Widget mode: show or hide." })),
         status: ToolSchema.optional(ToolSchema.string({ description: "Return status: compact or full." })),
       }),

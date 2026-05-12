@@ -93,6 +93,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const commands = new Map();
   const tools = new Map();
   const handlers = new Map();
+  const providers = new Map();
   const widgets = new Map();
   const statuses = new Map();
   const notifications = [];
@@ -121,6 +122,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     getCommand(name) { return commands.get(name); },
     registerMessageRenderer() {},
     registerProvider(provider, definition) {
+      providers.set(provider, definition);
       for (const model of definition.models || []) models.set(`${provider}/${model.id}`, { ...model, provider });
     },
     registerTool(definition) { tools.set(definition.name, definition); },
@@ -133,7 +135,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     },
   };
 
-  return { pi, commands, tools, handlers, widgets, statuses, notifications, setModelCalls, emittedEvents, ctx };
+  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, emittedEvents, ctx };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -616,26 +618,94 @@ test("/rt start force-registers realtime provider and switches away from current
   }
 });
 
-test("/rt env-style args configure Pulse routing and tool exposes same control", async () => {
+test("/rt env-style args configure Pulse routing, summary mode, and tool exposes same control", async () => {
   const previous = { server: process.env.PULSE_SERVER, source: process.env.PULSE_SOURCE, sink: process.env.PULSE_SINK };
   const { pi, commands, tools, handlers, ctx } = makeHarness();
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   try {
-    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink', ctx);
+    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink summary=true', ctx);
     assert.equal(process.env.PI_RT_AUDIO_BACKEND, "pulse");
     assert.equal(process.env.PULSE_SOURCE, "source bluetooth");
     assert.equal(process.env.PULSE_SINK, "vsink");
+    assert.equal(pi.realtime.snapshot().summaryContext, true);
 
-    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", status: "full" }, null, null, ctx);
+    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, status: "full" }, null, null, ctx);
     assert.equal(process.env.PULSE_SERVER, "sgu24:4713");
     assert.equal(process.env.PULSE_SOURCE, "source.bluetooth");
+    assert.equal(pi.realtime.snapshot().summaryContext, false);
   } finally {
     for (const [key, value] of [["PULSE_SERVER", previous.server], ["PULSE_SOURCE", previous.source], ["PULSE_SINK", previous.sink]]) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("/rt summary=true forwards compact summary instead of full history", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRegister = process.env.PI_RT_REGISTER;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_REGISTER = "1";
+  FakeWebSocket.instances = [];
+  const harness = makeHarness({ initialModel: { provider: "openai-realtime", id: "gpt-realtime-2", contextWindow: 128000 } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    await harness.commands.get("rt").handler("summary true", harness.ctx);
+    const context = {
+      systemPrompt: "system",
+      tools: [],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "The conversation history before this point was compacted into the following summary:\n\n<summary>important compact facts</summary>" }] },
+        { role: "user", content: [{ type: "text", text: `old full history ${"x".repeat(20_000)}` }] },
+        { role: "assistant", content: [{ type: "text", text: "old assistant reply" }] },
+        { role: "user", content: [{ type: "text", text: "current realtime question" }] },
+      ],
+    };
+    harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, context, {});
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const items = FakeWebSocket.instances[0].sent.filter((m) => m.type === "conversation.item.create");
+    assert.equal(items.length, 2);
+    assert.match(items[0].item.content[0].text, /important compact facts/);
+    assert.doesNotMatch(items[0].item.content[0].text, /old full history/);
+    assert.equal(items[1].item.content[0].text, "current realtime question");
+  } finally {
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRegister === undefined) delete process.env.PI_RT_REGISTER;
+    else process.env.PI_RT_REGISTER = previousRegister;
+  }
+});
+
+test("realtime aborts oversized full-history context before opening WebSocket", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRegister = process.env.PI_RT_REGISTER;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_REGISTER = "1";
+  FakeWebSocket.instances = [];
+  const { pi, providers, handlers, ctx } = makeHarness({ initialModel: { provider: "openai-realtime", id: "gpt-realtime-2", contextWindow: 128000 } });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    const stream = providers.get("openai-realtime").streamSimple(ctx.model, {
+      systemPrompt: "system",
+      tools: [],
+      messages: [{ role: "user", content: [{ type: "text", text: "x".repeat(600_000) }] }],
+    }, {});
+    const result = await stream.result();
+    assert.equal(result.stopReason, "error");
+    assert.match(result.errorMessage, /too large/);
+    assert.equal(FakeWebSocket.instances.length, 0);
+  } finally {
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRegister === undefined) delete process.env.PI_RT_REGISTER;
+    else process.env.PI_RT_REGISTER = previousRegister;
   }
 });
 
