@@ -47,6 +47,7 @@ function collectUrls(item = {}) {
 }
 
 function compactMetadata(value, limit = 120) {
+  if (typeof value === "boolean") return null;
   const text = normalizeWhitespace(value);
   if (!text) return null;
   return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;

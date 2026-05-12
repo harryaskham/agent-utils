@@ -95,6 +95,7 @@ function countSnapshotLinks(value) {
 }
 
 function compactContextValue(value, limit = 80) {
+  if (typeof value === "boolean") return null;
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return null;
   return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
