@@ -91,6 +91,11 @@ function collectUrls(item = {}) {
   return urls;
 }
 
+function slackSourceLabel(label) {
+  const source = normalizeWhitespace(label).replace(/\s+\d{1,4}\s*(?:unread|new|mentions?|replies?)?\s*$/i, "").trim();
+  return source || normalizeWhitespace(label) || null;
+}
+
 function classifySlackLine(line) {
   const text = normalizeWhitespace(line);
   const lower = text.toLowerCase();
@@ -101,9 +106,11 @@ function classifySlackLine(line) {
   const channel = /#|\bchannel\b/.test(lower);
   const unread = count !== null || /\bunread\b|\bnew message\b|\bnew messages\b/.test(lower);
   if (!unread && !mention) return null;
+  const label = text.replace(/\s+\d{1,4}\s*$/, "").trim() || text;
   return {
-    label: text.replace(/\s+\d{1,4}\s*$/, "").trim() || text,
+    label,
     text,
+    source: slackSourceLabel(label),
     unreadCount: count,
     mention,
     dm,

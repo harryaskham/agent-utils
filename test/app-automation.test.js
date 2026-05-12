@@ -239,6 +239,8 @@ test("Slack notification snapshot parses unread and mention lines", () => {
   assert.equal(snapshot.counts.items, 2);
   assert.equal(snapshot.counts.mentions, 1);
   assert.equal(snapshot.notifications[0].url, "https://app.slack.com/client/T/C");
+  assert.equal(snapshot.notifications[0].source, "#general");
+  assert.equal(snapshot.notifications[1].source, "Harry mentioned you");
   assert.doesNotMatch(JSON.stringify(snapshot), /token=secret|#frag|javascript/);
   assert.match(renderSlackNotificationMarkdown(snapshot), /\[#general/);
   assert.match(renderSlackNotificationMarkdown(snapshot), /https:\/\/app\.slack\.com\/client\/T\/C/);
