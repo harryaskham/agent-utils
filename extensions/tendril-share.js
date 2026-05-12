@@ -72,7 +72,7 @@ function parseJsonEnvelope(stdout, commandName = "tendril") {
   }
 }
 
-async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEOUT_MS } = {}) {
+export async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const tendril = buildTendrilCommand(args);
   const result = await pi.exec(tendril.command, tendril.args, { signal, timeout });
   const envelope = parseJsonEnvelope(result.stdout, `tendril ${args[0] || ""}`);
@@ -408,6 +408,32 @@ async function handleTendrilCommand(pi, args, ctx, state, forcedAction) {
 export default function tendrilShareExtension(pi) {
   const state = createTendrilShareState();
   pi.on?.("session_shutdown", () => stopStream(state));
+
+  pi.registerTool?.({
+    name: "tendril_bridge_doctor",
+    label: "Tendril Bridge Doctor",
+    description: "Inspect configured Tendril remote/WSL tunnel settings and optionally probe target discovery through the bridge.",
+    parameters: {
+      type: "object",
+      properties: {
+        probe: { type: "boolean", description: "Run tendril list --json through the configured bridge. Defaults to true." },
+        timeoutMs: { type: "number", description: "Probe timeout in milliseconds. Defaults to 30000." },
+      },
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, params = {}, signal) {
+      const summary = tendrilCommandSummary();
+      const probe = params.probe === false ? null : await runTendrilJson(pi, ["list", "--json"], { signal, timeout: params.timeoutMs || DEFAULT_TIMEOUT_MS })
+        .then((envelope) => ({ status: envelope.status || "ok", targets: envelope.data?.targets?.length || 0 }))
+        .catch((error) => ({ status: "error", error: error.message || String(error) }));
+      const lines = [
+        `tendril bridge command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel}`,
+        `argsPrefix=${summary.argsPrefix.join(" ") || "none"}`,
+        probe ? `probe=${probe.status}${probe.targets != null ? ` targets=${probe.targets}` : ""}${probe.error ? ` error=${probe.error}` : ""}` : "probe=skipped",
+      ];
+      return { content: [{ type: "text", text: lines.join("\n") }], data: { summary, probe } };
+    },
+  });
 
   pi.registerCommand("tendril", {
     description: `Share Tendril windows/displays with the model. Usage: /tendril list|window <id-or-name>|display <id-or-name>|describe window <id>|stream window <id>. Bridge: ${JSON.stringify(tendrilCommandSummary())}`,

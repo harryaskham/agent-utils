@@ -76,6 +76,18 @@ test("/tendril list formats Tendril targets", async () => {
   assert.match(notifications.at(-1).message, /window 4/);
 });
 
+test("tendril bridge doctor reports bridge settings and probes targets", async () => {
+  const { pi, execCalls } = makeHarness();
+  const tools = new Map();
+  pi.registerTool = (tool) => tools.set(tool.name, tool);
+  tendrilShareExtension(pi);
+
+  const result = await tools.get("tendril_bridge_doctor").execute("call-1", {}, new AbortController().signal);
+  assert.match(result.content[0].text, /wslTunnel=false/);
+  assert.match(result.content[0].text, /probe=ok targets=2/);
+  assert.deepEqual(execCalls[0], { command: "tendril", args: ["list", "--json"] });
+});
+
 test("/tendril window captures and sends image content to the model", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
   const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;

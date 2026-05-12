@@ -106,6 +106,7 @@ The Tendril share extension is loaded from [`extensions/tendril-share.js`](exten
 
 Available commands:
 
+- `tendril_bridge_doctor` — native Pi tool that reports the configured Tendril command, `--remote` target, `--wsl-tunnel` flag, and optionally probes `tendril list --json` through that bridge.
 - `/tendril list` — runs `tendril list --json` and shows readable display/window targets.
 - `/tendril window <id-or-name> [prompt]` — captures a Tendril window to PNG and sends a user message containing the screenshot image plus optional prompt text.
 - `/tendril display <id-or-name> [prompt]` — captures a Tendril display to PNG and sends it to the model.
