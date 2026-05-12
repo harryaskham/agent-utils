@@ -307,6 +307,15 @@ function renderDefaultOpenBundle() {
   ].join("\n");
 }
 
+function renderDefaultStaleRefresh() {
+  return [
+    "default app automation stale-refresh flow:",
+    "1. app_automation_snapshots_staleness checks Slack, Outlook, Teams, and canvas freshness.",
+    "2. app_automation_refresh_stale_run_once runs only standard Slack/Outlook/Teams refresh actions whose app snapshots are stale or missing.",
+    "Use dryRun=true first to preview stale-refresh decisions before browser automation.",
+  ].join("\n");
+}
+
 function renderDoctorReport({ rootSummary, catalog, playwrightCli, actionDiagnostics, cliCheck }) {
   const lines = [
     `app automation doctor stateRoot=${rootSummary.root} exists=${rootSummary.exists}`,
@@ -926,7 +935,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|bundle|open-bundle|app action]",
+    description: "List, doctor, overview, staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -967,12 +976,22 @@ export default function appAutomationExtension(pi) {
         ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, root }), "info");
         return;
       }
+      if (words[0] === "staleness") {
+        const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "outlook", "teams", "canvas"];
+        const report = await snapshotStalenessReport({ root: stateRoot(), apps: wantedIds, staleAfterMinutes: 60 });
+        ctx.ui.notify(renderSnapshotStaleness(report), "info");
+        return;
+      }
       if (words[0] === "bundle") {
         ctx.ui.notify(renderDefaultRefreshBundle(), "info");
         return;
       }
       if (words[0] === "open-bundle") {
         ctx.ui.notify(renderDefaultOpenBundle(), "info");
+        return;
+      }
+      if (words[0] === "stale-refresh") {
+        ctx.ui.notify(renderDefaultStaleRefresh(), "info");
         return;
       }
       if (words.length >= 2) {
@@ -985,7 +1004,7 @@ export default function appAutomationExtension(pi) {
         ctx.ui.notify(app ? renderAppList([app]) : `Unknown app: ${words[0]}`, app ? "info" : "warning");
         return;
       }
-      ctx.ui.notify(`${renderAppList(catalog.apps)}\n\n${renderDefaultOpenBundle()}\n\n${renderDefaultRefreshBundle()}`, "info");
+      ctx.ui.notify(`${renderAppList(catalog.apps)}\n\n${renderDefaultOpenBundle()}\n\n${renderDefaultRefreshBundle()}\n\n${renderDefaultStaleRefresh()}`, "info");
     },
   });
 }

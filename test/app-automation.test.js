@@ -313,10 +313,13 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /words\[0\] === "doctor"/);
   assert.match(source, /words\[0\] === "overview"/);
   assert.match(source, /snapshotStalenessReport/);
+  assert.match(source, /words\[0\] === "staleness"/);
   assert.match(source, /words\[0\] === "bundle"/);
   assert.match(source, /words\[0\] === "open-bundle"/);
+  assert.match(source, /words\[0\] === "stale-refresh"/);
   assert.match(source, /renderDefaultOpenBundle/);
   assert.match(source, /renderDefaultRefreshBundle/);
+  assert.match(source, /renderDefaultStaleRefresh/);
 });
 
 test("sanitizeId normalizes user-facing app selectors", () => {
