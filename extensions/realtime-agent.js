@@ -78,6 +78,8 @@ import { ToolSchema } from "./lib/tool-schema.js";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
+const REALTIME_API = "openai-realtime";
+const REALTIME_INSTRUCTIONS_PREFIX = "You are running inside an OpenAI Realtime audio session. For microphone turns, the committed input audio is already present in the realtime conversation; the transcript visible in Pi is a UI/history trigger, not your only input. Do not tell the user you only receive text transcripts when full realtime mode is active.";
 const DEFAULT_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
 const DEFAULT_VOICE = "marin";
 
@@ -697,6 +699,7 @@ class RealtimeSession {
     this.pendingCommitTimer = null;
     this.lastMicBytes = 0;
     this.micMuteUntilTs = 0;
+    this.lastTurnInputMode = null;           // null|audio|transcript|text
     this.phase = "idle";
     this.lastReasoningPayload = null;        // for reasoning auto-retry
     this.lastResponseObject = null;
@@ -984,6 +987,11 @@ class RealtimeSession {
     return this.config.audioEnabled ? "audio" : "text";
   }
 
+  realtimeInstructions(systemPrompt = "") {
+    const text = String(systemPrompt || "").trim();
+    return text ? `${REALTIME_INSTRUCTIONS_PREFIX}\n\n${text}` : REALTIME_INSTRUCTIONS_PREFIX;
+  }
+
   currentTurnDetection() {
     // Server VAD: speak, fall silent, server commits + transcribes the segment.
     // create_response stays false so Pi still owns the response turn (so tools,
@@ -1048,7 +1056,7 @@ class RealtimeSession {
           tool_choice: realtimeTools.length ? "auto" : "none",
         };
 
-    if (systemPrompt) sessionPayload.instructions = systemPrompt;
+    sessionPayload.instructions = this.realtimeInstructions(systemPrompt);
 
     this.send({ type: "session.update", session: sessionPayload });
 
@@ -1205,7 +1213,7 @@ class RealtimeSession {
     return {
       role: "assistant",
       content: [],
-      api: "openai-responses",
+      api: REALTIME_API,
       provider: "openai-realtime",
       model: model?.id || this.config.model,
       responseModel: undefined,
@@ -1499,6 +1507,7 @@ class RealtimeSession {
       this.clearPendingCommitTimer();
       this.setPhase("idle");
       if (text) {
+        this.lastTurnInputMode = this.config.sttOnly ? "transcript" : "audio";
         this.markSpokenTranscript(text);
         try { this.pi.sendUserMessage(text); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
       }
@@ -1936,7 +1945,7 @@ function registerRealtimeProvider(pi, session, { force = false } = {}) {
   }
   pi.registerProvider("openai-realtime", {
     name: "OpenAI Realtime",
-    api: "openai-responses",
+    api: REALTIME_API,
     baseUrl,
     apiKey,
     models,
@@ -1991,9 +2000,10 @@ function statusLines(session, config, { full = false } = {}) {
   const mode = session.state?.mode?.({ sttOnly: config.sttOnly }) || (config.sttOnly ? "stt" : "connected");
   const restore = config.previousModel ? ` · ↩${config.previousModel.provider}/${config.previousModel.id}` : "";
   const summary = config.summaryContext ? "summary:on" : "summary:off";
+  const input = session.lastTurnInputMode ? ` · input:${session.lastTurnInputMode}` : "";
   const compact = [
     `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · ${outBackend}/${inBackend}${phase}`,
-    `trans:${config.transcriptionModel} · voice:${config.voice} · hist:${session.forwardedMessageCount} · ${summary} · ${provider}${reason}${clip}${restore}`,
+    `trans:${config.transcriptionModel} · voice:${config.voice} · hist:${session.forwardedMessageCount} · ${summary}${input} · ${provider}${reason}${clip}${restore}`,
   ];
   if (!full) return compact;
   return [
@@ -2114,8 +2124,9 @@ export function createRealtimeControls({ pi, session, config }) {
         },
         reasoningEffort: config.reasoningEffort,
         summaryContext: !!config.summaryContext,
+        lastInputMode: session.lastTurnInputMode || null,
         previousModel: config.previousModel || null,
-        state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled }),
+        state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled, lastInputMode: session.lastTurnInputMode || null }),
         health: {
           lastResponseError: session.lastResponseError || null,
           lastPlaybackError: config.lastPlaybackError || null,
@@ -2329,6 +2340,13 @@ export default function realtimeAgentExtension(pi) {
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = null;
     await session.close(false).catch(() => {});
+  });
+
+  pi.on("session_before_compact", async (_event, ctx) => {
+    if (!isRealtimeModel(ctx?.model) && !session.current && !session.connected) return undefined;
+    await controls.disable(ctx, { restoreModel: true }).catch(() => {});
+    ctx?.ui?.notify?.("Realtime paused and restored the text model before compaction. Retry /compact if this was a manual compact; auto-compaction will retry on the text model.", "warning");
+    return { cancel: true };
   });
 
   pi.on("model_select", (event, ctx) => {

@@ -304,6 +304,23 @@ test("server VAD turn detection honors threshold, silence, and prefix env contro
   }
 });
 
+test("realtime provider uses a dedicated API so it does not override text providers", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  const { pi, commands, providers, handlers, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("start nolisten", ctx);
+    assert.equal(providers.get("openai-realtime")?.api, "openai-realtime");
+  } finally {
+    await commands.get("rt-off").handler("", ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+  }
+});
+
 test("model_select shows realtime UI and non-realtime selection clears it", async () => {
   const realtimeModel = { provider: "openai-realtime", id: "gpt-realtime-2" };
   const textModel = { provider: "litellm-anthropic", id: "claude-sonnet-4-5" };
@@ -596,6 +613,32 @@ test("/rt status full and doctor subcommands expose diagnostics", async () => {
 
   await commands.get("rt").handler("doctor", ctx);
   assert.match(notifications.at(-1).message, /Realtime doctor/);
+});
+
+test("session_before_compact disables realtime and restores text model", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  FakeWebSocket.instances = [];
+  const previousModel = { provider: "litellm-openai", id: "gpt-5.5" };
+  const realtimeModel = { provider: "openai-realtime", id: "gpt-realtime-2", api: "openai-realtime" };
+  const models = new Map([["openai-realtime/gpt-realtime-2", realtimeModel], ["litellm-openai/gpt-5.5", previousModel]]);
+  const { pi, commands, handlers, providers, setModelCalls, ctx, notifications } = makeHarness({ models, initialModel: previousModel });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("start nolisten", ctx);
+    assert.equal(ctx.model.provider, "openai-realtime");
+    const result = await handlers.get("session_before_compact")?.({ preparation: {}, branchEntries: [] }, ctx);
+    assert.deepEqual(result, { cancel: true });
+    assert.equal(ctx.model.provider, "litellm-openai");
+    assert.equal(setModelCalls.at(-1), previousModel);
+    assert.equal(providers.has("openai-realtime"), false);
+    assert.match(notifications.at(-1)?.message || "", /restored the text model/);
+  } finally {
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+  }
 });
 
 test("/rt stt does not register realtime provider while text model remains selected", async () => {

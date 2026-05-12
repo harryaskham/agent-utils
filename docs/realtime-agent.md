@@ -198,6 +198,8 @@ Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/stt`, 
 
 `/rt summary=true` switches realtime history replay into compact-summary mode. The first realtime turn after enabling it sends the latest Pi compaction or branch summary from model context plus the current turn, rather than replaying the full conversation history. If no saved Pi summary is present, the extension falls back to a bounded role-by-role summary of recent messages. The default is `summary=false`, which preserves the previous full-history replay behavior.
 
+Compaction itself still runs through Pi's selected text model. If manual or auto-compaction starts while a realtime model/session is active, the extension pauses realtime, restores the previous text model where possible, unregisters the realtime API handler, and cancels that compaction attempt. Retry `/compact` after the model has been restored; auto-compaction will retry on a later text-model turn. This avoids summarization requests being sent to `gpt-realtime-2` while a realtime response is active.
+
 When full-history mode is active, realtime estimates the outgoing system prompt, tools, and message history before opening the WebSocket. If the estimate exceeds the realtime model context window (128k tokens for `gpt-realtime-2`), the turn is aborted with an error telling the user to enable `summary=true`; this avoids silently overflowing the realtime provider context.
 
 ## Pi control API
@@ -220,7 +222,7 @@ Examples:
 { "action": "stop" }
 ```
 
-Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output.
+Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior.
 
 ## Autoreconnect
 
@@ -237,7 +239,7 @@ export PI_RT_RECONNECT_BASE_DELAY_MS=1000
 
 Useful methods include:
 
-- `snapshot()` — current model, audio/STT flags, voice, backend, reasoning effort, previous model, lifecycle state, and health fields. The nested `state` object includes `connection`, boolean `connected`/`connecting` flags, `phase`, `micMode`, `widgetVisible`, and the derived user-facing `mode`; the nested `health` object includes last response/playback errors, last playback exit/start metadata, mic byte count, pending transcript count, and remaining mic mute time.
+- `snapshot()` — current model, audio/STT flags, voice, backend, reasoning effort, previous model, last input mode, lifecycle state, and health fields. The nested `state` object includes `connection`, boolean `connected`/`connecting` flags, `phase`, `micMode`, `widgetVisible`, `lastInputMode`, and the derived user-facing `mode`; the nested `health` object includes last response/playback errors, last playback exit/start metadata, mic byte count, pending transcript count, and remaining mic mute time.
 - `usage()` / `help()` — canonical `/rt` usage text for UI/help surfaces.
 - `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, `reasoningEfforts`, `startModes`, `micModes`, `sttModes`, `audioModes`, `widgetModes`, `statusModes`, and direct `listenModes` for building UI affordances.
 - `diagnostics()` and `statusLines()` — the same content used by `/rt-doctor` and `/rt-status`.
