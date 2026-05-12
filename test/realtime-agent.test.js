@@ -99,6 +99,8 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const notifications = [];
   const setModelCalls = [];
   const emittedEvents = [];
+  const sentMessages = [];
+  const sentUserMessages = [];
 
   const ctx = {
     model: initialModel || { provider: "litellm-anthropic", id: "claude-sonnet-4-5" },
@@ -121,6 +123,8 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     registerCommand(name, definition) { commands.set(name, definition); },
     getCommand(name) { return commands.get(name); },
     registerMessageRenderer() {},
+    sendMessage(message, options) { sentMessages.push({ message, options }); },
+    sendUserMessage(content, options) { sentUserMessages.push({ content, options }); },
     registerProvider(provider, definition) {
       providers.set(provider, definition);
       for (const model of definition.models || []) models.set(`${provider}/${model.id}`, { ...model, provider });
@@ -136,7 +140,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     },
   };
 
-  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, emittedEvents, ctx };
+  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, emittedEvents, sentMessages, sentUserMessages, ctx };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -771,6 +775,43 @@ test("/rt summary=true forwards compact summary instead of full history", async 
     else process.env.PI_RT_API_KEY = previousApiKey;
     if (previousRegister === undefined) delete process.env.PI_RT_REGISTER;
     else process.env.PI_RT_REGISTER = previousRegister;
+  }
+});
+
+test("full realtime committed audio triggers a custom turn, not transcript user text", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  FakeWebSocket.instances = [];
+  const harness = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    await harness.commands.get("rt").handler("start nolisten", harness.ctx);
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.committed" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.sentMessages.length, 1);
+    assert.equal(harness.sentMessages[0].message.customType, "realtime-agent");
+    assert.equal(harness.sentMessages[0].message.display, false);
+    assert.equal(harness.sentMessages[0].options.triggerTurn, true);
+    assert.equal(harness.sentUserMessages.length, 0);
+
+    ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "da da da da" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.sentMessages.length, 2);
+    assert.equal(harness.sentMessages[1].message.content, "da da da da");
+    assert.equal(harness.sentMessages[1].message.display, true);
+    assert.equal(harness.sentUserMessages.length, 0);
+
+    harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(ws.sent.some((m) => m.type === "conversation.item.create" && JSON.stringify(m).includes("da da da da")), false);
+    assert.equal(ws.sent.some((m) => m.type === "response.create"), true);
+  } finally {
+    await harness.commands.get("rt-off").handler("", harness.ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
   }
 });
 

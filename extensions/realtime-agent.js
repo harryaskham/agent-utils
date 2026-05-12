@@ -8,8 +8,9 @@
 // Pi automatically. Audio output and microphone capture are kept as a
 // side-channel: when audio is enabled the realtime session also speaks the
 // reply through ffplay/pacat; /rt-listen pumps mic PCM into
-// `input_audio_buffer.append` and forwards the resulting transcription
-// through `pi.sendUserMessage()`.
+// `input_audio_buffer.append`. Full realtime turns trigger the Pi loop with a
+// hidden custom message so `response.create` is grounded in the committed audio;
+// STT-only mode forwards transcripts through `pi.sendUserMessage()`.
 //
 // Smoke test plan
 // ---------------
@@ -17,7 +18,7 @@
 //  2. type "hello"                              → text reply (and audio if /rt-on)
 //  3. type "list files in current dir"          → tool_call to ls/bash
 //  4. type "read package.json and tell me deps" → multi-tool flow
-//  5. /rt-listen vad, speak                     → transcription → pi.sendUserMessage → reply
+//  5. /rt-listen vad, speak                     → committed audio → hidden custom trigger → reply
 //  6. MCP tool (e.g. slack_search_messages)     → appears in tool list, callable
 //  7. /skill:foo                                → pi expands first, realtime gets text
 //  8. switch mid-session: /model litellm-anthropic/claude-opus-4-7 → reply →
@@ -30,7 +31,7 @@
 //   /rt-on                     Enable audio output (text-and-audio modality).
 //   /rt-off                    Disable audio output (text-only Realtime).
 //   /rt-audio [on|off|toggle]  Same as on/off.
-//   /rt-listen [ptt|vad]       Start mic capture → transcription → pi.sendUserMessage.
+//   /rt-listen [ptt|vad]       Start mic capture → committed audio response.
 //   /rt-stop                   Stop mic and commit PTT audio; if no mic, close WSS.
 //   /rt-cancel                 Stop mic without committing audio.
 //   /rt-status                 Show realtime status.
@@ -80,6 +81,7 @@ const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
 const REALTIME_API = "openai-realtime";
 const REALTIME_INSTRUCTIONS_PREFIX = "You are running inside an OpenAI Realtime audio session. For microphone turns, the committed input audio is already present in the realtime conversation; the transcript visible in Pi is a UI/history trigger, not your only input. Do not tell the user you only receive text transcripts when full realtime mode is active.";
+const REALTIME_AUDIO_TURN_MESSAGE = "Realtime audio input committed; starting audio-native response.";
 const DEFAULT_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
 const DEFAULT_VOICE = "marin";
 
@@ -697,6 +699,7 @@ class RealtimeSession {
     this.pendingSpokenTranscripts = [];
     this.spokenUserSkipCount = 0;
     this.pendingCommitTimer = null;
+    this.pendingAudioTurnPending = false;
     this.lastMicBytes = 0;
     this.micMuteUntilTs = 0;
     this.lastTurnInputMode = null;           // null|audio|transcript|text
@@ -1092,6 +1095,22 @@ class RealtimeSession {
     this.pendingSpokenTranscripts = this.pendingSpokenTranscripts
       .filter((t) => t.timestamp >= cutoff)
       .slice(-20);
+  }
+
+  triggerCommittedAudioTurn() {
+    if (this.pendingAudioTurnPending) return;
+    this.pendingAudioTurnPending = true;
+    this.lastTurnInputMode = "audio";
+    try {
+      this.pi.sendMessage?.({
+        customType: RT_CUSTOM_TYPE,
+        content: REALTIME_AUDIO_TURN_MESSAGE,
+        display: false,
+        details: { role: "audio-turn", inputMode: "audio" },
+      }, { triggerTurn: true, deliverAs: "followUp" });
+    } catch (e) {
+      this.notify(`sendMessage failed: ${e.message}`, "warning");
+    }
   }
 
   consumeSpokenTranscript(text) {
@@ -1505,11 +1524,26 @@ class RealtimeSession {
     if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(event.transcript || "").trim();
       this.clearPendingCommitTimer();
-      this.setPhase("idle");
-      if (text) {
-        this.lastTurnInputMode = this.config.sttOnly ? "transcript" : "audio";
+      if (this.config.sttOnly) this.setPhase("idle");
+      if (text && this.config.sttOnly) {
+        this.lastTurnInputMode = "transcript";
         this.markSpokenTranscript(text);
         try { this.pi.sendUserMessage(text); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
+      } else if (text && !this.config.sttOnly) {
+        // Full realtime already triggers the Pi turn from input_audio_buffer.committed
+        // so inference is based on the committed audio item, not this transcript.
+        // Keep the transcript visible for the operator, but do not inject it as
+        // a user text prompt or forward it to the model.
+        this.lastTranscript = text;
+        try {
+          this.pi.sendMessage?.({
+            customType: RT_CUSTOM_TYPE,
+            content: text,
+            display: true,
+            details: { role: "transcript", inputMode: "audio" },
+          }, { deliverAs: "followUp" });
+        } catch {}
+        this.updateStatus();
       }
       return;
     }
@@ -1530,8 +1564,14 @@ class RealtimeSession {
 
     if (type === "input_audio_buffer.committed") {
       this.lastMicBytes = 0;
-      this.setPhase("transcribing");
-      this.startPendingCommitTimer();
+      if (this.config.sttOnly) {
+        this.setPhase("transcribing");
+        this.startPendingCommitTimer();
+      } else {
+        this.clearPendingCommitTimer();
+        this.setPhase("thinking");
+        this.triggerCommittedAudioTurn();
+      }
       return;
     }
 
@@ -1719,6 +1759,7 @@ class RealtimeSession {
       state.stream.end(state.partial);
     }
     this.current = null;
+    this.pendingAudioTurnPending = false;
     this.setPhase("idle");
     if (clip && !hasToolCalls) this.sendAudioControlMessage(clip);
   }
@@ -1812,6 +1853,7 @@ class RealtimeSession {
     this.sendTurnDetectionUpdate();
     this.updateStatus();
     if (!this.connected || !isRealtimeWebSocketOpen(this.ws)) return;
+    this.pendingAudioTurnPending = false;
     if (commit) {
       if (this.lastMicBytes <= 0) {
         this.setPhase("idle");
@@ -1819,10 +1861,11 @@ class RealtimeSession {
         return;
       }
       this.setPhase("transcribing");
-      this.startPendingCommitTimer();
+      if (this.config.sttOnly) this.startPendingCommitTimer();
       try { this.send({ type: "input_audio_buffer.commit" }); } catch {}
-      // The transcription.completed event will fire and we'll route it via
-      // pi.sendUserMessage -> Pi calls streamSimple again -> response.create.
+      // STT-only waits for transcription.completed and injects transcript text.
+      // Full realtime triggers a placeholder Pi turn from input_audio_buffer.committed
+      // so the realtime response is grounded in the committed audio item.
     } else {
       this.clearPendingCommitTimer();
       this.setPhase("idle");
@@ -1838,6 +1881,7 @@ class RealtimeSession {
       this.ws = null;
     }
     this.connected = false;
+    this.pendingAudioTurnPending = false;
     this.setPhase("idle");
     this.systemPromptApplied = null;
     this.toolsAppliedKey = null;

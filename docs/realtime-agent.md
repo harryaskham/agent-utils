@@ -1,6 +1,6 @@
 # Realtime Agent Pi extension
 
-The realtime extension in [`extensions/realtime-agent.js`](../extensions/realtime-agent.js) lets Pi use OpenAI Realtime models as a normal Pi provider while keeping audio input/output as a side channel. The goal is to preserve the usual Pi agent loop — tools, MCP, skills, approvals, history, compaction, and model switching — while adding live speech I/O for realtime conversations.
+The realtime extension in [`extensions/realtime-agent.js`](../extensions/realtime-agent.js) lets Pi use OpenAI Realtime models as a normal Pi provider while keeping audio input/output as a side channel. The goal is to preserve the usual Pi agent loop — tools, MCP, skills, approvals, history, compaction, and model switching — while adding live speech I/O for realtime conversations. Full realtime microphone turns are audio-native: the transcript can be displayed in the UI, but the model response is triggered from the committed audio item rather than by injecting transcript text as the user's prompt.
 
 ## Install and prerequisites
 
@@ -222,7 +222,7 @@ Examples:
 { "action": "stop" }
 ```
 
-Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior.
+Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. For full realtime turns, the transcript is sent as a visible `realtime-agent` custom UI message only; it is stripped from model context and is not forwarded as a second text input.
 
 ## Autoreconnect
 
