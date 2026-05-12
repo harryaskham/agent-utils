@@ -303,7 +303,7 @@ function refreshPublicEntry(entry) {
   };
 }
 
-function renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, refreshStaleness, root }) {
+function renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }) {
   const lines = [`app automation overview stateRoot=${root}`];
   lines.push(`apps: ${apps.map((app) => `${app.id}(${app.actions?.length || 0} actions)`).join(", ") || "none"}`);
   lines.push(refreshers.length
@@ -320,6 +320,10 @@ function renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStal
   for (const digest of snapshotDigests) {
     const rendered = renderSnapshotDigest(digest).split("\n").slice(0, 5).join("\n  ");
     lines.push(`${digest.app || "snapshots"}: ${rendered}`);
+  }
+  if (snapshotLinks) {
+    lines.push("links:");
+    lines.push(...renderSnapshotLinks(snapshotLinks).split("\n").map((line) => `  ${line}`));
   }
   return lines.join("\n");
 }
@@ -544,8 +548,10 @@ export default function appAutomationExtension(pi) {
       includeSnapshots: Type.Optional(Type.Boolean({ description: "Include snapshot digest summaries. Defaults to true." })),
       includeStaleness: Type.Optional(Type.Boolean({ description: "Include fresh/stale/missing snapshot status. Defaults to true." })),
       includeRefreshStaleness: Type.Optional(Type.Boolean({ description: "Include per-action standard refresh bundle staleness. Defaults to true." })),
+      includeLinks: Type.Optional(Type.Boolean({ description: "Include compact snapshot link rows. Defaults to false." })),
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale snapshots. Defaults to 60 minutes." })),
       snapshotLimitPerApp: Type.Optional(Type.Number({ description: "Readable snapshot artifacts to summarize per app. Defaults to 3." })),
+      linkLimitPerApp: Type.Optional(Type.Number({ description: "Snapshot links to include per app when includeLinks is true. Defaults to 3." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
     }),
     async execute(_toolCallId, params) {
@@ -572,10 +578,22 @@ export default function appAutomationExtension(pi) {
         staleAfterMinutes: params.staleAfterMinutes || 60,
       });
       const refreshStaleness = params.includeRefreshStaleness === false ? null : await buildRefreshBundleStaleness({ catalog, params: { ...params, apps: wantedIds.filter((id) => id !== "canvas") } });
-      return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, refreshStaleness, root }), {
+      let snapshotLinks = null;
+      if (params.includeLinks) {
+        const links = [];
+        let truncated = false;
+        for (const app of apps) {
+          const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3 });
+          links.push(...summary.links);
+          truncated = truncated || summary.truncated;
+        }
+        snapshotLinks = { root, snapshotRoot: path.join(root, "snapshots"), exists: true, links, truncated };
+      }
+      return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), {
         apps,
         refreshers,
         snapshotDigests,
+        snapshotLinks,
         snapshotStaleness,
         refreshStaleness,
         external: catalog.external,
@@ -1137,7 +1155,18 @@ export default function appAutomationExtension(pi) {
           .map(refreshPublicEntry);
         const snapshotStaleness = await snapshotStalenessReport({ root, apps: apps.map((app) => app.id), staleAfterMinutes: 60 });
         const refreshStaleness = await buildRefreshBundleStaleness({ catalog, params: { apps: wantedIds.filter((id) => id !== "canvas"), staleAfterMinutes: 60 } });
-        ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, refreshStaleness, root }), "info");
+        let snapshotLinks = null;
+        if (words.includes("links") || words.includes("--links")) {
+          const links = [];
+          let truncated = false;
+          for (const app of apps) {
+            const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: 3 });
+            links.push(...summary.links);
+            truncated = truncated || summary.truncated;
+          }
+          snapshotLinks = { root, snapshotRoot: path.join(root, "snapshots"), exists: true, links, truncated };
+        }
+        ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), "info");
         return;
       }
       if (words[0] === "links") {
