@@ -41,6 +41,13 @@ const DEFAULT_REFRESH_BUNDLE = [
   { app: "teams", action: "notifications.snapshot" },
   { app: "teams", action: "calendar.snapshot" },
 ];
+const DEFAULT_OPEN_BUNDLE = [
+  { app: "slack", action: "open" },
+  { app: "outlook", action: "open" },
+  { app: "outlook", action: "calendar.open" },
+  { app: "teams", action: "open" },
+  { app: "teams", action: "calendar.open" },
+];
 const DEFAULT_DOCTOR_ACTIONS = [
   { app: "slack", action: "open" },
   { app: "slack", action: "notifications.snapshot" },
@@ -555,6 +562,46 @@ export default function appAutomationExtension(pi) {
       if (params.runImmediately !== false) await runRefresh(entry, signal);
       return textResult(`started app automation refresh ${id}: ${entry.app}.${entry.action} every ${intervalSeconds}s`, {
         refresh: refreshPublicEntry(entry),
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_open_bundle_run_once`,
+    label: "App Automation Open Bundle Run Once",
+    description: "Open the standard Slack, Outlook, and Teams browser surfaces once without snapshot extraction or periodic timers.",
+    promptSnippet: "Use this to warm or verify authenticated Slack, Outlook mail/calendar, and Teams browser sessions before live snapshot automation.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default open bundle." }))),
+      actions: Type.Optional(Type.Array(Type.String({ description: "Optional open action ids to include from the default open bundle." }))),
+      params: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Shared action parameters such as session/playwrightSession." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Per-action command timeout in milliseconds. Defaults to 30000." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const catalog = await resolveCatalog(params);
+      const wantedApps = new Set((params.apps || []).map((value) => String(value)));
+      const wantedActions = new Set((params.actions || []).map((value) => String(value)));
+      const targets = DEFAULT_OPEN_BUNDLE.filter((target) => (
+        (!wantedApps.size || wantedApps.has(target.app))
+        && (!wantedActions.size || wantedActions.has(target.action))
+      ));
+      const runs = [];
+      const skipped = [];
+      for (const target of targets) {
+        const plan = buildActionPlan({ app: target.app, action: target.action, params: params.params || {}, catalog: catalog.apps });
+        if (!plan.execution.executable) {
+          skipped.push({ app: target.app, action: target.action, reason: plan.execution.missingParams.length ? `missing ${plan.execution.missingParams.join(",")}` : "plan is not executable", blockedSteps: plan.execution.blockedSteps });
+          continue;
+        }
+        const run = await runPlan(pi, plan, { signal, timeoutMs: params.timeoutMs });
+        runs.push({ app: target.app, action: target.action, status: run.status, latestRunPath: run.latestRunPath, results: run.results });
+      }
+      const failed = runs.filter((run) => run.status !== "ok").length;
+      return textResult(`opened ${runs.length} app automation surfaces once${failed ? `; ${failed} failed` : ""}${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+        runs,
+        skipped,
+        defaultBundle: DEFAULT_OPEN_BUNDLE,
       });
     },
   });
