@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { parseLinkCommandFilters } from "../extensions/app-automation/link-command.js";
+import { parseLinkCommandArgs, parseLinkCommandFilters } from "../extensions/app-automation/link-command.js";
 import {
   APP_AUTOMATION_SPEC_VERSION,
   buildActionPlan,
@@ -332,6 +332,19 @@ test("/tendril-app link filter parser accepts flexible token order", () => {
     sort: "newest",
     query: "Ops Bot",
   });
+  assert.deepEqual(parseLinkCommandArgs(["fresh", "sort:newest", "standup"], { appIds: ["slack", "calendar"] }), {
+    app: undefined,
+    linkLimit: undefined,
+    freshness: "fresh",
+    sort: "newest",
+    query: "standup",
+  });
+  assert.deepEqual(parseLinkCommandArgs(["slack", "kind:notifications.snapshot", "10"], { appIds: ["slack", "calendar"] }), {
+    app: "slack",
+    linkLimit: 10,
+    kind: "notifications.snapshot",
+    query: "",
+  });
 });
 
 test("snapshot artifact helpers list and read bounded readable files", async () => {
@@ -497,7 +510,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /all/);
   assert.match(source, /query: Type\.Optional/);
   assert.match(source, /kind: Type\.Optional/);
-  assert.match(source, /parseLinkCommandFilters/);
+  assert.match(source, /parseLinkCommandArgs/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /sort: Type\.Optional/);
   assert.match(source, /staleAfterMinutes: Type\.Optional/);

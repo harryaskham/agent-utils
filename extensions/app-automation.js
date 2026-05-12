@@ -31,7 +31,7 @@ import { calendarExtractorScript } from "./app-automation/calendar.js";
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
-import { parseLinkCommandFilters } from "./app-automation/link-command.js";
+import { parseLinkCommandArgs } from "./app-automation/link-command.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
@@ -1121,7 +1121,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [sort:<order>] [query]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [sort:<order>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1176,10 +1176,8 @@ export default function appAutomationExtension(pi) {
         return;
       }
       if (words[0] === "links") {
-        const maybeLimit = Number(words.at(-1));
-        const hasLimit = Number.isFinite(maybeLimit) && words.length > 2;
-        const filters = parseLinkCommandFilters(words.slice(2, hasLimit ? -1 : undefined));
-        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: filters.query, freshness: filters.freshness, kind: filters.kind, sort: filters.sort, linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
+        const filters = parseLinkCommandArgs(words.slice(1), { appIds: catalog.apps.map((app) => app.id) });
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: filters.app, query: filters.query, freshness: filters.freshness, kind: filters.kind, sort: filters.sort, linkLimit: filters.linkLimit || 100, staleAfterMinutes: 60 });
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }

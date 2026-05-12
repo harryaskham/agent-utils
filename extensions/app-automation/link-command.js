@@ -1,5 +1,9 @@
 const LINK_SORTS = new Set(["newest", "oldest", "freshest", "stalest", "app", "kind"]);
 
+function normalizeWord(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
 export function parseLinkCommandFilters(words = []) {
   const queryWords = [];
   const filters = { query: "" };
@@ -27,4 +31,21 @@ export function parseLinkCommandFilters(words = []) {
   }
   filters.query = queryWords.join(" ");
   return filters;
+}
+
+export function parseLinkCommandArgs(words = [], { appIds = [] } = {}) {
+  const args = words.map((word) => String(word || "").trim()).filter(Boolean);
+  const maybeLimit = Number(args.at(-1));
+  const hasLimit = Number.isFinite(maybeLimit) && args.length > 1;
+  const rest = hasLimit ? args.slice(0, -1) : [...args];
+  const knownApps = new Set(["all", "*", ...appIds.map(normalizeWord).filter(Boolean)]);
+  let app;
+  if (rest.length && knownApps.has(normalizeWord(rest[0]))) {
+    app = rest.shift();
+  }
+  return {
+    app,
+    linkLimit: hasLimit ? maybeLimit : undefined,
+    ...parseLinkCommandFilters(rest),
+  };
 }
