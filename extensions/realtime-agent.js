@@ -1894,6 +1894,10 @@ function makeInitialConfig() {
 // Provider registration
 // ---------------------------------------------------------------------------
 
+function unregisterRealtimeProvider(pi) {
+  try { pi.unregisterProvider?.("openai-realtime"); } catch {}
+}
+
 function registerRealtimeProvider(pi, session, { force = false } = {}) {
   const baseUrl = env("PI_RT_BASE_URL", "OPENAI_BASE_URL") || "https://api.openai.com";
   const apiKey = env("PI_RT_API_KEY") ? "PI_RT_API_KEY" : "OPENAI_API_KEY";
@@ -2255,6 +2259,7 @@ export function createRealtimeControls({ pi, session, config }) {
         const m = ctx?.modelRegistry?.find?.(prev.provider, prev.id);
         if (m) { try { await pi.setModel(m); } catch {} }
       }
+      unregisterRealtimeProvider(pi);
       session.clearRealtimeUi(ctx);
       return this.snapshot();
     },
@@ -2339,6 +2344,7 @@ export default function realtimeAgentExtension(pi) {
       session.callIdsEmittedByModel.clear();
       ctx.ui.notify(`Realtime: ${event.model.provider}/${event.model.id} selected`, "info");
     } else {
+      unregisterRealtimeProvider(pi);
       session.clearRealtimeUi(ctx);
     }
   });
@@ -2350,7 +2356,6 @@ export default function realtimeAgentExtension(pi) {
   }
 
   async function startRealtime(ctx, { listenMode = "vad", sttOnly = false } = {}) {
-    await ensureRealtimeProvider(ctx);
     config.autoReconnect = true;
     config.desiredListenMode = listenMode || "vad";
 
@@ -2361,6 +2366,7 @@ export default function realtimeAgentExtension(pi) {
       controls.setSttOnly(true, ctx);
       controls.showStatus(ctx);
     } else {
+      await ensureRealtimeProvider(ctx);
       // Full realtime: remember the prior Pi model so /rt-off can restore it,
       // then switch to gpt-realtime-2.
       const current = ctx.model;
@@ -2425,12 +2431,13 @@ export default function realtimeAgentExtension(pi) {
       if (params.widget === "hide" || params.widget === "off") controls.hideStatus(ctx);
       else controls.showStatus(ctx);
     }
-    if (params.status) {
+    const action = params.action || params.start || params.mode;
+    const hasLifecycleAction = !!(action || params.stt || params.mic || params.listen);
+    if (params.status && !hasLifecycleAction) {
       const full = params.status === "full";
       controls.showStatus(ctx);
       return { lines: full ? controls.diagnostics() : controls.statusLines(), snapshot: controls.snapshot() };
     }
-    const action = params.action || params.start || params.mode;
     if (action === "status" || action === "doctor") {
       const full = action === "doctor" || params.status === "full";
       controls.showStatus(ctx);
@@ -2441,7 +2448,12 @@ export default function realtimeAgentExtension(pi) {
     if (action) {
       if (action === "stop" || action === "off") return controls.disable(ctx, { restoreModel: true });
       if (!REALTIME_START_MODES.has(action)) throw new Error(`Unsupported realtime start mode: ${action}`);
-      return startRealtime(ctx, { listenMode: action });
+      const result = await startRealtime(ctx, { listenMode: action });
+      if (params.status) {
+        const full = params.status === "full";
+        return { lines: full ? controls.diagnostics() : controls.statusLines(), snapshot: controls.snapshot(), result };
+      }
+      return result;
     }
     return controls.snapshot();
   }

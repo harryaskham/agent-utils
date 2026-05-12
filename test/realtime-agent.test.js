@@ -125,6 +125,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
       providers.set(provider, definition);
       for (const model of definition.models || []) models.set(`${provider}/${model.id}`, { ...model, provider });
     },
+    unregisterProvider(provider) { providers.delete(provider); },
     registerTool(definition) { tools.set(definition.name, definition); },
     events: { emit: (name, payload) => emittedEvents.push({ name, payload }) },
     on(event, handler) { handlers.set(event, handler); },
@@ -595,6 +596,55 @@ test("/rt status full and doctor subcommands expose diagnostics", async () => {
 
   await commands.get("rt").handler("doctor", ctx);
   assert.match(notifications.at(-1).message, /Realtime doctor/);
+});
+
+test("/rt stt does not register realtime provider while text model remains selected", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRegister = process.env.PI_RT_REGISTER;
+  const previousAlways = process.env.PI_RT_ALWAYS_REGISTER;
+  process.env.PI_RT_API_KEY = "test-key";
+  delete process.env.PI_RT_REGISTER;
+  delete process.env.PI_RT_ALWAYS_REGISTER;
+  FakeWebSocket.instances = [];
+  const { pi, commands, providers, handlers, ctx } = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("stt vad", ctx);
+    assert.equal(ctx.model.provider, "litellm-openai");
+    assert.equal(providers.has("openai-realtime"), false);
+    assert.equal(FakeWebSocket.instances.length, 1);
+  } finally {
+    await commands.get("rt-off").handler("", ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRegister === undefined) delete process.env.PI_RT_REGISTER;
+    else process.env.PI_RT_REGISTER = previousRegister;
+    if (previousAlways === undefined) delete process.env.PI_RT_ALWAYS_REGISTER;
+    else process.env.PI_RT_ALWAYS_REGISTER = previousAlways;
+  }
+});
+
+test("realtime_agent_control start with status still starts realtime", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  FakeWebSocket.instances = [];
+  const previousModel = { provider: "litellm-openai", id: "gpt-5.5" };
+  const { pi, commands, tools, handlers, setModelCalls, ctx } = makeHarness({ initialModel: previousModel });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    const result = await tools.get("realtime_agent_control").execute("tool-1", { start: "nolisten", status: "full" }, null, null, ctx);
+    assert.equal(setModelCalls.at(-1)?.provider, "openai-realtime");
+    assert.equal(FakeWebSocket.instances.length, 1);
+    assert.match(result.content[0].text, /Realtime doctor/);
+  } finally {
+    await commands.get("rt-off").handler("", ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+  }
 });
 
 test("/rt start force-registers realtime provider and switches away from current text model", async () => {
