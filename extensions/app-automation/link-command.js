@@ -64,3 +64,18 @@ export function parseLinkCommandArgs(words = [], { appIds = [] } = {}) {
     ...filters,
   };
 }
+
+export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppIds = [] } = {}) {
+  const args = words.map((word) => String(word || "").trim()).filter(Boolean);
+  const appIdSet = new Set(appIds.map(normalizeWord).filter(Boolean));
+  const includeLinks = args.some((word) => ["links", "--links"].includes(normalizeWord(word)));
+  const appTokens = args.filter((word) => !["links", "--links"].includes(normalizeWord(word)));
+  const wantsAll = appTokens.some((word) => ["all", "*"].includes(normalizeWord(word)));
+  const apps = wantsAll
+    ? appIds
+    : appTokens.filter((word) => appIdSet.has(normalizeWord(word)));
+  return {
+    includeLinks,
+    apps: apps.length ? apps : defaultAppIds,
+  };
+}

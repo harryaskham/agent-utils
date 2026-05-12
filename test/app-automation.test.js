@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { parseLinkCommandArgs, parseLinkCommandFilters } from "../extensions/app-automation/link-command.js";
+import { parseLinkCommandArgs, parseLinkCommandFilters, parseOverviewCommandArgs } from "../extensions/app-automation/link-command.js";
 import {
   APP_AUTOMATION_SPEC_VERSION,
   buildActionPlan,
@@ -320,6 +320,17 @@ test("generic app snapshots preserve redacted meeting and message links", () => 
   assert.match(calendarExtractor, /datetime/);
 });
 
+test("/tendril-app overview parser keeps links option out of app ids", () => {
+  assert.deepEqual(parseOverviewCommandArgs(["links"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
+    includeLinks: true,
+    apps: ["slack", "calendar"],
+  });
+  assert.deepEqual(parseOverviewCommandArgs(["slack", "links"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
+    includeLinks: true,
+    apps: ["slack"],
+  });
+});
+
 test("/tendril-app link filter parser accepts flexible token order", () => {
   assert.deepEqual(parseLinkCommandFilters(["kind:events.snapshot", "fresh", "standup"]), {
     freshness: "fresh",
@@ -527,6 +538,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /kind: Type\.Optional/);
   assert.match(source, /aliases like notifications\/events\/calendar/);
   assert.match(source, /parseLinkCommandArgs/);
+  assert.match(source, /parseOverviewCommandArgs/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /sort: Type\.Optional/);
   assert.match(source, /staleAfterMinutes: Type\.Optional/);

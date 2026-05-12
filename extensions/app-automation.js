@@ -31,7 +31,7 @@ import { calendarExtractorScript } from "./app-automation/calendar.js";
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
-import { parseLinkCommandArgs } from "./app-automation/link-command.js";
+import { parseLinkCommandArgs, parseOverviewCommandArgs } from "./app-automation/link-command.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
@@ -1146,7 +1146,8 @@ export default function appAutomationExtension(pi) {
         return;
       }
       if (words[0] === "overview") {
-        const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "calendar", "outlook", "teams", "canvas"];
+        const overviewArgs = parseOverviewCommandArgs(words.slice(1), { appIds: catalog.apps.map((app) => app.id), defaultAppIds: ["slack", "calendar", "outlook", "teams", "canvas"] });
+        const wantedIds = overviewArgs.apps;
         const apps = wantedIds
           .map((id) => catalog.apps.find((app) => app.id === id))
           .filter(Boolean)
@@ -1162,7 +1163,7 @@ export default function appAutomationExtension(pi) {
         const snapshotStaleness = await snapshotStalenessReport({ root, apps: apps.map((app) => app.id), staleAfterMinutes: 60 });
         const refreshStaleness = await buildRefreshBundleStaleness({ catalog, params: { apps: wantedIds.filter((id) => id !== "canvas"), staleAfterMinutes: 60 } });
         let snapshotLinks = null;
-        if (words.includes("links") || words.includes("--links")) {
+        if (overviewArgs.includeLinks) {
           const links = [];
           let truncated = false;
           for (const app of apps) {
