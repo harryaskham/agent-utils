@@ -33,6 +33,13 @@ import {
 const TOOL_PREFIX = "app_automation";
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 300;
 const MIN_REFRESH_INTERVAL_SECONDS = 30;
+const DEFAULT_REFRESH_BUNDLE = [
+  { app: "slack", action: "notifications.snapshot" },
+  { app: "outlook", action: "notifications.snapshot" },
+  { app: "outlook", action: "calendar.snapshot" },
+  { app: "teams", action: "notifications.snapshot" },
+  { app: "teams", action: "calendar.snapshot" },
+];
 
 async function pathSummary(root) {
   const exists = await stat(root).then(() => true, () => false);
@@ -400,6 +407,71 @@ export default function appAutomationExtension(pi) {
       if (params.runImmediately !== false) await runRefresh(entry, signal);
       return textResult(`started app automation refresh ${id}: ${entry.app}.${entry.action} every ${intervalSeconds}s`, {
         refresh: refreshPublicEntry(entry),
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_refresh_bundle_start`,
+    label: "App Automation Refresh Bundle Start",
+    description: "Start a standard bundle of Slack, Outlook, and Teams snapshot refreshers from the blessed catalog.",
+    promptSnippet: "Use this to keep Slack, Outlook mail/calendar, and Teams notification/calendar snapshots current without starting each refresher individually.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default bundle." }))),
+      actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to include from the default bundle." }))),
+      params: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Shared action parameters such as session/playwrightSession." })),
+      intervalSeconds: Type.Optional(Type.Number({ description: "Refresh interval for each started action. Defaults to 300 seconds; minimum 30 seconds." })),
+      runImmediately: Type.Optional(Type.Boolean({ description: "Run each refresher immediately after starting. Defaults to false for bundle starts." })),
+      includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Per-refresh command timeout in milliseconds. Defaults to 30000." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const catalog = await resolveCatalog(params);
+      const wantedApps = new Set((params.apps || []).map((value) => String(value)));
+      const wantedActions = new Set((params.actions || []).map((value) => String(value)));
+      const targets = DEFAULT_REFRESH_BUNDLE.filter((target) => (
+        (!wantedApps.size || wantedApps.has(target.app))
+        && (!wantedActions.size || wantedActions.has(target.action))
+      ));
+      const intervalSeconds = Math.max(
+        MIN_REFRESH_INTERVAL_SECONDS,
+        Number.parseInt(String(params.intervalSeconds || DEFAULT_REFRESH_INTERVAL_SECONDS), 10) || DEFAULT_REFRESH_INTERVAL_SECONDS,
+      );
+      const started = [];
+      const skipped = [];
+      for (const target of targets) {
+        const plan = buildActionPlan({ app: target.app, action: target.action, params: params.params || {}, catalog: catalog.apps });
+        if (!plan.execution.executable) {
+          skipped.push({ app: target.app, action: target.action, reason: plan.execution.missingParams.length ? `missing ${plan.execution.missingParams.join(",")}` : "plan is not executable", blockedSteps: plan.execution.blockedSteps });
+          continue;
+        }
+        const id = nextRefreshId(refreshState, plan.app.id, plan.action.id);
+        const entry = {
+          id,
+          app: plan.app.id,
+          action: plan.action.id,
+          params: params.params || {},
+          includeExternal: params.includeExternal !== false,
+          timeoutMs: params.timeoutMs,
+          intervalSeconds,
+          running: true,
+          inFlight: false,
+          runCount: 0,
+          errorCount: 0,
+          lastRunAt: null,
+          lastStatus: "pending",
+          lastError: null,
+          lastRun: null,
+        };
+        entry.timer = setInterval(() => { void runRefresh(entry, signal); }, intervalSeconds * 1000);
+        refreshState.refreshers.set(id, entry);
+        if (params.runImmediately === true) await runRefresh(entry, signal);
+        started.push(refreshPublicEntry(entry));
+      }
+      return textResult(`started ${started.length} app automation refreshers${skipped.length ? `; skipped ${skipped.length}` : ""}`, {
+        started,
+        skipped,
+        defaultBundle: DEFAULT_REFRESH_BUNDLE,
       });
     },
   });
