@@ -352,6 +352,22 @@ export async function collectSnapshotLinks({ root, app, query, freshness, kind, 
   };
 }
 
+export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries = [] } = {}) {
+  const links = summaries.flatMap((summary) => summary.links || []);
+  return {
+    root,
+    snapshotRoot,
+    exists: summaries.some((summary) => summary.exists),
+    links,
+    matchedCount: summaries.reduce((total, summary) => total + (summary.matchedCount ?? summary.links?.length ?? 0), 0),
+    returnedCount: links.length,
+    freshnessCounts: summarizeLinkFreshness(links),
+    appCounts: summarizeLinkApps(links),
+    kindCounts: summarizeLinkKinds(links),
+    truncated: summaries.some((summary) => summary.truncated),
+  };
+}
+
 export function renderArtifactList(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
   if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${summary.snapshotRoot}.`;

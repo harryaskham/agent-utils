@@ -5,6 +5,7 @@ import { setInterval, clearInterval } from "node:timers";
 import { Type } from "@sinclair/typebox";
 
 import {
+  aggregateSnapshotLinkSummaries,
   collectSnapshotLinks,
   digestSnapshotArtifacts,
   listSnapshotArtifacts,
@@ -582,14 +583,11 @@ export default function appAutomationExtension(pi) {
       const refreshStaleness = params.includeRefreshStaleness === false ? null : await buildRefreshBundleStaleness({ catalog, params: { ...params, apps: wantedIds.filter((id) => id !== "canvas") } });
       let snapshotLinks = null;
       if (params.includeLinks) {
-        const links = [];
-        let truncated = false;
+        const summaries = [];
         for (const app of apps) {
-          const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3, staleAfterMinutes: params.staleAfterMinutes || 60 });
-          links.push(...summary.links);
-          truncated = truncated || summary.truncated;
+          summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3, staleAfterMinutes: params.staleAfterMinutes || 60 }));
         }
-        snapshotLinks = { root, snapshotRoot: path.join(root, "snapshots"), exists: true, links, truncated };
+        snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries });
       }
       return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), {
         apps,
@@ -1164,14 +1162,11 @@ export default function appAutomationExtension(pi) {
         const refreshStaleness = await buildRefreshBundleStaleness({ catalog, params: { apps: wantedIds.filter((id) => id !== "canvas"), staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 } });
         let snapshotLinks = null;
         if (overviewArgs.includeLinks) {
-          const links = [];
-          let truncated = false;
+          const summaries = [];
           for (const app of apps) {
-            const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: overviewArgs.linkLimitPerApp || 3, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 });
-            links.push(...summary.links);
-            truncated = truncated || summary.truncated;
+            summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: overviewArgs.linkLimitPerApp || 3, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 }));
           }
-          snapshotLinks = { root, snapshotRoot: path.join(root, "snapshots"), exists: true, links, truncated };
+          snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries });
         }
         ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), "info");
         return;
