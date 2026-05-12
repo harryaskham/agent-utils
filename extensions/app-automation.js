@@ -1,4 +1,4 @@
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setInterval, clearInterval } from "node:timers";
 
@@ -63,7 +63,7 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
   await mkdir(plan.snapshotDir, { recursive: true });
   for (const step of plan.execution.stepCommands) {
     if (step.internal === "slack.notifications.snapshot") {
-      let input = plan.params.extraction || plan.params.sourceJson || plan.params.sourceText || {};
+      let input = plan.params.extraction || plan.params.sourceJson || plan.params.sourceText || results.find((result) => result.extraction)?.extraction || {};
       if (typeof input === "string" && input.trim().startsWith("{")) {
         input = JSON.parse(input);
       }
@@ -138,11 +138,19 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       results.push({ index: step.index, kind: step.kind, status: "ok", outputPath });
       continue;
     }
-    if (step.kind === "dom.extract" && !step.scriptPath) {
+    if (step.kind === "dom.extract") {
       const sourceStep = plan.steps[step.index] || {};
-      const prepared = await prepareDomExtractStep(sourceStep, plan.params, { snapshotDir: plan.snapshotDir, actionId: plan.action.id });
-      if (prepared.paths.scriptPath) {
-        step.args = step.args.map((arg) => arg === sourceStep.scriptFile ? prepared.paths.scriptPath : arg);
+      const prepared = await prepareDomExtractStep(sourceStep, plan.params, {
+        snapshotDir: plan.snapshotDir,
+        actionId: plan.action.id,
+        scripts: { slackExtractorScript: slackExtractorScript() },
+      });
+      if (prepared.paths.scriptPath || prepared.paths.outputPath) {
+        step.scriptPath = prepared.paths.scriptPath || step.scriptPath;
+        step.outputPath = prepared.paths.outputPath || step.outputPath;
+        step.args = [];
+        if (plan.params.session || plan.params.playwrightSession) step.args.push(`-s=${String(plan.params.session || plan.params.playwrightSession)}`);
+        step.args.push("evaluate", "--script-file", step.scriptPath, "--output", step.outputPath);
       }
     }
     const result = await pi.exec(step.command, step.args, { signal, timeout: timeoutMs });
@@ -157,6 +165,14 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
       status: result.code === 0 ? "ok" : "error",
       authRequired: result.code !== 0 && authMissingHint(result),
     });
+    if (step.kind === "dom.extract" && result.code === 0) {
+      try {
+        const extractionText = await readFile(step.outputPath, "utf8");
+        results.at(-1).extraction = JSON.parse(extractionText);
+      } catch (error) {
+        results.at(-1).extractionError = error.message;
+      }
+    }
     if (result.code !== 0) break;
   }
   return {

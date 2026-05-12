@@ -44,7 +44,7 @@ test("Slack notification plan is deterministic, read-only, and snapshot-oriented
   assert.equal(plan.action.driver, "playwright");
   assert.equal(plan.snapshotDir.endsWith("snapshots/slack"), true);
   assert.deepEqual(plan.action.missingParams, []);
-  assert.deepEqual(plan.steps.map((step) => step.kind), ["slack.notifications.snapshot"]);
+  assert.deepEqual(plan.steps.map((step) => step.kind), ["browser.open", "dom.extract", "slack.notifications.snapshot"]);
   assert.equal(plan.execution.executable, true);
   assert.match(renderPlan(plan), /slack\.notifications\.snapshot/);
 });
@@ -98,6 +98,7 @@ test("Playwright bridge builds deterministic browser and DOM extraction commands
     reason: "dom.extract requires a scriptFile, extractorPath, or generated script",
   });
   assert.equal(buildDomExtractCommand({ scriptFile: "extract.js" }, { extractionOutputPath: "out.json" }).executable, true);
+  assert.equal(buildDomExtractCommand({ script: "inline", output: "out.json" }, {}).executable, true);
   assert.equal(authMissingHint({ stderr: "Please sign in to continue" }), true);
 });
 
@@ -119,11 +120,12 @@ test("execution plan allows high-level browser.open when bridge command can be b
   assert.deepEqual(execution.stepCommands[0].args, ["-s=agent", "open", "https://app.slack.com/client"]);
 });
 
-test("execution plan allows Slack notification snapshot internal runner", () => {
-  const plan = buildActionPlan({ app: "slack", action: "notifications.snapshot" });
+test("execution plan wires Slack notification snapshot through browser, DOM extraction, and normalizer", () => {
+  const plan = buildActionPlan({ app: "slack", action: "notifications.snapshot", params: { session: "agent" } });
   const execution = buildExecutionPlan(plan);
   assert.equal(execution.executable, true);
-  assert.deepEqual(execution.blockedSteps, []);
+  assert.deepEqual(execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "slack.notifications.snapshot"]);
+  assert.deepEqual(execution.stepCommands[1].args, ["-s=agent", "evaluate", "--script-file", "slackExtractorScript", "--output", "slack-extraction.json"]);
 });
 
 test("canvas sync writes Markdown, HTML, paste text, and sync metadata", async () => {

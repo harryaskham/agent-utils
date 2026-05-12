@@ -30,8 +30,8 @@ export function buildBrowserOpenCommand(step = {}, params = {}, env = process.en
 }
 
 export function buildDomExtractCommand(step = {}, params = {}, paths = {}, env = process.env) {
-  const outputPath = paths.outputPath || params.extractionOutputPath;
-  const scriptPath = paths.scriptPath || step.scriptFile || params.extractorPath;
+  const outputPath = paths.outputPath || params.extractionOutputPath || step.outputPath || step.output;
+  const scriptPath = paths.scriptPath || step.scriptFile || params.extractorPath || step.script;
   if (!scriptPath) return { executable: false, reason: "dom.extract requires a scriptFile, extractorPath, or generated script" };
   if (!outputPath) return { executable: false, reason: "dom.extract requires an extraction output path" };
   return {
@@ -43,12 +43,22 @@ export function buildDomExtractCommand(step = {}, params = {}, paths = {}, env =
   };
 }
 
-export async function prepareDomExtractStep(step = {}, params = {}, { snapshotDir, actionId } = {}) {
-  if (!step.script && !params.extractorScript) return { step, paths: {} };
-  const script = String(params.extractorScript || step.script);
-  const scriptPath = path.join(snapshotDir, `${sanitizeFilenamePart(actionId || "extract")}-extractor.js`);
-  await writeFile(scriptPath, `${script}\n`, "utf8");
-  return { step: { ...step, scriptFile: scriptPath }, paths: { scriptPath } };
+export async function prepareDomExtractStep(step = {}, params = {}, { snapshotDir, actionId, scripts = {} } = {}) {
+  const scriptSource = params.extractorScript || scripts[step.script] || step.script;
+  const paths = {};
+  let nextStep = { ...step };
+  if (scriptSource) {
+    const scriptPath = path.join(snapshotDir, `${sanitizeFilenamePart(actionId || "extract")}-extractor.js`);
+    await writeFile(scriptPath, `${scriptSource}\n`, "utf8");
+    nextStep = { ...nextStep, scriptFile: scriptPath };
+    paths.scriptPath = scriptPath;
+  }
+  const outputName = step.output || step.outputPath || params.extractionOutputPath;
+  if (outputName) {
+    paths.outputPath = path.isAbsolute(String(outputName)) ? String(outputName) : path.join(snapshotDir, String(outputName));
+    nextStep.outputPath = paths.outputPath;
+  }
+  return { step: nextStep, paths };
 }
 
 export function authMissingHint(result = {}) {

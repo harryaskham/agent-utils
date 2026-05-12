@@ -68,6 +68,8 @@ export const BLESSED_APPS = [
         description: "Extract a conservative unread/channel/DM notification summary and persist it as canonical JSON and Markdown.",
         outputs: ["snapshots/slack/notifications.json", "snapshots/slack/notifications.md"],
         plan: [
+          { kind: "browser.open", url: "https://app.slack.com/client", reuseSession: true },
+          { kind: "dom.extract", script: "slackExtractorScript", output: "slack-extraction.json" },
           { kind: "slack.notifications.snapshot" },
         ],
       },
