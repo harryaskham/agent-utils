@@ -334,7 +334,6 @@ test("/tendril-app link filter parser accepts flexible token order", () => {
   });
   assert.deepEqual(parseLinkCommandArgs(["fresh", "sort:newest", "standup"], { appIds: ["slack", "calendar"] }), {
     app: undefined,
-    linkLimit: undefined,
     freshness: "fresh",
     sort: "newest",
     query: "standup",
@@ -344,6 +343,12 @@ test("/tendril-app link filter parser accepts flexible token order", () => {
     linkLimit: 10,
     kind: "notifications.snapshot",
     query: "",
+  });
+  assert.deepEqual(parseLinkCommandArgs(["limit:5", "fresh", "standup", "2026"], { appIds: ["slack", "calendar"] }), {
+    app: undefined,
+    linkLimit: 5,
+    freshness: "fresh",
+    query: "standup 2026",
   });
 });
 

@@ -27,6 +27,11 @@ export function parseLinkCommandFilters(words = []) {
       filters.sort = sortMatch[1];
       continue;
     }
+    const limitMatch = lower.match(/^limit[:=](\d+)$/);
+    if (limitMatch && !filters.linkLimit) {
+      filters.linkLimit = Number(limitMatch[1]);
+      continue;
+    }
     queryWords.push(text);
   }
   filters.query = queryWords.join(" ");
@@ -35,17 +40,22 @@ export function parseLinkCommandFilters(words = []) {
 
 export function parseLinkCommandArgs(words = [], { appIds = [] } = {}) {
   const args = words.map((word) => String(word || "").trim()).filter(Boolean);
-  const maybeLimit = Number(args.at(-1));
-  const hasLimit = Number.isFinite(maybeLimit) && args.length > 1;
-  const rest = hasLimit ? args.slice(0, -1) : [...args];
   const knownApps = new Set(["all", "*", ...appIds.map(normalizeWord).filter(Boolean)]);
   let app;
-  if (rest.length && knownApps.has(normalizeWord(rest[0]))) {
-    app = rest.shift();
+  if (args.length && knownApps.has(normalizeWord(args[0]))) {
+    app = args.shift();
+  }
+  let filters = parseLinkCommandFilters(args);
+  if (!filters.linkLimit) {
+    const maybeLimit = Number(args.at(-1));
+    const hasLegacyLimit = Number.isFinite(maybeLimit) && args.length > 1;
+    if (hasLegacyLimit) {
+      filters = parseLinkCommandFilters(args.slice(0, -1));
+      filters.linkLimit = maybeLimit;
+    }
   }
   return {
     app,
-    linkLimit: hasLimit ? maybeLimit : undefined,
-    ...parseLinkCommandFilters(rest),
+    ...filters,
   };
 }
