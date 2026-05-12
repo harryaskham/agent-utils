@@ -23,6 +23,7 @@ import {
   renderPlan,
   stateRoot,
 } from "./app-automation/catalog.js";
+import { calendarExtractorScript } from "./app-automation/calendar.js";
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
@@ -40,6 +41,7 @@ const DEFAULT_REFRESH_INTERVAL_SECONDS = 300;
 const MIN_REFRESH_INTERVAL_SECONDS = 30;
 const DEFAULT_REFRESH_BUNDLE = [
   { app: "slack", action: "notifications.snapshot" },
+  { app: "calendar", action: "events.snapshot" },
   { app: "outlook", action: "notifications.snapshot" },
   { app: "outlook", action: "calendar.snapshot" },
   { app: "teams", action: "notifications.snapshot" },
@@ -47,6 +49,7 @@ const DEFAULT_REFRESH_BUNDLE = [
 ];
 const DEFAULT_OPEN_BUNDLE = [
   { app: "slack", action: "open" },
+  { app: "calendar", action: "open" },
   { app: "outlook", action: "open" },
   { app: "outlook", action: "calendar.open" },
   { app: "teams", action: "open" },
@@ -55,6 +58,8 @@ const DEFAULT_OPEN_BUNDLE = [
 const DEFAULT_DOCTOR_ACTIONS = [
   { app: "slack", action: "open" },
   { app: "slack", action: "notifications.snapshot" },
+  { app: "calendar", action: "open" },
+  { app: "calendar", action: "events.snapshot" },
   { app: "outlook", action: "open" },
   { app: "outlook", action: "calendar.open" },
   { app: "outlook", action: "notifications.snapshot" },
@@ -202,6 +207,11 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
         actionId: plan.action.id,
         scripts: {
           slackExtractorScript: slackExtractorScript(),
+          calendarExtractorScript: calendarExtractorScript({
+            app: sourceStep.app || plan.app.id,
+            kind: plan.action.id,
+            includePatterns: sourceStep.includePatterns || [],
+          }),
           microsoftExtractorScript: microsoftExtractorScript({
             app: sourceStep.app || plan.app.id,
             kind: plan.action.id,
@@ -312,8 +322,8 @@ function renderDefaultOpenBundle() {
 function renderDefaultStaleRefresh() {
   return [
     "default app automation stale-refresh flow:",
-    "1. app_automation_snapshots_staleness checks Slack, Outlook, Teams, and canvas freshness.",
-    "2. app_automation_refresh_stale_run_once runs only standard Slack/Outlook/Teams refresh actions whose app snapshots are stale or missing.",
+    "1. app_automation_snapshots_staleness checks Slack, Calendar, Outlook, Teams, and canvas freshness.",
+    "2. app_automation_refresh_stale_run_once runs only standard Slack/Calendar/Outlook/Teams refresh actions whose app snapshots are stale or missing.",
     "Use dryRun=true first to preview stale-refresh decisions before browser automation.",
   ].join("\n");
 }
@@ -381,7 +391,7 @@ export default function appAutomationExtension(pi) {
     name: `${TOOL_PREFIX}_list`,
     label: "App Automation List",
     description: "List blessed API-less web app automation configs and their available high-level actions.",
-    promptSnippet: "Discover blessed app automation configs for Slack, Outlook, Teams, and canvas workflows before using raw Playwright/Tendril.",
+    promptSnippet: "Discover blessed app automation configs for Slack, Calendar, Outlook, Teams, and canvas workflows before using raw Playwright/Tendril.",
     parameters: Type.Object({
       includeActions: Type.Optional(Type.Boolean({ description: "Include action summaries. Defaults to true." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
@@ -461,7 +471,7 @@ export default function appAutomationExtension(pi) {
     }),
     async execute(_toolCallId, params) {
       const catalog = await resolveCatalog(params);
-      const wantedIds = params.apps?.length ? params.apps.map((app) => String(app)) : ["slack", "outlook", "teams", "canvas"];
+      const wantedIds = params.apps?.length ? params.apps.map((app) => String(app)) : ["slack", "calendar", "outlook", "teams", "canvas"];
       const apps = wantedIds
         .map((id) => catalog.apps.find((app) => app.id === id))
         .filter(Boolean)
@@ -602,8 +612,8 @@ export default function appAutomationExtension(pi) {
   pi.registerTool({
     name: `${TOOL_PREFIX}_open_bundle_run_once`,
     label: "App Automation Open Bundle Run Once",
-    description: "Open the standard Slack, Outlook, and Teams browser surfaces once without snapshot extraction or periodic timers.",
-    promptSnippet: "Use this to warm or verify authenticated Slack, Outlook mail/calendar, and Teams browser sessions before live snapshot automation.",
+    description: "Open the standard Slack, Calendar, Outlook, and Teams browser surfaces once without snapshot extraction or periodic timers.",
+    promptSnippet: "Use this to warm or verify authenticated Slack, Calendar, Outlook mail/calendar, and Teams browser sessions before live snapshot automation.",
     parameters: Type.Object({
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default open bundle." }))),
       actions: Type.Optional(Type.Array(Type.String({ description: "Optional open action ids to include from the default open bundle." }))),
@@ -648,8 +658,8 @@ export default function appAutomationExtension(pi) {
   pi.registerTool({
     name: `${TOOL_PREFIX}_refresh_bundle_run_once`,
     label: "App Automation Refresh Bundle Run Once",
-    description: "Run the standard Slack, Outlook, and Teams snapshot refresh bundle once without starting periodic timers.",
-    promptSnippet: "Use this when you need an explicit refresh-now pass for Slack, Outlook mail/calendar, and Teams notification/calendar snapshots without arming timers.",
+    description: "Run the standard Slack, Calendar, Outlook, and Teams snapshot refresh bundle once without starting periodic timers.",
+    promptSnippet: "Use this when you need an explicit refresh-now pass for Slack, Calendar, Outlook mail/calendar, and Teams notification/calendar snapshots without arming timers.",
     parameters: Type.Object({
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default bundle." }))),
       actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to include from the default bundle." }))),
@@ -694,7 +704,7 @@ export default function appAutomationExtension(pi) {
   pi.registerTool({
     name: `${TOOL_PREFIX}_refresh_stale_run_once`,
     label: "App Automation Refresh Stale Run Once",
-    description: "Run standard Slack, Outlook, and Teams snapshot refresh actions once only for apps whose snapshots are stale or missing.",
+    description: "Run standard Slack, Calendar, Outlook, and Teams snapshot refresh actions once only for apps whose snapshots are stale or missing.",
     promptSnippet: "Use this when you want to refresh only stale or missing work-app snapshots instead of running the full bundle.",
     parameters: Type.Object({
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to check. Defaults to the standard refresh bundle apps." }))),
@@ -748,8 +758,8 @@ export default function appAutomationExtension(pi) {
   pi.registerTool({
     name: `${TOOL_PREFIX}_refresh_bundle_start`,
     label: "App Automation Refresh Bundle Start",
-    description: "Start a standard bundle of Slack, Outlook, and Teams snapshot refreshers from the blessed catalog.",
-    promptSnippet: "Use this to keep Slack, Outlook mail/calendar, and Teams notification/calendar snapshots current without starting each refresher individually.",
+    description: "Start a standard bundle of Slack, Calendar, Outlook, and Teams snapshot refreshers from the blessed catalog.",
+    promptSnippet: "Use this to keep Slack, Calendar, Outlook mail/calendar, and Teams notification/calendar snapshots current without starting each refresher individually.",
     parameters: Type.Object({
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include from the default bundle." }))),
       actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to include from the default bundle." }))),
@@ -893,7 +903,7 @@ export default function appAutomationExtension(pi) {
       const root = stateRoot();
       const report = await snapshotStalenessReport({
         root,
-        apps: params.apps?.length ? params.apps : ["slack", "outlook", "teams", "canvas"],
+        apps: params.apps?.length ? params.apps : ["slack", "calendar", "outlook", "teams", "canvas"],
         staleAfterMinutes: params.staleAfterMinutes || 60,
       });
       return textResult(renderSnapshotStaleness(report), { staleness: report });
@@ -977,7 +987,7 @@ export default function appAutomationExtension(pi) {
         return;
       }
       if (words[0] === "overview") {
-        const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "outlook", "teams", "canvas"];
+        const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "calendar", "outlook", "teams", "canvas"];
         const apps = wantedIds
           .map((id) => catalog.apps.find((app) => app.id === id))
           .filter(Boolean)
@@ -995,7 +1005,7 @@ export default function appAutomationExtension(pi) {
         return;
       }
       if (words[0] === "staleness") {
-        const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "outlook", "teams", "canvas"];
+        const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "calendar", "outlook", "teams", "canvas"];
         const report = await snapshotStalenessReport({ root: stateRoot(), apps: wantedIds, staleAfterMinutes: 60 });
         ctx.ui.notify(renderSnapshotStaleness(report), "info");
         return;

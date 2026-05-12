@@ -105,6 +105,40 @@ export const BLESSED_APPS = [
     ],
   },
   {
+    id: "calendar",
+    label: "Calendar Web",
+    url: "https://calendar.google.com/calendar/u/0/r",
+    category: "calendar",
+    auth: { strategy: "reuse-browser-session", notes: ["Use existing browser auth for the operator's preferred web calendar where available."] },
+    actions: [
+      {
+        id: "open",
+        label: "Open calendar",
+        mode: "interactive",
+        driver: "playwright",
+        description: "Open or reuse a web calendar in a Playwright-controlled browser.",
+        outputs: ["browser-session"],
+        plan: [
+          { kind: "browser.open", url: "https://calendar.google.com/calendar/u/0/r", reuseSession: true },
+          { kind: "wait", condition: "calendar-or-login-visible" },
+        ],
+      },
+      {
+        id: "events.snapshot",
+        label: "Snapshot calendar events",
+        mode: "read",
+        driver: "playwright",
+        description: "Conservative read-only normalization of visible web calendar events into canonical JSON and Markdown.",
+        outputs: ["snapshots/calendar/events.snapshot.json", "snapshots/calendar/events.snapshot.md"],
+        plan: [
+          { kind: "browser.open", url: "https://calendar.google.com/calendar/u/0/r", reuseSession: true },
+          { kind: "dom.extract", script: "calendarExtractorScript", output: "calendar-events-extraction.json", app: "calendar", includePatterns: ["meeting", "event", "calendar", "today", "tomorrow", "starts", "join", "busy", "free"] },
+          { kind: "generic.notifications.snapshot", app: "calendar", includePatterns: ["meeting", "event", "calendar", "today", "tomorrow", "starts", "join", "busy", "free"] },
+        ],
+      },
+    ],
+  },
+  {
     id: "outlook",
     label: "Outlook Web",
     url: "https://outlook.office.com/mail/",

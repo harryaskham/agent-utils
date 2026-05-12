@@ -27,6 +27,7 @@ import {
   renderSnapshotStaleness,
   snapshotStalenessReport,
 } from "../extensions/app-automation/artifacts.js";
+import { calendarExtractorScript } from "../extensions/app-automation/calendar.js";
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
@@ -45,11 +46,12 @@ import {
   slackExtractorScript,
 } from "../extensions/app-automation/slack.js";
 
-test("app automation catalog includes Slack, canvas, Outlook, and Teams", () => {
+test("app automation catalog includes Slack, canvas, calendar, Outlook, and Teams", () => {
   const apps = listAppConfigs();
-  assert.deepEqual(apps.map((app) => app.id), ["slack", "canvas", "outlook", "teams"]);
+  assert.deepEqual(apps.map((app) => app.id), ["slack", "canvas", "calendar", "outlook", "teams"]);
   assert.match(renderAppList(apps), /slack: Slack Web/);
   assert.match(renderAppList(apps), /canvas: Markdown canvas sync/);
+  assert.match(renderAppList(apps), /calendar: Calendar Web/);
 });
 
 test("Slack notification plan is deterministic, read-only, and snapshot-oriented", () => {
@@ -223,6 +225,17 @@ test("Slack notification snapshot parses unread and mention lines", () => {
   assert.match(slackExtractorScript(), /querySelectorAll/);
 });
 
+test("calendar app exposes open and events snapshot actions", () => {
+  const calendar = listAppConfigs().find((app) => app.id === "calendar");
+  assert.deepEqual(calendar.actions.map((action) => action.id), ["open", "events.snapshot"]);
+  const openPlan = buildActionPlan({ app: "calendar", action: "open", params: { session: "agent" } });
+  const snapshotPlan = buildActionPlan({ app: "calendar", action: "events.snapshot", params: { session: "agent" } });
+  assert.equal(openPlan.execution.executable, true);
+  assert.equal(snapshotPlan.execution.executable, true);
+  assert.deepEqual(snapshotPlan.execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "generic.notifications.snapshot"]);
+  assert.match(calendarExtractorScript({ includePatterns: ["meeting"] }), /includePatterns/);
+});
+
 test("Outlook and Teams expose concrete notification and calendar snapshot actions", () => {
   const outlook = listAppConfigs().find((app) => app.id === "outlook");
   const teams = listAppConfigs().find((app) => app.id === "teams");
@@ -299,6 +312,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_run`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_open_bundle_run_once`/);
   assert.match(source, /DEFAULT_OPEN_BUNDLE/);
+  assert.match(source, /calendarExtractorScript/);
   assert.match(source, /Return planned open bundle actions/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_start`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_refresh_bundle_start`/);

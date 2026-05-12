@@ -26,8 +26,8 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 - `app_automation_plan` — return the deterministic plan for an app/action without executing browser automation.
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
 - `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
-- `app_automation_open_bundle_run_once` — open Slack, Outlook mail/calendar, and Teams browser surfaces once to warm authenticated sessions.
-- `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_stale_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including standard Slack/Outlook/Teams bundle start, one-shot, and stale-only refresh paths.
+- `app_automation_open_bundle_run_once` — open Slack, Calendar, Outlook mail/calendar, and Teams browser surfaces once to warm authenticated sessions.
+- `app_automation_refresh_start` / `app_automation_refresh_bundle_start` / `app_automation_refresh_bundle_run_once` / `app_automation_refresh_stale_run_once` / `app_automation_refresh_status` / `app_automation_refresh_stop` — manage non-overlapping Pi-session-local periodic app action refreshes, including standard Slack/Calendar/Outlook/Teams bundle start, one-shot, and stale-only refresh paths.
 - `app_automation_snapshots_list` / `app_automation_snapshots_digest` / `app_automation_snapshots_staleness` / `app_automation_snapshots_cleanup_plan` / `app_automation_snapshot_read` — list, summarize, freshness-check, cleanup-plan, and read persisted JSON/Markdown/text/HTML snapshot artifacts under the state root without ad-hoc filesystem access.
 - `/tendril-app [doctor|overview|staleness|bundle|open-bundle|stale-refresh|app action]` — operator/agent-facing command for quick diagnostics, work-app overview, snapshot freshness, default bundle discovery, and app/action planning.
 
@@ -37,7 +37,7 @@ For Slack, Outlook, Teams, calendars, and canvas/editor work, prefer this sequen
 
 1. **Diagnose setup** — run `app_automation_doctor` or `/tendril-app doctor` to confirm the catalog, state root, Playwright CLI, and standard action executability.
 2. **Orient on current state** — run `app_automation_overview` or `/tendril-app overview` to see apps, active refreshers, freshness, and recent snapshot digests.
-3. **Preview browser churn** — run `app_automation_open_bundle_run_once` with `dryRun: true` before opening Slack, Outlook mail/calendar, and Teams surfaces.
+3. **Preview browser churn** — run `app_automation_open_bundle_run_once` with `dryRun: true` before opening Slack, Calendar, Outlook mail/calendar, and Teams surfaces.
 4. **Warm sessions when needed** — run `app_automation_open_bundle_run_once` without `dryRun` if auth/session state is likely stale; inspect `auth-required.json` diagnostics if login is needed.
 5. **Refresh only what is stale** — run `app_automation_refresh_stale_run_once` with `dryRun: true`, then without `dryRun` when the stale/missing decisions look right.
 6. **Force a full refresh only when necessary** — use `app_automation_refresh_bundle_run_once` for an explicit all-app refresh, or `app_automation_refresh_bundle_start` for periodic refreshers.
@@ -73,16 +73,17 @@ Outputs:
 
 The implementation performs the source/export/persist part and records whether the artifact is `exported` or `ready_for_browser_sync`. When `targetUrl` and `targetSelector` are provided, the action also plans a `browser.open` followed by an `editor.replace` step that writes a temporary browser-side replacement script for Playwright evaluation.
 
-### Outlook and Teams
+### Calendar, Outlook, and Teams
 
-`outlook` and `teams` provide interactive open actions plus conservative read-only notification and calendar/meeting snapshots:
+`calendar`, `outlook`, and `teams` provide interactive open actions plus conservative read-only notification and calendar/meeting snapshots:
 
 - `open` — open or reuse the primary Outlook/Teams web surface.
-- `calendar.open` — open or reuse the calendar surface.
+- `calendar.open` — open or reuse the Outlook/Teams calendar surface.
+- `events.snapshot` — normalize visible generic web calendar events into canonical JSON and Markdown.
 - `notifications.snapshot` — normalize supplied mail/chat/activity extraction text or JSON into canonical JSON and Markdown.
 - `calendar.snapshot` — normalize supplied calendar/meeting extraction text or JSON into canonical JSON and Markdown.
 
-These examples use the same live extraction shape as Slack: `browser.open`, `dom.extract` with a conservative Microsoft extractor snippet, then `generic.notifications.snapshot` for canonical JSON/Markdown artifacts. They still accept supplied extraction input as a fallback, and selector maintenance can improve behind the same action ids later without changing the artifact contract.
+These examples use the same live extraction shape as Slack: `browser.open`, `dom.extract` with conservative calendar/Microsoft extractor snippets, then `generic.notifications.snapshot` for canonical JSON/Markdown artifacts. They still accept supplied extraction input as a fallback, and selector maintenance can improve behind the same action ids later without changing the artifact contract.
 
 ## Config loader
 
@@ -145,7 +146,7 @@ Agents should run `app_automation_doctor` (or `/tendril-app doctor`) when setup 
 
 Periodic actions stay Pi-native and controllable rather than using daemon-global cron or unmanaged shell loops:
 
-- `app_automation_open_bundle_run_once` opens Slack, Outlook mail/calendar, and Teams browser surfaces once without snapshot extraction or timers, useful for warming authenticated sessions. Pass `dryRun` to inspect planned browser actions first.
+- `app_automation_open_bundle_run_once` opens Slack, Calendar, Outlook mail/calendar, and Teams browser surfaces once without snapshot extraction or timers, useful for warming authenticated sessions. Pass `dryRun` to inspect planned browser actions first.
 - `app_automation_refresh_start` starts one app/action interval and optionally runs immediately.
 - `app_automation_refresh_bundle_start` starts the standard Slack notifications, Outlook mail/calendar, and Teams notification/calendar bundle. It defaults `runImmediately` to `false` so agents can arm the bundle without opening several authenticated apps at once.
 - `app_automation_refresh_bundle_run_once` runs that same standard bundle once without creating timers, for explicit refresh-now workflows. Pass `dryRun` to inspect planned snapshot actions first.
