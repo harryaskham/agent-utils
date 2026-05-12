@@ -37,6 +37,7 @@ import {
   renderSlackNotificationMarkdown,
   slackExtractorScript,
 } from "./app-automation/slack.js";
+import { tendrilCommandSummary } from "./tendril-command.js";
 
 const TOOL_PREFIX = "app_automation";
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 300;
@@ -361,10 +362,11 @@ async function buildRefreshBundleStaleness({ catalog, params = {} } = {}) {
   return snapshotTargetStalenessReport({ root: stateRoot(), targets: stalenessTargets, staleAfterMinutes: params.staleAfterMinutes || 60 });
 }
 
-function renderDoctorReport({ rootSummary, catalog, playwrightCli, actionDiagnostics, cliCheck }) {
+function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, actionDiagnostics, cliCheck }) {
   const lines = [
     `app automation doctor stateRoot=${rootSummary.root} exists=${rootSummary.exists}`,
     `playwrightCli=${playwrightCli}`,
+    `tendrilBridge command=${tendrilBridge.command} remote=${tendrilBridge.remote || "none"} wslTunnel=${tendrilBridge.wslTunnel}`,
     `catalogApps=${catalog.apps.map((app) => app.id).join(",")}`,
   ];
   if (catalog.external?.errors?.length) {
@@ -487,9 +489,11 @@ export default function appAutomationExtension(pi) {
           ? { status: "ok", version: String(result.stdout || "").trim().split(/\r?\n/)[0] || "unknown" }
           : { status: "error", error: String(result.stderr || result.stdout || `exit ${result.code}`).slice(0, 300) };
       }
-      return textResult(renderDoctorReport({ rootSummary, catalog, playwrightCli, actionDiagnostics, cliCheck }), {
+      const tendrilBridge = tendrilCommandSummary();
+      return textResult(renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, actionDiagnostics, cliCheck }), {
         state: rootSummary,
         playwrightCli,
+        tendrilBridge,
         cliCheck,
         actionDiagnostics,
         external: catalog.external,
@@ -1063,7 +1067,7 @@ export default function appAutomationExtension(pi) {
             return { app: target.app, action: target.action, executable: false, error: error.message };
           }
         });
-        ctx.ui.notify(renderDoctorReport({ rootSummary, catalog, playwrightCli: playwrightCliCommand(), actionDiagnostics }), "info");
+        ctx.ui.notify(renderDoctorReport({ rootSummary, catalog, playwrightCli: playwrightCliCommand(), tendrilBridge: tendrilCommandSummary(), actionDiagnostics }), "info");
         return;
       }
       if (words[0] === "overview") {

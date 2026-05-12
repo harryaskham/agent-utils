@@ -34,7 +34,7 @@ The app automation extension is loaded from [`extensions/app-automation.js`](ext
 Available tools:
 
 - `app_automation_list` — list configured apps and high-level actions.
-- `app_automation_doctor` — diagnose catalog/state-root/Playwright CLI setup and standard action executability.
+- `app_automation_doctor` — diagnose catalog/state-root/Playwright CLI setup, Tendril remote/WSL bridge configuration, and standard action executability.
 - `app_automation_overview` — summarize configured work apps, active refreshers, snapshot freshness, standard refresh-action freshness, and latest snapshot digests.
 - `app_automation_plan` — return the deterministic action plan for an app/action without executing browser automation.
 - `app_automation_run` — dry-run or execute deterministic allowlisted runner steps such as `cli.exec`, `tendril.run`, and `snapshot.write`.
