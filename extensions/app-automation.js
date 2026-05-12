@@ -1039,7 +1039,7 @@ export default function appAutomationExtension(pi) {
       artifactLimit: Type.Optional(Type.Number({ description: "Maximum JSON artifacts to scan. Defaults to 100." })),
       linkLimit: Type.Optional(Type.Number({ description: "Maximum links to return. Defaults to 100." })),
       query: Type.Optional(Type.String({ description: "Optional case-insensitive filter over app, kind, artifact path, label, URL, and source context." })),
-      kind: Type.Optional(Type.String({ description: "Optional snapshot kind/action filter, for example notifications.snapshot, events.snapshot, or aliases like notifications/events/calendar." })),
+      kind: Type.Optional(Type.String({ description: "Optional snapshot kind/action filter, for example notifications.snapshot, events.snapshot, or aliases like events/notifications/calendar/mail/chat/mentions/meetings." })),
       freshness: Type.Optional(Type.String({ description: "Optional link freshness filter: fresh, stale, or unknown." })),
       sort: Type.Optional(Type.String({ description: "Optional link sort: newest, oldest, freshest, stalest, app, or kind." })),
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for per-link freshness. Defaults to 60 minutes." })),

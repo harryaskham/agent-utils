@@ -464,6 +464,12 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(eventAliasLinks.kind, "events.snapshot");
   const notificationAliasLinks = await collectSnapshotLinks({ root, app: "all", kind: "notifications", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(notificationAliasLinks.links.length, 3);
+  const chatAliasLinks = await collectSnapshotLinks({ root, app: "all", kind: "chat", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(chatAliasLinks.kind, "notifications.snapshot");
+  assert.equal(chatAliasLinks.links.length, 3);
+  const meetingAliasLinks = await collectSnapshotLinks({ root, app: "all", kind: "meetings", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(meetingAliasLinks.kind, "calendar.snapshot");
+  assert.equal(meetingAliasLinks.links.length, 0);
   const aggregatedLinks = aggregateSnapshotLinkSummaries({
     root,
     snapshotRoot: path.join(root, "snapshots"),
@@ -590,7 +596,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /all/);
   assert.match(source, /query: Type\.Optional/);
   assert.match(source, /kind: Type\.Optional/);
-  assert.match(source, /aliases like notifications\/events\/calendar/);
+  assert.match(source, /aliases like events\/notifications\/calendar\/mail\/chat\/mentions\/meetings/);
   assert.match(source, /parseLinkCommandArgs/);
   assert.match(source, /parseOverviewCommandArgs/);
   assert.match(source, /linkFreshness/);

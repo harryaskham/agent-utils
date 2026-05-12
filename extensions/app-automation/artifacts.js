@@ -203,9 +203,20 @@ function normalizeLinkKind(kind) {
   const aliases = {
     event: "events.snapshot",
     events: "events.snapshot",
+    mail: "notifications.snapshot",
+    email: "notifications.snapshot",
+    inbox: "notifications.snapshot",
+    chat: "notifications.snapshot",
+    chats: "notifications.snapshot",
+    message: "notifications.snapshot",
+    messages: "notifications.snapshot",
+    mention: "notifications.snapshot",
+    mentions: "notifications.snapshot",
     notification: "notifications.snapshot",
     notifications: "notifications.snapshot",
     calendar: "calendar.snapshot",
+    meeting: "calendar.snapshot",
+    meetings: "calendar.snapshot",
   };
   return aliases[value] || value;
 }
