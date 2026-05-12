@@ -11,6 +11,7 @@ import {
   renderPlan,
   stateRoot,
 } from "./app-automation/catalog.js";
+import { syncMarkdownCanvas } from "./app-automation/canvas.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -77,6 +78,18 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
         markdownPath,
         extractorPath,
         counts: snapshot.counts,
+      });
+      continue;
+    }
+    if (step.internal === "canvas.sync-markdown") {
+      const metadata = await syncMarkdownCanvas(plan.params, { snapshotDir: plan.snapshotDir });
+      results.push({
+        index: step.index,
+        kind: step.kind,
+        status: "ok",
+        syncStatus: metadata.status,
+        outputs: metadata.outputs,
+        pastePlan: metadata.pastePlan,
       });
       continue;
     }

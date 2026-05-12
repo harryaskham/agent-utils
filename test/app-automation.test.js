@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import {
   renderPlan,
   sanitizeId,
 } from "../extensions/app-automation/catalog.js";
+import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -41,7 +42,10 @@ test("Slack notification plan is deterministic, read-only, and snapshot-oriented
   assert.match(renderPlan(plan), /slack\.notifications\.snapshot/);
 });
 
-test("canvas sync plan reports required parameters before execution exists", () => {
+test("canvas sync plan requires sourcePath and is internally executable", () => {
+  const missing = buildActionPlan({ app: "canvas", action: "sync-markdown" });
+  assert.deepEqual(missing.action.missingParams, ["sourcePath"]);
+
   const plan = buildActionPlan({
     app: "canvas",
     action: "sync-markdown",
@@ -50,14 +54,9 @@ test("canvas sync plan reports required parameters before execution exists", () 
   });
   assert.equal(plan.action.mode, "write");
   assert.equal(plan.action.driver, "playwright-or-tendril");
-  assert.deepEqual(plan.action.missingParams, ["targetUrl", "targetSelector", "exportFormat"]);
-  assert.deepEqual(plan.steps.map((step) => step.kind), [
-    "file.read",
-    "document.export",
-    "browser.open",
-    "editor.replace",
-    "snapshot.write",
-  ]);
+  assert.deepEqual(plan.action.missingParams, []);
+  assert.deepEqual(plan.steps.map((step) => step.kind), ["canvas.sync-markdown"]);
+  assert.equal(plan.execution.executable, true);
 });
 
 test("external JSON app configs load and override built-ins by id", async () => {
@@ -92,6 +91,24 @@ test("execution plan allows Slack notification snapshot internal runner", () => 
   const execution = buildExecutionPlan(plan);
   assert.equal(execution.executable, true);
   assert.deepEqual(execution.blockedSteps, []);
+});
+
+test("canvas sync writes Markdown, HTML, paste text, and sync metadata", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `canvas-sync-${Date.now()}`), { recursive: true });
+  const sourcePath = path.join(root, "notes.md");
+  const snapshotDir = path.join(root, "snapshots");
+  await mkdir(snapshotDir, { recursive: true });
+  await writeFile(sourcePath, "# Hello\n\nCanvas body", "utf8");
+  const metadata = await syncMarkdownCanvas({ sourcePath, targetUrl: "https://example.invalid", targetSelector: "[contenteditable]" }, {
+    snapshotDir,
+    cwd: root,
+    now: new Date("2026-05-12T00:00:00Z"),
+  });
+  assert.equal(metadata.status, "ready_for_browser_sync");
+  assert.equal(buildCanvasPastePlan({}).executable, false);
+  assert.match(await readFile(metadata.outputs.html, "utf8"), /Canvas body/);
+  assert.match(await readFile(metadata.outputs.sync, "utf8"), /ready_for_browser_sync/);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("Slack notification snapshot parses unread and mention lines", () => {

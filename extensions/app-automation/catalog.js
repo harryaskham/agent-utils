@@ -89,15 +89,11 @@ export const BLESSED_APPS = [
         label: "Export Markdown and sync to canvas",
         mode: "write",
         driver: "playwright-or-tendril",
-        description: "Render Markdown via pandoc or a configured exporter and paste/import it into a web canvas/editor target.",
-        params: ["sourcePath", "targetUrl", "targetSelector", "exportFormat"],
-        outputs: ["snapshots/canvas/latest.md", "snapshots/canvas/latest.html", "snapshots/canvas/sync.json"],
+        description: "Render Markdown to canonical artifacts and prepare a browser paste/import plan for a web canvas/editor target.",
+        params: ["sourcePath"],
+        outputs: ["snapshots/canvas/latest.md", "snapshots/canvas/latest.html", "snapshots/canvas/paste.txt", "snapshots/canvas/sync.json"],
         plan: [
-          { kind: "file.read", param: "sourcePath" },
-          { kind: "document.export", command: "pandoc", formatParam: "exportFormat", defaultFormat: "html" },
-          { kind: "browser.open", urlParam: "targetUrl", reuseSession: true },
-          { kind: "editor.replace", selectorParam: "targetSelector", input: "exported-document" },
-          { kind: "snapshot.write", format: ["json", "markdown", "html"], name: "canvas-sync" },
+          { kind: "canvas.sync-markdown" },
         ],
       },
     ],
@@ -290,6 +286,7 @@ export function buildStepCommand(step, params = {}) {
   }
   if (step.kind === "snapshot.write") return { executable: true, internal: "snapshot.write", args: [] };
   if (step.kind === "slack.notifications.snapshot") return { executable: true, internal: "slack.notifications.snapshot", args: [] };
+  if (step.kind === "canvas.sync-markdown") return { executable: true, internal: "canvas.sync-markdown", args: [] };
   return { executable: false, reason: `no runner for step kind: ${step.kind || "unknown"}` };
 }
 

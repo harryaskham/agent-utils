@@ -44,13 +44,16 @@ Slack auth should reuse a Playwright/browser profile or an already-authenticated
 
 `canvas` is a generic Markdown-to-editor sync profile. Its first action is:
 
-- `sync-markdown` — read Markdown, export with `pandoc` or a configured renderer, open a target URL, replace/paste into a target selector, and persist sync metadata.
+- `sync-markdown` — read Markdown, export to deterministic HTML/paste artifacts, and prepare a browser paste/import plan for a target URL and selector when supplied.
 
-Planned outputs:
+Outputs:
 
 - `snapshots/canvas/latest.md`
 - `snapshots/canvas/latest.html`
+- `snapshots/canvas/paste.txt`
 - `snapshots/canvas/sync.json`
+
+The current implementation performs the source/export/persist part and records whether the artifact is `exported` or `ready_for_browser_sync`. Actual browser paste/import execution remains behind the app-specific Playwright/Tendril driver follow-up.
 
 ### Outlook and Teams
 
@@ -92,6 +95,7 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - `tendril.run` builds a structured `tendril run --window <target> <dsl>` invocation.
    - `snapshot.write` persists run metadata under the app snapshot directory.
    - `slack.notifications.snapshot` normalizes Slack extraction text/JSON and writes canonical JSON, Markdown, and the browser-side extractor snippet.
+   - `canvas.sync-markdown` reads Markdown and writes canonical Markdown, HTML, paste text, and sync metadata with a browser paste plan.
    - high-level steps such as `browser.open`, `dom.extract`, `document.export`, and `editor.replace` remain planned until app-specific driver beads implement them.
 4. **App-specific execution** lands behind the same plan vocabulary:
    - Prefer Playwright DOM extraction for structured read-only snapshots.
