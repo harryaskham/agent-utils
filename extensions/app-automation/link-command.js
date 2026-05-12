@@ -32,6 +32,11 @@ export function parseLinkCommandFilters(words = []) {
       filters.linkLimit = Number(limitMatch[1]);
       continue;
     }
+    const staleAfterMatch = lower.match(/^(?:stale-after|staleafter|stale-after-minutes|staleafterminutes)[:=](\d+)$/);
+    if (staleAfterMatch && !filters.staleAfterMinutes) {
+      filters.staleAfterMinutes = Number(staleAfterMatch[1]);
+      continue;
+    }
     queryWords.push(text);
   }
   filters.query = queryWords.join(" ");
