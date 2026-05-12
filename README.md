@@ -28,7 +28,7 @@ Available tools:
 
 - `app_automation_list` — list configured apps and high-level actions.
 - `app_automation_doctor` — diagnose catalog/state-root/Playwright CLI setup and standard action executability.
-- `app_automation_overview` — summarize configured work apps, active refreshers, and latest snapshot digests.
+- `app_automation_overview` — summarize configured work apps, active refreshers, snapshot freshness, and latest snapshot digests.
 - `app_automation_plan` — return the deterministic action plan for an app/action without executing browser automation.
 - `app_automation_run` — dry-run or execute deterministic allowlisted runner steps such as `cli.exec`, `tendril.run`, and `snapshot.write`.
 - `app_automation_open_bundle_run_once` — open Slack, Outlook mail/calendar, and Teams browser surfaces once to warm authenticated sessions; pass `dryRun` to inspect the planned browser actions first.

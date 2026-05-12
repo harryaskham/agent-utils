@@ -288,6 +288,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /renderDoctorReport/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
+  assert.match(source, /includeStaleness/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_plan`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_run`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_open_bundle_run_once`/);
@@ -310,6 +311,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /registerCommand\("tendril-app"/);
   assert.match(source, /words\[0\] === "doctor"/);
   assert.match(source, /words\[0\] === "overview"/);
+  assert.match(source, /snapshotStalenessReport/);
   assert.match(source, /words\[0\] === "bundle"/);
   assert.match(source, /words\[0\] === "open-bundle"/);
   assert.match(source, /renderDefaultOpenBundle/);

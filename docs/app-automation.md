@@ -22,7 +22,7 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 
 - `app_automation_list` — list blessed app configs and available high-level actions.
 - `app_automation_doctor` — diagnose catalog errors, state-root existence, Playwright CLI configuration, and standard action executability.
-- `app_automation_overview` — summarize configured work apps, active refreshers, and latest snapshot digests for quick orientation.
+- `app_automation_overview` — summarize configured work apps, active refreshers, snapshot freshness, and latest snapshot digests for quick orientation.
 - `app_automation_plan` — return the deterministic plan for an app/action without executing browser automation.
 - `app_automation_status` — inspect or create the state root used for snapshots and app state.
 - `app_automation_run` — dry-run a plan or execute only deterministic allowlisted steps (`cli.exec`, `tendril.run`, `snapshot.write`).
@@ -126,7 +126,7 @@ Snapshots are persisted under:
 ${APP_AUTOMATION_STATE_ROOT:-~/.local/state/agent-utils/app-automation}/snapshots/<app>/...
 ```
 
-Agents should run `app_automation_doctor` (or `/tendril-app doctor`) when setup is unclear, then prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation and `app_automation_snapshots_staleness`, `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. Each executed action writes a safe `latest-run.json` manifest in its snapshot directory with statuses/counts/paths but without command stdout/stderr. The digest tool extracts compact status/count/action/result/auth-required summaries from JSON artifacts and first-line summaries from text artifacts. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
+Agents should run `app_automation_doctor` (or `/tendril-app doctor`) when setup is unclear, then prefer `app_automation_overview` (or `/tendril-app overview`) for quick orientation including freshness, and `app_automation_snapshots_staleness`, `app_automation_snapshots_list`, `app_automation_snapshots_digest`, and `app_automation_snapshot_read` for deeper inspection. Each executed action writes a safe `latest-run.json` manifest in its snapshot directory with statuses/counts/paths but without command stdout/stderr. The digest tool extracts compact status/count/action/result/auth-required summaries from JSON artifacts and first-line summaries from text artifacts. The read tool only returns readable artifact types (`.json`, `.md`, `.txt`, `.html`) and enforces that paths stay inside the configured state root.
 
 ## Periodic refresh model
 

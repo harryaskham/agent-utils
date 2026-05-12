@@ -274,12 +274,16 @@ function refreshPublicEntry(entry) {
   };
 }
 
-function renderWorkAppOverview({ apps, refreshers, snapshotDigests, root }) {
+function renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, root }) {
   const lines = [`app automation overview stateRoot=${root}`];
   lines.push(`apps: ${apps.map((app) => `${app.id}(${app.actions?.length || 0} actions)`).join(", ") || "none"}`);
   lines.push(refreshers.length
     ? `refreshers: ${refreshers.map((entry) => `${entry.id}:${entry.lastStatus}/runs=${entry.runCount}`).join(", ")}`
     : "refreshers: none");
+  if (snapshotStaleness) {
+    lines.push("staleness:");
+    lines.push(...renderSnapshotStaleness(snapshotStaleness).split("\n").map((line) => `  ${line}`));
+  }
   for (const digest of snapshotDigests) {
     const rendered = renderSnapshotDigest(digest).split("\n").slice(0, 5).join("\n  ");
     lines.push(`${digest.app || "snapshots"}: ${rendered}`);
@@ -439,6 +443,8 @@ export default function appAutomationExtension(pi) {
     parameters: Type.Object({
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include. Defaults to slack, outlook, teams, canvas." }))),
       includeSnapshots: Type.Optional(Type.Boolean({ description: "Include snapshot digest summaries. Defaults to true." })),
+      includeStaleness: Type.Optional(Type.Boolean({ description: "Include fresh/stale/missing snapshot status. Defaults to true." })),
+      staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale snapshots. Defaults to 60 minutes." })),
       snapshotLimitPerApp: Type.Optional(Type.Number({ description: "Readable snapshot artifacts to summarize per app. Defaults to 3." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
     }),
@@ -460,10 +466,16 @@ export default function appAutomationExtension(pi) {
           snapshotDigests.push({ ...digest, app: app.id });
         }
       }
-      return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, root }), {
+      const snapshotStaleness = params.includeStaleness === false ? null : await snapshotStalenessReport({
+        root,
+        apps: apps.map((app) => app.id),
+        staleAfterMinutes: params.staleAfterMinutes || 60,
+      });
+      return textResult(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, root }), {
         apps,
         refreshers,
         snapshotDigests,
+        snapshotStaleness,
         external: catalog.external,
         stateRoot: root,
       });
@@ -860,7 +872,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|bundle|open-bundle|app action]"
+    description: "List, doctor, overview, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor|overview|bundle|open-bundle|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -897,7 +909,8 @@ export default function appAutomationExtension(pi) {
         const refreshers = Array.from(refreshState.refreshers.values())
           .filter((entry) => wantedIds.includes(entry.app))
           .map(refreshPublicEntry);
-        ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, root }), "info");
+        const snapshotStaleness = await snapshotStalenessReport({ root, apps: apps.map((app) => app.id), staleAfterMinutes: 60 });
+        ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotStaleness, root }), "info");
         return;
       }
       if (words[0] === "bundle") {
