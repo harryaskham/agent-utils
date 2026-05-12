@@ -76,6 +76,7 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
   let linkSort;
   let staleAfterMinutes;
   const appTokens = [];
+  const bareQueryTokens = [];
   for (const word of args) {
     const lower = normalizeWord(word);
     if (["links", "--links"].includes(lower)) {
@@ -117,7 +118,14 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
       staleAfterMinutes = Number(staleAfterMatch[1]);
       continue;
     }
-    appTokens.push(word);
+    if (["all", "*"].includes(lower) || appIdSet.has(lower)) {
+      appTokens.push(word);
+    } else {
+      bareQueryTokens.push(word);
+    }
+  }
+  if (includeLinks && !linkQuery && bareQueryTokens.length) {
+    linkQuery = bareQueryTokens.join(" ");
   }
   const wantsAll = appTokens.some((word) => ["all", "*"].includes(normalizeWord(word)));
   const apps = wantsAll
