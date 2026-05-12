@@ -98,6 +98,8 @@ export const BLESSED_APPS = [
         outputs: ["snapshots/canvas/latest.md", "snapshots/canvas/latest.html", "snapshots/canvas/paste.txt", "snapshots/canvas/sync.json"],
         plan: [
           { kind: "canvas.sync-markdown" },
+          { kind: "browser.open", urlParam: "targetUrl", optional: true, reuseSession: true },
+          { kind: "editor.replace", selectorParam: "targetSelector", inputPath: "paste.txt", optional: true },
         ],
       },
     ],
@@ -299,6 +301,10 @@ export function buildStepCommand(step, params = {}) {
     return { executable: true, command, args: ensureArray(step.args).map((arg) => coerceArg(arg, params)) };
   }
   if (step.kind === "dom.extract") return { ...buildDomExtractCommand(step, params), kind: "dom.extract" };
+  if (step.kind === "editor.replace" && step.optional && !params.targetSelector && !step.selector) {
+    return { executable: true, internal: "optional.skip", reason: "optional editor.replace skipped because no selector was supplied" };
+  }
+  if (step.kind === "editor.replace") return { executable: true, internal: "editor.replace", args: [] };
   if (step.kind === "wait") return { executable: true, internal: "wait", args: [] };
   if (step.kind === "snapshot.write") return { executable: true, internal: "snapshot.write", args: [] };
   if (step.kind === "slack.notifications.snapshot") return { executable: true, internal: "slack.notifications.snapshot", args: [] };

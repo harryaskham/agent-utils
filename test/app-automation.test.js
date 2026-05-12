@@ -17,6 +17,7 @@ import {
   sanitizeId,
 } from "../extensions/app-automation/catalog.js";
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
+import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
 import {
   authMissingHint,
@@ -62,8 +63,9 @@ test("canvas sync plan requires sourcePath and is internally executable", () => 
   assert.equal(plan.action.mode, "write");
   assert.equal(plan.action.driver, "playwright-or-tendril");
   assert.deepEqual(plan.action.missingParams, []);
-  assert.deepEqual(plan.steps.map((step) => step.kind), ["canvas.sync-markdown"]);
+  assert.deepEqual(plan.steps.map((step) => step.kind), ["canvas.sync-markdown", "browser.open", "editor.replace"]);
   assert.equal(plan.execution.executable, true);
+  assert.equal(plan.execution.stepCommands[1].internal, "optional.skip");
 });
 
 test("external JSON app configs load and override built-ins by id", async () => {
@@ -126,6 +128,19 @@ test("execution plan wires Slack notification snapshot through browser, DOM extr
   assert.equal(execution.executable, true);
   assert.deepEqual(execution.stepCommands.map((step) => step.kind), ["browser.open", "dom.extract", "slack.notifications.snapshot"]);
   assert.deepEqual(execution.stepCommands[1].args, ["-s=agent", "evaluate", "--script-file", "slackExtractorScript", "--output", "slack-extraction.json"]);
+});
+
+test("canvas sync can build live browser open and editor replace plan", () => {
+  const plan = buildActionPlan({
+    app: "canvas",
+    action: "sync-markdown",
+    params: { sourcePath: "notes.md", targetUrl: "https://example.invalid", targetSelector: "[contenteditable]", session: "agent" },
+  });
+  assert.equal(plan.execution.executable, true);
+  assert.deepEqual(plan.execution.stepCommands.map((step) => step.kind), ["canvas.sync-markdown", "browser.open", "editor.replace"]);
+  assert.deepEqual(plan.execution.stepCommands[1].args, ["-s=agent", "open", "https://example.invalid"]);
+  assert.equal(plan.execution.stepCommands[2].internal, "editor.replace");
+  assert.match(buildEditorReplaceScript({ selector: "[contenteditable]", text: "hello" }), /querySelector/);
 });
 
 test("canvas sync writes Markdown, HTML, paste text, and sync metadata", async () => {

@@ -13,8 +13,9 @@ import {
   stateRoot,
 } from "./app-automation/catalog.js";
 import { syncMarkdownCanvas } from "./app-automation/canvas.js";
+import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
-import { authMissingHint, prepareDomExtractStep } from "./app-automation/playwright-bridge.js";
+import { authMissingHint, prepareDomExtractStep, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import {
   buildSlackNotificationSnapshot,
   renderSlackNotificationMarkdown,
@@ -116,6 +117,22 @@ async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
         outputs,
         count: snapshot.count,
       });
+      continue;
+    }
+    if (step.internal === "editor.replace") {
+      const sourceStep = plan.steps[step.index] || {};
+      const prepared = await prepareEditorReplace({ step: sourceStep, params: plan.params, snapshotDir: plan.snapshotDir });
+      if (!prepared.executable) {
+        results.push({ index: step.index, kind: step.kind, status: "not_executable", reason: prepared.reason });
+        break;
+      }
+      step.command = "playwright-cli";
+      step.args = [...playwrightSessionArgs(plan.params), "evaluate", "--script-file", prepared.scriptPath, "--output", prepared.outputPath];
+      step.scriptPath = prepared.scriptPath;
+      step.outputPath = prepared.outputPath;
+    }
+    if (step.internal === "optional.skip") {
+      results.push({ index: step.index, kind: step.kind, status: "skipped", reason: step.reason });
       continue;
     }
     if (step.internal === "wait") {

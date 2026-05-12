@@ -54,7 +54,7 @@ Outputs:
 - `snapshots/canvas/paste.txt`
 - `snapshots/canvas/sync.json`
 
-The current implementation performs the source/export/persist part and records whether the artifact is `exported` or `ready_for_browser_sync`. Actual browser paste/import execution remains behind the app-specific Playwright/Tendril driver follow-up.
+The implementation performs the source/export/persist part and records whether the artifact is `exported` or `ready_for_browser_sync`. When `targetUrl` and `targetSelector` are provided, the action also plans a `browser.open` followed by an `editor.replace` step that writes a temporary browser-side replacement script for Playwright evaluation.
 
 ### Outlook and Teams
 
@@ -103,7 +103,7 @@ The architecture deliberately keeps a thin bridge between app actions and browse
    - `tendril.run` builds a structured `tendril run --window <target> <dsl>` invocation.
    - `snapshot.write` persists run metadata under the app snapshot directory.
    - `slack.notifications.snapshot` normalizes Slack extraction text/JSON and writes canonical JSON, Markdown, and the browser-side extractor snippet.
-   - `canvas.sync-markdown` reads Markdown and writes canonical Markdown, HTML, paste text, and sync metadata with a browser paste plan.
+   - `canvas.sync-markdown` reads Markdown and writes canonical Markdown, HTML, paste text, and sync metadata with a browser paste plan; `editor.replace` can turn that paste artifact into a browser-side replacement script.
    - `generic.notifications.snapshot` normalizes Outlook/Teams-style supplied extraction text/JSON with conservative include-pattern filters.
    - high-level steps such as `browser.open`, `dom.extract`, `document.export`, and `editor.replace` remain planned until app-specific driver beads implement them.
 4. **App-specific execution** lands behind the same plan vocabulary:

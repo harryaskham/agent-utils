@@ -44,7 +44,7 @@ export function buildCanvasPastePlan(params = {}) {
   if (targetUrl) steps.push({ kind: "browser.open", url: targetUrl, reuseSession: true });
   if (targetSelector) steps.push({ kind: "editor.focus", selector: targetSelector });
   if (targetUrl && targetSelector) {
-    steps.push({ kind: "editor.replace", selector: targetSelector, input: "latest.html", pasteMode });
+    steps.push({ kind: "editor.replace", selector: targetSelector, inputPath: "paste.txt", pasteMode });
   }
   return { targetUrl, targetSelector, pasteMode, executable: Boolean(targetUrl && targetSelector), steps };
 }

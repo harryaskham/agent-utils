@@ -21,6 +21,7 @@ export function playwrightSessionArgs(params = {}) {
 
 export function buildBrowserOpenCommand(step = {}, params = {}, env = process.env) {
   const url = step.url || (step.urlParam ? params[step.urlParam] : undefined) || params.targetUrl;
+  if (!url && step.optional) return { executable: true, internal: "optional.skip", reason: "optional browser.open skipped because no url was supplied" };
   if (!url) return { executable: false, reason: "browser.open requires url or urlParam" };
   return {
     executable: true,
