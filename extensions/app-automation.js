@@ -583,7 +583,7 @@ export default function appAutomationExtension(pi) {
         const links = [];
         let truncated = false;
         for (const app of apps) {
-          const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3 });
+          const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3, staleAfterMinutes: params.staleAfterMinutes || 60 });
           links.push(...summary.links);
           truncated = truncated || summary.truncated;
         }
@@ -1035,9 +1035,10 @@ export default function appAutomationExtension(pi) {
       artifactLimit: Type.Optional(Type.Number({ description: "Maximum JSON artifacts to scan. Defaults to 100." })),
       linkLimit: Type.Optional(Type.Number({ description: "Maximum links to return. Defaults to 100." })),
       query: Type.Optional(Type.String({ description: "Optional case-insensitive filter over app, kind, artifact path, label, and URL." })),
+      staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for per-link freshness. Defaults to 60 minutes." })),
     }),
     async execute(_toolCallId, params) {
-      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100 });
+      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100, staleAfterMinutes: params.staleAfterMinutes || 60 });
       return textResult(renderSnapshotLinks(summary), { links: summary });
     },
   });
@@ -1160,7 +1161,7 @@ export default function appAutomationExtension(pi) {
           const links = [];
           let truncated = false;
           for (const app of apps) {
-            const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: 3 });
+            const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: 3, staleAfterMinutes: 60 });
             links.push(...summary.links);
             truncated = truncated || summary.truncated;
           }
@@ -1173,7 +1174,7 @@ export default function appAutomationExtension(pi) {
         const maybeLimit = Number(words.at(-1));
         const hasLimit = Number.isFinite(maybeLimit) && words.length > 2;
         const queryWords = words.slice(2, hasLimit ? -1 : undefined);
-        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: queryWords.join(" "), linkLimit: hasLimit ? maybeLimit : 100 });
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: queryWords.join(" "), linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }

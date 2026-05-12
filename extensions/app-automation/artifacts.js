@@ -167,7 +167,17 @@ function linkMatchesQuery(link, query) {
     .some((value) => String(value || "").toLowerCase().includes(needle));
 }
 
-export async function collectSnapshotLinks({ root, app, query, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000 } = {}) {
+function linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes = 60, now = new Date() } = {}) {
+  const threshold = Math.max(1, Number(staleAfterMinutes) || 60);
+  const timestamp = snapshotAt || artifactModifiedAt;
+  const thenMs = new Date(timestamp || "").getTime();
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (!Number.isFinite(thenMs) || !Number.isFinite(nowMs)) return { freshness: "unknown", staleAfterMinutes: threshold };
+  const ageMinutes = Math.max(0, Math.round((nowMs - thenMs) / 60000));
+  return { freshness: ageMinutes > threshold ? "stale" : "fresh", ageMinutes, staleAfterMinutes: threshold };
+}
+
+export async function collectSnapshotLinks({ root, app, query, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const listed = await listSnapshotArtifacts({ root, app, limit: artifactLimit });
   const links = [];
   for (const artifact of listed.artifacts.filter((entry) => entry.extension === ".json")) {
@@ -180,6 +190,8 @@ export async function collectSnapshotLinks({ root, app, query, artifactLimit = 1
       rowIndex += 1;
       const urls = rowUrls(row);
       for (const url of urls) {
+        const snapshotAt = snapshotTimestamp(value);
+        const artifactModifiedAt = artifact.modifiedAt;
         const link = {
           app: value.app || app || artifact.relativePath.split("/")[1] || "unknown",
           kind: value.kind || value.action || null,
@@ -187,8 +199,9 @@ export async function collectSnapshotLinks({ root, app, query, artifactLimit = 1
           row: rowIndex,
           label: snapshotLinkLabel(row, `${artifact.relativePath}#${rowIndex}`),
           url,
-          snapshotAt: snapshotTimestamp(value),
-          artifactModifiedAt: artifact.modifiedAt,
+          snapshotAt,
+          artifactModifiedAt,
+          ...linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes, now }),
         };
         if (!linkMatchesQuery(link, query)) continue;
         links.push(link);
@@ -214,7 +227,7 @@ export function renderSnapshotDigest(summary) {
 export function renderSnapshotLinks(summary) {
   if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
   if (!summary.links.length) return `No snapshot links found at ${summary.snapshotRoot}.`;
-  const lines = summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""})`);
+  const lines = summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`);
   if (summary.truncated) lines.push(`truncated at ${summary.links.length} links`);
   return lines.join("\n");
 }
