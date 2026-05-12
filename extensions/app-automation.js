@@ -555,6 +555,7 @@ export default function appAutomationExtension(pi) {
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale snapshots. Defaults to 60 minutes." })),
       snapshotLimitPerApp: Type.Optional(Type.Number({ description: "Readable snapshot artifacts to summarize per app. Defaults to 3." })),
       linkLimitPerApp: Type.Optional(Type.Number({ description: "Snapshot links to include per app when includeLinks is true. Defaults to 3." })),
+      linkSort: Type.Optional(Type.String({ description: "Optional sort for per-app overview links: newest, oldest, freshest, stalest, app, or kind." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
     }),
     async execute(_toolCallId, params) {
@@ -585,7 +586,7 @@ export default function appAutomationExtension(pi) {
       if (params.includeLinks) {
         const summaries = [];
         for (const app of apps) {
-          summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3, staleAfterMinutes: params.staleAfterMinutes || 60 }));
+          summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: params.linkLimitPerApp || 3, sort: params.linkSort, staleAfterMinutes: params.staleAfterMinutes || 60 }));
         }
         snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries });
       }
@@ -1119,7 +1120,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [link-limit:<n>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1164,7 +1165,7 @@ export default function appAutomationExtension(pi) {
         if (overviewArgs.includeLinks) {
           const summaries = [];
           for (const app of apps) {
-            summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: overviewArgs.linkLimitPerApp || 3, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 }));
+            summaries.push(await collectSnapshotLinks({ root, app: app.id, linkLimit: overviewArgs.linkLimitPerApp || 3, sort: overviewArgs.linkSort, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 }));
           }
           snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries });
         }

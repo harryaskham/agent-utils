@@ -330,10 +330,11 @@ test("/tendril-app overview parser keeps links option out of app ids", () => {
     includeLinks: true,
     apps: ["slack"],
   });
-  assert.deepEqual(parseOverviewCommandArgs(["link-limit:5", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
+  assert.deepEqual(parseOverviewCommandArgs(["link-limit:5", "link-sort:newest", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
     includeLinks: true,
     apps: ["calendar"],
     linkLimitPerApp: 5,
+    linkSort: "newest",
     staleAfterMinutes: 1440,
   });
 });
@@ -558,6 +559,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /aliases like notifications\/events\/calendar/);
   assert.match(source, /parseLinkCommandArgs/);
   assert.match(source, /parseOverviewCommandArgs/);
+  assert.match(source, /linkSort/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /sort: Type\.Optional/);
   assert.match(source, /staleAfterMinutes: Type\.Optional/);
