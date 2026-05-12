@@ -44,6 +44,7 @@
       "./extensions/pi-graphics.js",
       "./extensions/firecracker-vm.js",
       "./extensions/realtime-agent.js",
+      "./extensions/pi-self-update.js",
       "./extensions/tendril-share.js",
       "./extensions/app-automation.js"
     ],
