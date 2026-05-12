@@ -186,7 +186,7 @@ export async function digestSnapshotArtifacts({ root, app, limit = 20, maxBytes 
 function linkMatchesQuery(link, query) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle) return true;
-  return [link.app, link.kind, link.artifact, link.label, link.url]
+  return [link.app, link.kind, link.artifact, link.label, link.url, ...Object.values(link.context || {})]
     .some((value) => String(value || "").toLowerCase().includes(needle));
 }
 

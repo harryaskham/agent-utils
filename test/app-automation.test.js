@@ -337,6 +337,9 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.match(renderSnapshotLinks(links), /links total=2 fresh=2 stale=0 unknown=0/);
   assert.match(renderSnapshotLinks(links), /#general: https:\/\/app\.slack\.com\/client\/T\/C/);
   assert.match(renderSnapshotLinks(links), /context=source:"#general" from:"Ops Bot" time:"00:10"/);
+  const contextFilteredLinks = await collectSnapshotLinks({ root, app: "slack", query: "Ops Bot", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(contextFilteredLinks.links.length, 2);
+  assert.ok(contextFilteredLinks.links.every((link) => link.context.from === "Ops Bot"));
   assert.equal(links.links[0].snapshotAt, "2026-05-12T00:00:00Z");
   assert.equal(links.links[0].freshness, "fresh");
   assert.equal(links.links[0].ageMinutes, 30);
