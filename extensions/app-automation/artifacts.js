@@ -59,6 +59,26 @@ export async function readSnapshotArtifact({ root, file, maxBytes = 64_000 } = {
   return { path: fullPath, relativePath: relativeTo(root, fullPath), size: info.size, modifiedAt: info.mtime.toISOString(), truncated, content, extension };
 }
 
+function countSnapshotLinks(value) {
+  const rows = [];
+  if (Array.isArray(value.items)) rows.push(...value.items);
+  if (Array.isArray(value.notifications)) rows.push(...value.notifications);
+  let links = 0;
+  let linkItems = 0;
+  for (const row of rows) {
+    const rowLinks = new Set();
+    if (row?.url) rowLinks.add(row.url);
+    if (Array.isArray(row?.urls)) {
+      for (const url of row.urls) if (url) rowLinks.add(url);
+    }
+    if (rowLinks.size) {
+      linkItems += 1;
+      links += rowLinks.size;
+    }
+  }
+  return { links, linkItems };
+}
+
 function summarizeJson(value) {
   const parts = [];
   if (value.app) parts.push(`app=${value.app}`);
@@ -72,6 +92,8 @@ function summarizeJson(value) {
     if (counts) parts.push(`counts=${counts}`);
   }
   if (Array.isArray(value.items)) parts.push(`items=${value.items.length}`);
+  const linkCounts = countSnapshotLinks(value);
+  if (linkCounts.links) parts.push(`links=${linkCounts.links}`, `linkItems=${linkCounts.linkItems}`);
   if (Array.isArray(value.results)) {
     parts.push(`results=${value.results.length}`);
     const authRequired = value.results.filter((result) => result?.authRequired).length;

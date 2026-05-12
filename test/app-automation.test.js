@@ -299,7 +299,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const slackDir = path.join(root, "snapshots", "slack");
   await mkdir(slackDir, { recursive: true });
   await writeFile(path.join(slackDir, "notifications.md"), "# Slack\n", "utf8");
-  await writeFile(path.join(slackDir, "notifications.json"), JSON.stringify({ app: "slack", kind: "notifications.snapshot", status: "ok", counts: { items: 2 } }), "utf8");
+  await writeFile(path.join(slackDir, "notifications.json"), JSON.stringify({ app: "slack", kind: "notifications.snapshot", status: "ok", counts: { items: 2 }, notifications: [{ text: "#general", url: "https://app.slack.com/client/T/C", urls: ["https://app.slack.com/client/T/C", "https://app.slack.com/client/T/D"] }] }), "utf8");
   await writeFile(path.join(slackDir, "latest-run.json"), JSON.stringify({ app: "slack", action: "notifications.snapshot", status: "error", results: [{ status: "error", authRequired: true }, { status: "ok" }] }), "utf8");
   await writeFile(path.join(slackDir, "auth-required.json"), JSON.stringify({ app: "slack", action: "notifications.snapshot", status: "auth_required", detectedAt: "2026-05-12T00:00:00Z" }), "utf8");
   await writeFile(path.join(slackDir, "extractor.js"), "secret-ish helper should not be listed", "utf8");
@@ -311,6 +311,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const digest = await digestSnapshotArtifacts({ root, app: "slack" });
   const renderedDigest = renderSnapshotDigest(digest);
   assert.match(renderedDigest, /counts=items=2/);
+  assert.match(renderedDigest, /links=2 linkItems=1/);
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
   const staleness = await snapshotStalenessReport({ root, apps: ["slack", "outlook"], staleAfterMinutes: 1, now: new Date(Date.now() + 5 * 60000) });
