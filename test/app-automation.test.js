@@ -329,6 +329,12 @@ test("/tendril-app overview parser keeps links option out of app ids", () => {
     includeLinks: true,
     apps: ["slack"],
   });
+  assert.deepEqual(parseOverviewCommandArgs(["link-limit:5", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
+    includeLinks: true,
+    apps: ["calendar"],
+    linkLimitPerApp: 5,
+    staleAfterMinutes: 1440,
+  });
 });
 
 test("/tendril-app link filter parser accepts flexible token order", () => {

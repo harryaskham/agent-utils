@@ -1121,7 +1121,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [link-limit:<n>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1160,14 +1160,14 @@ export default function appAutomationExtension(pi) {
         const refreshers = Array.from(refreshState.refreshers.values())
           .filter((entry) => wantedIds.includes(entry.app))
           .map(refreshPublicEntry);
-        const snapshotStaleness = await snapshotStalenessReport({ root, apps: apps.map((app) => app.id), staleAfterMinutes: 60 });
-        const refreshStaleness = await buildRefreshBundleStaleness({ catalog, params: { apps: wantedIds.filter((id) => id !== "canvas"), staleAfterMinutes: 60 } });
+        const snapshotStaleness = await snapshotStalenessReport({ root, apps: apps.map((app) => app.id), staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 });
+        const refreshStaleness = await buildRefreshBundleStaleness({ catalog, params: { apps: wantedIds.filter((id) => id !== "canvas"), staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 } });
         let snapshotLinks = null;
         if (overviewArgs.includeLinks) {
           const links = [];
           let truncated = false;
           for (const app of apps) {
-            const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: 3, staleAfterMinutes: 60 });
+            const summary = await collectSnapshotLinks({ root, app: app.id, linkLimit: overviewArgs.linkLimitPerApp || 3, staleAfterMinutes: overviewArgs.staleAfterMinutes || 60 });
             links.push(...summary.links);
             truncated = truncated || summary.truncated;
           }

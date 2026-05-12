@@ -68,8 +68,29 @@ export function parseLinkCommandArgs(words = [], { appIds = [] } = {}) {
 export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppIds = [] } = {}) {
   const args = words.map((word) => String(word || "").trim()).filter(Boolean);
   const appIdSet = new Set(appIds.map(normalizeWord).filter(Boolean));
-  const includeLinks = args.some((word) => ["links", "--links"].includes(normalizeWord(word)));
-  const appTokens = args.filter((word) => !["links", "--links"].includes(normalizeWord(word)));
+  let includeLinks = false;
+  let linkLimitPerApp;
+  let staleAfterMinutes;
+  const appTokens = [];
+  for (const word of args) {
+    const lower = normalizeWord(word);
+    if (["links", "--links"].includes(lower)) {
+      includeLinks = true;
+      continue;
+    }
+    const linkLimitMatch = lower.match(/^(?:link-limit|linklimit|links-limit|linkslimit)[:=](\d+)$/);
+    if (linkLimitMatch && !linkLimitPerApp) {
+      includeLinks = true;
+      linkLimitPerApp = Number(linkLimitMatch[1]);
+      continue;
+    }
+    const staleAfterMatch = lower.match(/^(?:stale-after|staleafter|stale-after-minutes|staleafterminutes)[:=](\d+)$/);
+    if (staleAfterMatch && !staleAfterMinutes) {
+      staleAfterMinutes = Number(staleAfterMatch[1]);
+      continue;
+    }
+    appTokens.push(word);
+  }
   const wantsAll = appTokens.some((word) => ["all", "*"].includes(normalizeWord(word)));
   const apps = wantsAll
     ? appIds
@@ -77,5 +98,7 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
   return {
     includeLinks,
     apps: apps.length ? apps : defaultAppIds,
+    ...(linkLimitPerApp ? { linkLimitPerApp } : {}),
+    ...(staleAfterMinutes ? { staleAfterMinutes } : {}),
   };
 }
