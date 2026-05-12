@@ -369,7 +369,9 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(allLinks.links.length, 4);
   assert.deepEqual(allLinks.freshnessCounts, { total: 4, fresh: 4, stale: 0, unknown: 0 });
   assert.deepEqual(allLinks.appCounts, { slack: 3, calendar: 1 });
+  assert.deepEqual(allLinks.kindCounts, { "notifications.snapshot": 3, "events.snapshot": 1 });
   assert.match(renderSnapshotLinks(allLinks), /apps=calendar=1,slack=3/);
+  assert.match(renderSnapshotLinks(allLinks), /kinds=events\.snapshot=1,notifications\.snapshot=3/);
   assert.ok(allLinks.links.some((link) => link.app === "calendar" && link.url === "https://calendar.example/events/standup"));
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);

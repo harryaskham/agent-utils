@@ -225,6 +225,15 @@ function summarizeLinkApps(links = []) {
   return counts;
 }
 
+function summarizeLinkKinds(links = []) {
+  const counts = {};
+  for (const link of links) {
+    const key = String(link.kind || "unknown");
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return counts;
+}
+
 export async function collectSnapshotLinks({ root, app, query, freshness, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const appSelector = normalizeSnapshotAppSelector(app);
   const listed = await listSnapshotArtifacts({ root, app: appSelector, limit: artifactLimit });
@@ -255,11 +264,11 @@ export async function collectSnapshotLinks({ root, app, query, freshness, artifa
         };
         if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness)) continue;
         links.push(link);
-        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), links, truncated: true };
+        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: true };
       }
     }
   }
-  return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), links, truncated: false };
+  return { ...listed, query: query || null, freshness: freshness || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: false };
 }
 
 export function renderArtifactList(summary) {
@@ -291,8 +300,10 @@ export function renderSnapshotLinks(summary) {
   if (!summary.links.length) return `No snapshot links${renderSnapshotLinkFilters(summary)} found at ${summary.snapshotRoot} (scanned ${summary.artifacts?.length || 0} artifacts).`;
   const counts = summary.freshnessCounts || summarizeLinkFreshness(summary.links);
   const appCounts = summary.appCounts || summarizeLinkApps(summary.links);
+  const kindCounts = summary.kindCounts || summarizeLinkKinds(summary.links);
   const appCountsText = Object.entries(appCounts).sort(([a], [b]) => a.localeCompare(b)).map(([app, count]) => `${app}=${count}`).join(",");
-  const lines = [`links total=${counts.total} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${appCountsText ? ` apps=${appCountsText}` : ""}`];
+  const kindCountsText = Object.entries(kindCounts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, count]) => `${kind}=${count}`).join(",");
+  const lines = [`links total=${counts.total} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}`];
   lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${renderSnapshotLinkContext(link.context)}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
   if (summary.truncated) lines.push(`truncated at ${summary.links.length} links`);
   return lines.join("\n");
