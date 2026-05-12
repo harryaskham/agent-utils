@@ -1,3 +1,5 @@
+const LINK_SORTS = new Set(["newest", "oldest", "freshest", "stalest", "app", "kind"]);
+
 export function parseLinkCommandFilters(words = []) {
   const queryWords = [];
   const filters = { query: "" };
@@ -14,6 +16,11 @@ export function parseLinkCommandFilters(words = []) {
     const kindMatch = text.match(/^kind[:=](.+)$/i);
     if (kindMatch && !filters.kind) {
       filters.kind = kindMatch[1];
+      continue;
+    }
+    const sortMatch = lower.match(/^(?:sort|order)[:=](.+)$/);
+    if (sortMatch && !filters.sort && LINK_SORTS.has(sortMatch[1])) {
+      filters.sort = sortMatch[1];
       continue;
     }
     queryWords.push(text);

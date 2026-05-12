@@ -326,9 +326,10 @@ test("/tendril-app link filter parser accepts flexible token order", () => {
     kind: "events.snapshot",
     query: "standup",
   });
-  assert.deepEqual(parseLinkCommandFilters(["Ops", "freshness=stale", "kind=notifications.snapshot", "Bot"]), {
+  assert.deepEqual(parseLinkCommandFilters(["Ops", "freshness=stale", "sort:newest", "kind=notifications.snapshot", "Bot"]), {
     freshness: "stale",
     kind: "notifications.snapshot",
+    sort: "newest",
     query: "Ops Bot",
   });
 });
@@ -392,6 +393,13 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.deepEqual(allLinks.kindCounts, { "notifications.snapshot": 3, "events.snapshot": 1 });
   assert.match(renderSnapshotLinks(allLinks), /apps=calendar=1,slack=3/);
   assert.match(renderSnapshotLinks(allLinks), /kinds=events\.snapshot=1,notifications\.snapshot=3/);
+  const newestLinks = await collectSnapshotLinks({ root, app: "all", sort: "newest", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(newestLinks.sort, "newest");
+  assert.equal(newestLinks.links[0].app, "calendar");
+  assert.match(renderSnapshotLinks(newestLinks), /sort=newest/);
+  const stalestLimitedLinks = await collectSnapshotLinks({ root, app: "all", sort: "stalest", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(stalestLimitedLinks.truncated, true);
+  assert.equal(stalestLimitedLinks.links[0].app, "slack");
   const eventLinks = await collectSnapshotLinks({ root, app: "all", kind: "events.snapshot", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(eventLinks.links.length, 1);
   assert.equal(eventLinks.kind, "events.snapshot");
@@ -491,6 +499,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /kind: Type\.Optional/);
   assert.match(source, /parseLinkCommandFilters/);
   assert.match(source, /freshness: Type\.Optional/);
+  assert.match(source, /sort: Type\.Optional/);
   assert.match(source, /staleAfterMinutes: Type\.Optional/);
   assert.match(source, /snapshotStalenessReport/);
   assert.match(source, /words\[0\] === "staleness"/);

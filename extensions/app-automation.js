@@ -1039,10 +1039,11 @@ export default function appAutomationExtension(pi) {
       query: Type.Optional(Type.String({ description: "Optional case-insensitive filter over app, kind, artifact path, label, URL, and source context." })),
       kind: Type.Optional(Type.String({ description: "Optional exact snapshot kind/action filter, for example notifications.snapshot or events.snapshot." })),
       freshness: Type.Optional(Type.String({ description: "Optional link freshness filter: fresh, stale, or unknown." })),
+      sort: Type.Optional(Type.String({ description: "Optional link sort: newest, oldest, freshest, stalest, app, or kind." })),
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for per-link freshness. Defaults to 60 minutes." })),
     }),
     async execute(_toolCallId, params) {
-      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, freshness: params.freshness, kind: params.kind, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100, staleAfterMinutes: params.staleAfterMinutes || 60 });
+      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, freshness: params.freshness, kind: params.kind, sort: params.sort, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100, staleAfterMinutes: params.staleAfterMinutes || 60 });
       return textResult(renderSnapshotLinks(summary), { links: summary });
     },
   });
@@ -1120,7 +1121,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app|all] [fresh|stale|unknown] [kind:<kind>] [query]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview|links [app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [sort:<order>] [query]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1178,7 +1179,7 @@ export default function appAutomationExtension(pi) {
         const maybeLimit = Number(words.at(-1));
         const hasLimit = Number.isFinite(maybeLimit) && words.length > 2;
         const filters = parseLinkCommandFilters(words.slice(2, hasLimit ? -1 : undefined));
-        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: filters.query, freshness: filters.freshness, kind: filters.kind, linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: words[1], query: filters.query, freshness: filters.freshness, kind: filters.kind, sort: filters.sort, linkLimit: hasLimit ? maybeLimit : 100, staleAfterMinutes: 60 });
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }

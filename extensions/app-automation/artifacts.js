@@ -203,6 +203,50 @@ function linkMatchesKind(link, kind) {
   return String(link.kind || "unknown").toLowerCase() === wanted;
 }
 
+function normalizeLinkSort(sort) {
+  const value = String(sort || "").trim().toLowerCase();
+  return ["newest", "oldest", "freshest", "stalest", "app", "kind"].includes(value) ? value : null;
+}
+
+function linkTimestampMs(link = {}) {
+  const timestamp = link.snapshotAt || link.artifactModifiedAt;
+  const ms = new Date(timestamp || "").getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function compareSnapshotLinks(sort) {
+  const mode = normalizeLinkSort(sort);
+  if (!mode) return null;
+  return (a, b) => {
+    if (mode === "app") {
+      return String(a.app || "").localeCompare(String(b.app || ""))
+        || String(a.kind || "").localeCompare(String(b.kind || ""))
+        || String(a.label || "").localeCompare(String(b.label || ""))
+        || String(a.url || "").localeCompare(String(b.url || ""));
+    }
+    if (mode === "kind") {
+      return String(a.kind || "").localeCompare(String(b.kind || ""))
+        || String(a.app || "").localeCompare(String(b.app || ""))
+        || String(a.label || "").localeCompare(String(b.label || ""))
+        || String(a.url || "").localeCompare(String(b.url || ""));
+    }
+    if (mode === "freshest" || mode === "stalest") {
+      const aAge = Number.isFinite(a.ageMinutes) ? a.ageMinutes : null;
+      const bAge = Number.isFinite(b.ageMinutes) ? b.ageMinutes : null;
+      if (aAge == null && bAge == null) return String(a.url || "").localeCompare(String(b.url || ""));
+      if (aAge == null) return 1;
+      if (bAge == null) return -1;
+      return mode === "freshest" ? aAge - bAge : bAge - aAge;
+    }
+    const aTime = linkTimestampMs(a);
+    const bTime = linkTimestampMs(b);
+    if (aTime == null && bTime == null) return String(a.url || "").localeCompare(String(b.url || ""));
+    if (aTime == null) return 1;
+    if (bTime == null) return -1;
+    return mode === "oldest" ? aTime - bTime : bTime - aTime;
+  };
+}
+
 function linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes = 60, now = new Date() } = {}) {
   const threshold = Math.max(1, Number(staleAfterMinutes) || 60);
   const timestamp = snapshotAt || artifactModifiedAt;
@@ -240,8 +284,9 @@ function summarizeLinkKinds(links = []) {
   return counts;
 }
 
-export async function collectSnapshotLinks({ root, app, query, freshness, kind, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
+export async function collectSnapshotLinks({ root, app, query, freshness, kind, sort, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const appSelector = normalizeSnapshotAppSelector(app);
+  const normalizedSort = normalizeLinkSort(sort);
   const listed = await listSnapshotArtifacts({ root, app: appSelector, limit: artifactLimit });
   const links = [];
   for (const artifact of listed.artifacts.filter((entry) => entry.extension === ".json")) {
@@ -270,11 +315,25 @@ export async function collectSnapshotLinks({ root, app, query, freshness, kind, 
         };
         if (!linkMatchesQuery(link, query) || !linkMatchesFreshness(link, freshness) || !linkMatchesKind(link, kind)) continue;
         links.push(link);
-        if (links.length >= Math.max(1, Number(linkLimit) || 100)) return { ...listed, query: query || null, freshness: freshness || null, kind: kind || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: true };
       }
     }
   }
-  return { ...listed, query: query || null, freshness: freshness || null, kind: kind || null, freshnessCounts: summarizeLinkFreshness(links), appCounts: summarizeLinkApps(links), kindCounts: summarizeLinkKinds(links), links, truncated: false };
+  const compare = compareSnapshotLinks(normalizedSort);
+  if (compare) links.sort(compare);
+  const limit = Math.max(1, Number(linkLimit) || 100);
+  const limitedLinks = links.slice(0, limit);
+  return {
+    ...listed,
+    query: query || null,
+    freshness: freshness || null,
+    kind: kind || null,
+    sort: normalizedSort,
+    freshnessCounts: summarizeLinkFreshness(limitedLinks),
+    appCounts: summarizeLinkApps(limitedLinks),
+    kindCounts: summarizeLinkKinds(limitedLinks),
+    links: limitedLinks,
+    truncated: links.length > limit,
+  };
 }
 
 export function renderArtifactList(summary) {
@@ -310,7 +369,7 @@ export function renderSnapshotLinks(summary) {
   const kindCounts = summary.kindCounts || summarizeLinkKinds(summary.links);
   const appCountsText = Object.entries(appCounts).sort(([a], [b]) => a.localeCompare(b)).map(([app, count]) => `${app}=${count}`).join(",");
   const kindCountsText = Object.entries(kindCounts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, count]) => `${kind}=${count}`).join(",");
-  const lines = [`links total=${counts.total} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}`];
+  const lines = [`links total=${counts.total} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${summary.sort ? ` sort=${summary.sort}` : ""}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}`];
   lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${renderSnapshotLinkContext(link.context)}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
   if (summary.truncated) lines.push(`truncated at ${summary.links.length} links`);
   return lines.join("\n");
