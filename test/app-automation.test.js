@@ -807,6 +807,7 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
   assert.equal(summary.status, "copy_failed");
   assert.equal(summary.failed[0].status, "copy_failed");
   assert.equal(summary.failed[0].errorKind, "connect_timeout");
+  assert.match(renderMsDevCdpRefresh(summary), /ms-dev CDP refresh status=copy_failed .* failed=1 failureErrorKinds=connect_timeout=1/);
   assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=copy_failed errorKind=connect_timeout/);
   const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
   assert.equal(manifest.status, "copy_failed");

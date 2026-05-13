@@ -69,6 +69,16 @@ function classifyBridgeError(error) {
   return null;
 }
 
+function compactCounts(entries = [], field = "errorKind") {
+  const counts = {};
+  for (const entry of entries || []) {
+    const key = compact(entry?.[field], 80);
+    if (!key) continue;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([key, count]) => `${key}=${count}`).join(",");
+}
+
 function sshOptions(connectTimeoutSeconds = DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS) {
   const timeout = Math.max(1, Number.parseInt(String(connectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS);
   return ["-o", "BatchMode=yes", "-o", `ConnectTimeout=${timeout}`];
@@ -585,7 +595,8 @@ export async function runMsDevCdpRefresh({
 export function renderMsDevCdpRefresh(summary = {}) {
   if (summary.status === "not_configured") return `ms-dev CDP refresh not configured: ${summary.reason}`;
   if (summary.status && summary.status !== "ok" && !summary.failed?.length) return `ms-dev CDP refresh ${summary.status}: ${summary.error || summary.stderr || summary.reason || "unknown error"}`;
-  const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}`];
+  const failureErrorKinds = compactCounts(summary.failed || [], "errorKind");
+  const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}`];
   if (summary.manifestPath) lines.push(`manifest=${summary.manifestPath}`);
   for (const snapshot of summary.snapshots || []) {
     lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.authRequired ? " authRequired=true" : ""}`);
