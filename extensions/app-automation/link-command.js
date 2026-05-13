@@ -27,6 +27,11 @@ export function parseLinkCommandFilters(words = []) {
       filters[contextMatch[1].toLowerCase()] = contextMatch[2];
       continue;
     }
+    const hostMatch = text.match(/^(?:host|domain|url-host|urlhost)[:=](.+)$/i);
+    if (hostMatch && !filters.host) {
+      filters.host = hostMatch[1];
+      continue;
+    }
     const sortMatch = lower.match(/^(?:sort|order)[:=](.+)$/);
     if (sortMatch && !filters.sort && LINK_SORTS.has(sortMatch[1])) {
       filters.sort = sortMatch[1];

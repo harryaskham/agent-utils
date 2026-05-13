@@ -1045,13 +1045,14 @@ export default function appAutomationExtension(pi) {
       source: Type.Optional(Type.String({ description: "Optional case-insensitive filter over compact source context such as Slack channel, Teams team, Outlook folder, or calendar name." })),
       from: Type.Optional(Type.String({ description: "Optional case-insensitive filter over compact sender, organizer, or author context." })),
       time: Type.Optional(Type.String({ description: "Optional case-insensitive filter over compact time/date context." })),
+      host: Type.Optional(Type.String({ description: "Optional case-insensitive filter over sanitized link URL hostname, for example meet.google.com, teams.microsoft.com, or app.slack.com." })),
       kind: Type.Optional(Type.String({ description: "Optional snapshot kind/action filter, for example notifications.snapshot, events.snapshot, or aliases like events/notifications/calendar/mail/chat/mentions/meetings." })),
       freshness: Type.Optional(Type.String({ description: "Optional link freshness filter: fresh, stale, or unknown." })),
       sort: Type.Optional(Type.String({ description: "Optional link sort: newest, oldest, freshest, stalest, app, or kind." })),
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for per-link freshness. Defaults to 60 minutes." })),
     }),
     async execute(_toolCallId, params) {
-      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, source: params.source, from: params.from, time: params.time, freshness: params.freshness, kind: params.kind, sort: params.sort, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100, staleAfterMinutes: params.staleAfterMinutes || 60 });
+      const summary = await collectSnapshotLinks({ root: stateRoot(), app: params.app, query: params.query, source: params.source, from: params.from, time: params.time, host: params.host, freshness: params.freshness, kind: params.kind, sort: params.sort, artifactLimit: params.artifactLimit || 100, linkLimit: params.linkLimit || 100, staleAfterMinutes: params.staleAfterMinutes || 60 });
       return textResult(renderSnapshotLinks(summary), { links: summary });
     },
   });
@@ -1129,7 +1130,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1183,7 +1184,7 @@ export default function appAutomationExtension(pi) {
       }
       if (words[0] === "links") {
         const filters = parseLinkCommandArgs(words.slice(1), { appIds: catalog.apps.map((app) => app.id) });
-        const summary = await collectSnapshotLinks({ root: stateRoot(), app: filters.app, query: filters.query, source: filters.source, from: filters.from, time: filters.time, freshness: filters.freshness, kind: filters.kind, sort: filters.sort, linkLimit: filters.linkLimit || 100, staleAfterMinutes: filters.staleAfterMinutes || 60 });
+        const summary = await collectSnapshotLinks({ root: stateRoot(), app: filters.app, query: filters.query, source: filters.source, from: filters.from, time: filters.time, host: filters.host, freshness: filters.freshness, kind: filters.kind, sort: filters.sort, linkLimit: filters.linkLimit || 100, staleAfterMinutes: filters.staleAfterMinutes || 60 });
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }

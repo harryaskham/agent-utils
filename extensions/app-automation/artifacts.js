@@ -207,6 +207,16 @@ function linkMatchesContext(link, filters = {}) {
   return true;
 }
 
+function linkMatchesHost(link, host) {
+  const needle = String(host || "").trim().toLowerCase();
+  if (!needle) return true;
+  try {
+    return new URL(link.url).hostname.toLowerCase().includes(needle);
+  } catch {
+    return false;
+  }
+}
+
 function normalizeLinkKind(kind) {
   const value = String(kind || "").trim().toLowerCase();
   if (!value) return null;
@@ -318,7 +328,7 @@ function summarizeLinkKinds(links = []) {
   return counts;
 }
 
-export async function collectSnapshotLinks({ root, app, query, source, from, time, freshness, kind, sort, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
+export async function collectSnapshotLinks({ root, app, query, source, from, time, host, freshness, kind, sort, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const appSelector = normalizeSnapshotAppSelector(app);
   const normalizedKind = normalizeLinkKind(kind);
   const normalizedSort = normalizeLinkSort(sort);
@@ -348,7 +358,7 @@ export async function collectSnapshotLinks({ root, app, query, source, from, tim
           artifactModifiedAt,
           ...linkFreshness({ snapshotAt, artifactModifiedAt, staleAfterMinutes, now }),
         };
-        if (!linkMatchesQuery(link, query) || !linkMatchesContext(link, { source, from, time }) || !linkMatchesFreshness(link, freshness) || !linkMatchesKind(link, normalizedKind)) continue;
+        if (!linkMatchesQuery(link, query) || !linkMatchesContext(link, { source, from, time }) || !linkMatchesHost(link, host) || !linkMatchesFreshness(link, freshness) || !linkMatchesKind(link, normalizedKind)) continue;
         links.push(link);
       }
     }
@@ -364,6 +374,7 @@ export async function collectSnapshotLinks({ root, app, query, source, from, tim
     source: source || null,
     from: from || null,
     time: time || null,
+    host: host || null,
     freshness: freshness || null,
     kind: normalizedKind,
     sort: normalizedSort,
@@ -426,6 +437,7 @@ function snapshotLinkFilterParts(summary = {}) {
   if (summary.source) filters.push(`source=${JSON.stringify(summary.source)}`);
   if (summary.from) filters.push(`from=${JSON.stringify(summary.from)}`);
   if (summary.time) filters.push(`time=${JSON.stringify(summary.time)}`);
+  if (summary.host) filters.push(`host=${JSON.stringify(summary.host)}`);
   return filters;
 }
 

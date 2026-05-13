@@ -375,12 +375,13 @@ test("/tendril-app link filter parser accepts flexible token order", () => {
     kind: "events.snapshot",
     query: "standup",
   });
-  assert.deepEqual(parseLinkCommandFilters(["Ops", "freshness=stale", "sort:newest", "kind=notifications.snapshot", "source:#general", "from=Harry", "time:today", "Bot"]), {
+  assert.deepEqual(parseLinkCommandFilters(["Ops", "freshness=stale", "sort:newest", "kind=notifications.snapshot", "source:#general", "from=Harry", "time:today", "host:slack.com", "Bot"]), {
     freshness: "stale",
     kind: "notifications.snapshot",
     source: "#general",
     from: "Harry",
     time: "today",
+    host: "slack.com",
     sort: "newest",
     query: "Ops Bot",
   });
@@ -441,6 +442,10 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(sourceFilteredLinks.from, "ops");
   assert.equal(sourceFilteredLinks.time, "00:10");
   assert.match(renderSnapshotLinks(sourceFilteredLinks), /source="general" from="ops" time="00:10"/);
+  const hostFilteredLinks = await collectSnapshotLinks({ root, app: "slack", host: "slack.com", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(hostFilteredLinks.links.length, 2);
+  assert.equal(hostFilteredLinks.host, "slack.com");
+  assert.match(renderSnapshotLinks(hostFilteredLinks), /host="slack.com"/);
   assert.equal(links.links[0].snapshotAt, "2026-05-12T00:00:00Z");
   assert.equal(links.links[0].freshness, "fresh");
   assert.equal(links.links[0].ageMinutes, 30);
@@ -625,6 +630,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /source: Type\.Optional/);
   assert.match(source, /from: Type\.Optional/);
   assert.match(source, /time: Type\.Optional/);
+  assert.match(source, /host: Type\.Optional/);
   assert.match(source, /kind: Type\.Optional/);
   assert.match(source, /aliases like events\/notifications\/calendar\/mail\/chat\/mentions\/meetings/);
   assert.match(source, /parseLinkCommandArgs/);
