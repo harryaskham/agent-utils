@@ -169,6 +169,8 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
     const items = Array.isArray(snapshot.items) ? snapshot.items : (Array.isArray(snapshot.notifications) ? snapshot.notifications : []);
     const briefingItems = items.filter((item) => !isBriefingChromeItem(item, { app, action }));
     const freshness = freshnessFor(snapshot.capturedAt, { staleAfterMinutes, now });
+    const rawItemCount = Number.isFinite(snapshot.count) ? snapshot.count : (Number.isFinite(snapshot.counts?.items) ? snapshot.counts.items : items.length);
+    const hiddenChromeCount = Math.max(0, rawItemCount - briefingItems.length);
     entries.push({
       app,
       action,
@@ -176,7 +178,8 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       path: loaded.path,
       capturedAt: snapshot.capturedAt || null,
       ...freshness,
-      itemCount: Number.isFinite(snapshot.count) ? snapshot.count : (Number.isFinite(snapshot.counts?.items) ? snapshot.counts.items : items.length),
+      itemCount: briefingItems.length,
+      ...(hiddenChromeCount ? { rawItemCount, hiddenChromeCount } : {}),
       authRequired: Boolean(snapshot.authRequired),
       ...(latestRefresh ? { latestRefresh } : {}),
       samples: sampleItemsForAction(briefingItems, { action, now, sampleLimit }).map(summarizeItem),
@@ -218,7 +221,8 @@ export function renderWorkBriefingIndex(index = {}) {
     const age = entry.ageMinutes != null ? ` age=${entry.ageMinutes}m` : "";
     const auth = entry.authRequired ? " authRequired=true" : "";
     const refresh = entry.latestRefresh ? ` latestRefresh=${entry.latestRefresh.status}${entry.latestRefresh.ageMinutes != null ? `/${entry.latestRefresh.ageMinutes}m` : ""}${entry.latestRefresh.skippedWrite ? "/skippedWrite" : ""}` : "";
-    lines.push(`${entry.app}.${entry.action}: status=${entry.status} freshness=${entry.freshness}${age} items=${entry.itemCount || 0}${auth}${refresh}`);
+    const hidden = entry.hiddenChromeCount ? ` rawItems=${entry.rawItemCount || 0} hiddenChrome=${entry.hiddenChromeCount}` : "";
+    lines.push(`${entry.app}.${entry.action}: status=${entry.status} freshness=${entry.freshness}${age} items=${entry.itemCount || 0}${hidden}${auth}${refresh}`);
     for (const sample of entry.samples || []) {
       const context = [sample.source ? `source=${JSON.stringify(sample.source)}` : null, sample.from ? `from=${JSON.stringify(sample.from)}` : null, sample.time ? `time=${JSON.stringify(sample.time)}` : null].filter(Boolean).join(" ");
       lines.push(`  - ${sample.text || "(untitled)"}${context ? ` (${context})` : ""}`);

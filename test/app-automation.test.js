@@ -900,7 +900,8 @@ test("work briefing suppresses Outlook Add-ins chrome samples from stale snapsho
   }), "utf8");
   const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, sampleLimit: 2, now: new Date("2026-05-13T02:00:00Z") });
   const rendered = renderWorkBriefingIndex(index);
-  assert.match(rendered, /outlook\.notifications\.snapshot: status=ok freshness=stale age=60m items=2/);
+  assert.equal(index.totals.items, 1);
+  assert.match(rendered, /outlook\.notifications\.snapshot: status=ok freshness=stale age=60m items=1 rawItems=2 hiddenChrome=1/);
   assert.doesNotMatch(rendered, /Add-ins|Viva Insights/);
   assert.match(rendered, /Unread mail from Ada/);
   await rm(root, { recursive: true, force: true });
