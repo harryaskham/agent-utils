@@ -763,6 +763,7 @@ test("work briefing index summarizes bounded app snapshot state", async () => {
   const slackDir = path.join(root, "snapshots", "slack");
   await mkdir(outlookDir, { recursive: true });
   await mkdir(slackDir, { recursive: true });
+  await mkdir(path.join(root, "bridge"), { recursive: true });
   await writeFile(path.join(outlookDir, "notifications.snapshot.json"), JSON.stringify({
     app: "outlook",
     kind: "notifications.snapshot",
@@ -783,6 +784,12 @@ test("work briefing index summarizes bounded app snapshot state", async () => {
     count: 0,
     items: [],
   }), "utf8");
+  await writeFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), JSON.stringify({
+    capturedAt: "2026-05-13T02:04:00Z",
+    source: "ms-dev-chrome-cdp",
+    snapshots: [],
+    failed: [{ app: "outlook", action: "calendar.snapshot", status: "extract_failed", error: "timeout" }],
+  }), "utf8");
   const index = await buildWorkBriefingIndex({ root, apps: ["outlook", "slack"], staleAfterMinutes: 15, sampleLimit: 1, now: new Date("2026-05-13T02:05:00Z") });
   assert.equal(index.totals.actions, 3);
   assert.equal(index.totals.fresh, 1);
@@ -791,9 +798,26 @@ test("work briefing index summarizes bounded app snapshot state", async () => {
   assert.equal(index.entries.find((entry) => entry.app === "outlook").samples.length, 1);
   assert.match(renderWorkBriefingIndex(index), /outlook\.notifications\.snapshot: status=ok freshness=fresh age=5m items=2/);
   assert.match(renderWorkBriefingIndex(index), /slack\.notifications\.snapshot: status=auth_required freshness=stale age=35m items=0 authRequired=true/);
+  assert.match(renderWorkBriefingIndex(index), /outlook\.calendar\.snapshot: status=missing freshness=unknown items=0 latestRefresh=extract_failed\/1m/);
+  assert.equal(index.entries.find((entry) => entry.action === "calendar.snapshot").latestRefresh.status, "extract_failed");
   const persisted = JSON.parse(await readFile(path.join(root, "indexes", "work-briefing.json"), "utf8"));
   assert.equal(persisted.totals.items, 2);
   assert.equal(persisted.totals.missing, 1);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("work briefing shows filtered-empty skipped-write refresh attempts", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-filtered-${Date.now()}`), { recursive: true });
+  await mkdir(path.join(root, "bridge"), { recursive: true });
+  await writeFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), JSON.stringify({
+    capturedAt: "2026-05-13T02:04:00Z",
+    source: "ms-dev-chrome-cdp",
+    snapshots: [{ app: "calendar", action: "events.snapshot", status: "filtered_empty", skippedWrite: true, rawCount: 1, reason: "all rows filtered" }],
+    failed: [],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["calendar"], staleAfterMinutes: 15, now: new Date("2026-05-13T02:05:00Z") });
+  assert.match(renderWorkBriefingIndex(index), /calendar\.events\.snapshot: status=missing freshness=unknown items=0 latestRefresh=filtered_empty\/1m\/skippedWrite/);
+  assert.equal(index.entries[0].latestRefresh.rawCount, 1);
   await rm(root, { recursive: true, force: true });
 });
 

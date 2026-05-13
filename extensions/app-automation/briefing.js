@@ -65,14 +65,47 @@ async function readSnapshot(root, app, action) {
   return { app, action, status: "missing", path: lastPath };
 }
 
+async function readLatestRefreshAttempts(root, { staleAfterMinutes = 15, now = new Date() } = {}) {
+  const manifestPath = path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json");
+  const raw = await readFile(manifestPath, "utf8").catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!raw) return new Map();
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch {
+    return new Map();
+  }
+  const attempts = new Map();
+  const attemptFreshness = freshnessFor(manifest.capturedAt, { staleAfterMinutes, now });
+  for (const entry of [...(manifest.snapshots || []), ...(manifest.failed || [])]) {
+    if (!entry?.app || !entry?.action) continue;
+    attempts.set(`${entry.app}:${entry.action}`, {
+      status: entry.status || "unknown",
+      capturedAt: manifest.capturedAt || null,
+      source: manifest.source || "ms-dev-chrome-cdp",
+      skippedWrite: Boolean(entry.skippedWrite),
+      reason: compact(entry.reason, 180),
+      error: compact(entry.error, 180),
+      rawCount: Number.isFinite(entry.rawCount) ? entry.rawCount : undefined,
+      ...attemptFreshness,
+    });
+  }
+  return attempts;
+}
+
 export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRIEFING_ACTIONS, staleAfterMinutes = 15, sampleLimit = 5, now = new Date() } = {}) {
   const wantedApps = new Set((apps || []).map((app) => String(app)));
   const selected = wantedApps.size ? actions.filter((entry) => wantedApps.has(entry.app)) : actions;
+  const latestAttempts = await readLatestRefreshAttempts(root, { staleAfterMinutes, now });
   const entries = [];
   for (const { app, action } of selected) {
+    const latestRefresh = latestAttempts.get(`${app}:${action}`);
     const loaded = await readSnapshot(root, app, action);
     if (loaded.status !== "ok") {
-      entries.push({ app, action, status: loaded.status, path: loaded.path, error: loaded.error || null, freshness: "unknown", itemCount: 0, samples: [] });
+      entries.push({ app, action, status: loaded.status, path: loaded.path, error: loaded.error || null, freshness: "unknown", itemCount: 0, samples: [], ...(latestRefresh ? { latestRefresh } : {}) });
       continue;
     }
     const snapshot = loaded.snapshot;
@@ -87,6 +120,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       ...freshness,
       itemCount: Number.isFinite(snapshot.count) ? snapshot.count : (Number.isFinite(snapshot.counts?.items) ? snapshot.counts.items : items.length),
       authRequired: Boolean(snapshot.authRequired),
+      ...(latestRefresh ? { latestRefresh } : {}),
       samples: items.slice(0, Math.max(0, Number(sampleLimit) || 0)).map(summarizeItem),
     });
   }
@@ -121,7 +155,8 @@ export function renderWorkBriefingIndex(index = {}) {
   for (const entry of index.entries || []) {
     const age = entry.ageMinutes != null ? ` age=${entry.ageMinutes}m` : "";
     const auth = entry.authRequired ? " authRequired=true" : "";
-    lines.push(`${entry.app}.${entry.action}: status=${entry.status} freshness=${entry.freshness}${age} items=${entry.itemCount || 0}${auth}`);
+    const refresh = entry.latestRefresh ? ` latestRefresh=${entry.latestRefresh.status}${entry.latestRefresh.ageMinutes != null ? `/${entry.latestRefresh.ageMinutes}m` : ""}${entry.latestRefresh.skippedWrite ? "/skippedWrite" : ""}` : "";
+    lines.push(`${entry.app}.${entry.action}: status=${entry.status} freshness=${entry.freshness}${age} items=${entry.itemCount || 0}${auth}${refresh}`);
     for (const sample of entry.samples || []) {
       const context = [sample.source ? `source=${JSON.stringify(sample.source)}` : null, sample.from ? `from=${JSON.stringify(sample.from)}` : null, sample.time ? `time=${JSON.stringify(sample.time)}` : null].filter(Boolean).join(" ");
       lines.push(`  - ${sample.text || "(untitled)"}${context ? ` (${context})` : ""}`);
