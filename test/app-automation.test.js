@@ -41,6 +41,7 @@ import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "../extensions/a
 import { buildMsDevCdpPowerShell, renderMsDevCdpRefresh, runMsDevCdpRefresh } from "../extensions/app-automation/msdev-cdp.js";
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
 import { buildSafeRunManifest, runStatusFromResults } from "../extensions/app-automation/run-manifest.js";
+import { readLatestMsDevRefreshSummary, renderDoctorReport } from "../extensions/app-automation/doctor.js";
 import {
   authMissingHint,
   buildAuthRequiredDiagnostic,
@@ -819,6 +820,34 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
   await rm(root, { recursive: true, force: true });
 });
 
+test("app automation doctor summarizes latest ms-dev refresh manifest", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-doctor-msdev-${Date.now()}`), { recursive: true });
+  await mkdir(path.join(root, "bridge"), { recursive: true });
+  await writeFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), JSON.stringify({
+    status: "copy_failed",
+    capturedAt: "2026-05-13T03:00:00Z",
+    snapshots: [],
+    failed: [
+      { app: "slack", action: "notifications.snapshot", status: "copy_failed" },
+      { app: "outlook", action: "notifications.snapshot", status: "copy_failed" },
+    ],
+  }), "utf8");
+  const summary = await readLatestMsDevRefreshSummary(root, { now: new Date("2026-05-13T03:05:00Z") });
+  assert.equal(summary.status, "copy_failed");
+  assert.equal(summary.ageMinutes, 5);
+  assert.deepEqual(summary.failureStatuses, { copy_failed: 2 });
+  const rendered = renderDoctorReport({
+    rootSummary: { root, exists: true },
+    catalog: { apps: [{ id: "slack" }], external: {} },
+    playwrightCli: "playwright-cli",
+    tendrilBridge: { command: "tendril", remote: null, wslTunnel: false },
+    actionDiagnostics: [],
+    msDevCdpRefresh: summary,
+  });
+  assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh does not overwrite snapshots on extraction failure", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-fail-${Date.now()}`), { recursive: true });
   const outlookDir = path.join(root, "snapshots", "outlook");
@@ -1060,6 +1089,8 @@ test("work briefing shows filtered-empty skipped-write refresh attempts", async 
 test("extension is packaged and exposes list, doctor, overview, plan, run, open bundle, refresh, bundle, one-shot, snapshot, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
+  const doctorSource = await readFile(new URL("../extensions/app-automation/doctor.js", import.meta.url), "utf8");
+  const combinedSource = `${source}\n${doctorSource}`;
 
   assert.ok(packageJson.pi.extensions.includes("./extensions/app-automation.js"));
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_list`/);
@@ -1067,9 +1098,9 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /DEFAULT_DOCTOR_ACTIONS/);
   assert.match(source, /renderDoctorReport/);
   assert.match(source, /tendrilCommandSummary/);
-  assert.match(source, /tendrilBridge command=/);
+  assert.match(combinedSource, /tendrilBridge command=/);
   assert.match(source, /probeTendrilBridge/);
-  assert.match(source, /tendrilProbe=/);
+  assert.match(combinedSource, /tendrilProbe=/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_msdev_cdp_refresh`/);

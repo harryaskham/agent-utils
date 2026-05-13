@@ -35,6 +35,7 @@ import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/gen
 import { parseLinkCommandArgs, parseOverviewCommandArgs } from "./app-automation/link-command.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "./app-automation/briefing.js";
+import { readLatestMsDevRefreshSummary, renderDoctorReport } from "./app-automation/doctor.js";
 import { renderMsDevCdpRefresh, runMsDevCdpRefresh } from "./app-automation/msdev-cdp.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
@@ -389,26 +390,6 @@ async function buildRefreshBundleStaleness({ catalog, params = {} } = {}) {
   return snapshotTargetStalenessReport({ root: stateRoot(), targets: stalenessTargets, staleAfterMinutes: params.staleAfterMinutes || 60 });
 }
 
-function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, tendrilProbe, actionDiagnostics, cliCheck }) {
-  const lines = [
-    `app automation doctor stateRoot=${rootSummary.root} exists=${rootSummary.exists}`,
-    `playwrightCli=${playwrightCli}`,
-    `tendrilBridge command=${tendrilBridge.command} remote=${tendrilBridge.remote || "none"} wslTunnel=${tendrilBridge.wslTunnel}`,
-    tendrilProbe ? `tendrilProbe=${tendrilProbe.status}${tendrilProbe.targets != null ? ` targets=${tendrilProbe.targets}` : ""}${tendrilProbe.error ? ` error=${tendrilProbe.error}` : ""}` : null,
-    `catalogApps=${catalog.apps.map((app) => app.id).join(",")}`,
-  ].filter(Boolean);
-  if (catalog.external?.errors?.length) {
-    lines.push(`catalogErrors=${catalog.external.errors.length}`);
-    lines.push(...catalog.external.errors.slice(0, 5).map((error) => `- ${error.source || "external"}: ${error.error || error.message || String(error)}`));
-  } else {
-    lines.push("catalogErrors=0");
-  }
-  if (cliCheck) lines.push(`cliCheck=${cliCheck.status}${cliCheck.version ? ` version=${cliCheck.version}` : ""}${cliCheck.error ? ` error=${cliCheck.error}` : ""}`);
-  lines.push("actions:");
-  lines.push(...actionDiagnostics.map((entry) => `- ${entry.app}.${entry.action}: ${entry.executable ? "executable" : "not-executable"}${entry.missingParams?.length ? ` missing=${entry.missingParams.join(",")}` : ""}${entry.blockedSteps?.length ? ` blocked=${entry.blockedSteps.map((step) => step.kind).join(",")}` : ""}`));
-  return lines.join("\n");
-}
-
 function parseTendrilJsonEnvelope(stdout) {
   const trimmed = String(stdout || "").trim();
   if (!trimmed) throw new Error("tendril list returned no JSON output");
@@ -547,11 +528,13 @@ export default function appAutomationExtension(pi) {
       }
       const tendrilBridge = tendrilCommandSummary();
       const tendrilProbe = params.probeTendrilBridge ? await probeTendrilBridge(pi, { signal, timeoutMs: params.timeoutMs || 5000 }) : null;
-      return textResult(renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, tendrilProbe, actionDiagnostics, cliCheck }), {
+      const msDevCdpRefresh = await readLatestMsDevRefreshSummary(stateRoot());
+      return textResult(renderDoctorReport({ rootSummary, catalog, playwrightCli, tendrilBridge, tendrilProbe, actionDiagnostics, cliCheck, msDevCdpRefresh }), {
         state: rootSummary,
         playwrightCli,
         tendrilBridge,
         tendrilProbe,
+        msDevCdpRefresh,
         cliCheck,
         actionDiagnostics,
         external: catalog.external,
@@ -1215,7 +1198,8 @@ export default function appAutomationExtension(pi) {
           }
         });
         const tendrilProbe = words.includes("probe") || words.includes("--probe") ? await probeTendrilBridge(pi, { timeoutMs: 5000 }) : null;
-        ctx.ui.notify(renderDoctorReport({ rootSummary, catalog, playwrightCli: playwrightCliCommand(), tendrilBridge: tendrilCommandSummary(), tendrilProbe, actionDiagnostics }), "info");
+        const msDevCdpRefresh = await readLatestMsDevRefreshSummary(stateRoot());
+        ctx.ui.notify(renderDoctorReport({ rootSummary, catalog, playwrightCli: playwrightCliCommand(), tendrilBridge: tendrilCommandSummary(), tendrilProbe, actionDiagnostics, msDevCdpRefresh }), "info");
         return;
       }
       if (words[0] === "overview") {
