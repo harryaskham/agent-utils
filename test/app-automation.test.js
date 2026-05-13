@@ -695,6 +695,29 @@ test("ms-dev CDP refresh suppresses noisy inferred from metadata", async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh suppresses Outlook aggregate mail-list chrome", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-outlook-aggregate-${Date.now()}`), { recursive: true });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [
+        { text: "Unread Collapsed Meeting Raveena Khemani GA Burn Down Daily Sync 10:02 C2 cross squad meeting cadence No conversations selected | ? Raveena Khemani ? GA Burn Down Daily Sync 10:02 C2 cross squad meeting cadence", source: "Outlook Mail" },
+        { text: "? Today ? ? Raveena Khemani ? GA Burn Down Daily Sync 10:02 C2 cross squad meeting cadence MAM Hub C3 MAM Opener Town Hall Recap 00:04 Thank you", source: "Outlook Mail" },
+      ] } }] }), stderr: "" };
+    },
+  });
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=1/);
+  const snapshot = JSON.parse(await readFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), "utf8"));
+  assert.equal(snapshot.items.length, 1);
+  assert.equal(snapshot.items[0].text, "Unread Collapsed Meeting Raveena Khemani GA Burn Down Daily Sync 10:02 C2 cross squad meeting cadence");
+  assert.doesNotMatch(JSON.stringify(snapshot), /No conversations selected|Today \?/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh dedupes nested Outlook notification rows", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-outlook-dedupe-${Date.now()}`), { recursive: true });
   const summary = await runMsDevCdpRefresh({
@@ -931,6 +954,32 @@ test("ms-dev CDP PowerShell script uses configured port and no raw secrets", () 
   assert.match(script, /replace\(\/\\s\+\/g/);
   assert.match(script, /text\.match\(\/\\b/);
   assert.match(script, /parsed\.search = ''/);
+});
+
+test("work briefing suppresses Outlook aggregate mail-list chrome from preserved snapshots", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-outlook-aggregate-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  await mkdir(outlookDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "notifications.snapshot.json"), JSON.stringify({
+    app: "outlook",
+    kind: "notifications.snapshot",
+    status: "ok",
+    capturedAt: "2026-05-13T01:00:00Z",
+    count: 2,
+    items: [
+      { text: "Unread Collapsed Meeting Raveena Khemani GA Burn Down Daily Sync 10:02 C2 cross squad meeting cadence No conversations selected | ? Raveena Khemani ? GA Burn Down Daily Sync 10:02", source: "Outlook Mail" },
+      { text: "? Today ? ? Raveena Khemani ? GA Burn Down Daily Sync 10:02 C2 cross squad meeting cadence MAM Hub C3 MAM Opener Town Hall Recap 00:04", source: "Outlook Mail" },
+    ],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, sampleLimit: 5, now: new Date("2026-05-13T02:00:00Z") });
+  const rendered = renderWorkBriefingIndex(index);
+  const entry = index.entries.find((item) => item.app === "outlook" && item.action === "notifications.snapshot");
+  assert.equal(entry.itemCount, 1);
+  assert.equal(entry.rawItemCount, 2);
+  assert.equal(entry.hiddenChromeCount, 1);
+  assert.match(rendered, /GA Burn Down Daily Sync/);
+  assert.doesNotMatch(rendered, /No conversations selected|\? Today \?/);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("work briefing suppresses Outlook Add-ins chrome samples from stale snapshots", async () => {

@@ -304,6 +304,9 @@ function isSnapshotChrome(item = {}, target = {}) {
   const text = compact(item.text, 260) || "";
   if (!text) return true;
   if (SNAPSHOT_CHROME_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (target.app === "outlook" && target.action === "notifications.snapshot") {
+    if (/^[?□�\s]*today\b/i.test(text)) return true;
+  }
   if (target.app === "teams" && target.action === "notifications.snapshot") {
     if (/^chat\b(?:\s*\(ctrl\+shift\+\d+\))?$/i.test(text)) return true;
     if (/^activity\b(?:\s*\(ctrl\+shift\+\d+\))?$/i.test(text)) return true;
@@ -347,7 +350,10 @@ function cleanInferredFrom(value) {
 }
 
 function normalizeExtractedItem(item = {}, target = {}) {
-  const text = compact(item.text, 240);
+  let text = compact(item.text, 240);
+  if (target.app === "outlook" && target.action === "notifications.snapshot") {
+    text = compact(String(text || "").replace(/\s+No conversations selected\b.*$/i, ""), 240);
+  }
   if (target.app === "teams" && target.action === "notifications.snapshot") {
     const match = String(text || "").match(/(?:^|[|])\s*(\d{1,4})(?:\s+\1)?\s+new\s+notifications?\b/i)
       || String(text || "").match(/\b(\d{1,4})\b(?=.{0,80}\bnew\s+notifications?\b)/i);

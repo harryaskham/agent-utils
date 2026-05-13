@@ -31,6 +31,15 @@ function freshnessFor(timestamp, { staleAfterMinutes = 15, now = new Date() } = 
   return { freshness: ageMinutes > threshold ? "stale" : "fresh", ageMinutes, staleAfterMinutes: threshold };
 }
 
+function cleanBriefingItem(item = {}, { app, action } = {}) {
+  if (app === "outlook" && action === "notifications.snapshot") {
+    const text = compact(item.text || item.label || item.title, 260);
+    const cleaned = compact(String(text || "").replace(/\s+No conversations selected\b.*$/i, ""), 260);
+    return { ...item, text: cleaned || text };
+  }
+  return item;
+}
+
 function summarizeItem(item = {}) {
   return {
     text: compact(item.text || item.label || item.title),
@@ -45,7 +54,7 @@ function isBriefingChromeItem(item = {}, { app, action } = {}) {
   const text = compact(item.text || item.label || item.title, 260) || "";
   if (!text) return true;
   if (app === "outlook" && action === "notifications.snapshot") {
-    return /^add-ins?\b/i.test(text) || /enhance outlook with apps/i.test(text) || /viva insights/i.test(text);
+    return /^add-ins?\b/i.test(text) || /enhance outlook with apps/i.test(text) || /viva insights/i.test(text) || /^[?□�\s]*today\b/i.test(text);
   }
   if (app === "teams" && action === "notifications.snapshot") {
     if (/^chat\b(?:\s*\(ctrl\+shift\+\d+\))?$/i.test(text)) return true;
@@ -177,7 +186,9 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
     }
     const snapshot = loaded.snapshot;
     const items = Array.isArray(snapshot.items) ? snapshot.items : (Array.isArray(snapshot.notifications) ? snapshot.notifications : []);
-    const briefingItems = items.filter((item) => !isBriefingChromeItem(item, { app, action }));
+    const briefingItems = items
+      .filter((item) => !isBriefingChromeItem(item, { app, action }))
+      .map((item) => cleanBriefingItem(item, { app, action }));
     const freshness = freshnessFor(snapshot.capturedAt, { staleAfterMinutes, now });
     const rawItemCount = Number.isFinite(snapshot.count) ? snapshot.count : (Number.isFinite(snapshot.counts?.items) ? snapshot.counts.items : items.length);
     const hiddenChromeCount = Math.max(0, rawItemCount - briefingItems.length);
