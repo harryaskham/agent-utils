@@ -810,6 +810,8 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
   assert.equal("stdout" in manifest, false);
   assert.equal("stderr" in manifest, false);
   const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, now: new Date(manifest.capturedAt) });
+  assert.equal(index.totals.failedRefresh, 1);
+  assert.match(renderWorkBriefingIndex(index), /failedRefresh=1/);
   assert.match(renderWorkBriefingIndex(index), /outlook\.notifications\.snapshot: status=ok freshness=stale age=\d+m items=1 latestRefresh=copy_failed\/0m/);
   const preserved = JSON.parse(await readFile(path.join(outlookDir, "notifications.snapshot.json"), "utf8"));
   assert.equal(preserved.items[0].text, "keep mail");
