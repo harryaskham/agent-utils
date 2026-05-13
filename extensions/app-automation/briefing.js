@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { displayPath } from "./display-path.js";
 
-const FAILED_REFRESH_STATUSES = new Set(["copy_failed", "run_failed", "parse_failed", "extract_failed", "cdp_unavailable"]);
+const FAILED_REFRESH_STATUSES = new Set(["preflight_failed", "copy_failed", "run_failed", "parse_failed", "extract_failed", "cdp_unavailable"]);
 
 const DEFAULT_BRIEFING_ACTIONS = [
   { app: "slack", action: "notifications.snapshot" },

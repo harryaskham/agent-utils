@@ -654,11 +654,14 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
       return { code: 1, stdout: "", stderr: "unexpected" };
     },
   });
-  assert.equal(commands[0].command, "scp");
+  assert.equal(commands[0].command, "ssh");
   assert.deepEqual(commands[0].args.slice(0, 4), ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
-  assert.equal(commands[1].command, "ssh");
+  assert.equal(commands[0].args[5], "true");
+  assert.equal(commands[1].command, "scp");
   assert.deepEqual(commands[1].args.slice(0, 4), ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
-  assert.match(commands[1].args[5], /ExecutionPolicy Bypass/);
+  assert.equal(commands[2].command, "ssh");
+  assert.deepEqual(commands[2].args.slice(0, 4), ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
+  assert.match(commands[2].args[5], /ExecutionPolicy Bypass/);
   assert.equal(summary.status, "ok");
   assert.match(renderMsDevCdpRefresh(summary), /calendar\.events\.snapshot: status=ok items=1/);
   assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=1/);
@@ -826,7 +829,8 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
     sshTarget: "test-user@ms-dev",
     apps: ["outlook"],
     actions: ["notifications.snapshot"],
-    exec: async (command) => {
+    exec: async (command, args) => {
+      if (command === "ssh" && args.at(-1) === "true") return { code: 0, stdout: "", stderr: "" };
       if (command === "scp") return { code: 255, stdout: "", stderr: "ssh: connect to host ms-dev port 22: Connection timed out" };
       return { code: 1, stdout: "", stderr: "unexpected" };
     },
@@ -853,6 +857,37 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh fails fast when SSH preflight fails", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-preflight-fail-${Date.now()}`), { recursive: true });
+  const commands = [];
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    sshConnectTimeoutSeconds: 3,
+    timeoutMs: 60_000,
+    exec: async (command, args, options) => {
+      commands.push({ command, args, options });
+      return { code: 255, stdout: "", stderr: "ssh: connect to host ms-dev port 22: Connection timed out" };
+    },
+  });
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].command, "ssh");
+  assert.equal(commands[0].args.at(-1), "true");
+  assert.equal(commands[0].options.timeout, 5000);
+  assert.equal(summary.status, "preflight_failed");
+  assert.equal(summary.failed[0].status, "preflight_failed");
+  assert.equal(summary.failed[0].errorKind, "connect_timeout");
+  assert.match(renderMsDevCdpRefresh(summary), /failed=1 failureErrorKinds=connect_timeout=1/);
+  const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
+  assert.equal(manifest.status, "preflight_failed");
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, now: new Date(manifest.capturedAt) });
+  assert.deepEqual(index.totals.failedRefreshStatuses, { preflight_failed: 1 });
+  assert.match(renderWorkBriefingIndex(index), /failedRefresh=1 failedRefreshStatuses=preflight_failed=1/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh classifies process-level command timeouts", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-run-timeout-${Date.now()}`), { recursive: true });
   const summary = await runMsDevCdpRefresh({
@@ -861,7 +896,8 @@ test("ms-dev CDP refresh classifies process-level command timeouts", async () =>
     apps: ["outlook"],
     actions: ["calendar.snapshot"],
     timeoutMs: 1234,
-    exec: async (command) => {
+    exec: async (command, args) => {
+      if (command === "ssh" && args.at(-1) === "true") return { code: 0, stdout: "", stderr: "" };
       if (command === "scp") return { code: 0, stdout: "", stderr: "" };
       return {
         code: 1,
@@ -962,10 +998,16 @@ test("ms-dev CDP refresh honors env configuration when params are omitted", asyn
       return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:01:00Z", source: "ms-dev-chrome-cdp", cdpPort: 9333, results: [] }), stderr: "" };
     },
   });
+  assert.equal(commands[0].command, "ssh");
   assert.equal(commands[0].args[3], "ConnectTimeout=7");
-  assert.equal(commands[0].args[5].startsWith("env-user@ms-dev:"), true);
+  assert.equal(commands[0].args[4], "env-user@ms-dev");
+  assert.equal(commands[0].args[5], "true");
+  assert.equal(commands[1].command, "scp");
   assert.equal(commands[1].args[3], "ConnectTimeout=7");
-  assert.equal(commands[1].args[4], "env-user@ms-dev");
+  assert.equal(commands[1].args[5].startsWith("env-user@ms-dev:"), true);
+  assert.equal(commands[2].command, "ssh");
+  assert.equal(commands[2].args[3], "ConnectTimeout=7");
+  assert.equal(commands[2].args[4], "env-user@ms-dev");
   assert.equal(summary.cdpPort, 9333);
   await rm(root, { recursive: true, force: true });
 });
