@@ -65,7 +65,7 @@ function renderTool(tool) {
     .join('\n              ');
 
   return `
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>${escapeHtml(tool.name)}</h3>
               <code>${escapeHtml(tool.command)}</code>
@@ -93,7 +93,7 @@ function renderTool(tool) {
 function renderSection(section) {
   const tools = section.tools.map(renderTool).join('\n');
   return `
-      <section class="inventory-section" id="${slug(section.name)}">
+      <section class="inventory-section" id="${slug(section.name)}" data-section="${slug(section.name)}">
         <div class="section-heading">
           <h2>${escapeHtml(section.name)}</h2>
           <p>${escapeHtml(section.summary)}</p>
@@ -113,8 +113,11 @@ function slug(value) {
 function renderPage(inventory) {
   const totalTools = inventory.sections.reduce((sum, section) => sum + section.tools.length, 0);
   const navItems = inventory.sections
-    .map((section) => `<a href="#${slug(section.name)}">${escapeHtml(section.name)}</a>`)
+    .map((section) => `<a href="#/section/${slug(section.name)}" data-route-link="${slug(section.name)}">${escapeHtml(section.name)}</a>`)
     .join('\n          ');
+  const sectionPills = inventory.sections
+    .map((section) => `<a href="#/section/${slug(section.name)}" data-route-link="${slug(section.name)}">${escapeHtml(section.name)}</a>`)
+    .join('\n            ');
   const sections = inventory.sections.map(renderSection).join('\n');
 
   return `<!doctype html>
@@ -125,11 +128,12 @@ function renderPage(inventory) {
     <title>${escapeHtml(inventory.title)}</title>
     <meta name="description" content="${escapeHtml(inventory.description)}">
     <link rel="stylesheet" href="assets/styles.css">
+    <script type="module" src="assets/app.js"></script>
   </head>
   <body>
     <header class="site-header">
       <nav aria-label="Tool inventory sections">
-        <a class="brand" href="./">agent-utils</a>
+        <a class="brand" href="#/" data-route-link="all">agent-utils</a>
         <div class="nav-links">
           ${navItems}
         </div>
@@ -154,14 +158,31 @@ function renderPage(inventory) {
           <p><strong>Local preview:</strong> <code>${escapeHtml(inventory.publishing.localPreview)}</code></p>
           <p><strong>Validation:</strong> <code>${escapeHtml(inventory.publishing.validation)}</code></p>
         </div>
-        <p class="small">The rendered page is static HTML/CSS generated from <code>docs/tools.json</code>, so GitHub Pages can publish it without secrets, build services, or local-only daemon state.</p>
+        <p class="small">The rendered page is a static SPA generated from <code>docs/tools.json</code>, so GitHub Pages can publish it without secrets, private app snapshots, cookies, tokens, or local-only daemon state.</p>
+      </section>
+
+      <section class="spa-controls" aria-labelledby="explore-heading">
+        <div>
+          <p class="eyebrow">SPA explorer</p>
+          <h2 id="explore-heading">Explore the public tool surface</h2>
+          <p class="small">Filter the checked-in inventory in your browser. The app uses only static files committed under <code>docs/</code>.</p>
+        </div>
+        <label class="search-box" for="tool-search">
+          <span>Search tools, commands, and purposes</span>
+          <input id="tool-search" type="search" autocomplete="off" placeholder="Try app automation, tendril, realtime, caco…">
+        </label>
+        <div class="route-pills" aria-label="Inventory views">
+          <a href="#/" data-route-link="all">All sections</a>
+          ${sectionPills}
+        </div>
+        <p class="result-summary" id="result-summary" aria-live="polite"></p>
       </section>
 
 ${sections}
     </main>
 
     <footer>
-      <p>Generated from <code>docs/tools.json</code>. Update the JSON and run <code>npm run docs:build</code> to refresh this page.</p>
+      <p>Generated from <code>docs/tools.json</code>. Update the JSON and run <code>npm run docs:build</code> to refresh this SPA. Do not add secrets, private snapshot artifacts, or local-only daemon state.</p>
     </footer>
   </body>
 </html>

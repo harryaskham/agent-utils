@@ -6,16 +6,17 @@
     <title>Agent Utils tool inventory</title>
     <meta name="description" content="Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.">
     <link rel="stylesheet" href="assets/styles.css">
+    <script type="module" src="assets/app.js"></script>
   </head>
   <body>
     <header class="site-header">
       <nav aria-label="Tool inventory sections">
-        <a class="brand" href="./">agent-utils</a>
+        <a class="brand" href="#/" data-route-link="all">agent-utils</a>
         <div class="nav-links">
-          <a href="#cacophony-first-party-surfaces">Cacophony first-party surfaces</a>
-          <a href="#pi-runtime-and-agent-self-ops">Pi runtime and agent self-ops</a>
-          <a href="#interactive-and-ui-automation-helpers">Interactive and UI automation helpers</a>
-          <a href="#repo-local-tools">Repo-local tools</a>
+          <a href="#/section/cacophony-first-party-surfaces" data-route-link="cacophony-first-party-surfaces">Cacophony first-party surfaces</a>
+          <a href="#/section/pi-runtime-and-agent-self-ops" data-route-link="pi-runtime-and-agent-self-ops">Pi runtime and agent self-ops</a>
+          <a href="#/section/interactive-and-ui-automation-helpers" data-route-link="interactive-and-ui-automation-helpers">Interactive and UI automation helpers</a>
+          <a href="#/section/repo-local-tools" data-route-link="repo-local-tools">Repo-local tools</a>
         </div>
       </nav>
       <div class="hero">
@@ -34,21 +35,41 @@
       <section class="publishing-note" aria-labelledby="publishing-heading">
         <h2 id="publishing-heading">Publishing and preview</h2>
         <div class="publishing-grid">
-          <p><strong>GitHub Pages path:</strong> Repository Settings → Pages → Deploy from branch: main, folder: /docs</p>
+          <p><strong>GitHub Pages path:</strong> Repository Settings → Pages → Source: GitHub Actions, workflow: .github/workflows/pages.yml on self-hosted runners</p>
           <p><strong>Local preview:</strong> <code>npm run docs:build &amp;&amp; python3 -m http.server --directory docs 8000</code></p>
-          <p><strong>Validation:</strong> <code>npm run docs:check</code></p>
+          <p><strong>Validation:</strong> <code>npm run docs:check (workflow also validates on self-hosted runners before deployment)</code></p>
         </div>
-        <p class="small">The rendered page is static HTML/CSS generated from <code>docs/tools.json</code>, so GitHub Pages can publish it without secrets, build services, or local-only daemon state.</p>
+        <p class="small">The rendered page is a static SPA generated from <code>docs/tools.json</code>, so GitHub Pages can publish it without secrets, private app snapshots, cookies, tokens, or local-only daemon state.</p>
+      </section>
+
+      <section class="spa-controls" aria-labelledby="explore-heading">
+        <div>
+          <p class="eyebrow">SPA explorer</p>
+          <h2 id="explore-heading">Explore the public tool surface</h2>
+          <p class="small">Filter the checked-in inventory in your browser. The app uses only static files committed under <code>docs/</code>.</p>
+        </div>
+        <label class="search-box" for="tool-search">
+          <span>Search tools, commands, and purposes</span>
+          <input id="tool-search" type="search" autocomplete="off" placeholder="Try app automation, tendril, realtime, caco…">
+        </label>
+        <div class="route-pills" aria-label="Inventory views">
+          <a href="#/" data-route-link="all">All sections</a>
+          <a href="#/section/cacophony-first-party-surfaces" data-route-link="cacophony-first-party-surfaces">Cacophony first-party surfaces</a>
+            <a href="#/section/pi-runtime-and-agent-self-ops" data-route-link="pi-runtime-and-agent-self-ops">Pi runtime and agent self-ops</a>
+            <a href="#/section/interactive-and-ui-automation-helpers" data-route-link="interactive-and-ui-automation-helpers">Interactive and UI automation helpers</a>
+            <a href="#/section/repo-local-tools" data-route-link="repo-local-tools">Repo-local tools</a>
+        </div>
+        <p class="result-summary" id="result-summary" aria-live="polite"></p>
       </section>
 
 
-      <section class="inventory-section" id="cacophony-first-party-surfaces">
+      <section class="inventory-section" id="cacophony-first-party-surfaces" data-section="cacophony-first-party-surfaces">
         <div class="section-heading">
           <h2>Cacophony first-party surfaces</h2>
           <p>Managed lifecycle, work tracking, validation, and operator coordination surfaces provided by caco.</p>
         </div>
         <div class="tool-grid">
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Beads</h3>
               <code>caco bd</code>
@@ -77,7 +98,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Agent lifecycle</h3>
               <code>caco agent</code>
@@ -105,7 +126,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Messaging and speech</h3>
               <code>caco msg</code>
@@ -132,7 +153,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Scratchpad notes</h3>
               <code>caco scratch</code>
@@ -160,7 +181,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Test queue</h3>
               <code>caco test</code>
@@ -188,7 +209,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Build queue</h3>
               <code>caco build</code>
@@ -216,7 +237,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Operator choices</h3>
               <code>caco choices</code>
@@ -244,7 +265,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Managed cron</h3>
               <code>caco cron</code>
@@ -269,7 +290,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Image generation</h3>
               <code>caco image generate</code>
@@ -297,13 +318,13 @@
         </div>
       </section>
 
-      <section class="inventory-section" id="pi-runtime-and-agent-self-ops">
+      <section class="inventory-section" id="pi-runtime-and-agent-self-ops" data-section="pi-runtime-and-agent-self-ops">
         <div class="section-heading">
           <h2>Pi runtime and agent self-ops</h2>
           <p>Pi-native commands and skills that keep long-running managed agents healthy and recyclable.</p>
         </div>
         <div class="tool-grid">
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Pi recurring loop</h3>
               <code>/loop</code>
@@ -329,7 +350,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Pi self-nudge</h3>
               <code>pi-self-nudge skill</code>
@@ -355,7 +376,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Pi self-ops</h3>
               <code>/bead-claim, /self-idle, /pool-register</code>
@@ -382,7 +403,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Pi package entry points</h3>
               <code>pi install git:github.com/harryaskham/agent-utils@v1</code>
@@ -410,13 +431,13 @@
         </div>
       </section>
 
-      <section class="inventory-section" id="interactive-and-ui-automation-helpers">
+      <section class="inventory-section" id="interactive-and-ui-automation-helpers" data-section="interactive-and-ui-automation-helpers">
         <div class="section-heading">
           <h2>Interactive and UI automation helpers</h2>
           <p>Tools for sessions that need a real terminal, screenshots, or desktop input automation.</p>
         </div>
         <div class="tool-grid">
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>tmux-cli</h3>
               <code>tmux-cli</code>
@@ -444,7 +465,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Tendril MCP</h3>
               <code>tendril_list, tendril_capture, tendril_run, tendril_listen</code>
@@ -473,13 +494,13 @@
         </div>
       </section>
 
-      <section class="inventory-section" id="repo-local-tools">
+      <section class="inventory-section" id="repo-local-tools" data-section="repo-local-tools">
         <div class="section-heading">
           <h2>Repo-local tools</h2>
           <p>Utilities provided directly by this repository and kept installable without project secrets.</p>
         </div>
         <div class="tool-grid">
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Live web search Pi extension</h3>
               <code>search_web</code>
@@ -504,7 +525,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Tendril share Pi extension</h3>
               <code>tendril_bridge_doctor, /tendril list, /tendril window &lt;id-or-name&gt;, /tendril display &lt;id-or-name&gt;, /tendril describe window &lt;id-or-name&gt;, /tendril stream window &lt;id-or-name&gt;</code>
@@ -536,7 +557,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Kitty image preview Pi extension</h3>
               <code>kitty_image_preview_capture, kitty_image_preview_add, kitty_image_preview_show</code>
@@ -565,7 +586,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Pi graphics theme + extension</h3>
               <code>pi_graphics_render_prompt_enclosure, pi_graphics_render_message_border, pi_graphics_clear, /pi-graphics-status, /pi-graphics-demo</code>
@@ -592,7 +613,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Firecracker VM Pi extension</h3>
               <code>firecracker_vm_start, firecracker_vm_status, firecracker_vm_list, firecracker_vm_screen, firecracker_vm_stop, /firecracker-vms</code>
@@ -620,7 +641,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>App automation Pi extension</h3>
               <code>app_automation_list, app_automation_doctor, app_automation_overview, app_automation_plan, app_automation_run, app_automation_open_bundle_run_once, app_automation_refresh_start, app_automation_refresh_bundle_start, app_automation_refresh_bundle_run_once, app_automation_refresh_staleness, app_automation_refresh_stale_run_once, app_automation_refresh_status, app_automation_refresh_stop, app_automation_snapshots_list, app_automation_snapshots_digest, app_automation_snapshot_links, app_automation_snapshots_staleness, app_automation_snapshots_cleanup_plan, app_automation_snapshot_read, app_automation_status, /tendril-app</code>
@@ -657,7 +678,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Web search prompt template</h3>
               <code>/web-search</code>
@@ -681,7 +702,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>web-search MCP server</h3>
               <code>web-search-mcp</code>
@@ -706,7 +727,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Nix package collator</h3>
               <code>nix build .</code>
@@ -731,7 +752,7 @@
             </details>
           </article>
 
-          <article class="tool-card">
+          <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>GitHub Pages inventory generator</h3>
               <code>npm run docs:build</code>
@@ -760,7 +781,7 @@
     </main>
 
     <footer>
-      <p>Generated from <code>docs/tools.json</code>. Update the JSON and run <code>npm run docs:build</code> to refresh this page.</p>
+      <p>Generated from <code>docs/tools.json</code>. Update the JSON and run <code>npm run docs:build</code> to refresh this SPA. Do not add secrets, private snapshot artifacts, or local-only daemon state.</p>
     </footer>
   </body>
 </html>

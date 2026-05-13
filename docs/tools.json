@@ -3,9 +3,9 @@
   "description": "Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.",
   "lastReviewed": "2026-05-12",
   "publishing": {
-    "githubPagesPath": "Repository Settings \u2192 Pages \u2192 Deploy from branch: main, folder: /docs",
+    "githubPagesPath": "Repository Settings \u2192 Pages \u2192 Source: GitHub Actions, workflow: .github/workflows/pages.yml on self-hosted runners",
     "localPreview": "npm run docs:build && python3 -m http.server --directory docs 8000",
-    "validation": "npm run docs:check"
+    "validation": "npm run docs:check (workflow also validates on self-hosted runners before deployment)"
   },
   "sections": [
     {
