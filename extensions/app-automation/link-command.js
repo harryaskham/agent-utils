@@ -1,4 +1,4 @@
-const LINK_SORTS = new Set(["newest", "oldest", "freshest", "stalest", "app", "kind", "host", "source", "from"]);
+const LINK_SORTS = new Set(["newest", "oldest", "freshest", "stalest", "app", "kind", "host", "source", "from", "time"]);
 
 function normalizeWord(value) {
   return String(value || "").trim().toLowerCase();
