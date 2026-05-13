@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { displayPath } from "./display-path.js";
+
 const FAILED_REFRESH_STATUSES = new Set(["copy_failed", "run_failed", "parse_failed", "extract_failed", "cdp_unavailable"]);
 
 const DEFAULT_BRIEFING_ACTIONS = [
@@ -255,7 +257,7 @@ export function renderWorkBriefingIndex(index = {}) {
   const lines = [
     `work briefing generated=${index.generatedAt || "unknown"} staleAfter=${index.staleAfterMinutes || "unknown"}m actions=${totals.actions || 0} fresh=${totals.fresh || 0} stale=${totals.stale || 0}${totals.preservedStale ? ` preservedStale=${totals.preservedStale} effectiveStale=${totals.effectiveStale || 0}` : ""}${totals.filteredEmptyRefresh ? ` filteredEmptyRefresh=${totals.filteredEmptyRefresh}` : ""}${totals.failedRefresh ? ` failedRefresh=${totals.failedRefresh}` : ""}${failedStatuses ? ` failedRefreshStatuses=${failedStatuses}` : ""}${failedErrorKinds ? ` failedRefreshErrorKinds=${failedErrorKinds}` : ""} missing=${totals.missing || 0} authRequired=${totals.authRequired || 0} items=${totals.items || 0}`,
   ];
-  if (index.indexPath) lines.push(`index=${index.indexPath}`);
+  if (index.indexPath) lines.push(`index=${displayPath(index.indexPath, { root: index.root })}`);
   for (const entry of index.entries || []) {
     const age = entry.ageMinutes != null ? ` age=${entry.ageMinutes}m` : "";
     const auth = entry.authRequired ? " authRequired=true" : "";

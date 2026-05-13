@@ -1,6 +1,8 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { displayPath } from "./display-path.js";
+
 const READABLE_EXTENSIONS = new Set([".json", ".md", ".txt", ".html"]);
 
 function relativeTo(root, filePath) {
@@ -511,14 +513,16 @@ export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries =
 }
 
 export function renderArtifactList(summary) {
-  if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
-  if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${summary.snapshotRoot}.`;
+  const snapshotRoot = displayPath(summary.snapshotRoot, { root: summary.root });
+  if (!summary.exists) return `No snapshots found at ${snapshotRoot}.`;
+  if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${snapshotRoot}.`;
   return summary.artifacts.map((artifact) => `${artifact.relativePath} (${artifact.size} bytes, ${artifact.modifiedAt})`).join("\n");
 }
 
 export function renderSnapshotDigest(summary) {
-  if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
-  if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${summary.snapshotRoot}.`;
+  const snapshotRoot = displayPath(summary.snapshotRoot, { root: summary.root });
+  if (!summary.exists) return `No snapshots found at ${snapshotRoot}.`;
+  if (!summary.artifacts.length) return `No readable snapshot artifacts found at ${snapshotRoot}.`;
   return summary.artifacts.map((artifact) => `${artifact.relativePath}: ${artifact.summary}${artifact.truncated ? " (truncated)" : ""}`).join("\n");
 }
 
@@ -550,8 +554,9 @@ function renderSnapshotLinkContext(context = {}) {
 }
 
 export function renderSnapshotLinks(summary) {
-  if (!summary.exists) return `No snapshots found at ${summary.snapshotRoot}.`;
-  if (!summary.links.length) return `No snapshot links${renderSnapshotLinkFilters(summary)} found at ${summary.snapshotRoot} (scanned ${summary.scannedArtifactCount ?? summary.artifacts?.length ?? 0} artifacts).`;
+  const snapshotRoot = displayPath(summary.snapshotRoot, { root: summary.root });
+  if (!summary.exists) return `No snapshots found at ${snapshotRoot}.`;
+  if (!summary.links.length) return `No snapshot links${renderSnapshotLinkFilters(summary)} found at ${snapshotRoot} (scanned ${summary.scannedArtifactCount ?? summary.artifacts?.length ?? 0} artifacts).`;
   const counts = summary.freshnessCounts || summarizeLinkFreshness(summary.links);
   const appCounts = summary.appCounts || summarizeLinkApps(summary.links);
   const kindCounts = summary.kindCounts || summarizeLinkKinds(summary.links);

@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { displayPath } from "./display-path.js";
+
 function compactDoctorValue(value, limit = 180) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return null;
@@ -63,7 +65,7 @@ export function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendri
   const failureStatuses = renderStatusCounts(msDevCdpRefresh?.failureStatuses);
   const failureErrorKinds = renderStatusCounts(msDevCdpRefresh?.failureErrorKinds);
   const lines = [
-    `app automation doctor stateRoot=${rootSummary.root} exists=${rootSummary.exists}`,
+    `app automation doctor stateRoot=${displayPath(rootSummary.root, { root: rootSummary.root })} exists=${rootSummary.exists}`,
     `playwrightCli=${playwrightCli}`,
     `tendrilBridge command=${tendrilBridge.command} remote=${tendrilBridge.remote || "none"} wslTunnel=${tendrilBridge.wslTunnel}`,
     tendrilProbe ? `tendrilProbe=${tendrilProbe.status}${tendrilProbe.targets != null ? ` targets=${tendrilProbe.targets}` : ""}${tendrilProbe.error ? ` error=${tendrilProbe.error}` : ""}` : null,

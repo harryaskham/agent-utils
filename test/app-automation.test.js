@@ -481,7 +481,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   const staleLinks = await collectSnapshotLinks({ root, app: "slack", freshness: "stale", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(staleLinks.links.length, 0);
   assert.deepEqual(staleLinks.freshnessCounts, { total: 0, fresh: 0, stale: 0, unknown: 0 });
-  assert.match(renderSnapshotLinks(staleLinks), /No snapshot links matching freshness=stale found .*scanned 4 artifacts/);
+  assert.match(renderSnapshotLinks(staleLinks), /No snapshot links matching freshness=stale found at \[state-root\]\/snapshots\/slack \(scanned 4 artifacts\)/);
   await writeFile(path.join(slackDir, "boolean-context.json"), JSON.stringify({ app: "slack", kind: "notifications.snapshot", status: "ok", capturedAt: "2026-05-12T00:00:00Z", notifications: [{ text: "DM 1 unread", channel: true, dm: true, url: "https://app.slack.com/client/T/E" }] }), "utf8");
   const booleanContextLinks = await collectSnapshotLinks({ root, app: "slack", query: "/E", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.deepEqual(booleanContextLinks.links[0].context, {});
@@ -586,7 +586,7 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   });
   assert.equal(emptyAggregatedLinks.scannedArtifactCount, 6);
   assert.equal(emptyAggregatedLinks.artifacts, undefined);
-  assert.match(renderSnapshotLinks(emptyAggregatedLinks), /No snapshot links matching query="missing" found .*scanned 6 artifacts/);
+  assert.match(renderSnapshotLinks(emptyAggregatedLinks), /No snapshot links matching query="missing" found at \[state-root\]\/snapshots \(scanned 6 artifacts\)/);
   assert.ok(allLinks.links.some((link) => link.app === "calendar" && link.url === "https://meet.google.com/standup"));
   assert.match(renderedDigest, /action=notifications\.snapshot status=error results=2 authRequired=1 resultStatuses=error=1,ok=1/);
   assert.match(renderedDigest, /status=auth_required/);
@@ -921,8 +921,10 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
     actionDiagnostics: [],
     msDevCdpRefresh: summary,
   });
+  assert.match(rendered, /app automation doctor stateRoot=\[state-root\] exists=true/);
   assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2 failureErrorKinds=connect_timeout=2 sshTargetConfigured=true cdpPort=9224 connectTimeout=5s/);
   assert.doesNotMatch(rendered, /test-user@ms-dev/);
+  assert.doesNotMatch(rendered, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1118,6 +1120,8 @@ test("work briefing index summarizes bounded app snapshot state", async () => {
   assert.equal(index.totals.stale, 1);
   assert.equal(index.totals.authRequired, 1);
   assert.equal(index.entries.find((entry) => entry.app === "outlook").samples.length, 1);
+  assert.match(renderWorkBriefingIndex(index), /index=\[state-root\]\/indexes\/work-briefing\.json/);
+  assert.doesNotMatch(renderWorkBriefingIndex(index), new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(renderWorkBriefingIndex(index), /outlook\.notifications\.snapshot: status=ok freshness=fresh age=5m items=2/);
   assert.match(renderWorkBriefingIndex(index), /slack\.notifications\.snapshot: status=auth_required freshness=stale age=35m items=0 authRequired=true/);
   assert.match(renderWorkBriefingIndex(index), /outlook\.calendar\.snapshot: status=missing freshness=unknown items=0 latestRefresh=extract_failed\/1m/);
