@@ -284,6 +284,14 @@ function rawItems(liveResult = {}) {
   return Array.isArray(liveResult.result?.items) ? liveResult.result.items : [];
 }
 
+function cleanInferredFrom(value) {
+  const text = compact(value, 120);
+  if (!text) return null;
+  const placeholderCount = (text.match(/[?□�]/g) || []).length;
+  if (placeholderCount >= 3) return null;
+  return text;
+}
+
 function normalizeExtractedItem(item = {}, target = {}) {
   const text = compact(item.text, 240);
   if (target.app === "teams" && target.action === "notifications.snapshot") {
@@ -293,7 +301,7 @@ function normalizeExtractedItem(item = {}, target = {}) {
       return {
         text: `Teams reports ${count} new notification${count === 1 ? "" : "s"}`,
         source: "Teams",
-        from: compact(item.from),
+        from: cleanInferredFrom(item.from),
         time: compact(item.time),
         hrefs: Array.isArray(item.hrefs) ? item.hrefs : [],
       };
@@ -302,7 +310,7 @@ function normalizeExtractedItem(item = {}, target = {}) {
   return {
     text,
     source: compact(item.source),
-    from: compact(item.from),
+    from: cleanInferredFrom(item.from),
     time: compact(item.time),
     hrefs: Array.isArray(item.hrefs) ? item.hrefs : [],
   };

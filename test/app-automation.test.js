@@ -669,6 +669,28 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh suppresses noisy inferred from metadata", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-outlook-from-${Date.now()}`), { recursive: true });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [
+        { text: "Unread Silvia Candiani, Satya Nadella Microsoft Daily Digest Tue 22:52 New posts from Microsoft ? ? ? ? ?", source: "Outlook Mail", from: "Microsoft ? ? ? ? ?" },
+        { text: "Unread Ada Lovelace Project update", source: "Outlook Mail", from: "Ada Lovelace" },
+      ] } }] }), stderr: "" };
+    },
+  });
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=2/);
+  const snapshot = JSON.parse(await readFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), "utf8"));
+  assert.equal(snapshot.items[0].from, undefined);
+  assert.equal(snapshot.items[1].from, "Ada Lovelace");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh dedupes nested Outlook notification rows", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-outlook-dedupe-${Date.now()}`), { recursive: true });
   const summary = await runMsDevCdpRefresh({
