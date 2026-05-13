@@ -1021,7 +1021,7 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
   await writeFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), JSON.stringify({
     status: "copy_failed",
     capturedAt: "2026-05-13T03:00:00Z",
-    config: { sshTargetConfigured: true, sshTarget: "test-user@ms-dev", cdpPort: 9224, sshConnectTimeoutSeconds: 5, preflightAttempts: 2 },
+    config: { sshTargetConfigured: true, sshTarget: "test-user@ms-dev", cdpPort: 9224, sshConnectTimeoutSeconds: 5, preflightAttempts: 0 },
     snapshots: [],
     failed: [
       { app: "slack", action: "notifications.snapshot", status: "copy_failed", errorKind: "connect_timeout" },
@@ -1036,7 +1036,7 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
   assert.equal(summary.sshTargetConfigured, true);
   assert.equal(summary.cdpPort, 9224);
   assert.equal(summary.sshConnectTimeoutSeconds, 5);
-  assert.equal(summary.preflightAttempts, 2);
+  assert.equal(summary.preflightAttempts, 0);
   const rendered = renderDoctorReport({
     rootSummary: { root, exists: true },
     catalog: { apps: [{ id: "slack" }], external: {} },
@@ -1046,7 +1046,7 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
     msDevCdpRefresh: summary,
   });
   assert.match(rendered, /app automation doctor stateRoot=\[state-root\] exists=true/);
-  assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2 failureErrorKinds=connect_timeout=2 sshTargetConfigured=true cdpPort=9224 connectTimeout=5s preflightAttempts=2/);
+  assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2 failureErrorKinds=connect_timeout=2 sshTargetConfigured=true cdpPort=9224 connectTimeout=5s preflightAttempts=0/);
   assert.doesNotMatch(rendered, /test-user@ms-dev/);
   assert.doesNotMatch(rendered, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   await rm(root, { recursive: true, force: true });

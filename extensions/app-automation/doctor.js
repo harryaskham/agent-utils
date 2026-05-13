@@ -42,9 +42,9 @@ export async function readLatestMsDevRefreshSummary(root, { now = new Date() } =
   const failed = Array.isArray(manifest.failed) ? manifest.failed : [];
   const snapshots = Array.isArray(manifest.snapshots) ? manifest.snapshots : [];
   const config = manifest.config && typeof manifest.config === "object" ? manifest.config : {};
-  const cdpPort = Number.parseInt(String(config.cdpPort || ""), 10);
-  const sshConnectTimeoutSeconds = Number.parseInt(String(config.sshConnectTimeoutSeconds || ""), 10);
-  const preflightAttempts = Number.parseInt(String(config.preflightAttempts || ""), 10);
+  const cdpPort = Number.parseInt(String(config.cdpPort ?? ""), 10);
+  const sshConnectTimeoutSeconds = Number.parseInt(String(config.sshConnectTimeoutSeconds ?? ""), 10);
+  const preflightAttempts = Number.parseInt(String(config.preflightAttempts ?? ""), 10);
   const hasSshTargetConfigured = Object.prototype.hasOwnProperty.call(config, "sshTargetConfigured");
   return {
     status: compactDoctorValue(manifest.status, 80) || "unknown",
