@@ -853,6 +853,32 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh classifies process-level command timeouts", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-run-timeout-${Date.now()}`), { recursive: true });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["calendar.snapshot"],
+    timeoutMs: 1234,
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 1, stdout: "", stderr: "", signal: "SIGTERM", killed: true, timedOut: true, timeoutMs: 1234 };
+    },
+  });
+  assert.equal(summary.status, "run_failed");
+  assert.equal(summary.failed[0].status, "run_failed");
+  assert.equal(summary.failed[0].errorKind, "command_timeout");
+  assert.match(summary.failed[0].error, /signal=SIGTERM/);
+  assert.match(summary.failed[0].error, /killed=true/);
+  assert.match(renderMsDevCdpRefresh(summary), /failureErrorKinds=command_timeout=1/);
+  const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
+  assert.equal(manifest.failed[0].errorKind, "command_timeout");
+  assert.equal("stdout" in manifest, false);
+  assert.equal("stderr" in manifest, false);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("app automation doctor summarizes latest ms-dev refresh manifest", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-doctor-msdev-${Date.now()}`), { recursive: true });
   await mkdir(path.join(root, "bridge"), { recursive: true });

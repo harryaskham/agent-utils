@@ -61,12 +61,30 @@ function compact(value, limit = 180) {
 function classifyBridgeError(error) {
   const text = String(error || "").toLowerCase();
   if (!text) return null;
-  if (/connection timed out|operation timed out|connect to host .* timed out|timed out/.test(text)) return "connect_timeout";
+  if (/connection timed out|operation timed out|connect to host .* timed out/.test(text)) return "connect_timeout";
+  if (/command timed out|process timed out|timeout exceeded|\betimedout\b|\bsigterm\b|\bsigkill\b|killed=true|timedout=true/.test(text)) return "command_timeout";
   if (/connection refused/.test(text)) return "connection_refused";
   if (/no route to host|network is unreachable|host is down/.test(text)) return "host_unreachable";
   if (/could not resolve hostname|name or service not known|temporary failure in name resolution/.test(text)) return "name_resolution_failed";
   if (/permission denied|publickey|authentication failed/.test(text)) return "auth_failed";
   return null;
+}
+
+function execFailureText(result = {}, fallback = "command failed") {
+  if (typeof result === "string") return result;
+  const parts = [];
+  for (const field of ["stderr", "stdout", "error", "message"]) {
+    const value = compact(result?.[field], 500);
+    if (value) parts.push(value);
+  }
+  for (const field of ["code", "signal"]) {
+    if (result?.[field] !== undefined && result?.[field] !== null && result?.[field] !== "") parts.push(`${field}=${result[field]}`);
+  }
+  if (result?.killed !== undefined) parts.push(`killed=${Boolean(result.killed)}`);
+  if (result?.timedOut !== undefined) parts.push(`timedOut=${Boolean(result.timedOut)}`);
+  if (result?.timeout !== undefined) parts.push(`timeout=${result.timeout}`);
+  if (result?.timeoutMs !== undefined) parts.push(`timeoutMs=${result.timeoutMs}`);
+  return compact(parts.join(" "), 1000) || fallback;
 }
 
 function compactCounts(entries = [], field = "errorKind") {
@@ -582,12 +600,12 @@ export async function runMsDevCdpRefresh({
   const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
   const copy = await exec("scp", [...sshArgs, localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
   if (copy.code !== 0) {
-    return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: copy.stderr || copy.stdout || "scp failed" });
+    return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(copy, "scp failed") });
   }
   const remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
   const run = await exec("ssh", [...sshArgs, config.sshTarget, remoteCommand], { timeout: timeoutMs });
   if (run.code !== 0) {
-    return writeBridgeFailureManifest({ bridgeDir, status: "run_failed", config, targets, error: run.stderr || run.stdout || "ssh command failed" });
+    return writeBridgeFailureManifest({ bridgeDir, status: "run_failed", config, targets, error: execFailureText(run, "ssh command failed") });
   }
   let payload;
   try {
