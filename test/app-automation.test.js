@@ -623,15 +623,25 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
     source: "ms-dev-chrome-cdp",
     cdpPort: 9224,
     results: [
-      { app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", url: "https://outlook.office.com/mail/?token=secret#frag", authRequired: false, items: [{ text: "Important mail from Ada", source: "Outlook Mail", from: "Ada", hrefs: ["https://outlook.office.com/mail/id/1?auth=secret#frag"] }] } },
+      { app: "calendar", action: "events.snapshot", status: "ok", result: { title: "Google Calendar", url: "https://calendar.google.com/calendar/u/0/r", authRequired: false, items: [
+        { text: "13, Wednesday, today | 13", source: "Google Calendar" },
+        { text: "Team standup, 09:00 to 09:30, Wednesday, May 13, By Ada, Busy", source: "Google Calendar", from: "Ada" },
+      ] } },
+      { app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", url: "https://outlook.office.com/mail/?token=secret#frag", authRequired: false, items: [
+        { text: "Delete | ? this message. (#)", source: "Outlook Mail" },
+        { text: "Flag this message | Flag this message | ??", source: "Outlook Mail" },
+        { text: "Tags | ? Quick steps ? ? Mark all as read", source: "Outlook Mail" },
+        { text: "Inbox - 1,467 items (1,123 unread) | ? Inbox selected 1123 unread", source: "Outlook Mail" },
+        { text: "Important mail from Ada", source: "Outlook Mail", from: "Ada", hrefs: ["https://outlook.office.com/mail/id/1?auth=secret#frag"] },
+      ] } },
       { app: "slack", action: "notifications.snapshot", status: "ok", result: { title: "Find your workspace | Slack", url: "https://app.slack.com/client", authRequired: true, items: [] } },
     ],
   });
   const summary = await runMsDevCdpRefresh({
     root,
     sshTarget: "test-user@ms-dev",
-    apps: ["outlook", "slack"],
-    actions: ["notifications.snapshot"],
+    apps: ["calendar", "outlook", "slack"],
+    actions: ["events.snapshot", "notifications.snapshot"],
     exec: async (command, args) => {
       commands.push({ command, args });
       if (command === "scp") return { code: 0, stdout: "", stderr: "" };
@@ -643,13 +653,39 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
   assert.equal(commands[1].command, "ssh");
   assert.match(commands[1].args[1], /ExecutionPolicy Bypass/);
   assert.equal(summary.status, "ok");
+  assert.match(renderMsDevCdpRefresh(summary), /calendar\.events\.snapshot: status=ok items=1/);
   assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=1/);
   assert.match(renderMsDevCdpRefresh(summary), /slack\.notifications\.snapshot: status=auth_required items=0 authRequired=true/);
   const slackSnapshot = JSON.parse(await readFile(path.join(root, "snapshots", "slack", "notifications.snapshot.json"), "utf8"));
   assert.equal(slackSnapshot.status, "auth_required");
+  const calendarSnapshot = JSON.parse(await readFile(path.join(root, "snapshots", "calendar", "events.snapshot.json"), "utf8"));
+  assert.equal(calendarSnapshot.items[0].text, "Team standup, 09:00 to 09:30, Wednesday, May 13, By Ada, Busy");
   const outlookSnapshot = JSON.parse(await readFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), "utf8"));
   assert.equal(outlookSnapshot.items[0].url, "https://outlook.office.com/mail/id/1");
   assert.doesNotMatch(JSON.stringify(outlookSnapshot), /token=secret|auth=secret|#frag/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ms-dev CDP refresh preserves snapshots when all live rows are filtered as chrome", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-filtered-${Date.now()}`), { recursive: true });
+  const calendarDir = path.join(root, "snapshots", "calendar");
+  await mkdir(calendarDir, { recursive: true });
+  await writeFile(path.join(calendarDir, "events.snapshot.json"), JSON.stringify({ app: "calendar", kind: "events.snapshot", status: "ok", capturedAt: "2026-05-13T02:00:00Z", count: 1, items: [{ text: "preserve event" }] }), "utf8");
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["calendar"],
+    actions: ["events.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "calendar", action: "events.snapshot", status: "ok", result: { title: "Calendar", items: [{ text: "13, Wednesday, today | 13" }] } }] }), stderr: "" };
+    },
+  });
+  assert.equal(summary.snapshots[0].status, "filtered_empty");
+  assert.equal(summary.snapshots[0].skippedWrite, true);
+  assert.match(renderMsDevCdpRefresh(summary), /calendar\.events\.snapshot: status=filtered_empty items=0/);
+  const preserved = JSON.parse(await readFile(path.join(calendarDir, "events.snapshot.json"), "utf8"));
+  assert.equal(preserved.items[0].text, "preserve event");
   await rm(root, { recursive: true, force: true });
 });
 

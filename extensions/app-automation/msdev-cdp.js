@@ -13,7 +13,7 @@ export const DEFAULT_MSDEV_CDP_TARGETS = [
     app: "calendar",
     action: "events.snapshot",
     url: "https://calendar.google.com/calendar/u/0/r",
-    includePatterns: ["meeting", "event", "calendar", "today", "tomorrow", "starts", "join", "busy", "free"],
+    includePatterns: ["meeting", "event", "calendar", "today", "tomorrow", "starts", "join", "busy", "free", "\\d{1,2}:\\d{2}", "\\bby\\b"],
   },
   {
     app: "outlook",
@@ -25,7 +25,7 @@ export const DEFAULT_MSDEV_CDP_TARGETS = [
     app: "outlook",
     action: "calendar.snapshot",
     url: "https://outlook.office.com/calendar/",
-    includePatterns: ["meeting", "calendar", "event", "today", "tomorrow", "starts", "join", "organizer", "organiser", "accepted", "tentative"],
+    includePatterns: ["meeting", "calendar", "event", "today", "tomorrow", "starts", "join", "organizer", "organiser", "accepted", "tentative", "busy", "free", "\\d{1,2}:\\d{2}", "\\bby\\b"],
   },
   {
     app: "teams",
@@ -37,7 +37,7 @@ export const DEFAULT_MSDEV_CDP_TARGETS = [
     app: "teams",
     action: "calendar.snapshot",
     url: "https://teams.microsoft.com/v2/calendar",
-    includePatterns: ["meeting", "calendar", "event", "starts", "join", "organizer", "organiser", "today", "tomorrow"],
+    includePatterns: ["meeting", "calendar", "event", "starts", "join", "organizer", "organiser", "today", "tomorrow", "busy", "free", "\\d{1,2}:\\d{2}", "\\bby\\b"],
   },
   {
     app: "slack",
@@ -205,25 +205,102 @@ foreach ($targetSpec in $Targets) {
 `;
 }
 
-function snapshotInputFromResult(liveResult = {}) {
+const SNAPSHOT_CHROME_PATTERNS = [
+  /^calendar(?:\s*[|].*)?$/i,
+  /^today(?:,|\s|$)/i,
+  /^switch to calendar$/i,
+  /^add other calendars$/i,
+  /^other calendars\b/i,
+  /^my calendars\b/i,
+  /^delete\b/i,
+  /^archive\b/i,
+  /^reply(?: all)?\b/i,
+  /^forward\b/i,
+  /^report(?: message)?\b/i,
+  /^message list\b/i,
+  /^inbox\s+-\s+[\d,]+\s+items\b/i,
+  /^deleted items\s+-\s+[\d,]+\s+items\b/i,
+  /^drafts?\s+-\s+[\d,]+\s+items\b/i,
+  /^sent items\s+-\s+[\d,]+\s+items\b/i,
+  /^tags\b/i,
+  /^mark all as read\b/i,
+  /^flag [/] unflag\b/i,
+  /^expand to see flag options\b/i,
+  /^snooze\b/i,
+  /^ribbon\b/i,
+  /^move [&] delete\b/i,
+  /^respond\b/i,
+  /^\d{4}\s+[a-z]+, selected date\b/i,
+  /^\d{1,2},\s*[a-z]+,\s*today\b/i,
+  /^[a-z]+,\s*\d{1,2}\s+[a-z]+,\s*today\b/i,
+  /^calendar view,\s*current time\b/i,
+  /^view details\b/i,
+  /^calendar actions\b/i,
+  /^loading calendar actions\b/i,
+  /^go to today\b/i,
+  /tasks are currently not shown on your grid/i,
+  /create a new email message/i,
+  /tell microsoft about issues related to a message/i,
+  /^flag this message\b/i,
+  /^keep this message at the top of your folder\b/i,
+];
+
+function isSnapshotChrome(item = {}, target = {}) {
+  const text = compact(item.text, 260) || "";
+  if (!text) return true;
+  if (SNAPSHOT_CHROME_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (target.action === "calendar.snapshot" || target.action === "events.snapshot") {
+    const hasEventSignal = /\b(\d{1,2}:\d{2}\s+to\s+\d{1,2}:\d{2}|all day event|\bby\s+[^,]{2,}|tentative|accepted|free|busy|join|meeting|standup|sync)\b/i.test(text);
+    const isDateOnly = /^[a-z]+,?\s+\d{1,2}\s+[a-z]+,?\s+(today\s*)?(?:[|].*)?$/i.test(text);
+    if (isDateOnly && !hasEventSignal) return true;
+  }
+  return false;
+}
+
+function rawItems(liveResult = {}) {
+  return Array.isArray(liveResult.result?.items) ? liveResult.result.items : [];
+}
+
+function snapshotInputFromResult(liveResult = {}, target = {}) {
   const result = liveResult.result || {};
   return {
     title: compact(result.title),
     url: result.url,
-    items: Array.isArray(result.items) ? result.items.map((item) => ({
+    items: rawItems(liveResult).map((item) => ({
       text: compact(item.text, 240),
       source: compact(item.source),
       from: compact(item.from),
       time: compact(item.time),
       hrefs: Array.isArray(item.hrefs) ? item.hrefs : [],
-    })).filter((item) => item.text) : [],
+    })).filter((item) => item.text && !isSnapshotChrome(item, target)),
+  };
+}
+
+function slackLooksAuthRequired(liveResult = {}) {
+  const title = compact(liveResult.result?.title, 180) || "";
+  const url = compact(liveResult.result?.url, 240) || "";
+  return Boolean(liveResult.result?.authRequired) || /find your workspace|sign in|log in|login|authenticate/i.test(`${title} ${url}`);
+}
+
+function filteredEmptyResult({ target, input, liveResult, snapshotCount = 0 }) {
+  const rawCount = rawItems(liveResult).length;
+  if (snapshotCount > 0 || rawCount === 0 || liveResult.result?.authRequired || slackLooksAuthRequired(liveResult)) return null;
+  return {
+    app: target.app,
+    action: target.action,
+    status: "filtered_empty",
+    count: 0,
+    rawCount,
+    filteredCount: input.items.length,
+    skippedWrite: true,
+    reason: "all extracted rows were filtered out or failed include-pattern matching; preserving previous snapshot",
   };
 }
 
 async function writeLiveSnapshot({ root, target, liveResult, capturedAt }) {
   const snapshotDir = path.join(root, "snapshots", target.app);
   await mkdir(snapshotDir, { recursive: true });
-  const input = snapshotInputFromResult(liveResult);
+  const input = snapshotInputFromResult(liveResult, target);
   if (target.app === "slack" && target.action === "notifications.snapshot") {
     const snapshot = buildSlackNotificationSnapshot(input, { now: capturedAt ? new Date(capturedAt) : new Date() });
     snapshot.source = "ms-dev-chrome-cdp";
@@ -231,7 +308,7 @@ async function writeLiveSnapshot({ root, target, liveResult, capturedAt }) {
       snapshot.status = liveResult.status || "error";
       snapshot.error = liveResult.status || "error";
     }
-    if (liveResult.result?.authRequired) {
+    if (slackLooksAuthRequired(liveResult)) {
       snapshot.status = "auth_required";
       snapshot.authRequired = true;
     }
@@ -249,6 +326,8 @@ async function writeLiveSnapshot({ root, target, liveResult, capturedAt }) {
     input,
     includePatterns: target.includePatterns || [],
   });
+  const filteredEmpty = filteredEmptyResult({ target, input, liveResult, snapshotCount: snapshot.count });
+  if (filteredEmpty) return filteredEmpty;
   snapshot.capturedAt = capturedAt || snapshot.capturedAt;
   snapshot.source = "ms-dev-chrome-cdp";
   if (liveResult.status !== "ok") {
