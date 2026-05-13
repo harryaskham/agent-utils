@@ -655,8 +655,10 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
     },
   });
   assert.equal(commands[0].command, "scp");
+  assert.deepEqual(commands[0].args.slice(0, 4), ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
   assert.equal(commands[1].command, "ssh");
-  assert.match(commands[1].args[1], /ExecutionPolicy Bypass/);
+  assert.deepEqual(commands[1].args.slice(0, 4), ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
+  assert.match(commands[1].args[5], /ExecutionPolicy Bypass/);
   assert.equal(summary.status, "ok");
   assert.match(renderMsDevCdpRefresh(summary), /calendar\.events\.snapshot: status=ok items=1/);
   assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=1/);
@@ -875,15 +877,17 @@ test("ms-dev CDP refresh honors env configuration when params are omitted", asyn
   const commands = [];
   const summary = await runMsDevCdpRefresh({
     root,
-    env: { APP_AUTOMATION_MSDEV_SSH_TARGET: "env-user@ms-dev", APP_AUTOMATION_MSDEV_CDP_PORT: "9333" },
+    env: { APP_AUTOMATION_MSDEV_SSH_TARGET: "env-user@ms-dev", APP_AUTOMATION_MSDEV_CDP_PORT: "9333", APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS: "7" },
     exec: async (command, args) => {
       commands.push({ command, args });
       if (command === "scp") return { code: 0, stdout: "", stderr: "" };
       return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:01:00Z", source: "ms-dev-chrome-cdp", cdpPort: 9333, results: [] }), stderr: "" };
     },
   });
-  assert.equal(commands[0].args[1].startsWith("env-user@ms-dev:"), true);
-  assert.equal(commands[1].args[0], "env-user@ms-dev");
+  assert.equal(commands[0].args[3], "ConnectTimeout=7");
+  assert.equal(commands[0].args[5].startsWith("env-user@ms-dev:"), true);
+  assert.equal(commands[1].args[3], "ConnectTimeout=7");
+  assert.equal(commands[1].args[4], "env-user@ms-dev");
   assert.equal(summary.cdpPort, 9333);
   await rm(root, { recursive: true, force: true });
 });

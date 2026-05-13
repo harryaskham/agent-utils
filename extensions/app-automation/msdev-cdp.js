@@ -7,6 +7,7 @@ import { buildSlackNotificationSnapshot, renderSlackNotificationMarkdown } from 
 export const DEFAULT_MSDEV_CDP_PORT = 9224;
 export const DEFAULT_MSDEV_PWSH = "/mnt/c/Program Files/PowerShell/7/pwsh.exe";
 export const DEFAULT_MSDEV_REMOTE_SCRIPT = "/tmp/agent-utils-msdev-cdp-refresh.ps1";
+export const DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS = 10;
 
 export const DEFAULT_MSDEV_CDP_TARGETS = [
   {
@@ -57,6 +58,11 @@ function compact(value, limit = 180) {
   return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
 }
 
+function sshOptions(connectTimeoutSeconds = DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS) {
+  const timeout = Math.max(1, Number.parseInt(String(connectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS);
+  return ["-o", "BatchMode=yes", "-o", `ConnectTimeout=${timeout}`];
+}
+
 function selectedTargets({ apps, actions, targets = DEFAULT_MSDEV_CDP_TARGETS } = {}) {
   const wantedApps = new Set((apps || []).map((value) => String(value)));
   const wantedActions = new Set((actions || []).map((value) => String(value)));
@@ -72,6 +78,7 @@ export function msDevCdpConfig(env = process.env) {
     pwshPath: env.APP_AUTOMATION_MSDEV_PWSH || DEFAULT_MSDEV_PWSH,
     cdpPort: Number.parseInt(String(env.APP_AUTOMATION_MSDEV_CDP_PORT || DEFAULT_MSDEV_CDP_PORT), 10) || DEFAULT_MSDEV_CDP_PORT,
     remoteScriptPath: env.APP_AUTOMATION_MSDEV_REMOTE_SCRIPT || DEFAULT_MSDEV_REMOTE_SCRIPT,
+    sshConnectTimeoutSeconds: Number.parseInt(String(env.APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
   };
 }
 
@@ -82,6 +89,7 @@ export function msDevCdpCommandSummary(config = msDevCdpConfig()) {
     pwshPath: config.pwshPath,
     cdpPort: config.cdpPort,
     remoteScriptPath: config.remoteScriptPath,
+    sshConnectTimeoutSeconds: config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
   };
 }
 
@@ -488,6 +496,7 @@ export async function runMsDevCdpRefresh({
   pwshPath,
   cdpPort,
   remoteScriptPath,
+  sshConnectTimeoutSeconds,
   exec,
   timeoutMs = 120_000,
   env = process.env,
@@ -498,11 +507,13 @@ export async function runMsDevCdpRefresh({
     pwshPath: pwshPath ?? defaults.pwshPath,
     cdpPort: cdpPort ?? defaults.cdpPort,
     remoteScriptPath: remoteScriptPath ?? defaults.remoteScriptPath,
+    sshConnectTimeoutSeconds: sshConnectTimeoutSeconds ?? defaults.sshConnectTimeoutSeconds,
   };
   config.sshTarget = config.sshTarget || "";
   config.pwshPath = config.pwshPath || DEFAULT_MSDEV_PWSH;
   config.cdpPort = Number.parseInt(String(config.cdpPort || DEFAULT_MSDEV_CDP_PORT), 10) || DEFAULT_MSDEV_CDP_PORT;
   config.remoteScriptPath = config.remoteScriptPath || DEFAULT_MSDEV_REMOTE_SCRIPT;
+  config.sshConnectTimeoutSeconds = Number.parseInt(String(config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS;
   if (!root) throw new Error("runMsDevCdpRefresh requires root");
   if (!exec) throw new Error("runMsDevCdpRefresh requires an exec(command, args, options) function");
   const targets = selectedTargets({ apps, actions });
@@ -513,12 +524,13 @@ export async function runMsDevCdpRefresh({
   await mkdir(bridgeDir, { recursive: true });
   const localScriptPath = path.join(bridgeDir, "ms-dev-cdp-refresh.ps1");
   await writeFile(localScriptPath, buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets }), "utf8");
-  const copy = await exec("scp", [localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
+  const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
+  const copy = await exec("scp", [...sshArgs, localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
   if (copy.code !== 0) {
     return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: copy.stderr || copy.stdout || "scp failed" });
   }
   const remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
-  const run = await exec("ssh", [config.sshTarget, remoteCommand], { timeout: timeoutMs });
+  const run = await exec("ssh", [...sshArgs, config.sshTarget, remoteCommand], { timeout: timeoutMs });
   if (run.code !== 0) {
     return writeBridgeFailureManifest({ bridgeDir, status: "run_failed", config, targets, error: run.stderr || run.stdout || "ssh command failed" });
   }
