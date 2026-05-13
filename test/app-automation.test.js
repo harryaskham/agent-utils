@@ -887,6 +887,41 @@ test("ms-dev CDP refresh fails fast when SSH preflight fails", async () => {
   const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, now: new Date(manifest.capturedAt) });
   assert.deepEqual(index.totals.failedRefreshStatuses, { preflight_failed: 1 });
   assert.match(renderWorkBriefingIndex(index), /failedRefresh=1 failedRefreshStatuses=preflight_failed=1/);
+  assert.equal(manifest.config.preflightAttempts, 1);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ms-dev CDP refresh retries flapping SSH preflight before copy", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-preflight-retry-${Date.now()}`), { recursive: true });
+  const commands = [];
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    preflightAttempts: 2,
+    exec: async (command, args, options) => {
+      commands.push({ command, args, options });
+      if (command === "ssh" && args.at(-1) === "true" && commands.filter((entry) => entry.command === "ssh" && entry.args.at(-1) === "true").length === 1) {
+        return { code: 255, stdout: "", stderr: "Connection timed out during banner exchange" };
+      }
+      if (command === "ssh" && args.at(-1) === "true") return { code: 0, stdout: "", stderr: "" };
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      if (command === "ssh") {
+        return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [{ text: "Important mail", source: "Outlook Mail" }] } }] }), stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unexpected" };
+    },
+  });
+  assert.deepEqual(commands.map((entry) => entry.command), ["ssh", "ssh", "scp", "ssh"]);
+  assert.equal(commands[0].args.at(-1), "true");
+  assert.equal(commands[1].args.at(-1), "true");
+  assert.equal(summary.status, "ok");
+  assert.equal(summary.snapshots[0].status, "ok");
+  assert.match(renderMsDevCdpRefresh(summary), /preflightAttempts=2/);
+  const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
+  assert.equal(manifest.config.preflightAttempts, 2);
+  assert.equal(manifest.failed.length, 0);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -958,7 +993,7 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
   await writeFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), JSON.stringify({
     status: "copy_failed",
     capturedAt: "2026-05-13T03:00:00Z",
-    config: { sshTargetConfigured: true, sshTarget: "test-user@ms-dev", cdpPort: 9224, sshConnectTimeoutSeconds: 5 },
+    config: { sshTargetConfigured: true, sshTarget: "test-user@ms-dev", cdpPort: 9224, sshConnectTimeoutSeconds: 5, preflightAttempts: 2 },
     snapshots: [],
     failed: [
       { app: "slack", action: "notifications.snapshot", status: "copy_failed", errorKind: "connect_timeout" },
@@ -973,6 +1008,7 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
   assert.equal(summary.sshTargetConfigured, true);
   assert.equal(summary.cdpPort, 9224);
   assert.equal(summary.sshConnectTimeoutSeconds, 5);
+  assert.equal(summary.preflightAttempts, 2);
   const rendered = renderDoctorReport({
     rootSummary: { root, exists: true },
     catalog: { apps: [{ id: "slack" }], external: {} },
@@ -982,7 +1018,7 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
     msDevCdpRefresh: summary,
   });
   assert.match(rendered, /app automation doctor stateRoot=\[state-root\] exists=true/);
-  assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2 failureErrorKinds=connect_timeout=2 sshTargetConfigured=true cdpPort=9224 connectTimeout=5s/);
+  assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2 failureErrorKinds=connect_timeout=2 sshTargetConfigured=true cdpPort=9224 connectTimeout=5s preflightAttempts=2/);
   assert.doesNotMatch(rendered, /test-user@ms-dev/);
   assert.doesNotMatch(rendered, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   await rm(root, { recursive: true, force: true });
@@ -1319,7 +1355,9 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /renderWorkAppOverview/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_msdev_cdp_refresh`/);
   assert.match(source, /sshConnectTimeoutSeconds/);
+  assert.match(source, /preflightAttempts/);
   assert.match(source, /APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS/);
+  assert.match(combinedSource, /APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS/);
   assert.match(source, /runMsDevCdpRefresh/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_work_briefing`/);
   assert.match(source, /buildWorkBriefingIndex/);

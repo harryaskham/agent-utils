@@ -44,6 +44,7 @@ export async function readLatestMsDevRefreshSummary(root, { now = new Date() } =
   const config = manifest.config && typeof manifest.config === "object" ? manifest.config : {};
   const cdpPort = Number.parseInt(String(config.cdpPort || ""), 10);
   const sshConnectTimeoutSeconds = Number.parseInt(String(config.sshConnectTimeoutSeconds || ""), 10);
+  const preflightAttempts = Number.parseInt(String(config.preflightAttempts || ""), 10);
   const hasSshTargetConfigured = Object.prototype.hasOwnProperty.call(config, "sshTargetConfigured");
   return {
     status: compactDoctorValue(manifest.status, 80) || "unknown",
@@ -58,6 +59,7 @@ export async function readLatestMsDevRefreshSummary(root, { now = new Date() } =
     sshTargetConfigured: hasSshTargetConfigured ? Boolean(config.sshTargetConfigured) : undefined,
     cdpPort: Number.isFinite(cdpPort) ? cdpPort : undefined,
     sshConnectTimeoutSeconds: Number.isFinite(sshConnectTimeoutSeconds) ? sshConnectTimeoutSeconds : undefined,
+    preflightAttempts: Number.isFinite(preflightAttempts) ? preflightAttempts : undefined,
   };
 }
 
@@ -69,7 +71,7 @@ export function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendri
     `playwrightCli=${playwrightCli}`,
     `tendrilBridge command=${tendrilBridge.command} remote=${tendrilBridge.remote || "none"} wslTunnel=${tendrilBridge.wslTunnel}`,
     tendrilProbe ? `tendrilProbe=${tendrilProbe.status}${tendrilProbe.targets != null ? ` targets=${tendrilProbe.targets}` : ""}${tendrilProbe.error ? ` error=${tendrilProbe.error}` : ""}` : null,
-    msDevCdpRefresh ? `msDevCdpRefresh=${msDevCdpRefresh.status}${msDevCdpRefresh.ageMinutes != null ? ` age=${msDevCdpRefresh.ageMinutes}m` : ""}${msDevCdpRefresh.snapshots != null ? ` snapshots=${msDevCdpRefresh.snapshots}` : ""}${msDevCdpRefresh.failed != null ? ` failed=${msDevCdpRefresh.failed}` : ""}${failureStatuses ? ` failureStatuses=${failureStatuses}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}${msDevCdpRefresh.sshTargetConfigured != null ? ` sshTargetConfigured=${msDevCdpRefresh.sshTargetConfigured}` : ""}${msDevCdpRefresh.cdpPort != null ? ` cdpPort=${msDevCdpRefresh.cdpPort}` : ""}${msDevCdpRefresh.sshConnectTimeoutSeconds != null ? ` connectTimeout=${msDevCdpRefresh.sshConnectTimeoutSeconds}s` : ""}${msDevCdpRefresh.error ? ` error=${msDevCdpRefresh.error}` : ""}` : null,
+    msDevCdpRefresh ? `msDevCdpRefresh=${msDevCdpRefresh.status}${msDevCdpRefresh.ageMinutes != null ? ` age=${msDevCdpRefresh.ageMinutes}m` : ""}${msDevCdpRefresh.snapshots != null ? ` snapshots=${msDevCdpRefresh.snapshots}` : ""}${msDevCdpRefresh.failed != null ? ` failed=${msDevCdpRefresh.failed}` : ""}${failureStatuses ? ` failureStatuses=${failureStatuses}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}${msDevCdpRefresh.sshTargetConfigured != null ? ` sshTargetConfigured=${msDevCdpRefresh.sshTargetConfigured}` : ""}${msDevCdpRefresh.cdpPort != null ? ` cdpPort=${msDevCdpRefresh.cdpPort}` : ""}${msDevCdpRefresh.sshConnectTimeoutSeconds != null ? ` connectTimeout=${msDevCdpRefresh.sshConnectTimeoutSeconds}s` : ""}${msDevCdpRefresh.preflightAttempts != null ? ` preflightAttempts=${msDevCdpRefresh.preflightAttempts}` : ""}${msDevCdpRefresh.error ? ` error=${msDevCdpRefresh.error}` : ""}` : null,
     `catalogApps=${catalog.apps.map((app) => app.id).join(",")}`,
   ].filter(Boolean);
   if (catalog.external?.errors?.length) {
