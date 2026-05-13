@@ -38,6 +38,7 @@ import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-auto
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
 import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "../extensions/app-automation/briefing.js";
+import { buildMsDevCdpPowerShell, renderMsDevCdpRefresh, runMsDevCdpRefresh } from "../extensions/app-automation/msdev-cdp.js";
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
 import { buildSafeRunManifest, runStatusFromResults } from "../extensions/app-automation/run-manifest.js";
 import {
@@ -614,6 +615,101 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-cdp-${Date.now()}`), { recursive: true });
+  const commands = [];
+  const stdoutPayload = JSON.stringify({
+    capturedAt: "2026-05-13T03:00:00Z",
+    source: "ms-dev-chrome-cdp",
+    cdpPort: 9224,
+    results: [
+      { app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", url: "https://outlook.office.com/mail/?token=secret#frag", authRequired: false, items: [{ text: "Important mail from Ada", source: "Outlook Mail", from: "Ada", hrefs: ["https://outlook.office.com/mail/id/1?auth=secret#frag"] }] } },
+      { app: "slack", action: "notifications.snapshot", status: "ok", result: { title: "Find your workspace | Slack", url: "https://app.slack.com/client", authRequired: true, items: [] } },
+    ],
+  });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook", "slack"],
+    actions: ["notifications.snapshot"],
+    exec: async (command, args) => {
+      commands.push({ command, args });
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      if (command === "ssh") return { code: 0, stdout: stdoutPayload, stderr: "" };
+      return { code: 1, stdout: "", stderr: "unexpected" };
+    },
+  });
+  assert.equal(commands[0].command, "scp");
+  assert.equal(commands[1].command, "ssh");
+  assert.match(commands[1].args[1], /ExecutionPolicy Bypass/);
+  assert.equal(summary.status, "ok");
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=1/);
+  assert.match(renderMsDevCdpRefresh(summary), /slack\.notifications\.snapshot: status=auth_required items=0 authRequired=true/);
+  const slackSnapshot = JSON.parse(await readFile(path.join(root, "snapshots", "slack", "notifications.snapshot.json"), "utf8"));
+  assert.equal(slackSnapshot.status, "auth_required");
+  const outlookSnapshot = JSON.parse(await readFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), "utf8"));
+  assert.equal(outlookSnapshot.items[0].url, "https://outlook.office.com/mail/id/1");
+  assert.doesNotMatch(JSON.stringify(outlookSnapshot), /token=secret|auth=secret|#frag/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ms-dev CDP refresh does not overwrite snapshots on extraction failure", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-fail-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  await mkdir(outlookDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "notifications.snapshot.json"), JSON.stringify({ app: "outlook", kind: "notifications.snapshot", status: "ok", capturedAt: "2026-05-13T02:00:00Z", count: 1, items: [{ text: "keep me" }] }), "utf8");
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "extract_failed", error: "boom" }] }), stderr: "" };
+    },
+  });
+  assert.equal(summary.status, "extract_failed");
+  assert.match(renderMsDevCdpRefresh(summary), /failed=1/);
+  const preserved = JSON.parse(await readFile(path.join(outlookDir, "notifications.snapshot.json"), "utf8"));
+  assert.equal(preserved.items[0].text, "keep me");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ms-dev CDP refresh honors env configuration when params are omitted", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-env-${Date.now()}`), { recursive: true });
+  const commands = [];
+  const summary = await runMsDevCdpRefresh({
+    root,
+    env: { APP_AUTOMATION_MSDEV_SSH_TARGET: "env-user@ms-dev", APP_AUTOMATION_MSDEV_CDP_PORT: "9333" },
+    exec: async (command, args) => {
+      commands.push({ command, args });
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:01:00Z", source: "ms-dev-chrome-cdp", cdpPort: 9333, results: [] }), stderr: "" };
+    },
+  });
+  assert.equal(commands[0].args[1].startsWith("env-user@ms-dev:"), true);
+  assert.equal(commands[1].args[0], "env-user@ms-dev");
+  assert.equal(summary.cdpPort, 9333);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ms-dev CDP PowerShell script filters common work-app navigation chrome", () => {
+  const script = buildMsDevCdpPowerShell({ cdpPort: 9224 });
+  assert.match(script, /ribbon/);
+  assert.match(script, /move \[&\] delete/);
+  assert.match(script, /my calendars/);
+  assert.match(script, /switch to calendar/);
+});
+
+test("ms-dev CDP PowerShell script uses configured port and no raw secrets", () => {
+  const script = buildMsDevCdpPowerShell({ cdpPort: 9333, targets: [{ app: "outlook", action: "notifications.snapshot", url: "https://outlook.office.com/mail/?token=secret#frag" }] });
+  assert.match(script, /\$CdpPort = 9333/);
+  assert.match(script, /ExecutionPolicy|Invoke-CdpJson/);
+  assert.match(script, /replace\(\/\\s\+\/g/);
+  assert.match(script, /text\.match\(\/\\b/);
+  assert.match(script, /parsed\.search = ''/);
+});
+
 test("work briefing index summarizes bounded app snapshot state", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-briefing-${Date.now()}`), { recursive: true });
   const outlookDir = path.join(root, "snapshots", "outlook");
@@ -669,6 +765,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /tendrilProbe=/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_msdev_cdp_refresh`/);
+  assert.match(source, /runMsDevCdpRefresh/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_work_briefing`/);
   assert.match(source, /buildWorkBriefingIndex/);
   assert.match(source, /renderWorkBriefingIndex/);

@@ -16,8 +16,23 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
     /^search\b/i,
     /^(mail|calendar|people|files|teams chat|to do|onedrive)$/i,
     /^(new mail|new event|new message)$/i,
-    /^(navigation|app launcher|settings|help|feedback)$/i,
-    /keyboard shortcuts/i
+    /^(navigation|navigation pane|app launcher|settings|help|feedback|filter|filter applied|share|print|quick steps?|flag|unflag|flag \/ unflag|expand to see flag options)$/i,
+    /keyboard shortcuts/i,
+    /favorite|sent item|draft|github ci/i,
+    /you can take multiple actions? on a message/i,
+    /apply or remove calendar event filters/i,
+    /share a calendar|print a copy of your calendar/i,
+    /^ribbon\b/i,
+    /^move [&] delete\b/i,
+    /^respond\b/i,
+    /create a new email message/i,
+    /move this message to your archive folder/i,
+    /this message as phishing/i,
+    /go to today/i,
+    /my calendars/i,
+    /deselect all calendars/i,
+    /loading calendar actions/i,
+    /add a new calendar instruction/i
   ];
   const seen = new Set();
   const items = [];

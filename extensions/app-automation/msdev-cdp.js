@@ -1,0 +1,363 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import { buildGenericSnapshot, writeGenericSnapshot } from "./generic-snapshot.js";
+import { buildSlackNotificationSnapshot, renderSlackNotificationMarkdown } from "./slack.js";
+
+export const DEFAULT_MSDEV_CDP_PORT = 9224;
+export const DEFAULT_MSDEV_PWSH = "/mnt/c/Program Files/PowerShell/7/pwsh.exe";
+export const DEFAULT_MSDEV_REMOTE_SCRIPT = "/tmp/agent-utils-msdev-cdp-refresh.ps1";
+
+export const DEFAULT_MSDEV_CDP_TARGETS = [
+  {
+    app: "calendar",
+    action: "events.snapshot",
+    url: "https://calendar.google.com/calendar/u/0/r",
+    includePatterns: ["meeting", "event", "calendar", "today", "tomorrow", "starts", "join", "busy", "free"],
+  },
+  {
+    app: "outlook",
+    action: "notifications.snapshot",
+    url: "https://outlook.office.com/mail/",
+    includePatterns: ["unread", "mention", "flag", "important", "from", "sender", "subject", "inbox", "mail", "message", "meeting", "calendar", "invite"],
+  },
+  {
+    app: "outlook",
+    action: "calendar.snapshot",
+    url: "https://outlook.office.com/calendar/",
+    includePatterns: ["meeting", "calendar", "event", "today", "tomorrow", "starts", "join", "organizer", "organiser", "accepted", "tentative"],
+  },
+  {
+    app: "teams",
+    action: "notifications.snapshot",
+    url: "https://teams.microsoft.com/v2/",
+    includePatterns: ["unread", "mention", "chat", "message", "author", "meeting", "call", "reply", "activity"],
+  },
+  {
+    app: "teams",
+    action: "calendar.snapshot",
+    url: "https://teams.microsoft.com/v2/calendar",
+    includePatterns: ["meeting", "calendar", "event", "starts", "join", "organizer", "organiser", "today", "tomorrow"],
+  },
+  {
+    app: "slack",
+    action: "notifications.snapshot",
+    url: "https://app.slack.com/client",
+    includePatterns: ["unread", "mention", "dm", "direct message", "channel", "new message", "slack"],
+  },
+];
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function compact(value, limit = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+}
+
+function selectedTargets({ apps, actions, targets = DEFAULT_MSDEV_CDP_TARGETS } = {}) {
+  const wantedApps = new Set((apps || []).map((value) => String(value)));
+  const wantedActions = new Set((actions || []).map((value) => String(value)));
+  return targets.filter((target) => (
+    (!wantedApps.size || wantedApps.has(target.app))
+    && (!wantedActions.size || wantedActions.has(target.action))
+  ));
+}
+
+export function msDevCdpConfig(env = process.env) {
+  return {
+    sshTarget: env.APP_AUTOMATION_MSDEV_SSH_TARGET || env.AGENT_UTILS_MSDEV_SSH_TARGET || "",
+    pwshPath: env.APP_AUTOMATION_MSDEV_PWSH || DEFAULT_MSDEV_PWSH,
+    cdpPort: Number.parseInt(String(env.APP_AUTOMATION_MSDEV_CDP_PORT || DEFAULT_MSDEV_CDP_PORT), 10) || DEFAULT_MSDEV_CDP_PORT,
+    remoteScriptPath: env.APP_AUTOMATION_MSDEV_REMOTE_SCRIPT || DEFAULT_MSDEV_REMOTE_SCRIPT,
+  };
+}
+
+export function msDevCdpCommandSummary(config = msDevCdpConfig()) {
+  return {
+    sshTargetConfigured: Boolean(config.sshTarget),
+    sshTarget: config.sshTarget || null,
+    pwshPath: config.pwshPath,
+    cdpPort: config.cdpPort,
+    remoteScriptPath: config.remoteScriptPath,
+  };
+}
+
+export function buildMsDevCdpPowerShell({ cdpPort = DEFAULT_MSDEV_CDP_PORT, targets = DEFAULT_MSDEV_CDP_TARGETS } = {}) {
+  const targetJson = JSON.stringify(targets.map((target) => ({ app: target.app, action: target.action, url: target.url })));
+  return `$ErrorActionPreference = 'SilentlyContinue'
+$CdpPort = ${Number.parseInt(String(cdpPort), 10) || DEFAULT_MSDEV_CDP_PORT}
+$TargetsJson = @'
+${targetJson}
+'@
+$Targets = $TargetsJson | ConvertFrom-Json
+function Invoke-CdpJson($Path, $Method = 'Get') {
+  $uri = "http://127.0.0.1:$CdpPort$Path"
+  try { return Invoke-RestMethod -Method $Method -Uri $uri -TimeoutSec 8 } catch { return $null }
+}
+function New-CdpTarget($Url) {
+  $encoded = [System.Uri]::EscapeDataString($Url)
+  $target = Invoke-CdpJson "/json/new?$encoded" 'Put'
+  if ($null -eq $target) { return $null }
+  Start-Sleep -Seconds 8
+  return $target
+}
+function Receive-CdpMessage($Socket, $WantedId) {
+  $buffer = New-Object byte[] 1048576
+  $deadline = (Get-Date).AddSeconds(12)
+  while ((Get-Date) -lt $deadline) {
+    $segment = [ArraySegment[byte]]::new($buffer)
+    $task = $Socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
+    if (-not $task.Wait(12000)) { return $null }
+    $count = $task.Result.Count
+    if ($count -le 0) { continue }
+    $text = [Text.Encoding]::UTF8.GetString($buffer, 0, $count)
+    try { $messages = $text | ConvertFrom-Json -Depth 80 } catch { continue }
+    foreach ($msg in @($messages)) {
+      if ($msg.id -eq $WantedId) { return $msg }
+    }
+  }
+  return $null
+}
+function Eval-Cdp($WsUrl, $Expression) {
+  Add-Type -AssemblyName System.Net.WebSockets.Client
+  $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+  $socket.ConnectAsync([Uri]$WsUrl, [Threading.CancellationToken]::None).Wait(10000) | Out-Null
+  $id = 1
+  $payload = @{ id = $id; method = 'Runtime.evaluate'; params = @{ expression = $Expression; returnByValue = $true; awaitPromise = $false } } | ConvertTo-Json -Compress -Depth 20
+  $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
+  $socket.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(10000) | Out-Null
+  $msg = Receive-CdpMessage $socket $id
+  $socket.Dispose()
+  if ($null -eq $msg) { return $null }
+  if ($msg.exceptionDetails) { return [pscustomobject]@{ __cdpError = ($msg.exceptionDetails.text | Out-String).Trim() } }
+  if ($msg.result.exceptionDetails) { return [pscustomobject]@{ __cdpError = (($msg.result.exceptionDetails.text, $msg.result.exceptionDetails.exception.description) -join ' ').Trim() } }
+  return $msg.result.result.value
+}
+$extractor = @'
+(() => {
+  const compact = (value, max = 180) => {
+    const text = String(value || '').replace(/\\s+/g, ' ').trim();
+    if (!text) return null;
+    return text.length > max ? text.slice(0, max - 3) + '...' : text;
+  };
+  const sanitize = (href) => {
+    try {
+      const parsed = new URL(href, location.href);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+      parsed.username = ''; parsed.password = ''; parsed.search = ''; parsed.hash = '';
+      return parsed.toString();
+    } catch (_) { return null; }
+  };
+  const bodyText = compact(document.body?.innerText || '', 1200);
+  const title = compact(document.title, 180);
+  const source = location.hostname.includes('outlook') ? (location.href.includes('/calendar') ? 'Outlook Calendar' : 'Outlook Mail') : location.hostname.includes('teams') ? (location.href.includes('/calendar') ? 'Teams Calendar' : 'Teams') : location.hostname.includes('slack') ? 'Slack Web' : title;
+  const patterns = [/unread/i, /important/i, /flag/i, /mention/i, /meeting/i, /calendar/i, /today/i, /tomorrow/i, /join/i, /chat/i, /message/i, /from/i, /sender/i, /organizer/i, /organiser/i, /starts/i, /accepted/i, /tentative/i, /channel/i, /direct message/i, /busy/i, /free/i];
+  const ignore = [/^search\\b/i, /^(mail|calendar|people|files|teams chat|to do|onedrive)$/i, /^(new mail|new event|new message)$/i, /^(navigation|navigation pane|app launcher|settings|help|feedback|filter|filter applied|share|print|quick steps?|flag|unflag|flag [/] unflag|expand to see flag options)$/i, /keyboard shortcuts/i, /favorite|sent item|draft|github ci/i, /you can take multiple actions? on a message/i, /apply or remove calendar event filters/i, /share a calendar|print a copy of your calendar/i, /^ribbon\\b/i, /^move [&] delete\\b/i, /^respond\\b/i, /create a new email message/i, /move this message to your archive folder/i, /this message as phishing/i, /go to today/i, /my calendars/i, /deselect all calendars/i, /loading calendar actions/i, /add a new calendar instruction/i, /switch to calendar/i, /add other calendars/i, /tasks are currently not shown on your grid/i];
+  const selectors = ['[aria-label]', '[role="treeitem"]', '[role="listitem"]', '[data-testid]', '[data-tid]', '[title]', 'a[href]'];
+  const seen = new Set();
+  const items = [];
+  const metadata = (el) => [el.getAttribute?.('aria-label'), el.getAttribute?.('title'), el.innerText || el.textContent || ''].map(v => compact(v, 180)).filter(Boolean).join(' | ');
+  const timeFor = (el) => [el.getAttribute?.('datetime'), el.getAttribute?.('data-start'), el.getAttribute?.('data-start-time'), el.getAttribute?.('data-date'), el.querySelector?.('time')?.getAttribute?.('datetime'), el.querySelector?.('time')?.textContent, el.closest?.('time')?.getAttribute?.('datetime'), el.closest?.('time')?.textContent].map(v => compact(v, 80)).find(Boolean) || null;
+  const fromFor = (text) => {
+    const match = text.match(/\\b(?:from|sender|organizer|organiser|author)\\s*:?\\s*([^,;|•]{2,80})/i);
+    return match ? compact(match[1], 80) : null;
+  };
+  for (const selector of selectors) {
+    for (const el of document.querySelectorAll(selector)) {
+      const text = metadata(el);
+      if (!text || ignore.some(p => p.test(text)) || !patterns.some(p => p.test(text))) continue;
+      const hrefs = [];
+      const add = href => { const url = sanitize(href); if (url && !hrefs.includes(url)) hrefs.push(url); };
+      const own = el.closest?.('a[href]'); if (own) add(own.getAttribute('href'));
+      for (const a of el.querySelectorAll?.('a[href]') || []) add(a.getAttribute('href'));
+      const key = text.toLowerCase() + '|' + hrefs.join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ text, source, from: fromFor(text), time: timeFor(el), hrefs });
+      if (items.length >= 40) break;
+    }
+    if (items.length >= 40) break;
+  }
+  const authRequired = /sign in|signin|log in|login|password|authenticate/i.test(bodyText || title || '');
+  return { title, url: sanitize(location.href), source, authRequired, itemCount: items.length, items };
+})()
+'@
+$results = @()
+foreach ($targetSpec in $Targets) {
+  $target = New-CdpTarget $targetSpec.url
+  if ($null -eq $target -or -not $target.webSocketDebuggerUrl) {
+    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='cdp_unavailable'; url=$targetSpec.url }
+    continue
+  }
+  $value = Eval-Cdp $target.webSocketDebuggerUrl $extractor
+  if ($null -eq $value) {
+    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; url=$targetSpec.url }
+  } elseif ($value.__cdpError) {
+    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; url=$targetSpec.url; error=$value.__cdpError }
+  } else {
+    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; result=$value }
+  }
+}
+[pscustomobject]@{ capturedAt=(Get-Date).ToUniversalTime().ToString('o'); source='ms-dev-chrome-cdp'; cdpPort=$CdpPort; results=$results } | ConvertTo-Json -Depth 80 -Compress
+`;
+}
+
+function snapshotInputFromResult(liveResult = {}) {
+  const result = liveResult.result || {};
+  return {
+    title: compact(result.title),
+    url: result.url,
+    items: Array.isArray(result.items) ? result.items.map((item) => ({
+      text: compact(item.text, 240),
+      source: compact(item.source),
+      from: compact(item.from),
+      time: compact(item.time),
+      hrefs: Array.isArray(item.hrefs) ? item.hrefs : [],
+    })).filter((item) => item.text) : [],
+  };
+}
+
+async function writeLiveSnapshot({ root, target, liveResult, capturedAt }) {
+  const snapshotDir = path.join(root, "snapshots", target.app);
+  await mkdir(snapshotDir, { recursive: true });
+  const input = snapshotInputFromResult(liveResult);
+  if (target.app === "slack" && target.action === "notifications.snapshot") {
+    const snapshot = buildSlackNotificationSnapshot(input, { now: capturedAt ? new Date(capturedAt) : new Date() });
+    snapshot.source = "ms-dev-chrome-cdp";
+    if (liveResult.status !== "ok") {
+      snapshot.status = liveResult.status || "error";
+      snapshot.error = liveResult.status || "error";
+    }
+    if (liveResult.result?.authRequired) {
+      snapshot.status = "auth_required";
+      snapshot.authRequired = true;
+    }
+    const jsonPath = path.join(snapshotDir, "notifications.snapshot.json");
+    const legacyJsonPath = path.join(snapshotDir, "notifications.json");
+    const markdownPath = path.join(snapshotDir, "notifications.snapshot.md");
+    await writeFile(jsonPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    await writeFile(legacyJsonPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    await writeFile(markdownPath, renderSlackNotificationMarkdown(snapshot), "utf8");
+    return { app: target.app, action: target.action, status: snapshot.status, count: snapshot.counts?.items || 0, authRequired: Boolean(snapshot.authRequired), outputs: { jsonPath, legacyJsonPath, markdownPath } };
+  }
+  const snapshot = buildGenericSnapshot({
+    app: target.app,
+    kind: target.action,
+    input,
+    includePatterns: target.includePatterns || [],
+  });
+  snapshot.capturedAt = capturedAt || snapshot.capturedAt;
+  snapshot.source = "ms-dev-chrome-cdp";
+  if (liveResult.status !== "ok") {
+    snapshot.status = liveResult.status || "error";
+    snapshot.error = liveResult.status || "error";
+  }
+  if (liveResult.result?.authRequired) {
+    snapshot.status = "auth_required";
+    snapshot.authRequired = true;
+  }
+  const outputs = await writeGenericSnapshot(snapshotDir, snapshot);
+  return { app: target.app, action: target.action, status: snapshot.status, count: snapshot.count, authRequired: Boolean(snapshot.authRequired), outputs };
+}
+
+function parseCdpJson(stdout = "") {
+  const trimmed = String(stdout || "").trim();
+  if (!trimmed) throw new Error("ms-dev CDP refresh produced no JSON output");
+  const first = trimmed.indexOf("{");
+  const last = trimmed.lastIndexOf("}");
+  if (first === -1 || last === -1 || last < first) throw new Error("ms-dev CDP refresh output did not contain a JSON object");
+  return JSON.parse(trimmed.slice(first, last + 1));
+}
+
+export async function runMsDevCdpRefresh({
+  root,
+  apps,
+  actions,
+  sshTarget,
+  pwshPath,
+  cdpPort,
+  remoteScriptPath,
+  exec,
+  timeoutMs = 120_000,
+  env = process.env,
+} = {}) {
+  const defaults = msDevCdpConfig(env);
+  const config = {
+    sshTarget: sshTarget ?? defaults.sshTarget,
+    pwshPath: pwshPath ?? defaults.pwshPath,
+    cdpPort: cdpPort ?? defaults.cdpPort,
+    remoteScriptPath: remoteScriptPath ?? defaults.remoteScriptPath,
+  };
+  config.sshTarget = config.sshTarget || "";
+  config.pwshPath = config.pwshPath || DEFAULT_MSDEV_PWSH;
+  config.cdpPort = Number.parseInt(String(config.cdpPort || DEFAULT_MSDEV_CDP_PORT), 10) || DEFAULT_MSDEV_CDP_PORT;
+  config.remoteScriptPath = config.remoteScriptPath || DEFAULT_MSDEV_REMOTE_SCRIPT;
+  if (!root) throw new Error("runMsDevCdpRefresh requires root");
+  if (!exec) throw new Error("runMsDevCdpRefresh requires an exec(command, args, options) function");
+  const targets = selectedTargets({ apps, actions });
+  if (!config.sshTarget) {
+    return { status: "not_configured", reason: "set APP_AUTOMATION_MSDEV_SSH_TARGET or pass sshTarget", config: msDevCdpCommandSummary(config), targets };
+  }
+  const bridgeDir = path.join(root, "bridge");
+  await mkdir(bridgeDir, { recursive: true });
+  const localScriptPath = path.join(bridgeDir, "ms-dev-cdp-refresh.ps1");
+  await writeFile(localScriptPath, buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets }), "utf8");
+  const copy = await exec("scp", [localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
+  if (copy.code !== 0) {
+    return { status: "copy_failed", config: msDevCdpCommandSummary(config), targets, stderr: compact(copy.stderr, 1000), stdout: compact(copy.stdout, 1000) };
+  }
+  const remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
+  const run = await exec("ssh", [config.sshTarget, remoteCommand], { timeout: timeoutMs });
+  if (run.code !== 0) {
+    return { status: "run_failed", config: msDevCdpCommandSummary(config), targets, stderr: compact(run.stderr, 1000), stdout: compact(run.stdout, 1000) };
+  }
+  let payload;
+  try {
+    payload = parseCdpJson(run.stdout);
+  } catch (error) {
+    return { status: "parse_failed", config: msDevCdpCommandSummary(config), targets, error: error.message, stdout: compact(run.stdout, 1000), stderr: compact(run.stderr, 1000) };
+  }
+  const byKey = new Map(targets.map((target) => [`${target.app}:${target.action}`, target]));
+  const snapshots = [];
+  const failed = [];
+  for (const liveResult of payload.results || []) {
+    const target = byKey.get(`${liveResult.app}:${liveResult.action}`);
+    if (!target) continue;
+    if (liveResult.status !== "ok") {
+      failed.push({ app: target.app, action: target.action, status: liveResult.status || "error", error: compact(liveResult.error, 500) });
+      continue;
+    }
+    snapshots.push(await writeLiveSnapshot({ root, target, liveResult, capturedAt: payload.capturedAt }));
+  }
+  const status = failed.length && !snapshots.length ? "extract_failed" : "ok";
+  const manifest = {
+    version: 1,
+    status,
+    capturedAt: payload.capturedAt,
+    source: payload.source || "ms-dev-chrome-cdp",
+    cdpPort: payload.cdpPort || config.cdpPort,
+    config: msDevCdpCommandSummary(config),
+    snapshots,
+    failed,
+  };
+  const manifestPath = path.join(bridgeDir, "latest-ms-dev-cdp-refresh.json");
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return { ...manifest, manifestPath };
+}
+
+export function renderMsDevCdpRefresh(summary = {}) {
+  if (summary.status === "not_configured") return `ms-dev CDP refresh not configured: ${summary.reason}`;
+  if (summary.status && summary.status !== "ok" && !summary.failed?.length) return `ms-dev CDP refresh ${summary.status}: ${summary.error || summary.stderr || summary.reason || "unknown error"}`;
+  const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}`];
+  if (summary.manifestPath) lines.push(`manifest=${summary.manifestPath}`);
+  for (const snapshot of summary.snapshots || []) {
+    lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.authRequired ? " authRequired=true" : ""}`);
+  }
+  for (const failure of summary.failed || []) {
+    lines.push(`${failure.app}.${failure.action}: status=${failure.status}${failure.error ? ` error=${failure.error}` : ""}`);
+  }
+  return lines.join("\n");
+}

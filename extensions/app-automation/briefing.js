@@ -39,18 +39,30 @@ function summarizeItem(item = {}) {
   };
 }
 
+function snapshotPathCandidates(root, app, action) {
+  const base = path.join(root, "snapshots", app);
+  const candidates = [path.join(base, `${safeKind(action)}.json`)];
+  if (app === "slack" && action === "notifications.snapshot") candidates.push(path.join(base, "notifications.json"));
+  return candidates;
+}
+
 async function readSnapshot(root, app, action) {
-  const snapshotPath = path.join(root, "snapshots", app, `${safeKind(action)}.json`);
-  const raw = await readFile(snapshotPath, "utf8").catch((error) => {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  });
-  if (!raw) return { app, action, status: "missing", path: snapshotPath };
-  try {
-    return { app, action, status: "ok", path: snapshotPath, snapshot: JSON.parse(raw) };
-  } catch (error) {
-    return { app, action, status: "invalid", path: snapshotPath, error: error.message };
+  const candidates = snapshotPathCandidates(root, app, action);
+  let lastPath = candidates[0];
+  for (const snapshotPath of candidates) {
+    lastPath = snapshotPath;
+    const raw = await readFile(snapshotPath, "utf8").catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!raw) continue;
+    try {
+      return { app, action, status: "ok", path: snapshotPath, snapshot: JSON.parse(raw) };
+    } catch (error) {
+      return { app, action, status: "invalid", path: snapshotPath, error: error.message };
+    }
   }
+  return { app, action, status: "missing", path: lastPath };
 }
 
 export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRIEFING_ACTIONS, staleAfterMinutes = 15, sampleLimit = 5, now = new Date() } = {}) {
@@ -64,7 +76,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       continue;
     }
     const snapshot = loaded.snapshot;
-    const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+    const items = Array.isArray(snapshot.items) ? snapshot.items : (Array.isArray(snapshot.notifications) ? snapshot.notifications : []);
     const freshness = freshnessFor(snapshot.capturedAt, { staleAfterMinutes, now });
     entries.push({
       app,
@@ -73,7 +85,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       path: loaded.path,
       capturedAt: snapshot.capturedAt || null,
       ...freshness,
-      itemCount: Number.isFinite(snapshot.count) ? snapshot.count : items.length,
+      itemCount: Number.isFinite(snapshot.count) ? snapshot.count : (Number.isFinite(snapshot.counts?.items) ? snapshot.counts.items : items.length),
       authRequired: Boolean(snapshot.authRequired),
       samples: items.slice(0, Math.max(0, Number(sampleLimit) || 0)).map(summarizeItem),
     });

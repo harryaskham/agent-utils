@@ -35,6 +35,7 @@ import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/gen
 import { parseLinkCommandArgs, parseOverviewCommandArgs } from "./app-automation/link-command.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "./app-automation/briefing.js";
+import { renderMsDevCdpRefresh, runMsDevCdpRefresh } from "./app-automation/msdev-cdp.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
 import {
@@ -624,6 +625,34 @@ export default function appAutomationExtension(pi) {
         external: catalog.external,
         stateRoot: root,
       });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_msdev_cdp_refresh`,
+    label: "App Automation ms-dev CDP Refresh",
+    description: "Refresh Slack, Outlook, Teams, and Calendar snapshots through ms-dev Windows Chrome CDP using the PowerShell WSL escape route.",
+    promptSnippet: "Use this on an operator-owned ms-dev setup when local Playwright/Tendril cannot reach Windows browser state; it writes bounded redacted snapshots and never stores cookies or tokens.",
+    parameters: Type.Object({
+      sshTarget: Type.Optional(Type.String({ description: "SSH target for ms-dev, for example <user>@ms-dev. Defaults to APP_AUTOMATION_MSDEV_SSH_TARGET." })),
+      pwshPath: Type.Optional(Type.String({ description: "Windows PowerShell path visible from ms-dev WSL. Defaults to /mnt/c/Program Files/PowerShell/7/pwsh.exe." })),
+      cdpPort: Type.Optional(Type.Number({ description: "Windows Chrome DevTools port. Defaults to 9224." })),
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to refresh." }))),
+      actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to refresh." }))),
+      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for scp/ssh commands. Defaults to 120000." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const summary = await runMsDevCdpRefresh({
+        root: stateRoot(),
+        sshTarget: params.sshTarget,
+        pwshPath: params.pwshPath,
+        cdpPort: params.cdpPort,
+        apps: params.apps,
+        actions: params.actions,
+        timeoutMs: params.timeoutMs,
+        exec: (command, args, options = {}) => pi.exec(command, args, { ...options, signal }),
+      });
+      return textResult(renderMsDevCdpRefresh(summary), { msdevCdpRefresh: summary });
     },
   });
 
