@@ -208,6 +208,8 @@ function linkMatchesContext(link, filters = {}) {
 }
 
 function linkHost(link = {}) {
+  const existing = String(link.urlHost || "").trim().toLowerCase();
+  if (existing) return existing;
   try {
     return new URL(link.url).hostname.toLowerCase();
   } catch {
@@ -366,6 +368,7 @@ export async function collectSnapshotLinks({ root, app, query, source, from, tim
       for (const url of urls) {
         const snapshotAt = snapshotTimestamp(value);
         const artifactModifiedAt = artifact.modifiedAt;
+        const urlHost = linkHost({ url });
         const link = {
           app: value.app || appSelector || artifact.relativePath.split("/")[1] || "unknown",
           kind: value.kind || value.action || null,
@@ -373,6 +376,7 @@ export async function collectSnapshotLinks({ root, app, query, source, from, tim
           row: rowIndex,
           label: snapshotLinkLabel(row, `${artifact.relativePath}#${rowIndex}`),
           url,
+          urlHost,
           context: snapshotLinkContext(row),
           snapshotAt,
           artifactModifiedAt,
@@ -493,7 +497,7 @@ export function renderSnapshotLinks(summary) {
   const scannedCount = summary.scannedArtifactCount ?? summary.artifacts?.length;
   const scannedText = scannedCount != null ? ` scanned=${scannedCount}` : "";
   const lines = [`links total=${counts.total}${matchedText}${scannedText} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${summary.sort ? ` sort=${summary.sort}` : ""}${renderSnapshotLinkHeaderFilters(summary)}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}${hostCountsText ? ` hosts=${hostCountsText}` : ""}`];
-  lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${renderSnapshotLinkContext(link.context)}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
+  lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.urlHost ? ` host=${link.urlHost}` : ""}${renderSnapshotLinkContext(link.context)}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
   if (summary.truncated) lines.push(`truncated at ${summary.links.length}${summary.matchedCount != null ? ` of ${summary.matchedCount}` : ""} links`);
   return lines.join("\n");
 }
