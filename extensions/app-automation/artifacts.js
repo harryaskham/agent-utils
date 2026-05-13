@@ -366,6 +366,15 @@ function summarizeLinkSources(links = []) {
   return counts;
 }
 
+function summarizeLinkFrom(links = []) {
+  const counts = {};
+  for (const link of links) {
+    const key = String(link.context?.from || "unknown");
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return counts;
+}
+
 export async function collectSnapshotLinks({ root, app, query, source, from, time, host, freshness, kind, sort, artifactLimit = 100, linkLimit = 100, maxBytes = 64_000, staleAfterMinutes = 60, now = new Date() } = {}) {
   const appSelector = normalizeSnapshotAppSelector(app);
   const normalizedKind = normalizeLinkKind(kind);
@@ -425,6 +434,7 @@ export async function collectSnapshotLinks({ root, app, query, source, from, tim
     kindCounts: summarizeLinkKinds(limitedLinks),
     hostCounts: summarizeLinkHosts(limitedLinks),
     sourceCounts: summarizeLinkSources(limitedLinks),
+    fromCounts: summarizeLinkFrom(limitedLinks),
     links: limitedLinks,
     truncated: links.length > limit,
   };
@@ -458,6 +468,7 @@ export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries =
     kindCounts: summarizeLinkKinds(links),
     hostCounts: summarizeLinkHosts(links),
     sourceCounts: summarizeLinkSources(links),
+    fromCounts: summarizeLinkFrom(links),
     truncated: summaries.some((summary) => summary.truncated),
   };
 }
@@ -509,14 +520,16 @@ export function renderSnapshotLinks(summary) {
   const kindCounts = summary.kindCounts || summarizeLinkKinds(summary.links);
   const hostCounts = summary.hostCounts || summarizeLinkHosts(summary.links);
   const sourceCounts = summary.sourceCounts || summarizeLinkSources(summary.links);
+  const fromCounts = summary.fromCounts || summarizeLinkFrom(summary.links);
   const appCountsText = Object.entries(appCounts).sort(([a], [b]) => a.localeCompare(b)).map(([app, count]) => `${app}=${count}`).join(",");
   const kindCountsText = Object.entries(kindCounts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, count]) => `${kind}=${count}`).join(",");
   const hostCountsText = Object.entries(hostCounts).sort(([a], [b]) => a.localeCompare(b)).map(([host, count]) => `${host}=${count}`).join(",");
   const sourceCountsText = Object.entries(sourceCounts).sort(([a], [b]) => a.localeCompare(b)).map(([source, count]) => `${JSON.stringify(source)}=${count}`).join(",");
+  const fromCountsText = Object.entries(fromCounts).sort(([a], [b]) => a.localeCompare(b)).map(([from, count]) => `${JSON.stringify(from)}=${count}`).join(",");
   const matchedText = summary.matchedCount != null && summary.matchedCount !== counts.total ? ` matched=${summary.matchedCount}` : "";
   const scannedCount = summary.scannedArtifactCount ?? summary.artifacts?.length;
   const scannedText = scannedCount != null ? ` scanned=${scannedCount}` : "";
-  const lines = [`links total=${counts.total}${matchedText}${scannedText} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${summary.sort ? ` sort=${summary.sort}` : ""}${renderSnapshotLinkHeaderFilters(summary)}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}${hostCountsText ? ` hosts=${hostCountsText}` : ""}${sourceCountsText ? ` sources=${sourceCountsText}` : ""}`];
+  const lines = [`links total=${counts.total}${matchedText}${scannedText} fresh=${counts.fresh} stale=${counts.stale} unknown=${counts.unknown}${summary.sort ? ` sort=${summary.sort}` : ""}${renderSnapshotLinkHeaderFilters(summary)}${appCountsText ? ` apps=${appCountsText}` : ""}${kindCountsText ? ` kinds=${kindCountsText}` : ""}${hostCountsText ? ` hosts=${hostCountsText}` : ""}${sourceCountsText ? ` sources=${sourceCountsText}` : ""}${fromCountsText ? ` from=${fromCountsText}` : ""}`];
   lines.push(...summary.links.map((link) => `${link.app}${link.kind ? `.${link.kind}` : ""} ${link.label}: ${link.url} (${link.artifact}${link.urlHost ? ` host=${link.urlHost}` : ""}${renderSnapshotLinkContext(link.context)}${link.snapshotAt ? ` captured=${link.snapshotAt}` : ""}${link.artifactModifiedAt ? ` modified=${link.artifactModifiedAt}` : ""}${link.freshness ? ` freshness=${link.freshness}` : ""}${link.ageMinutes != null ? ` age=${link.ageMinutes}m` : ""})`));
   if (summary.truncated) lines.push(`truncated at ${summary.links.length}${summary.matchedCount != null ? ` of ${summary.matchedCount}` : ""} links`);
   return lines.join("\n");
