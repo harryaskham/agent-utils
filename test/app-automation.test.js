@@ -831,13 +831,15 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
     actions: ["notifications.snapshot"],
     exec: async (command, args) => {
       if (command === "ssh" && args.at(-1) === "true") return { code: 0, stdout: "", stderr: "" };
-      if (command === "scp") return { code: 255, stdout: "", stderr: "ssh: connect to host ms-dev port 22: Connection timed out" };
+      if (command === "scp") return { code: 255, stdout: "", stderr: "ssh: connect to host 100.66.53.117 port 22: Connection timed out" };
       return { code: 1, stdout: "", stderr: "unexpected" };
     },
   });
   assert.equal(summary.status, "copy_failed");
   assert.equal(summary.failed[0].status, "copy_failed");
   assert.equal(summary.failed[0].errorKind, "connect_timeout");
+  assert.match(summary.failed[0].error, /connect to host \[ssh-target\] port 22/);
+  assert.doesNotMatch(summary.failed[0].error, /ms-dev|100\.66\.53\.117/);
   assert.match(renderMsDevCdpRefresh(summary), /ms-dev CDP refresh status=copy_failed .* failed=1 failureErrorKinds=connect_timeout=1/);
   assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=copy_failed errorKind=connect_timeout/);
   const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));

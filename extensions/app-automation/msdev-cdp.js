@@ -75,6 +75,8 @@ function sanitizeBridgeFailureText(value) {
   if (!text) return null;
   if (/^command failed:/i.test(text)) text = "command failed";
   text = text.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+(?=[:\s]|$)/g, "[ssh-target]");
+  text = text.replace(/\b(connect to host|connection to)\s+[^\s]+\s+port\b/gi, "$1 [ssh-target] port");
+  text = text.replace(/\bhostname\s+[^\s:]+/gi, "hostname [ssh-target]");
   text = text.replace(/\/home\/[^\s]+/g, "[local-path]");
   text = text.replace(/\/tmp\/[^\s]+/g, "[remote-path]");
   text = text.replace(/[A-Za-z]:\\[^\s]+/g, "[windows-path]");
