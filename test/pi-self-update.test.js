@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
 
 import piSelfUpdateExtension from "../extensions/pi-self-update.js";
 
@@ -11,11 +12,13 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
   const activeToolsCalls = [];
   let reloadCount = 0;
   let execCount = 0;
+  let lastExec = null;
   const pi = {
     registerCommand(name, definition) { commands.set(name, definition); },
     registerTool(definition) { tools.set(definition.name, definition); },
     async exec(command, args, options) {
       execCount += 1;
+      lastExec = { command, args, options };
       return { command, args, options, ...execResult };
     },
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
@@ -26,19 +29,31 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
     ui: { notify(message, level = "info") { notifications.push({ message, level }); } },
     async reload() { reloadCount += 1; },
   };
-  return { pi, ctx, commands, tools, notifications, userMessages, activeToolsCalls, get execCount() { return execCount; }, get reloadCount() { return reloadCount; } };
+  return { pi, ctx, commands, tools, notifications, userMessages, activeToolsCalls, get execCount() { return execCount; }, get lastExec() { return lastExec; }, get reloadCount() { return reloadCount; } };
 }
 
-test("/update runs pi update and reloads on success", async () => {
+test("/update runs pi update from home and reloads on success", async () => {
   const h = makeHarness();
   piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("", h.ctx);
 
   assert.equal(h.reloadCount, 1);
+  assert.equal(h.execCount, 1);
+  assert.equal(h.notifications.at(0).message, "Running pi update from home directory...");
   assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp" } }]);
   assert.match(h.notifications.at(-2).message, /pi update exited with code 0/);
   assert.match(h.notifications.at(-1).message, /reloading Pi runtime/);
+});
+
+test("pi update exec uses home directory cwd", async () => {
+  const h = makeHarness();
+  piSelfUpdateExtension(h.pi);
+
+  await h.commands.get("update").handler("--no-reload", h.ctx);
+
+  assert.equal(h.notifications.at(0).message, "Running pi update from home directory...");
+  assert.equal(h.lastExec.options.cwd, homedir());
 });
 
 test("/update --no-reload skips reload", async () => {

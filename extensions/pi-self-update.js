@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 
 import { ToolSchema } from "./lib/tool-schema.js";
 
 const UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const OUTPUT_LIMIT = 12_000;
+const UPDATE_CWD = homedir();
 
 function truncateOutput(text, limit = OUTPUT_LIMIT) {
   const s = String(text || "");
@@ -28,9 +30,13 @@ function updateLooksReloadWorthy(result) {
   return false;
 }
 
+function piUpdateExecOptions(signal) {
+  return { timeout: UPDATE_TIMEOUT_MS, signal, cwd: UPDATE_CWD };
+}
+
 function runPiUpdateWithSpawn(signal) {
   return new Promise((resolve) => {
-    const child = spawn("pi", ["update"], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("pi", ["update"], { stdio: ["ignore", "pipe", "pipe"], cwd: UPDATE_CWD });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -57,7 +63,7 @@ function runPiUpdateWithSpawn(signal) {
 
 async function runPiUpdate(pi, signal) {
   if (typeof pi.exec === "function") {
-    return pi.exec("pi", ["update"], { timeout: UPDATE_TIMEOUT_MS, signal });
+    return pi.exec("pi", ["update"], piUpdateExecOptions(signal));
   }
   return runPiUpdateWithSpawn(signal);
 }
@@ -120,7 +126,7 @@ export default function piSelfUpdateExtension(pi) {
       }
       updateRunning = true;
       try {
-        ctx.ui.notify("Running pi update...", "info");
+        ctx.ui.notify("Running pi update from home directory...", "info");
         const result = await runPiUpdate(pi);
         const ok = Number(result?.code || 0) === 0 && !result?.killed;
         const reloadWorthy = updateLooksReloadWorthy(result);
@@ -178,14 +184,14 @@ export default function piSelfUpdateExtension(pi) {
       async execute(_toolCallId, params = {}) {
         const reloadCommand = params.skipReload ? null : "/reload-tools";
         if (params.dryRun) {
-          return { content: [{ type: "text", text: `Would run pi update${reloadCommand ? ` and queue ${reloadCommand}` : " without reload"}.` }], details: { reloadCommand, queued: false } };
+          return { content: [{ type: "text", text: `Would run pi update from ${UPDATE_CWD}${reloadCommand ? ` and queue ${reloadCommand}` : " without reload"}.` }], details: { reloadCommand, queued: false, cwd: UPDATE_CWD } };
         }
         const result = await runPiUpdate(pi);
         const reloadWorthy = updateLooksReloadWorthy(result);
         if (reloadCommand) pi.sendUserMessage?.(reloadCommand, { deliverAs: "followUp" });
         return {
           content: [{ type: "text", text: `${formatUpdateResult(result, { reload: !params.skipReload, reloadWorthy })}\n\n${reloadCommand ? `Queued ${reloadCommand} as a follow-up command.` : "Reload skipped."}` }],
-          details: { reloadCommand, queued: !!reloadCommand, updateExitCode: result?.code ?? null, reloadWorthy },
+          details: { reloadCommand, queued: !!reloadCommand, updateExitCode: result?.code ?? null, reloadWorthy, cwd: UPDATE_CWD },
         };
       },
     });
