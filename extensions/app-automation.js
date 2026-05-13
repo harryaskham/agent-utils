@@ -622,7 +622,8 @@ export default function appAutomationExtension(pi) {
       cdpPort: Type.Optional(Type.Number({ description: "Windows Chrome DevTools port. Defaults to 9224." })),
       apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to refresh." }))),
       actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to refresh." }))),
-      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for scp/ssh commands. Defaults to 120000." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Overall timeout for each scp/ssh process. Defaults to 120000." })),
+      sshConnectTimeoutSeconds: Type.Optional(Type.Number({ description: "SSH ConnectTimeout seconds passed to both scp and ssh. Defaults to APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS or 10." })),
     }),
     async execute(_toolCallId, params, signal) {
       const summary = await runMsDevCdpRefresh({
@@ -633,6 +634,7 @@ export default function appAutomationExtension(pi) {
         apps: params.apps,
         actions: params.actions,
         timeoutMs: params.timeoutMs,
+        sshConnectTimeoutSeconds: params.sshConnectTimeoutSeconds,
         exec: (command, args, options = {}) => pi.exec(command, args, { ...options, signal }),
       });
       return textResult(renderMsDevCdpRefresh(summary), { msdevCdpRefresh: summary });

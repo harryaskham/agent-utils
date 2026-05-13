@@ -1108,6 +1108,8 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_msdev_cdp_refresh`/);
+  assert.match(source, /sshConnectTimeoutSeconds/);
+  assert.match(source, /APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS/);
   assert.match(source, /runMsDevCdpRefresh/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_work_briefing`/);
   assert.match(source, /buildWorkBriefingIndex/);
