@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import realtimeAgentExtension, {
   RealtimeStateController,
@@ -642,6 +645,41 @@ test("session_before_compact disables realtime and restores text model", async (
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
     else process.env.PI_RT_API_KEY = previousApiKey;
+  }
+});
+
+test("/rt temporary realtime switch preserves default model settings", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_RT_API_KEY = "test-key";
+  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
+  process.env.PI_CODING_AGENT_DIR = dir;
+  const settingsPath = join(dir, "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ defaultProvider: "litellm-openai", defaultModel: "gpt-5.5" }, null, 2));
+  FakeWebSocket.instances = [];
+  const { pi, commands, handlers, ctx } = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  pi.setModel = async (model) => {
+    ctx.model = model;
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    settings.defaultProvider = model.provider;
+    settings.defaultModel = model.id;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return true;
+  };
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("start nolisten", ctx);
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { defaultProvider: "litellm-openai", defaultModel: "gpt-5.5" });
+  } finally {
+    await commands.get("rt-off").handler("", ctx).catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   }
 });
 

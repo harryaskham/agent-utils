@@ -72,6 +72,9 @@
 //   PI_RT_VAD_PREFIX_PADDING_MS                   server VAD prefix padding (default 300)
 //   PI_RT_DEBUG=1                                 verbose event logging
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
@@ -317,6 +320,37 @@ function numberEnv(name, fallback) {
 
 function shouldAutoRestartMicMode(mode) {
   return mode === "vad" || mode === "continuous";
+}
+
+function agentSettingsPath() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+  return join(agentDir, "settings.json");
+}
+
+function readDefaultModelSettings() {
+  const path = agentSettingsPath();
+  try {
+    if (!existsSync(path)) return null;
+    const json = JSON.parse(readFileSync(path, "utf8"));
+    return { path, provider: json.defaultProvider, model: json.defaultModel };
+  } catch { return null; }
+}
+
+function restoreDefaultModelSettings(snapshot) {
+  if (!snapshot?.path) return;
+  try {
+    if (!existsSync(snapshot.path)) return;
+    const json = JSON.parse(readFileSync(snapshot.path, "utf8"));
+    if (snapshot.provider !== undefined) json.defaultProvider = snapshot.provider;
+    if (snapshot.model !== undefined) json.defaultModel = snapshot.model;
+    writeFileSync(snapshot.path, `${JSON.stringify(json, null, 2)}\n`);
+  } catch {}
+}
+
+function restoreDefaultModelSettingsSoon(snapshot) {
+  restoreDefaultModelSettings(snapshot);
+  setTimeout(() => restoreDefaultModelSettings(snapshot), 50).unref?.();
+  setTimeout(() => restoreDefaultModelSettings(snapshot), 250).unref?.();
 }
 
 export function buildServerVadTurnDetection() {
@@ -2005,6 +2039,7 @@ function makeInitialConfig() {
     nextReconnectAt: null,
     desiredListenMode: null,
     summaryContext: envBool("PI_RT_SUMMARY", false),
+    defaultModelSnapshot: null,
   };
 }
 
@@ -2381,6 +2416,8 @@ export function createRealtimeControls({ pi, session, config }) {
         const m = ctx?.modelRegistry?.find?.(prev.provider, prev.id);
         if (m) { try { await pi.setModel(m); } catch {} }
       }
+      restoreDefaultModelSettingsSoon(config.defaultModelSnapshot);
+      config.defaultModelSnapshot = null;
       unregisterRealtimeProvider(pi);
       session.clearRealtimeUi(ctx);
       return this.snapshot();
@@ -2505,7 +2542,10 @@ export default function realtimeAgentExtension(pi) {
       const modelId = config.model || "gpt-realtime-2";
       const m = ctx.modelRegistry.find?.("openai-realtime", modelId)
         || { provider: "openai-realtime", id: modelId, name: modelId };
+      config.defaultModelSnapshot ||= readDefaultModelSettings();
       const ok = await pi.setModel(m);
+      restoreDefaultModelSettingsSoon(config.defaultModelSnapshot);
+      if (!ok) { ctx.ui.notify("No API key for openai-realtime", "error"); return false; }
       if (!ok) { ctx.ui.notify("No API key for openai-realtime", "error"); return false; }
       controls.setAudio(true, ctx);
       controls.setSttOnly(false, ctx);
