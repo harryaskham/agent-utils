@@ -928,6 +928,28 @@ test("ms-dev CDP refresh classifies process-level command timeouts", async () =>
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh preserves per-target failure stage diagnostics", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-stage-${Date.now()}`), { recursive: true });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["calendar.snapshot"],
+    exec: async (command, args) => {
+      if (command === "ssh" && args.at(-1) === "true") return { code: 0, stdout: "", stderr: "" };
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "calendar.snapshot", status: "extract_failed", stage: "runtime_evaluate", error: "runtime_evaluate_timeout" }] }), stderr: "" };
+    },
+  });
+  assert.equal(summary.status, "extract_failed");
+  assert.equal(summary.failed[0].stage, "runtime_evaluate");
+  assert.equal(summary.failed[0].error, "runtime_evaluate_timeout");
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.calendar\.snapshot: status=extract_failed stage=runtime_evaluate error=runtime_evaluate_timeout/);
+  const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
+  assert.equal(manifest.failed[0].stage, "runtime_evaluate");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("app automation doctor summarizes latest ms-dev refresh manifest", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-doctor-msdev-${Date.now()}`), { recursive: true });
   await mkdir(path.join(root, "bridge"), { recursive: true });
@@ -1043,6 +1065,10 @@ test("ms-dev CDP PowerShell script uses configured port and no raw secrets", () 
   assert.match(script, /textLength > 2500/);
   assert.doesNotMatch(script, /const containers = \[[^\n]+data-testid/);
   assert.doesNotMatch(script, /const containers = \[[^\n]+data-tid/);
+  assert.match(script, /TimeoutSec 4/);
+  assert.match(script, /Start-Sleep -Seconds 3/);
+  assert.match(script, /stage='new_target'/);
+  assert.match(script, /stage='runtime_evaluate'/);
 });
 
 test("work briefing suppresses Outlook aggregate mail-list chrome from preserved snapshots", async () => {

@@ -153,22 +153,22 @@ ${targetJson}
 $Targets = $TargetsJson | ConvertFrom-Json
 function Invoke-CdpJson($Path, $Method = 'Get') {
   $uri = "http://127.0.0.1:$CdpPort$Path"
-  try { return Invoke-RestMethod -Method $Method -Uri $uri -TimeoutSec 8 } catch { return $null }
+  try { return Invoke-RestMethod -Method $Method -Uri $uri -TimeoutSec 4 } catch { return $null }
 }
 function New-CdpTarget($Url) {
   $encoded = [System.Uri]::EscapeDataString($Url)
   $target = Invoke-CdpJson "/json/new?$encoded" 'Put'
   if ($null -eq $target) { return $null }
-  Start-Sleep -Seconds 8
+  Start-Sleep -Seconds 3
   return $target
 }
 function Receive-CdpMessage($Socket, $WantedId) {
   $buffer = New-Object byte[] 1048576
-  $deadline = (Get-Date).AddSeconds(12)
+  $deadline = (Get-Date).AddSeconds(6)
   while ((Get-Date) -lt $deadline) {
     $segment = [ArraySegment[byte]]::new($buffer)
     $task = $Socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
-    if (-not $task.Wait(12000)) { return $null }
+    if (-not $task.Wait(6000)) { return $null }
     $count = $task.Result.Count
     if ($count -le 0) { continue }
     $text = [Text.Encoding]::UTF8.GetString($buffer, 0, $count)
@@ -182,11 +182,11 @@ function Receive-CdpMessage($Socket, $WantedId) {
 function Eval-Cdp($WsUrl, $Expression) {
   Add-Type -AssemblyName System.Net.WebSockets.Client
   $socket = [System.Net.WebSockets.ClientWebSocket]::new()
-  $socket.ConnectAsync([Uri]$WsUrl, [Threading.CancellationToken]::None).Wait(10000) | Out-Null
+  if (-not $socket.ConnectAsync([Uri]$WsUrl, [Threading.CancellationToken]::None).Wait(6000)) { return [pscustomobject]@{ __cdpError = 'websocket_connect_timeout' } }
   $id = 1
   $payload = @{ id = $id; method = 'Runtime.evaluate'; params = @{ expression = $Expression; returnByValue = $true; awaitPromise = $false } } | ConvertTo-Json -Compress -Depth 20
   $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
-  $socket.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(10000) | Out-Null
+  if (-not $socket.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(6000)) { $socket.Dispose(); return [pscustomobject]@{ __cdpError = 'websocket_send_timeout' } }
   $msg = Receive-CdpMessage $socket $id
   $socket.Dispose()
   if ($null -eq $msg) { return $null }
@@ -279,25 +279,29 @@ $extractor = @'
 '@
 $results = @()
 foreach ($targetSpec in $Targets) {
-  $target = New-CdpTarget $targetSpec.url
-  if ($null -eq $target -or -not $target.webSocketDebuggerUrl) {
-    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='cdp_unavailable'; url=$targetSpec.url }
-    continue
-  }
-  $value = Eval-Cdp $target.webSocketDebuggerUrl $extractor
-  if ($targetSpec.app -eq 'slack' -and $targetSpec.action -eq 'notifications.snapshot') {
-    $desktop = Get-SlackDesktopObservation
-    if ($null -ne $desktop) {
-      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; result=$desktop; fallback='slack-desktop-window' }
+  try {
+    $target = New-CdpTarget $targetSpec.url
+    if ($null -eq $target -or -not $target.webSocketDebuggerUrl) {
+      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='cdp_unavailable'; stage='new_target'; url=$targetSpec.url }
       continue
     }
-  }
-  if ($null -eq $value) {
-    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; url=$targetSpec.url }
-  } elseif ($value.__cdpError) {
-    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; url=$targetSpec.url; error=$value.__cdpError }
-  } else {
-    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; result=$value }
+    $value = Eval-Cdp $target.webSocketDebuggerUrl $extractor
+    if ($targetSpec.app -eq 'slack' -and $targetSpec.action -eq 'notifications.snapshot') {
+      $desktop = Get-SlackDesktopObservation
+      if ($null -ne $desktop) {
+        $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; result=$desktop; fallback='slack-desktop-window' }
+        continue
+      }
+    }
+    if ($null -eq $value) {
+      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; stage='runtime_evaluate'; url=$targetSpec.url; error='runtime_evaluate_timeout' }
+    } elseif ($value.__cdpError) {
+      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; stage='runtime_evaluate'; url=$targetSpec.url; error=$value.__cdpError }
+    } else {
+      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; result=$value }
+    }
+  } catch {
+    $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; stage='target_loop'; url=$targetSpec.url; error=($_.Exception.Message | Out-String).Trim() }
   }
 }
 [pscustomobject]@{ capturedAt=(Get-Date).ToUniversalTime().ToString('o'); source='ms-dev-chrome-cdp'; cdpPort=$CdpPort; results=$results } | ConvertTo-Json -Depth 80 -Compress
@@ -637,7 +641,7 @@ export async function runMsDevCdpRefresh({
     if (!target) continue;
     if (liveResult.status !== "ok") {
       const errorKind = classifyBridgeError(liveResult.error);
-      failed.push({ app: target.app, action: target.action, status: liveResult.status || "error", ...(errorKind ? { errorKind } : {}), error: compact(liveResult.error, 500) });
+      failed.push({ app: target.app, action: target.action, status: liveResult.status || "error", ...(liveResult.stage ? { stage: compact(liveResult.stage, 80) } : {}), ...(errorKind ? { errorKind } : {}), error: compact(liveResult.error, 500) });
       continue;
     }
     snapshots.push(await writeLiveSnapshot({ root, target, liveResult, capturedAt: payload.capturedAt }));
@@ -670,7 +674,7 @@ export function renderMsDevCdpRefresh(summary = {}) {
     lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.skippedWrite ? " skippedWrite=true" : ""}${snapshot.authRequired ? " authRequired=true" : ""}`);
   }
   for (const failure of summary.failed || []) {
-    lines.push(`${failure.app}.${failure.action}: status=${failure.status}${failure.errorKind ? ` errorKind=${failure.errorKind}` : ""}${failure.error ? ` error=${failure.error}` : ""}`);
+    lines.push(`${failure.app}.${failure.action}: status=${failure.status}${failure.stage ? ` stage=${failure.stage}` : ""}${failure.errorKind ? ` errorKind=${failure.errorKind}` : ""}${failure.error ? ` error=${failure.error}` : ""}`);
   }
   return lines.join("\n");
 }
