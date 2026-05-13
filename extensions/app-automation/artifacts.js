@@ -217,10 +217,33 @@ function linkHost(link = {}) {
   }
 }
 
+function hostFilterNeedles(host) {
+  const value = String(host || "").trim().toLowerCase();
+  if (!value) return [];
+  const aliases = {
+    slack: ["slack.com"],
+    meet: ["meet.google.com"],
+    googlemeet: ["meet.google.com"],
+    "google-meet": ["meet.google.com"],
+    gcal: ["calendar.google.com"],
+    googlecalendar: ["calendar.google.com"],
+    "google-calendar": ["calendar.google.com"],
+    teams: ["teams.microsoft.com"],
+    outlook: ["outlook.office.com", "outlook.live.com"],
+    owa: ["outlook.office.com"],
+    office: ["office.com", "office365.com", "microsoft.com"],
+    m365: ["office.com", "office365.com", "microsoft.com"],
+    zoom: ["zoom.us"],
+    github: ["github.com"],
+  };
+  return aliases[value] || [value];
+}
+
 function linkMatchesHost(link, host) {
-  const needle = String(host || "").trim().toLowerCase();
-  if (!needle) return true;
-  return linkHost(link).includes(needle);
+  const needles = hostFilterNeedles(host);
+  if (!needles.length) return true;
+  const haystack = linkHost(link);
+  return needles.some((needle) => haystack.includes(needle));
 }
 
 function normalizeLinkKind(kind) {
