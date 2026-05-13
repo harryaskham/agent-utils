@@ -875,7 +875,7 @@ test("ms-dev CDP refresh fails fast when SSH preflight fails", async () => {
   assert.equal(commands.length, 1);
   assert.equal(commands[0].command, "ssh");
   assert.equal(commands[0].args.at(-1), "true");
-  assert.equal(commands[0].options.timeout, 12000);
+  assert.equal(commands[0].options.timeout, 25000);
   assert.equal(summary.status, "preflight_failed");
   assert.equal(summary.failed[0].status, "preflight_failed");
   assert.equal(summary.failed[0].errorKind, "connect_timeout");

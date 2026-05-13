@@ -613,7 +613,7 @@ export async function runMsDevCdpRefresh({
   const localScriptPath = path.join(bridgeDir, "ms-dev-cdp-refresh.ps1");
   await writeFile(localScriptPath, buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets }), "utf8");
   const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
-  const preflightTimeoutMs = Math.min(timeoutMs, Math.max(12_000, (config.sshConnectTimeoutSeconds + 8) * 1000));
+  const preflightTimeoutMs = Math.min(timeoutMs, Math.max(25_000, (config.sshConnectTimeoutSeconds + 20) * 1000));
   const preflight = await exec("ssh", [...sshArgs, config.sshTarget, "true"], { timeout: preflightTimeoutMs });
   if (preflight.code !== 0) {
     return writeBridgeFailureManifest({ bridgeDir, status: "preflight_failed", config, targets, error: execFailureText(preflight, "ssh preflight failed") });
