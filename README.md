@@ -34,7 +34,7 @@ The app automation extension is loaded from [`extensions/app-automation.js`](ext
 Available tools:
 
 - `app_automation_list` — list configured apps and high-level actions.
-- `app_automation_doctor` — diagnose catalog/state-root/Playwright CLI setup, Tendril remote/WSL bridge configuration, optional bridge target-discovery probe, and standard action executability.
+- `app_automation_doctor` — diagnose catalog/state-root/Playwright CLI setup, Tendril remote/WSL bridge configuration, latest ms-dev CDP refresh status plus non-secret bridge config hints, optional bridge target-discovery probe, and standard action executability.
 - `app_automation_overview` — summarize configured work apps, active refreshers, snapshot freshness, standard refresh-action freshness, latest snapshot digests, and optional compact snapshot links.
 - `app_automation_work_briefing` — build a compact stale-aware shared briefing index from Slack, Outlook mail/calendar, Teams, and Calendar snapshots for natural-language questions.
 - `app_automation_msdev_cdp_refresh` — refresh work-app snapshots through `ms-dev` Windows Chrome CDP using the PowerShell WSL escape route when local Playwright/Tendril cannot reach Windows browser state. Configure `APP_AUTOMATION_MSDEV_SSH_TARGET=<user>@ms-dev`; SSH/SCP connection attempts use bounded non-interactive connect options by default and can be tuned per call with `sshConnectTimeoutSeconds` or via `APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS`. When Slack Web is unauthenticated but Slack Desktop is running, the bridge can fall back to the desktop window badge count and writes only a generic unread-count row.
