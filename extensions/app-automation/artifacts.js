@@ -253,7 +253,7 @@ function linkMatchesKind(link, kind) {
 
 function normalizeLinkSort(sort) {
   const value = String(sort || "").trim().toLowerCase();
-  return ["newest", "oldest", "freshest", "stalest", "app", "kind"].includes(value) ? value : null;
+  return ["newest", "oldest", "freshest", "stalest", "app", "kind", "host"].includes(value) ? value : null;
 }
 
 function linkTimestampMs(link = {}) {
@@ -275,6 +275,13 @@ function compareSnapshotLinks(sort) {
     if (mode === "kind") {
       return String(a.kind || "").localeCompare(String(b.kind || ""))
         || String(a.app || "").localeCompare(String(b.app || ""))
+        || String(a.label || "").localeCompare(String(b.label || ""))
+        || String(a.url || "").localeCompare(String(b.url || ""));
+    }
+    if (mode === "host") {
+      return linkHost(a).localeCompare(linkHost(b))
+        || String(a.app || "").localeCompare(String(b.app || ""))
+        || String(a.kind || "").localeCompare(String(b.kind || ""))
         || String(a.label || "").localeCompare(String(b.label || ""))
         || String(a.url || "").localeCompare(String(b.url || ""));
     }
