@@ -315,6 +315,10 @@ function numberEnv(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function shouldAutoRestartMicMode(mode) {
+  return mode === "vad" || mode === "continuous";
+}
+
 export function buildServerVadTurnDetection() {
   return {
     type: "server_vad",
@@ -699,6 +703,8 @@ class RealtimeSession {
     this.pendingSpokenTranscripts = [];
     this.spokenUserSkipCount = 0;
     this.pendingCommitTimer = null;
+    this.micRestartTimer = null;
+    this.micRestartAttempts = 0;
     this.pendingAudioTurnPending = false;
     this.lastMicBytes = 0;
     this.micMuteUntilTs = 0;
@@ -706,6 +712,36 @@ class RealtimeSession {
     this.phase = "idle";
     this.lastReasoningPayload = null;        // for reasoning auto-retry
     this.lastResponseObject = null;
+  }
+
+  clearMicRestartTimer() {
+    if (this.micRestartTimer) {
+      clearTimeout(this.micRestartTimer);
+      this.micRestartTimer = null;
+    }
+  }
+
+  scheduleMicRestart(reason = "microphone capture stopped") {
+    this.clearMicRestartTimer();
+    const mode = this.config.desiredListenMode;
+    if (!this.config.autoReconnect || !this.connected || this.mic || !shouldAutoRestartMicMode(mode)) return;
+    const maxAttempts = Number(env("PI_RT_MIC_RESTART_MAX_ATTEMPTS") || 20);
+    if (this.micRestartAttempts >= maxAttempts) {
+      this.notify(`Realtime mic stopped and restart attempts exhausted: ${reason}`, "error");
+      this.updateStatus();
+      return;
+    }
+    const attempt = ++this.micRestartAttempts;
+    const delay = Math.min(10_000, 500 * (2 ** Math.max(0, attempt - 1)));
+    this.notify(`Realtime mic stopped; restarting ${mode} capture in ${formatDurationMs(delay)} (${reason})`, attempt === 1 ? "warning" : "info");
+    this.micRestartTimer = setTimeout(async () => {
+      this.micRestartTimer = null;
+      if (!this.config.autoReconnect || this.mic || !this.connected || !shouldAutoRestartMicMode(this.config.desiredListenMode)) return;
+      try { await this.startMic(this.lastCtx, this.config.desiredListenMode === "continuous" ? "continuous" : "vad", { restarted: true }); }
+      catch (e) { this.scheduleMicRestart(e.message || String(e)); }
+    }, delay);
+    this.micRestartTimer.unref?.();
+    this.updateStatus();
   }
 
   clearReconnectTimer() {
@@ -1803,13 +1839,15 @@ class RealtimeSession {
     this.pendingCommitTimer.unref?.();
   }
 
-  async startMic(ctx, mode = "ptt") {
+  async startMic(ctx, mode = "ptt", { restarted = false } = {}) {
     this.lastCtx = ctx || this.lastCtx;
     // Mic can be started before any typed turn. Ensure the WSS exists first;
     // no `response.create` is sent here, only audio input/transcription config.
     if (!this.connected) await this.connect(ctx);
-    if (this.mic) await this.stopMic({ commit: false });
+    if (this.mic) await this.stopMic({ commit: false, restart: false });
 
+    this.clearMicRestartTimer();
+    if (!restarted) this.micRestartAttempts = 0;
     this.micMode = mode;
     this.lastMicBytes = 0;
     this.clearPendingCommitTimer();
@@ -1843,26 +1881,32 @@ class RealtimeSession {
       const s = String(d).trim();
       if (s && this.config.debug) this.notify(`mic: ${s}`, "warning");
     });
-    proc.on("exit", () => {
-      if (this.mic === proc) this.mic = null;
-      this.updateStatus();
+    proc.on("exit", (code, signal) => {
+      if (this.mic === proc) {
+        this.mic = null;
+        this.micMode = null;
+        this.sendTurnDetectionUpdate();
+        this.updateStatus();
+        this.scheduleMicRestart(`${code ?? "?"}${signal ? `/${signal}` : ""}`);
+      }
     });
     this.setPhase("recording");
     this.notify(
       mode === "ptt"
         ? "Recording. Press Enter/Space/Esc or /rt-stop to send; Ctrl-C or /rt-cancel discards."
-        : "Server VAD listening. Stop talking to send; /rt-cancel discards.",
+        : `${restarted ? "Restarted. " : ""}Server VAD listening. Stop talking to send; /rt-cancel discards.`,
       "info",
     );
     this.updateStatus();
   }
 
-  async stopMic({ commit = true } = {}) {
+  async stopMic({ commit = true, restart = false } = {}) {
     if (this.mic) {
       try { this.mic.kill("SIGTERM"); } catch {}
       setTimeout(() => { try { this.mic?.kill("SIGKILL"); } catch {} }, 1000).unref?.();
       this.mic = null;
     }
+    if (!restart) this.clearMicRestartTimer();
     const mode = this.micMode;
     this.micMode = null;
     this.sendTurnDetectionUpdate();
@@ -1894,6 +1938,7 @@ class RealtimeSession {
 
   async close(display = true) {
     this.clearReconnectTimer();
+    this.clearMicRestartTimer();
     await this.stopMic({ commit: false }).catch(() => {});
     this.player.close();
     if (this.ws) {
@@ -2131,7 +2176,7 @@ function diagnosticLines(session, config) {
     `commands: ${requirements}`,
     `vad: threshold:${numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
     `state: ${JSON.stringify(session.state?.snapshot?.({ sttOnly: config.sttOnly, audioEnabled: config.audioEnabled }) || {})}`,
-    `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length}`,
+    `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length} · micRestart:${session.micRestartAttempts || 0}${session.micRestartTimer ? " pending" : ""}`,
     `reconnect: ${config.autoReconnect ? "on" : "off"} · attempts:${config.reconnectAttempts || 0}/${config.reconnectMaxAttempts || 0} · next:${config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0}ms · last:${config.lastDisconnectReason || "<none>"}`,
     `lastResponseError: ${session.lastResponseError || "<none>"}`,
     `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,
@@ -2199,6 +2244,8 @@ export function createRealtimeControls({ pi, session, config }) {
           lastMicBytes: session.lastMicBytes || 0,
           pendingTranscriptCount: session.pendingSpokenTranscripts?.length || 0,
           micMuteRemainingMs: Math.max(0, (session.micMuteUntilTs || 0) - Date.now()),
+          micRestartAttempts: session.micRestartAttempts || 0,
+          micRestartPending: !!session.micRestartTimer,
           autoReconnect: !!config.autoReconnect,
           reconnectAttempts: config.reconnectAttempts || 0,
           reconnectMaxAttempts: config.reconnectMaxAttempts || 0,

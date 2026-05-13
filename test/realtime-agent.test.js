@@ -883,6 +883,31 @@ test("realtime flushes spoken preamble before tool calls", async () => {
   }
 });
 
+test("realtime restarts VAD mic when recorder exits unexpectedly", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRecord = process.env.PI_RT_RECORD_CMD;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_RECORD_CMD = "sh -c 'exit 7'";
+  FakeWebSocket.instances = [];
+  const harness = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    await harness.commands.get("rt").handler("start vad", harness.ctx);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(harness.pi.realtime.snapshot().state.micMode, null);
+    assert.equal(harness.pi.realtime.snapshot().health.micRestartPending, true);
+    assert.match(harness.notifications.at(-1)?.message || "", /restarting vad capture/);
+  } finally {
+    await harness.commands.get("rt-off").handler("", harness.ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRecord === undefined) delete process.env.PI_RT_RECORD_CMD;
+    else process.env.PI_RT_RECORD_CMD = previousRecord;
+  }
+});
+
 test("realtime aborts oversized full-history context before opening WebSocket", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   const previousRegister = process.env.PI_RT_REGISTER;

@@ -226,7 +226,7 @@ Tool output includes the same diagnostics/status lines as `/rt-status` and a str
 
 ## Autoreconnect
 
-Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off`, `/rt stop`, or the tool equivalent disables reconnect. When a response contains a spoken preamble before a tool call, the extension flushes buffered audio before emitting the tool call so the preamble is heard before the tool result rather than after it.
+Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off`, `/rt stop`, or the tool equivalent disables reconnect. For VAD/continuous calls, the extension also watches the recorder process: if microphone capture exits unexpectedly while the realtime session is still connected, it clears stale mic state and restarts capture with bounded backoff. When a response contains a spoken preamble before a tool call, the extension flushes buffered audio before emitting the tool call so the preamble is heard before the tool result rather than after it.
 
 Tuning knobs:
 
