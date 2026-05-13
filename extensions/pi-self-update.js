@@ -34,9 +34,12 @@ function piUpdateExecOptions(signal) {
   return { timeout: UPDATE_TIMEOUT_MS, signal, cwd: UPDATE_CWD };
 }
 
+const UPDATE_ARGS = ["update", "--extensions"];
+const UPDATE_DISPLAY = "pi update --extensions";
+
 function runPiUpdateWithSpawn(signal) {
   return new Promise((resolve) => {
-    const child = spawn("pi", ["update"], { stdio: ["ignore", "pipe", "pipe"], cwd: UPDATE_CWD });
+    const child = spawn("pi", UPDATE_ARGS, { stdio: ["ignore", "pipe", "pipe"], cwd: UPDATE_CWD });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -48,11 +51,11 @@ function runPiUpdateWithSpawn(signal) {
     };
     const timer = setTimeout(() => {
       try { child.kill("SIGTERM"); } catch {}
-      finish({ code: null, stdout, stderr: `${stderr}\npi update timed out after ${UPDATE_TIMEOUT_MS}ms`, killed: true });
+      finish({ code: null, stdout, stderr: `${stderr}\n${UPDATE_DISPLAY} timed out after ${UPDATE_TIMEOUT_MS}ms`, killed: true });
     }, UPDATE_TIMEOUT_MS);
     signal?.addEventListener?.("abort", () => {
       try { child.kill("SIGTERM"); } catch {}
-      finish({ code: null, stdout, stderr: `${stderr}\npi update aborted`, killed: true });
+      finish({ code: null, stdout, stderr: `${stderr}\n${UPDATE_DISPLAY} aborted`, killed: true });
     }, { once: true });
     child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
@@ -63,7 +66,7 @@ function runPiUpdateWithSpawn(signal) {
 
 async function runPiUpdate(pi, signal) {
   if (typeof pi.exec === "function") {
-    return pi.exec("pi", ["update"], piUpdateExecOptions(signal));
+    return pi.exec("pi", UPDATE_ARGS, piUpdateExecOptions(signal));
   }
   return runPiUpdateWithSpawn(signal);
 }
@@ -73,7 +76,7 @@ function formatUpdateResult(result, { reload, reloadWorthy }) {
   const stdout = truncateOutput(result?.stdout || "").trim();
   const stderr = truncateOutput(result?.stderr || "").trim();
   return [
-    `pi update exited with code ${code}`,
+    `${UPDATE_DISPLAY} exited with code ${code}`,
     reload ? (reloadWorthy ? "reload: requested after package update" : "reload: requested after update attempt") : "reload: skipped (--no-reload)",
     stdout ? `\nstdout:\n${stdout}` : "",
     stderr ? `\nstderr:\n${stderr}` : "",
@@ -113,20 +116,20 @@ export default function piSelfUpdateExtension(pi) {
   let updateRunning = false;
 
   pi.registerCommand("update", {
-    description: "Run `pi update`, then reload extensions/resources and refresh active tools. Use /update --no-reload to skip reload.",
+    description: "Run `pi update --extensions`, then reload extensions/resources and refresh active tools. Use /update --no-reload to skip reload.",
     handler: async (args, ctx) => {
       const options = parseUpdateArgs(args);
       if (options.help) {
-        ctx.ui.notify("Usage: /update [--no-reload] — run pi update, then reload and refresh active tools.", "info");
+        ctx.ui.notify("Usage: /update [--no-reload] — run pi update --extensions, then reload and refresh active tools.", "info");
         return;
       }
       if (updateRunning) {
-        ctx.ui.notify("pi update is already running in this session", "warning");
+        ctx.ui.notify("pi extension update is already running in this session", "warning");
         return;
       }
       updateRunning = true;
       try {
-        ctx.ui.notify("Running pi update from home directory...", "info");
+        ctx.ui.notify("Running pi update --extensions from home directory...", "info");
         const result = await runPiUpdate(pi);
         const ok = Number(result?.code || 0) === 0 && !result?.killed;
         const reloadWorthy = updateLooksReloadWorthy(result);
@@ -134,13 +137,13 @@ export default function piSelfUpdateExtension(pi) {
         if (options.reload) {
           queueReloadToolsActivate(pi);
           ctx.ui.notify(reloadWorthy
-            ? "pi update completed package work; reloading Pi runtime and refreshing tools..."
-            : "pi update did not report package success, but /update reloads after attempts; reloading Pi runtime and refreshing tools...", "info");
+            ? "pi extension update completed package work; reloading Pi runtime and refreshing tools..."
+            : "pi extension update did not report package success, but /update reloads after attempts; reloading Pi runtime and refreshing tools...", "info");
           await ctx.reload();
           return;
         }
       } catch (error) {
-        ctx.ui.notify(`pi update failed: ${error.message || String(error)}`, "error");
+        ctx.ui.notify(`${UPDATE_DISPLAY} failed: ${error.message || String(error)}`, "error");
       } finally {
         updateRunning = false;
       }
@@ -174,24 +177,24 @@ export default function piSelfUpdateExtension(pi) {
     pi.registerTool({
       name: "pi_self_update",
       label: "Pi Self Update",
-      description: "Run `pi update`, then queue /reload-tools so updated packages and tools are loaded in the current Pi session.",
-      promptSnippet: "Run a Pi package self-update and queue a reload-tools pass when newly landed extension/tool changes are needed in the running session.",
+      description: "Run `pi update --extensions`, then queue /reload-tools so updated packages and tools are loaded in the current Pi session.",
+      promptSnippet: "Run a Pi extension/package update and queue a reload-tools pass when newly landed extension/tool changes are needed in the running session.",
       promptGuidelines: ["Use pi_self_update when the user asks to update Pi packages or when a newly landed agent-utils extension/tool needs to appear in the current Pi session."],
       parameters: ToolSchema.object({
-        skipReload: ToolSchema.optional(ToolSchema.boolean({ description: "Run pi update without queueing /reload-tools afterward." })),
-        dryRun: ToolSchema.optional(ToolSchema.boolean({ description: "Only report what would run; do not run pi update or queue a reload." })),
+        skipReload: ToolSchema.optional(ToolSchema.boolean({ description: "Run pi update --extensions without queueing /reload-tools afterward." })),
+        dryRun: ToolSchema.optional(ToolSchema.boolean({ description: "Only report what would run; do not run pi update --extensions or queue a reload." })),
       }),
       async execute(_toolCallId, params = {}) {
         const reloadCommand = params.skipReload ? null : "/reload-tools";
         if (params.dryRun) {
-          return { content: [{ type: "text", text: `Would run pi update from ${UPDATE_CWD}${reloadCommand ? ` and queue ${reloadCommand}` : " without reload"}.` }], details: { reloadCommand, queued: false, cwd: UPDATE_CWD } };
+          return { content: [{ type: "text", text: `Would run ${UPDATE_DISPLAY} from ${UPDATE_CWD}${reloadCommand ? ` and queue ${reloadCommand}` : " without reload"}.` }], details: { reloadCommand, queued: false, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS } };
         }
         const result = await runPiUpdate(pi);
         const reloadWorthy = updateLooksReloadWorthy(result);
         if (reloadCommand) pi.sendUserMessage?.(reloadCommand, { deliverAs: "followUp" });
         return {
           content: [{ type: "text", text: `${formatUpdateResult(result, { reload: !params.skipReload, reloadWorthy })}\n\n${reloadCommand ? `Queued ${reloadCommand} as a follow-up command.` : "Reload skipped."}` }],
-          details: { reloadCommand, queued: !!reloadCommand, updateExitCode: result?.code ?? null, reloadWorthy, cwd: UPDATE_CWD },
+          details: { reloadCommand, queued: !!reloadCommand, updateExitCode: result?.code ?? null, reloadWorthy, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS },
         };
       },
     });
@@ -201,7 +204,7 @@ export default function piSelfUpdateExtension(pi) {
       label: "Pi Reload Tools",
       description: "Queue /reload-tools so Pi reloads extensions/resources and activates newly registered tools for future turns.",
       promptSnippet: "Queue a Pi runtime reload plus active-tool refresh when newly updated extension tools are not visible yet.",
-      promptGuidelines: ["Use pi_reload_tools when the user asks to refresh or reload model-visible Pi tools without running pi update."],
+      promptGuidelines: ["Use pi_reload_tools when the user asks to refresh or reload model-visible Pi tools without running pi update --extensions."],
       parameters: ToolSchema.object({
         dryRun: ToolSchema.optional(ToolSchema.boolean({ description: "Only report the command that would be queued; do not queue it." })),
       }),

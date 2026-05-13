@@ -32,7 +32,7 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
   return { pi, ctx, commands, tools, notifications, userMessages, activeToolsCalls, get execCount() { return execCount; }, get lastExec() { return lastExec; }, get reloadCount() { return reloadCount; } };
 }
 
-test("/update runs pi update from home and reloads on success", async () => {
+test("/update runs pi update --extensions from home and reloads on success", async () => {
   const h = makeHarness();
   piSelfUpdateExtension(h.pi);
 
@@ -40,19 +40,21 @@ test("/update runs pi update from home and reloads on success", async () => {
 
   assert.equal(h.reloadCount, 1);
   assert.equal(h.execCount, 1);
-  assert.equal(h.notifications.at(0).message, "Running pi update from home directory...");
+  assert.equal(h.lastExec.command, "pi");
+  assert.deepEqual(h.lastExec.args, ["update", "--extensions"]);
+  assert.equal(h.notifications.at(0).message, "Running pi update --extensions from home directory...");
   assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp" } }]);
-  assert.match(h.notifications.at(-2).message, /pi update exited with code 0/);
+  assert.match(h.notifications.at(-2).message, /pi update --extensions exited with code 0/);
   assert.match(h.notifications.at(-1).message, /reloading Pi runtime/);
 });
 
-test("pi update exec uses home directory cwd", async () => {
+test("pi update --extensions exec uses home directory cwd", async () => {
   const h = makeHarness();
   piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("--no-reload", h.ctx);
 
-  assert.equal(h.notifications.at(0).message, "Running pi update from home directory...");
+  assert.equal(h.notifications.at(0).message, "Running pi update --extensions from home directory...");
   assert.equal(h.lastExec.options.cwd, homedir());
 });
 
@@ -106,7 +108,8 @@ test("pi_self_update dryRun reports without queueing", async () => {
 
   assert.deepEqual(h.userMessages, []);
   assert.equal(h.execCount, 0);
-  assert.match(result.content[0].text, /Would run pi update/);
+  assert.match(result.content[0].text, /Would run pi update --extensions/);
+  assert.deepEqual(result.details.updateArgs, ["update", "--extensions"]);
 });
 
 test("/reload-tools reloads first and queues post-reload activation", async () => {
