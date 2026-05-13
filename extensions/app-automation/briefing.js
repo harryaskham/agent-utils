@@ -148,6 +148,7 @@ async function readLatestRefreshAttempts(root, { staleAfterMinutes = 15, now = n
       skippedWrite: Boolean(entry.skippedWrite),
       reason: compact(entry.reason, 180),
       error: compact(entry.error, 180),
+      errorKind: compact(entry.errorKind, 80),
       rawCount: Number.isFinite(entry.rawCount) ? entry.rawCount : undefined,
       ...attemptFreshness,
     });
@@ -194,6 +195,12 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
     if (!FAILED_REFRESH_STATUSES.has(status)) continue;
     failedRefreshStatuses[status] = (failedRefreshStatuses[status] || 0) + 1;
   }
+  const failedRefreshErrorKinds = {};
+  for (const entry of entries) {
+    const errorKind = entry.latestRefresh?.errorKind;
+    if (!errorKind || !FAILED_REFRESH_STATUSES.has(entry.latestRefresh?.status)) continue;
+    failedRefreshErrorKinds[errorKind] = (failedRefreshErrorKinds[errorKind] || 0) + 1;
+  }
   const failedRefresh = Object.values(failedRefreshStatuses).reduce((sum, count) => sum + count, 0);
   const index = {
     version: 1,
@@ -209,6 +216,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       filteredEmptyRefresh: entries.filter((entry) => entry.latestRefresh?.status === "filtered_empty").length,
       failedRefresh,
       ...(failedRefresh ? { failedRefreshStatuses } : {}),
+      ...(Object.keys(failedRefreshErrorKinds).length ? { failedRefreshErrorKinds } : {}),
       missing: entries.filter((entry) => entry.status === "missing").length,
       authRequired: entries.filter((entry) => entry.authRequired || entry.status === "auth_required").length,
       items: entries.reduce((sum, entry) => sum + (entry.itemCount || 0), 0),
@@ -225,14 +233,15 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
 export function renderWorkBriefingIndex(index = {}) {
   const totals = index.totals || {};
   const failedStatuses = Object.entries(totals.failedRefreshStatuses || {}).sort(([a], [b]) => a.localeCompare(b)).map(([status, count]) => `${status}=${count}`).join(",");
+  const failedErrorKinds = Object.entries(totals.failedRefreshErrorKinds || {}).sort(([a], [b]) => a.localeCompare(b)).map(([kind, count]) => `${kind}=${count}`).join(",");
   const lines = [
-    `work briefing generated=${index.generatedAt || "unknown"} staleAfter=${index.staleAfterMinutes || "unknown"}m actions=${totals.actions || 0} fresh=${totals.fresh || 0} stale=${totals.stale || 0}${totals.preservedStale ? ` preservedStale=${totals.preservedStale} effectiveStale=${totals.effectiveStale || 0}` : ""}${totals.filteredEmptyRefresh ? ` filteredEmptyRefresh=${totals.filteredEmptyRefresh}` : ""}${totals.failedRefresh ? ` failedRefresh=${totals.failedRefresh}` : ""}${failedStatuses ? ` failedRefreshStatuses=${failedStatuses}` : ""} missing=${totals.missing || 0} authRequired=${totals.authRequired || 0} items=${totals.items || 0}`,
+    `work briefing generated=${index.generatedAt || "unknown"} staleAfter=${index.staleAfterMinutes || "unknown"}m actions=${totals.actions || 0} fresh=${totals.fresh || 0} stale=${totals.stale || 0}${totals.preservedStale ? ` preservedStale=${totals.preservedStale} effectiveStale=${totals.effectiveStale || 0}` : ""}${totals.filteredEmptyRefresh ? ` filteredEmptyRefresh=${totals.filteredEmptyRefresh}` : ""}${totals.failedRefresh ? ` failedRefresh=${totals.failedRefresh}` : ""}${failedStatuses ? ` failedRefreshStatuses=${failedStatuses}` : ""}${failedErrorKinds ? ` failedRefreshErrorKinds=${failedErrorKinds}` : ""} missing=${totals.missing || 0} authRequired=${totals.authRequired || 0} items=${totals.items || 0}`,
   ];
   if (index.indexPath) lines.push(`index=${index.indexPath}`);
   for (const entry of index.entries || []) {
     const age = entry.ageMinutes != null ? ` age=${entry.ageMinutes}m` : "";
     const auth = entry.authRequired ? " authRequired=true" : "";
-    const refresh = entry.latestRefresh ? ` latestRefresh=${entry.latestRefresh.status}${entry.latestRefresh.ageMinutes != null ? `/${entry.latestRefresh.ageMinutes}m` : ""}${entry.latestRefresh.skippedWrite ? "/skippedWrite" : ""}` : "";
+    const refresh = entry.latestRefresh ? ` latestRefresh=${entry.latestRefresh.status}${entry.latestRefresh.ageMinutes != null ? `/${entry.latestRefresh.ageMinutes}m` : ""}${entry.latestRefresh.skippedWrite ? "/skippedWrite" : ""}${entry.latestRefresh.errorKind ? `/${entry.latestRefresh.errorKind}` : ""}` : "";
     const hidden = entry.hiddenChromeCount ? ` rawItems=${entry.rawItemCount || 0} hiddenChrome=${entry.hiddenChromeCount}` : "";
     lines.push(`${entry.app}.${entry.action}: status=${entry.status} freshness=${entry.freshness}${age} items=${entry.itemCount || 0}${hidden}${auth}${refresh}`);
     for (const sample of entry.samples || []) {

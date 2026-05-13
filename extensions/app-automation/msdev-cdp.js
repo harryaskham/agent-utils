@@ -58,6 +58,17 @@ function compact(value, limit = 180) {
   return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
 }
 
+function classifyBridgeError(error) {
+  const text = String(error || "").toLowerCase();
+  if (!text) return null;
+  if (/connection timed out|operation timed out|connect to host .* timed out|timed out/.test(text)) return "connect_timeout";
+  if (/connection refused/.test(text)) return "connection_refused";
+  if (/no route to host|network is unreachable|host is down/.test(text)) return "host_unreachable";
+  if (/could not resolve hostname|name or service not known|temporary failure in name resolution/.test(text)) return "name_resolution_failed";
+  if (/permission denied|publickey|authentication failed/.test(text)) return "auth_failed";
+  return null;
+}
+
 function sshOptions(connectTimeoutSeconds = DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS) {
   const timeout = Math.max(1, Number.parseInt(String(connectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS);
   return ["-o", "BatchMode=yes", "-o", `ConnectTimeout=${timeout}`];
@@ -468,6 +479,7 @@ function parseCdpJson(stdout = "") {
 }
 
 async function writeBridgeFailureManifest({ bridgeDir, status, config, targets = [], error }) {
+  const errorKind = classifyBridgeError(error);
   const manifest = {
     version: 1,
     status,
@@ -480,6 +492,7 @@ async function writeBridgeFailureManifest({ bridgeDir, status, config, targets =
       app: target.app,
       action: target.action,
       status,
+      ...(errorKind ? { errorKind } : {}),
       error: compact(error, 500),
     })),
   };
@@ -547,7 +560,8 @@ export async function runMsDevCdpRefresh({
     const target = byKey.get(`${liveResult.app}:${liveResult.action}`);
     if (!target) continue;
     if (liveResult.status !== "ok") {
-      failed.push({ app: target.app, action: target.action, status: liveResult.status || "error", error: compact(liveResult.error, 500) });
+      const errorKind = classifyBridgeError(liveResult.error);
+      failed.push({ app: target.app, action: target.action, status: liveResult.status || "error", ...(errorKind ? { errorKind } : {}), error: compact(liveResult.error, 500) });
       continue;
     }
     snapshots.push(await writeLiveSnapshot({ root, target, liveResult, capturedAt: payload.capturedAt }));
@@ -577,7 +591,7 @@ export function renderMsDevCdpRefresh(summary = {}) {
     lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.authRequired ? " authRequired=true" : ""}`);
   }
   for (const failure of summary.failed || []) {
-    lines.push(`${failure.app}.${failure.action}: status=${failure.status}${failure.error ? ` error=${failure.error}` : ""}`);
+    lines.push(`${failure.app}.${failure.action}: status=${failure.status}${failure.errorKind ? ` errorKind=${failure.errorKind}` : ""}${failure.error ? ` error=${failure.error}` : ""}`);
   }
   return lines.join("\n");
 }

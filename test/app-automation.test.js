@@ -806,17 +806,20 @@ test("ms-dev CDP refresh records bridge copy failures in latest manifest", async
   });
   assert.equal(summary.status, "copy_failed");
   assert.equal(summary.failed[0].status, "copy_failed");
-  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=copy_failed/);
+  assert.equal(summary.failed[0].errorKind, "connect_timeout");
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=copy_failed errorKind=connect_timeout/);
   const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
   assert.equal(manifest.status, "copy_failed");
   assert.equal(manifest.failed[0].app, "outlook");
+  assert.equal(manifest.failed[0].errorKind, "connect_timeout");
   assert.equal("stdout" in manifest, false);
   assert.equal("stderr" in manifest, false);
   const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, now: new Date(manifest.capturedAt) });
   assert.equal(index.totals.failedRefresh, 1);
   assert.deepEqual(index.totals.failedRefreshStatuses, { copy_failed: 1 });
-  assert.match(renderWorkBriefingIndex(index), /failedRefresh=1 failedRefreshStatuses=copy_failed=1/);
-  assert.match(renderWorkBriefingIndex(index), /outlook\.notifications\.snapshot: status=ok freshness=stale age=\d+m items=1 latestRefresh=copy_failed\/0m/);
+  assert.deepEqual(index.totals.failedRefreshErrorKinds, { connect_timeout: 1 });
+  assert.match(renderWorkBriefingIndex(index), /failedRefresh=1 failedRefreshStatuses=copy_failed=1 failedRefreshErrorKinds=connect_timeout=1/);
+  assert.match(renderWorkBriefingIndex(index), /outlook\.notifications\.snapshot: status=ok freshness=stale age=\d+m items=1 latestRefresh=copy_failed\/0m\/connect_timeout/);
   const preserved = JSON.parse(await readFile(path.join(outlookDir, "notifications.snapshot.json"), "utf8"));
   assert.equal(preserved.items[0].text, "keep mail");
   await rm(root, { recursive: true, force: true });
@@ -831,14 +834,15 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
     config: { sshTargetConfigured: true, sshTarget: "test-user@ms-dev", cdpPort: 9224, sshConnectTimeoutSeconds: 5 },
     snapshots: [],
     failed: [
-      { app: "slack", action: "notifications.snapshot", status: "copy_failed" },
-      { app: "outlook", action: "notifications.snapshot", status: "copy_failed" },
+      { app: "slack", action: "notifications.snapshot", status: "copy_failed", errorKind: "connect_timeout" },
+      { app: "outlook", action: "notifications.snapshot", status: "copy_failed", errorKind: "connect_timeout" },
     ],
   }), "utf8");
   const summary = await readLatestMsDevRefreshSummary(root, { now: new Date("2026-05-13T03:05:00Z") });
   assert.equal(summary.status, "copy_failed");
   assert.equal(summary.ageMinutes, 5);
   assert.deepEqual(summary.failureStatuses, { copy_failed: 2 });
+  assert.deepEqual(summary.failureErrorKinds, { connect_timeout: 2 });
   assert.equal(summary.sshTargetConfigured, true);
   assert.equal(summary.cdpPort, 9224);
   assert.equal(summary.sshConnectTimeoutSeconds, 5);
@@ -850,7 +854,7 @@ test("app automation doctor summarizes latest ms-dev refresh manifest", async ()
     actionDiagnostics: [],
     msDevCdpRefresh: summary,
   });
-  assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2 sshTargetConfigured=true cdpPort=9224 connectTimeout=5s/);
+  assert.match(rendered, /msDevCdpRefresh=copy_failed age=5m snapshots=0 failed=2 failureStatuses=copy_failed=2 failureErrorKinds=connect_timeout=2 sshTargetConfigured=true cdpPort=9224 connectTimeout=5s/);
   assert.doesNotMatch(rendered, /test-user@ms-dev/);
   await rm(root, { recursive: true, force: true });
 });
