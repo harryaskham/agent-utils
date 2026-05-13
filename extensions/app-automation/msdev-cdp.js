@@ -70,11 +70,22 @@ function classifyBridgeError(error) {
   return null;
 }
 
+function sanitizeBridgeFailureText(value) {
+  let text = compact(value, 500);
+  if (!text) return null;
+  if (/^command failed:/i.test(text)) text = "command failed";
+  text = text.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+(?=[:\s]|$)/g, "[ssh-target]");
+  text = text.replace(/\/home\/[^\s]+/g, "[local-path]");
+  text = text.replace(/\/tmp\/[^\s]+/g, "[remote-path]");
+  text = text.replace(/[A-Za-z]:\\[^\s]+/g, "[windows-path]");
+  return compact(text, 500);
+}
+
 function execFailureText(result = {}, fallback = "command failed") {
-  if (typeof result === "string") return result;
+  if (typeof result === "string") return sanitizeBridgeFailureText(result) || fallback;
   const parts = [];
   for (const field of ["stderr", "stdout", "error", "message"]) {
-    const value = compact(result?.[field], 500);
+    const value = sanitizeBridgeFailureText(result?.[field]);
     if (value) parts.push(value);
   }
   for (const field of ["code", "signal"]) {
@@ -649,7 +660,7 @@ export function renderMsDevCdpRefresh(summary = {}) {
   const snapshotStatuses = compactCounts(summary.snapshots || [], "status");
   const skippedWrite = (summary.snapshots || []).filter((snapshot) => snapshot?.skippedWrite).length;
   const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${snapshotStatuses ? ` snapshotStatuses=${snapshotStatuses}` : ""}${skippedWrite ? ` skippedWrite=${skippedWrite}` : ""}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}`];
-  if (summary.manifestPath) lines.push(`manifest=${summary.manifestPath}`);
+  if (summary.manifestPath) lines.push(`manifest=${sanitizeBridgeFailureText(summary.manifestPath) || "[local-path]"}`);
   for (const snapshot of summary.snapshots || []) {
     lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.skippedWrite ? " skippedWrite=true" : ""}${snapshot.authRequired ? " authRequired=true" : ""}`);
   }

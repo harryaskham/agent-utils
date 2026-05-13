@@ -863,7 +863,16 @@ test("ms-dev CDP refresh classifies process-level command timeouts", async () =>
     timeoutMs: 1234,
     exec: async (command) => {
       if (command === "scp") return { code: 0, stdout: "", stderr: "" };
-      return { code: 1, stdout: "", stderr: "", signal: "SIGTERM", killed: true, timedOut: true, timeoutMs: 1234 };
+      return {
+        code: 1,
+        stdout: "",
+        stderr: "",
+        message: "Command failed: scp -o BatchMode=yes /home/harry/.local/state/agent-utils/app-automation/bridge/ms-dev-cdp-refresh.ps1 test-user@ms-dev:/tmp/agent-utils-msdev-cdp-refresh.ps1",
+        signal: "SIGTERM",
+        killed: true,
+        timedOut: true,
+        timeoutMs: 1234,
+      };
     },
   });
   assert.equal(summary.status, "run_failed");
@@ -871,7 +880,11 @@ test("ms-dev CDP refresh classifies process-level command timeouts", async () =>
   assert.equal(summary.failed[0].errorKind, "command_timeout");
   assert.match(summary.failed[0].error, /signal=SIGTERM/);
   assert.match(summary.failed[0].error, /killed=true/);
-  assert.match(renderMsDevCdpRefresh(summary), /failureErrorKinds=command_timeout=1/);
+  assert.doesNotMatch(summary.failed[0].error, /scp -o|\/home\/harry|test-user@ms-dev|\/tmp\/agent-utils/);
+  const rendered = renderMsDevCdpRefresh({ ...summary, manifestPath: "/home/harry/.local/state/agent-utils/app-automation/bridge/latest-ms-dev-cdp-refresh.json" });
+  assert.match(rendered, /failureErrorKinds=command_timeout=1/);
+  assert.match(rendered, /manifest=\[local-path\]/);
+  assert.doesNotMatch(rendered, /\/home\/harry|test-user@ms-dev|scp -o/);
   const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
   assert.equal(manifest.failed[0].errorKind, "command_timeout");
   assert.equal("stdout" in manifest, false);
