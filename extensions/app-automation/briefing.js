@@ -64,13 +64,15 @@ function calendarTodayScore(item = {}, now = new Date()) {
   let score = 0;
   if (/\btoday\b/i.test(text)) score += 40;
   const day = parts.day.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const dayToken = `${day}(?!\\s*:)`;
   const weekday = parts.weekday.toLowerCase();
   const weekdayShort = parts.weekdayShort.toLowerCase();
   const month = parts.month.toLowerCase();
   const monthShort = parts.monthShort.toLowerCase();
-  if ((lower.includes(weekday) || lower.includes(weekdayShort)) && new RegExp(`\\b${day}\\b`).test(lower)) score += 90;
-  if ((lower.includes(month) || lower.includes(monthShort)) && new RegExp(`\\b${day}\\b`).test(lower)) score += 70;
-  if (lower.includes(parts.year) && new RegExp(`\\b${day}\\b`).test(lower)) score += 30;
+  const weekdayDate = new RegExp(`\\b(?:${weekday}|${weekdayShort})\\b[^|\\n]{0,80}\\b${dayToken}\\b|\\b${dayToken}\\b[^|\\n]{0,80}\\b(?:${weekday}|${weekdayShort})\\b`, "i");
+  const monthDate = new RegExp(`\\b(?:${month}|${monthShort})\\b\\s+${dayToken}\\b|\\b${dayToken}\\b\\s+(?:${month}|${monthShort})\\b`, "i");
+  if (weekdayDate.test(lower)) score += 90;
+  if (monthDate.test(lower)) score += 70;
   return score;
 }
 

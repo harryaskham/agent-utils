@@ -875,6 +875,29 @@ test("work briefing index summarizes bounded app snapshot state", async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+test("work briefing does not treat clock times as today's calendar date", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-time-date-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  await mkdir(outlookDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "calendar.snapshot.json"), JSON.stringify({
+    app: "outlook",
+    kind: "calendar.snapshot",
+    status: "ok",
+    capturedAt: "2026-05-13T02:00:00Z",
+    count: 3,
+    items: [
+      { text: "Monday all hands, all day event, Monday, May 11, 2026, By Ada" },
+      { text: "Monday sync, 13:00 to 13:30, Monday, May 11, 2026, By Ada" },
+      { text: "Wednesday standup, 09:00 to 09:30, Wednesday, May 13, 2026, By Ada" },
+    ],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, sampleLimit: 2, now: new Date("2026-05-13T02:05:00Z") });
+  const entry = index.entries.find((item) => item.action === "calendar.snapshot");
+  assert.equal(entry.samples[0].text, "Wednesday standup, 09:00 to 09:30, Wednesday, May 13, 2026, By Ada");
+  assert.equal(entry.samples[1].text, "Monday all hands, all day event, Monday, May 11, 2026, By Ada");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("work briefing prioritizes today's calendar rows in samples", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-briefing-today-${Date.now()}`), { recursive: true });
   const outlookDir = path.join(root, "snapshots", "outlook");
