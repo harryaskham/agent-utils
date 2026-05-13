@@ -624,7 +624,7 @@ export default function appAutomationExtension(pi) {
       actions: Type.Optional(Type.Array(Type.String({ description: "Optional action ids to refresh." }))),
       timeoutMs: Type.Optional(Type.Number({ description: "Overall timeout for each scp/ssh process. Defaults to 120000." })),
       sshConnectTimeoutSeconds: Type.Optional(Type.Number({ description: "SSH ConnectTimeout seconds passed to both scp and ssh. Defaults to APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS or 10." })),
-      preflightAttempts: Type.Optional(Type.Number({ description: "Bounded SSH preflight attempts before giving up. Defaults to APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS or 1, capped at 5." })),
+      preflightAttempts: Type.Optional(Type.Number({ description: "Bounded SSH preflight attempts before giving up. Defaults to APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS or 1, capped at 5; set 0 to skip preflight and try scp/PowerShell directly." })),
     }),
     async execute(_toolCallId, params, signal) {
       const summary = await runMsDevCdpRefresh({

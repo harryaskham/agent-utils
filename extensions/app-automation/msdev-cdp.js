@@ -139,7 +139,7 @@ export function msDevCdpConfig(env = process.env) {
     cdpPort: Number.parseInt(String(env.APP_AUTOMATION_MSDEV_CDP_PORT || DEFAULT_MSDEV_CDP_PORT), 10) || DEFAULT_MSDEV_CDP_PORT,
     remoteScriptPath: env.APP_AUTOMATION_MSDEV_REMOTE_SCRIPT || DEFAULT_MSDEV_REMOTE_SCRIPT,
     sshConnectTimeoutSeconds: Number.parseInt(String(env.APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
-    preflightAttempts: boundedInteger(env.APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 1, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
+    preflightAttempts: boundedInteger(env.APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
   };
 }
 
@@ -151,7 +151,7 @@ export function msDevCdpCommandSummary(config = msDevCdpConfig()) {
     cdpPort: config.cdpPort,
     remoteScriptPath: config.remoteScriptPath,
     sshConnectTimeoutSeconds: config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
-    preflightAttempts: boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 1, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
+    preflightAttempts: boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
   };
 }
 
@@ -616,7 +616,7 @@ export async function runMsDevCdpRefresh({
   config.cdpPort = Number.parseInt(String(config.cdpPort || DEFAULT_MSDEV_CDP_PORT), 10) || DEFAULT_MSDEV_CDP_PORT;
   config.remoteScriptPath = config.remoteScriptPath || DEFAULT_MSDEV_REMOTE_SCRIPT;
   config.sshConnectTimeoutSeconds = Number.parseInt(String(config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS;
-  config.preflightAttempts = boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 1, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS });
+  config.preflightAttempts = boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS });
   if (!root) throw new Error("runMsDevCdpRefresh requires root");
   if (!exec) throw new Error("runMsDevCdpRefresh requires an exec(command, args, options) function");
   const targets = selectedTargets({ apps, actions });
@@ -629,13 +629,15 @@ export async function runMsDevCdpRefresh({
   await writeFile(localScriptPath, buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets }), "utf8");
   const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
   const preflightTimeoutMs = Math.min(timeoutMs, Math.max(25_000, (config.sshConnectTimeoutSeconds + 20) * 1000));
-  let preflight;
-  for (let attempt = 1; attempt <= config.preflightAttempts; attempt += 1) {
-    preflight = await exec("ssh", [...sshArgs, config.sshTarget, "true"], { timeout: preflightTimeoutMs });
-    if (preflight.code === 0) break;
-  }
-  if (preflight.code !== 0) {
-    return writeBridgeFailureManifest({ bridgeDir, status: "preflight_failed", config, targets, error: execFailureText(preflight, "ssh preflight failed") });
+  if (config.preflightAttempts > 0) {
+    let preflight;
+    for (let attempt = 1; attempt <= config.preflightAttempts; attempt += 1) {
+      preflight = await exec("ssh", [...sshArgs, config.sshTarget, "true"], { timeout: preflightTimeoutMs });
+      if (preflight.code === 0) break;
+    }
+    if (preflight.code !== 0) {
+      return writeBridgeFailureManifest({ bridgeDir, status: "preflight_failed", config, targets, error: execFailureText(preflight, "ssh preflight failed") });
+    }
   }
   const copy = await exec("scp", [...sshArgs, localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
   if (copy.code !== 0) {

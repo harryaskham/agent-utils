@@ -925,6 +925,34 @@ test("ms-dev CDP refresh retries flapping SSH preflight before copy", async () =
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh can skip SSH preflight and try copy/run directly", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-preflight-skip-${Date.now()}`), { recursive: true });
+  const commands = [];
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    preflightAttempts: 0,
+    exec: async (command, args) => {
+      commands.push({ command, args });
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      if (command === "ssh") {
+        return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [{ text: "Important mail", source: "Outlook Mail" }] } }] }), stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unexpected" };
+    },
+  });
+  assert.deepEqual(commands.map((entry) => entry.command), ["scp", "ssh"]);
+  assert.equal(commands.some((entry) => entry.command === "ssh" && entry.args.at(-1) === "true"), false);
+  assert.equal(summary.status, "ok");
+  assert.match(renderMsDevCdpRefresh(summary), /preflightAttempts=0/);
+  const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
+  assert.equal(manifest.config.preflightAttempts, 0);
+  assert.equal(manifest.snapshots[0].status, "ok");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh classifies process-level command timeouts", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-run-timeout-${Date.now()}`), { recursive: true });
   const summary = await runMsDevCdpRefresh({
