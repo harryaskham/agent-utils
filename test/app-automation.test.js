@@ -669,6 +669,29 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh normalizes Teams notification badge rows", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-teams-${Date.now()}`), { recursive: true });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["teams"],
+    actions: ["notifications.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "teams", action: "notifications.snapshot", status: "ok", result: { title: "Microsoft Teams", items: [
+        { text: "Chat (Ctrl+Shift+1) | 13 13 new notifications", source: "Teams" },
+        { text: "Chat (Ctrl+Shift+1)", source: "Teams" },
+      ] } }] }), stderr: "" };
+    },
+  });
+  assert.match(renderMsDevCdpRefresh(summary), /teams\.notifications\.snapshot: status=ok items=1/);
+  const snapshot = JSON.parse(await readFile(path.join(root, "snapshots", "teams", "notifications.snapshot.json"), "utf8"));
+  assert.equal(snapshot.items.length, 1);
+  assert.equal(snapshot.items[0].text, "Teams reports 13 new notifications");
+  assert.equal(snapshot.items[0].source, "Teams");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh preserves snapshots when all live rows are filtered as chrome", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-filtered-${Date.now()}`), { recursive: true });
   const calendarDir = path.join(root, "snapshots", "calendar");

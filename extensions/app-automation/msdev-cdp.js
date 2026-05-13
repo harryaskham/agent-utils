@@ -31,7 +31,7 @@ export const DEFAULT_MSDEV_CDP_TARGETS = [
     app: "teams",
     action: "notifications.snapshot",
     url: "https://teams.microsoft.com/v2/",
-    includePatterns: ["unread", "mention", "chat", "message", "author", "meeting", "call", "reply", "activity"],
+    includePatterns: ["unread", "mention", "chat", "message", "notification", "author", "meeting", "call", "reply", "activity"],
   },
   {
     app: "teams",
@@ -240,6 +240,7 @@ const SNAPSHOT_CHROME_PATTERNS = [
   /^forward\b/i,
   /^report(?: message)?\b/i,
   /^message list\b/i,
+  /^chat\s*\(ctrl[+]shift[+]1\)$/i,
   /^inbox\s+-\s+[\d,]+\s+items\b/i,
   /^deleted items\s+-\s+[\d,]+\s+items\b/i,
   /^drafts?\s+-\s+[\d,]+\s+items\b/i,
@@ -283,18 +284,36 @@ function rawItems(liveResult = {}) {
   return Array.isArray(liveResult.result?.items) ? liveResult.result.items : [];
 }
 
+function normalizeExtractedItem(item = {}, target = {}) {
+  const text = compact(item.text, 240);
+  if (target.app === "teams" && target.action === "notifications.snapshot") {
+    const match = String(text || "").match(/(?:^|[|])\s*(\d{1,4})(?:\s+\1)?\s+new\s+notifications?\b/i);
+    if (match) {
+      const count = Number.parseInt(match[1], 10);
+      return {
+        text: `Teams reports ${count} new notification${count === 1 ? "" : "s"}`,
+        source: "Teams",
+        from: compact(item.from),
+        time: compact(item.time),
+        hrefs: Array.isArray(item.hrefs) ? item.hrefs : [],
+      };
+    }
+  }
+  return {
+    text,
+    source: compact(item.source),
+    from: compact(item.from),
+    time: compact(item.time),
+    hrefs: Array.isArray(item.hrefs) ? item.hrefs : [],
+  };
+}
+
 function snapshotInputFromResult(liveResult = {}, target = {}) {
   const result = liveResult.result || {};
   return {
     title: compact(result.title),
     url: result.url,
-    items: rawItems(liveResult).map((item) => ({
-      text: compact(item.text, 240),
-      source: compact(item.source),
-      from: compact(item.from),
-      time: compact(item.time),
-      hrefs: Array.isArray(item.hrefs) ? item.hrefs : [],
-    })).filter((item) => item.text && !isSnapshotChrome(item, target)),
+    items: rawItems(liveResult).map((item) => normalizeExtractedItem(item, target)).filter((item) => item.text && !isSnapshotChrome(item, target)),
   };
 }
 
