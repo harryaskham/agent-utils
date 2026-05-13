@@ -91,8 +91,9 @@ function sampleItemsForAction(items = [], { action, now, sampleLimit = 5 } = {})
   const limit = Math.max(0, Number(sampleLimit) || 0);
   const source = Array.isArray(items) ? items : [];
   if (!/calendar|events/.test(String(action || ""))) return source.slice(0, limit);
-  return source
-    .map((item, index) => ({ item, index, score: calendarTodayScore(item, now) }))
+  const scored = source.map((item, index) => ({ item, index, score: calendarTodayScore(item, now) }));
+  const todayRows = scored.filter((entry) => entry.score > 0);
+  return (todayRows.length ? todayRows : scored)
     .sort((a, b) => (b.score - a.score) || (a.index - b.index))
     .slice(0, limit)
     .map((entry) => entry.item);

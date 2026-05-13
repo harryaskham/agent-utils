@@ -1021,7 +1021,7 @@ test("work briefing does not treat clock times as today's calendar date", async 
   const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, sampleLimit: 2, now: new Date("2026-05-13T02:05:00Z") });
   const entry = index.entries.find((item) => item.action === "calendar.snapshot");
   assert.equal(entry.samples[0].text, "Wednesday standup, 09:00 to 09:30, Wednesday, May 13, 2026, By Ada");
-  assert.equal(entry.samples[1].text, "Monday all hands, all day event, Monday, May 11, 2026, By Ada");
+  assert.equal(entry.samples.length, 1);
   await rm(root, { recursive: true, force: true });
 });
 
