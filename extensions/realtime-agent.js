@@ -1535,14 +1535,7 @@ class RealtimeSession {
         // Keep the transcript visible for the operator, but do not inject it as
         // a user text prompt or forward it to the model.
         this.lastTranscript = text;
-        try {
-          this.pi.sendMessage?.({
-            customType: RT_CUSTOM_TYPE,
-            content: text,
-            display: true,
-            details: { role: "transcript", inputMode: "audio" },
-          }, { deliverAs: "followUp" });
-        } catch {}
+        try { this.lastCtx?.ui?.setStatus?.("rt-transcript", `◇ ${truncateVisible(text, 120)}`); } catch {}
         this.updateStatus();
       }
       return;

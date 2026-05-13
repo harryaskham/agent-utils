@@ -799,9 +799,8 @@ test("full realtime committed audio triggers a custom turn, not transcript user 
 
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "da da da da" }));
     await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.equal(harness.sentMessages.length, 2);
-    assert.equal(harness.sentMessages[1].message.content, "da da da da");
-    assert.equal(harness.sentMessages[1].message.display, true);
+    assert.equal(harness.sentMessages.length, 1);
+    assert.equal(harness.statuses.get("rt-transcript"), "◇ da da da da");
     assert.equal(harness.sentUserMessages.length, 0);
 
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
