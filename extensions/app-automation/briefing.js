@@ -39,6 +39,52 @@ function summarizeItem(item = {}) {
   };
 }
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function calendarDateParts(now = new Date()) {
+  const date = now instanceof Date ? now : new Date(now);
+  if (!Number.isFinite(date.getTime())) return null;
+  return {
+    weekday: WEEKDAYS[date.getDay()],
+    weekdayShort: WEEKDAYS[date.getDay()].slice(0, 3),
+    month: MONTHS[date.getMonth()],
+    monthShort: MONTHS[date.getMonth()].slice(0, 3),
+    day: String(date.getDate()),
+    year: String(date.getFullYear()),
+  };
+}
+
+function calendarTodayScore(item = {}, now = new Date()) {
+  const parts = calendarDateParts(now);
+  if (!parts) return 0;
+  const text = compact([item.text, item.label, item.title, item.time, item.date, item.when, item.start].filter(Boolean).join(" "), 600) || "";
+  if (!text) return 0;
+  const lower = text.toLowerCase();
+  let score = 0;
+  if (/\btoday\b/i.test(text)) score += 40;
+  const day = parts.day.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const weekday = parts.weekday.toLowerCase();
+  const weekdayShort = parts.weekdayShort.toLowerCase();
+  const month = parts.month.toLowerCase();
+  const monthShort = parts.monthShort.toLowerCase();
+  if ((lower.includes(weekday) || lower.includes(weekdayShort)) && new RegExp(`\\b${day}\\b`).test(lower)) score += 90;
+  if ((lower.includes(month) || lower.includes(monthShort)) && new RegExp(`\\b${day}\\b`).test(lower)) score += 70;
+  if (lower.includes(parts.year) && new RegExp(`\\b${day}\\b`).test(lower)) score += 30;
+  return score;
+}
+
+function sampleItemsForAction(items = [], { action, now, sampleLimit = 5 } = {}) {
+  const limit = Math.max(0, Number(sampleLimit) || 0);
+  const source = Array.isArray(items) ? items : [];
+  if (!/calendar|events/.test(String(action || ""))) return source.slice(0, limit);
+  return source
+    .map((item, index) => ({ item, index, score: calendarTodayScore(item, now) }))
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index))
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
+
 function snapshotPathCandidates(root, app, action) {
   const base = path.join(root, "snapshots", app);
   const candidates = [path.join(base, `${safeKind(action)}.json`)];
@@ -121,7 +167,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       itemCount: Number.isFinite(snapshot.count) ? snapshot.count : (Number.isFinite(snapshot.counts?.items) ? snapshot.counts.items : items.length),
       authRequired: Boolean(snapshot.authRequired),
       ...(latestRefresh ? { latestRefresh } : {}),
-      samples: items.slice(0, Math.max(0, Number(sampleLimit) || 0)).map(summarizeItem),
+      samples: sampleItemsForAction(items, { action, now, sampleLimit }).map(summarizeItem),
     });
   }
   const index = {

@@ -806,6 +806,28 @@ test("work briefing index summarizes bounded app snapshot state", async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+test("work briefing prioritizes today's calendar rows in samples", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-today-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  await mkdir(outlookDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "calendar.snapshot.json"), JSON.stringify({
+    app: "outlook",
+    kind: "calendar.snapshot",
+    status: "ok",
+    capturedAt: "2026-05-13T02:00:00Z",
+    count: 3,
+    items: [
+      { text: "Monday planning, 10:00 to 10:30, Monday, May 11, 2026, By Ada" },
+      { text: "Wednesday standup, 09:00 to 09:30, Wednesday, May 13, 2026, By Ada" },
+      { text: "Friday wrap, 16:00 to 16:30, Friday, May 15, 2026, By Ada" },
+    ],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, sampleLimit: 1, now: new Date("2026-05-13T02:05:00Z") });
+  const entry = index.entries.find((item) => item.action === "calendar.snapshot");
+  assert.equal(entry.samples[0].text, "Wednesday standup, 09:00 to 09:30, Wednesday, May 13, 2026, By Ada");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("work briefing shows filtered-empty skipped-write refresh attempts", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-briefing-filtered-${Date.now()}`), { recursive: true });
   await mkdir(path.join(root, "bridge"), { recursive: true });
