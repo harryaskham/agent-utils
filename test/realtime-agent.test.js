@@ -778,6 +778,45 @@ test("/rt summary=true forwards compact summary instead of full history", async 
   }
 });
 
+test("full realtime speech lifecycle does not expose a blocking transcribing phase", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  FakeWebSocket.instances = [];
+  const harness = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    await harness.commands.get("rt").handler("start nolisten", harness.ctx);
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.pi.realtime.snapshot().state.phase, "thinking");
+    assert.equal(harness.pi.realtime.snapshot().state.mode, "responding");
+
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.committed" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.sentMessages.length, 1);
+    assert.equal(harness.pi.realtime.snapshot().state.phase, "thinking");
+
+    harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    ws.emit("message", JSON.stringify({ type: "response.done", response: { id: "resp_1" } }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.pi.realtime.snapshot().state.phase, "idle");
+
+    ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "late transcript" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.pi.realtime.snapshot().state.phase, "idle");
+    assert.equal(harness.pi.realtime.snapshot().state.mode, "connected");
+    assert.equal(harness.statuses.get("rt-transcript"), "◇ late transcript");
+  } finally {
+    await harness.commands.get("rt-off").handler("", harness.ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+  }
+});
+
 test("full realtime committed audio triggers a custom turn, not transcript user text", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_API_KEY = "test-key";

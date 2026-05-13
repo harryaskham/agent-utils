@@ -611,7 +611,7 @@ class AudioPlayer {
 export class RealtimeStateController {
   constructor() {
     this.connection = "off";             // off|connecting|connected|error
-    this.phase = "idle";                 // idle|connecting|thinking|speaking|recording|transcribing|replaying|error
+    this.phase = "idle";                 // idle|connecting|thinking|speaking|recording|transcribing(STT-only)|replaying|error
     this.micMode = null;                 // null|ptt|vad|continuous
     this.widgetVisible = false;
   }
@@ -1519,8 +1519,9 @@ class RealtimeSession {
       return;
     }
 
-    // Mic transcription -> Pi user message (does NOT touch the current
-    // assistant turn; pi.sendUserMessage will trigger a new streamSimple).
+    // Mic transcription: STT-only injects a user text message. Full realtime
+    // treats the transcript as display-only because the model response is
+    // grounded in the committed audio item.
     if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(event.transcript || "").trim();
       this.clearPendingCommitTimer();
@@ -1529,14 +1530,19 @@ class RealtimeSession {
         this.lastTurnInputMode = "transcript";
         this.markSpokenTranscript(text);
         try { this.pi.sendUserMessage(text); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
-      } else if (text && !this.config.sttOnly) {
+      } else if (!this.config.sttOnly) {
         // Full realtime already triggers the Pi turn from input_audio_buffer.committed
         // so inference is based on the committed audio item, not this transcript.
         // Keep the transcript visible for the operator, but do not inject it as
-        // a user text prompt or forward it to the model.
-        this.lastTranscript = text;
-        try { this.lastCtx?.ui?.setStatus?.("rt-transcript", `◇ ${truncateVisible(text, 120)}`); } catch {}
-        this.updateStatus();
+        // a user text prompt or forward it to the model. Also avoid leaving the
+        // session in a stale "transcribing" phase; transcription is not a
+        // user-visible blocking state for full realtime.
+        if (text) {
+          this.lastTranscript = text;
+          try { this.lastCtx?.ui?.setStatus?.("rt-transcript", `◇ ${truncateVisible(text, 120)}`); } catch {}
+        }
+        if (!this.current && this.phase === "transcribing") this.setPhase("idle");
+        else this.updateStatus();
       }
       return;
     }
@@ -1544,14 +1550,24 @@ class RealtimeSession {
     if (type === "conversation.item.input_audio_transcription.failed") {
       this.clearPendingCommitTimer();
       const err = event.error?.message || event.error || "audio transcription failed";
-      this.setPhase("idle");
-      this.notify(`Realtime transcription failed: ${err}`, "warning");
+      if (this.config.sttOnly) {
+        this.setPhase("idle");
+        this.notify(`Realtime transcription failed: ${err}`, "warning");
+      } else {
+        if (!this.current && this.phase === "transcribing") this.setPhase("idle");
+        else this.updateStatus();
+      }
       return;
     }
 
     if (type === "input_audio_buffer.speech_stopped") {
-      this.setPhase("transcribing");
-      this.startPendingCommitTimer();
+      if (this.config.sttOnly) {
+        this.setPhase("transcribing");
+        this.startPendingCommitTimer();
+      } else {
+        this.clearPendingCommitTimer();
+        this.setPhase("thinking");
+      }
       return;
     }
 
@@ -1853,8 +1869,13 @@ class RealtimeSession {
         this.notify("No pending microphone audio to commit.", "warning");
         return;
       }
-      this.setPhase("transcribing");
-      if (this.config.sttOnly) this.startPendingCommitTimer();
+      if (this.config.sttOnly) {
+        this.setPhase("transcribing");
+        this.startPendingCommitTimer();
+      } else {
+        this.clearPendingCommitTimer();
+        this.setPhase("thinking");
+      }
       try { this.send({ type: "input_audio_buffer.commit" }); } catch {}
       // STT-only waits for transcription.completed and injects transcript text.
       // Full realtime triggers a placeholder Pi turn from input_audio_buffer.committed
