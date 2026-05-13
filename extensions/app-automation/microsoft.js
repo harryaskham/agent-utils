@@ -12,6 +12,13 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
     '[data-tid]',
     '[title]'
   ];
+  const ignoreChromePatterns = [
+    /^search\b/i,
+    /^(mail|calendar|people|files|teams chat|to do|onedrive)$/i,
+    /^(new mail|new event|new message)$/i,
+    /^(navigation|app launcher|settings|help|feedback)$/i,
+    /keyboard shortcuts/i
+  ];
   const seen = new Set();
   const items = [];
   const absoluteHref = (href) => {
@@ -83,6 +90,7 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
         element.getAttribute('aria-label') || '',
         element.getAttribute('title') || ''
       ].join(' ').replace(/\\s+/g, ' ').trim();
+      if (ignoreChromePatterns.some((pattern) => pattern.test(text))) continue;
       const hrefs = linksFor(element);
       const time = timeFor(element);
       const source = sourceFor();

@@ -37,6 +37,7 @@ import { calendarExtractorScript } from "../extensions/app-automation/calendar.j
 import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-automation/canvas.js";
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
+import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "../extensions/app-automation/briefing.js";
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
 import { buildSafeRunManifest, runStatusFromResults } from "../extensions/app-automation/run-manifest.js";
 import {
@@ -613,6 +614,46 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   await rm(root, { recursive: true, force: true });
 });
 
+test("work briefing index summarizes bounded app snapshot state", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  const slackDir = path.join(root, "snapshots", "slack");
+  await mkdir(outlookDir, { recursive: true });
+  await mkdir(slackDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "notifications.snapshot.json"), JSON.stringify({
+    app: "outlook",
+    kind: "notifications.snapshot",
+    status: "ok",
+    capturedAt: "2026-05-13T02:00:00Z",
+    count: 2,
+    items: [
+      { text: "Important mail from Ada", source: "Outlook Mail", from: "Ada", time: "09:00", url: "https://outlook.office.com/mail/id/1" },
+      { text: "Flagged mail from Ops", source: "Outlook Mail", from: "Ops" },
+    ],
+  }), "utf8");
+  await writeFile(path.join(slackDir, "notifications.snapshot.json"), JSON.stringify({
+    app: "slack",
+    kind: "notifications.snapshot",
+    status: "auth_required",
+    authRequired: true,
+    capturedAt: "2026-05-13T01:30:00Z",
+    count: 0,
+    items: [],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook", "slack"], staleAfterMinutes: 15, sampleLimit: 1, now: new Date("2026-05-13T02:05:00Z") });
+  assert.equal(index.totals.actions, 3);
+  assert.equal(index.totals.fresh, 1);
+  assert.equal(index.totals.stale, 1);
+  assert.equal(index.totals.authRequired, 1);
+  assert.equal(index.entries.find((entry) => entry.app === "outlook").samples.length, 1);
+  assert.match(renderWorkBriefingIndex(index), /outlook\.notifications\.snapshot: status=ok freshness=fresh age=5m items=2/);
+  assert.match(renderWorkBriefingIndex(index), /slack\.notifications\.snapshot: status=auth_required freshness=stale age=35m items=0 authRequired=true/);
+  const persisted = JSON.parse(await readFile(path.join(root, "indexes", "work-briefing.json"), "utf8"));
+  assert.equal(persisted.totals.items, 2);
+  assert.equal(persisted.totals.missing, 1);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("extension is packaged and exposes list, doctor, overview, plan, run, open bundle, refresh, bundle, one-shot, snapshot, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
@@ -628,6 +669,9 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /tendrilProbe=/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_work_briefing`/);
+  assert.match(source, /buildWorkBriefingIndex/);
+  assert.match(source, /renderWorkBriefingIndex/);
   assert.match(source, /includeStaleness/);
   assert.match(source, /includeRefreshStaleness/);
   assert.match(source, /includeLinks/);
@@ -669,6 +713,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /registerCommand\("tendril-app"/);
   assert.match(source, /words\[0\] === "doctor"/);
   assert.match(source, /words\[0\] === "overview"/);
+  assert.match(source, /words\[0\] === "briefing"/);
   assert.match(source, /words\[0\] === "links"/);
   assert.match(source, /collectSnapshotLinks/);
   assert.match(source, /all/);

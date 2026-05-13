@@ -34,6 +34,7 @@ import { prepareEditorReplace } from "./app-automation/editor.js";
 import { buildGenericSnapshot, writeGenericSnapshot } from "./app-automation/generic-snapshot.js";
 import { parseLinkCommandArgs, parseOverviewCommandArgs } from "./app-automation/link-command.js";
 import { microsoftExtractorScript } from "./app-automation/microsoft.js";
+import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "./app-automation/briefing.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
 import {
@@ -99,6 +100,22 @@ function textResult(text, details = {}) {
 
 function timestampForFilename(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function parseBriefingCommandArgs(words = []) {
+  const apps = [];
+  let staleAfterMinutes;
+  for (const word of words) {
+    const text = String(word || "").trim();
+    if (!text) continue;
+    const staleAfterMatch = text.match(/^(?:stale-after|staleafter|stale-after-minutes|staleafterminutes)[:=](\d+)$/i);
+    if (staleAfterMatch && !staleAfterMinutes) {
+      staleAfterMinutes = Number(staleAfterMatch[1]);
+      continue;
+    }
+    apps.push(text);
+  }
+  return { apps, staleAfterMinutes };
 }
 
 async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
@@ -607,6 +624,23 @@ export default function appAutomationExtension(pi) {
         external: catalog.external,
         stateRoot: root,
       });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_work_briefing`,
+    label: "App Automation Work Briefing",
+    description: "Build a compact stale-aware shared briefing index from Slack, Outlook, Teams, and calendar snapshots.",
+    promptSnippet: "Use this to answer natural-language questions about current work-app notifications, important mail, or calendar items from the latest bounded snapshots before reading raw artifacts.",
+    parameters: Type.Object({
+      apps: Type.Optional(Type.Array(Type.String({ description: "Optional app ids to include. Defaults to the standard Slack, Calendar, Outlook, and Teams briefing actions." }))),
+      staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for stale briefing entries. Defaults to 15 minutes." })),
+      sampleLimit: Type.Optional(Type.Number({ description: "Maximum bounded sample rows to include per action. Defaults to 5." })),
+    }),
+    async execute(_toolCallId, params) {
+      const root = stateRoot();
+      const briefing = await buildWorkBriefingIndex({ root, apps: params.apps, staleAfterMinutes: params.staleAfterMinutes || 15, sampleLimit: params.sampleLimit || 5 });
+      return textResult(renderWorkBriefingIndex(briefing), { briefing });
     },
   });
 
@@ -1131,7 +1165,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, briefing, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|briefing [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1181,6 +1215,12 @@ export default function appAutomationExtension(pi) {
           snapshotLinks = aggregateSnapshotLinkSummaries({ root, snapshotRoot: path.join(root, "snapshots"), summaries, query: overviewArgs.linkQuery, source: overviewArgs.linkSource, from: overviewArgs.linkFrom, time: overviewArgs.linkTime, host: overviewArgs.linkHost, freshness: overviewArgs.linkFreshness, kind: overviewArgs.linkKind, sort: overviewArgs.linkSort });
         }
         ctx.ui.notify(renderWorkAppOverview({ apps, refreshers, snapshotDigests, snapshotLinks, snapshotStaleness, refreshStaleness, root }), "info");
+        return;
+      }
+      if (words[0] === "briefing") {
+        const briefingArgs = parseBriefingCommandArgs(words.slice(1));
+        const briefing = await buildWorkBriefingIndex({ root: stateRoot(), apps: briefingArgs.apps, staleAfterMinutes: briefingArgs.staleAfterMinutes || 15 });
+        ctx.ui.notify(renderWorkBriefingIndex(briefing), "info");
         return;
       }
       if (words[0] === "links") {
