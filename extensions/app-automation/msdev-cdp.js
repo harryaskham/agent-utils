@@ -603,10 +603,12 @@ export function renderMsDevCdpRefresh(summary = {}) {
   if (summary.status === "not_configured") return `ms-dev CDP refresh not configured: ${summary.reason}`;
   if (summary.status && summary.status !== "ok" && !summary.failed?.length) return `ms-dev CDP refresh ${summary.status}: ${summary.error || summary.stderr || summary.reason || "unknown error"}`;
   const failureErrorKinds = compactCounts(summary.failed || [], "errorKind");
-  const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}`];
+  const snapshotStatuses = compactCounts(summary.snapshots || [], "status");
+  const skippedWrite = (summary.snapshots || []).filter((snapshot) => snapshot?.skippedWrite).length;
+  const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${snapshotStatuses ? ` snapshotStatuses=${snapshotStatuses}` : ""}${skippedWrite ? ` skippedWrite=${skippedWrite}` : ""}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}`];
   if (summary.manifestPath) lines.push(`manifest=${summary.manifestPath}`);
   for (const snapshot of summary.snapshots || []) {
-    lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.authRequired ? " authRequired=true" : ""}`);
+    lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.skippedWrite ? " skippedWrite=true" : ""}${snapshot.authRequired ? " authRequired=true" : ""}`);
   }
   for (const failure of summary.failed || []) {
     lines.push(`${failure.app}.${failure.action}: status=${failure.status}${failure.errorKind ? ` errorKind=${failure.errorKind}` : ""}${failure.error ? ` error=${failure.error}` : ""}`);

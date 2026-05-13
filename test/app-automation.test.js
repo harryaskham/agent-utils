@@ -761,7 +761,8 @@ test("ms-dev CDP refresh preserves snapshots when all live rows are filtered as 
   });
   assert.equal(summary.snapshots[0].status, "filtered_empty");
   assert.equal(summary.snapshots[0].skippedWrite, true);
-  assert.match(renderMsDevCdpRefresh(summary), /calendar\.events\.snapshot: status=filtered_empty items=0/);
+  assert.match(renderMsDevCdpRefresh(summary), /ms-dev CDP refresh status=ok .* snapshots=1 snapshotStatuses=filtered_empty=1 skippedWrite=1/);
+  assert.match(renderMsDevCdpRefresh(summary), /calendar\.events\.snapshot: status=filtered_empty items=0 skippedWrite=true/);
   const preserved = JSON.parse(await readFile(path.join(calendarDir, "events.snapshot.json"), "utf8"));
   assert.equal(preserved.items[0].text, "preserve event");
   await rm(root, { recursive: true, force: true });
@@ -785,7 +786,8 @@ test("ms-dev CDP refresh preserves non-empty snapshots on raw-empty results", as
   assert.equal(summary.snapshots[0].status, "raw_empty");
   assert.equal(summary.snapshots[0].skippedWrite, true);
   assert.equal(summary.snapshots[0].preservedCount, 1);
-  assert.match(renderMsDevCdpRefresh(summary), /outlook\.calendar\.snapshot: status=raw_empty items=0/);
+  assert.match(renderMsDevCdpRefresh(summary), /ms-dev CDP refresh status=ok .* snapshots=1 snapshotStatuses=raw_empty=1 skippedWrite=1/);
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.calendar\.snapshot: status=raw_empty items=0 skippedWrite=true/);
   const preserved = JSON.parse(await readFile(path.join(outlookDir, "calendar.snapshot.json"), "utf8"));
   assert.equal(preserved.items[0].text, "keep calendar event");
   await rm(root, { recursive: true, force: true });
