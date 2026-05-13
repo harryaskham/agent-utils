@@ -61,7 +61,7 @@ function compact(value, limit = 180) {
 function classifyBridgeError(error) {
   const text = String(error || "").toLowerCase();
   if (!text) return null;
-  if (/connection timed out|operation timed out|connect to host .* timed out/.test(text)) return "connect_timeout";
+  if (/connection timed out|operation timed out|connect to host .* timed out|banner exchange/.test(text)) return "connect_timeout";
   if (/command timed out|process timed out|timeout exceeded|\betimedout\b|\bsigterm\b|\bsigkill\b|killed=true|timedout=true/.test(text)) return "command_timeout";
   if (/connection refused/.test(text)) return "connection_refused";
   if (/no route to host|network is unreachable|host is down/.test(text)) return "host_unreachable";
@@ -613,7 +613,7 @@ export async function runMsDevCdpRefresh({
   const localScriptPath = path.join(bridgeDir, "ms-dev-cdp-refresh.ps1");
   await writeFile(localScriptPath, buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets }), "utf8");
   const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
-  const preflightTimeoutMs = Math.min(timeoutMs, Math.max(5000, (config.sshConnectTimeoutSeconds + 2) * 1000));
+  const preflightTimeoutMs = Math.min(timeoutMs, Math.max(12_000, (config.sshConnectTimeoutSeconds + 8) * 1000));
   const preflight = await exec("ssh", [...sshArgs, config.sshTarget, "true"], { timeout: preflightTimeoutMs });
   if (preflight.code !== 0) {
     return writeBridgeFailureManifest({ bridgeDir, status: "preflight_failed", config, targets, error: execFailureText(preflight, "ssh preflight failed") });

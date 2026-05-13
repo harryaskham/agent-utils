@@ -869,13 +869,13 @@ test("ms-dev CDP refresh fails fast when SSH preflight fails", async () => {
     timeoutMs: 60_000,
     exec: async (command, args, options) => {
       commands.push({ command, args, options });
-      return { code: 255, stdout: "", stderr: "ssh: connect to host ms-dev port 22: Connection timed out" };
+      return { code: 255, stdout: "", stderr: "Connection timed out during banner exchange" };
     },
   });
   assert.equal(commands.length, 1);
   assert.equal(commands[0].command, "ssh");
   assert.equal(commands[0].args.at(-1), "true");
-  assert.equal(commands[0].options.timeout, 5000);
+  assert.equal(commands[0].options.timeout, 12000);
   assert.equal(summary.status, "preflight_failed");
   assert.equal(summary.failed[0].status, "preflight_failed");
   assert.equal(summary.failed[0].errorKind, "connect_timeout");
