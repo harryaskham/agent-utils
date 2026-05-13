@@ -308,7 +308,7 @@
             "diagnose catalog, Playwright setup, and Tendril bridge routing",
             "optionally probe Tendril target discovery from app_automation_doctor",
             "build compact stale-aware work briefing indexes for natural-language Slack, Outlook, Teams, and Calendar questions",
-            "refresh work-app snapshots through ms-dev Windows Chrome CDP using the PowerShell WSL escape route when local Playwright/Tendril cannot reach browser state",
+            "refresh work-app snapshots through ms-dev Windows Chrome CDP using the PowerShell WSL escape route when local Playwright/Tendril cannot reach browser state, with a Slack Desktop unread-count fallback that avoids message contents",
             "summarize work-app refreshers and snapshots with optional overview link prefixed or bare query/source/from/time/host/kind/freshness filters, sorting, link limits, stale thresholds, and rendered aggregate matched/truncated/scanned counts across snapshot and app samples",
             "plan Slack notification snapshot",
             "dry-run or execute allowlisted runner steps",

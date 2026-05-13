@@ -96,7 +96,12 @@ function slackSourceLabel(label) {
   return source || normalizeWhitespace(label) || null;
 }
 
-function classifySlackLine(line) {
+function slackItemSource(item, fallbackLabel) {
+  const source = normalizeWhitespace(item.source || item.channel || item.team || item.folder);
+  return source || slackSourceLabel(fallbackLabel);
+}
+
+function classifySlackLine(line, item = {}) {
   const text = normalizeWhitespace(line);
   const lower = text.toLowerCase();
   if (!text) return null;
@@ -110,7 +115,7 @@ function classifySlackLine(line) {
   return {
     label,
     text,
-    source: slackSourceLabel(label),
+    source: slackItemSource(item, label),
     unreadCount: count,
     mention,
     dm,
@@ -132,7 +137,7 @@ export function buildSlackNotificationSnapshot(input = {}, { now = new Date() } 
   const candidates = [];
   for (const item of extraction.items) {
     const text = normalizeWhitespace([item.text, item.ariaLabel].filter(Boolean).join(" "));
-    const parsed = classifySlackLine(text);
+    const parsed = classifySlackLine(text, item);
     if (parsed) candidates.push({ ...parsed, dataQa: item.dataQa || null, urls: collectUrls(item) });
   }
   const deduped = [];

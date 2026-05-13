@@ -136,6 +136,21 @@ function Eval-Cdp($WsUrl, $Expression) {
   if ($msg.result.exceptionDetails) { return [pscustomobject]@{ __cdpError = (($msg.result.exceptionDetails.text, $msg.result.exceptionDetails.exception.description) -join ' ').Trim() } }
   return $msg.result.result.value
 }
+function Get-SlackDesktopObservation {
+  $windows = @(Get-Process | Where-Object { $_.MainWindowTitle -and ($_.ProcessName -match 'Slack' -or $_.MainWindowTitle -match 'Slack') } | Select-Object -First 10 ProcessName,MainWindowTitle)
+  $items = @()
+  foreach ($window in $windows) {
+    $title = [string]$window.MainWindowTitle
+    $match = [regex]::Match($title, '(?i)(\\d{1,4})\\s+new\\s+items?')
+    if ($match.Success) {
+      $count = [int]$match.Groups[1].Value
+      $label = if ($count -eq 1) { 'Slack desktop reports 1 new item' } else { "Slack desktop reports $count new items" }
+      $items += [pscustomobject]@{ text=$label; source='Slack Desktop'; unreadCount=$count; hrefs=@() }
+    }
+  }
+  if ($items.Count -gt 0) { return [pscustomobject]@{ title='Slack Desktop'; source='Slack Desktop'; authRequired=$false; itemCount=$items.Count; items=$items } }
+  return $null
+}
 $extractor = @'
 (() => {
   const compact = (value, max = 180) => {
@@ -193,6 +208,13 @@ foreach ($targetSpec in $Targets) {
     continue
   }
   $value = Eval-Cdp $target.webSocketDebuggerUrl $extractor
+  if ($targetSpec.app -eq 'slack' -and $targetSpec.action -eq 'notifications.snapshot') {
+    $desktop = Get-SlackDesktopObservation
+    if ($null -ne $desktop) {
+      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; result=$desktop; fallback='slack-desktop-window' }
+      continue
+    }
+  }
   if ($null -eq $value) {
     $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; url=$targetSpec.url }
   } elseif ($value.__cdpError) {

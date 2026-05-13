@@ -245,6 +245,9 @@ test("Slack notification snapshot parses unread and mention lines", () => {
   assert.equal(snapshot.notifications[0].url, "https://app.slack.com/client/T/C");
   assert.equal(snapshot.notifications[0].source, "#general");
   assert.equal(snapshot.notifications[1].source, "Harry mentioned you");
+  const desktopSnapshot = buildSlackNotificationSnapshot({ items: [{ text: "Slack desktop reports 1 new item", source: "Slack Desktop" }] });
+  assert.equal(desktopSnapshot.notifications[0].source, "Slack Desktop");
+  assert.equal(desktopSnapshot.notifications[0].unreadCount, 1);
   assert.doesNotMatch(JSON.stringify(snapshot), /token=secret|#frag|javascript/);
   assert.match(renderSlackNotificationMarkdown(snapshot), /\[#general/);
   assert.match(renderSlackNotificationMarkdown(snapshot), /https:\/\/app\.slack\.com\/client\/T\/C/);
@@ -735,6 +738,14 @@ test("ms-dev CDP PowerShell script filters common work-app navigation chrome", (
   assert.match(script, /move \[&\] delete/);
   assert.match(script, /my calendars/);
   assert.match(script, /switch to calendar/);
+});
+
+test("ms-dev CDP PowerShell script includes Slack desktop unread fallback", () => {
+  const script = buildMsDevCdpPowerShell({ cdpPort: 9224 });
+  assert.match(script, /Get-SlackDesktopObservation/);
+  assert.match(script, /Slack desktop reports/);
+  assert.match(script, /\(\\d\{1,4\}\)\\s\+new\\s\+items\?/);
+  assert.match(script, /slack-desktop-window/);
 });
 
 test("ms-dev CDP PowerShell script uses configured port and no raw secrets", () => {
