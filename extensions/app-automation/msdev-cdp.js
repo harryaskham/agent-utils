@@ -304,6 +304,12 @@ function isSnapshotChrome(item = {}, target = {}) {
   const text = compact(item.text, 260) || "";
   if (!text) return true;
   if (SNAPSHOT_CHROME_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (target.app === "teams" && target.action === "notifications.snapshot") {
+    if (/^chat\b(?:\s*\(ctrl\+shift\+\d+\))?$/i.test(text)) return true;
+    if (/^activity\b(?:\s*\(ctrl\+shift\+\d+\))?$/i.test(text)) return true;
+    if (/^actions for new message\b/i.test(text)) return true;
+    if (/\bhas context menu\b/i.test(text) && !/\bteams reports \d{1,4} new notifications?\b/i.test(text)) return true;
+  }
   if (target.action === "calendar.snapshot" || target.action === "events.snapshot") {
     const hasEventSignal = /\b(\d{1,2}:\d{2}\s+to\s+\d{1,2}:\d{2}|all day event|\bby\s+[^,]{2,}|tentative|accepted|free|busy|join|meeting|standup|sync)\b/i.test(text);
     const isDateOnly = /^[a-z]+,?\s+\d{1,2}\s+[a-z]+,?\s+(today\s*)?(?:[|].*)?$/i.test(text);
@@ -343,7 +349,8 @@ function cleanInferredFrom(value) {
 function normalizeExtractedItem(item = {}, target = {}) {
   const text = compact(item.text, 240);
   if (target.app === "teams" && target.action === "notifications.snapshot") {
-    const match = String(text || "").match(/(?:^|[|])\s*(\d{1,4})(?:\s+\1)?\s+new\s+notifications?\b/i);
+    const match = String(text || "").match(/(?:^|[|])\s*(\d{1,4})(?:\s+\1)?\s+new\s+notifications?\b/i)
+      || String(text || "").match(/\b(\d{1,4})\b(?=.{0,80}\bnew\s+notifications?\b)/i);
     if (match) {
       const count = Number.parseInt(match[1], 10);
       return {

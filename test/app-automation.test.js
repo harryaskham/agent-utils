@@ -730,6 +730,8 @@ test("ms-dev CDP refresh normalizes Teams notification badge rows", async () => 
       if (command === "scp") return { code: 0, stdout: "", stderr: "" };
       return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "teams", action: "notifications.snapshot", status: "ok", result: { title: "Microsoft Teams", items: [
         { text: "Chat (Ctrl+Shift+1) | 13 13 new notifications", source: "Teams" },
+        { text: "Actions for new message | has context menu", source: "Teams" },
+        { text: "13 R1 13 13 new notifications New missed calls Has context menu Message List has context menu has context menu", source: "Teams" },
         { text: "Chat (Ctrl+Shift+1)", source: "Teams" },
       ] } }] }), stderr: "" };
     },
@@ -950,6 +952,34 @@ test("work briefing suppresses Outlook Add-ins chrome samples from stale snapsho
   assert.match(rendered, /outlook\.notifications\.snapshot: status=ok freshness=stale age=60m items=1 rawItems=2 hiddenChrome=1/);
   assert.doesNotMatch(rendered, /Add-ins|Viva Insights/);
   assert.match(rendered, /Unread mail from Ada/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("work briefing suppresses Teams context-menu chrome while preserving badge counts", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-teams-chrome-${Date.now()}`), { recursive: true });
+  const teamsDir = path.join(root, "snapshots", "teams");
+  await mkdir(teamsDir, { recursive: true });
+  await writeFile(path.join(teamsDir, "notifications.snapshot.json"), JSON.stringify({
+    app: "teams",
+    kind: "notifications.snapshot",
+    status: "ok",
+    capturedAt: "2026-05-13T02:00:00Z",
+    count: 3,
+    items: [
+      { text: "Teams reports 13 new notifications", source: "Teams" },
+      { text: "Actions for new message | has context menu", source: "Teams" },
+      { text: "13 R1 13 13 new notifications New missed calls Has context menu Message List has context menu has context menu", source: "Teams" },
+    ],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["teams"], staleAfterMinutes: 15, sampleLimit: 5, now: new Date("2026-05-13T02:05:00Z") });
+  const rendered = renderWorkBriefingIndex(index);
+  const entry = index.entries.find((item) => item.app === "teams" && item.action === "notifications.snapshot");
+  assert.equal(entry.itemCount, 1);
+  assert.equal(entry.rawItemCount, 3);
+  assert.equal(entry.hiddenChromeCount, 2);
+  assert.match(rendered, /teams\.notifications\.snapshot: status=ok freshness=fresh age=5m items=1 rawItems=3 hiddenChrome=2/);
+  assert.match(rendered, /Teams reports 13 new notifications/);
+  assert.doesNotMatch(rendered, /Actions for new message|Message List has context menu/);
   await rm(root, { recursive: true, force: true });
 });
 

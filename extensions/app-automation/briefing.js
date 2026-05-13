@@ -47,6 +47,12 @@ function isBriefingChromeItem(item = {}, { app, action } = {}) {
   if (app === "outlook" && action === "notifications.snapshot") {
     return /^add-ins?\b/i.test(text) || /enhance outlook with apps/i.test(text) || /viva insights/i.test(text);
   }
+  if (app === "teams" && action === "notifications.snapshot") {
+    if (/^chat\b(?:\s*\(ctrl\+shift\+\d+\))?$/i.test(text)) return true;
+    if (/^activity\b(?:\s*\(ctrl\+shift\+\d+\))?$/i.test(text)) return true;
+    if (/^actions for new message\b/i.test(text)) return true;
+    if (/\bhas context menu\b/i.test(text) && !/\bteams reports \d{1,4} new notifications?\b/i.test(text)) return true;
+  }
   return false;
 }
 
