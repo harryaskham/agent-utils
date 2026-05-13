@@ -386,10 +386,10 @@ test("/tendril-app link filter parser accepts flexible token order", () => {
     sort: "newest",
     query: "Ops Bot",
   });
-  assert.deepEqual(parseLinkCommandArgs(["fresh", "sort:source", "standup"], { appIds: ["slack", "calendar"] }), {
+  assert.deepEqual(parseLinkCommandArgs(["fresh", "sort:from", "standup"], { appIds: ["slack", "calendar"] }), {
     app: undefined,
     freshness: "fresh",
-    sort: "source",
+    sort: "from",
     query: "standup",
   });
   assert.deepEqual(parseLinkCommandArgs(["slack", "kind:notifications.snapshot", "10"], { appIds: ["slack", "calendar"] }), {
@@ -497,6 +497,10 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(sourceSortedLinks.sort, "source");
   assert.equal(sourceSortedLinks.links[0].url, "https://app.slack.com/client/T/C");
   assert.match(renderSnapshotLinks(sourceSortedLinks), /sort=source/);
+  const fromSortedLinks = await collectSnapshotLinks({ root, app: "all", sort: "from", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
+  assert.equal(fromSortedLinks.sort, "from");
+  assert.equal(fromSortedLinks.links[0].url, "https://app.slack.com/client/T/C");
+  assert.match(renderSnapshotLinks(fromSortedLinks), /sort=from/);
   const stalestLimitedLinks = await collectSnapshotLinks({ root, app: "all", sort: "stalest", linkLimit: 1, staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(stalestLimitedLinks.truncated, true);
   assert.equal(stalestLimitedLinks.matchedCount, 4);
