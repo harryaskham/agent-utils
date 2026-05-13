@@ -308,12 +308,39 @@ function normalizeExtractedItem(item = {}, target = {}) {
   };
 }
 
+function normalizedTextKey(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function hrefSignature(item = {}) {
+  return (Array.isArray(item.hrefs) ? item.hrefs : []).map((href) => String(href || "")).filter(Boolean).sort().join("|");
+}
+
+function dedupeNestedItems(items = [], target = {}) {
+  if (!(target.app === "outlook" && target.action === "notifications.snapshot")) return items;
+  return items.filter((item, index) => {
+    const text = normalizedTextKey(item.text);
+    if (text.length < 24) return true;
+    const source = normalizedTextKey(item.source);
+    const hrefs = hrefSignature(item);
+    return !items.some((other, otherIndex) => {
+      if (otherIndex === index) return false;
+      const otherText = normalizedTextKey(other.text);
+      if (otherText.length <= text.length) return false;
+      if (!otherText.includes(text)) return false;
+      if (source !== normalizedTextKey(other.source)) return false;
+      return hrefs === hrefSignature(other);
+    });
+  });
+}
+
 function snapshotInputFromResult(liveResult = {}, target = {}) {
   const result = liveResult.result || {};
+  const items = rawItems(liveResult).map((item) => normalizeExtractedItem(item, target)).filter((item) => item.text && !isSnapshotChrome(item, target));
   return {
     title: compact(result.title),
     url: result.url,
-    items: rawItems(liveResult).map((item) => normalizeExtractedItem(item, target)).filter((item) => item.text && !isSnapshotChrome(item, target)),
+    items: dedupeNestedItems(items, target),
   };
 }
 

@@ -669,6 +669,30 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh dedupes nested Outlook notification rows", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-outlook-dedupe-${Date.now()}`), { recursive: true });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [
+        { text: "Unread Lorant Domokos in Teams Lorant Domokos mentioned M App (Clawpilot) Tue 21:48 M App (Clawpilot) Here's what's new", source: "Outlook Mail" },
+        { text: "Lorant Domokos mentioned M App (Clawpilot)", source: "Outlook Mail" },
+        { text: "Unread Ada Lovelace Project update", source: "Outlook Mail" },
+      ] } }] }), stderr: "" };
+    },
+  });
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=2/);
+  const snapshot = JSON.parse(await readFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), "utf8"));
+  assert.equal(snapshot.items.length, 2);
+  assert.equal(snapshot.items.some((item) => item.text === "Lorant Domokos mentioned M App (Clawpilot)"), false);
+  assert.ok(snapshot.items.some((item) => item.text.includes("Unread Lorant Domokos in Teams")));
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh normalizes Teams notification badge rows", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-teams-${Date.now()}`), { recursive: true });
   const summary = await runMsDevCdpRefresh({
