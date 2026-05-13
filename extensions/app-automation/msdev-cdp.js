@@ -214,9 +214,14 @@ $extractor = @'
       const text = metadata(el);
       if (!text || ignore.some(p => p.test(text)) || !patterns.some(p => p.test(text))) continue;
       const hrefs = [];
-      const add = href => { const url = sanitize(href); if (url && !hrefs.includes(url)) hrefs.push(url); };
+      const add = href => { const url = sanitize(href); if (url && !hrefs.includes(url) && hrefs.length < 8) hrefs.push(url); };
+      const addLinksFrom = root => { for (const a of root?.querySelectorAll?.('a[href]') || []) add(a.getAttribute('href')); };
       const own = el.closest?.('a[href]'); if (own) add(own.getAttribute('href'));
-      for (const a of el.querySelectorAll?.('a[href]') || []) add(a.getAttribute('href'));
+      addLinksFrom(el);
+      const containers = ['[role="row"]', '[role="gridcell"]', '[role="listitem"]', '[role="article"]', '[data-testid]', '[data-tid]']
+        .map(selector => el.closest?.(selector))
+        .filter(Boolean);
+      for (const container of containers.slice(0, 4)) addLinksFrom(container);
       const key = text.toLowerCase() + '|' + hrefs.join('|');
       if (seen.has(key)) continue;
       seen.add(key);
