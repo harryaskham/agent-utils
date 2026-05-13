@@ -170,7 +170,7 @@ $extractor = @'
   const title = compact(document.title, 180);
   const source = location.hostname.includes('outlook') ? (location.href.includes('/calendar') ? 'Outlook Calendar' : 'Outlook Mail') : location.hostname.includes('teams') ? (location.href.includes('/calendar') ? 'Teams Calendar' : 'Teams') : location.hostname.includes('slack') ? 'Slack Web' : title;
   const patterns = [/unread/i, /important/i, /flag/i, /mention/i, /meeting/i, /calendar/i, /today/i, /tomorrow/i, /join/i, /chat/i, /message/i, /from/i, /sender/i, /organizer/i, /organiser/i, /starts/i, /accepted/i, /tentative/i, /channel/i, /direct message/i, /busy/i, /free/i];
-  const ignore = [/^search\\b/i, /^(mail|calendar|people|files|teams chat|to do|onedrive)$/i, /^(new mail|new event|new message)$/i, /^(navigation|navigation pane|app launcher|settings|help|feedback|filter|filter applied|share|print|quick steps?|flag|unflag|flag [/] unflag|expand to see flag options)$/i, /keyboard shortcuts/i, /favorite|sent item|draft|github ci/i, /you can take multiple actions? on a message/i, /apply or remove calendar event filters/i, /share a calendar|print a copy of your calendar/i, /^ribbon\\b/i, /^move [&] delete\\b/i, /^respond\\b/i, /create a new email message/i, /move this message to your archive folder/i, /this message as phishing/i, /go to today/i, /my calendars/i, /deselect all calendars/i, /loading calendar actions/i, /add a new calendar instruction/i, /switch to calendar/i, /add other calendars/i, /tasks are currently not shown on your grid/i];
+  const ignore = [/^search\\b/i, /^(mail|calendar|people|files|teams chat|to do|onedrive)$/i, /^(new mail|new event|new message)$/i, /^(navigation|navigation pane|app launcher|settings|help|feedback|filter|filter applied|share|print|quick steps?|flag|unflag|flag [/] unflag|expand to see flag options)$/i, /keyboard shortcuts/i, /favorite|sent item|draft|github ci/i, /^add-ins?\\b/i, /enhance outlook with apps/i, /viva insights/i, /you can take multiple actions? on a message/i, /apply or remove calendar event filters/i, /share a calendar|print a copy of your calendar/i, /^ribbon\\b/i, /^move [&] delete\\b/i, /^respond\\b/i, /create a new email message/i, /move this message to your archive folder/i, /this message as phishing/i, /go to today/i, /my calendars/i, /deselect all calendars/i, /loading calendar actions/i, /add a new calendar instruction/i, /switch to calendar/i, /add other calendars/i, /tasks are currently not shown on your grid/i];
   const selectors = ['[aria-label]', '[role="treeitem"]', '[role="listitem"]', '[data-testid]', '[data-tid]', '[title]', 'a[href]'];
   const seen = new Set();
   const items = [];
@@ -240,6 +240,9 @@ const SNAPSHOT_CHROME_PATTERNS = [
   /^forward\b/i,
   /^report(?: message)?\b/i,
   /^message list\b/i,
+  /^add-ins?\b/i,
+  /enhance outlook with apps/i,
+  /viva insights/i,
   /^chat\s*\(ctrl[+]shift[+]1\)$/i,
   /^inbox\s+-\s+[\d,]+\s+items\b/i,
   /^deleted items\s+-\s+[\d,]+\s+items\b/i,

@@ -635,6 +635,7 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
         { text: "Flag this message | Flag this message | ??", source: "Outlook Mail" },
         { text: "Tags | ? Quick steps ? ? Mark all as read", source: "Outlook Mail" },
         { text: "Inbox - 1,467 items (1,123 unread) | ? Inbox selected 1123 unread", source: "Outlook Mail" },
+        { text: "Add-ins | ?Enhance Outlook with apps.Viva InsightsInsights. This version applies to Office 365 Enterprise E5", source: "Outlook Mail" },
         { text: "Important mail from Ada", source: "Outlook Mail", from: "Ada", hrefs: ["https://outlook.office.com/mail/id/1?auth=secret#frag"] },
       ] } },
       { app: "slack", action: "notifications.snapshot", status: "ok", result: { title: "Find your workspace | Slack", url: "https://app.slack.com/client", authRequired: true, items: [] } },
@@ -861,6 +862,8 @@ test("ms-dev CDP PowerShell script filters common work-app navigation chrome", (
   assert.match(script, /move \[&\] delete/);
   assert.match(script, /my calendars/);
   assert.match(script, /switch to calendar/);
+  assert.match(script, /enhance outlook with apps/);
+  assert.match(script, /viva insights/);
 });
 
 test("ms-dev CDP PowerShell script includes Slack desktop unread fallback", () => {
@@ -878,6 +881,29 @@ test("ms-dev CDP PowerShell script uses configured port and no raw secrets", () 
   assert.match(script, /replace\(\/\\s\+\/g/);
   assert.match(script, /text\.match\(\/\\b/);
   assert.match(script, /parsed\.search = ''/);
+});
+
+test("work briefing suppresses Outlook Add-ins chrome samples from stale snapshots", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-addins-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  await mkdir(outlookDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "notifications.snapshot.json"), JSON.stringify({
+    app: "outlook",
+    kind: "notifications.snapshot",
+    status: "ok",
+    capturedAt: "2026-05-13T01:00:00Z",
+    count: 2,
+    items: [
+      { text: "Add-ins | ?Enhance Outlook with apps.Viva InsightsInsights. This version applies to Office 365 Enterprise E5", source: "Outlook Mail" },
+      { text: "Unread mail from Ada", source: "Outlook Mail", from: "Ada" },
+    ],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, sampleLimit: 2, now: new Date("2026-05-13T02:00:00Z") });
+  const rendered = renderWorkBriefingIndex(index);
+  assert.match(rendered, /outlook\.notifications\.snapshot: status=ok freshness=stale age=60m items=2/);
+  assert.doesNotMatch(rendered, /Add-ins|Viva Insights/);
+  assert.match(rendered, /Unread mail from Ada/);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("work briefing index summarizes bounded app snapshot state", async () => {

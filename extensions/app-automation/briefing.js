@@ -39,6 +39,15 @@ function summarizeItem(item = {}) {
   };
 }
 
+function isBriefingChromeItem(item = {}, { app, action } = {}) {
+  const text = compact(item.text || item.label || item.title, 260) || "";
+  if (!text) return true;
+  if (app === "outlook" && action === "notifications.snapshot") {
+    return /^add-ins?\b/i.test(text) || /enhance outlook with apps/i.test(text) || /viva insights/i.test(text);
+  }
+  return false;
+}
+
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -158,6 +167,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
     }
     const snapshot = loaded.snapshot;
     const items = Array.isArray(snapshot.items) ? snapshot.items : (Array.isArray(snapshot.notifications) ? snapshot.notifications : []);
+    const briefingItems = items.filter((item) => !isBriefingChromeItem(item, { app, action }));
     const freshness = freshnessFor(snapshot.capturedAt, { staleAfterMinutes, now });
     entries.push({
       app,
@@ -169,7 +179,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       itemCount: Number.isFinite(snapshot.count) ? snapshot.count : (Number.isFinite(snapshot.counts?.items) ? snapshot.counts.items : items.length),
       authRequired: Boolean(snapshot.authRequired),
       ...(latestRefresh ? { latestRefresh } : {}),
-      samples: sampleItemsForAction(items, { action, now, sampleLimit }).map(summarizeItem),
+      samples: sampleItemsForAction(briefingItems, { action, now, sampleLimit }).map(summarizeItem),
     });
   }
   const preservedStale = entries.filter((entry) => entry.freshness === "stale" && ["filtered_empty", "raw_empty"].includes(entry.latestRefresh?.status) && entry.latestRefresh?.skippedWrite).length;
