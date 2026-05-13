@@ -478,9 +478,11 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.deepEqual(allLinks.appCounts, { slack: 3, calendar: 1 });
   assert.deepEqual(allLinks.kindCounts, { "notifications.snapshot": 3, "events.snapshot": 1 });
   assert.deepEqual(allLinks.hostCounts, { "app.slack.com": 3, "calendar.example": 1 });
+  assert.deepEqual(allLinks.sourceCounts, { "#general": 2, unknown: 2 });
   assert.match(renderSnapshotLinks(allLinks), /apps=calendar=1,slack=3/);
   assert.match(renderSnapshotLinks(allLinks), /kinds=events\.snapshot=1,notifications\.snapshot=3/);
   assert.match(renderSnapshotLinks(allLinks), /hosts=app\.slack\.com=3,calendar\.example=1/);
+  assert.match(renderSnapshotLinks(allLinks), /sources="#general"=2,"unknown"=2/);
   const newestLinks = await collectSnapshotLinks({ root, app: "all", sort: "newest", staleAfterMinutes: 60, now: new Date("2026-05-12T00:30:00Z") });
   assert.equal(newestLinks.sort, "newest");
   assert.equal(newestLinks.links[0].app, "calendar");
@@ -531,8 +533,10 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(aggregatedLinks.matchedCount, 4);
   assert.equal(aggregatedLinks.returnedCount, 2);
   assert.deepEqual(aggregatedLinks.hostCounts, { "app.slack.com": 1, "calendar.example": 1 });
+  assert.deepEqual(aggregatedLinks.sourceCounts, { unknown: 2 });
   assert.match(renderSnapshotLinks(aggregatedLinks), /links total=2 matched=4 scanned=6 fresh=2 stale=0 unknown=0 sort=newest freshness=fresh kind=events\.snapshot query="standup"/);
   assert.match(renderSnapshotLinks(aggregatedLinks), /hosts=app\.slack\.com=1,calendar\.example=1/);
+  assert.match(renderSnapshotLinks(aggregatedLinks), /sources="unknown"=2/);
   assert.match(renderSnapshotLinks(aggregatedLinks), /truncated at 2 of 4 links/);
   const emptyAggregatedLinks = aggregateSnapshotLinkSummaries({
     root,
