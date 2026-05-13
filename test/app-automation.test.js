@@ -785,6 +785,36 @@ test("ms-dev CDP refresh preserves non-empty snapshots on raw-empty results", as
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh records bridge copy failures in latest manifest", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-copy-fail-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  await mkdir(outlookDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "notifications.snapshot.json"), JSON.stringify({ app: "outlook", kind: "notifications.snapshot", status: "ok", capturedAt: "2026-05-13T02:00:00Z", count: 1, items: [{ text: "keep mail" }] }), "utf8");
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 255, stdout: "", stderr: "ssh: connect to host ms-dev port 22: Connection timed out" };
+      return { code: 1, stdout: "", stderr: "unexpected" };
+    },
+  });
+  assert.equal(summary.status, "copy_failed");
+  assert.equal(summary.failed[0].status, "copy_failed");
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=copy_failed/);
+  const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));
+  assert.equal(manifest.status, "copy_failed");
+  assert.equal(manifest.failed[0].app, "outlook");
+  assert.equal("stdout" in manifest, false);
+  assert.equal("stderr" in manifest, false);
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, now: new Date(manifest.capturedAt) });
+  assert.match(renderWorkBriefingIndex(index), /outlook\.notifications\.snapshot: status=ok freshness=stale age=\d+m items=1 latestRefresh=copy_failed\/0m/);
+  const preserved = JSON.parse(await readFile(path.join(outlookDir, "notifications.snapshot.json"), "utf8"));
+  assert.equal(preserved.items[0].text, "keep mail");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh does not overwrite snapshots on extraction failure", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-fail-${Date.now()}`), { recursive: true });
   const outlookDir = path.join(root, "snapshots", "outlook");

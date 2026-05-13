@@ -456,6 +456,27 @@ function parseCdpJson(stdout = "") {
   return JSON.parse(trimmed.slice(first, last + 1));
 }
 
+async function writeBridgeFailureManifest({ bridgeDir, status, config, targets = [], error }) {
+  const manifest = {
+    version: 1,
+    status,
+    capturedAt: new Date().toISOString(),
+    source: "ms-dev-chrome-cdp",
+    cdpPort: config.cdpPort,
+    config: msDevCdpCommandSummary(config),
+    snapshots: [],
+    failed: targets.map((target) => ({
+      app: target.app,
+      action: target.action,
+      status,
+      error: compact(error, 500),
+    })),
+  };
+  const manifestPath = path.join(bridgeDir, "latest-ms-dev-cdp-refresh.json");
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return { ...manifest, manifestPath };
+}
+
 export async function runMsDevCdpRefresh({
   root,
   apps,
@@ -491,18 +512,18 @@ export async function runMsDevCdpRefresh({
   await writeFile(localScriptPath, buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets }), "utf8");
   const copy = await exec("scp", [localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
   if (copy.code !== 0) {
-    return { status: "copy_failed", config: msDevCdpCommandSummary(config), targets, stderr: compact(copy.stderr, 1000), stdout: compact(copy.stdout, 1000) };
+    return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: copy.stderr || copy.stdout || "scp failed" });
   }
   const remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
   const run = await exec("ssh", [config.sshTarget, remoteCommand], { timeout: timeoutMs });
   if (run.code !== 0) {
-    return { status: "run_failed", config: msDevCdpCommandSummary(config), targets, stderr: compact(run.stderr, 1000), stdout: compact(run.stdout, 1000) };
+    return writeBridgeFailureManifest({ bridgeDir, status: "run_failed", config, targets, error: run.stderr || run.stdout || "ssh command failed" });
   }
   let payload;
   try {
     payload = parseCdpJson(run.stdout);
   } catch (error) {
-    return { status: "parse_failed", config: msDevCdpCommandSummary(config), targets, error: error.message, stdout: compact(run.stdout, 1000), stderr: compact(run.stderr, 1000) };
+    return writeBridgeFailureManifest({ bridgeDir, status: "parse_failed", config, targets, error: error.message });
   }
   const byKey = new Map(targets.map((target) => [`${target.app}:${target.action}`, target]));
   const snapshots = [];
