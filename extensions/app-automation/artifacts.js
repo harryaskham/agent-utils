@@ -388,7 +388,7 @@ export async function collectSnapshotLinks({ root, app, query, source, from, tim
   };
 }
 
-export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries = [], query, source, from, time, freshness, kind, sort } = {}) {
+export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries = [], query, source, from, time, host, freshness, kind, sort } = {}) {
   const normalizedKind = normalizeLinkKind(kind);
   const normalizedSort = normalizeLinkSort(sort);
   const links = summaries.flatMap((summary) => summary.links || []);
@@ -405,6 +405,7 @@ export function aggregateSnapshotLinkSummaries({ root, snapshotRoot, summaries =
     source: source || null,
     from: from || null,
     time: time || null,
+    host: host || null,
     freshness: freshness || null,
     kind: normalizedKind,
     sort: normalizedSort,

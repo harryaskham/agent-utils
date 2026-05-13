@@ -345,7 +345,7 @@ test("/tendril-app overview parser keeps links option out of app ids", () => {
     includeLinks: true,
     apps: ["slack"],
   });
-  assert.deepEqual(parseOverviewCommandArgs(["fresh", "kind:events", "source:calendar", "from=Harry", "time:today", "query:standup", "link-limit:5", "link-sort:newest", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
+  assert.deepEqual(parseOverviewCommandArgs(["fresh", "kind:events", "source:calendar", "from=Harry", "time:today", "host:meet.google.com", "query:standup", "link-limit:5", "link-sort:newest", "stale-after:1440", "calendar"], { appIds: ["slack", "calendar", "outlook"], defaultAppIds: ["slack", "calendar"] }), {
     includeLinks: true,
     apps: ["calendar"],
     linkFreshness: "fresh",
@@ -355,6 +355,7 @@ test("/tendril-app overview parser keeps links option out of app ids", () => {
     linkSource: "calendar",
     linkFrom: "Harry",
     linkTime: "today",
+    linkHost: "meet.google.com",
     linkSort: "newest",
     staleAfterMinutes: 1440,
   });
@@ -641,6 +642,7 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /linkSource/);
   assert.match(source, /linkFrom/);
   assert.match(source, /linkTime/);
+  assert.match(source, /linkHost/);
   assert.match(source, /linkSort/);
   assert.match(source, /freshness: Type\.Optional/);
   assert.match(source, /sort: Type\.Optional/);

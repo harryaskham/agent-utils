@@ -86,6 +86,7 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
   let linkSource;
   let linkFrom;
   let linkTime;
+  let linkHost;
   let linkSort;
   let staleAfterMinutes;
   const appTokens = [];
@@ -121,6 +122,12 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
       if (key === "source" && !linkSource) linkSource = contextMatch[2];
       else if (key === "from" && !linkFrom) linkFrom = contextMatch[2];
       else if (key === "time" && !linkTime) linkTime = contextMatch[2];
+      continue;
+    }
+    const hostMatch = word.match(/^(?:host|domain|url-host|urlhost)[:=](.+)$/i);
+    if (hostMatch && !linkHost) {
+      includeLinks = true;
+      linkHost = hostMatch[1];
       continue;
     }
     const linkLimitMatch = lower.match(/^(?:link-limit|linklimit|links-limit|linkslimit)[:=](\d+)$/);
@@ -163,6 +170,7 @@ export function parseOverviewCommandArgs(words = [], { appIds = [], defaultAppId
     ...(linkSource ? { linkSource } : {}),
     ...(linkFrom ? { linkFrom } : {}),
     ...(linkTime ? { linkTime } : {}),
+    ...(linkHost ? { linkHost } : {}),
     ...(linkSort ? { linkSort } : {}),
     ...(staleAfterMinutes ? { staleAfterMinutes } : {}),
   };
