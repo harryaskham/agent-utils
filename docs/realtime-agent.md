@@ -222,11 +222,11 @@ Examples:
 { "action": "stop" }
 ```
 
-Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. For full realtime turns, the transcript is sent as a visible `realtime-agent` custom UI message only; it is stripped from model context and is not forwarded as a second text input.
+Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. For full realtime turns, the transcript is shown as UI status/notification only; it is not queued as a message, is stripped from model context, and is not forwarded as a second text input.
 
 ## Autoreconnect
 
-Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off`, `/rt stop`, or the tool equivalent disables reconnect.
+Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off`, `/rt stop`, or the tool equivalent disables reconnect. When a response contains a spoken preamble before a tool call, the extension flushes buffered audio before emitting the tool call so the preamble is heard before the tool result rather than after it.
 
 Tuning knobs:
 

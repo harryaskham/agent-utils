@@ -1406,8 +1406,11 @@ class RealtimeSession {
     const callId = item.call_id || item.id;
     if (!callId) return;
     if (state.toolBlocks.has(callId)) return;
-    // Close any pending text block before starting tool calls
+    // Close any pending text block and flush any spoken preamble before starting
+    // tool calls. Without this, the buffered "I'll check..." audio can start
+    // after the tool result, which sounds backwards to the operator.
     this._closeTextBlock(state);
+    this.player.flush();
     const block = { type: "toolCall", id: callId, name: item.name || "", arguments: {} };
     state.partial.content.push(block);
     const contentIndex = state.partial.content.length - 1;
@@ -1504,6 +1507,7 @@ class RealtimeSession {
       }
       // Keep phase as speaking until response.done; audio.done can arrive before
       // final text/tool metadata.
+      this.updateStatus();
       return;
     }
 
@@ -1539,7 +1543,9 @@ class RealtimeSession {
         // user-visible blocking state for full realtime.
         if (text) {
           this.lastTranscript = text;
-          try { this.lastCtx?.ui?.setStatus?.("rt-transcript", `◇ ${truncateVisible(text, 120)}`); } catch {}
+          const line = `◇ ${truncateVisible(text, 120)}`;
+          try { this.lastCtx?.ui?.setStatus?.("rt-transcript", line); } catch {}
+          try { this.lastCtx?.ui?.notify?.(line, "info"); } catch {}
         }
         if (!this.current && this.phase === "transcribing") this.setPhase("idle");
         else this.updateStatus();

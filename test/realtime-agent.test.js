@@ -840,6 +840,7 @@ test("full realtime committed audio triggers a custom turn, not transcript user 
     await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(harness.sentMessages.length, 1);
     assert.equal(harness.statuses.get("rt-transcript"), "◇ da da da da");
+    assert.equal(harness.notifications.at(-1)?.message, "◇ da da da da");
     assert.equal(harness.sentUserMessages.length, 0);
 
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
@@ -850,6 +851,35 @@ test("full realtime committed audio triggers a custom turn, not transcript user 
     await harness.commands.get("rt-off").handler("", harness.ctx);
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
     else process.env.PI_RT_API_KEY = previousApiKey;
+  }
+});
+
+test("realtime flushes spoken preamble before tool calls", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousPlayback = process.env.PI_RT_PLAYBACK_CMD;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_PLAYBACK_CMD = "cat >/dev/null";
+  FakeWebSocket.instances = [];
+  const harness = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    await harness.commands.get("rt").handler("start nolisten", harness.ctx);
+    const stream = harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [{ name: "read", description: "read", parameters: { type: "object", properties: {}, required: [] } }], messages: [] }, {});
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("message", JSON.stringify({ type: "response.audio.delta", delta: Buffer.alloc(64).toString("base64") }));
+    assert.equal(harness.pi.realtime.snapshot().health.lastPlaybackStartedAt, null);
+    ws.emit("message", JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", call_id: "call-1", name: "read" } }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(harness.pi.realtime.snapshot().health.lastPlaybackStartedAt);
+    stream[Symbol.asyncIterator]?.();
+  } finally {
+    await harness.commands.get("rt-off").handler("", harness.ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousPlayback === undefined) delete process.env.PI_RT_PLAYBACK_CMD;
+    else process.env.PI_RT_PLAYBACK_CMD = previousPlayback;
   }
 });
 
