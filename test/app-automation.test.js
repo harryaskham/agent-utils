@@ -761,6 +761,30 @@ test("ms-dev CDP refresh preserves snapshots when all live rows are filtered as 
   await rm(root, { recursive: true, force: true });
 });
 
+test("ms-dev CDP refresh preserves non-empty snapshots on raw-empty results", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-raw-empty-${Date.now()}`), { recursive: true });
+  const outlookDir = path.join(root, "snapshots", "outlook");
+  await mkdir(outlookDir, { recursive: true });
+  await writeFile(path.join(outlookDir, "calendar.snapshot.json"), JSON.stringify({ app: "outlook", kind: "calendar.snapshot", status: "ok", capturedAt: "2026-05-13T02:00:00Z", count: 1, items: [{ text: "keep calendar event" }] }), "utf8");
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["calendar.snapshot"],
+    exec: async (command) => {
+      if (command === "scp") return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "calendar.snapshot", status: "ok", result: { title: "Outlook Calendar", items: [] } }] }), stderr: "" };
+    },
+  });
+  assert.equal(summary.snapshots[0].status, "raw_empty");
+  assert.equal(summary.snapshots[0].skippedWrite, true);
+  assert.equal(summary.snapshots[0].preservedCount, 1);
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.calendar\.snapshot: status=raw_empty items=0/);
+  const preserved = JSON.parse(await readFile(path.join(outlookDir, "calendar.snapshot.json"), "utf8"));
+  assert.equal(preserved.items[0].text, "keep calendar event");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ms-dev CDP refresh does not overwrite snapshots on extraction failure", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-msdev-fail-${Date.now()}`), { recursive: true });
   const outlookDir = path.join(root, "snapshots", "outlook");
@@ -917,6 +941,31 @@ test("work briefing prioritizes today's calendar rows in samples", async () => {
   const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, sampleLimit: 1, now: new Date("2026-05-13T02:05:00Z") });
   const entry = index.entries.find((item) => item.action === "calendar.snapshot");
   assert.equal(entry.samples[0].text, "Wednesday standup, 09:00 to 09:30, Wednesday, May 13, 2026, By Ada");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("work briefing shows raw-empty skipped-write refresh attempts", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-briefing-raw-empty-${Date.now()}`), { recursive: true });
+  await mkdir(path.join(root, "bridge"), { recursive: true });
+  await mkdir(path.join(root, "snapshots", "outlook"), { recursive: true });
+  await writeFile(path.join(root, "snapshots", "outlook", "calendar.snapshot.json"), JSON.stringify({
+    app: "outlook",
+    kind: "calendar.snapshot",
+    status: "ok",
+    capturedAt: "2026-05-13T01:30:00Z",
+    count: 1,
+    items: [{ text: "preserved event" }],
+  }), "utf8");
+  await writeFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), JSON.stringify({
+    capturedAt: "2026-05-13T02:04:00Z",
+    source: "ms-dev-chrome-cdp",
+    snapshots: [{ app: "outlook", action: "calendar.snapshot", status: "raw_empty", skippedWrite: true, preservedCount: 1, reason: "empty rows" }],
+    failed: [],
+  }), "utf8");
+  const index = await buildWorkBriefingIndex({ root, apps: ["outlook"], staleAfterMinutes: 15, now: new Date("2026-05-13T02:05:00Z") });
+  assert.equal(index.totals.preservedStale, 1);
+  assert.equal(index.totals.effectiveStale, 0);
+  assert.match(renderWorkBriefingIndex(index), /outlook\.calendar\.snapshot: status=ok freshness=stale age=35m items=1 latestRefresh=raw_empty\/1m\/skippedWrite/);
   await rm(root, { recursive: true, force: true });
 });
 

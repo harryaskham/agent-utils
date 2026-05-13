@@ -172,7 +172,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       samples: sampleItemsForAction(items, { action, now, sampleLimit }).map(summarizeItem),
     });
   }
-  const preservedStale = entries.filter((entry) => entry.freshness === "stale" && entry.latestRefresh?.status === "filtered_empty" && entry.latestRefresh?.skippedWrite).length;
+  const preservedStale = entries.filter((entry) => entry.freshness === "stale" && ["filtered_empty", "raw_empty"].includes(entry.latestRefresh?.status) && entry.latestRefresh?.skippedWrite).length;
   const index = {
     version: 1,
     generatedAt: (now instanceof Date ? now : new Date(now)).toISOString(),

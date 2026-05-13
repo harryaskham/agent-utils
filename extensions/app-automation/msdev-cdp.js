@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { buildGenericSnapshot, writeGenericSnapshot } from "./generic-snapshot.js";
@@ -284,6 +284,22 @@ function rawItems(liveResult = {}) {
   return Array.isArray(liveResult.result?.items) ? liveResult.result.items : [];
 }
 
+async function existingSnapshotSummary(root, target = {}) {
+  const snapshotPath = path.join(root, "snapshots", target.app, `${target.action.replace(/[^a-zA-Z0-9._-]+/g, "-")}.json`);
+  const raw = await readFile(snapshotPath, "utf8").catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!raw) return { path: snapshotPath, count: 0 };
+  try {
+    const snapshot = JSON.parse(raw);
+    const count = Number.isFinite(snapshot.count) ? snapshot.count : (Array.isArray(snapshot.items) ? snapshot.items.length : 0);
+    return { path: snapshotPath, count, status: snapshot.status || null, capturedAt: snapshot.capturedAt || null };
+  } catch {
+    return { path: snapshotPath, count: 0 };
+  }
+}
+
 function cleanInferredFrom(value) {
   const text = compact(value, 120);
   if (!text) return null;
@@ -404,6 +420,19 @@ async function writeLiveSnapshot({ root, target, liveResult, capturedAt }) {
   });
   const filteredEmpty = filteredEmptyResult({ target, input, liveResult, snapshotCount: snapshot.count });
   if (filteredEmpty) return filteredEmpty;
+  const previous = await existingSnapshotSummary(root, target);
+  if (snapshot.count === 0 && rawItems(liveResult).length === 0 && previous.count > 0) {
+    return {
+      app: target.app,
+      action: target.action,
+      status: "raw_empty",
+      count: 0,
+      preservedCount: previous.count,
+      preservedPath: previous.path,
+      skippedWrite: true,
+      reason: "refresh returned no extracted rows; preserving previous non-empty snapshot",
+    };
+  }
   snapshot.capturedAt = capturedAt || snapshot.capturedAt;
   snapshot.source = "ms-dev-chrome-cdp";
   if (liveResult.status !== "ok") {
