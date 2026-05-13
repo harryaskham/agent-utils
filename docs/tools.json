@@ -312,7 +312,7 @@
             "dry-run or execute allowlisted runner steps",
             "plan Markdown-to-canvas sync",
             "inspect canonical app automation state root",
-            "list/digest/query timestamped snapshot links with matched/truncated counts, freshness/app/kind/host/source counts, source/from/time context, rendered urlHost rows, and host filters, exact-or-natural kind aliases such as mail/chat/meetings, optional newest/oldest/freshest/stalest/app/kind/host sorting, and clear empty-filter output",
+            "list/digest/query timestamped snapshot links with matched/truncated counts, freshness/app/kind/host/source counts, source/from/time context, rendered urlHost rows, and host filters, exact-or-natural kind aliases such as mail/chat/meetings, optional newest/oldest/freshest/stalest/app/kind/host/source sorting, and clear empty-filter output",
             "list/freshness-check/cleanup-plan/read persisted app snapshots",
             "use flexible /tendril-app links filters with optional app selector, explicit limits, context/host filters, and stale thresholds, such as fresh kind:events source:calendar from:harry sort:newest stale-after:1440 limit:5 standup",
             "start/inspect/stop periodic app refreshers",

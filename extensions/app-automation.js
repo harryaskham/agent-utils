@@ -562,7 +562,7 @@ export default function appAutomationExtension(pi) {
       linkFrom: Type.Optional(Type.String({ description: "Optional overview link sender, organizer, or author context filter." })),
       linkTime: Type.Optional(Type.String({ description: "Optional overview link time/date context filter." })),
       linkHost: Type.Optional(Type.String({ description: "Optional overview link sanitized URL hostname filter, for example meet.google.com, teams.microsoft.com, or app.slack.com." })),
-      linkSort: Type.Optional(Type.String({ description: "Optional sort for per-app overview links: newest, oldest, freshest, stalest, app, kind, or host." })),
+      linkSort: Type.Optional(Type.String({ description: "Optional sort for per-app overview links: newest, oldest, freshest, stalest, app, kind, host, or source." })),
       includeExternal: Type.Optional(Type.Boolean({ description: "Load JSON app configs from APP_AUTOMATION_CONFIG_DIR. Defaults to true." })),
     }),
     async execute(_toolCallId, params) {
@@ -1049,7 +1049,7 @@ export default function appAutomationExtension(pi) {
       host: Type.Optional(Type.String({ description: "Optional case-insensitive filter over sanitized link URL hostname, for example meet.google.com, teams.microsoft.com, or app.slack.com." })),
       kind: Type.Optional(Type.String({ description: "Optional snapshot kind/action filter, for example notifications.snapshot, events.snapshot, or aliases like events/notifications/calendar/mail/chat/mentions/meetings." })),
       freshness: Type.Optional(Type.String({ description: "Optional link freshness filter: fresh, stale, or unknown." })),
-      sort: Type.Optional(Type.String({ description: "Optional link sort: newest, oldest, freshest, stalest, app, kind, or host." })),
+      sort: Type.Optional(Type.String({ description: "Optional link sort: newest, oldest, freshest, stalest, app, kind, host, or source." })),
       staleAfterMinutes: Type.Optional(Type.Number({ description: "Age threshold for per-link freshness. Defaults to 60 minutes." })),
     }),
     async execute(_toolCallId, params) {
