@@ -215,13 +215,27 @@ $extractor = @'
       if (!text || ignore.some(p => p.test(text)) || !patterns.some(p => p.test(text))) continue;
       const hrefs = [];
       const add = href => { const url = sanitize(href); if (url && !hrefs.includes(url) && hrefs.length < 8) hrefs.push(url); };
-      const addLinksFrom = root => { for (const a of root?.querySelectorAll?.('a[href]') || []) add(a.getAttribute('href')); };
+      const addLinksFrom = (root, maxAnchors = 12) => {
+        let scanned = 0;
+        for (const a of root?.querySelectorAll?.('a[href]') || []) {
+          add(a.getAttribute('href'));
+          scanned += 1;
+          if (hrefs.length >= 8 || scanned >= maxAnchors) break;
+        }
+      };
       const own = el.closest?.('a[href]'); if (own) add(own.getAttribute('href'));
-      addLinksFrom(el);
-      const containers = ['[role="row"]', '[role="gridcell"]', '[role="listitem"]', '[role="article"]', '[data-testid]', '[data-tid]']
-        .map(selector => el.closest?.(selector))
-        .filter(Boolean);
-      for (const container of containers.slice(0, 4)) addLinksFrom(container);
+      addLinksFrom(el, 8);
+      if (!hrefs.length) {
+        const containers = ['[role="row"]', '[role="listitem"]', '[role="article"]']
+          .map(selector => el.closest?.(selector))
+          .filter(Boolean);
+        for (const container of containers.slice(0, 2)) {
+          const textLength = (container.innerText || container.textContent || '').length;
+          if (textLength > 2500) continue;
+          addLinksFrom(container, 12);
+          if (hrefs.length) break;
+        }
+      }
       const key = text.toLowerCase() + '|' + hrefs.join('|');
       if (seen.has(key)) continue;
       seen.add(key);

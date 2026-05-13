@@ -956,6 +956,10 @@ test("ms-dev CDP PowerShell script uses configured port and no raw secrets", () 
   assert.match(script, /parsed\.search = ''/);
   assert.match(script, /const containers = \['\[role="row"\]'/);
   assert.match(script, /hrefs\.length < 8/);
+  assert.match(script, /maxAnchors = 12/);
+  assert.match(script, /textLength > 2500/);
+  assert.doesNotMatch(script, /const containers = \[[^\n]+data-testid/);
+  assert.doesNotMatch(script, /const containers = \[[^\n]+data-tid/);
 });
 
 test("work briefing suppresses Outlook aggregate mail-list chrome from preserved snapshots", async () => {
