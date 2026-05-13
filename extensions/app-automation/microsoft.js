@@ -2,6 +2,8 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
   const patternSource = JSON.stringify(includePatterns);
   return `(() => {
   const includePatterns = ${patternSource}.map((pattern) => new RegExp(pattern, 'i'));
+  const appName = ${JSON.stringify(app)};
+  const snapshotKind = ${JSON.stringify(kind)};
   const selectors = [
     '[aria-label]',
     '[role="treeitem"]',
@@ -37,6 +39,30 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
     return urls;
   };
   const compact = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const sourceFor = () => {
+    const href = String(location.href || '').toLowerCase();
+    const calendarLike = snapshotKind.includes('calendar') || href.includes('/calendar');
+    if (appName === 'outlook' && calendarLike) return 'Outlook Calendar';
+    if (appName === 'outlook') return 'Outlook Mail';
+    if (appName === 'teams' && calendarLike) return 'Teams Calendar';
+    if (appName === 'teams') return 'Teams';
+    return compact(document.title) || appName;
+  };
+  const metadataTextFor = (element) => [
+    element.getAttribute?.('aria-label'),
+    element.getAttribute?.('title'),
+    element.closest?.('[aria-label]')?.getAttribute?.('aria-label'),
+    element.closest?.('[title]')?.getAttribute?.('title'),
+    element.innerText || element.textContent || ''
+  ].map(compact).filter(Boolean).join(' | ');
+  const fromFor = (element) => {
+    const senderElement = element.querySelector?.('[data-testid*="Sender"], [data-testid*="sender"], [data-testid*="author"], [data-testid*="organizer"], [aria-label*="From"], [aria-label*="from"], [title*="From"], [title*="from"]');
+    const senderText = compact(senderElement?.innerText || senderElement?.textContent || senderElement?.getAttribute?.('aria-label') || senderElement?.getAttribute?.('title'));
+    if (senderText) return senderText.slice(0, 120);
+    const match = metadataTextFor(element).match(/\b(?:from|sender|organizer|organiser|author)\s*:?\s*([^,;|•]{2,120})/i);
+    if (!match) return null;
+    return compact(match[1]).replace(/\s+(subject|sent|received|starts|start time|when)\b.*$/i, '').slice(0, 120) || null;
+  };
   const timeFor = (element) => {
     const candidates = [
       element.getAttribute?.('datetime'),
@@ -59,13 +85,15 @@ export function microsoftExtractorScript({ app = "microsoft", kind = "notificati
       ].join(' ').replace(/\\s+/g, ' ').trim();
       const hrefs = linksFor(element);
       const time = timeFor(element);
-      const key = text + '|' + hrefs.join('|') + '|' + (time || '');
+      const source = sourceFor();
+      const from = fromFor(element);
+      const key = text + '|' + hrefs.join('|') + '|' + (time || '') + '|' + (from || '');
       if (!text || seen.has(key)) continue;
       if (includePatterns.length && !includePatterns.some((pattern) => pattern.test(text))) continue;
       seen.add(key);
-      items.push({ text, selector, hrefs, ...(time ? { time } : {}) });
+      items.push({ text, selector, hrefs, ...(source ? { source } : {}), ...(from ? { from } : {}), ...(time ? { time } : {}) });
     }
   }
-  return { source: 'playwright-dom', app: ${JSON.stringify(app)}, kind: ${JSON.stringify(kind)}, url: location.href, title: document.title, items };
+  return { source: 'playwright-dom', app: appName, kind: snapshotKind, url: location.href, title: document.title, items };
 })()`;
 }
