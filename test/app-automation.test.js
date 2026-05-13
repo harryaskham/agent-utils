@@ -854,6 +854,15 @@ test("work briefing prioritizes today's calendar rows in samples", async () => {
 test("work briefing shows filtered-empty skipped-write refresh attempts", async () => {
   const root = await mkdir(path.join(os.tmpdir(), `app-briefing-filtered-${Date.now()}`), { recursive: true });
   await mkdir(path.join(root, "bridge"), { recursive: true });
+  await mkdir(path.join(root, "snapshots", "calendar"), { recursive: true });
+  await writeFile(path.join(root, "snapshots", "calendar", "events.snapshot.json"), JSON.stringify({
+    app: "calendar",
+    kind: "events.snapshot",
+    status: "empty",
+    capturedAt: "2026-05-13T01:30:00Z",
+    count: 0,
+    items: [],
+  }), "utf8");
   await writeFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), JSON.stringify({
     capturedAt: "2026-05-13T02:04:00Z",
     source: "ms-dev-chrome-cdp",
@@ -861,7 +870,11 @@ test("work briefing shows filtered-empty skipped-write refresh attempts", async 
     failed: [],
   }), "utf8");
   const index = await buildWorkBriefingIndex({ root, apps: ["calendar"], staleAfterMinutes: 15, now: new Date("2026-05-13T02:05:00Z") });
-  assert.match(renderWorkBriefingIndex(index), /calendar\.events\.snapshot: status=missing freshness=unknown items=0 latestRefresh=filtered_empty\/1m\/skippedWrite/);
+  assert.equal(index.totals.preservedStale, 1);
+  assert.equal(index.totals.effectiveStale, 0);
+  assert.equal(index.totals.filteredEmptyRefresh, 1);
+  assert.match(renderWorkBriefingIndex(index), /stale=1 preservedStale=1 effectiveStale=0 filteredEmptyRefresh=1/);
+  assert.match(renderWorkBriefingIndex(index), /calendar\.events\.snapshot: status=empty freshness=stale age=35m items=0 latestRefresh=filtered_empty\/1m\/skippedWrite/);
   assert.equal(index.entries[0].latestRefresh.rawCount, 1);
   await rm(root, { recursive: true, force: true });
 });

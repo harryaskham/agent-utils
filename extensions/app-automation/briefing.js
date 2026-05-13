@@ -170,6 +170,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       samples: sampleItemsForAction(items, { action, now, sampleLimit }).map(summarizeItem),
     });
   }
+  const preservedStale = entries.filter((entry) => entry.freshness === "stale" && entry.latestRefresh?.status === "filtered_empty" && entry.latestRefresh?.skippedWrite).length;
   const index = {
     version: 1,
     generatedAt: (now instanceof Date ? now : new Date(now)).toISOString(),
@@ -179,6 +180,9 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
       actions: entries.length,
       fresh: entries.filter((entry) => entry.freshness === "fresh").length,
       stale: entries.filter((entry) => entry.freshness === "stale").length,
+      preservedStale,
+      effectiveStale: Math.max(0, entries.filter((entry) => entry.freshness === "stale").length - preservedStale),
+      filteredEmptyRefresh: entries.filter((entry) => entry.latestRefresh?.status === "filtered_empty").length,
       missing: entries.filter((entry) => entry.status === "missing").length,
       authRequired: entries.filter((entry) => entry.authRequired || entry.status === "auth_required").length,
       items: entries.reduce((sum, entry) => sum + (entry.itemCount || 0), 0),
@@ -195,7 +199,7 @@ export async function buildWorkBriefingIndex({ root, apps, actions = DEFAULT_BRI
 export function renderWorkBriefingIndex(index = {}) {
   const totals = index.totals || {};
   const lines = [
-    `work briefing generated=${index.generatedAt || "unknown"} staleAfter=${index.staleAfterMinutes || "unknown"}m actions=${totals.actions || 0} fresh=${totals.fresh || 0} stale=${totals.stale || 0} missing=${totals.missing || 0} authRequired=${totals.authRequired || 0} items=${totals.items || 0}`,
+    `work briefing generated=${index.generatedAt || "unknown"} staleAfter=${index.staleAfterMinutes || "unknown"}m actions=${totals.actions || 0} fresh=${totals.fresh || 0} stale=${totals.stale || 0}${totals.preservedStale ? ` preservedStale=${totals.preservedStale} effectiveStale=${totals.effectiveStale || 0}` : ""}${totals.filteredEmptyRefresh ? ` filteredEmptyRefresh=${totals.filteredEmptyRefresh}` : ""} missing=${totals.missing || 0} authRequired=${totals.authRequired || 0} items=${totals.items || 0}`,
   ];
   if (index.indexPath) lines.push(`index=${index.indexPath}`);
   for (const entry of index.entries || []) {
