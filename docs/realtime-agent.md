@@ -177,7 +177,7 @@ Unified `/rt` controls:
 /rt backend <backend>          set audio backend for new mic/playback commands
 /rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high
 /rt summary [true|false]       use compact summary context instead of full history (default false)
-/rt backend=pulse source=...    env-style key/value form; supports server/source/sink/start/mic/stt/audio/widget/status/voice/reasoning/summary
+/rt backend=pulse source=...    env-style key/value form; supports server/source/sink/start/mic/stt/audio/widget/status/voice/reasoning/summary/fork
 /rt help                       show the unified command usage
 ```
 
@@ -187,6 +187,7 @@ Env-style `/rt` arguments normalize into the same shape used by the agent tool s
 
 ```text
 /rt backend=pulse server=sgu24:4713 source=source.bluetooth summary=true start=vad
+/rt fork=true backend=pulse server=sgu24:4713 source=source.bluetooth summary=true start=vad
 /rt stt=ptt source="source.bluetooth"
 /rt summary=false
 /rt action=stop
@@ -197,6 +198,8 @@ Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/stt`, 
 ### Summary context mode
 
 `/rt summary=true` switches realtime history replay into compact-summary mode. The first realtime turn after enabling it sends the latest Pi compaction or branch summary from model context plus the current turn, rather than replaying the full conversation history. If no saved Pi summary is present, the extension falls back to a bounded role-by-role summary of recent messages. The default is `summary=false`, which preserves the previous full-history replay behavior.
+
+`/rt fork=true ...` forks from the current tree/session leaf before applying the remaining realtime parameters in the replacement session. It composes with other env-style options such as `summary=true`, Pulse routing, and `start=vad`, and uses `position: "at"` so the current tree position is cloned rather than continuing in-place.
 
 Compaction itself still runs through Pi's selected text model. If manual or auto-compaction starts while a realtime model/session is active, the extension pauses realtime, restores the previous text model where possible, unregisters the realtime API handler, and cancels that compaction attempt. Retry `/compact` after the model has been restored; auto-compaction will retry on a later text-model turn. This avoids summarization requests being sent to `gpt-realtime-2` while a realtime response is active.
 

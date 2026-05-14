@@ -101,12 +101,14 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const statuses = new Map();
   const notifications = [];
   const setModelCalls = [];
+  const forkCalls = [];
   const emittedEvents = [];
   const sentMessages = [];
   const sentUserMessages = [];
 
   const ctx = {
     model: initialModel || { provider: "litellm-anthropic", id: "claude-sonnet-4-5" },
+    sessionManager: { getLeafId: () => "leaf-1", getBranch: () => [{ id: "root" }, { id: "leaf-1" }] },
     modelRegistry: { find: (provider, id) => models.get(`${provider}/${id}`) },
     ui: {
       notify(message, level = "info") { notifications.push({ message, level }); },
@@ -143,7 +145,14 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     },
   };
 
-  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, emittedEvents, sentMessages, sentUserMessages, ctx };
+  ctx.fork = async (entryId, options = {}) => {
+    const forkCtx = { ...ctx, sessionManager: { getLeafId: () => `${entryId}-fork`, getBranch: () => [{ id: entryId }, { id: `${entryId}-fork` }] } };
+    forkCalls.push({ entryId, options, forkCtx });
+    if (options.withSession) await options.withSession(forkCtx);
+    return { cancelled: false };
+  };
+
+  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -746,6 +755,31 @@ test("/rt start force-registers realtime provider and switches away from current
     assert.equal(setModelCalls.at(-1)?.provider, "openai-realtime");
     assert.equal(setModelCalls.at(-1)?.id, "gpt-realtime-2");
     assert.equal(pi.realtime.snapshot().previousModel.id, "gpt-5.5");
+  } finally {
+    await commands.get("rt-off").handler("", ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+  }
+});
+
+test("/rt fork=true forks current tree position and preserves other params", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  FakeWebSocket.instances = [];
+  const previousModel = { provider: "litellm-openai", id: "gpt-5.5" };
+  const { pi, commands, handlers, setModelCalls, forkCalls, ctx, notifications } = makeHarness({ initialModel: previousModel });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("fork=true summary=true start=nolisten", ctx);
+    assert.equal(forkCalls.length, 1);
+    assert.equal(forkCalls[0].entryId, "leaf-1");
+    assert.equal(forkCalls[0].options.position, "at");
+    assert.equal(pi.realtime.snapshot().summaryContext, true);
+    assert.equal(setModelCalls.at(-1)?.provider, "openai-realtime");
+    assert.equal(FakeWebSocket.instances.length, 1);
+    assert.match(notifications.at(-2)?.message || "", /Realtime started in a fork/);
   } finally {
     await commands.get("rt-off").handler("", ctx);
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;

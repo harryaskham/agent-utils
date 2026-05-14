@@ -120,7 +120,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... summary=true start=vad";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... summary=true fork=true start=vad";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -2606,11 +2606,30 @@ export default function realtimeAgentExtension(pi) {
       if (out[key] !== undefined && out[key] !== null) out[key] = String(out[key]).trim().toLowerCase();
     }
     if (out.summary !== undefined && out.summary !== null) out.summary = parseBooleanValue(out.summary);
+    if (out.fork !== undefined && out.fork !== null) out.fork = parseBooleanValue(out.fork);
     return out;
+  }
+
+  function currentLeafId(ctx) {
+    return ctx?.sessionManager?.getLeafId?.() || ctx?.sessionManager?.getBranch?.()?.at?.(-1)?.id || null;
   }
 
   async function applyRealtimeParams(rawParams, ctx) {
     const params = normalizeRealtimeToolParams(rawParams);
+    if (params.fork) {
+      if (typeof ctx?.fork !== "function") throw new Error("/rt fork=true requires a command-capable Pi context with ctx.fork().");
+      const leafId = currentLeafId(ctx);
+      if (!leafId) throw new Error("/rt fork=true could not find the current tree position to fork from.");
+      const forkParams = { ...params, fork: false };
+      const result = await ctx.fork(leafId, {
+        position: "at",
+        withSession: async (forkCtx) => {
+          await applyRealtimeParams(forkParams, forkCtx);
+          forkCtx.ui?.notify?.("Realtime started in a fork from the previous tree position.", "info");
+        },
+      });
+      return { forked: true, cancelled: !!result?.cancelled, snapshot: controls.snapshot() };
+    }
     if (params.backend) controls.setAudioBackend(params.backend, ctx);
     if (params.pulseServer !== undefined || params.pulseSource !== undefined || params.pulseSink !== undefined) {
       controls.setPulseRouting({ server: params.pulseServer, source: params.pulseSource, sink: params.pulseSink }, ctx);
@@ -2668,6 +2687,7 @@ export default function realtimeAgentExtension(pi) {
       voice: v.voice,
       reasoning: v.reasoning,
       summary: v.summary,
+      fork: v.fork,
       audio: v.audio,
       widget: v.widget,
       status: v.status,
@@ -2819,6 +2839,7 @@ export default function realtimeAgentExtension(pi) {
         voice: ToolSchema.optional(ToolSchema.string({ description: "Realtime output voice." })),
         reasoning: ToolSchema.optional(ToolSchema.string({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
         summary: ToolSchema.optional(ToolSchema.boolean({ description: "Use compact summary context instead of replaying full conversation history. Default false." })),
+        fork: ToolSchema.optional(ToolSchema.boolean({ description: "Start realtime in a fork from the current tree/session position." })),
         widget: ToolSchema.optional(ToolSchema.string({ description: "Widget mode: show or hide." })),
         status: ToolSchema.optional(ToolSchema.string({ description: "Return status: compact or full." })),
       }),
