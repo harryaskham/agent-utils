@@ -10,6 +10,7 @@ export const DEFAULT_MSDEV_REMOTE_SCRIPT = "/tmp/agent-utils-msdev-cdp-refresh.p
 export const DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS = 10;
 export const DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS = 1;
 export const MAX_MSDEV_PREFLIGHT_ATTEMPTS = 5;
+export const DEFAULT_MSDEV_SCRIPT_TRANSFER = "scp";
 
 export const DEFAULT_MSDEV_CDP_TARGETS = [
   {
@@ -64,6 +65,14 @@ function boundedInteger(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGE
   const parsed = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
+}
+
+function normalizeScriptTransfer(value) {
+  return String(value || DEFAULT_MSDEV_SCRIPT_TRANSFER).toLowerCase() === "inline" ? "inline" : DEFAULT_MSDEV_SCRIPT_TRANSFER;
+}
+
+function powerShellEncodedCommand(script) {
+  return Buffer.from(String(script), "utf16le").toString("base64");
 }
 
 function classifyBridgeError(error) {
@@ -140,6 +149,7 @@ export function msDevCdpConfig(env = process.env) {
     remoteScriptPath: env.APP_AUTOMATION_MSDEV_REMOTE_SCRIPT || DEFAULT_MSDEV_REMOTE_SCRIPT,
     sshConnectTimeoutSeconds: Number.parseInt(String(env.APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
     preflightAttempts: boundedInteger(env.APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
+    scriptTransfer: normalizeScriptTransfer(env.APP_AUTOMATION_MSDEV_SCRIPT_TRANSFER),
   };
 }
 
@@ -152,6 +162,7 @@ export function msDevCdpCommandSummary(config = msDevCdpConfig()) {
     remoteScriptPath: config.remoteScriptPath,
     sshConnectTimeoutSeconds: config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
     preflightAttempts: boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
+    scriptTransfer: normalizeScriptTransfer(config.scriptTransfer),
   };
 }
 
@@ -598,6 +609,7 @@ export async function runMsDevCdpRefresh({
   remoteScriptPath,
   sshConnectTimeoutSeconds,
   preflightAttempts,
+  scriptTransfer,
   exec,
   timeoutMs = 120_000,
   env = process.env,
@@ -610,6 +622,7 @@ export async function runMsDevCdpRefresh({
     remoteScriptPath: remoteScriptPath ?? defaults.remoteScriptPath,
     sshConnectTimeoutSeconds: sshConnectTimeoutSeconds ?? defaults.sshConnectTimeoutSeconds,
     preflightAttempts: preflightAttempts ?? defaults.preflightAttempts,
+    scriptTransfer: scriptTransfer ?? defaults.scriptTransfer,
   };
   config.sshTarget = config.sshTarget || "";
   config.pwshPath = config.pwshPath || DEFAULT_MSDEV_PWSH;
@@ -617,6 +630,7 @@ export async function runMsDevCdpRefresh({
   config.remoteScriptPath = config.remoteScriptPath || DEFAULT_MSDEV_REMOTE_SCRIPT;
   config.sshConnectTimeoutSeconds = Number.parseInt(String(config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS;
   config.preflightAttempts = boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS });
+  config.scriptTransfer = normalizeScriptTransfer(config.scriptTransfer);
   if (!root) throw new Error("runMsDevCdpRefresh requires root");
   if (!exec) throw new Error("runMsDevCdpRefresh requires an exec(command, args, options) function");
   const targets = selectedTargets({ apps, actions });
@@ -626,7 +640,8 @@ export async function runMsDevCdpRefresh({
   const bridgeDir = path.join(root, "bridge");
   await mkdir(bridgeDir, { recursive: true });
   const localScriptPath = path.join(bridgeDir, "ms-dev-cdp-refresh.ps1");
-  await writeFile(localScriptPath, buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets }), "utf8");
+  const script = buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets });
+  await writeFile(localScriptPath, script, "utf8");
   const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
   const preflightTimeoutMs = Math.min(timeoutMs, Math.max(25_000, (config.sshConnectTimeoutSeconds + 20) * 1000));
   if (config.preflightAttempts > 0) {
@@ -639,11 +654,16 @@ export async function runMsDevCdpRefresh({
       return writeBridgeFailureManifest({ bridgeDir, status: "preflight_failed", config, targets, error: execFailureText(preflight, "ssh preflight failed") });
     }
   }
-  const copy = await exec("scp", [...sshArgs, localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
-  if (copy.code !== 0) {
-    return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(copy, "scp failed") });
+  let remoteCommand;
+  if (config.scriptTransfer === "inline") {
+    remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${shellQuote(powerShellEncodedCommand(script))}`;
+  } else {
+    const copy = await exec("scp", [...sshArgs, localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
+    if (copy.code !== 0) {
+      return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(copy, "scp failed") });
+    }
+    remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
   }
-  const remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
   const run = await exec("ssh", [...sshArgs, config.sshTarget, remoteCommand], { timeout: timeoutMs });
   if (run.code !== 0) {
     return writeBridgeFailureManifest({ bridgeDir, status: "run_failed", config, targets, error: execFailureText(run, "ssh command failed") });
@@ -690,7 +710,8 @@ export function renderMsDevCdpRefresh(summary = {}) {
   const snapshotStatuses = compactCounts(summary.snapshots || [], "status");
   const skippedWrite = (summary.snapshots || []).filter((snapshot) => snapshot?.skippedWrite).length;
   const preflightAttempts = summary.config?.preflightAttempts;
-  const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${snapshotStatuses ? ` snapshotStatuses=${snapshotStatuses}` : ""}${skippedWrite ? ` skippedWrite=${skippedWrite}` : ""}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}${preflightAttempts != null ? ` preflightAttempts=${preflightAttempts}` : ""}`];
+  const scriptTransfer = summary.config?.scriptTransfer;
+  const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${snapshotStatuses ? ` snapshotStatuses=${snapshotStatuses}` : ""}${skippedWrite ? ` skippedWrite=${skippedWrite}` : ""}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}${preflightAttempts != null ? ` preflightAttempts=${preflightAttempts}` : ""}${scriptTransfer ? ` scriptTransfer=${scriptTransfer}` : ""}`];
   if (summary.manifestPath) lines.push(`manifest=${sanitizeBridgeFailureText(summary.manifestPath) || "[local-path]"}`);
   for (const snapshot of summary.snapshots || []) {
     lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.skippedWrite ? " skippedWrite=true" : ""}${snapshot.authRequired ? " authRequired=true" : ""}`);
