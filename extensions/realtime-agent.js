@@ -719,6 +719,7 @@ class RealtimeSession {
     this.audioModeApplied = null;            // "audio" | "text" most recently
     this.forwardedMessageCount = 0;
     this.callIdsEmittedByModel = new Set();  // call_ids the WSS already has
+    this.realtimeCallIdByOriginal = new Map();
     this.player = new AudioPlayer(config, (m, l) => this.notify(m, l));
     this.mic = null;
     this.micMode = null;
@@ -1018,13 +1019,19 @@ class RealtimeSession {
   }
 
   failPending(err) {
-    if (!this.current) return;
+    if (!this.current) {
+      this.pendingAudioTurnPending = false;
+      if (this.phase === "speaking" || this.phase === "thinking") this.setPhase("idle");
+      return;
+    }
     const { stream, partial } = this.current;
     partial.stopReason = "error";
     partial.errorMessage = err.message || String(err);
     stream.push({ type: "error", reason: "error", error: partial });
     stream.end(partial);
     this.current = null;
+    this.pendingAudioTurnPending = false;
+    if (this.phase === "speaking" || this.phase === "thinking") this.setPhase("idle");
   }
 
   // -------------------------------------------------------------------------
@@ -1138,6 +1145,21 @@ class RealtimeSession {
     this.audioModeApplied = audioMode;
   }
 
+  realtimeCallId(originalId) {
+    const raw = String(originalId || "");
+    if (!raw) return null;
+    const existing = this.realtimeCallIdByOriginal.get(raw);
+    if (existing) return existing;
+    let hash = 2166136261;
+    for (let i = 0; i < raw.length; i++) {
+      hash ^= raw.charCodeAt(i);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    const id = `call_${hash.toString(36)}_${this.realtimeCallIdByOriginal.size.toString(36)}`.slice(0, 32);
+    this.realtimeCallIdByOriginal.set(raw, id);
+    return id;
+  }
+
   // -------------------------------------------------------------------------
   // History forwarding — push the new tail of context.messages into WSS
   // -------------------------------------------------------------------------
@@ -1229,11 +1251,13 @@ class RealtimeSession {
           // Skip tool_calls the model already emitted in this WSS — they
           // are already in the conversation history server-side.
           if (this.callIdsEmittedByModel.has(c.id)) continue;
+          const callId = this.realtimeCallId(c.id);
+          if (!callId) continue;
           this.send({
             type: "conversation.item.create",
             item: {
               type: "function_call",
-              call_id: c.id,
+              call_id: callId,
               name: c.name,
               arguments: JSON.stringify(c.arguments || {}),
             },
@@ -1245,11 +1269,13 @@ class RealtimeSession {
 
     if (msg.role === "toolResult") {
       const output = truncateToolOutput(this.textContentJoined(msg.content));
+      const callId = this.realtimeCallId(msg.toolCallId);
+      if (!callId) return;
       this.send({
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
-          call_id: msg.toolCallId,
+          call_id: callId,
           output: msg.isError ? `[error]\n${output}` : output,
         },
       });
@@ -1987,6 +2013,7 @@ class RealtimeSession {
     this.audioModeApplied = null;
     this.forwardedMessageCount = 0;
     this.callIdsEmittedByModel.clear();
+    this.realtimeCallIdByOriginal.clear();
     this.failPending(new Error("Realtime closed"));
     if (display) this.notify("Realtime stopped", "info");
     this.updateStatus();
@@ -2508,6 +2535,7 @@ export default function realtimeAgentExtension(pi) {
       session.toolsAppliedKey = null;
       session.audioModeApplied = null;
       session.callIdsEmittedByModel.clear();
+      session.realtimeCallIdByOriginal.clear();
       ctx.ui.notify(`Realtime: ${event.model.provider}/${event.model.id} selected`, "info");
     } else {
       unregisterRealtimeProvider(pi);

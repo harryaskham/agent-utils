@@ -946,6 +946,43 @@ test("realtime restarts VAD mic when recorder exits unexpectedly", async () => {
   }
 });
 
+test("realtime sanitizes long history tool call ids and recovers from server errors", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRegister = process.env.PI_RT_REGISTER;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_REGISTER = "1";
+  FakeWebSocket.instances = [];
+  const longId = `tool-${"x".repeat(430)}`;
+  const harness = makeHarness({ initialModel: { provider: "openai-realtime", id: "gpt-realtime-2", api: "openai-realtime" } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, {
+      systemPrompt: "",
+      tools: [],
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: longId, name: "read", arguments: { path: "x" } }] },
+        { role: "toolResult", toolCallId: longId, content: [{ type: "text", text: "ok" }] },
+      ],
+    }, {});
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const callItems = FakeWebSocket.instances[0].sent.filter((m) => m.type === "conversation.item.create" && /function_call/.test(m.item?.type));
+    assert.equal(callItems.length, 2);
+    assert.ok(callItems.every((m) => m.item.call_id.length <= 32));
+    assert.equal(callItems[0].item.call_id, callItems[1].item.call_id);
+
+    FakeWebSocket.instances[0].emit("message", JSON.stringify({ type: "error", error: { message: "boom" } }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.pi.realtime.snapshot().state.phase, "idle");
+  } finally {
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRegister === undefined) delete process.env.PI_RT_REGISTER;
+    else process.env.PI_RT_REGISTER = previousRegister;
+  }
+});
+
 test("realtime aborts oversized full-history context before opening WebSocket", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   const previousRegister = process.env.PI_RT_REGISTER;
