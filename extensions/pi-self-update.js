@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 import { homedir } from "node:os";
 
 import { ToolSchema } from "./lib/tool-schema.js";
@@ -6,6 +8,52 @@ import { ToolSchema } from "./lib/tool-schema.js";
 const UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const OUTPUT_LIMIT = 12_000;
 const UPDATE_CWD = homedir();
+
+const PI_RESTART_ENV_FLAG = "PI_RESTARTED_WITHOUT_INITIAL_PROMPT";
+const PI_RESTART_SESSION_ENV = "PI_RESTART_SESSION_FILE";
+const PI_RESTART_ENTRY_TYPE = "agent-utils.pi-restart";
+const PI_RESTART_PREFER_PATH = "pi";
+
+const VALUE_FLAGS = new Set([
+  "--mode",
+  "--provider",
+  "--model",
+  "--api-key",
+  "--system-prompt",
+  "--append-system-prompt",
+  "--models",
+  "--tools",
+  "--thinking",
+  "--export",
+  "--extension",
+  "-e",
+  "--skill",
+  "--prompt-template",
+  "--theme",
+  "--list-models",
+]);
+
+const BOOLEAN_FLAGS = new Set([
+  "--help",
+  "-h",
+  "--version",
+  "-v",
+  "--no-tools",
+  "--print",
+  "-p",
+  "--no-extensions",
+  "-ne",
+  "--no-skills",
+  "-ns",
+  "--no-prompt-templates",
+  "-np",
+  "--no-themes",
+  "--verbose",
+  "--offline",
+]);
+
+const SESSION_VALUE_FLAGS = new Set(["--session", "--fork", "--session-dir"]);
+const SESSION_BOOLEAN_FLAGS = new Set(["--continue", "-c", "--resume", "-r", "--no-session"]);
 
 function truncateOutput(text, limit = OUTPUT_LIMIT) {
   const s = String(text || "");
@@ -92,6 +140,160 @@ function parseReloadToolsArgs(args) {
   };
 }
 
+function parseRestartArgs(args) {
+  const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
+  return {
+    dryRun: tokens.includes("--dry-run") || tokens.includes("dry-run"),
+    help: tokens.includes("--help") || tokens.includes("help") || tokens.includes("-h"),
+  };
+}
+
+function findExecutableOnPath(command, env = process.env) {
+  if (command.includes("/")) {
+    try {
+      accessSync(command, constants.X_OK);
+      return command;
+    } catch {
+      return undefined;
+    }
+  }
+  const pathValue = env.PATH || "";
+  for (const dir of pathValue.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  return undefined;
+}
+
+function redactSensitiveArgs(args) {
+  const redacted = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--api-key") {
+      redacted.push(arg);
+      if (i + 1 < args.length) {
+        redacted.push("<redacted>");
+        i += 1;
+      }
+      continue;
+    }
+    if (/^--api-key=/.test(arg)) {
+      redacted.push("--api-key=<redacted>");
+      continue;
+    }
+    redacted.push(arg);
+  }
+  return redacted;
+}
+
+function stripPromptArgs(rawArgs) {
+  const preserved = [];
+  const dropped = [];
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const arg = rawArgs[i];
+    if (arg === "--") {
+      dropped.push(...rawArgs.slice(i));
+      break;
+    }
+    if (SESSION_VALUE_FLAGS.has(arg)) {
+      dropped.push(arg);
+      if (i + 1 < rawArgs.length) dropped.push(rawArgs[++i]);
+      continue;
+    }
+    if (SESSION_BOOLEAN_FLAGS.has(arg)) {
+      dropped.push(arg);
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      preserved.push(arg);
+      if (i + 1 < rawArgs.length) preserved.push(rawArgs[++i]);
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(arg)) {
+      preserved.push(arg);
+      continue;
+    }
+    if (arg.startsWith("--") && arg.includes("=")) {
+      preserved.push(arg);
+      continue;
+    }
+    if (arg.startsWith("--") || arg.startsWith("-")) {
+      preserved.push(arg);
+      continue;
+    }
+    dropped.push(arg);
+  }
+  return { preserved, dropped };
+}
+
+export function buildPiRestartPlan({
+  argv = process.argv,
+  env = process.env,
+  sessionFile,
+  sessionDir,
+  cwd = process.cwd(),
+  command = PI_RESTART_PREFER_PATH,
+} = {}) {
+  if (!sessionFile) {
+    throw new Error("/restart requires a persistent session file; current Pi session is ephemeral or not yet persisted");
+  }
+  const rawArgs = argv.slice(2);
+  const { preserved, dropped } = stripPromptArgs(rawArgs);
+  const restartArgs = [...preserved];
+  if (sessionDir) restartArgs.push("--session-dir", sessionDir);
+  restartArgs.push("--session", sessionFile);
+  const executable = findExecutableOnPath(command, env) || argv[1] || command;
+  const execArgv = [command, ...restartArgs];
+  return {
+    executable,
+    args: execArgv,
+    restartArgs,
+    droppedArgs: dropped,
+    sessionFile,
+    sessionDir,
+    cwd,
+    env: {
+      ...env,
+      [PI_RESTART_ENV_FLAG]: "1",
+      [PI_RESTART_SESSION_ENV]: sessionFile,
+    },
+  };
+}
+
+export function executePiRestartPlan(plan, { execve = process.execve, spawnImpl = spawn, exit = process.exit } = {}) {
+  if (typeof execve === "function") {
+    execve(plan.executable, plan.args, plan.env);
+    return { method: "execve" };
+  }
+  const child = spawnImpl(plan.executable, plan.args.slice(1), {
+    cwd: plan.cwd,
+    env: plan.env,
+    stdio: "inherit",
+  });
+  child.on?.("exit", (code, signal) => {
+    if (signal) exit(128);
+    exit(typeof code === "number" ? code : 0);
+  });
+  child.on?.("error", () => exit(1));
+  return { method: "spawn" };
+}
+
+function formatRestartPlan(plan) {
+  const displayArgs = redactSensitiveArgs(plan.args).map((arg) => JSON.stringify(arg)).join(" ");
+  return [
+    `restart executable: ${plan.executable}`,
+    `restart argv: ${displayArgs}`,
+    `session: ${plan.sessionFile}`,
+    plan.droppedArgs.length > 0
+      ? `suppressed startup prompt/file args: ${plan.droppedArgs.length}`
+      : "suppressed startup prompt/file args: 0",
+  ].join("\n");
+}
+
 function getToolNames(pi) {
   if (typeof pi.getAllTools !== "function") return [];
   return pi.getAllTools()
@@ -173,6 +375,41 @@ export default function piSelfUpdateExtension(pi) {
     },
   });
 
+  pi.registerCommand("restart", {
+    description: "Re-exec the current Pi process against the same session, preserving runtime flags but suppressing initial prompt/file arguments.",
+    handler: async (args, ctx) => {
+      const options = parseRestartArgs(args);
+      if (options.help) {
+        ctx.ui.notify("Usage: /restart [--dry-run] — re-exec Pi with the current session via --session, omitting initial prompt and @file args so startup instructions are not replayed.", "info");
+        return;
+      }
+      const sessionFile = ctx.sessionManager?.getSessionFile?.();
+      const sessionDir = ctx.sessionManager?.getSessionDir?.();
+      let plan;
+      try {
+        plan = buildPiRestartPlan({ sessionFile, sessionDir, cwd: ctx.cwd });
+      } catch (error) {
+        ctx.ui.notify(error.message || String(error), "error");
+        return;
+      }
+      if (options.dryRun) {
+        ctx.ui.notify(formatRestartPlan(plan), "info");
+        return;
+      }
+      await ctx.waitForIdle?.();
+      pi.appendEntry?.(PI_RESTART_ENTRY_TYPE, {
+        at: new Date().toISOString(),
+        executable: plan.executable,
+        args: redactSensitiveArgs(plan.args),
+        sessionFile: plan.sessionFile,
+        sessionDir: plan.sessionDir,
+        droppedArgCount: plan.droppedArgs.length,
+      });
+      ctx.ui.notify("Restarting Pi process with the current session; startup prompt/file args are suppressed.", "info");
+      executePiRestartPlan(plan);
+    },
+  });
+
   if (typeof pi.registerTool === "function") {
     pi.registerTool({
       name: "pi_self_update",
@@ -214,6 +451,25 @@ export default function piSelfUpdateExtension(pi) {
         return {
           content: [{ type: "text", text: params.dryRun ? `Would queue ${reloadCommand}.` : `Queued ${reloadCommand} as a follow-up command.` }],
           details: { reloadCommand, queued: !params.dryRun },
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: "pi_restart",
+      label: "Pi Restart",
+      description: "Queue /restart so Pi re-execs the current process against the current session while suppressing initial prompt/file arguments.",
+      promptSnippet: "Queue a Pi process restart when a full re-exec is needed to pick up newly installed runtime/tool injections without replaying startup prompts.",
+      promptGuidelines: ["Use pi_restart when /reload-tools is insufficient and the user wants the current Pi session re-execed in place."],
+      parameters: ToolSchema.object({
+        dryRun: ToolSchema.optional(ToolSchema.boolean({ description: "Queue /restart --dry-run instead of restarting." })),
+      }),
+      async execute(_toolCallId, params = {}) {
+        const restartCommand = params.dryRun ? "/restart --dry-run" : "/restart";
+        pi.sendUserMessage?.(restartCommand, { deliverAs: "followUp" });
+        return {
+          content: [{ type: "text", text: `Queued ${restartCommand} as a follow-up command.` }],
+          details: { restartCommand, queued: true },
         };
       },
     });
