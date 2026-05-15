@@ -720,6 +720,39 @@ test("/rt stt does not register realtime provider while text model remains selec
   }
 });
 
+test("/rt stt queues completed transcripts as follow-ups while agent is busy", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRegister = process.env.PI_RT_REGISTER;
+  const previousAlways = process.env.PI_RT_ALWAYS_REGISTER;
+  process.env.PI_RT_API_KEY = "test-key";
+  delete process.env.PI_RT_REGISTER;
+  delete process.env.PI_RT_ALWAYS_REGISTER;
+  FakeWebSocket.instances = [];
+  const harness = makeHarness({ initialModel: { provider: "litellm-openai", id: "gpt-5.5" } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    await harness.commands.get("rt").handler("stt vad", harness.ctx);
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "queue this while busy" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.deepEqual(harness.sentUserMessages, [
+      { content: "queue this while busy", options: { deliverAs: "followUp" } },
+    ]);
+    assert.equal(harness.pi.realtime.snapshot().state.lastInputMode, "transcript");
+  } finally {
+    await harness.commands.get("rt-off").handler("", harness.ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRegister === undefined) delete process.env.PI_RT_REGISTER;
+    else process.env.PI_RT_REGISTER = previousRegister;
+    if (previousAlways === undefined) delete process.env.PI_RT_ALWAYS_REGISTER;
+    else process.env.PI_RT_ALWAYS_REGISTER = previousAlways;
+  }
+});
+
 test("realtime_agent_control start with status still starts realtime", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_API_KEY = "test-key";

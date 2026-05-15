@@ -1629,7 +1629,7 @@ class RealtimeSession {
       if (text && this.config.sttOnly) {
         this.lastTurnInputMode = "transcript";
         this.markSpokenTranscript(text);
-        try { this.pi.sendUserMessage(text); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
+        try { this.pi.sendUserMessage(text, { deliverAs: "followUp" }); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
       } else if (!this.config.sttOnly) {
         // Full realtime already triggers the Pi turn from input_audio_buffer.committed
         // so inference is based on the committed audio item, not this transcript.
