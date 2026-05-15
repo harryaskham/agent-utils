@@ -120,7 +120,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... summary=true fork=true start=vad";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 summary=true fork=true chime=false start=vad";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -189,6 +189,29 @@ function pcmBytesForMs(ms) {
   return Math.floor(SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH * ms / 1000);
 }
 
+function synthTone({ frequency = 660, durationMs = 90, gain = 0.16 } = {}) {
+  const samples = Math.max(1, Math.floor(SAMPLE_RATE * durationMs / 1000));
+  const pcm = Buffer.alloc(samples * SAMPLE_WIDTH);
+  const fadeSamples = Math.max(1, Math.floor(samples * 0.12));
+  for (let i = 0; i < samples; i++) {
+    const fadeIn = Math.min(1, i / fadeSamples);
+    const fadeOut = Math.min(1, (samples - i - 1) / fadeSamples);
+    const envelope = Math.max(0, Math.min(fadeIn, fadeOut));
+    const value = Math.sin(2 * Math.PI * frequency * i / SAMPLE_RATE) * gain * envelope;
+    pcm.writeInt16LE(Math.max(-32767, Math.min(32767, Math.round(value * 32767))), i * SAMPLE_WIDTH);
+  }
+  return pcm;
+}
+
+function concatPcm(...buffers) { return Buffer.concat(buffers.filter(Boolean)); }
+
+function chimePcm(kind) {
+  if (kind === "listen") return concatPcm(synthTone({ frequency: 660, durationMs: 70 }), synthTone({ frequency: 880, durationMs: 70 }));
+  if (kind === "speech-start") return synthTone({ frequency: 880, durationMs: 85, gain: 0.14 });
+  if (kind === "speech-end") return synthTone({ frequency: 440, durationMs: 90, gain: 0.14 });
+  return synthTone({ frequency: 660, durationMs: 80 });
+}
+
 function truncateToolOutput(text, max = TOOL_OUTPUT_CAP) {
   const s = String(text ?? "");
   if (s.length <= max) return s;
@@ -202,6 +225,13 @@ function parseBooleanValue(value, fallback = false) {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   throw new Error(`Expected boolean value, got: ${value}`);
+}
+
+function parseRealtimeSpeed(value, fallback = 1.0) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0.25 || n > 1.5) throw new Error(`Expected realtime speed between 0.25 and 1.5, got: ${value}`);
+  return n;
 }
 
 function estimateRealtimeTokensForText(text) {
@@ -726,6 +756,7 @@ class RealtimeSession {
     this.lastCtx = null;
     this.lastResponseError = null;
     this.reasoningRejected = false;
+    this.speedRejected = false;
     this.current = null;                     // active per-response state
     this.audioClips = new Map();             // clipId -> { id, pcm, durationMs, text, timestamp }
     this.latestClipId = null;
@@ -747,6 +778,7 @@ class RealtimeSession {
     this.phase = "idle";
     this.lastReasoningPayload = null;        // for reasoning auto-retry
     this.lastResponseObject = null;
+    this.chimeChain = Promise.resolve();
   }
 
   clearMicRestartTimer() {
@@ -831,6 +863,16 @@ class RealtimeSession {
 
   notify(msg, level = "info") {
     try { this.lastCtx?.ui?.notify?.(msg, level); } catch {}
+  }
+
+  playChime(kind) {
+    if (!this.config.chimeEnabled || !this.config.audioEnabled) return;
+    const pcm = chimePcm(kind);
+    const command = this.config.playbackCommand || defaultPlaybackCommand();
+    this.chimeChain = this.chimeChain
+      .catch(() => {})
+      .then(() => playPcmBuffer(pcm, command, undefined, false).catch(() => {}));
+    this.chimeChain.catch(() => {});
   }
 
   setPhase(phase) {
@@ -1120,6 +1162,7 @@ class RealtimeSession {
             output: {
               format: { type: "audio/pcm", rate: SAMPLE_RATE },
               voice: this.config.voice,
+              ...(this.config.speed && this.config.speed !== 1 ? { speed: this.config.speed } : {}),
             },
           },
           tools: realtimeTools,
@@ -1440,6 +1483,7 @@ class RealtimeSession {
     const response = this.sessionShape === "ga"
       ? { output_modalities: audioMode === "audio" ? ["audio"] : ["text"] }
       : { modalities: audioMode === "audio" ? ["audio", "text"] : ["text"] };
+    if (this.config.speed && this.config.speed !== 1 && !this.speedRejected) response.speed = this.config.speed;
 
     const sendReasoning = this.config.sendReasoning
       || (this.config.directAzure && (this.config.azureProtocol === "v1" || this.config.azureProtocol === "GA"));
@@ -1609,6 +1653,7 @@ class RealtimeSession {
 
     if (type === "input_audio_buffer.speech_started") {
       this.player.interrupt();
+      this.playChime("speech-start");
       this.setPhase("recording");
       // Optional: barge-in also aborts Pi's in-flight agent loop (text +
       // tool chain). Defaults on; disable with PI_RT_BARGE_IN_ABORTS_AGENT=0.
@@ -1663,6 +1708,7 @@ class RealtimeSession {
     }
 
     if (type === "input_audio_buffer.speech_stopped") {
+      this.playChime("speech-end");
       if (this.config.sttOnly) {
         this.setPhase("transcribing");
         this.startPendingCommitTimer();
@@ -1780,6 +1826,18 @@ class RealtimeSession {
           this.send({ type: "response.create", response: retryObj });
         } catch (e) {
           this.failPending(new Error(`Reasoning retry failed: ${e.message}`));
+        }
+        return;
+      }
+      if (/Unknown parameter: 'response\.speed'/.test(msg) || /Unknown parameter: 'speed'/.test(msg)) {
+        this.speedRejected = true;
+        this.notify("Realtime server rejected response speed; retrying without it.", "warning");
+        try {
+          const retryObj = this._makeResponseObject();
+          delete retryObj.speed;
+          this.send({ type: "response.create", response: retryObj });
+        } catch (e) {
+          this.failPending(new Error(`Speed retry failed: ${e.message}`));
         }
         return;
       }
@@ -1951,6 +2009,7 @@ class RealtimeSession {
       }
     });
     this.setPhase("recording");
+    if (mode === "vad" || mode === "continuous") this.playChime("listen");
     this.notify(
       mode === "ptt"
         ? "Recording. Press Enter/Space/Esc or /rt-stop to send; Ctrl-C or /rt-cancel discards."
@@ -2047,6 +2106,7 @@ function makeInitialConfig() {
     azureProtocol: env("PI_RT_AZURE_PROTOCOL") || "v1",
     transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL")),
     voice: resolveRealtimeVoice(),
+    speed: parseRealtimeSpeed(env("PI_RT_SPEED", "OPENAI_REALTIME_SPEED"), 1.0),
     bufferMs: Number(env("PI_RT_BUFFER_MS", "TTS_REALTIME_BUFFER_MS") || 180),
     playbackChunkMs: Number(env("PI_RT_PLAYBACK_CHUNK_MS") || 80),
     reasoningEffort: env("PI_RT_REASONING_EFFORT") || "off",
@@ -2066,6 +2126,7 @@ function makeInitialConfig() {
     nextReconnectAt: null,
     desiredListenMode: null,
     summaryContext: envBool("PI_RT_SUMMARY", false),
+    chimeEnabled: envBool("PI_RT_CHIME", true),
     defaultModelSnapshot: null,
   };
 }
@@ -2166,15 +2227,17 @@ function statusLines(session, config, { full = false } = {}) {
   const reason = config.reasoningEffort === "off"
     ? ""
     : ` · reason:${config.reasoningEffort}${session.reasoningRejected ? "!" : ""}${(!config.directAzure && !config.sendReasoning) ? " unsent" : ""}`;
+  const speed = config.speed && config.speed !== 1 ? ` · speed:${config.speed}${session.speedRejected ? "!" : ""}` : "";
   const phase = session.phase && session.phase !== "idle" ? ` · ${session.phase}` : "";
   const clip = session.latestClipId ? ` · clip:${session.latestClipId}` : "";
   const mode = session.state?.mode?.({ sttOnly: config.sttOnly }) || (config.sttOnly ? "stt" : "connected");
   const restore = config.previousModel ? ` · ↩${config.previousModel.provider}/${config.previousModel.id}` : "";
   const summary = config.summaryContext ? "summary:on" : "summary:off";
+  const chime = config.chimeEnabled ? "chime:on" : "chime:off";
   const input = session.lastTurnInputMode ? ` · input:${session.lastTurnInputMode}` : "";
   const compact = [
     `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · ${outBackend}/${inBackend}${phase}`,
-    `trans:${config.transcriptionModel} · voice:${config.voice} · hist:${session.forwardedMessageCount} · ${summary}${input} · ${provider}${reason}${clip}${restore}`,
+    `trans:${config.transcriptionModel} · voice:${config.voice}${speed} · hist:${session.forwardedMessageCount} · ${summary} · ${chime}${input} · ${provider}${reason}${clip}${restore}`,
   ];
   if (!full) return compact;
   return [
@@ -2287,6 +2350,7 @@ export function createRealtimeControls({ pi, session, config }) {
         audioEnabled: config.audioEnabled,
         sttOnly: !!config.sttOnly,
         voice: config.voice,
+        transcriptionModel: config.transcriptionModel,
         audioBackend: process.env.PI_RT_AUDIO_BACKEND || "pulse",
         pulse: {
           server: process.env.PULSE_SERVER || null,
@@ -2294,7 +2358,9 @@ export function createRealtimeControls({ pi, session, config }) {
           sink: process.env.PULSE_SINK || null,
         },
         reasoningEffort: config.reasoningEffort,
+        speed: config.speed,
         summaryContext: !!config.summaryContext,
+        chimeEnabled: !!config.chimeEnabled,
         lastInputMode: session.lastTurnInputMode || null,
         previousModel: config.previousModel || null,
         state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled, lastInputMode: session.lastTurnInputMode || null }),
@@ -2335,6 +2401,31 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setSttOnly(enabled, ctx) {
       config.sttOnly = !!enabled;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setChime(enabled, ctx) {
+      config.chimeEnabled = !!enabled;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setTranscriptionModel(model, ctx) {
+      const next = normalizeTranscriptionModel(String(model || "").trim());
+      if (!next) throw new Error("Realtime transcription model cannot be empty");
+      config.transcriptionModel = next;
+      session.systemPromptApplied = null;
+      session.toolsAppliedKey = null;
+      session.audioModeApplied = null;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setSpeed(speed, ctx) {
+      config.speed = parseRealtimeSpeed(speed, config.speed || 1.0);
+      session.speedRejected = false;
+      session.audioModeApplied = null;
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2602,10 +2693,12 @@ export default function realtimeAgentExtension(pi) {
     if (out.server !== undefined && out.pulseServer === undefined) out.pulseServer = out.server;
     if (out.source !== undefined && out.pulseSource === undefined) out.pulseSource = out.source;
     if (out.sink !== undefined && out.pulseSink === undefined) out.pulseSink = out.sink;
-    for (const key of ["action", "start", "mic", "listen", "stt", "audio", "widget", "status", "backend", "voice", "reasoning"]) {
+    for (const key of ["action", "start", "mic", "listen", "stt", "audio", "widget", "status", "backend", "voice", "reasoning", "trans", "transcription", "transcriptionModel"]) {
       if (out[key] !== undefined && out[key] !== null) out[key] = String(out[key]).trim().toLowerCase();
     }
     if (out.summary !== undefined && out.summary !== null) out.summary = parseBooleanValue(out.summary);
+    if (out.chime !== undefined && out.chime !== null) out.chime = parseBooleanValue(out.chime);
+    if (out.speed !== undefined && out.speed !== null) out.speed = parseRealtimeSpeed(out.speed);
     if (out.fork !== undefined && out.fork !== null) out.fork = parseBooleanValue(out.fork);
     return out;
   }
@@ -2635,8 +2728,11 @@ export default function realtimeAgentExtension(pi) {
       controls.setPulseRouting({ server: params.pulseServer, source: params.pulseSource, sink: params.pulseSink }, ctx);
     }
     if (params.voice) controls.setVoice(params.voice, ctx);
+    if (params.trans || params.transcription || params.transcriptionModel) controls.setTranscriptionModel(params.trans || params.transcription || params.transcriptionModel, ctx);
+    if (params.speed !== undefined) controls.setSpeed(params.speed, ctx);
     if (params.reasoning) controls.setReasoningEffort(params.reasoning, ctx);
     if (params.summary !== undefined) controls.setSummaryContext(params.summary, ctx);
+    if (params.chime !== undefined) controls.setChime(params.chime, ctx);
     if (params.audio) {
       if (!REALTIME_AUDIO_MODES.has(params.audio)) throw new Error("Unsupported realtime audio mode");
       if (params.audio === "toggle") controls.toggleAudio(ctx);
@@ -2685,8 +2781,11 @@ export default function realtimeAgentExtension(pi) {
       source: v.source ?? v.pulse_source ?? v.pulsesource,
       sink: v.sink ?? v.pulse_sink ?? v.pulsesink,
       voice: v.voice,
+      trans: v.trans ?? v.transcription ?? v.transcription_model ?? v.transcriptionmodel,
+      speed: v.speed,
       reasoning: v.reasoning,
       summary: v.summary,
+      chime: v.chime,
       fork: v.fork,
       audio: v.audio,
       widget: v.widget,
@@ -2715,7 +2814,7 @@ export default function realtimeAgentExtension(pi) {
     const extra = tokens.slice(2);
     const singleValueVerbs = new Set([
       "start", "on", "stt", "status", "widget", "audio", "mic", "listen",
-      "voice", "backend", "reasoning", "summary",
+      "voice", "backend", "reasoning", "summary", "chime", "trans", "transcription", "speed",
     ]);
     const noValueVerbs = new Set(["help", "usage", "?", "stop", "off", "doctor", "vad", "ptt", "nolisten"]);
     if (value && noValueVerbs.has(verb)) {
@@ -2793,6 +2892,18 @@ export default function realtimeAgentExtension(pi) {
       catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }
+    if (verb === "trans" || verb === "transcription") {
+      if (!value) { ctx.ui.notify(`Realtime transcription model ${controls.snapshot().transcriptionModel}. Use /rt trans <model>.`, "info"); return; }
+      try { const snapshot = controls.setTranscriptionModel(value, ctx); ctx.ui.notify(`Realtime transcription model ${snapshot.transcriptionModel}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    if (verb === "speed") {
+      if (!value) { ctx.ui.notify(`Realtime response speed ${controls.snapshot().speed}. Use /rt speed <0.25..1.5>.`, "info"); return; }
+      try { const snapshot = controls.setSpeed(value, ctx); ctx.ui.notify(`Realtime response speed ${snapshot.speed}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
     if (verb === "backend") {
       if (!value) { ctx.ui.notify(`Realtime audio backend ${controls.snapshot().audioBackend}. Options: ${controls.options().audioBackends.join(", ")}`, "info"); return; }
       try { controls.setAudioBackend(value, ctx); ctx.ui.notify(`Realtime audio backend ${value}`, "info"); }
@@ -2811,6 +2922,15 @@ export default function realtimeAgentExtension(pi) {
         const enabled = parseBooleanValue(value);
         controls.setSummaryContext(enabled, ctx);
         ctx.ui.notify(`Realtime summary context ${enabled ? "true" : "false"}`, "info");
+      } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    if (verb === "chime") {
+      if (!value) { ctx.ui.notify(`Realtime VAD chimes ${controls.snapshot().chimeEnabled ? "true" : "false"}. Use /rt chime [true|false].`, "info"); return; }
+      try {
+        const enabled = parseBooleanValue(value);
+        controls.setChime(enabled, ctx);
+        ctx.ui.notify(`Realtime VAD chimes ${enabled ? "true" : "false"}`, "info");
       } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }
@@ -2839,6 +2959,9 @@ export default function realtimeAgentExtension(pi) {
         voice: ToolSchema.optional(ToolSchema.string({ description: "Realtime output voice." })),
         reasoning: ToolSchema.optional(ToolSchema.string({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
         summary: ToolSchema.optional(ToolSchema.boolean({ description: "Use compact summary context instead of replaying full conversation history. Default false." })),
+        trans: ToolSchema.optional(ToolSchema.string({ description: "Realtime input transcription model, e.g. gpt-realtime-whisper or gpt-whisper-realtime." })),
+        speed: ToolSchema.optional(ToolSchema.number({ description: "Realtime spoken response speed from 0.25 to 1.5. Default 1.0." })),
+        chime: ToolSchema.optional(ToolSchema.boolean({ description: "Play brief VAD/listening state chimes through the realtime playback backend. Default true." })),
         fork: ToolSchema.optional(ToolSchema.boolean({ description: "Start realtime in a fork from the current tree/session position." })),
         widget: ToolSchema.optional(ToolSchema.string({ description: "Widget mode: show or hide." })),
         status: ToolSchema.optional(ToolSchema.string({ description: "Return status: compact or full." })),

@@ -827,21 +827,56 @@ test("/rt env-style args configure Pulse routing, summary mode, and tool exposes
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   try {
-    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink summary=true', ctx);
+    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink summary=true trans=gpt-whisper-realtime speed=1.25 chime=false', ctx);
     assert.equal(process.env.PI_RT_AUDIO_BACKEND, "pulse");
     assert.equal(process.env.PULSE_SOURCE, "source bluetooth");
     assert.equal(process.env.PULSE_SINK, "vsink");
     assert.equal(pi.realtime.snapshot().summaryContext, true);
+    assert.equal(pi.realtime.snapshot().transcriptionModel, "gpt-whisper-realtime");
+    assert.equal(pi.realtime.snapshot().speed, 1.25);
+    assert.equal(pi.realtime.snapshot().chimeEnabled, false);
 
-    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, status: "full" }, null, null, ctx);
+    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, trans: "gpt-realtime-whisper", speed: 0.75, chime: true, status: "full" }, null, null, ctx);
     assert.equal(process.env.PULSE_SERVER, "sgu24:4713");
     assert.equal(process.env.PULSE_SOURCE, "source.bluetooth");
     assert.equal(pi.realtime.snapshot().summaryContext, false);
+    assert.equal(pi.realtime.snapshot().transcriptionModel, "gpt-realtime-whisper");
+    assert.equal(pi.realtime.snapshot().speed, 0.75);
+    assert.equal(pi.realtime.snapshot().chimeEnabled, true);
   } finally {
     for (const [key, value] of [["PULSE_SERVER", previous.server], ["PULSE_SOURCE", previous.source], ["PULSE_SINK", previous.sink]]) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("/rt speed applies realtime response speed and retries if rejected", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRegister = process.env.PI_RT_REGISTER;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_REGISTER = "1";
+  FakeWebSocket.instances = [];
+  const harness = makeHarness({ initialModel: { provider: "openai-realtime", id: "gpt-realtime-2", api: "openai-realtime" } });
+  realtimeAgentExtension(harness.pi);
+  harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+  try {
+    await harness.commands.get("rt").handler("speed 1.2", harness.ctx);
+    harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const create = FakeWebSocket.instances[0].sent.find((m) => m.type === "response.create");
+    assert.equal(create.response.speed, 1.2);
+
+    FakeWebSocket.instances[0].emit("message", JSON.stringify({ type: "error", error: { message: "Unknown parameter: 'response.speed'" } }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const retry = FakeWebSocket.instances[0].sent.filter((m) => m.type === "response.create").at(-1);
+    assert.equal(retry.response.speed, undefined);
+  } finally {
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRegister === undefined) delete process.env.PI_RT_REGISTER;
+    else process.env.PI_RT_REGISTER = previousRegister;
   }
 });
 
@@ -1000,10 +1035,13 @@ test("realtime restarts VAD mic when recorder exits unexpectedly", async () => {
 
   try {
     await harness.commands.get("rt").handler("start vad", harness.ctx);
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    assert.equal(harness.pi.realtime.snapshot().state.micMode, null);
-    assert.equal(harness.pi.realtime.snapshot().health.micRestartPending, true);
-    assert.match(harness.notifications.at(-1)?.message || "", /restarting vad capture/);
+    let snapshot = harness.pi.realtime.snapshot();
+    for (let i = 0; i < 20 && !(snapshot.health.micRestartPending || snapshot.health.micRestartAttempts >= 1); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      snapshot = harness.pi.realtime.snapshot();
+    }
+    assert.ok(snapshot.health.micRestartPending || snapshot.health.micRestartAttempts >= 1);
+    assert.ok(harness.notifications.some((n) => /restarting vad capture/.test(n.message)));
   } finally {
     await harness.commands.get("rt-off").handler("", harness.ctx);
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;

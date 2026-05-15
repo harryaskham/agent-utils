@@ -174,21 +174,25 @@ Unified `/rt` controls:
 /rt status [compact|full]      compact or full status
 /rt doctor                     diagnostics
 /rt voice <voice>              set realtime output voice
+/rt trans <model>              set realtime input transcription model
+/rt speed <0.25..1.5>          set spoken response speed (default 1.0)
 /rt backend <backend>          set audio backend for new mic/playback commands
 /rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high
 /rt summary [true|false]       use compact summary context instead of full history (default false)
-/rt backend=pulse source=...    env-style key/value form; supports server/source/sink/start/mic/stt/audio/widget/status/voice/reasoning/summary/fork
+/rt chime [true|false]         enable/disable VAD state chimes (default true)
+/rt backend=pulse source=...    env-style key/value form; supports server/source/sink/start/mic/stt/audio/widget/status/voice/trans/speed/reasoning/summary/chime/fork
 /rt help                       show the unified command usage
 ```
 
-`/rt voice`, `/rt backend`, `/rt reasoning`, and `/rt summary` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Voice names are normalized case-insensitively before validation, so `/rt voice Verse` selects `verse`. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, `/rt listen <mode>`, `/rt stt <mode>`, `/rt audio <mode>`, `/rt widget <mode>`, and `/rt status <mode>` are also rejected instead of falling through to a default action. `/rt listen continuous` is accepted as a listen-mode alias for VAD, matching `pi.realtime.listen(ctx, "continuous")`. Unexpected extra arguments, such as `/rt start ptt typo`, are rejected before changing realtime state. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
+`/rt voice`, `/rt trans`, `/rt speed`, `/rt backend`, `/rt reasoning`, `/rt summary`, and `/rt chime` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Voice names are normalized case-insensitively before validation, so `/rt voice Verse` selects `verse`. Transcription model names are passed through after normalizing the historical `whisper` alias to the default realtime transcription model. Speed must be between `0.25` and `1.5`; the extension retries without speed if the realtime server rejects the parameter. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, `/rt listen <mode>`, `/rt stt <mode>`, `/rt audio <mode>`, `/rt widget <mode>`, and `/rt status <mode>` are also rejected instead of falling through to a default action. `/rt listen continuous` is accepted as a listen-mode alias for VAD, matching `pi.realtime.listen(ctx, "continuous")`. Unexpected extra arguments, such as `/rt start ptt typo`, are rejected before changing realtime state. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
 
 Env-style `/rt` arguments normalize into the same shape used by the agent tool surface. Examples:
 
 ```text
 /rt backend=pulse server=sgu24:4713 source=source.bluetooth summary=true start=vad
-/rt fork=true backend=pulse server=sgu24:4713 source=source.bluetooth summary=true start=vad
-/rt stt=ptt source="source.bluetooth"
+/rt fork=true backend=pulse server=sgu24:4713 source=source.bluetooth summary=true chime=false start=vad
+/rt trans=gpt-whisper-realtime speed=1.15 start=vad
+/rt stt=ptt trans=gpt-realtime-whisper source="source.bluetooth"
 /rt summary=false
 /rt action=stop
 ```
@@ -214,13 +218,14 @@ The extension also exposes a unified control object at `pi.realtime` and emits i
 When the extension is loaded in a Pi runtime that supports dynamic tools, it registers `realtime_agent_control`. Agents can use this instead of asking the operator to type `/rt` commands. The tool accepts the same normalized fields as the env-style command parser:
 
 - lifecycle: `action`, `start`, `stt`, `mic`, `listen`, `status`
-- audio/config: `audio`, `backend`, `pulseServer`, `pulseSource`, `pulseSink`, `voice`, `reasoning`, `summary`, `widget`
+- audio/config: `audio`, `backend`, `pulseServer`, `pulseSource`, `pulseSink`, `voice`, `trans`, `speed`, `reasoning`, `summary`, `chime`, `fork`, `widget`
 
 Examples:
 
 ```json
-{ "backend": "pulse", "pulseServer": "sgu24:4713", "pulseSource": "source.bluetooth", "summary": true, "start": "vad" }
-{ "stt": "ptt", "pulseSource": "source.bluetooth" }
+{ "backend": "pulse", "pulseServer": "sgu24:4713", "pulseSource": "source.bluetooth", "summary": true, "chime": false, "start": "vad" }
+{ "stt": "ptt", "pulseSource": "source.bluetooth", "trans": "gpt-realtime-whisper" }
+{ "start": "vad", "trans": "gpt-whisper-realtime", "speed": 1.15 }
 { "action": "status", "status": "full" }
 { "action": "stop" }
 ```
