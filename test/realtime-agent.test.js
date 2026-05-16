@@ -1187,7 +1187,7 @@ test("realtime restarts VAD mic when recorder exits unexpectedly", async () => {
   }
 });
 
-test("realtime preserves live model-emitted tool call ids for tool outputs", async () => {
+test("realtime preserves live model-emitted tool call ids for tool outputs, including sanitized-looking ids", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   const previousRegister = process.env.PI_RT_REGISTER;
   process.env.PI_RT_API_KEY = "test-key";
@@ -1198,23 +1198,27 @@ test("realtime preserves live model-emitted tool call ids for tool outputs", asy
   harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
 
   try {
-    const liveCallId = "call_live_123";
+    const liveCallIds = ["call_live_123", "call_1fk4b5p_1", "call_1lg16bt_2"];
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
     await new Promise((resolve) => setTimeout(resolve, 10));
     const ws = FakeWebSocket.instances[0];
-    ws.emit("message", JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", call_id: liveCallId, name: "read" } }));
-    ws.emit("message", JSON.stringify({ type: "response.function_call_arguments.done", call_id: liveCallId, arguments: "{}", name: "read" }));
-    ws.emit("message", JSON.stringify({ type: "response.done", response: { id: "resp_tool" } }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    for (const liveCallId of liveCallIds) {
+      ws.emit("message", JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", call_id: liveCallId, name: "read" } }));
+      ws.emit("message", JSON.stringify({ type: "response.function_call_arguments.done", call_id: liveCallId, arguments: "{}", name: "read" }));
+    }
+    ws.emit("message", JSON.stringify({ type: "response.done", response: { id: "resp_reported_tool_ids" } }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, {
       systemPrompt: "",
       tools: [],
-      messages: [{ role: "toolResult", toolCallId: liveCallId, content: [{ type: "text", text: "tool ok" }] }],
+      messages: liveCallIds.map((liveCallId) => ({ role: "toolResult", toolCallId: liveCallId, content: [{ type: "text", text: "tool ok" }] })),
     }, {});
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const output = ws.sent.find((m) => m.type === "conversation.item.create" && m.item?.type === "function_call_output");
-    assert.equal(output.item.call_id, liveCallId);
+
+    const outputs = ws.sent.filter((m) => m.type === "conversation.item.create" && m.item?.type === "function_call_output");
+    assert.deepEqual(outputs.map((m) => m.item.call_id), liveCallIds);
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
     else process.env.PI_RT_API_KEY = previousApiKey;
