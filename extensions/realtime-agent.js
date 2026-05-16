@@ -1206,8 +1206,16 @@ class RealtimeSession {
   realtimeCallId(originalId) {
     const raw = String(originalId || "");
     if (!raw) return null;
+    // Tool calls emitted by the live realtime model already exist in the
+    // server-side conversation under this exact call_id. Tool results must use
+    // that same id; remapping them creates "tool_call_id not found" errors.
+    if (this.callIdsEmittedByModel.has(raw)) return raw;
     const existing = this.realtimeCallIdByOriginal.get(raw);
     if (existing) return existing;
+    if (raw.length <= 32) {
+      this.realtimeCallIdByOriginal.set(raw, raw);
+      return raw;
+    }
     let hash = 2166136261;
     for (let i = 0; i < raw.length; i++) {
       hash ^= raw.charCodeAt(i);
