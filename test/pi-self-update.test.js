@@ -11,6 +11,7 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
   const userMessages = [];
   const activeToolsCalls = [];
   const customEntries = [];
+  let refreshToolsCount = 0;
   let reloadCount = 0;
   let execCount = 0;
   let idleWaitCount = 0;
@@ -24,7 +25,9 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
       return { command, args, options, ...execResult };
     },
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
+    refreshTools() { refreshToolsCount += 1; },
     getAllTools() { return [{ name: "read" }, { name: "pi_self_update" }, { name: "realtime_agent_control" }]; },
+    getActiveTools() { return activeToolsCalls.at(-1) || []; },
     setActiveTools(names) { activeToolsCalls.push(names); },
     appendEntry(type, data) { customEntries.push({ type, data }); },
   };
@@ -38,7 +41,7 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
     async waitForIdle() { idleWaitCount += 1; },
     async reload() { reloadCount += 1; },
   };
-  return { pi, ctx, commands, tools, notifications, userMessages, activeToolsCalls, customEntries, get execCount() { return execCount; }, get lastExec() { return lastExec; }, get reloadCount() { return reloadCount; }, get idleWaitCount() { return idleWaitCount; } };
+  return { pi, ctx, commands, tools, notifications, userMessages, activeToolsCalls, customEntries, get execCount() { return execCount; }, get lastExec() { return lastExec; }, get reloadCount() { return reloadCount; }, get idleWaitCount() { return idleWaitCount; }, get refreshToolsCount() { return refreshToolsCount; } };
 }
 
 test("/update runs pi update --extensions from home and reloads on success", async () => {
@@ -140,7 +143,9 @@ test("/reload-tools --activate enables every registered tool", async () => {
 
   assert.equal(h.reloadCount, 0);
   assert.deepEqual(h.activeToolsCalls, [["read", "pi_self_update", "realtime_agent_control"]]);
+  assert.equal(h.refreshToolsCount, 1);
   assert.match(h.notifications.at(-1).message, /Activated 3 registered tools/);
+  assert.match(h.notifications.at(-1).message, /refreshing the tool registry/);
 });
 
 test("pi_reload_tools tool queues reload-tools command", async () => {

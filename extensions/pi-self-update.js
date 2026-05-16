@@ -303,11 +303,17 @@ function getToolNames(pi) {
 
 function activateAllTools(pi) {
   if (typeof pi.setActiveTools !== "function") {
-    return { ok: false, reason: "pi.setActiveTools is not available in this runtime", count: 0, names: [] };
+    return { ok: false, reason: "pi.setActiveTools is not available in this runtime", count: 0, names: [], refreshed: false, activeCount: null };
+  }
+  let refreshed = false;
+  if (typeof pi.refreshTools === "function") {
+    pi.refreshTools();
+    refreshed = true;
   }
   const names = [...new Set(getToolNames(pi))];
   pi.setActiveTools(names);
-  return { ok: true, count: names.length, names };
+  const activeNames = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : null;
+  return { ok: true, count: names.length, names, refreshed, activeCount: Array.isArray(activeNames) ? activeNames.length : null };
 }
 
 function queueFollowUpCommand(pi, queuedFollowUps, command) {
@@ -377,7 +383,7 @@ export default function piSelfUpdateExtension(pi) {
       if (options.activateOnly || options.noReload || typeof ctx.reload !== "function") {
         const result = activateAllTools(pi);
         if (result.ok) {
-          ctx.ui.notify(`Activated ${result.count} registered tools for future agent turns.`, "info");
+          ctx.ui.notify(`Activated ${result.count} registered tools for future agent turns${result.refreshed ? " after refreshing the tool registry" : ""}${result.activeCount === null ? "" : ` (active:${result.activeCount})`}.`, "info");
         } else {
           ctx.ui.notify(`Could not refresh active tools: ${result.reason}`, "warning");
         }
