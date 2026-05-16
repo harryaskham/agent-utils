@@ -971,7 +971,7 @@ class RealtimeSession {
     try { ctx?.ui?.setStatus?.("realtime", this.statusText()); } catch {}
     try {
       if (this.config.statusWidgetVisible) {
-        ctx?.ui?.setWidget?.("realtime-status", statusLines(this, this.config), { placement: "belowEditor" });
+        ctx?.ui?.setWidget?.("realtime-status", realtimePanelLines(this, this.config), { placement: "belowEditor" });
       }
     } catch {}
   }
@@ -2371,6 +2371,18 @@ function envPresent(...names) {
   return names.find((name) => !!process.env[name]);
 }
 
+function realtimePanelLines(session, config) {
+  const compact = statusLines(session, config);
+  const threshold = config.vadThreshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7);
+  const speed = config.speed && config.speed !== 1 ? `${config.speed}` : "1";
+  return [
+    ...compact,
+    `vad: thresh:${threshold} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · chime:${config.chimeEnabled ? "on" : "off"} · speed:${speed}`,
+    `pulse: server:${process.env.PULSE_SERVER || "<unset>"} · source:${process.env.PULSE_SOURCE || "<default>"} · sink:${process.env.PULSE_SINK || "<default>"}`,
+    "controls: /rt mic off · /rt audio toggle · /rt thresh=0.85 · /rt status full · /rt off",
+  ];
+}
+
 function diagnosticLines(session, config) {
   const provider = config.directAzure ? "azure" : "openai/proxy";
   const backend = process.env.PI_RT_AUDIO_BACKEND || "pulse";
@@ -2802,7 +2814,7 @@ export default function realtimeAgentExtension(pi) {
       catch (e) { ctx.ui.notify(`Realtime mic failed: ${e.message}`, "error"); }
     }
 
-    try { ctx.ui.setWidget("realtime-status", controls.statusLines(), { placement: "belowEditor" }); } catch {}
+    try { ctx.ui.setWidget("realtime-status", realtimePanelLines(session, config), { placement: "belowEditor" }); } catch {}
     session.updateStatus(ctx);
     return true;
   }

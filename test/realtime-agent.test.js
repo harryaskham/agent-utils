@@ -234,6 +234,36 @@ test("unified realtime controls reject unsupported direct listen modes", async (
   assert.equal(pi.realtime.snapshot().state.micMode, null);
 });
 
+test("/rt status widget shows realtime control panel details", async () => {
+  const previous = { server: process.env.PULSE_SERVER, source: process.env.PULSE_SOURCE, sink: process.env.PULSE_SINK };
+  process.env.PULSE_SERVER = "host:4713";
+  process.env.PULSE_SOURCE = "source.usb";
+  process.env.PULSE_SINK = "sink.phone";
+  const { pi, commands, handlers, widgets, ctx } = makeHarness();
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    pi.realtime.setVadThreshold(0.85, ctx);
+    pi.realtime.setSpeed(1.2, ctx);
+    pi.realtime.showStatus(ctx);
+    const panel = widgets.get("realtime-status").join("\n");
+    assert.match(panel, /vad: thresh:0\.85/);
+    assert.match(panel, /chime:on/);
+    assert.match(panel, /speed:1\.2/);
+    assert.match(panel, /pulse: server:host:4713/);
+    assert.match(panel, /controls: \/rt mic off/);
+
+    await commands.get("rt-hide-status").handler("", ctx);
+    assert.equal(widgets.has("realtime-status"), false);
+  } finally {
+    for (const [key, value] of [["PULSE_SERVER", previous.server], ["PULSE_SOURCE", previous.source], ["PULSE_SINK", previous.sink]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test("/rt-hide-status keeps the realtime widget hidden across later status updates", async () => {
   const { pi, commands, handlers, widgets, ctx } = makeHarness();
   realtimeAgentExtension(pi);

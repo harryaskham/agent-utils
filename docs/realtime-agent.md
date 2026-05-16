@@ -259,9 +259,11 @@ Widget controls:
 
 ```text
 /rt widget hide  hide the realtime widget until explicitly shown again
-/rt widget show  show the realtime widget again
+/rt widget show  show the realtime status/control panel again
 /rt stop         clear realtime widget and footer statuses
 ```
+
+The realtime panel includes compact connection/mic/audio state, transcription model, voice, summary/chime status, VAD threshold and silence, Pulse routing, and quick command hints such as `/rt thresh=0.85` and `/rt audio toggle`.
 
 ## Tuning server VAD
 
