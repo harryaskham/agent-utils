@@ -277,6 +277,18 @@ Raise the threshold if background noise triggers false starts. Lower it if quiet
 
 `/rt-doctor` shows the resolved values so you can confirm what Pi is using.
 
+## Local realtime extension development
+
+For fast realtime-plugin iteration, link a local `agent-utils` checkout into Pi's auto-discovered extension directory:
+
+```text
+/rt-dev link /path/to/agent-utils
+/rt-dev status
+/rt-dev unlink
+```
+
+When no path is provided, `/rt-dev link` uses the current Pi working directory. The command creates a small local package under `~/.pi/agent/extensions/agent-utils-realtime-dev` (or `$PI_CODING_AGENT_DIR/extensions/...`) whose `pi.extensions` entry points at the checkout's `extensions/realtime-agent.js`. After linking, run `/reload-tools` or Pi's `/reload` to load the local source. This avoids waiting for `pi update --extensions` from GitHub for every small edit. Use `/rt-dev unlink` followed by `/reload-tools` or `/reload` to return to the installed package source.
+
 ## Device listing
 
 For macOS local-device experiments:

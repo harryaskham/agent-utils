@@ -72,9 +72,9 @@
 //   PI_RT_VAD_PREFIX_PADDING_MS                   server VAD prefix padding (default 300)
 //   PI_RT_DEBUG=1                                 verbose event logging
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
@@ -363,9 +363,64 @@ function shouldAutoRestartMicMode(mode) {
   return mode === "vad" || mode === "continuous";
 }
 
+function agentBaseDir() {
+  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
+
 function agentSettingsPath() {
-  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-  return join(agentDir, "settings.json");
+  return join(agentBaseDir(), "settings.json");
+}
+
+function realtimeDevLinkDir() {
+  return join(agentBaseDir(), "extensions", "agent-utils-realtime-dev");
+}
+
+function readJsonFile(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function validateAgentUtilsCheckout(path) {
+  const root = resolve(path || ".");
+  const packageJson = join(root, "package.json");
+  const realtimeExtension = join(root, "extensions", "realtime-agent.js");
+  if (!existsSync(packageJson)) throw new Error(`No package.json found at ${root}`);
+  if (!existsSync(realtimeExtension)) throw new Error(`No realtime extension found at ${realtimeExtension}`);
+  const pkg = readJsonFile(packageJson);
+  if (pkg.name !== "agent-utils") throw new Error(`Expected package.json name "agent-utils" at ${root}, got ${pkg.name || "<missing>"}`);
+  return { root, realtimeExtension };
+}
+
+function installRealtimeDevLink(sourceRoot) {
+  const source = validateAgentUtilsCheckout(sourceRoot);
+  const linkDir = realtimeDevLinkDir();
+  rmSync(linkDir, { recursive: true, force: true });
+  mkdirSync(linkDir, { recursive: true });
+  writeFileSync(join(linkDir, "package.json"), `${JSON.stringify({
+    name: "agent-utils-realtime-dev",
+    private: true,
+    pi: { extensions: ["./extensions/realtime-agent.js"] },
+  }, null, 2)}\n`);
+  symlinkSync(join(source.root, "extensions"), join(linkDir, "extensions"), "dir");
+  return { linkDir, sourceRoot: source.root, extension: source.realtimeExtension };
+}
+
+function removeRealtimeDevLink() {
+  const linkDir = realtimeDevLinkDir();
+  const existed = existsSync(linkDir);
+  rmSync(linkDir, { recursive: true, force: true });
+  return { linkDir, existed };
+}
+
+function realtimeDevLinkStatus() {
+  const linkDir = realtimeDevLinkDir();
+  const extensionLink = join(linkDir, "extensions");
+  if (!existsSync(linkDir)) return { linkDir, linked: false };
+  let target = null;
+  try {
+    const stat = lstatSync(extensionLink);
+    if (stat.isSymbolicLink()) target = readlinkSync(extensionLink);
+  } catch {}
+  return { linkDir, linked: true, target, extension: join(extensionLink, "realtime-agent.js") };
 }
 
 function readDefaultModelSettings() {
@@ -3045,6 +3100,39 @@ export default function realtimeAgentExtension(pi) {
       },
     });
   }
+
+  pi.registerCommand("rt-dev", {
+    description: "Realtime dev helper: /rt-dev link [agent-utils checkout], /rt-dev status, /rt-dev unlink.",
+    handler: async (args, ctx) => {
+      const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
+      const action = (tokens[0] || "status").toLowerCase();
+      const source = tokens.slice(1).join(" ") || ctx.cwd;
+      try {
+        if (["help", "usage", "?"].includes(action)) {
+          ctx.ui.notify("Usage: /rt-dev link [agent-utils checkout], /rt-dev status, /rt-dev unlink. After link, run /reload-tools or /reload to load local realtime source.", "info");
+          return;
+        }
+        if (action === "link" || action === "on") {
+          const result = installRealtimeDevLink(source);
+          ctx.ui.notify(`Realtime dev link installed: ${result.linkDir} -> ${result.sourceRoot}. Run /reload-tools or /reload to load local source.`, "info");
+          return;
+        }
+        if (action === "unlink" || action === "off") {
+          const result = removeRealtimeDevLink();
+          ctx.ui.notify(result.existed ? `Realtime dev link removed: ${result.linkDir}. Run /reload-tools or /reload to return to package source.` : `Realtime dev link was not present: ${result.linkDir}`, "info");
+          return;
+        }
+        if (action === "status") {
+          const status = realtimeDevLinkStatus();
+          ctx.ui.notify(status.linked ? `Realtime dev link active: ${status.linkDir} -> ${status.target || status.extension}` : `Realtime dev link inactive: ${status.linkDir}`, "info");
+          return;
+        }
+        ctx.ui.notify("Unsupported /rt-dev action. Use link, status, unlink, or help.", "warning");
+      } catch (e) {
+        ctx.ui.notify(`Realtime dev link failed: ${e.message || String(e)}`, "error");
+      }
+    },
+  });
 
   pi.registerCommand("rt", {
     description: "Realtime control. Usage: /rt start|stop|mic|listen|audio|stt|widget|status|doctor|voice|backend|reasoning ...",

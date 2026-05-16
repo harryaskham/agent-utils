@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -318,6 +318,38 @@ test("server VAD turn detection honors threshold, silence, and prefix env contro
     else process.env.PI_RT_VAD_SILENCE_MS = previous.silence;
     if (previous.prefix === undefined) delete process.env.PI_RT_VAD_PREFIX_PADDING_MS;
     else process.env.PI_RT_VAD_PREFIX_PADDING_MS = previous.prefix;
+  }
+});
+
+test("/rt-dev links local realtime source into Pi auto-discovery dir", async () => {
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const agentDir = mkdtempSync(join(tmpdir(), "rt-dev-agent-"));
+  const checkout = mkdtempSync(join(tmpdir(), "rt-dev-checkout-"));
+  mkdirSync(join(checkout, "extensions"), { recursive: true });
+  writeFileSync(join(checkout, "package.json"), JSON.stringify({ name: "agent-utils" }));
+  writeFileSync(join(checkout, "extensions", "realtime-agent.js"), "export default function noop() {}\n");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const { pi, commands, handlers, notifications, ctx } = makeHarness();
+  ctx.cwd = checkout;
+  realtimeAgentExtension(pi);
+
+  try {
+    await commands.get("rt-dev").handler("status", ctx);
+    assert.match(notifications.at(-1).message, /inactive/);
+
+    await commands.get("rt-dev").handler("link", ctx);
+    const linkDir = join(agentDir, "extensions", "agent-utils-realtime-dev");
+    assert.equal(existsSync(join(linkDir, "package.json")), true);
+    assert.equal(readlinkSync(join(linkDir, "extensions")), join(checkout, "extensions"));
+    assert.match(notifications.at(-1).message, /Run \/reload-tools or \/reload/);
+
+    await commands.get("rt-dev").handler("unlink", ctx);
+    assert.equal(existsSync(linkDir), false);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(checkout, { recursive: true, force: true });
   }
 });
 
