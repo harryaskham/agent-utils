@@ -180,6 +180,7 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.equal(pi.realtime.help(), pi.realtime.usage());
   assert.match(pi.realtime.usage(), /\/rt start \[vad\|ptt\|nolisten\]/);
   assert.match(pi.realtime.usage(), /\/rt listen \[vad\|ptt\|continuous\]/);
+  assert.match(pi.realtime.usage(), /thresh <0\.\.1>/);
   assert.deepEqual(pi.realtime.supportedOptions(), pi.realtime.options());
   assert.ok(pi.realtime.options().voices.includes("marin"));
   assert.ok(pi.realtime.options().audioBackends.includes("pulse"));
@@ -744,7 +745,7 @@ test("/rt stt shows partial transcripts and queues completed transcripts as foll
 
     assert.equal(harness.statuses.get("rt-transcript"), "◇ queue this while busy");
     assert.deepEqual(harness.sentUserMessages, [
-      { content: "queue this while busy", options: { deliverAs: "followUp" } },
+      { content: "queue this while busy", options: { deliverAs: "followUp", streamingBehavior: "followUp" } },
     ]);
     assert.equal(harness.pi.realtime.snapshot().state.lastInputMode, "transcript");
   } finally {
@@ -832,27 +833,31 @@ test("/rt env-style args configure Pulse routing, summary mode, and tool exposes
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   try {
-    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink summary=true trans=gpt-whisper-realtime speed=1.25 chime=false', ctx);
+    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink summary=true trans=gpt-whisper-realtime speed=1.25 thresh=0.85 chime=false', ctx);
     assert.equal(process.env.PI_RT_AUDIO_BACKEND, "pulse");
     assert.equal(process.env.PULSE_SOURCE, "source bluetooth");
     assert.equal(process.env.PULSE_SINK, "vsink");
     assert.equal(pi.realtime.snapshot().summaryContext, true);
     assert.equal(pi.realtime.snapshot().transcriptionModel, "gpt-whisper-realtime");
     assert.equal(pi.realtime.snapshot().speed, 1.25);
+    assert.equal(pi.realtime.snapshot().vadThreshold, 0.85);
+    assert.equal(process.env.PI_RT_VAD_THRESHOLD, "0.85");
     assert.equal(pi.realtime.snapshot().chimeEnabled, false);
 
-    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, trans: "gpt-realtime-whisper", speed: 0.75, chime: true, status: "full" }, null, null, ctx);
+    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, trans: "gpt-realtime-whisper", speed: 0.75, thresh: 0.6, chime: true, status: "full" }, null, null, ctx);
     assert.equal(process.env.PULSE_SERVER, "sgu24:4713");
     assert.equal(process.env.PULSE_SOURCE, "source.bluetooth");
     assert.equal(pi.realtime.snapshot().summaryContext, false);
     assert.equal(pi.realtime.snapshot().transcriptionModel, "gpt-realtime-whisper");
     assert.equal(pi.realtime.snapshot().speed, 0.75);
+    assert.equal(pi.realtime.snapshot().vadThreshold, 0.6);
     assert.equal(pi.realtime.snapshot().chimeEnabled, true);
   } finally {
     for (const [key, value] of [["PULSE_SERVER", previous.server], ["PULSE_SOURCE", previous.source], ["PULSE_SINK", previous.sink]]) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    delete process.env.PI_RT_VAD_THRESHOLD;
   }
 });
 

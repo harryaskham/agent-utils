@@ -120,7 +120,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 summary=true fork=true chime=false start=vad";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 summary=true fork=true chime=false start=vad";
 const SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const SAMPLE_WIDTH = 2;
@@ -232,6 +232,13 @@ function parseRealtimeSpeed(value, fallback = 1.0) {
   if (value === undefined || value === null || value === "") return fallback;
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0.25 || n > 1.5) throw new Error(`Expected realtime speed between 0.25 and 1.5, got: ${value}`);
+  return n;
+}
+
+function parseVadThreshold(value, fallback = 0.7) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 1) throw new Error(`Expected realtime VAD threshold between 0 and 1, got: ${value}`);
   return n;
 }
 
@@ -387,14 +394,14 @@ function restoreDefaultModelSettingsSoon(snapshot) {
   setTimeout(() => restoreDefaultModelSettings(snapshot), 250).unref?.();
 }
 
-export function buildServerVadTurnDetection() {
+export function buildServerVadTurnDetection(options = {}) {
   return {
     type: "server_vad",
     create_response: false,
     interrupt_response: true,
-    threshold: numberEnv("PI_RT_VAD_THRESHOLD", 0.7),
-    prefix_padding_ms: numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300),
-    silence_duration_ms: numberEnv("PI_RT_VAD_SILENCE_MS", 1100),
+    threshold: options.threshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7),
+    prefix_padding_ms: options.prefixPaddingMs ?? numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300),
+    silence_duration_ms: options.silenceMs ?? numberEnv("PI_RT_VAD_SILENCE_MS", 1100),
   };
 }
 
@@ -1134,7 +1141,7 @@ class RealtimeSession {
     // create_response stays false so Pi still owns the response turn (so tools,
     // history, approvals all flow through the normal agent loop).
     if (this.mic && (this.micMode === "vad" || this.micMode === "continuous")) {
-      return buildServerVadTurnDetection();
+      return buildServerVadTurnDetection({ threshold: this.config.vadThreshold });
     }
     return null;
   }
@@ -1714,7 +1721,7 @@ class RealtimeSession {
         this.lastTurnInputMode = "transcript";
         this.showTranscriptStatus(text, { pending: false, notify: true });
         this.markSpokenTranscript(text);
-        try { this.pi.sendUserMessage(text, { deliverAs: "followUp" }); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
+        try { this.pi.sendUserMessage(text, { deliverAs: "followUp", streamingBehavior: "followUp" }); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
       } else if (!this.config.sttOnly) {
         // Full realtime already triggers the Pi turn from input_audio_buffer.committed
         // so inference is based on the committed audio item, not this transcript.
@@ -2145,6 +2152,7 @@ function makeInitialConfig() {
     transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL")),
     voice: resolveRealtimeVoice(),
     speed: parseRealtimeSpeed(env("PI_RT_SPEED", "OPENAI_REALTIME_SPEED"), 1.0),
+    vadThreshold: parseVadThreshold(env("PI_RT_VAD_THRESHOLD"), 0.7),
     bufferMs: Number(env("PI_RT_BUFFER_MS", "TTS_REALTIME_BUFFER_MS") || 180),
     playbackChunkMs: Number(env("PI_RT_PLAYBACK_CHUNK_MS") || 80),
     reasoningEffort: env("PI_RT_REASONING_EFFORT") || "off",
@@ -2337,7 +2345,7 @@ function diagnosticLines(session, config) {
     `audioBackend: ${backend} · ${audioOutputBackendLabel(config)}/${audioInputBackendLabel(config)}`,
     `pulse: ${pulse}`,
     `commands: ${requirements}`,
-    `vad: threshold:${numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
+    `vad: threshold:${config.vadThreshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
     `state: ${JSON.stringify(session.state?.snapshot?.({ sttOnly: config.sttOnly, audioEnabled: config.audioEnabled }) || {})}`,
     `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length} · micRestart:${session.micRestartAttempts || 0}${session.micRestartTimer ? " pending" : ""}`,
     `reconnect: ${config.autoReconnect ? "on" : "off"} · attempts:${config.reconnectAttempts || 0}/${config.reconnectMaxAttempts || 0} · next:${config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0}ms · last:${config.lastDisconnectReason || "<none>"}`,
@@ -2397,6 +2405,7 @@ export function createRealtimeControls({ pi, session, config }) {
         },
         reasoningEffort: config.reasoningEffort,
         speed: config.speed,
+        vadThreshold: config.vadThreshold,
         summaryContext: !!config.summaryContext,
         chimeEnabled: !!config.chimeEnabled,
         lastInputMode: session.lastTurnInputMode || null,
@@ -2464,6 +2473,14 @@ export function createRealtimeControls({ pi, session, config }) {
       config.speed = parseRealtimeSpeed(speed, config.speed || 1.0);
       session.speedRejected = false;
       session.audioModeApplied = null;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setVadThreshold(threshold, ctx) {
+      config.vadThreshold = parseVadThreshold(threshold, config.vadThreshold ?? 0.7);
+      process.env.PI_RT_VAD_THRESHOLD = String(config.vadThreshold);
+      session.sendTurnDetectionUpdate();
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2737,6 +2754,7 @@ export default function realtimeAgentExtension(pi) {
     if (out.summary !== undefined && out.summary !== null) out.summary = parseBooleanValue(out.summary);
     if (out.chime !== undefined && out.chime !== null) out.chime = parseBooleanValue(out.chime);
     if (out.speed !== undefined && out.speed !== null) out.speed = parseRealtimeSpeed(out.speed);
+    if (out.thresh !== undefined && out.thresh !== null) out.thresh = parseVadThreshold(out.thresh);
     if (out.fork !== undefined && out.fork !== null) out.fork = parseBooleanValue(out.fork);
     return out;
   }
@@ -2768,6 +2786,7 @@ export default function realtimeAgentExtension(pi) {
     if (params.voice) controls.setVoice(params.voice, ctx);
     if (params.trans || params.transcription || params.transcriptionModel) controls.setTranscriptionModel(params.trans || params.transcription || params.transcriptionModel, ctx);
     if (params.speed !== undefined) controls.setSpeed(params.speed, ctx);
+    if (params.thresh !== undefined) controls.setVadThreshold(params.thresh, ctx);
     if (params.reasoning) controls.setReasoningEffort(params.reasoning, ctx);
     if (params.summary !== undefined) controls.setSummaryContext(params.summary, ctx);
     if (params.chime !== undefined) controls.setChime(params.chime, ctx);
@@ -2821,6 +2840,7 @@ export default function realtimeAgentExtension(pi) {
       voice: v.voice,
       trans: v.trans ?? v.transcription ?? v.transcription_model ?? v.transcriptionmodel,
       speed: v.speed,
+      thresh: v.thresh ?? v.threshold ?? v.vad_threshold ?? v.vadthreshold,
       reasoning: v.reasoning,
       summary: v.summary,
       chime: v.chime,
@@ -2852,7 +2872,7 @@ export default function realtimeAgentExtension(pi) {
     const extra = tokens.slice(2);
     const singleValueVerbs = new Set([
       "start", "on", "stt", "status", "widget", "audio", "mic", "listen",
-      "voice", "backend", "reasoning", "summary", "chime", "trans", "transcription", "speed",
+      "voice", "backend", "reasoning", "summary", "chime", "trans", "transcription", "speed", "thresh",
     ]);
     const noValueVerbs = new Set(["help", "usage", "?", "stop", "off", "doctor", "vad", "ptt", "nolisten"]);
     if (value && noValueVerbs.has(verb)) {
@@ -2942,6 +2962,12 @@ export default function realtimeAgentExtension(pi) {
       catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }
+    if (verb === "thresh") {
+      if (!value) { ctx.ui.notify(`Realtime VAD threshold ${controls.snapshot().vadThreshold}. Use /rt thresh <0..1>. Raise it to reject ambient noise.`, "info"); return; }
+      try { const snapshot = controls.setVadThreshold(value, ctx); ctx.ui.notify(`Realtime VAD threshold ${snapshot.vadThreshold}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
     if (verb === "backend") {
       if (!value) { ctx.ui.notify(`Realtime audio backend ${controls.snapshot().audioBackend}. Options: ${controls.options().audioBackends.join(", ")}`, "info"); return; }
       try { controls.setAudioBackend(value, ctx); ctx.ui.notify(`Realtime audio backend ${value}`, "info"); }
@@ -2999,6 +3025,7 @@ export default function realtimeAgentExtension(pi) {
         summary: ToolSchema.optional(ToolSchema.boolean({ description: "Use compact summary context instead of replaying full conversation history. Default false." })),
         trans: ToolSchema.optional(ToolSchema.string({ description: "Realtime input transcription model, e.g. gpt-realtime-whisper or gpt-whisper-realtime." })),
         speed: ToolSchema.optional(ToolSchema.number({ description: "Realtime spoken response speed from 0.25 to 1.5. Default 1.0." })),
+        thresh: ToolSchema.optional(ToolSchema.number({ description: "Realtime server VAD threshold from 0 to 1. Raise it to reject ambient noise; lower it for quiet speech." })),
         chime: ToolSchema.optional(ToolSchema.boolean({ description: "Play brief VAD/listening state chimes through the realtime playback backend. Default true." })),
         fork: ToolSchema.optional(ToolSchema.boolean({ description: "Start realtime in a fork from the current tree/session position." })),
         widget: ToolSchema.optional(ToolSchema.string({ description: "Widget mode: show or hide." })),

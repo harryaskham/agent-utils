@@ -273,7 +273,7 @@ export PI_RT_VAD_SILENCE_MS=1100        # silence before server commits speech
 export PI_RT_VAD_PREFIX_PADDING_MS=300  # audio kept before detected speech
 ```
 
-Raise the threshold if background noise triggers false starts. Lower it if quiet speech is missed. Increase silence duration if turns are cut off too quickly.
+Raise the threshold if background noise triggers false starts. Lower it if quiet speech is missed. Increase silence duration if turns are cut off too quickly. Threshold can also be adjusted at runtime with `/rt thresh <0..1>` or env-style `/rt thresh=0.85`; the change is applied to new/current server VAD configuration without restarting Pi.
 
 `/rt-doctor` shows the resolved values so you can confirm what Pi is using.
 
