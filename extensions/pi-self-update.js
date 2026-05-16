@@ -310,12 +310,24 @@ function activateAllTools(pi) {
   return { ok: true, count: names.length, names };
 }
 
-function queueReloadToolsActivate(pi) {
-  pi.sendUserMessage?.("/reload-tools --activate", { deliverAs: "followUp" });
+function queueFollowUpCommand(pi, queuedFollowUps, command) {
+  if (queuedFollowUps.has(command)) return { queued: false, duplicate: true, command };
+  queuedFollowUps.add(command);
+  pi.sendUserMessage?.(command, { deliverAs: "followUp", streamingBehavior: "followUp" });
+  return { queued: true, duplicate: false, command };
+}
+
+function clearQueuedFollowUp(queuedFollowUps, command) {
+  queuedFollowUps.delete(command);
+}
+
+function queueReloadToolsActivate(pi, queuedFollowUps) {
+  return queueFollowUpCommand(pi, queuedFollowUps, "/reload-tools --activate");
 }
 
 export default function piSelfUpdateExtension(pi) {
   let updateRunning = false;
+  const queuedFollowUps = new Set();
 
   pi.registerCommand("update", {
     description: "Run `pi update --extensions`, then reload extensions/resources and refresh active tools. Use /update --no-reload to skip reload.",
@@ -337,7 +349,7 @@ export default function piSelfUpdateExtension(pi) {
         const reloadWorthy = updateLooksReloadWorthy(result);
         ctx.ui.notify(formatUpdateResult(result, { ...options, reloadWorthy }), ok || reloadWorthy ? "info" : "error");
         if (options.reload) {
-          queueReloadToolsActivate(pi);
+          queueReloadToolsActivate(pi, queuedFollowUps);
           ctx.ui.notify(reloadWorthy
             ? "pi extension update completed package work; reloading Pi runtime and refreshing tools..."
             : "pi extension update did not report package success, but /update reloads after attempts; reloading Pi runtime and refreshing tools...", "info");
@@ -360,6 +372,8 @@ export default function piSelfUpdateExtension(pi) {
         ctx.ui.notify("Usage: /reload-tools [--no-reload] — reload extensions, then activate all registered tools. Internal: /reload-tools --activate", "info");
         return;
       }
+      clearQueuedFollowUp(queuedFollowUps, "/reload-tools");
+      clearQueuedFollowUp(queuedFollowUps, "/reload-tools --activate");
       if (options.activateOnly || options.noReload || typeof ctx.reload !== "function") {
         const result = activateAllTools(pi);
         if (result.ok) {
@@ -369,8 +383,10 @@ export default function piSelfUpdateExtension(pi) {
         }
         return;
       }
-      queueReloadToolsActivate(pi);
-      ctx.ui.notify("Reloading Pi runtime; refreshed tools will be activated immediately after reload...", "info");
+      const queued = queueReloadToolsActivate(pi, queuedFollowUps);
+      ctx.ui.notify(queued.duplicate
+        ? "Reloading Pi runtime; tool activation is already queued after reload..."
+        : "Reloading Pi runtime; refreshed tools will be activated immediately after reload...", "info");
       await ctx.reload();
     },
   });
@@ -428,10 +444,10 @@ export default function piSelfUpdateExtension(pi) {
         }
         const result = await runPiUpdate(pi);
         const reloadWorthy = updateLooksReloadWorthy(result);
-        if (reloadCommand) pi.sendUserMessage?.(reloadCommand, { deliverAs: "followUp" });
+        const queued = reloadCommand ? queueFollowUpCommand(pi, queuedFollowUps, reloadCommand) : { queued: false, duplicate: false };
         return {
-          content: [{ type: "text", text: `${formatUpdateResult(result, { reload: !params.skipReload, reloadWorthy })}\n\n${reloadCommand ? `Queued ${reloadCommand} as a follow-up command.` : "Reload skipped."}` }],
-          details: { reloadCommand, queued: !!reloadCommand, updateExitCode: result?.code ?? null, reloadWorthy, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS },
+          content: [{ type: "text", text: `${formatUpdateResult(result, { reload: !params.skipReload, reloadWorthy })}\n\n${reloadCommand ? (queued.duplicate ? `${reloadCommand} is already queued; not adding a duplicate.` : `Queued ${reloadCommand} as a follow-up command.`) : "Reload skipped."}` }],
+          details: { reloadCommand, queued: queued.queued, duplicate: queued.duplicate, updateExitCode: result?.code ?? null, reloadWorthy, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS },
         };
       },
     });
@@ -447,10 +463,10 @@ export default function piSelfUpdateExtension(pi) {
       }),
       async execute(_toolCallId, params = {}) {
         const reloadCommand = "/reload-tools";
-        if (!params.dryRun) pi.sendUserMessage?.(reloadCommand, { deliverAs: "followUp" });
+        const queued = params.dryRun ? { queued: false, duplicate: false } : queueFollowUpCommand(pi, queuedFollowUps, reloadCommand);
         return {
-          content: [{ type: "text", text: params.dryRun ? `Would queue ${reloadCommand}.` : `Queued ${reloadCommand} as a follow-up command.` }],
-          details: { reloadCommand, queued: !params.dryRun },
+          content: [{ type: "text", text: params.dryRun ? `Would queue ${reloadCommand}.` : (queued.duplicate ? `${reloadCommand} is already queued; not adding a duplicate.` : `Queued ${reloadCommand} as a follow-up command.`) }],
+          details: { reloadCommand, queued: queued.queued, duplicate: queued.duplicate },
         };
       },
     });
@@ -466,7 +482,7 @@ export default function piSelfUpdateExtension(pi) {
       }),
       async execute(_toolCallId, params = {}) {
         const restartCommand = params.dryRun ? "/restart --dry-run" : "/restart";
-        pi.sendUserMessage?.(restartCommand, { deliverAs: "followUp" });
+        queueFollowUpCommand(pi, queuedFollowUps, restartCommand);
         return {
           content: [{ type: "text", text: `Queued ${restartCommand} as a follow-up command.` }],
           details: { restartCommand, queued: true },

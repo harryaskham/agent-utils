@@ -52,7 +52,7 @@ test("/update runs pi update --extensions from home and reloads on success", asy
   assert.equal(h.lastExec.command, "pi");
   assert.deepEqual(h.lastExec.args, ["update", "--extensions"]);
   assert.equal(h.notifications.at(0).message, "Running pi update --extensions from home directory...");
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp" } }]);
+  assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
   assert.match(h.notifications.at(-2).message, /pi update --extensions exited with code 0/);
   assert.match(h.notifications.at(-1).message, /reloading Pi runtime/);
 });
@@ -105,7 +105,7 @@ test("pi_self_update tool runs update and queues reload-tools follow-up", async 
 
   const result = await h.tools.get("pi_self_update").execute("tool-1", {}, null, null, h.ctx);
 
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools", options: { deliverAs: "followUp" } }]);
+  assert.deepEqual(h.userMessages, [{ message: "/reload-tools", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
   assert.equal(result.details.queued, true);
 });
 
@@ -128,7 +128,7 @@ test("/reload-tools reloads first and queues post-reload activation", async () =
   await h.commands.get("reload-tools").handler("", h.ctx);
 
   assert.equal(h.reloadCount, 1);
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp" } }]);
+  assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
   assert.deepEqual(h.activeToolsCalls, []);
 });
 
@@ -149,8 +149,26 @@ test("pi_reload_tools tool queues reload-tools command", async () => {
 
   const result = await h.tools.get("pi_reload_tools").execute("tool-1", {}, null, null, h.ctx);
 
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools", options: { deliverAs: "followUp" } }]);
+  assert.deepEqual(h.userMessages, [{ message: "/reload-tools", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
   assert.equal(result.details.queued, true);
+});
+
+test("pi_reload_tools suppresses duplicate queued reload follow-ups", async () => {
+  const h = makeHarness();
+  piSelfUpdateExtension(h.pi);
+
+  const first = await h.tools.get("pi_reload_tools").execute("tool-1", {}, null, null, h.ctx);
+  const second = await h.tools.get("pi_reload_tools").execute("tool-2", {}, null, null, h.ctx);
+
+  assert.equal(h.userMessages.length, 1);
+  assert.equal(first.details.queued, true);
+  assert.equal(second.details.queued, false);
+  assert.equal(second.details.duplicate, true);
+  assert.match(second.content[0].text, /already queued/);
+
+  await h.commands.get("reload-tools").handler("", h.ctx);
+  assert.equal(h.reloadCount, 1);
+  assert.deepEqual(h.userMessages.map((m) => m.message), ["/reload-tools", "/reload-tools --activate"]);
 });
 
 test("buildPiRestartPlan preserves runtime flags, switches to current session, and drops startup prompts", () => {
@@ -203,7 +221,7 @@ test("pi_restart tool queues restart command", async () => {
 
   const result = await h.tools.get("pi_restart").execute("tool-1", {}, null, null, h.ctx);
 
-  assert.deepEqual(h.userMessages, [{ message: "/restart", options: { deliverAs: "followUp" } }]);
+  assert.deepEqual(h.userMessages, [{ message: "/restart", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
   assert.equal(result.details.queued, true);
 });
 
