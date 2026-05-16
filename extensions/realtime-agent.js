@@ -128,6 +128,7 @@ const TOOL_OUTPUT_CAP = 16_000;
 const REALTIME_CONTEXT_WINDOW_TOKENS = 128_000;
 const SUMMARY_FALLBACK_MESSAGE_CAP = 40;
 const SUMMARY_FALLBACK_TEXT_CAP = 1_200;
+const REALTIME_SUMMARY_TEXT_CAP = 24_000;
 
 let realtimeWebSocketConstructor = null;
 let realtimeWebSocketOpenState = 1;
@@ -289,22 +290,28 @@ function extractExistingCompactionSummaries(messages = []) {
   return summaries;
 }
 
+function capRealtimeSummaryText(text) {
+  const s = String(text || "");
+  if (s.length <= REALTIME_SUMMARY_TEXT_CAP) return s;
+  return `${s.slice(0, REALTIME_SUMMARY_TEXT_CAP)}\n\n[realtime summary truncated ${s.length - REALTIME_SUMMARY_TEXT_CAP} chars]`;
+}
+
 function buildRealtimeSummaryText(messages = []) {
   const existing = extractExistingCompactionSummaries(messages);
   if (existing.length) {
-    return [
-      "Realtime compact context mode is enabled. Use this existing Pi compaction/branch summary as prior conversation context instead of full history.",
-      ...existing.slice(-3).map((summary, idx, arr) => `\n## Summary ${idx + 1}/${arr.length}\n${summary}`),
-    ].join("\n");
+    return capRealtimeSummaryText([
+      "Realtime compact context mode is enabled. Use this existing Pi compaction/branch summary as prior conversation context instead of full history. This is background context only; do not read it aloud or answer it directly.",
+      ...existing.slice(-2).map((summary, idx, arr) => `\n## Summary ${idx + 1}/${arr.length}\n${summary}`),
+    ].join("\n"));
   }
 
   const lines = messages.slice(-SUMMARY_FALLBACK_MESSAGE_CAP).map(messageToSummaryLine).filter(Boolean);
-  return [
-    "Realtime compact context mode is enabled. No saved Pi compaction summary was present in the model context, so this is a compact role-by-role fallback summary of recent history instead of full replay.",
+  return capRealtimeSummaryText([
+    "Realtime compact context mode is enabled. No saved Pi compaction summary was present in the model context, so this is a compact role-by-role fallback summary of recent history instead of full replay. This is background context only; do not read it aloud or answer it directly.",
     `Included recent messages: ${lines.length}/${messages.length}`,
     "",
     ...lines,
-  ].join("\n");
+  ].join("\n"));
 }
 
 function splitCurrentTurn(messages = []) {
@@ -317,12 +324,9 @@ function estimateRealtimeSummaryContextTokens(context = {}) {
   const { history, currentTurn } = splitCurrentTurn(context.messages || []);
   const summaryText = buildRealtimeSummaryText(history);
   return estimateRealtimeContextTokens({
-    systemPrompt: context.systemPrompt || "",
+    systemPrompt: `${context.systemPrompt || ""}\n\n${summaryText}`,
     tools: context.tools || [],
-    messages: [
-      { role: "user", content: [{ type: "text", text: summaryText }] },
-      ...currentTurn,
-    ],
+    messages: currentTurn,
   });
 }
 
@@ -775,6 +779,7 @@ class RealtimeSession {
     this.lastMicBytes = 0;
     this.micMuteUntilTs = 0;
     this.lastTurnInputMode = null;           // null|audio|transcript|text
+    this.pendingTranscriptText = "";
     this.phase = "idle";
     this.lastReasoningPayload = null;        // for reasoning auto-retry
     this.lastResponseObject = null;
@@ -863,6 +868,16 @@ class RealtimeSession {
 
   notify(msg, level = "info") {
     try { this.lastCtx?.ui?.notify?.(msg, level); } catch {}
+  }
+
+  showTranscriptStatus(text, { pending = false, notify = false } = {}) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) return;
+    const line = `${pending ? "◇ … " : "◇ "}${truncateVisible(trimmed, pending ? 110 : 120)}`;
+    try { this.lastCtx?.ui?.setStatus?.("rt-transcript", line); } catch {}
+    if (notify) {
+      try { this.lastCtx?.ui?.notify?.(line, "info"); } catch {}
+    }
   }
 
   playChime(kind) {
@@ -1337,15 +1352,7 @@ class RealtimeSession {
       this.forwardNewMessages(messages);
       return;
     }
-    const { history, currentTurn } = splitCurrentTurn(messages);
-    const summaryText = buildRealtimeSummaryText(history);
-    if (summaryText.trim()) {
-      this.forwardMessage({
-        role: "user",
-        content: [{ type: "text", text: summaryText }],
-        timestamp: Date.now(),
-      });
-    }
+    const { currentTurn } = splitCurrentTurn(messages);
     for (const msg of currentTurn) this.forwardMessage(msg);
     this.forwardedMessageCount = messages.length;
   }
@@ -1430,8 +1437,13 @@ class RealtimeSession {
     if (!this.connected) await this.connect(this.lastCtx);
 
     // 2. session.update if anything changed
+    const { history: summaryHistory } = this.config.summaryContext ? splitCurrentTurn(context?.messages || []) : { history: [] };
+    const summaryText = this.config.summaryContext ? buildRealtimeSummaryText(summaryHistory) : "";
+    const systemPrompt = summaryText.trim()
+      ? `${context?.systemPrompt || ""}\n\n${summaryText}`
+      : (context?.systemPrompt || "");
     await this.maybeApplySession({
-      systemPrompt: context?.systemPrompt || "",
+      systemPrompt,
       tools: context?.tools || [],
     });
 
@@ -1653,6 +1665,8 @@ class RealtimeSession {
 
     if (type === "input_audio_buffer.speech_started") {
       this.player.interrupt();
+      this.pendingTranscriptText = "";
+      try { this.lastCtx?.ui?.setStatus?.("rt-transcript", undefined); } catch {}
       this.playChime("speech-start");
       this.setPhase("recording");
       // Optional: barge-in also aborts Pi's in-flight agent loop (text +
@@ -1664,15 +1678,33 @@ class RealtimeSession {
       return;
     }
 
+    // Mic transcription deltas are display-only until the server reports the
+    // completed transcript. STT-only commits on completion; full realtime never
+    // injects transcript text as a model prompt.
+    if (
+      type === "conversation.item.input_audio_transcription.delta" ||
+      type === "conversation.item.input_audio_transcription.partial" ||
+      type === "input_audio_transcription.delta"
+    ) {
+      const delta = String(event.delta ?? event.transcript ?? event.text ?? "");
+      if (delta) {
+        this.pendingTranscriptText = event.transcript || event.text ? delta : `${this.pendingTranscriptText}${delta}`;
+        this.showTranscriptStatus(this.pendingTranscriptText, { pending: true });
+      }
+      return;
+    }
+
     // Mic transcription: STT-only injects a user text message. Full realtime
     // treats the transcript as display-only because the model response is
     // grounded in the committed audio item.
     if (type === "conversation.item.input_audio_transcription.completed") {
-      const text = String(event.transcript || "").trim();
+      const text = String(event.transcript || this.pendingTranscriptText || "").trim();
+      this.pendingTranscriptText = "";
       this.clearPendingCommitTimer();
       if (this.config.sttOnly) this.setPhase("idle");
       if (text && this.config.sttOnly) {
         this.lastTurnInputMode = "transcript";
+        this.showTranscriptStatus(text, { pending: false, notify: true });
         this.markSpokenTranscript(text);
         try { this.pi.sendUserMessage(text, { deliverAs: "followUp" }); } catch (e) { this.notify(`sendUserMessage failed: ${e.message}`, "warning"); }
       } else if (!this.config.sttOnly) {
@@ -1684,9 +1716,7 @@ class RealtimeSession {
         // user-visible blocking state for full realtime.
         if (text) {
           this.lastTranscript = text;
-          const line = `◇ ${truncateVisible(text, 120)}`;
-          try { this.lastCtx?.ui?.setStatus?.("rt-transcript", line); } catch {}
-          try { this.lastCtx?.ui?.notify?.(line, "info"); } catch {}
+          this.showTranscriptStatus(text, { pending: false, notify: true });
         }
         if (!this.current && this.phase === "transcribing") this.setPhase("idle");
         else this.updateStatus();

@@ -201,7 +201,7 @@ Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/stt`, 
 
 ### Summary context mode
 
-`/rt summary=true` switches realtime history replay into compact-summary mode. The first realtime turn after enabling it sends the latest Pi compaction or branch summary from model context plus the current turn, rather than replaying the full conversation history. If no saved Pi summary is present, the extension falls back to a bounded role-by-role summary of recent messages. The default is `summary=false`, which preserves the previous full-history replay behavior.
+`/rt summary=true` switches realtime history replay into compact-summary mode. The first realtime turn after enabling it puts the latest Pi compaction or branch summary into realtime session instructions plus the current turn, rather than replaying the full conversation history as user messages. If no saved Pi summary is present, the extension falls back to a bounded role-by-role summary of recent messages. Summary text is capped and marked as background context so it is not spoken aloud or answered directly. The default is `summary=false`, which preserves the previous full-history replay behavior.
 
 `/rt fork=true ...` forks from the current tree/session leaf before applying the remaining realtime parameters in the replacement session. It composes with other env-style options such as `summary=true`, Pulse routing, and `start=vad`, and uses `position: "at"` so the current tree position is cloned rather than continuing in-place.
 
@@ -230,7 +230,7 @@ Examples:
 { "action": "stop" }
 ```
 
-Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. For full realtime turns, the transcript is shown as UI status/notification only; it is not queued as a message, is stripped from model context, and is not forwarded as a second text input.
+Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. Partial input transcription deltas are shown as pending `rt-transcript` UI status while speech is still in progress. Completed transcripts are shown as UI status/notification; full realtime never queues them as messages or forwards them as text input, while STT-only queues the completed transcript as a follow-up user message so it works even when the agent is busy.
 
 ## Autoreconnect
 

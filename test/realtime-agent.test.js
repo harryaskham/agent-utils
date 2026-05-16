@@ -720,7 +720,7 @@ test("/rt stt does not register realtime provider while text model remains selec
   }
 });
 
-test("/rt stt queues completed transcripts as follow-ups while agent is busy", async () => {
+test("/rt stt shows partial transcripts and queues completed transcripts as follow-ups", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   const previousRegister = process.env.PI_RT_REGISTER;
   const previousAlways = process.env.PI_RT_ALWAYS_REGISTER;
@@ -735,9 +735,14 @@ test("/rt stt queues completed transcripts as follow-ups while agent is busy", a
   try {
     await harness.commands.get("rt").handler("stt vad", harness.ctx);
     const ws = FakeWebSocket.instances[0];
+    ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "queue this" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.statuses.get("rt-transcript"), "◇ … queue this");
+
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "queue this while busy" }));
     await new Promise((resolve) => setTimeout(resolve, 5));
 
+    assert.equal(harness.statuses.get("rt-transcript"), "◇ queue this while busy");
     assert.deepEqual(harness.sentUserMessages, [
       { content: "queue this while busy", options: { deliverAs: "followUp" } },
     ]);
@@ -880,7 +885,7 @@ test("/rt speed applies realtime response speed and retries if rejected", async 
   }
 });
 
-test("/rt summary=true forwards compact summary instead of full history", async () => {
+test("/rt summary=true keeps compact summary in instructions, not spoken user messages", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   const previousRegister = process.env.PI_RT_REGISTER;
   process.env.PI_RT_API_KEY = "test-key";
@@ -905,11 +910,12 @@ test("/rt summary=true forwards compact summary instead of full history", async 
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, context, {});
     await new Promise((resolve) => setTimeout(resolve, 25));
 
+    const sessionUpdate = FakeWebSocket.instances[0].sent.find((m) => m.type === "session.update");
+    assert.match(sessionUpdate.session.instructions, /important compact facts/);
+    assert.doesNotMatch(sessionUpdate.session.instructions, /old full history/);
     const items = FakeWebSocket.instances[0].sent.filter((m) => m.type === "conversation.item.create");
-    assert.equal(items.length, 2);
-    assert.match(items[0].item.content[0].text, /important compact facts/);
-    assert.doesNotMatch(items[0].item.content[0].text, /old full history/);
-    assert.equal(items[1].item.content[0].text, "current realtime question");
+    assert.equal(items.length, 1);
+    assert.equal(items[0].item.content[0].text, "current realtime question");
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
     else process.env.PI_RT_API_KEY = previousApiKey;
@@ -975,6 +981,10 @@ test("full realtime committed audio triggers a custom turn, not transcript user 
     assert.equal(harness.sentMessages[0].message.display, false);
     assert.equal(harness.sentMessages[0].options.triggerTurn, true);
     assert.equal(harness.sentUserMessages.length, 0);
+
+    ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "da da" }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(harness.statuses.get("rt-transcript"), "◇ … da da");
 
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "da da da da" }));
     await new Promise((resolve) => setTimeout(resolve, 5));
