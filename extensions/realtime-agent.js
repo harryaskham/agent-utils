@@ -3102,19 +3102,30 @@ export default function realtimeAgentExtension(pi) {
   }
 
   pi.registerCommand("rt-dev", {
-    description: "Realtime dev helper: /rt-dev link [agent-utils checkout], /rt-dev status, /rt-dev unlink.",
+    description: "Realtime dev helper: /rt-dev link [agent-utils checkout], /rt-dev reload [agent-utils checkout], /rt-dev status, /rt-dev unlink.",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const action = (tokens[0] || "status").toLowerCase();
       const source = tokens.slice(1).join(" ") || ctx.cwd;
       try {
         if (["help", "usage", "?"].includes(action)) {
-          ctx.ui.notify("Usage: /rt-dev link [agent-utils checkout], /rt-dev status, /rt-dev unlink. After link, run /reload-tools or /reload to load local realtime source.", "info");
+          ctx.ui.notify("Usage: /rt-dev link [agent-utils checkout], /rt-dev reload [agent-utils checkout], /rt-dev status, /rt-dev unlink. Reload links optional local source, stops realtime, then calls Pi reload without restarting the process.", "info");
           return;
         }
         if (action === "link" || action === "on") {
           const result = installRealtimeDevLink(source);
           ctx.ui.notify(`Realtime dev link installed: ${result.linkDir} -> ${result.sourceRoot}. Run /reload-tools or /reload to load local source.`, "info");
+          return;
+        }
+        if (action === "reload") {
+          let linkResult = null;
+          if (tokens.length > 1) linkResult = installRealtimeDevLink(source);
+          if (typeof ctx.reload !== "function") throw new Error("This Pi runtime does not expose ctx.reload(). Use /reload manually after /rt-dev link.");
+          await controls.disable(ctx, { restoreModel: true }).catch(() => {});
+          ctx.ui.notify(linkResult
+            ? `Realtime dev link installed from ${linkResult.sourceRoot}; reloading Pi extensions from local source...`
+            : "Reloading Pi extensions for realtime dev without restarting the Pi process...", "info");
+          await ctx.reload();
           return;
         }
         if (action === "unlink" || action === "off") {

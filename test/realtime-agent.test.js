@@ -105,11 +105,13 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const emittedEvents = [];
   const sentMessages = [];
   const sentUserMessages = [];
+  let reloadCount = 0;
 
   const ctx = {
     model: initialModel || { provider: "litellm-anthropic", id: "claude-sonnet-4-5" },
     sessionManager: { getLeafId: () => "leaf-1", getBranch: () => [{ id: "root" }, { id: "leaf-1" }] },
     modelRegistry: { find: (provider, id) => models.get(`${provider}/${id}`) },
+    async reload() { reloadCount += 1; },
     ui: {
       notify(message, level = "info") { notifications.push({ message, level }); },
       setStatus(key, value) {
@@ -152,7 +154,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     return { cancelled: false };
   };
 
-  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx };
+  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -169,6 +171,7 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   realtimeAgentExtension(pi);
 
   assert.match(commands.get("rt").description, /mic\|listen\|audio/);
+  assert.match(commands.get("rt-dev").description, /reload/);
   assert.ok(tools.has("realtime_agent_control"));
   assert.match(commands.get("rt-listen").description, /ptt\|vad\|continuous/);
   assert.equal(typeof pi.realtime.snapshot, "function");
@@ -345,6 +348,37 @@ test("/rt-dev links local realtime source into Pi auto-discovery dir", async () 
 
     await commands.get("rt-dev").handler("unlink", ctx);
     assert.equal(existsSync(linkDir), false);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(checkout, { recursive: true, force: true });
+  }
+});
+
+test("/rt-dev reload optionally links and calls Pi reload", async () => {
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const agentDir = mkdtempSync(join(tmpdir(), "rt-dev-reload-agent-"));
+  const checkout = mkdtempSync(join(tmpdir(), "rt-dev-reload-checkout-"));
+  mkdirSync(join(checkout, "extensions"), { recursive: true });
+  writeFileSync(join(checkout, "package.json"), JSON.stringify({ name: "agent-utils" }));
+  writeFileSync(join(checkout, "extensions", "realtime-agent.js"), "export default function noop() {}\n");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const h = makeHarness();
+  h.ctx.cwd = checkout;
+  realtimeAgentExtension(h.pi);
+
+  try {
+    await h.commands.get("rt-dev").handler("reload", h.ctx);
+    const linkDir = join(agentDir, "extensions", "agent-utils-realtime-dev");
+    assert.equal(h.reloadCount, 1);
+    assert.equal(existsSync(linkDir), false);
+    assert.match(h.notifications.at(-1).message, /without restarting/);
+
+    await h.commands.get("rt-dev").handler(`reload ${checkout}`, h.ctx);
+    assert.equal(h.reloadCount, 2);
+    assert.equal(readlinkSync(join(linkDir, "extensions")), join(checkout, "extensions"));
+    assert.match(h.notifications.at(-1).message, /reloading Pi extensions from local source/);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
