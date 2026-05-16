@@ -867,6 +867,31 @@ test("/rt start force-registers realtime provider and switches away from current
   }
 });
 
+test("/rt clamps invalid realtime model env to supported fallback", async () => {
+  const previousApiKey = process.env.PI_RT_API_KEY;
+  const previousRtModel = process.env.PI_RT_MODEL;
+  process.env.PI_RT_API_KEY = "test-key";
+  process.env.PI_RT_MODEL = "gpt-4o-mini";
+  FakeWebSocket.instances = [];
+  const previousModel = { provider: "litellm-openai", id: "gpt-5.5" };
+  const { pi, commands, handlers, setModelCalls, ctx } = makeHarness({ initialModel: previousModel });
+  realtimeAgentExtension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+  try {
+    await commands.get("rt").handler("start nolisten", ctx);
+    assert.equal(setModelCalls.at(-1)?.provider, "openai-realtime");
+    assert.equal(setModelCalls.at(-1)?.id, "gpt-realtime-2");
+    assert.equal(pi.realtime.snapshot().model, "gpt-realtime-2");
+  } finally {
+    await commands.get("rt-off").handler("", ctx);
+    if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previousApiKey;
+    if (previousRtModel === undefined) delete process.env.PI_RT_MODEL;
+    else process.env.PI_RT_MODEL = previousRtModel;
+  }
+});
+
 test("/rt fork=true forks current tree position and preserves other params", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_API_KEY = "test-key";

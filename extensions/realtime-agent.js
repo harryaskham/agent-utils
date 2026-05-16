@@ -82,6 +82,7 @@ import { ToolSchema } from "./lib/tool-schema.js";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
+const SUPPORTED_REALTIME_MODELS = new Set(["gpt-realtime-2", "gpt-realtime"]);
 const REALTIME_API = "openai-realtime";
 const REALTIME_INSTRUCTIONS_PREFIX = "You are running inside an OpenAI Realtime audio session. For microphone turns, the committed input audio is already present in the realtime conversation; the transcript visible in Pi is a UI/history trigger, not your only input. Do not tell the user you only receive text transcripts when full realtime mode is active.";
 const REALTIME_AUDIO_TURN_MESSAGE = "Realtime audio input committed; starting audio-native response.";
@@ -2195,13 +2196,20 @@ function normalizeTranscriptionModel(raw) {
   return raw;
 }
 
+function normalizeRealtimeModelId(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return DEFAULT_MODEL;
+  const id = value.includes("/") ? value.split("/").pop() : value;
+  return SUPPORTED_REALTIME_MODELS.has(id) ? id : DEFAULT_MODEL;
+}
+
 function makeInitialConfig() {
   return {
     baseUrl: env("PI_RT_BASE_URL", "OPENAI_BASE_URL") || "https://api.openai.com",
-    model: env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL") || DEFAULT_MODEL,
+    model: normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL")),
     directAzure: envBool("PI_RT_DIRECT_AZURE", false) || (env("PI_RT_PROVIDER") || "").toLowerCase() === "azure",
     azureEndpoint: env("PI_RT_AZURE_ENDPOINT", "AZURE_CANADACENTRAL_ENDPOINT", "AZURE_OPENAI_ENDPOINT"),
-    azureDeployment: env("PI_RT_AZURE_DEPLOYMENT", "AZURE_CANADACENTRAL_DEPLOYMENT") || env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL") || DEFAULT_MODEL,
+    azureDeployment: env("PI_RT_AZURE_DEPLOYMENT", "AZURE_CANADACENTRAL_DEPLOYMENT") || normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL")),
     azureApiVersion: env("PI_RT_AZURE_API_VERSION", "AZURE_OPENAI_API_VERSION") || "2025-04-01-preview",
     azureProtocol: env("PI_RT_AZURE_PROTOCOL") || "v1",
     transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL")),
@@ -2688,7 +2696,7 @@ export default function realtimeAgentExtension(pi) {
   pi.on("session_start", (_event, ctx) => {
     session.lastCtx = ctx;
     if (isRealtimeModel(ctx.model)) {
-      config.model = ctx.model.id;
+      config.model = normalizeRealtimeModelId(ctx.model.id);
       session.showStatusWidget(ctx);
     } else {
       session.updateStatus(ctx);
@@ -2727,7 +2735,7 @@ export default function realtimeAgentExtension(pi) {
 
   pi.on("model_select", (event, ctx) => {
     if (isRealtimeModel(event.model)) {
-      config.model = event.model.id;
+      config.model = normalizeRealtimeModelId(event.model.id);
       session.showStatusWidget(ctx);
       // History pointer must reset whenever the model changes — otherwise we
       // would skip replaying the prior conversation into the WSS.
@@ -2768,9 +2776,14 @@ export default function realtimeAgentExtension(pi) {
       if (current && !isRealtimeModel(current)) {
         config.previousModel = { provider: current.provider, id: current.id };
       }
-      const modelId = config.model || "gpt-realtime-2";
-      const m = ctx.modelRegistry.find?.("openai-realtime", modelId)
-        || { provider: "openai-realtime", id: modelId, name: modelId };
+      const requestedModelId = normalizeRealtimeModelId(config.model);
+      const foundModel = ctx.modelRegistry.find?.("openai-realtime", requestedModelId)
+        || ctx.modelRegistry.find?.("openai-realtime", DEFAULT_MODEL);
+      const modelId = normalizeRealtimeModelId(foundModel?.id || requestedModelId);
+      config.model = modelId;
+      const m = foundModel && normalizeRealtimeModelId(foundModel.id) === modelId
+        ? foundModel
+        : { provider: "openai-realtime", id: modelId, name: modelId, api: REALTIME_API, contextWindow: REALTIME_CONTEXT_WINDOW_TOKENS };
       config.defaultModelSnapshot ||= readDefaultModelSettings();
       const ok = await pi.setModel(m);
       restoreDefaultModelSettingsSoon(config.defaultModelSnapshot);
