@@ -626,6 +626,10 @@ export default function appAutomationExtension(pi) {
       sshConnectTimeoutSeconds: Type.Optional(Type.Number({ description: "SSH ConnectTimeout seconds passed to both scp and ssh. Defaults to APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS or 10." })),
       preflightAttempts: Type.Optional(Type.Number({ description: "Bounded SSH preflight attempts before giving up. Defaults to APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS or 1, capped at 5; set 0 to skip preflight and try scp/PowerShell directly." })),
       scriptTransfer: Type.Optional(Type.String({ description: "PowerShell script transfer mode: scp (default) or inline (uses pwsh -EncodedCommand over SSH). Defaults to APP_AUTOMATION_MSDEV_SCRIPT_TRANSFER or scp." })),
+      ensureAppHost: Type.Optional(Type.Boolean({ description: "Ensure a dedicated non-disruptive Edge/Chrome apphost is running with the requested CDP port before extraction. Defaults to APP_AUTOMATION_MSDEV_ENSURE_APPHOST or false." })),
+      appHostBrowser: Type.Optional(Type.String({ description: "Browser for ensureAppHost: edge (default) or chrome." })),
+      appHostUserDataDir: Type.Optional(Type.String({ description: "Optional Windows user-data-dir for the dedicated apphost. Defaults to a cache under the Windows user profile." })),
+      appHostSourceUserDataDir: Type.Optional(Type.String({ description: "Optional Windows source user-data-dir to clone when the apphost profile is not initialized. Defaults to the selected browser's normal profile root." })),
     }),
     async execute(_toolCallId, params, signal) {
       const summary = await runMsDevCdpRefresh({
@@ -639,6 +643,10 @@ export default function appAutomationExtension(pi) {
         sshConnectTimeoutSeconds: params.sshConnectTimeoutSeconds,
         preflightAttempts: params.preflightAttempts,
         scriptTransfer: params.scriptTransfer,
+        ensureAppHost: params.ensureAppHost,
+        appHostBrowser: params.appHostBrowser,
+        appHostUserDataDir: params.appHostUserDataDir,
+        appHostSourceUserDataDir: params.appHostSourceUserDataDir,
         exec: (command, args, options = {}) => pi.exec(command, args, { ...options, signal }),
       });
       return textResult(renderMsDevCdpRefresh(summary), { msdevCdpRefresh: summary });

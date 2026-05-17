@@ -38,7 +38,7 @@ import { buildCanvasPastePlan, syncMarkdownCanvas } from "../extensions/app-auto
 import { buildEditorReplaceScript } from "../extensions/app-automation/editor.js";
 import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-automation/generic-snapshot.js";
 import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "../extensions/app-automation/briefing.js";
-import { buildMsDevCdpPowerShell, renderMsDevCdpRefresh, runMsDevCdpRefresh } from "../extensions/app-automation/msdev-cdp.js";
+import { buildMsDevAppHostPowerShell, buildMsDevCdpPowerShell, renderMsDevCdpRefresh, runMsDevCdpRefresh } from "../extensions/app-automation/msdev-cdp.js";
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
 import { buildSafeRunManifest, runStatusFromResults } from "../extensions/app-automation/run-manifest.js";
 import { readLatestMsDevRefreshSummary, renderDoctorReport } from "../extensions/app-automation/doctor.js";
@@ -673,6 +673,53 @@ test("ms-dev CDP refresh writes bounded snapshots through ssh PowerShell bridge"
   const outlookSnapshot = JSON.parse(await readFile(path.join(root, "snapshots", "outlook", "notifications.snapshot.json"), "utf8"));
   assert.equal(outlookSnapshot.items[0].url, "https://outlook.office.com/mail/id/1");
   assert.doesNotMatch(JSON.stringify(outlookSnapshot), /token=secret|auth=secret|#frag/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ms-dev apphost ensure script targets a dedicated browser profile", () => {
+  const script = buildMsDevAppHostPowerShell({ cdpPort: 9333, browser: "edge", urls: ["https://outlook.office.com/mail/"] });
+  assert.match(script, /remote-debugging-port=\$CdpPort/);
+  assert.match(script, /agent-utils-work-apphost/);
+  assert.match(script, /Microsoft\\Edge\\Application\\msedge\.exe/);
+  assert.match(script, /https:\/\/outlook\.office\.com\/mail\//);
+});
+
+test("ms-dev CDP refresh can ensure a dedicated apphost before extraction", async () => {
+  const root = await mkdir(path.join(os.tmpdir(), `app-msdev-cdp-apphost-${Date.now()}`), { recursive: true });
+  const commands = [];
+  const stdoutPayload = JSON.stringify({
+    capturedAt: "2026-05-13T03:00:00Z",
+    source: "ms-dev-chrome-cdp",
+    cdpPort: 9224,
+    results: [
+      { app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [{ text: "Unread Ada Lovelace Project update", source: "Outlook Mail" }] } },
+    ],
+  });
+  const summary = await runMsDevCdpRefresh({
+    root,
+    sshTarget: "test-user@ms-dev",
+    apps: ["outlook"],
+    actions: ["notifications.snapshot"],
+    preflightAttempts: 0,
+    scriptTransfer: "inline",
+    ensureAppHost: true,
+    exec: async (command, args) => {
+      commands.push({ command, args });
+      if (command !== "ssh") return { code: 1, stdout: "", stderr: "unexpected" };
+      const remoteCommand = args[5] || "";
+      if (commands.length === 1) {
+        assert.match(remoteCommand, /EncodedCommand/);
+        return { code: 0, stdout: JSON.stringify({ status: "ready", started: true, cdpReady: true, cdpPort: 9224, browser: "edge" }), stderr: "" };
+      }
+      assert.match(remoteCommand, /EncodedCommand/);
+      return { code: 0, stdout: stdoutPayload, stderr: "" };
+    },
+  });
+  assert.equal(commands.length, 2);
+  assert.equal(summary.appHost.status, "ready");
+  assert.equal(summary.status, "ok");
+  assert.match(renderMsDevCdpRefresh(summary), /appHost status=ready started=true cdpReady=true browser=edge/);
+  assert.match(renderMsDevCdpRefresh(summary), /outlook\.notifications\.snapshot: status=ok items=1/);
   await rm(root, { recursive: true, force: true });
 });
 

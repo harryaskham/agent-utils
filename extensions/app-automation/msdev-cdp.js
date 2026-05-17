@@ -11,6 +11,9 @@ export const DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS = 10;
 export const DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS = 1;
 export const MAX_MSDEV_PREFLIGHT_ATTEMPTS = 5;
 export const DEFAULT_MSDEV_SCRIPT_TRANSFER = "scp";
+export const DEFAULT_MSDEV_ENSURE_APPHOST = false;
+export const DEFAULT_MSDEV_APPHOST_BROWSER = "edge";
+
 
 export const DEFAULT_MSDEV_CDP_TARGETS = [
   {
@@ -150,6 +153,10 @@ export function msDevCdpConfig(env = process.env) {
     sshConnectTimeoutSeconds: Number.parseInt(String(env.APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
     preflightAttempts: boundedInteger(env.APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
     scriptTransfer: normalizeScriptTransfer(env.APP_AUTOMATION_MSDEV_SCRIPT_TRANSFER),
+    ensureAppHost: ["1", "true", "yes", "on"].includes(String(env.APP_AUTOMATION_MSDEV_ENSURE_APPHOST || "").toLowerCase()),
+    appHostBrowser: env.APP_AUTOMATION_MSDEV_APPHOST_BROWSER || DEFAULT_MSDEV_APPHOST_BROWSER,
+    appHostUserDataDir: env.APP_AUTOMATION_MSDEV_APPHOST_USER_DATA_DIR || "",
+    appHostSourceUserDataDir: env.APP_AUTOMATION_MSDEV_APPHOST_SOURCE_USER_DATA_DIR || "",
   };
 }
 
@@ -163,7 +170,74 @@ export function msDevCdpCommandSummary(config = msDevCdpConfig()) {
     sshConnectTimeoutSeconds: config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS,
     preflightAttempts: boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS }),
     scriptTransfer: normalizeScriptTransfer(config.scriptTransfer),
+    ensureAppHost: Boolean(config.ensureAppHost),
+    appHostBrowser: config.appHostBrowser || DEFAULT_MSDEV_APPHOST_BROWSER,
+    appHostUserDataDirConfigured: Boolean(config.appHostUserDataDir),
+    appHostSourceUserDataDirConfigured: Boolean(config.appHostSourceUserDataDir),
   };
+}
+
+export function buildMsDevAppHostPowerShell({ cdpPort = DEFAULT_MSDEV_CDP_PORT, browser = DEFAULT_MSDEV_APPHOST_BROWSER, userDataDir = "", sourceUserDataDir = "", urls = [] } = {}) {
+  const configJson = JSON.stringify({
+    cdpPort: Number.parseInt(String(cdpPort), 10) || DEFAULT_MSDEV_CDP_PORT,
+    browser: String(browser || DEFAULT_MSDEV_APPHOST_BROWSER),
+    userDataDir: String(userDataDir || ""),
+    sourceUserDataDir: String(sourceUserDataDir || ""),
+    urls: Array.isArray(urls) && urls.length ? urls.map((url) => String(url)) : DEFAULT_MSDEV_CDP_TARGETS.map((target) => target.url),
+  });
+  return `$ErrorActionPreference = 'Continue'
+$ConfigJson = @'
+${configJson}
+'@
+$Config = $ConfigJson | ConvertFrom-Json
+$CdpPort = [int]$Config.cdpPort
+$Browser = ([string]$Config.browser).ToLowerInvariant()
+function Test-CdpReady {
+  try {
+    $r = Invoke-RestMethod -TimeoutSec 2 -Uri "http://127.0.0.1:$CdpPort/json/version"
+    return $null -ne $r.webSocketDebuggerUrl
+  } catch { return $false }
+}
+function Emit-AppHost($Status, $Started, $Ready, $Extra) {
+  $obj = [ordered]@{ status=$Status; started=$Started; cdpReady=$Ready; cdpPort=$CdpPort; browser=$Browser }
+  if ($null -ne $Extra) { foreach ($key in $Extra.Keys) { $obj[$key] = $Extra[$key] } }
+  [pscustomobject]$obj | ConvertTo-Json -Depth 20 -Compress
+}
+if (Test-CdpReady) { Emit-AppHost 'ready' $false $true @{ alreadyRunning=$true }; exit 0 }
+if ($Browser -eq 'chrome') {
+  $Exe = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  $DefaultSource = Join-Path $env:LOCALAPPDATA 'Google\\Chrome\\User Data'
+  $DefaultDst = Join-Path $env:USERPROFILE '.cache\\agent-utils-work-apphost\\chrome-user-data'
+} else {
+  $Exe = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+  $DefaultSource = Join-Path $env:LOCALAPPDATA 'Microsoft\\Edge\\User Data'
+  $DefaultDst = Join-Path $env:USERPROFILE '.cache\\agent-utils-work-apphost\\edge-user-data'
+}
+$UserDataDir = if ([string]::IsNullOrWhiteSpace([string]$Config.userDataDir)) { $DefaultDst } else { [string]$Config.userDataDir }
+$SourceUserDataDir = if ([string]::IsNullOrWhiteSpace([string]$Config.sourceUserDataDir)) { $DefaultSource } else { [string]$Config.sourceUserDataDir }
+$copyExit = $null
+$copyAttempted = $false
+try { New-Item -ItemType Directory -Force -Path $UserDataDir | Out-Null } catch {}
+$pref = Join-Path $UserDataDir 'Default\\Preferences'
+if ((-not (Test-Path $pref)) -and (Test-Path $SourceUserDataDir)) {
+  $copyAttempted = $true
+  $excludeDirs = @('Cache','Code Cache','GPUCache','DawnCache','ShaderCache','GrShaderCache','Crashpad','BrowserMetrics','optimization_guide_model_store','Safe Browsing')
+  $excludeFiles = @('SingletonLock','SingletonSocket','SingletonCookie','lockfile','*.tmp')
+  & robocopy $SourceUserDataDir $UserDataDir /E /XD $excludeDirs /XF $excludeFiles /R:1 /W:1 /NFL /NDL /NP | Out-Null
+  $copyExit = $LASTEXITCODE
+}
+Get-ChildItem -Path $UserDataDir -Filter 'Singleton*' -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -Filter "name='msedge.exe' or name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*--remote-debugging-port=$CdpPort*" -or $_.CommandLine -like "*$UserDataDir*" } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
+Start-Sleep -Milliseconds 500
+if (-not (Test-Path $Exe)) { Emit-AppHost 'failed' $false $false @{ reason='browser_executable_missing'; copyAttempted=$copyAttempted; copyExitCode=$copyExit }; exit 3 }
+$LaunchArgs = @("--remote-debugging-port=$CdpPort", "--remote-debugging-address=127.0.0.1", "--user-data-dir=$UserDataDir", '--profile-directory=Default', '--no-first-run', '--disable-first-run-ui', '--no-default-browser-check')
+foreach ($url in @($Config.urls)) { if (-not [string]::IsNullOrWhiteSpace([string]$url)) { $LaunchArgs += [string]$url } }
+try { $proc = Start-Process -FilePath $Exe -ArgumentList $LaunchArgs -PassThru } catch { Emit-AppHost 'failed' $false $false @{ reason='start_process_failed'; error=($_.Exception.Message | Out-String).Trim(); copyAttempted=$copyAttempted; copyExitCode=$copyExit }; exit 4 }
+$ready = $false
+for ($i = 0; $i -lt 30; $i += 1) { Start-Sleep -Milliseconds 500; if (Test-CdpReady) { $ready = $true; break } }
+if ($ready) { Emit-AppHost 'ready' $true $true @{ pid=$proc.Id; copyAttempted=$copyAttempted; copyExitCode=$copyExit }; exit 0 }
+Emit-AppHost 'failed' $true $false @{ pid=$proc.Id; reason='cdp_not_ready'; copyAttempted=$copyAttempted; copyExitCode=$copyExit }; exit 2
+`;
 }
 
 export function buildMsDevCdpPowerShell({ cdpPort = DEFAULT_MSDEV_CDP_PORT, targets = DEFAULT_MSDEV_CDP_TARGETS } = {}) {
@@ -576,7 +650,7 @@ function parseCdpJson(stdout = "") {
   return JSON.parse(trimmed.slice(first, last + 1));
 }
 
-async function writeBridgeFailureManifest({ bridgeDir, status, config, targets = [], error }) {
+async function writeBridgeFailureManifest({ bridgeDir, status, config, targets = [], error, appHost }) {
   const errorKind = classifyBridgeError(error);
   const manifest = {
     version: 1,
@@ -585,6 +659,7 @@ async function writeBridgeFailureManifest({ bridgeDir, status, config, targets =
     source: "ms-dev-chrome-cdp",
     cdpPort: config.cdpPort,
     config: msDevCdpCommandSummary(config),
+    ...(appHost ? { appHost } : {}),
     snapshots: [],
     failed: targets.map((target) => ({
       app: target.app,
@@ -610,6 +685,10 @@ export async function runMsDevCdpRefresh({
   sshConnectTimeoutSeconds,
   preflightAttempts,
   scriptTransfer,
+  ensureAppHost,
+  appHostBrowser,
+  appHostUserDataDir,
+  appHostSourceUserDataDir,
   exec,
   timeoutMs = 120_000,
   env = process.env,
@@ -623,6 +702,10 @@ export async function runMsDevCdpRefresh({
     sshConnectTimeoutSeconds: sshConnectTimeoutSeconds ?? defaults.sshConnectTimeoutSeconds,
     preflightAttempts: preflightAttempts ?? defaults.preflightAttempts,
     scriptTransfer: scriptTransfer ?? defaults.scriptTransfer,
+    ensureAppHost: ensureAppHost ?? defaults.ensureAppHost,
+    appHostBrowser: appHostBrowser ?? defaults.appHostBrowser,
+    appHostUserDataDir: appHostUserDataDir ?? defaults.appHostUserDataDir,
+    appHostSourceUserDataDir: appHostSourceUserDataDir ?? defaults.appHostSourceUserDataDir,
   };
   config.sshTarget = config.sshTarget || "";
   config.pwshPath = config.pwshPath || DEFAULT_MSDEV_PWSH;
@@ -631,6 +714,10 @@ export async function runMsDevCdpRefresh({
   config.sshConnectTimeoutSeconds = Number.parseInt(String(config.sshConnectTimeoutSeconds || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS), 10) || DEFAULT_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS;
   config.preflightAttempts = boundedInteger(config.preflightAttempts, DEFAULT_MSDEV_PREFLIGHT_ATTEMPTS, { min: 0, max: MAX_MSDEV_PREFLIGHT_ATTEMPTS });
   config.scriptTransfer = normalizeScriptTransfer(config.scriptTransfer);
+  config.ensureAppHost = Boolean(config.ensureAppHost);
+  config.appHostBrowser = String(config.appHostBrowser || DEFAULT_MSDEV_APPHOST_BROWSER).toLowerCase() === "chrome" ? "chrome" : DEFAULT_MSDEV_APPHOST_BROWSER;
+  config.appHostUserDataDir = config.appHostUserDataDir || "";
+  config.appHostSourceUserDataDir = config.appHostSourceUserDataDir || "";
   if (!root) throw new Error("runMsDevCdpRefresh requires root");
   if (!exec) throw new Error("runMsDevCdpRefresh requires an exec(command, args, options) function");
   const targets = selectedTargets({ apps, actions });
@@ -643,6 +730,7 @@ export async function runMsDevCdpRefresh({
   const script = buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets });
   await writeFile(localScriptPath, script, "utf8");
   const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
+  let appHost = null;
   const preflightTimeoutMs = Math.min(timeoutMs, Math.max(25_000, (config.sshConnectTimeoutSeconds + 20) * 1000));
   if (config.preflightAttempts > 0) {
     let preflight;
@@ -651,28 +739,47 @@ export async function runMsDevCdpRefresh({
       if (preflight.code === 0) break;
     }
     if (preflight.code !== 0) {
-      return writeBridgeFailureManifest({ bridgeDir, status: "preflight_failed", config, targets, error: execFailureText(preflight, "ssh preflight failed") });
+      return writeBridgeFailureManifest({ bridgeDir, status: "preflight_failed", config, targets, error: execFailureText(preflight, "ssh preflight failed"), appHost });
     }
   }
+  if (config.ensureAppHost) {
+    const appHostScript = buildMsDevAppHostPowerShell({
+      cdpPort: config.cdpPort,
+      browser: config.appHostBrowser,
+      userDataDir: config.appHostUserDataDir,
+      sourceUserDataDir: config.appHostSourceUserDataDir,
+      urls: targets.map((target) => target.url),
+    });
+    const appHostCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${shellQuote(powerShellEncodedCommand(appHostScript))}`;
+    const ensured = await exec("ssh", [...sshArgs, config.sshTarget, appHostCommand], { timeout: timeoutMs });
+    if (ensured.code === 0) {
+      try { appHost = parseCdpJson(ensured.stdout); } catch (error) { appHost = { status: "parse_failed", error: compact(error.message, 300) }; }
+    } else {
+      let parsed = null;
+      try { parsed = parseCdpJson(ensured.stdout); } catch {}
+      appHost = parsed || { status: "failed", error: execFailureText(ensured, "apphost ensure failed") };
+    }
+  }
+
   let remoteCommand;
   if (config.scriptTransfer === "inline") {
     remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${shellQuote(powerShellEncodedCommand(script))}`;
   } else {
     const copy = await exec("scp", [...sshArgs, localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
     if (copy.code !== 0) {
-      return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(copy, "scp failed") });
+      return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(copy, "scp failed"), appHost });
     }
     remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
   }
   const run = await exec("ssh", [...sshArgs, config.sshTarget, remoteCommand], { timeout: timeoutMs });
   if (run.code !== 0) {
-    return writeBridgeFailureManifest({ bridgeDir, status: "run_failed", config, targets, error: execFailureText(run, "ssh command failed") });
+    return writeBridgeFailureManifest({ bridgeDir, status: "run_failed", config, targets, error: execFailureText(run, "ssh command failed"), appHost });
   }
   let payload;
   try {
     payload = parseCdpJson(run.stdout);
   } catch (error) {
-    return writeBridgeFailureManifest({ bridgeDir, status: "parse_failed", config, targets, error: error.message });
+    return writeBridgeFailureManifest({ bridgeDir, status: "parse_failed", config, targets, error: error.message, appHost });
   }
   const byKey = new Map(targets.map((target) => [`${target.app}:${target.action}`, target]));
   const snapshots = [];
@@ -695,6 +802,7 @@ export async function runMsDevCdpRefresh({
     source: payload.source || "ms-dev-chrome-cdp",
     cdpPort: payload.cdpPort || config.cdpPort,
     config: msDevCdpCommandSummary(config),
+    ...(appHost ? { appHost } : {}),
     snapshots,
     failed,
   };
@@ -712,6 +820,7 @@ export function renderMsDevCdpRefresh(summary = {}) {
   const preflightAttempts = summary.config?.preflightAttempts;
   const scriptTransfer = summary.config?.scriptTransfer;
   const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${snapshotStatuses ? ` snapshotStatuses=${snapshotStatuses}` : ""}${skippedWrite ? ` skippedWrite=${skippedWrite}` : ""}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}${preflightAttempts != null ? ` preflightAttempts=${preflightAttempts}` : ""}${scriptTransfer ? ` scriptTransfer=${scriptTransfer}` : ""}`];
+  if (summary.appHost) lines.push(`appHost status=${summary.appHost.status || "unknown"}${summary.appHost.started ? " started=true" : ""}${summary.appHost.cdpReady ? " cdpReady=true" : ""}${summary.appHost.browser ? ` browser=${summary.appHost.browser}` : ""}${summary.appHost.reason ? ` reason=${summary.appHost.reason}` : ""}`);
   if (summary.manifestPath) lines.push(`manifest=${sanitizeBridgeFailureText(summary.manifestPath) || "[local-path]"}`);
   for (const snapshot of summary.snapshots || []) {
     lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.skippedWrite ? " skippedWrite=true" : ""}${snapshot.authRequired ? " authRequired=true" : ""}`);
