@@ -417,14 +417,16 @@ test("/rt-dev reload optionally links and calls Pi reload", async () => {
   }
 });
 
-test("realtime provider uses a dedicated API so it does not override text providers", async () => {
+test("realtime provider registers during extension startup with a dedicated API", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_API_KEY = "test-key";
   const { pi, commands, providers, handlers, ctx } = makeHarness();
   realtimeAgentExtension(pi);
-  handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   try {
+    assert.equal(providers.get("openai-realtime")?.api, "openai-realtime");
+    assert.ok(providers.get("openai-realtime")?.models?.some((model) => model.id === "gpt-realtime-2"));
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
     await commands.get("rt").handler("start nolisten", ctx);
     assert.equal(providers.get("openai-realtime")?.api, "openai-realtime");
   } finally {
@@ -746,7 +748,7 @@ test("session_before_compact disables realtime and restores text model", async (
     assert.deepEqual(result, { cancel: true });
     assert.equal(ctx.model.provider, "litellm-openai");
     assert.equal(setModelCalls.at(-1), previousModel);
-    assert.equal(providers.has("openai-realtime"), false);
+    assert.equal(providers.has("openai-realtime"), true);
     assert.match(notifications.at(-1)?.message || "", /restored the text model/);
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
@@ -789,7 +791,7 @@ test("/rt temporary realtime switch preserves default model settings", async () 
   }
 });
 
-test("/rt stt does not register realtime provider while text model remains selected", async () => {
+test("/rt stt keeps the text model selected while startup-registered realtime provider remains available", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   const previousRegister = process.env.PI_RT_REGISTER;
   const previousAlways = process.env.PI_RT_ALWAYS_REGISTER;
@@ -804,7 +806,7 @@ test("/rt stt does not register realtime provider while text model remains selec
   try {
     await commands.get("rt").handler("stt vad", ctx);
     assert.equal(ctx.model.provider, "litellm-openai");
-    assert.equal(providers.has("openai-realtime"), false);
+    assert.equal(providers.has("openai-realtime"), true);
     assert.equal(FakeWebSocket.instances.length, 1);
   } finally {
     await commands.get("rt-off").handler("", ctx);
@@ -1308,7 +1310,8 @@ test("/rt nolisten switches to realtime, connects through injected WebSocket, an
 
   try {
     await commands.get("rt").handler("nolisten", ctx);
-    assert.equal(setModelCalls.at(-1), realtimeModel);
+    assert.equal(setModelCalls.at(-1)?.provider, realtimeModel.provider);
+    assert.equal(setModelCalls.at(-1)?.id, realtimeModel.id);
     assert.ok(widgets.has("realtime-status"));
     assert.equal(FakeWebSocket.instances.length, 1);
 

@@ -2244,11 +2244,14 @@ function makeInitialConfig() {
 // Provider registration
 // ---------------------------------------------------------------------------
 
-function unregisterRealtimeProvider(pi) {
-  try { pi.unregisterProvider?.("openai-realtime"); } catch {}
+function unregisterRealtimeProvider(_pi) {
+  // Keep the realtime provider/model registered for Pi startup model discovery
+  // and `--list-models` even when realtime audio is disabled or a text model is
+  // selected. The provider uses its own dedicated API id, so leaving it present
+  // no longer risks routing ordinary text-model turns through realtime.
 }
 
-function registerRealtimeProvider(pi, session, { force = false } = {}) {
+function registerRealtimeProvider(pi, session) {
   const baseUrl = env("PI_RT_BASE_URL", "OPENAI_BASE_URL") || "https://api.openai.com";
   const apiKey = env("PI_RT_API_KEY") ? "PI_RT_API_KEY" : "OPENAI_API_KEY";
   const models = [
@@ -2271,19 +2274,10 @@ function registerRealtimeProvider(pi, session, { force = false } = {}) {
       maxTokens: 4096,
     },
   ];
-  // Skip provider registration entirely unless the user opts in. Pi's model
-  // dispatcher can otherwise route other openai-responses-style models to our
-  // streamSimple, which then errors with "not a realtime model" on every turn.
-  // Opt in by setting PI_RT_REGISTER=1, by selecting an openai-realtime model
-  // on launch via --model, or by explicit /rt invocation (which re-registers).
-  if (
-    !force &&
-    !envBool("PI_RT_REGISTER", false) &&
-    !/^openai-realtime\//.test(env("PI_MODEL") || "") &&
-    !envBool("PI_RT_ALWAYS_REGISTER", false)
-  ) {
-    return;
-  }
+  // Register during extension factory startup so model-pattern resolution,
+  // scoped-model checks, and `--list-models` can see openai-realtime models
+  // before any `/rt` command is invoked. This is safe for text turns because
+  // the provider advertises a dedicated `openai-realtime` API id.
   pi.registerProvider("openai-realtime", {
     name: "OpenAI Realtime",
     api: REALTIME_API,
@@ -2686,8 +2680,9 @@ export default function realtimeAgentExtension(pi) {
   try { pi.events?.emit?.("realtime:controls", controls); } catch {}
   let terminalInputUnsub = null;
 
-  // Register provider lazily so users who never use realtime aren't affected
-  // by potential model-dispatch fallbacks.
+  // Register provider immediately during extension factory startup. Pi queues
+  // dynamic provider registrations made while loading extensions and flushes
+  // them before normal startup continues.
   registerRealtimeProvider(pi, session);
 
   pi.registerMessageRenderer?.(RT_CUSTOM_TYPE, (message, _options, theme) => {
@@ -2766,7 +2761,7 @@ export default function realtimeAgentExtension(pi) {
 
   async function ensureRealtimeProvider(ctx) {
     if (!ctx.modelRegistry.find?.("openai-realtime", config.model || "gpt-realtime-2")) {
-      try { registerRealtimeProvider(pi, session, { force: true }); } catch {}
+      try { registerRealtimeProvider(pi, session); } catch {}
     }
   }
 
