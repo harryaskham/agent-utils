@@ -54,16 +54,50 @@ const TOOL_PREFIX = "pi_graphics";
 export default function piGraphicsExtension(pi) {
   const state = makeState();
   const autoWidgetId = "pi-graphics-auto-pulse";
+  let lastAutoWidgetSignature = "";
 
-  pi.on("session_start", (_event, ctx) => {
-    if (!shouldAutoShowGraphics() || !ensureUnicodePlacement(state)) return;
+  function showAutoPulse(ctx, options = {}) {
+    if (!shouldAutoShowGraphics() || !ensureUnicodePlacement(state)) return false;
+    const signature = JSON.stringify({
+      tone: options.tone || "assistant",
+      caption: options.caption || "kitty graphics pulse active",
+      columns: options.columns || 42,
+      rows: options.rows || 6,
+      frames: options.frames || 8,
+      delayMs: options.delayMs || 90,
+    });
+    if (signature === lastAutoWidgetSignature) return true;
     try {
-      const widget = buildAutoPulseWidget(state);
+      const widget = buildAutoPulseWidget(state, options);
       ctx.ui?.setWidget?.(autoWidgetId, widget.lines, { placement: "aboveEditor" });
-      ctx.ui?.setStatus?.("pi-graphics", `◆ kitty glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+      ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+      lastAutoWidgetSignature = signature;
+      return true;
     } catch (error) {
       ctx.ui?.setStatus?.("pi-graphics", `graphics unavailable: ${error?.message || error}`);
+      return false;
     }
+  }
+
+  pi.on("session_start", (_event, ctx) => {
+    showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
+  });
+
+  pi.on("before_agent_start", (_event, ctx) => {
+    showAutoPulse(ctx, { caption: "prompt captured", tone: "user", delayMs: 80 });
+  });
+
+  pi.on("agent_start", (_event, ctx) => {
+    showAutoPulse(ctx, { caption: "agent thinking", tone: "assistant", delayMs: 90 });
+  });
+
+  pi.on("tool_execution_start", (event, ctx) => {
+    const toolName = String(event?.toolName || "tool").slice(0, 32);
+    showAutoPulse(ctx, { caption: `tool ${toolName}`, tone: "tool", delayMs: 70 });
+  });
+
+  pi.on("agent_end", (_event, ctx) => {
+    showAutoPulse(ctx, { caption: "ready", tone: "assistant", delayMs: 120 });
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
@@ -361,7 +395,8 @@ export default function piGraphicsExtension(pi) {
       }
       const widget = buildAutoPulseWidget(state);
       ctx.ui?.setWidget?.(autoWidgetId, widget.lines, { placement: "aboveEditor" });
-      ctx.ui?.setStatus?.("pi-graphics", `◆ kitty glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+      ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+      lastAutoWidgetSignature = "";
       ctx.ui?.notify?.("pi-graphics automatic pulse shown.", "info");
     },
   });

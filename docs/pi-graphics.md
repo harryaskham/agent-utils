@@ -34,8 +34,11 @@ The companion extension (`./extensions/pi-graphics.js`) is loaded
 automatically by Pi when the package is installed; no further setup is
 required. By default it also shows a small animated kitty pulse widget above
 the editor on session start so graphical mode is visible without manually
-running a demo command. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or
-`PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out.
+running a demo command. During normal turns the same widget changes tone/caption
+for prompt capture, agent thinking, tool execution, and ready states, giving
+regular conversation flow graphical chrome instead of a static startup-only
+banner. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`)
+to opt out.
 
 ## How the extension cooperates with the theme
 
@@ -128,8 +131,8 @@ The test suite under `test/pi-graphics.test.js` covers PNG byte output,
 canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
-glow coverage, scanline variation, APNG animation chunks, automatic startup
-widget wiring, bounded PNG/APNG wire size, tone-palette differences,
+glow coverage, scanline variation, APNG animation chunks, automatic startup and
+lifecycle widget wiring, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

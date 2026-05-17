@@ -356,6 +356,12 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /buildAutoPulseWidget\(state\)/);
   assert.match(source, /setWidget\?\.\(autoWidgetId, widget\.lines, \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /pi_graphics_render_tui_pulse/);
+  assert.match(source, /pi\.on\("before_agent_start"/);
+  assert.match(source, /pi\.on\("agent_start"/);
+  assert.match(source, /pi\.on\("tool_execution_start"/);
+  assert.match(source, /pi\.on\("agent_end"/);
+  assert.match(source, /lastAutoWidgetSignature/);
+  assert.match(source, /tool \$\{toolName\}/);
   assert.match(source, /pi-graphics-show/);
   assert.match(source, /pi-graphics-hide/);
 });
