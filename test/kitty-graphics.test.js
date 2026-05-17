@@ -10,6 +10,8 @@ import {
   buildScopedDeleteCommand,
   serializeKittyGraphicsCommand,
   shouldUseUnicodePlaceholders,
+  viewportHalfRowLimit,
+  clampRowsToViewportHalf,
 } from "../extensions/kitty-graphics.js";
 
 const ESC = "\x1b";
@@ -73,6 +75,28 @@ test("auto placement mode uses Unicode placeholders only for tmux passthrough", 
 
 test("forced anchoring overrides cursor placement for side overlays", () => {
   assert.equal(shouldUseUnicodePlaceholders({ placementMode: "cursor", env: {}, forceAnchored: true }), true);
+});
+
+test("viewport row helpers cap image previews to half the terminal height", () => {
+  assert.equal(viewportHalfRowLimit(24), 12);
+  assert.equal(viewportHalfRowLimit(25), 12);
+  assert.equal(viewportHalfRowLimit(1), 1);
+  assert.equal(viewportHalfRowLimit(undefined), undefined);
+  assert.equal(clampRowsToViewportHalf({ rows: 40, viewportRows: 24 }), 12);
+  assert.equal(clampRowsToViewportHalf({ rows: 40, viewportRows: 24, reserveRows: 1 }), 11);
+  assert.equal(clampRowsToViewportHalf({ rows: 3, viewportRows: 24, reserveRows: 1 }), 3);
+});
+
+test("kitty image preview applies the half-viewport cap to inline and side-panel layouts", async () => {
+  const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+
+  assert.match(source, /function currentTerminalRows/);
+  assert.match(source, /previewViewportRowLimit\(\)/);
+  assert.match(source, /previewImageRowLimit\(\{ includeControls: Boolean\(controls\), protocolMax \}\)/);
+  assert.match(source, /lines\.length < widgetRowLimit/);
+  assert.match(source, /viewportPanelLimit = previewViewportRowLimit\(terminalHeight\) \?\? terminalHeight/);
+  assert.match(source, /Math\.min\(terminalHeight - bottomVisibleRows, viewportPanelLimit\)/);
+  assert.match(source, /sideOverlayMaxHeight/);
 });
 
 test("kitty image preview advertises a fixed right-side panel with tmux inline fallback", async () => {

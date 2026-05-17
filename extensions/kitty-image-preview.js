@@ -19,6 +19,7 @@ import {
   shouldUseInMemoryTransfer,
   shouldUseUnicodePlaceholders,
   stableKittyImageId,
+  viewportHalfRowLimit,
 } from "./kitty-graphics.js";
 
 const TOOL_PREFIX = "kitty_image_preview";
@@ -295,17 +296,20 @@ export class KittyImagePreviewWidget {
       ...this.options,
       placement: this.options.placement ?? resolvePlacement(state),
     });
+    const controls = imageControlsLine(state, availableWidth);
+    const protocolMax = useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200;
+    const rowLimit = previewImageRowLimit({ includeControls: Boolean(controls), protocolMax });
     const rows = clampInteger(
       state.config.rows || estimateRowsForImage({
         imageWidth: current.width,
         imageHeight: current.height,
         columns,
-        maxRows: state.config.maxRows,
-        minRows: state.config.minRows,
+        maxRows: Math.min(state.config.maxRows, rowLimit),
+        minRows: Math.min(state.config.minRows, rowLimit),
       }),
       12,
       1,
-      useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200,
+      rowLimit,
     );
 
     const lines = renderCurrentImageLines(state, current, {
@@ -314,8 +318,8 @@ export class KittyImagePreviewWidget {
       lineWidth: availableWidth,
       useUnicodePlaceholders,
     });
-    const controls = imageControlsLine(state, availableWidth);
-    return controls ? [...lines, controls] : lines;
+    const widgetRowLimit = previewViewportRowLimit();
+    return controls && (widgetRowLimit === undefined || lines.length < widgetRowLimit) ? [...lines, controls] : lines;
   }
 
   invalidate() {}
@@ -326,7 +330,9 @@ function sideOverlayWidth(state) {
 }
 
 function sideOverlayMaxHeight(state) {
-  return clampInteger(state.config.rows || state.config.maxRows, DEFAULT_MAX_ROWS, 1, MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1);
+  const configured = clampInteger(state.config.rows || state.config.maxRows, DEFAULT_MAX_ROWS, 1, MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1);
+  const viewportLimit = previewViewportRowLimit();
+  return viewportLimit === undefined ? configured : Math.min(configured, viewportLimit);
 }
 
 function configuredPassthroughMode(state) {
@@ -340,6 +346,23 @@ function shouldUseInlineRightPlacement(state) {
 function currentTerminalColumns() {
   const columns = Number(process.stdout?.columns ?? process.env.COLUMNS);
   return Number.isFinite(columns) && columns > 0 ? Math.trunc(columns) : undefined;
+}
+
+function currentTerminalRows() {
+  const rows = Number(process.stdout?.rows ?? process.env.LINES);
+  return Number.isFinite(rows) && rows > 0 ? Math.trunc(rows) : undefined;
+}
+
+export function previewViewportRowLimit(viewportRows = currentTerminalRows()) {
+  return viewportHalfRowLimit(viewportRows);
+}
+
+function previewImageRowLimit({ viewportRows = currentTerminalRows(), availableRows, includeControls = false, protocolMax = 200 } = {}) {
+  const limits = [Math.max(1, Math.trunc(protocolMax || 1))];
+  const viewportLimit = previewViewportRowLimit(viewportRows);
+  if (viewportLimit !== undefined) limits.push(Math.max(1, viewportLimit - (includeControls ? 1 : 0)));
+  if (availableRows !== undefined) limits.push(Math.max(1, Math.trunc(availableRows)));
+  return Math.max(1, Math.min(...limits));
 }
 
 function shouldAutoUseSidePanel(state) {
@@ -514,7 +537,11 @@ function renderSidePanelImageLines(state, rows, layout) {
     forceUnicodePlaceholders: true,
     forceSideOverlay: false,
   });
-  const maxRows = useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200;
+  const maxRows = previewImageRowLimit({
+    viewportRows: undefined,
+    availableRows: rows,
+    protocolMax: useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200,
+  });
   const imageRows = Math.max(1, Math.min(rows, layout.imageRows || rows, maxRows));
   const imageLines = renderCurrentImageLines(state, current, {
     columns: layout.imageWidth,
@@ -541,7 +568,8 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
   const editorBoundary = findEditorBoundaryIndex(tui);
   const bottomLines = renderChildren(children.slice(editorBoundary), terminalWidth);
   const bottomVisibleRows = Math.min(bottomLines.length, Math.max(0, terminalHeight - 1));
-  const panelRows = Math.max(0, terminalHeight - bottomVisibleRows);
+  const viewportPanelLimit = previewViewportRowLimit(terminalHeight) ?? terminalHeight;
+  const panelRows = Math.max(0, Math.min(terminalHeight - bottomVisibleRows, viewportPanelLimit));
   if (panelRows <= 0) return originalRender.call(tui, width);
 
   let layout = buildSidePanelLayout(state, terminalWidth, panelRows);

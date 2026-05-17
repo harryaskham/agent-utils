@@ -354,6 +354,20 @@ export function estimateRowsForImage({ imageWidth, imageHeight, columns, maxRows
   return Math.max(minRows, Math.min(maxRows, estimated));
 }
 
+export function viewportHalfRowLimit(viewportRows) {
+  const parsed = Number(viewportRows);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.max(1, Math.floor(Math.trunc(parsed) / 2));
+}
+
+export function clampRowsToViewportHalf({ rows, viewportRows, reserveRows = 0, minRows = 1 } = {}) {
+  const rowCount = Math.max(minRows, Math.trunc(Number(rows) || minRows));
+  const halfLimit = viewportHalfRowLimit(viewportRows);
+  if (halfLimit === undefined) return rowCount;
+  const reserved = Math.max(0, Math.trunc(Number(reserveRows) || 0));
+  return Math.max(minRows, Math.min(rowCount, Math.max(minRows, halfLimit - reserved)));
+}
+
 export function isSupportedKittyPngPath(filePath) {
   return /\.(png|apng)$/i.test(String(filePath));
 }
