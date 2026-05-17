@@ -12,7 +12,7 @@ The pieces:
 | `extensions/pi-graphics.js` | Pi extension entry point (registers tools + slash commands). |
 | `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars, and glow panels. |
 | `extensions/pi-graphics/components.js` | TypeScript-side TUI component mirror: graphical card frames, rails, status chips, skeleton rows, pulse waveforms, and cache keys. |
-| `extensions/pi-graphics/png-renderer.js` | Tiny dependency-free RGBA → PNG encoder used by the affordance renderers. |
+| `extensions/pi-graphics/png-renderer.js` | Tiny dependency-free RGBA → PNG/APNG encoder used by the affordance renderers. |
 | `extensions/pi-graphics/runtime.js` | Pi-runtime-agnostic placement helpers (kept testable without `@sinclair/typebox`). |
 
 ## Installation
@@ -51,10 +51,13 @@ graphical affordances:
   component chrome: left activity rails, title strips, status chips, content
   skeleton rows, bottom pulse waveforms, scanlines, tone palettes, and stable
   layout cache keys that deliberately exclude animation phase.
+* **Animated APNG pulses** — multiple TUI component phases packaged into one
+  kitty-compatible animated PNG, so a continuously glowing/pulsing component
+  can be uploaded once instead of re-sending a stream of static frames.
 * **Accent bars** — single-cell-tall accent strips suitable for highlighting
   table rows or section headers.
 
-Each rendered affordance is transmitted as an in-memory PNG via
+Each rendered affordance is transmitted as an in-memory PNG/APNG via
 `buildPngVirtualPlacementCommand` (see `extensions/kitty-graphics.js`) and
 displayed using kitty Unicode placeholder cells, so:
 
@@ -69,7 +72,7 @@ displayed using kitty Unicode placeholder cells, so:
 
 ## Tools
 
-The extension registers five tools through `pi.registerTool`:
+The extension registers six tools through `pi.registerTool`:
 
 * `pi_graphics_render_prompt_enclosure` — render a graphical separator.
 * `pi_graphics_render_message_border` — render a gradient frame sized in
@@ -78,13 +81,15 @@ The extension registers five tools through `pi.registerTool`:
   in cells, optionally at a specific pulse phase.
 * `pi_graphics_render_tui_component` — render a high-tech graphical TUI card
   frame, with optional tone/density/phase/caption controls.
+* `pi_graphics_render_tui_pulse` — render a looping APNG version of the TUI
+  component for efficient continuous pulse animation.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
 
 And two slash commands:
 
 * `/pi-graphics-status` — report how many images are owned and whether
   Unicode placeholder placement is currently active.
-* `/pi-graphics-demo` — print a sample rule, border, glow panel, and graphical TUI component frame into the active UI.
+* `/pi-graphics-demo` — print a sample rule, border, glow panel, graphical TUI component frame, and animated APNG pulse into the active UI.
 
 ## Example
 
@@ -92,6 +97,7 @@ And two slash commands:
 > pi_graphics_render_prompt_enclosure({ columns: 60, leftColor: "#00d8ff", rightColor: "#b48cff" })
 > pi_graphics_render_glow_panel({ columns: 48, rows: 9, phase: 0.18 })
 > pi_graphics_render_tui_component({ columns: 56, rows: 9, tone: "assistant", phase: 0.2, caption: "graphical TUI" })
+> pi_graphics_render_tui_pulse({ columns: 56, rows: 9, tone: "tool", frames: 8, delayMs: 90, caption: "animated APNG pulse" })
 ```
 
 The returned tool output text contains both the kitty-graphics transmit
@@ -116,7 +122,7 @@ The test suite under `test/pi-graphics.test.js` covers PNG byte output,
 canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
-glow coverage, scanline variation, bounded PNG/wire size, tone-palette
-differences, phase-independent component cache keys, and stable-layout /
-different-pixels pulse frames so graphical changes cannot silently degrade into
-a theme that looks the same as plain text.
+glow coverage, scanline variation, APNG animation chunks, bounded PNG/APNG wire
+size, tone-palette differences, phase-independent component cache keys, and
+stable-layout / different-pixels pulse frames so graphical changes cannot
+silently degrade into a theme that looks the same as plain text.

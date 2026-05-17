@@ -10,6 +10,7 @@
 import {
   addRadialGlow,
   addScanlines,
+  encodeRgbaApng,
   encodeRgbaPng,
   fillHorizontalGradient,
   fillRect,
@@ -80,7 +81,7 @@ function barWidth(widthPx, index, density) {
   return Math.max(10, Math.floor(widthPx * (0.34 + density * 0.42) * wave));
 }
 
-export function renderTuiComponentFrame({
+function renderTuiComponentPixels({
   columns = 56,
   rows = 9,
   phase = 0,
@@ -141,26 +142,59 @@ export function renderTuiComponentFrame({
 
   if (scanlines) addScanlines(pixels, widthPx, { every: 5, alpha: 10 + p * 10, color: "#d7f8ff" });
 
-  const png = encodeRgbaPng(pixels, widthPx, heightPx);
+  return { pixels, columns: cols, rows: rs, widthPx, heightPx, phase: ph, tone: PALETTES[tone] ? tone : "assistant" };
+}
+
+function metricsForPayload(payload, widthPx, heightPx, extra = {}) {
+  return {
+    ...extra,
+    pngBytes: payload.length,
+    pixels: widthPx * heightPx,
+    estimatedWireBytes: Math.ceil(payload.length / 3) * 4,
+  };
+}
+
+export function renderTuiComponentFrame(options = {}) {
+  const frame = renderTuiComponentPixels(options);
+  const png = encodeRgbaPng(frame.pixels, frame.widthPx, frame.heightPx);
   return {
     png,
-    columns: cols,
-    rows: rs,
-    widthPx,
-    heightPx,
-    phase: ph,
-    tone: PALETTES[tone] ? tone : "assistant",
-    metrics: {
-      pngBytes: png.length,
-      pixels: widthPx * heightPx,
-      estimatedWireBytes: Math.ceil(png.length / 3) * 4,
-    },
+    columns: frame.columns,
+    rows: frame.rows,
+    widthPx: frame.widthPx,
+    heightPx: frame.heightPx,
+    phase: frame.phase,
+    tone: frame.tone,
+    metrics: metricsForPayload(png, frame.widthPx, frame.heightPx),
   };
 }
 
 export function renderTuiComponentFrames({ frames = 8, ...options } = {}) {
   const count = Math.max(1, Math.min(32, Math.trunc(Number(frames) || 8)));
   return Array.from({ length: count }, (_unused, index) => renderTuiComponentFrame({ ...options, phase: index / count }));
+}
+
+export function renderTuiComponentPulseApng({ frames = 8, delayMs = 100, plays = 0, ...options } = {}) {
+  const count = Math.max(2, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const rendered = Array.from({ length: count }, (_unused, index) => renderTuiComponentPixels({ ...options, phase: index / count }));
+  const first = rendered[0];
+  const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
+  return {
+    png,
+    columns: first.columns,
+    rows: first.rows,
+    widthPx: first.widthPx,
+    heightPx: first.heightPx,
+    frames: count,
+    delayMs: Math.max(1, Math.trunc(delayMs || 100)),
+    plays: Math.max(0, Math.trunc(plays || 0)),
+    tone: first.tone,
+    metrics: metricsForPayload(png, first.widthPx, first.heightPx, {
+      frames: count,
+      delayMs: Math.max(1, Math.trunc(delayMs || 100)),
+      animationMillis: count * Math.max(1, Math.trunc(delayMs || 100)),
+    }),
+  };
 }
 
 export function componentFrameCacheKey({ columns = 56, rows = 9, tone = "assistant", density = 0.72, scanlines = true } = {}) {

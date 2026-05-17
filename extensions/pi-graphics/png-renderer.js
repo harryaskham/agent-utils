@@ -89,14 +89,16 @@ function clampByte(value) {
 /**
  * Encode an RGBA pixel buffer (length = width*height*4) into PNG bytes.
  */
-export function encodeRgbaPng(pixels, width, height) {
-  if (!Number.isInteger(width) || width <= 0) throw new Error(`encodeRgbaPng width must be a positive integer, got ${width}`);
-  if (!Number.isInteger(height) || height <= 0) throw new Error(`encodeRgbaPng height must be a positive integer, got ${height}`);
+function validateRgbaFrame(pixels, width, height, label = "RGBA frame") {
+  if (!Number.isInteger(width) || width <= 0) throw new Error(`${label} width must be a positive integer, got ${width}`);
+  if (!Number.isInteger(height) || height <= 0) throw new Error(`${label} height must be a positive integer, got ${height}`);
   const expected = width * height * 4;
-  if (pixels.length !== expected) {
-    throw new Error(`encodeRgbaPng pixel buffer length ${pixels.length} does not match width*height*4 (${expected})`);
+  if (!pixels || pixels.length !== expected) {
+    throw new Error(`${label} pixel buffer length ${pixels?.length} does not match width*height*4 (${expected})`);
   }
+}
 
+function makeIhdr(width, height) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
@@ -105,21 +107,83 @@ export function encodeRgbaPng(pixels, width, height) {
   ihdr.writeUInt8(0, 10); // compression: deflate
   ihdr.writeUInt8(0, 11); // filter: adaptive
   ihdr.writeUInt8(0, 12); // interlace: none
+  return ihdr;
+}
 
+function deflateRgbaFrame(pixels, width, height) {
   const rowStride = width * 4;
   const filtered = Buffer.alloc(height * (rowStride + 1));
   for (let y = 0; y < height; y += 1) {
     filtered[y * (rowStride + 1)] = 0; // filter type none
     pixels.copy(filtered, y * (rowStride + 1) + 1, y * rowStride, (y + 1) * rowStride);
   }
-  const idat = deflateSync(filtered);
+  return deflateSync(filtered);
+}
 
+/**
+ * Encode an RGBA pixel buffer (length = width*height*4) into PNG bytes.
+ */
+export function encodeRgbaPng(pixels, width, height) {
+  validateRgbaFrame(pixels, width, height, "encodeRgbaPng");
   return Buffer.concat([
     PNG_SIGNATURE,
-    makeChunk("IHDR", ihdr),
-    makeChunk("IDAT", idat),
+    makeChunk("IHDR", makeIhdr(width, height)),
+    makeChunk("IDAT", deflateRgbaFrame(pixels, width, height)),
     makeChunk("IEND", Buffer.alloc(0)),
   ]);
+}
+
+function makeAnimationControl(numFrames, numPlays) {
+  const chunk = Buffer.alloc(8);
+  chunk.writeUInt32BE(numFrames, 0);
+  chunk.writeUInt32BE(Math.max(0, Math.trunc(numPlays ?? 0)), 4);
+  return chunk;
+}
+
+function makeFrameControl(sequence, width, height, delayMs) {
+  const chunk = Buffer.alloc(26);
+  chunk.writeUInt32BE(sequence, 0);
+  chunk.writeUInt32BE(width, 4);
+  chunk.writeUInt32BE(height, 8);
+  chunk.writeUInt32BE(0, 12); // x offset
+  chunk.writeUInt32BE(0, 16); // y offset
+  chunk.writeUInt16BE(Math.max(1, Math.trunc(delayMs ?? 100)), 20);
+  chunk.writeUInt16BE(1000, 22); // delay denominator: delay numerator is ms
+  chunk.writeUInt8(0, 24); // APNG_DISPOSE_OP_NONE
+  chunk.writeUInt8(0, 25); // APNG_BLEND_OP_SOURCE
+  return chunk;
+}
+
+/**
+ * Encode same-sized RGBA frames as APNG. Kitty accepts animated PNG payloads,
+ * so this lets Pi render efficient pulse effects with one image transmission
+ * instead of a stream of repeated static uploads.
+ */
+export function encodeRgbaApng(frames, width, height, { delayMs = 100, plays = 0 } = {}) {
+  if (!Array.isArray(frames) || frames.length === 0) throw new Error("encodeRgbaApng requires at least one frame");
+  if (frames.length > 256) throw new Error(`encodeRgbaApng supports at most 256 frames, got ${frames.length}`);
+  for (const [index, frame] of frames.entries()) validateRgbaFrame(frame, width, height, `encodeRgbaApng frame ${index}`);
+
+  const chunks = [
+    PNG_SIGNATURE,
+    makeChunk("IHDR", makeIhdr(width, height)),
+    makeChunk("acTL", makeAnimationControl(frames.length, plays)),
+  ];
+  let sequence = 0;
+  frames.forEach((frame, index) => {
+    chunks.push(makeChunk("fcTL", makeFrameControl(sequence++, width, height, delayMs)));
+    const compressed = deflateRgbaFrame(frame, width, height);
+    if (index === 0) {
+      chunks.push(makeChunk("IDAT", compressed));
+    } else {
+      const fdAT = Buffer.alloc(4 + compressed.length);
+      fdAT.writeUInt32BE(sequence++, 0);
+      compressed.copy(fdAT, 4);
+      chunks.push(makeChunk("fdAT", fdAT));
+    }
+  });
+  chunks.push(makeChunk("IEND", Buffer.alloc(0)));
+  return Buffer.concat(chunks);
 }
 
 /**

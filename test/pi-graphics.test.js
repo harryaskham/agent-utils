@@ -8,6 +8,7 @@ import { inflateSync } from "node:zlib";
 import {
   addRadialGlow,
   addScanlines,
+  encodeRgbaApng,
   encodeRgbaPng,
   fillHorizontalGradient,
   fillRect,
@@ -36,9 +37,22 @@ import {
   componentFrameCacheKey,
   renderTuiComponentFrame,
   renderTuiComponentFrames,
+  renderTuiComponentPulseApng,
 } from "../extensions/pi-graphics/components.js";
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function pngChunkTypes(png) {
+  const types = [];
+  let offset = 8;
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    types.push(type);
+    offset += 12 + length;
+  }
+  return types;
+}
 
 function decodePngRgba(png) {
   assert.equal(png.subarray(0, 8).toString("hex"), PNG_SIGNATURE.toString("hex"));
@@ -119,6 +133,19 @@ test("encodeRgbaPng writes a valid PNG signature and IHDR", () => {
 
 test("encodeRgbaPng rejects mismatched buffer sizes", () => {
   assert.throws(() => encodeRgbaPng(Buffer.alloc(10), 4, 2));
+});
+
+test("encodeRgbaApng writes animation chunks with one IDAT and fdAT continuations", () => {
+  const a = makeCanvas(2, 2, "#000000ff");
+  const b = makeCanvas(2, 2, "#00d8ffff");
+  const c = makeCanvas(2, 2, "#b48cffff");
+  const apng = encodeRgbaApng([a, b, c], 2, 2, { delayMs: 80, plays: 0 });
+  const types = pngChunkTypes(apng);
+  assert.deepEqual(types.slice(0, 4), ["IHDR", "acTL", "fcTL", "IDAT"]);
+  assert.equal(types.filter((type) => type === "fcTL").length, 3);
+  assert.equal(types.filter((type) => type === "fdAT").length, 2);
+  assert.equal(types.at(-1), "IEND");
+  assert.equal(apng.subarray(0, 8).toString("hex"), PNG_SIGNATURE.toString("hex"));
 });
 
 test("makeCanvas pre-fills every pixel with the provided color", () => {
@@ -273,6 +300,21 @@ test("renderTuiComponentFrames animates efficiently with stable layout/cache key
   }
   const uniquePayloads = new Set(frames.map((frame) => frame.png.toString("base64")));
   assert.ok(uniquePayloads.size >= 4, "pulse animation should produce distinct graphical frames");
+});
+
+test("renderTuiComponentPulseApng packages pulse frames into one bounded animated PNG", () => {
+  const pulse = renderTuiComponentPulseApng({ columns: 32, rows: 6, tone: "tool", frames: 6, delayMs: 75 });
+  const types = pngChunkTypes(pulse.png);
+  assert.equal(pulse.columns, 32);
+  assert.equal(pulse.rows, 6);
+  assert.equal(pulse.frames, 6);
+  assert.equal(pulse.delayMs, 75);
+  assert.equal(types.filter((type) => type === "fcTL").length, 6);
+  assert.equal(types.filter((type) => type === "fdAT").length, 5);
+  assert.equal(types.includes("acTL"), true);
+  assert.ok(pulse.metrics.pngBytes < 220_000, "animated component should stay bounded for one kitty upload");
+  assert.ok(pulse.metrics.estimatedWireBytes < 300_000, "base64 wire cost should stay bounded");
+  assert.equal(pulse.metrics.animationMillis, 450);
 });
 
 test("renderTuiComponentFrame tones produce visibly distinct component palettes", () => {

@@ -15,8 +15,8 @@
 //    cooperation with bd-f89780.
 //
 //  * It exposes Pi tools (`pi_graphics_render_prompt_enclosure`,
-//    `pi_graphics_render_message_border`, `pi_graphics_clear`) that other
-//    agents/operators can use to print graphical affordances directly into
+//    `pi_graphics_render_message_border`, `pi_graphics_render_tui_pulse`,
+//    `pi_graphics_clear`) that other agents/operators can use to print graphical affordances directly into
 //    tool output. Slash commands `/pi-graphics-status` and
 //    `/pi-graphics-demo` are registered for human discoverability.
 //
@@ -36,6 +36,7 @@ import {
 } from "./pi-graphics/affordances.js";
 import {
   renderTuiComponentFrame,
+  renderTuiComponentPulseApng,
 } from "./pi-graphics/components.js";
 import {
   buildPlacement,
@@ -249,6 +250,61 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_render_tui_pulse`,
+    label: "Pi Graphics: Animated TUI Pulse",
+    description: "Render an animated APNG kitty-graphics TUI component that pulses continuously with one bounded image transmission.",
+    promptSnippet: "Render an efficiently pulsating high-tech TUI component as an animated kitty graphics APNG.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Width in terminal cells. Defaults to 56.", minimum: 8, maximum: 512 })),
+      rows: Type.Optional(Type.Number({ description: "Height in terminal cells. Defaults to 9.", minimum: 4, maximum: 256 })),
+      frames: Type.Optional(Type.Number({ description: "Animation frame count. Defaults to 8, capped at 32.", minimum: 2, maximum: 32 })),
+      delayMs: Type.Optional(Type.Number({ description: "Per-frame delay in milliseconds. Defaults to 100." })),
+      plays: Type.Optional(Type.Number({ description: "APNG play count. 0 loops forever. Defaults to 0." })),
+      tone: Type.Optional(Type.String({ description: "Component tone: assistant, tool, or user." })),
+      density: Type.Optional(Type.Number({ description: "Content skeleton density from 0.1..1." })),
+      caption: Type.Optional(Type.String({ description: "Optional text caption rendered after the first placeholder line." })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!ensureUnicodePlacement(state)) {
+        return {
+          content: [{ type: "text", text: "pi-graphics: not running in a kitty/tmux placeholder-capable terminal; skipping animated TUI pulse." }],
+          details: { fallback: true },
+        };
+      }
+      const pulse = renderTuiComponentPulseApng({
+        columns: params.columns,
+        rows: params.rows,
+        frames: params.frames,
+        delayMs: params.delayMs,
+        plays: params.plays,
+        tone: params.tone,
+        density: params.density,
+      });
+      const placement = buildPlacement(state, {
+        name: `tui-pulse-${pulse.tone}-${pulse.columns}x${pulse.rows}-${pulse.frames}f`,
+        png: pulse.png,
+        columns: pulse.columns,
+        rows: pulse.rows,
+        caption: params.caption,
+      });
+      return {
+        content: [{ type: "text", text: renderToText(placement) }],
+        details: {
+          imageId: placement.imageId,
+          placementId: placement.placementId,
+          columns: pulse.columns,
+          rows: pulse.rows,
+          frames: pulse.frames,
+          delayMs: pulse.delayMs,
+          plays: pulse.plays,
+          tone: pulse.tone,
+          metrics: pulse.metrics,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_clear`,
     label: "Pi Graphics: Clear",
     description: "Delete every kitty graphics image owned by the pi-graphics extension. Scoped: never deletes images owned by other extensions, never issues a global clear.",
@@ -309,7 +365,15 @@ export default function piGraphicsExtension(pi) {
         rows: componentFrame.rows,
         caption: "graphical TUI component",
       });
-      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}\n${renderToText(glow)}\n${renderToText(component)}`, "info");
+      const pulseFrame = renderTuiComponentPulseApng({ columns: 44, rows: 7, frames: 8, delayMs: 90, tone: "tool" });
+      const pulse = buildPlacement(state, {
+        name: "demo-tui-pulse",
+        png: pulseFrame.png,
+        columns: pulseFrame.columns,
+        rows: pulseFrame.rows,
+        caption: "animated pulse APNG",
+      });
+      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}\n${renderToText(glow)}\n${renderToText(component)}\n${renderToText(pulse)}`, "info");
     },
   });
 }
@@ -332,4 +396,5 @@ export {
   componentFrameCacheKey,
   renderTuiComponentFrame,
   renderTuiComponentFrames,
+  renderTuiComponentPulseApng,
 } from "./pi-graphics/components.js";
