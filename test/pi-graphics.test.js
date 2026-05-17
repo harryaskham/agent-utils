@@ -3,11 +3,15 @@ import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { inflateSync } from "node:zlib";
 
 import {
+  addRadialGlow,
+  addScanlines,
   encodeRgbaPng,
   fillHorizontalGradient,
   fillRect,
+  fillVerticalGradient,
   makeCanvas,
   parseColor,
   setPixel,
@@ -17,6 +21,8 @@ import {
   CELL_PX_H,
   CELL_PX_W,
   renderAccentBar,
+  renderGlowPanel,
+  renderGlowPanelFrames,
   renderGradientBorder,
   renderPromptEnclosure,
 } from "../extensions/pi-graphics/affordances.js";
@@ -28,6 +34,56 @@ import {
 } from "../extensions/pi-graphics/runtime.js";
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function decodePngRgba(png) {
+  assert.equal(png.subarray(0, 8).toString("hex"), PNG_SIGNATURE.toString("hex"));
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  const idats = [];
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      assert.equal(data[9], 6, "tests only decode RGBA PNGs");
+    }
+    if (type === "IDAT") idats.push(data);
+    offset += 12 + length;
+  }
+  const inflated = inflateSync(Buffer.concat(idats));
+  const stride = width * 4;
+  const pixels = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    assert.equal(inflated[y * (stride + 1)], 0, "renderer uses unfiltered rows");
+    inflated.copy(pixels, y * stride, y * (stride + 1) + 1, y * (stride + 1) + 1 + stride);
+  }
+  return { width, height, pixels };
+}
+
+function pixelAt(decoded, x, y) {
+  const off = (y * decoded.width + x) * 4;
+  return [decoded.pixels[off], decoded.pixels[off + 1], decoded.pixels[off + 2], decoded.pixels[off + 3]];
+}
+
+function channelDistance(a, b) {
+  return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) + Math.abs(a[3] - b[3]);
+}
+
+function alphaStats(decoded) {
+  let transparent = 0;
+  let bright = 0;
+  let opaque = 0;
+  for (let i = 3; i < decoded.pixels.length; i += 4) {
+    const a = decoded.pixels[i];
+    if (a === 0) transparent += 1;
+    if (a > 64) bright += 1;
+    if (a > 220) opaque += 1;
+  }
+  return { transparent, bright, opaque, total: decoded.width * decoded.height };
+}
 
 test("parseColor accepts hex shorthand, full hex, alpha, ints, arrays", () => {
   assert.deepEqual(parseColor("#fff"), [0xff, 0xff, 0xff, 0xff]);
@@ -104,6 +160,22 @@ test("fillHorizontalGradient interpolates linearly", () => {
   assert.ok(pixels[4] > 0 && pixels[4] < 0xff);
 });
 
+test("fillVerticalGradient, radial glow, and scanlines create measurable visual variation", () => {
+  const pixels = makeCanvas(8, 8, "#00000000");
+  fillVerticalGradient(pixels, 8, 0, 0, 8, 8, "#000000ff", "#0000ffff");
+  addRadialGlow(pixels, 8, 4, 4, 4, "#00ffffff", 1);
+  addScanlines(pixels, 8, { every: 2, alpha: 20 });
+
+  const top = [pixels[0], pixels[1], pixels[2], pixels[3]];
+  const bottomOff = (7 * 8) * 4;
+  const bottom = [pixels[bottomOff], pixels[bottomOff + 1], pixels[bottomOff + 2], pixels[bottomOff + 3]];
+  const centerOff = (4 * 8 + 4) * 4;
+  const cornerOff = 0;
+  assert.ok(channelDistance(top, bottom) > 100, "vertical gradient should visibly change top to bottom");
+  assert.ok(pixels[centerOff + 1] > pixels[cornerOff + 1], "radial glow should brighten the center green/cyan channel");
+  assert.ok(pixels[(1 * 8) * 4] > pixels[(2 * 8) * 4], "scanline rows should be brighter than adjacent rows");
+});
+
 test("setPixel composites alpha over existing color", () => {
   const pixels = makeCanvas(1, 1, "#000000ff");
   setPixel(pixels, 1, 0, 0, "#ffffff80");
@@ -113,13 +185,17 @@ test("setPixel composites alpha over existing color", () => {
   assert.ok(pixels[0] > 0x60 && pixels[0] < 0xa0);
 });
 
-test("renderPromptEnclosure produces the expected cell footprint and PNG", () => {
-  const result = renderPromptEnclosure({ columns: 8 });
+test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () => {
+  const result = renderPromptEnclosure({ columns: 8, phase: 0.25 });
   assert.equal(result.columns, 8);
   assert.equal(result.rows, 1);
   assert.equal(result.widthPx, 8 * CELL_PX_W);
   assert.equal(result.heightPx, CELL_PX_H);
   assert.equal(result.png.subarray(0, 8).toString("hex"), PNG_SIGNATURE.toString("hex"));
+  const decoded = decodePngRgba(result.png);
+  const stats = alphaStats(decoded);
+  assert.ok(stats.bright > result.widthPx * 2, "glow rule should contain more than a hairline of visible pixels");
+  assert.ok(channelDistance(pixelAt(decoded, 2, Math.floor(decoded.height / 2)), pixelAt(decoded, decoded.width - 3, Math.floor(decoded.height / 2))) > 80, "left/right gradient endpoints should differ visibly");
 });
 
 test("renderGradientBorder produces opaque border edges and transparent fill", () => {
@@ -133,6 +209,33 @@ test("renderAccentBar honors strokeColor option", () => {
   const result = renderAccentBar({ columns: 6, color: "#bf616a", strokeColor: "#5e81ac" });
   assert.equal(result.columns, 6);
   assert.equal(result.rows, 1);
+});
+
+test("renderGlowPanel creates a deep Nordic high-contrast graphical component", () => {
+  const result = renderGlowPanel({ columns: 10, rows: 4, phase: 0.125 });
+  assert.equal(result.columns, 10);
+  assert.equal(result.rows, 4);
+  assert.equal(result.widthPx, 10 * CELL_PX_W);
+  assert.equal(result.heightPx, 4 * CELL_PX_H);
+  const decoded = decodePngRgba(result.png);
+  const stats = alphaStats(decoded);
+  assert.equal(stats.transparent, 0, "glow panel should paint the full component background");
+  assert.ok(stats.opaque > stats.total * 0.6, "deep panel background should be substantially opaque");
+  assert.ok(channelDistance(pixelAt(decoded, 1, 1), pixelAt(decoded, Math.floor(decoded.width / 2), Math.floor(decoded.height / 2))) > 120, "edge glow and center fill should be visibly different");
+  assert.ok(channelDistance(pixelAt(decoded, 2, 2), pixelAt(decoded, decoded.width - 3, decoded.height - 3)) > 70, "cyan/violet aurora corners should differ visibly");
+});
+
+test("renderGlowPanelFrames keeps layout stable while pulse frames change pixels", () => {
+  const frames = renderGlowPanelFrames({ columns: 8, rows: 3, frames: 4 });
+  assert.equal(frames.length, 4);
+  for (const frame of frames) {
+    assert.equal(frame.columns, 8);
+    assert.equal(frame.rows, 3);
+    assert.equal(frame.widthPx, 8 * CELL_PX_W);
+    assert.equal(frame.heightPx, 3 * CELL_PX_H);
+  }
+  assert.notEqual(frames[0].png.toString("base64"), frames[1].png.toString("base64"), "pulse frames should update image content");
+  assert.notEqual(frames[1].png.toString("base64"), frames[2].png.toString("base64"), "successive pulse frames should be visually distinct");
 });
 
 test("buildPlacement registers the image id and emits a virtual placement command", () => {
@@ -206,4 +309,16 @@ test("themes/kitty-graphics.json declares all required color tokens with the cor
   ]) {
     assert.ok(token in theme.colors, `theme is missing required token: ${token}`);
   }
+});
+
+test("themes/kitty-graphics.json is visibly different from the default text theme", async () => {
+  const themePath = fileURLToPath(new URL("../themes/kitty-graphics.json", import.meta.url));
+  const theme = JSON.parse(await readFile(themePath, "utf8"));
+  const resolve = (token) => parseColor(theme.vars[theme.colors[token]] ?? theme.colors[token]);
+  assert.deepEqual(resolve("accent"), parseColor("#00d8ff"));
+  assert.deepEqual(resolve("borderAccent"), parseColor("#72fbd6"));
+  assert.notDeepEqual(resolve("text"), parseColor([0, 0, 0, 0]), "main text must not inherit the default terminal color");
+  assert.ok(channelDistance(resolve("selectedBg"), resolve("userMessageBg")) > 20, "selected and message backgrounds should be distinguishable");
+  assert.equal(theme.export.glowCyan, "#00d8ff");
+  assert.equal(theme.export.glowAurora, "#b48cff");
 });

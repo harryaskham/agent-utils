@@ -194,13 +194,31 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function clamp01(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+function lerpColor(start, end, t) {
+  const a = parseColor(start);
+  const b = parseColor(end);
+  const k = clamp01(t);
+  return [
+    Math.round(lerp(a[0], b[0], k)),
+    Math.round(lerp(a[1], b[1], k)),
+    Math.round(lerp(a[2], b[2], k)),
+    Math.round(lerp(a[3], b[3], k)),
+  ];
+}
+
 /**
  * Fill a horizontal gradient between `start` and `end` colors. Useful for
  * drawing translucent gradient borders, prompt enclosure lines, etc.
  */
 export function fillHorizontalGradient(pixels, width, x, y, w, h, start, end) {
-  const startColor = parseColor(start);
-  const endColor = parseColor(end);
   const height = pixels.length / 4 / width;
   const x0 = Math.max(0, Math.trunc(x));
   const y0 = Math.max(0, Math.trunc(y));
@@ -208,13 +226,59 @@ export function fillHorizontalGradient(pixels, width, x, y, w, h, start, end) {
   const y1 = Math.min(height, Math.trunc(y + h));
   const span = Math.max(1, x1 - x0 - 1);
   for (let px = x0; px < x1; px += 1) {
-    const t = (px - x0) / span;
-    const r = Math.round(lerp(startColor[0], endColor[0], t));
-    const g = Math.round(lerp(startColor[1], endColor[1], t));
-    const b = Math.round(lerp(startColor[2], endColor[2], t));
-    const a = Math.round(lerp(startColor[3], endColor[3], t));
+    const color = lerpColor(start, end, (px - x0) / span);
     for (let py = y0; py < y1; py += 1) {
-      blendOver(pixels, (py * width + px) * 4, r, g, b, a);
+      blendOver(pixels, (py * width + px) * 4, color[0], color[1], color[2], color[3]);
+    }
+  }
+}
+
+/** Fill a vertical gradient between `top` and `bottom` colors. */
+export function fillVerticalGradient(pixels, width, x, y, w, h, top, bottom) {
+  const height = pixels.length / 4 / width;
+  const x0 = Math.max(0, Math.trunc(x));
+  const y0 = Math.max(0, Math.trunc(y));
+  const x1 = Math.min(width, Math.trunc(x + w));
+  const y1 = Math.min(height, Math.trunc(y + h));
+  const span = Math.max(1, y1 - y0 - 1);
+  for (let py = y0; py < y1; py += 1) {
+    const color = lerpColor(top, bottom, (py - y0) / span);
+    for (let px = x0; px < x1; px += 1) {
+      blendOver(pixels, (py * width + px) * 4, color[0], color[1], color[2], color[3]);
+    }
+  }
+}
+
+/** Add a soft radial glow with quadratic falloff. */
+export function addRadialGlow(pixels, width, centerX, centerY, radius, color, strength = 1) {
+  const [r, g, b, a] = parseColor(color);
+  const height = pixels.length / 4 / width;
+  const rad = Math.max(1, Number(radius) || 1);
+  const x0 = Math.max(0, Math.floor(centerX - rad));
+  const y0 = Math.max(0, Math.floor(centerY - rad));
+  const x1 = Math.min(width - 1, Math.ceil(centerX + rad));
+  const y1 = Math.min(height - 1, Math.ceil(centerY + rad));
+  const s = clamp01(strength);
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      const dx = (x + 0.5 - centerX) / rad;
+      const dy = (y + 0.5 - centerY) / rad;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > 1) continue;
+      const falloff = (1 - d2) * (1 - d2);
+      blendOver(pixels, (y * width + x) * 4, r, g, b, Math.round(a * s * falloff));
+    }
+  }
+}
+
+/** Draw subtle horizontal scanlines to make static panels feel active. */
+export function addScanlines(pixels, width, { every = 4, alpha = 18, color = "#ffffff" } = {}) {
+  const height = pixels.length / 4 / width;
+  const [r, g, b] = parseColor(color);
+  const step = Math.max(2, Math.trunc(every));
+  for (let y = 1; y < height; y += step) {
+    for (let x = 0; x < width; x += 1) {
+      blendOver(pixels, (y * width + x) * 4, r, g, b, Math.max(0, Math.min(255, Math.trunc(alpha))));
     }
   }
 }

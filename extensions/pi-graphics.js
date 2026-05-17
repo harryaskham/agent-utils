@@ -3,8 +3,8 @@
 // The extension is intentionally narrow in scope:
 //
 //  * It owns a small set of kitty image ids used to back graphical
-//    affordances (prompt enclosure rules, gradient borders, accent bars)
-//    rendered through the kitty graphics protocol. The image bytes are
+//    affordances (prompt enclosure rules, gradient borders, glow panels,
+//    accent bars) rendered through the kitty graphics protocol. The image bytes are
 //    produced by `extensions/pi-graphics/affordances.js` and transmitted via
 //    `extensions/kitty-graphics.js#buildPngVirtualPlacementCommand`.
 //
@@ -30,6 +30,7 @@ import { Type } from "@sinclair/typebox";
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderAccentBar,
+  renderGlowPanel,
   renderGradientBorder,
   renderPromptEnclosure,
 } from "./pi-graphics/affordances.js";
@@ -153,6 +154,49 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_render_glow_panel`,
+    label: "Pi Graphics: Nordic Glow Panel",
+    description: "Render a kitty-graphics-backed high-tech Nordic glow panel with deep gradients, scanlines, corner ticks, and phase-based pulse variation.",
+    promptSnippet: "Render a deep Nordic glowing kitty graphics panel for high-tech Pi TUI styling.",
+    parameters: Type.Object({
+      columns: Type.Number({ description: "Width in terminal cells.", minimum: 2, maximum: 512 }),
+      rows: Type.Number({ description: "Height in terminal cells.", minimum: 2, maximum: 256 }),
+      phase: Type.Optional(Type.Number({ description: "Normalized pulse phase from 0..1. Different phases shift glow centers/brightness." })),
+      scanlines: Type.Optional(Type.Boolean({ description: "Draw subtle scanlines. Defaults to true." })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!ensureUnicodePlacement(state)) {
+        return {
+          content: [{ type: "text", text: "pi-graphics: not running in a kitty/tmux placeholder-capable terminal; skipping graphical glow panel." }],
+          details: { fallback: true },
+        };
+      }
+      const { png, columns, rows, phase } = renderGlowPanel({
+        columns: params.columns,
+        rows: params.rows,
+        phase: params.phase,
+        scanlines: params.scanlines,
+      });
+      const placement = buildPlacement(state, {
+        name: `glow-panel-${columns}x${rows}-${phase.toFixed(3)}`,
+        png,
+        columns,
+        rows,
+      });
+      return {
+        content: [{ type: "text", text: renderToText(placement) }],
+        details: {
+          imageId: placement.imageId,
+          placementId: placement.placementId,
+          columns,
+          rows,
+          phase,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_clear`,
     label: "Pi Graphics: Clear",
     description: "Delete every kitty graphics image owned by the pi-graphics extension. Scoped: never deletes images owned by other extensions, never issues a global clear.",
@@ -201,7 +245,11 @@ export default function piGraphicsExtension(pi) {
         name: "demo-border",
         ...renderGradientBorder({ columns: 24, rows: 4 }),
       });
-      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}`, "info");
+      const glow = buildPlacement(state, {
+        name: "demo-glow-panel",
+        ...renderGlowPanel({ columns: 36, rows: 5, phase: 0.2 }),
+      });
+      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}\n${renderToText(glow)}`, "info");
     },
   });
 }
@@ -215,6 +263,8 @@ export {
 } from "./pi-graphics/runtime.js";
 export {
   renderAccentBar,
+  renderGlowPanel,
+  renderGlowPanelFrames,
   renderGradientBorder,
   renderPromptEnclosure,
 } from "./pi-graphics/affordances.js";

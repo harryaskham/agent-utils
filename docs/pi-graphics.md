@@ -8,9 +8,9 @@ The pieces:
 
 | File | Role |
 |------|------|
-| `themes/kitty-graphics.json` | Nord-flavoured color theme registered through `pi.themes` in `package.json`. |
+| `themes/kitty-graphics.json` | High-contrast deep-Nordic color theme registered through `pi.themes` in `package.json`. |
 | `extensions/pi-graphics.js` | Pi extension entry point (registers tools + slash commands). |
-| `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars. |
+| `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars, and glow panels. |
 | `extensions/pi-graphics/png-renderer.js` | Tiny dependency-free RGBA → PNG encoder used by the affordance renderers. |
 | `extensions/pi-graphics/runtime.js` | Pi-runtime-agnostic placement helpers (kept testable without `@sinclair/typebox`). |
 
@@ -38,10 +38,14 @@ The theme controls Pi's existing color tokens (borders, message backgrounds,
 markdown styles, etc.). The extension complements those flat colors with
 graphical affordances:
 
-* **Prompt enclosure rules** — a kitty-graphics gradient strip that can
-  replace plain ASCII separators like `--------------------`.
+* **Prompt enclosure rules** — a kitty-graphics gradient strip with a soft
+  cyan/violet halo that can replace plain ASCII separators like
+  `--------------------`.
 * **Translucent gradient borders** — a graphical frame that can be wrapped
   around tables, agent messages, or code blocks.
+* **Nordic glow panels** — a full-cell rendered component with deep-blue fill,
+  cyan/violet aurora glows, bright corner ticks, scanlines, and a normalized
+  `phase` input for efficient pulse animation.
 * **Accent bars** — single-cell-tall accent strips suitable for highlighting
   table rows or section headers.
 
@@ -60,23 +64,26 @@ displayed using kitty Unicode placeholder cells, so:
 
 ## Tools
 
-The extension registers three tools through `pi.registerTool`:
+The extension registers four tools through `pi.registerTool`:
 
 * `pi_graphics_render_prompt_enclosure` — render a graphical separator.
 * `pi_graphics_render_message_border` — render a gradient frame sized in
   cells.
+* `pi_graphics_render_glow_panel` — render a high-tech Nordic glow panel sized
+  in cells, optionally at a specific pulse phase.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
 
 And two slash commands:
 
 * `/pi-graphics-status` — report how many images are owned and whether
   Unicode placeholder placement is currently active.
-* `/pi-graphics-demo` — print a sample rule and border into the active UI.
+* `/pi-graphics-demo` — print a sample rule, border, and glow panel into the active UI.
 
 ## Example
 
 ```
-> pi_graphics_render_prompt_enclosure({ columns: 60, leftColor: "#5e81ac", rightColor: "#88c0d0" })
+> pi_graphics_render_prompt_enclosure({ columns: 60, leftColor: "#00d8ff", rightColor: "#b48cff" })
+> pi_graphics_render_glow_panel({ columns: 48, rows: 9, phase: 0.18 })
 ```
 
 The returned tool output text contains both the kitty-graphics transmit
@@ -99,4 +106,8 @@ npm test
 
 The test suite under `test/pi-graphics.test.js` covers PNG byte output,
 canvas drawing primitives, affordance footprints, kitty graphics command
-generation, package manifest discovery, and theme schema completeness.
+generation, package manifest discovery, and theme schema completeness. It also
+round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
+glow coverage, scanline variation, and stable-layout/different-pixels pulse
+frames so graphical changes cannot silently degrade into a theme that looks the
+same as plain text.
