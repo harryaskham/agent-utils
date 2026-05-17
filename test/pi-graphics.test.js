@@ -34,6 +34,10 @@ import {
   renderToText,
 } from "../extensions/pi-graphics/runtime.js";
 import {
+  buildAutoPulseWidget,
+  shouldAutoShowGraphics,
+} from "../extensions/pi-graphics/auto-widget.js";
+import {
   componentFrameCacheKey,
   renderTuiComponentFrame,
   renderTuiComponentFrames,
@@ -324,6 +328,36 @@ test("renderTuiComponentFrame tones produce visibly distinct component palettes"
   const sample = [3, Math.floor(assistant.height / 2)];
   assert.ok(channelDistance(pixelAt(assistant, ...sample), pixelAt(tool, ...sample)) > 70, "assistant and tool rails should differ visibly");
   assert.ok(channelDistance(pixelAt(user, ...sample), pixelAt(tool, ...sample)) > 70, "user and tool rails should differ visibly");
+});
+
+test("buildAutoPulseWidget creates a visible APNG-backed startup widget", () => {
+  const state = makeState();
+  const widget = buildAutoPulseWidget(state, { columns: 24, rows: 4, frames: 4, delayMs: 80, tone: "assistant" });
+  assert.equal(widget.lines.length, 4);
+  assert.equal(widget.details.frames, 4);
+  assert.equal(widget.details.delayMs, 80);
+  assert.ok(widget.placement.transmit.includes("a=T"));
+  assert.ok(state.ownedImageIds.has(widget.placement.imageId));
+  assert.ok(widget.details.metrics.pngBytes < 160_000);
+  assert.match(widget.lines[0], /kitty graphics pulse active/);
+});
+
+test("shouldAutoShowGraphics defaults on and honors explicit opt-out env", () => {
+  assert.equal(shouldAutoShowGraphics({}), true);
+  assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
+  assert.equal(shouldAutoShowGraphics({ PI_KITTY_GRAPHICS_AUTO_WIDGET: "off" }), false);
+  assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "1" }), true);
+});
+
+test("pi-graphics extension source wires the auto pulse widget into startup and commands", async () => {
+  const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
+  const source = await readFile(sourcePath, "utf8");
+  assert.match(source, /pi\.on\("session_start"/);
+  assert.match(source, /buildAutoPulseWidget\(state\)/);
+  assert.match(source, /setWidget\?\.\(autoWidgetId, widget\.lines, \{ placement: "aboveEditor" \}\)/);
+  assert.match(source, /pi_graphics_render_tui_pulse/);
+  assert.match(source, /pi-graphics-show/);
+  assert.match(source, /pi-graphics-hide/);
 });
 
 test("buildPlacement registers the image id and emits a virtual placement command", () => {

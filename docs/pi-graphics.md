@@ -12,6 +12,7 @@ The pieces:
 | `extensions/pi-graphics.js` | Pi extension entry point (registers tools + slash commands). |
 | `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars, and glow panels. |
 | `extensions/pi-graphics/components.js` | TypeScript-side TUI component mirror: graphical card frames, rails, status chips, skeleton rows, pulse waveforms, and cache keys. |
+| `extensions/pi-graphics/auto-widget.js` | Startup-visible APNG pulse widget helpers and opt-out detection. |
 | `extensions/pi-graphics/png-renderer.js` | Tiny dependency-free RGBA → PNG/APNG encoder used by the affordance renderers. |
 | `extensions/pi-graphics/runtime.js` | Pi-runtime-agnostic placement helpers (kept testable without `@sinclair/typebox`). |
 
@@ -31,7 +32,10 @@ pi /settings   # then choose "kitty-graphics"
 
 The companion extension (`./extensions/pi-graphics.js`) is loaded
 automatically by Pi when the package is installed; no further setup is
-required.
+required. By default it also shows a small animated kitty pulse widget above
+the editor on session start so graphical mode is visible without manually
+running a demo command. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or
+`PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out.
 
 ## How the extension cooperates with the theme
 
@@ -85,10 +89,12 @@ The extension registers six tools through `pi.registerTool`:
   component for efficient continuous pulse animation.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
 
-And two slash commands:
+And four slash commands:
 
-* `/pi-graphics-status` — report how many images are owned and whether
-  Unicode placeholder placement is currently active.
+* `/pi-graphics-status` — report how many images are owned, whether Unicode
+  placeholder placement is active, and whether the automatic pulse is enabled.
+* `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
+* `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
 * `/pi-graphics-demo` — print a sample rule, border, glow panel, graphical TUI component frame, and animated APNG pulse into the active UI.
 
 ## Example
@@ -122,7 +128,8 @@ The test suite under `test/pi-graphics.test.js` covers PNG byte output,
 canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
-glow coverage, scanline variation, APNG animation chunks, bounded PNG/APNG wire
-size, tone-palette differences, phase-independent component cache keys, and
-stable-layout / different-pixels pulse frames so graphical changes cannot
-silently degrade into a theme that looks the same as plain text.
+glow coverage, scanline variation, APNG animation chunks, automatic startup
+widget wiring, bounded PNG/APNG wire size, tone-palette differences,
+phase-independent component cache keys, and stable-layout / different-pixels
+pulse frames so graphical changes cannot silently degrade into a theme that
+looks the same as plain text.

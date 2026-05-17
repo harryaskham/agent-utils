@@ -35,6 +35,10 @@ import {
   renderPromptEnclosure,
 } from "./pi-graphics/affordances.js";
 import {
+  buildAutoPulseWidget,
+  shouldAutoShowGraphics,
+} from "./pi-graphics/auto-widget.js";
+import {
   renderTuiComponentFrame,
   renderTuiComponentPulseApng,
 } from "./pi-graphics/components.js";
@@ -49,8 +53,23 @@ const TOOL_PREFIX = "pi_graphics";
 
 export default function piGraphicsExtension(pi) {
   const state = makeState();
+  const autoWidgetId = "pi-graphics-auto-pulse";
+
+  pi.on("session_start", (_event, ctx) => {
+    if (!shouldAutoShowGraphics() || !ensureUnicodePlacement(state)) return;
+    try {
+      const widget = buildAutoPulseWidget(state);
+      ctx.ui?.setWidget?.(autoWidgetId, widget.lines, { placement: "aboveEditor" });
+      ctx.ui?.setStatus?.("pi-graphics", `◆ kitty glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+    } catch (error) {
+      ctx.ui?.setStatus?.("pi-graphics", `graphics unavailable: ${error?.message || error}`);
+    }
+  });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-graphics", undefined); } catch {}
+
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
       passthrough: state.config.passthrough,
@@ -324,6 +343,29 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-hide", {
+    description: "Hide the automatic Pi kitty graphics pulse widget for this session.",
+    handler: async (_args, ctx) => {
+      ctx.ui?.setWidget?.(autoWidgetId, undefined);
+      ctx.ui?.setStatus?.("pi-graphics", "kitty glow hidden");
+      ctx.ui?.notify?.("pi-graphics automatic pulse hidden for this session.", "info");
+    },
+  });
+
+  pi.registerCommand("pi-graphics-show", {
+    description: "Show the automatic Pi kitty graphics pulse widget.",
+    handler: async (_args, ctx) => {
+      if (!ensureUnicodePlacement(state)) {
+        ctx.ui?.notify?.("pi-graphics show skipped: terminal lacks Unicode placeholder placement.", "warning");
+        return;
+      }
+      const widget = buildAutoPulseWidget(state);
+      ctx.ui?.setWidget?.(autoWidgetId, widget.lines, { placement: "aboveEditor" });
+      ctx.ui?.setStatus?.("pi-graphics", `◆ kitty glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+      ctx.ui?.notify?.("pi-graphics automatic pulse shown.", "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-status", {
     description: "Report pi-graphics extension state: owned image ids and placement mode.",
     handler: async (_args, ctx) => {
@@ -333,6 +375,7 @@ export default function piGraphicsExtension(pi) {
         `placement mode: ${state.config.placementMode}`,
         `passthrough: ${state.config.passthrough}`,
         `unicode placeholders active: ${placementActive ? "yes" : "no"}`,
+        `auto pulse widget: ${shouldAutoShowGraphics() ? "enabled" : "disabled by env"}`,
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -398,3 +441,7 @@ export {
   renderTuiComponentFrames,
   renderTuiComponentPulseApng,
 } from "./pi-graphics/components.js";
+export {
+  buildAutoPulseWidget,
+  shouldAutoShowGraphics,
+} from "./pi-graphics/auto-widget.js";
