@@ -11,6 +11,7 @@ The pieces:
 | `themes/kitty-graphics.json` | High-contrast deep-Nordic color theme registered through `pi.themes` in `package.json`. |
 | `extensions/pi-graphics.js` | Pi extension entry point (registers tools + slash commands). |
 | `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars, and glow panels. |
+| `extensions/pi-graphics/components.js` | TypeScript-side TUI component mirror: graphical card frames, rails, status chips, skeleton rows, pulse waveforms, and cache keys. |
 | `extensions/pi-graphics/png-renderer.js` | Tiny dependency-free RGBA → PNG encoder used by the affordance renderers. |
 | `extensions/pi-graphics/runtime.js` | Pi-runtime-agnostic placement helpers (kept testable without `@sinclair/typebox`). |
 
@@ -46,6 +47,10 @@ graphical affordances:
 * **Nordic glow panels** — a full-cell rendered component with deep-blue fill,
   cyan/violet aurora glows, bright corner ticks, scanlines, and a normalized
   `phase` input for efficient pulse animation.
+* **Graphical TUI component frames** — a TypeScript mirror of Pi/Caco-style
+  component chrome: left activity rails, title strips, status chips, content
+  skeleton rows, bottom pulse waveforms, scanlines, tone palettes, and stable
+  layout cache keys that deliberately exclude animation phase.
 * **Accent bars** — single-cell-tall accent strips suitable for highlighting
   table rows or section headers.
 
@@ -64,26 +69,29 @@ displayed using kitty Unicode placeholder cells, so:
 
 ## Tools
 
-The extension registers four tools through `pi.registerTool`:
+The extension registers five tools through `pi.registerTool`:
 
 * `pi_graphics_render_prompt_enclosure` — render a graphical separator.
 * `pi_graphics_render_message_border` — render a gradient frame sized in
   cells.
 * `pi_graphics_render_glow_panel` — render a high-tech Nordic glow panel sized
   in cells, optionally at a specific pulse phase.
+* `pi_graphics_render_tui_component` — render a high-tech graphical TUI card
+  frame, with optional tone/density/phase/caption controls.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
 
 And two slash commands:
 
 * `/pi-graphics-status` — report how many images are owned and whether
   Unicode placeholder placement is currently active.
-* `/pi-graphics-demo` — print a sample rule, border, and glow panel into the active UI.
+* `/pi-graphics-demo` — print a sample rule, border, glow panel, and graphical TUI component frame into the active UI.
 
 ## Example
 
 ```
 > pi_graphics_render_prompt_enclosure({ columns: 60, leftColor: "#00d8ff", rightColor: "#b48cff" })
 > pi_graphics_render_glow_panel({ columns: 48, rows: 9, phase: 0.18 })
+> pi_graphics_render_tui_component({ columns: 56, rows: 9, tone: "assistant", phase: 0.2, caption: "graphical TUI" })
 ```
 
 The returned tool output text contains both the kitty-graphics transmit
@@ -108,6 +116,7 @@ The test suite under `test/pi-graphics.test.js` covers PNG byte output,
 canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
-glow coverage, scanline variation, and stable-layout/different-pixels pulse
-frames so graphical changes cannot silently degrade into a theme that looks the
-same as plain text.
+glow coverage, scanline variation, bounded PNG/wire size, tone-palette
+differences, phase-independent component cache keys, and stable-layout /
+different-pixels pulse frames so graphical changes cannot silently degrade into
+a theme that looks the same as plain text.

@@ -35,6 +35,9 @@ import {
   renderPromptEnclosure,
 } from "./pi-graphics/affordances.js";
 import {
+  renderTuiComponentFrame,
+} from "./pi-graphics/components.js";
+import {
   buildPlacement,
   ensureUnicodePlacement,
   makeState,
@@ -197,6 +200,55 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_render_tui_component`,
+    label: "Pi Graphics: TUI Component Frame",
+    description: "Render a kitty-graphics-backed TUI component frame with graphical chrome, deep Nordic glow, status chips, content skeleton rows, scanlines, and phase-based pulse motion.",
+    promptSnippet: "Render a high-tech glowing graphical TUI component frame for Pi kitty graphics mode.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Width in terminal cells. Defaults to 56.", minimum: 8, maximum: 512 })),
+      rows: Type.Optional(Type.Number({ description: "Height in terminal cells. Defaults to 9.", minimum: 4, maximum: 256 })),
+      phase: Type.Optional(Type.Number({ description: "Normalized pulse phase from 0..1." })),
+      tone: Type.Optional(Type.String({ description: "Component tone: assistant, tool, or user." })),
+      density: Type.Optional(Type.Number({ description: "Content skeleton density from 0.1..1." })),
+      caption: Type.Optional(Type.String({ description: "Optional text caption rendered after the first placeholder line." })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!ensureUnicodePlacement(state)) {
+        return {
+          content: [{ type: "text", text: "pi-graphics: not running in a kitty/tmux placeholder-capable terminal; skipping graphical TUI component." }],
+          details: { fallback: true },
+        };
+      }
+      const frame = renderTuiComponentFrame({
+        columns: params.columns,
+        rows: params.rows,
+        phase: params.phase,
+        tone: params.tone,
+        density: params.density,
+      });
+      const placement = buildPlacement(state, {
+        name: `tui-component-${frame.tone}-${frame.columns}x${frame.rows}-${frame.phase.toFixed(3)}`,
+        png: frame.png,
+        columns: frame.columns,
+        rows: frame.rows,
+        caption: params.caption,
+      });
+      return {
+        content: [{ type: "text", text: renderToText(placement) }],
+        details: {
+          imageId: placement.imageId,
+          placementId: placement.placementId,
+          columns: frame.columns,
+          rows: frame.rows,
+          phase: frame.phase,
+          tone: frame.tone,
+          metrics: frame.metrics,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_clear`,
     label: "Pi Graphics: Clear",
     description: "Delete every kitty graphics image owned by the pi-graphics extension. Scoped: never deletes images owned by other extensions, never issues a global clear.",
@@ -249,7 +301,15 @@ export default function piGraphicsExtension(pi) {
         name: "demo-glow-panel",
         ...renderGlowPanel({ columns: 36, rows: 5, phase: 0.2 }),
       });
-      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}\n${renderToText(glow)}`, "info");
+      const componentFrame = renderTuiComponentFrame({ columns: 44, rows: 7, phase: 0.35, tone: "assistant" });
+      const component = buildPlacement(state, {
+        name: "demo-tui-component",
+        png: componentFrame.png,
+        columns: componentFrame.columns,
+        rows: componentFrame.rows,
+        caption: "graphical TUI component",
+      });
+      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}\n${renderToText(glow)}\n${renderToText(component)}`, "info");
     },
   });
 }
@@ -268,3 +328,8 @@ export {
   renderGradientBorder,
   renderPromptEnclosure,
 } from "./pi-graphics/affordances.js";
+export {
+  componentFrameCacheKey,
+  renderTuiComponentFrame,
+  renderTuiComponentFrames,
+} from "./pi-graphics/components.js";

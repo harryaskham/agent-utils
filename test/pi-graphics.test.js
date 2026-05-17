@@ -32,6 +32,11 @@ import {
   makeState,
   renderToText,
 } from "../extensions/pi-graphics/runtime.js";
+import {
+  componentFrameCacheKey,
+  renderTuiComponentFrame,
+  renderTuiComponentFrames,
+} from "../extensions/pi-graphics/components.js";
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -236,6 +241,47 @@ test("renderGlowPanelFrames keeps layout stable while pulse frames change pixels
   }
   assert.notEqual(frames[0].png.toString("base64"), frames[1].png.toString("base64"), "pulse frames should update image content");
   assert.notEqual(frames[1].png.toString("base64"), frames[2].png.toString("base64"), "successive pulse frames should be visually distinct");
+});
+
+test("renderTuiComponentFrame mirrors a TUI card with measurable graphical chrome", () => {
+  const frame = renderTuiComponentFrame({ columns: 36, rows: 7, phase: 0.2, tone: "assistant" });
+  assert.equal(frame.columns, 36);
+  assert.equal(frame.rows, 7);
+  assert.ok(frame.metrics.pngBytes < 80_000, "component frame must remain cheap enough for interactive redraws");
+  assert.ok(frame.metrics.estimatedWireBytes < 110_000, "base64 wire estimate should stay bounded");
+  const decoded = decodePngRgba(frame.png);
+  const leftRail = pixelAt(decoded, 3, Math.floor(decoded.height / 2));
+  const center = pixelAt(decoded, Math.floor(decoded.width / 2), Math.floor(decoded.height / 2));
+  const title = pixelAt(decoded, 20, 7);
+  const bottomWave = pixelAt(decoded, 13, decoded.height - 20);
+  assert.ok(channelDistance(leftRail, center) > 90, "activity rail should visibly differ from card fill");
+  assert.ok(channelDistance(title, center) > 45, "title strip should be visible over card fill");
+  assert.ok(channelDistance(bottomWave, center) > 25, "bottom pulse waveform should be visible");
+});
+
+test("renderTuiComponentFrames animates efficiently with stable layout/cache key", () => {
+  const frames = renderTuiComponentFrames({ columns: 32, rows: 6, tone: "tool", frames: 5 });
+  const key = componentFrameCacheKey({ columns: 32, rows: 6, tone: "tool" });
+  const keyAtOtherPhase = componentFrameCacheKey({ columns: 32, rows: 6, tone: "tool", phase: 0.9 });
+  assert.equal(key, keyAtOtherPhase, "phase must not change the component layout cache key");
+  assert.equal(frames.length, 5);
+  for (const frame of frames) {
+    assert.equal(frame.columns, 32);
+    assert.equal(frame.rows, 6);
+    assert.equal(frame.metrics.pngBytes, frame.png.length);
+    assert.ok(frame.metrics.pngBytes < 70_000);
+  }
+  const uniquePayloads = new Set(frames.map((frame) => frame.png.toString("base64")));
+  assert.ok(uniquePayloads.size >= 4, "pulse animation should produce distinct graphical frames");
+});
+
+test("renderTuiComponentFrame tones produce visibly distinct component palettes", () => {
+  const assistant = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "assistant" }).png);
+  const tool = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "tool" }).png);
+  const user = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "user" }).png);
+  const sample = [3, Math.floor(assistant.height / 2)];
+  assert.ok(channelDistance(pixelAt(assistant, ...sample), pixelAt(tool, ...sample)) > 70, "assistant and tool rails should differ visibly");
+  assert.ok(channelDistance(pixelAt(user, ...sample), pixelAt(tool, ...sample)) > 70, "user and tool rails should differ visibly");
 });
 
 test("buildPlacement registers the image id and emits a virtual placement command", () => {
