@@ -100,9 +100,9 @@ strip, user-theme sync, persistent header chrome, transcript chrome,
 editor-surface chrome, raw stdout bootstrap, and the OSC terminal-palette request
 are enabled by default as
 fallback visual smoke tests. The raw bootstrap writes a bounded truecolor block
-directly to stdout at session start, so it does not depend on Pi theme APIs,
-widgets, editor APIs, transcript messages, kitty graphics placement, or OSC
-support. Transcript chrome inserts a bounded truecolor deep-Nordic rail after
+to stdout, stderr, and a Pi notification at session start, so it does not depend
+on Pi theme APIs, widgets, editor APIs, transcript messages, kitty graphics
+placement, OSC support, or a single output stream. Transcript chrome inserts a bounded truecolor deep-Nordic rail after
 normal messages, and editor-surface chrome wraps the real input editor with a
 pulsating truecolor Nordic frame so the session visibly changes even if core Pi
 surfaces ignore theme tokens. The strip includes the configured theme name, graphics mode,
@@ -424,7 +424,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame and bounded transcript-chrome rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD, editor-frame, editor-surface rendering, and raw stdout bootstrap rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, default-on persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame and bounded transcript-chrome rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD, editor-frame, editor-surface rendering, and raw stdout/stderr/notification bootstrap rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, default-on persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

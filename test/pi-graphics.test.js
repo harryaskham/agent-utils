@@ -1186,8 +1186,11 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /shouldAutoShowHeaderChrome\(gfxEnv\(\)\)/);
   assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
   assert.match(source, /pi-gfx-header/);
-  assert.match(source, /writeRawBootstrap\(\)/);
+  assert.match(source, /writeRawBootstrap\(ctx\)/);
   assert.match(source, /process\.stdout\.write/);
+  assert.match(source, /process\.stderr\.write/);
+  assert.match(source, /ctx\?\.ui\?\.notify\?\.\(text, "info"\)/);
+  assert.match(source, /pi-gfx-raw/);
   assert.match(source, /buildPiGraphicsRawBootstrapText/);
   assert.match(source, /installEditorSurface\(ctx\)/);
   assert.match(source, /class PiGraphicsEditorSurface extends CustomEditor/);

@@ -342,14 +342,15 @@ export default function piGraphicsExtension(pi) {
     return writeAnsiText(ctx, buildPiGraphicsAmbientProofText({ themeName: configuredThemeName, mode: configuredGraphicsMode, env: gfxEnv(), ...options }));
   }
 
-  function writeRawBootstrap() {
+  function writeRawBootstrap(ctx) {
     if (!shouldAutoShowRawBootstrap(gfxEnv())) return false;
-    try {
-      process.stdout.write(`\n${buildPiGraphicsRawBootstrapText({ label: `PI GFX ${configuredThemeName} RAW BOOTSTRAP`, phase: 0.31 })}`);
-      return true;
-    } catch {
-      return false;
-    }
+    const text = buildPiGraphicsRawBootstrapText({ label: `PI GFX ${configuredThemeName} RAW BOOTSTRAP`, phase: 0.31 });
+    let wrote = false;
+    try { process.stdout.write(`\n${text}`); wrote = true; } catch {}
+    try { process.stderr.write(`\n${text}`); wrote = true; } catch {}
+    try { ctx?.ui?.notify?.(text, "info"); wrote = true; } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-raw", wrote ? "⬢ raw stdout/stderr/notify bootstrap" : "⚠ raw bootstrap blocked"); } catch {}
+    return wrote;
   }
 
   function applyTerminalPalette(ctx) {
@@ -521,7 +522,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.on("session_start", (_event, ctx) => {
-    writeRawBootstrap();
+    writeRawBootstrap(ctx);
     applyTerminalPalette(ctx);
     applyThemeCues(ctx);
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
@@ -609,6 +610,7 @@ export default function piGraphicsExtension(pi) {
     try { stopEditorSurfacePulse(); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-editor", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-header", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-raw", undefined); } catch {}
     try { ctx?.ui?.setEditorComponent?.(undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
