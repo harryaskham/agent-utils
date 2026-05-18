@@ -36,6 +36,7 @@ import {
 import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
@@ -72,6 +73,7 @@ import {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowAnsiTakeover,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -491,6 +493,19 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[2], /neon cyan/);
 });
 
+test("buildPiGraphicsAnsiTakeoverText emits raw truecolor terminal graphics", () => {
+  assert.equal(shouldAutoShowAnsiTakeover({}), true);
+  assert.equal(shouldAutoShowAnsiTakeover({ PI_GRAPHICS_AUTO_ANSI_TAKEOVER: "off" }), false);
+  const first = buildPiGraphicsAnsiTakeoverText({ width: 64, phase: 0, label: "TEST TAKEOVER" });
+  const second = buildPiGraphicsAnsiTakeoverText({ width: 64, phase: 0.4, label: "TEST TAKEOVER" });
+  assert.match(first, /\u001b\[48;2;/);
+  assert.match(first, /\u001b\[38;2;/);
+  assert.match(first, /TEST TAKEOVER/);
+  assert.match(first, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(first.split("\n").length, 5);
+  assert.notEqual(first, second);
+});
+
 test("buildPiGraphicsConversationFrameComponent renders normal transcript chrome", () => {
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
@@ -870,9 +885,14 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /ANSI takeover: \/pi-graphics-ansi-takeover/);
+  assert.match(source, /pi-graphics-ansi-takeover/);
+  assert.match(source, /_ansi_takeover/);
+  assert.match(source, /writeAnsiTakeover\(ctx/);
   assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
   assert.match(source, /pi-graphics-conversation-frame/);
   assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /shouldAutoShowAnsiTakeover\(\)/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-conversation-frame"/);
   assert.match(source, /_theme_delta/);
   assert.match(source, /_conversation_frame/);

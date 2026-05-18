@@ -54,6 +54,41 @@ export function shouldAutoShowConversationFrame(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowAnsiTakeover(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_ANSI_TAKEOVER ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
+function ansiBg(hex) {
+  const [r, g, b] = hexRgb(hex);
+  return `\u001b[48;2;${r};${g};${b}m`;
+}
+
+function ansiFg(hex) {
+  const [r, g, b] = hexRgb(hex);
+  return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+export function buildPiGraphicsAnsiTakeoverText({ width = 88, phase = 0, label = "PI KITTY GRAPHICS TRUECOLOR TAKEOVER" } = {}) {
+  const cells = Math.max(48, Math.min(160, Math.trunc(width)));
+  const reset = "\u001b[0m";
+  const palette = ["#02030b", "#03152a", "#006ec0", "#00ffd0", "#7c4dff", "#ff4dff"];
+  const offset = Math.abs(Math.trunc(Number(phase) * 13)) % palette.length;
+  const row = (glyph, shift = 0) => Array.from({ length: cells }, (_, i) => {
+    const color = palette[(i + shift + offset) % palette.length];
+    return `${ansiBg(color)}${ansiFg(i % 3 === 0 ? "#ffffff" : "#00ffd0")}${glyph}`;
+  }).join("") + reset;
+  const title = ` ${String(label).replace(/\s+/g, " ").trim().slice(0, Math.max(18, cells - 4))} `;
+  const paddedTitle = title.padStart(Math.floor((cells + title.length) / 2), "█").padEnd(cells, "█").slice(0, cells);
+  return [
+    row("█", 0),
+    `${ansiBg("#02030b")}${ansiFg("#00ffd0")}${paddedTitle}${reset}`,
+    `${ansiBg("#33006b")}${ansiFg("#ff4dff")}${PI_GRAPHICS_RELOAD_SENTINEL.padEnd(cells).slice(0, cells)}${reset}`,
+    row("▓", 2),
+    row("▒", 4),
+  ].join("\n");
+}
+
 export function buildStartupSplashMessage({ content, tone = "assistant", title = "startup splash" } = {}) {
   const body = String(content || "PI KITTY GRAPHICS ONLINE — deep Nordic gradients, cyan/violet glow, APNG pulse, header/footer chrome, and rendered TypeScript TUI components are active.")
     .replace(/\s+/g, " ")

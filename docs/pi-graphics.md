@@ -76,7 +76,9 @@ kitty-placeholder, opt-out, and reload diagnostics. Use `/pi-graphics-theme-delt
 or `pi_graphics_theme_delta` to print the exact reload sentinel and quantified
 RGB deltas against the built-in dark theme. Use `/pi-graphics-conversation-frame`
 or `pi_graphics_conversation_frame` to force normal transcript text through the
-high-contrast deep-Nordic conversation frame. Use `/pi-graphics-lighthouse` or
+high-contrast deep-Nordic conversation frame. Use `/pi-graphics-ansi-takeover`
+or `pi_graphics_ansi_takeover` for a raw truecolor terminal banner that does not
+depend on Pi theme activation or kitty image placement. Use `/pi-graphics-lighthouse` or
 `pi_graphics_lighthouse` for the deliberately oversized normal-TUI beacon that
 should be visible even before image/APNG rendering succeeds.
 
@@ -132,6 +134,14 @@ rendered. The extension complements those flat colors with graphical affordances
   `pi-graphics-message` into the transcript so graphics mode leaves a visible
   neon block in normal conversation history even if terminal theme changes are
   subtle.
+* **Raw ANSI takeover banner** — `/pi-graphics-ansi-takeover` and
+  `pi_graphics_ansi_takeover` emit a five-line truecolor ANSI gradient banner
+  directly to the terminal. It uses deep-Nordic void, cyan, violet, and aurora
+  blocks plus the reload sentinel, and it is written on session start by default
+  unless `PI_GRAPHICS_AUTO_ANSI_TAKEOVER=0` (or
+  `PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER=off`) is set. This surface is intended as
+  the last-resort visibility check because it does not rely on theme APIs,
+  message renderers, widgets, or kitty image placement.
 * **Conversation frame renderer** — `/pi-graphics-conversation-frame` and
   `pi_graphics_conversation_frame` render ordinary transcript text inside a
   deep-Nordic frame with cyan/violet rails, animated-looking block gradients,
@@ -192,7 +202,7 @@ displayed using kitty Unicode placeholder cells, so:
 
 ## Tools
 
-The extension registers nine tools through `pi.registerTool`:
+The extension registers the following tools through `pi.registerTool`:
 
 * `pi_graphics_render_prompt_enclosure` — render a graphical separator.
 * `pi_graphics_render_message_border` — render a gradient frame sized in
@@ -209,9 +219,14 @@ The extension registers nine tools through `pi.registerTool`:
   covering tones and pulse phases for human inspection.
 * `pi_graphics_send_message` — send a displayed custom message through the
   `pi-graphics-message` renderer for validating normal conversation chrome.
+* `pi_graphics_ansi_takeover` — emit the raw truecolor ANSI takeover banner.
+* `pi_graphics_conversation_frame` — render ordinary text inside the deep-Nordic
+  conversation-frame transcript chrome.
+* `pi_graphics_theme_delta` — show the reload sentinel and quantified theme-token
+  RGB deltas against the built-in dark theme.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
 
-And five slash commands:
+And the discoverability slash commands include:
 
 * `/pi-graphics-status` — report how many images are owned, whether Unicode
   placeholder placement is active, whether the automatic pulse and startup
@@ -221,6 +236,9 @@ And five slash commands:
 * `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
 * `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
 * `/pi-graphics-message [text]` — display a custom message rendered with Pi kitty graphics message chrome.
+* `/pi-graphics-ansi-takeover [label]` — write the raw truecolor terminal banner.
+* `/pi-graphics-conversation-frame [text]` — send a graphical conversation-frame transcript message.
+* `/pi-graphics-theme-delta` — print the reload sentinel and theme delta report.
 * `/pi-graphics-demo` — print a sample rule, border, glow panel, graphical TUI component frame, and animated APNG pulse into the active UI.
 
 ## Example
@@ -265,7 +283,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, raw ANSI takeover rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

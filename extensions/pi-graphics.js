@@ -37,6 +37,7 @@ import {
 import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
@@ -67,6 +68,7 @@ import {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowAnsiTakeover,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -133,6 +135,22 @@ export default function piGraphicsExtension(pi) {
     }
   }
 
+  function writeAnsiTakeover(ctx, options = {}) {
+    if (!shouldAutoShowAnsiTakeover()) return false;
+    const text = buildPiGraphicsAnsiTakeoverText(options);
+    try {
+      if (typeof ctx?.ui?.write === "function") {
+        ctx.ui.write(`${text}\n`);
+        return true;
+      }
+      if (typeof process.stdout?.write === "function") {
+        process.stdout.write(`${text}\n`);
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
   function setWorkingChrome(ctx, stage, toolName = "") {
     try { ctx.ui?.setWorkingVisible?.(true); } catch {}
     try { ctx.ui?.setTitle?.(buildTerminalTitle({ stage, toolName })); } catch {}
@@ -187,6 +205,7 @@ export default function piGraphicsExtension(pi) {
 
   pi.on("session_start", (_event, ctx) => {
     applyThemeCues(ctx);
+    writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
     if (shouldAutoShowSplash()) {
       try { pi.sendMessage?.(buildStartupSplashMessage()); } catch {}
@@ -637,6 +656,24 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_ansi_takeover`,
+    label: "Pi Graphics: ANSI Takeover",
+    description: "Return a raw truecolor ANSI deep-Nordic takeover banner that does not depend on Pi theme APIs or kitty image placement.",
+    promptSnippet: "Show a raw truecolor Pi kitty graphics takeover banner.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target banner width.", minimum: 48, maximum: 160 })),
+      phase: Type.Optional(Type.Number({ description: "Pulse phase used to shift the gradient." })),
+      label: Type.Optional(Type.String({ description: "Banner label." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsAnsiTakeoverText(params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, ansi: true },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_conversation_frame`,
     label: "Pi Graphics: Conversation Frame",
     description: "Render a high-contrast deep-Nordic conversation frame for ordinary transcript visibility.",
@@ -842,6 +879,15 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-ansi-takeover", {
+    description: "Write a raw truecolor ANSI deep-Nordic takeover banner.",
+    handler: async (args, ctx) => {
+      const label = args.trim() || "PI KITTY GRAPHICS TRUECOLOR TAKEOVER";
+      const wrote = writeAnsiTakeover(ctx, { label });
+      if (!wrote) ctx.ui?.notify?.(buildPiGraphicsAnsiTakeoverText({ label }), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-conversation-frame", {
     description: "Send a graphical deep-Nordic conversation frame message.",
     handler: async (args, _ctx) => {
@@ -953,6 +999,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "ANSI takeover: /pi-graphics-ansi-takeover",
         "conversation frame: /pi-graphics-conversation-frame",
         "session header: enabled",
         "session footer: enabled",
@@ -1050,6 +1097,7 @@ export {
 export {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
@@ -1086,6 +1134,7 @@ export {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowAnsiTakeover,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
