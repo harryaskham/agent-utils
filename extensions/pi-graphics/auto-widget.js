@@ -70,6 +70,11 @@ export function buildPiGraphicsMessageLines({ content = "Pi graphics message", t
   return lines;
 }
 
+function boundedLines(lines, width = 120) {
+  const max = Math.max(24, Math.trunc(width));
+  return lines.map((line) => line.length > max ? `${line.slice(0, Math.max(0, max - 1))}…` : line);
+}
+
 export function buildPiGraphicsMessageComponent(message, options = {}, theme) {
   const details = message?.details && typeof message.details === "object" ? message.details : {};
   const lines = buildPiGraphicsMessageLines({
@@ -79,10 +84,27 @@ export function buildPiGraphicsMessageComponent(message, options = {}, theme) {
     expanded: Boolean(options.expanded),
   }, theme);
   return {
-    render(width = 120) {
-      const max = Math.max(24, Math.trunc(width));
-      return lines.map((line) => line.length > max ? `${line.slice(0, Math.max(0, max - 1))}…` : line);
-    },
+    render(width = 120) { return boundedLines(lines, width); },
+    invalidate() {},
+  };
+}
+
+export function buildPiGraphicsHeaderLines(theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const left = fg("borderAccent", "╭─⬢─◆─✦");
+  const right = fg("thinkingXhigh", "✦─◆─⬢─╮");
+  return [
+    bg("selectedBg", `${left} ${fg("customMessageLabel", "PI KITTY GRAPHICS ONLINE")} ${right}`),
+    bg("customMessageBg", `${fg("accent", "▌")} ${fg("text", "deep Nordic void • cyan/violet glow • APNG pulse • TypeScript TUI mirror")}`),
+    bg("toolPendingBg", `${fg("muted", "▔".repeat(12))} ${fg("borderAccent", "never-a-normal-terminal mode")}`),
+  ];
+}
+
+export function buildPiGraphicsHeaderComponent(theme) {
+  const lines = buildPiGraphicsHeaderLines(theme);
+  return {
+    render(width = 120) { return boundedLines(lines, width); },
     invalidate() {},
   };
 }

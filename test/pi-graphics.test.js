@@ -35,6 +35,8 @@ import {
 } from "../extensions/pi-graphics/runtime.js";
 import {
   buildAutoPulseWidget,
+  buildPiGraphicsHeaderComponent,
+  buildPiGraphicsHeaderLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
   buildStagePanelWidget,
@@ -431,6 +433,24 @@ test("buildPiGraphicsMessageComponent renders bounded custom message chrome", ()
   component.invalidate();
 });
 
+test("buildPiGraphicsHeaderComponent renders persistent branded session chrome", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const lines = buildPiGraphicsHeaderLines(theme);
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /PI KITTY GRAPHICS ONLINE/);
+  assert.match(lines[1], /deep Nordic void/);
+  assert.match(lines[2], /never-a-normal-terminal mode/);
+  assert.ok(lines.some((line) => line.includes("selectedBg")));
+  const component = buildPiGraphicsHeaderComponent(theme);
+  const rendered = component.render(54);
+  assert.equal(rendered.length, 3);
+  assert.ok(rendered.every((line) => line.length <= 55));
+  component.invalidate();
+});
+
 test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor explicit opt-out env", () => {
   assert.equal(shouldAutoShowGraphics({}), true);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
@@ -459,6 +479,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /ctx\.ui\.setTheme\("kitty-graphics"\)/);
   assert.match(source, /buildWorkingIndicatorFrames\(ctx\.ui\?\.theme\)/);
   assert.match(source, /setWorkingIndicator\?\.\(\{ frames:/);
+  assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
+  assert.match(source, /setHeader\?\.\(undefined\)/);
+  assert.match(source, /session header: enabled/);
   assert.match(source, /pi-theme/);
   assert.match(source, /select \/settings → kitty-graphics/);
   assert.match(source, /buildStagePanelWidget\(state, options\)/);
