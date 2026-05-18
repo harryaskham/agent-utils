@@ -20,6 +20,24 @@ export function shouldAutoApplyTheme(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowSplash(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_SPLASH ?? env.PI_KITTY_GRAPHICS_AUTO_SPLASH;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
+export function buildStartupSplashMessage({ content, tone = "assistant", title = "startup splash" } = {}) {
+  const body = String(content || "PI KITTY GRAPHICS ONLINE — deep Nordic gradients, cyan/violet glow, APNG pulse, header/footer chrome, and rendered TypeScript TUI components are active.")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
+  return {
+    customType: "pi-graphics-message",
+    content: body,
+    display: true,
+    details: { tone, title },
+  };
+}
+
 export function buildWorkingIndicatorFrames(theme) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
   return [

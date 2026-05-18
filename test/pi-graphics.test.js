@@ -42,10 +42,12 @@ import {
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
   buildStagePanelWidget,
+  buildStartupSplashMessage,
   buildTextStagePanel,
   buildWorkingIndicatorFrames,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
+  shouldAutoShowSplash,
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
   componentFrameCacheKey,
@@ -471,6 +473,18 @@ test("buildPiGraphicsFooterComponent renders persistent bottom chrome", () => {
   component.invalidate();
 });
 
+test("startup splash defaults on, can opt out, and builds bounded custom message", () => {
+  assert.equal(shouldAutoShowSplash({}), true);
+  assert.equal(shouldAutoShowSplash({ PI_GRAPHICS_AUTO_SPLASH: "0" }), false);
+  assert.equal(shouldAutoShowSplash({ PI_KITTY_GRAPHICS_AUTO_SPLASH: "off" }), false);
+  const message = buildStartupSplashMessage({ content: "x ".repeat(200), tone: "tool", title: "boot" });
+  assert.equal(message.customType, "pi-graphics-message");
+  assert.equal(message.display, true);
+  assert.equal(message.details.tone, "tool");
+  assert.equal(message.details.title, "boot");
+  assert.ok(message.content.length <= 220);
+});
+
 test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor explicit opt-out env", () => {
   assert.equal(shouldAutoShowGraphics({}), true);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
@@ -505,6 +519,8 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setFooter\?\.\(undefined\)/);
   assert.match(source, /session header: enabled/);
   assert.match(source, /session footer: enabled/);
+  assert.match(source, /buildStartupSplashMessage\(\)/);
+  assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);
   assert.match(source, /pi-theme/);
   assert.match(source, /select \/settings → kitty-graphics/);
   assert.match(source, /buildStagePanelWidget\(state, options\)/);

@@ -40,10 +40,12 @@ import {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsMessageComponent,
   buildStagePanelWidget,
+  buildStartupSplashMessage,
   buildTextStagePanel,
   buildWorkingIndicatorFrames,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
+  shouldAutoShowSplash,
 } from "./pi-graphics/auto-widget.js";
 import {
   renderPiGraphicsContactSheet,
@@ -112,6 +114,9 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_start", (_event, ctx) => {
     applyThemeCues(ctx);
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
+    if (shouldAutoShowSplash()) {
+      try { pi.sendMessage?.(buildStartupSplashMessage()); } catch {}
+    }
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
@@ -569,6 +574,7 @@ export default function piGraphicsExtension(pi) {
         `unicode placeholders active: ${placementActive ? "yes" : "no"}`,
         `auto pulse widget: ${shouldAutoShowGraphics() ? "enabled" : "disabled by env"}`,
         `auto theme apply: ${shouldAutoApplyTheme() ? "enabled" : "disabled by env"}`,
+        `startup splash: ${shouldAutoShowSplash() ? "enabled" : "disabled by env"}`,
         "session header: enabled",
         "session footer: enabled",
       ].join("\n");
@@ -647,8 +653,10 @@ export {
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
   buildStagePanelWidget,
+  buildStartupSplashMessage,
   buildTextStagePanel,
   buildWorkingIndicatorFrames,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
+  shouldAutoShowSplash,
 } from "./pi-graphics/auto-widget.js";
