@@ -36,6 +36,7 @@ import {
 } from "./pi-graphics/affordances.js";
 import {
   buildAutoPulseWidget,
+  buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHudComponent,
@@ -66,6 +67,8 @@ export default function piGraphicsExtension(pi) {
   const state = makeState();
   const autoWidgetId = "pi-graphics-auto-pulse";
   const hudWidgetId = "pi-graphics-hud-component";
+  const editorFrameTopId = "pi-graphics-editor-frame-top";
+  const editorFrameBottomId = "pi-graphics-editor-frame-bottom";
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
@@ -111,6 +114,8 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 90 });
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
+    ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
+    ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
     ctx.ui?.setWidget?.(hudWidgetId, (_tui, theme) => buildPiGraphicsHudComponent(theme), { placement: "belowEditor" });
   }
 
@@ -150,6 +155,8 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setHeader?.(undefined); } catch {}
     try { ctx?.ui?.setFooter?.(undefined); } catch {}
     try { ctx?.ui?.setWidget?.(hudWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(editorFrameTopId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(editorFrameBottomId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -582,6 +589,7 @@ export default function piGraphicsExtension(pi) {
         "session header: enabled",
         "session footer: enabled",
         "component HUD: below editor",
+        "editor frame: above/below editor",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -651,6 +659,8 @@ export {
 } from "./pi-graphics/components.js";
 export {
   buildAutoPulseWidget,
+  buildPiGraphicsEditorFrameComponent,
+  buildPiGraphicsEditorFrameLines,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,

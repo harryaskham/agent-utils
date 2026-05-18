@@ -35,6 +35,8 @@ import {
 } from "../extensions/pi-graphics/runtime.js";
 import {
   buildAutoPulseWidget,
+  buildPiGraphicsEditorFrameComponent,
+  buildPiGraphicsEditorFrameLines,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
@@ -495,6 +497,29 @@ test("buildPiGraphicsHudComponent renders a persistent component-backed HUD", ()
   assert.notDeepEqual(first, second);
 });
 
+test("buildPiGraphicsEditorFrameComponent renders editor-edge neon chrome", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const top = buildPiGraphicsEditorFrameLines(theme, { edge: "top", width: 72, phase: 0.25 });
+  const bottom = buildPiGraphicsEditorFrameLines(theme, { edge: "bottom", width: 72, phase: 0.75 });
+  assert.equal(top.length, 1);
+  assert.equal(bottom.length, 1);
+  assert.match(top[0], /NEON EDITOR FIELD/);
+  assert.match(bottom[0], /INPUT FIELD STABILIZED/);
+  assert.match(top[0], /customMessageBg/);
+  assert.notDeepEqual(
+    buildPiGraphicsEditorFrameLines(null, { edge: "top", width: 80, phase: 0 }),
+    buildPiGraphicsEditorFrameLines(null, { edge: "top", width: 80, phase: 0.25 }),
+  );
+  const component = buildPiGraphicsEditorFrameComponent(null, { edge: "top" });
+  const rendered = component.render(80);
+  assert.equal(rendered.length, 1);
+  assert.ok(rendered[0].length <= 81);
+  component.invalidate();
+});
+
 test("startup splash defaults on, can opt out, and builds bounded custom message", () => {
   assert.equal(shouldAutoShowSplash({}), true);
   assert.equal(shouldAutoShowSplash({ PI_GRAPHICS_AUTO_SPLASH: "0" }), false);
@@ -538,11 +563,14 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
+  assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
+  assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setHeader\?\.\(undefined\)/);
   assert.match(source, /setFooter\?\.\(undefined\)/);
   assert.match(source, /session header: enabled/);
   assert.match(source, /session footer: enabled/);
   assert.match(source, /component HUD: below editor/);
+  assert.match(source, /editor frame: above\/below editor/);
   assert.match(source, /buildStartupSplashMessage\(\)/);
   assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);
   assert.match(source, /pi-theme/);

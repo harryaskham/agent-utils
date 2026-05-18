@@ -168,6 +168,30 @@ export function buildPiGraphicsHudComponent(theme, options = {}) {
   };
 }
 
+export function buildPiGraphicsEditorFrameLines(theme, { edge = "top", width = 72, phase = 0 } = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const cells = Math.max(24, Math.min(120, Math.trunc(width)));
+  const pulse = Math.abs(Math.sin(Number(phase) * Math.PI * 2)) > 0.55 ? "⬢◆✦" : "✦◆⬢";
+  const label = edge === "bottom" ? "INPUT FIELD STABILIZED" : "NEON EDITOR FIELD";
+  const railWidth = Math.max(8, cells - label.length - pulse.length - 10);
+  const rail = edge === "bottom" ? "▄".repeat(railWidth) : "▀".repeat(railWidth);
+  const left = edge === "bottom" ? "╚═" : "╔═";
+  const right = edge === "bottom" ? "═╝" : "═╗";
+  return [bg("customMessageBg", `${fg("borderAccent", left)}${fg("accent", rail)} ${fg("customMessageLabel", label)} ${fg("thinkingXhigh", pulse)}${fg("borderAccent", right)}`)];
+}
+
+export function buildPiGraphicsEditorFrameComponent(theme, options = {}) {
+  let tick = Number(options.phase || 0);
+  return {
+    render(width = 120) {
+      tick = (tick + 0.1) % 1;
+      return boundedLines(buildPiGraphicsEditorFrameLines(theme, { ...options, width, phase: tick }), width);
+    },
+    invalidate() { tick = (tick + 0.2) % 1; },
+  };
+}
+
 export function buildAutoPulseWidget(state, {
   columns = 42,
   rows = 6,
