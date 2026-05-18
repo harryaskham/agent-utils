@@ -50,8 +50,10 @@ import {
   buildPiGraphicsMessageLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
+  buildPiGraphicsThemeSwatchMessageComponent,
   buildStagePanelWidget,
   buildStartupSplashMessage,
+  buildStartupThemeSwatchMessage,
   buildTerminalTitle,
   buildTextStagePanel,
   buildVisualContractLines,
@@ -61,6 +63,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
+  shouldAutoShowThemeSwatchSplash,
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
   componentFrameCacheKey,
@@ -502,6 +505,20 @@ test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width bann
   component.invalidate();
 });
 
+test("startup theme swatch message defaults on and renders transcript-visible swatch", () => {
+  assert.equal(shouldAutoShowThemeSwatchSplash({}), true);
+  assert.equal(shouldAutoShowThemeSwatchSplash({ PI_GRAPHICS_AUTO_THEME_SWATCH: "0" }), false);
+  assert.equal(shouldAutoShowThemeSwatchSplash({ PI_KITTY_GRAPHICS_AUTO_THEME_SWATCH: "off" }), false);
+  const message = buildStartupThemeSwatchMessage({ width: 88 });
+  assert.equal(message.customType, "pi-graphics-theme-swatch");
+  assert.equal(message.display, true);
+  assert.equal(message.details.width, 88);
+  const component = buildPiGraphicsThemeSwatchMessageComponent(message, {}, null);
+  const rendered = component.render(88);
+  assert.equal(rendered.length, 5);
+  assert.match(rendered.join("\n"), /PI THEME CALIBRATION SWATCH/);
+});
+
 test("buildPiGraphicsThemeSwatchComponent renders actual theme-token calibration bars", () => {
   const calls = [];
   const theme = {
@@ -698,7 +715,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /theme swatch: above editor \+ \/pi-graphics-theme-swatch/);
   assert.match(source, /live footer: branch\/status beacon/);
   assert.match(source, /_theme_swatch/);
+  assert.match(source, /_send_theme_swatch/);
   assert.match(source, /pi-graphics-theme-swatch/);
+  assert.match(source, /pi-graphics-theme-swatch-message/);
   assert.match(source, /visual contract: \/pi-graphics-visual-contract/);
   assert.match(source, /_visual_contract/);
   assert.match(source, /buildVisualContractLines\(\{ unicodePlacement: ensureUnicodePlacement\(state\), splash: shouldAutoShowSplash\(\) \}/);
@@ -707,7 +726,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setStatus\?\.\("pi-gfx-row", "✦ neon working row"\)/);
   assert.match(source, /setTitle\?\.\("pi"\)/);
   assert.match(source, /buildStartupSplashMessage\(\)/);
+  assert.match(source, /buildStartupThemeSwatchMessage\(\)/);
   assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);
+  assert.match(source, /startup theme swatch: \$\{shouldAutoShowThemeSwatchSplash\(\) \? "enabled" : "disabled by env"\}/);
   assert.match(source, /pi-theme/);
   assert.match(source, /select \/settings → kitty-graphics/);
   assert.match(source, /buildStagePanelWidget\(state, options\)/);
@@ -718,6 +739,8 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /render_contact_sheet/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-message"/);
   assert.match(source, /buildPiGraphicsMessageComponent\(message, options, theme\)/);
+  assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-theme-swatch"/);
+  assert.match(source, /buildPiGraphicsThemeSwatchMessageComponent\(message, options, theme\)/);
   assert.match(source, /_send_message/);
   assert.match(source, /pi-graphics-message/);
   assert.match(source, /pi\.on\("before_agent_start"/);

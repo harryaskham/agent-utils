@@ -45,8 +45,10 @@ import {
   buildPiGraphicsMessageComponent,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
+  buildPiGraphicsThemeSwatchMessageComponent,
   buildStagePanelWidget,
   buildStartupSplashMessage,
+  buildStartupThemeSwatchMessage,
   buildTerminalTitle,
   buildTextStagePanel,
   buildVisualContractLines,
@@ -56,6 +58,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
+  shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";
 import {
   renderPiGraphicsContactSheet,
@@ -153,6 +156,9 @@ export default function piGraphicsExtension(pi) {
     if (shouldAutoShowSplash()) {
       try { pi.sendMessage?.(buildStartupSplashMessage()); } catch {}
     }
+    if (shouldAutoShowThemeSwatchSplash()) {
+      try { pi.sendMessage?.(buildStartupThemeSwatchMessage()); } catch {}
+    }
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
@@ -178,6 +184,8 @@ export default function piGraphicsExtension(pi) {
 
   pi.registerMessageRenderer?.("pi-graphics-message", (message, options, theme) =>
     buildPiGraphicsMessageComponent(message, options, theme));
+  pi.registerMessageRenderer?.("pi-graphics-theme-swatch", (message, options, theme) =>
+    buildPiGraphicsThemeSwatchMessageComponent(message, options, theme));
 
   pi.on("session_shutdown", (_event, ctx) => {
     try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
@@ -550,6 +558,23 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_send_theme_swatch`,
+    label: "Pi Graphics: Send Theme Swatch",
+    description: "Send a displayed transcript-visible theme swatch rendered by the pi-graphics theme swatch renderer.",
+    promptSnippet: "Send a Pi kitty graphics theme swatch into the transcript.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target swatch width in cells. Defaults to 96.", minimum: 48, maximum: 160 })),
+    }),
+    async execute(_toolCallId, params) {
+      pi.sendMessage?.(buildStartupThemeSwatchMessage({ width: params.width || 96 }));
+      return {
+        content: [{ type: "text", text: "pi-graphics: displayed transcript theme swatch." }],
+        details: { customType: "pi-graphics-theme-swatch", width: params.width || 96 },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_visual_contract`,
     label: "Pi Graphics: Visual Contract",
     description: "Return a high-contrast checklist of the expected Pi kitty graphics cues so operators can verify the mode is visibly active.",
@@ -639,6 +664,13 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-theme-swatch-message", {
+    description: "Send the Pi kitty graphics theme swatch into the transcript.",
+    handler: async (_args, _ctx) => {
+      pi.sendMessage?.(buildStartupThemeSwatchMessage());
+    },
+  });
+
   pi.registerCommand("pi-graphics-visual-contract", {
     description: "Show the Pi kitty graphics visual contract checklist.",
     handler: async (_args, ctx) => {
@@ -671,6 +703,7 @@ export default function piGraphicsExtension(pi) {
         `auto pulse widget: ${shouldAutoShowGraphics() ? "enabled" : "disabled by env"}`,
         `auto theme apply: ${shouldAutoApplyTheme() ? "enabled" : "disabled by env"}`,
         `startup splash: ${shouldAutoShowSplash() ? "enabled" : "disabled by env"}`,
+        `startup theme swatch: ${shouldAutoShowThemeSwatchSplash() ? "enabled" : "disabled by env"}`,
         "session header: enabled",
         "session footer: enabled",
         "component HUD: below editor",
@@ -680,6 +713,7 @@ export default function piGraphicsExtension(pi) {
         "terminal title: lifecycle Pi kitty gfx",
         "floodlight: high-contrast editor-adjacent banner",
         "theme swatch: above editor + /pi-graphics-theme-swatch",
+        "transcript theme swatch: /pi-graphics-theme-swatch-message",
         "live footer: branch/status beacon",
         "visual contract: /pi-graphics-visual-contract",
       ].join("\n");
@@ -766,8 +800,10 @@ export {
   buildPiGraphicsMessageLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
+  buildPiGraphicsThemeSwatchMessageComponent,
   buildStagePanelWidget,
   buildStartupSplashMessage,
+  buildStartupThemeSwatchMessage,
   buildTerminalTitle,
   buildTextStagePanel,
   buildVisualContractLines,
@@ -777,4 +813,5 @@ export {
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
+  shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";

@@ -25,6 +25,11 @@ export function shouldAutoShowSplash(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowThemeSwatchSplash(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_THEME_SWATCH ?? env.PI_KITTY_GRAPHICS_AUTO_THEME_SWATCH;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function buildStartupSplashMessage({ content, tone = "assistant", title = "startup splash" } = {}) {
   const body = String(content || "PI KITTY GRAPHICS ONLINE — deep Nordic gradients, cyan/violet glow, APNG pulse, header/footer chrome, and rendered TypeScript TUI components are active.")
     .replace(/\s+/g, " ")
@@ -35,6 +40,15 @@ export function buildStartupSplashMessage({ content, tone = "assistant", title =
     content: body,
     display: true,
     details: { tone, title },
+  };
+}
+
+export function buildStartupThemeSwatchMessage({ width = 96 } = {}) {
+  return {
+    customType: "pi-graphics-theme-swatch",
+    content: "PI KITTY GRAPHICS THEME SWATCH — actual runtime theme-token calibration bars",
+    display: true,
+    details: { width },
   };
 }
 
@@ -189,6 +203,11 @@ export function buildPiGraphicsThemeSwatchComponent(theme, options = {}) {
     },
     invalidate() { tick = (tick + 0.25) % 1; },
   };
+}
+
+export function buildPiGraphicsThemeSwatchMessageComponent(message, _options = {}, theme) {
+  const details = message?.details && typeof message.details === "object" ? message.details : {};
+  return buildPiGraphicsThemeSwatchComponent(theme, { width: details.width || 96, phase: details.phase || 0 });
 }
 
 function footerBranch(footerData = {}) {
