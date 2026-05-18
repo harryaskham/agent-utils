@@ -38,6 +38,7 @@ import {
   buildAutoPulseWidget,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsHeaderComponent,
+  buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
   buildStagePanelWidget,
   buildStartupSplashMessage,
@@ -64,6 +65,7 @@ const TOOL_PREFIX = "pi_graphics";
 export default function piGraphicsExtension(pi) {
   const state = makeState();
   const autoWidgetId = "pi-graphics-auto-pulse";
+  const hudWidgetId = "pi-graphics-hud-component";
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
@@ -109,6 +111,7 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 90 });
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
+    ctx.ui?.setWidget?.(hudWidgetId, (_tui, theme) => buildPiGraphicsHudComponent(theme), { placement: "belowEditor" });
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -146,6 +149,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setHeader?.(undefined); } catch {}
     try { ctx?.ui?.setFooter?.(undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(hudWidgetId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -577,6 +581,7 @@ export default function piGraphicsExtension(pi) {
         `startup splash: ${shouldAutoShowSplash() ? "enabled" : "disabled by env"}`,
         "session header: enabled",
         "session footer: enabled",
+        "component HUD: below editor",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -650,6 +655,8 @@ export {
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
+  buildPiGraphicsHudComponent,
+  buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
   buildStagePanelWidget,

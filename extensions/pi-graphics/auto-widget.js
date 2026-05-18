@@ -145,6 +145,29 @@ export function buildPiGraphicsFooterComponent(theme, footerData = {}) {
   };
 }
 
+export function buildPiGraphicsHudLines(theme, { phase = 0 } = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const p = Math.abs(Math.sin(Number(phase) * Math.PI * 2));
+  const level = p > 0.66 ? "MAX" : p > 0.33 ? "MID" : "LOW";
+  return [
+    bg("selectedBg", `${fg("borderAccent", "╔═◢")} ${fg("customMessageLabel", "PI GFX HUD")} ${fg("thinkingXhigh", `pulse:${level}`)} ${fg("borderAccent", "◣═╗")}`),
+    bg("customMessageBg", `${fg("accent", "║")} ${fg("text", "TypeScript component render mirror")}${fg("muted", " :: ")}${fg("borderAccent", "deep nordic photon field")}`),
+    bg("toolPendingBg", `${fg("accent", "╚═")}${fg("thinkingXhigh", "⬢◆✦⬢◆✦")}${fg("accent", "═")}${fg("muted", " efficient persistent HUD below editor")}`),
+  ];
+}
+
+export function buildPiGraphicsHudComponent(theme, options = {}) {
+  let tick = Number(options.phase || 0);
+  return {
+    render(width = 120) {
+      tick = (tick + 0.125) % 1;
+      return boundedLines(buildPiGraphicsHudLines(theme, { phase: tick }), width);
+    },
+    invalidate() { tick = (tick + 0.25) % 1; },
+  };
+}
+
 export function buildAutoPulseWidget(state, {
   columns = 42,
   rows = 6,

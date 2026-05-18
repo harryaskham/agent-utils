@@ -46,8 +46,8 @@ APNG component with large text chrome (`PI KITTY GFX // ...`) so there is still
 an obvious visual cue even when kitty placeholder graphics are unavailable or an
 operator is not looking at the animated pixels. The extension also installs a
 persistent custom header (`PI KITTY GRAPHICS ONLINE`), a persistent footer
-(`KITTY-GFX ⬢◆✦ deep nordic glow`), a transcript startup splash message, and
-replaces the normal streaming spinner with a themed neon working indicator
+(`KITTY-GFX ⬢◆✦ deep nordic glow`), a real component-backed HUD widget below the
+editor, a transcript startup splash message, and replaces the normal streaming spinner with a themed neon working indicator
 (`✧ ✦ ◆ ✺ ⬢ ...`) so the session chrome and active generation both pulse even
 between widget redraws. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or
 `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out of the widget, and set
@@ -81,10 +81,11 @@ rendered. The extension complements those flat colors with graphical affordances
   normal turns. It combines an APNG TUI component with explicit neon text
   chrome and a text-only fallback, making graphical mode noticeable even when
   the theme was not selected or kitty placeholders are unavailable.
-* **Persistent session header/footer** — pure TypeScript components installed
-  via `ctx.ui.setHeader` and `ctx.ui.setFooter` so the session announces
-  `PI KITTY GRAPHICS ONLINE` at the top and `KITTY-GFX` in the bottom chrome,
-  with theme-colored rails and bounded rendering.
+* **Persistent session header/footer/HUD** — pure TypeScript components
+  installed via `ctx.ui.setHeader`, `ctx.ui.setFooter`, and a `ctx.ui.setWidget`
+  factory below the editor so the session announces `PI KITTY GRAPHICS ONLINE`
+  at the top, `KITTY-GFX` in the bottom chrome, and a live `PI GFX HUD` near the
+  editor with theme-colored rails and bounded rendering.
 * **Startup splash** — on `session_start`, the extension sends a bounded
   `pi-graphics-message` into the transcript so graphics mode leaves a visible
   neon block in normal conversation history even if terminal theme changes are
@@ -134,7 +135,7 @@ And five slash commands:
 
 * `/pi-graphics-status` — report how many images are owned, whether Unicode
   placeholder placement is active, whether the automatic pulse and startup
-  splash are enabled, and whether the session header/footer is installed.
+  splash are enabled, and whether the session header/footer/HUD is installed.
 * `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
 * `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
 * `/pi-graphics-message [text]` — display a custom message rendered with Pi kitty graphics message chrome.
@@ -182,7 +183,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, component-backed HUD rendering, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

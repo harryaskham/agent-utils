@@ -39,6 +39,8 @@ import {
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
+  buildPiGraphicsHudComponent,
+  buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
   buildStagePanelWidget,
@@ -473,6 +475,26 @@ test("buildPiGraphicsFooterComponent renders persistent bottom chrome", () => {
   component.invalidate();
 });
 
+test("buildPiGraphicsHudComponent renders a persistent component-backed HUD", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const lines = buildPiGraphicsHudLines(theme, { phase: 0.25 });
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /PI GFX HUD/);
+  assert.match(lines[1], /TypeScript component render mirror/);
+  assert.match(lines[2], /efficient persistent HUD below editor/);
+  assert.ok(lines.some((line) => line.includes("selectedBg")));
+  const component = buildPiGraphicsHudComponent(theme, { phase: 0 });
+  const first = component.render(160);
+  assert.equal(first.length, 3);
+  assert.ok(first.every((line) => line.length <= 161));
+  component.invalidate();
+  const second = component.render(160);
+  assert.notDeepEqual(first, second);
+});
+
 test("startup splash defaults on, can opt out, and builds bounded custom message", () => {
   assert.equal(shouldAutoShowSplash({}), true);
   assert.equal(shouldAutoShowSplash({ PI_GRAPHICS_AUTO_SPLASH: "0" }), false);
@@ -515,10 +537,12 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setWorkingIndicator\?\.\(\{ frames:/);
   assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
+  assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setHeader\?\.\(undefined\)/);
   assert.match(source, /setFooter\?\.\(undefined\)/);
   assert.match(source, /session header: enabled/);
   assert.match(source, /session footer: enabled/);
+  assert.match(source, /component HUD: below editor/);
   assert.match(source, /buildStartupSplashMessage\(\)/);
   assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);
   assert.match(source, /pi-theme/);
