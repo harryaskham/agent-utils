@@ -47,6 +47,7 @@ import {
   buildStartupSplashMessage,
   buildTerminalTitle,
   buildTextStagePanel,
+  buildVisualContractLines,
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
@@ -528,6 +529,20 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_visual_contract`,
+    label: "Pi Graphics: Visual Contract",
+    description: "Return a high-contrast checklist of the expected Pi kitty graphics cues so operators can verify the mode is visibly active.",
+    promptSnippet: "Show the Pi kitty graphics visual contract checklist.",
+    parameters: Type.Object({}),
+    async execute() {
+      return {
+        content: [{ type: "text", text: buildVisualContractLines({ unicodePlacement: ensureUnicodePlacement(state), splash: shouldAutoShowSplash() }).join("\n") }],
+        details: { unicodePlacement: ensureUnicodePlacement(state), startupSplash: shouldAutoShowSplash() },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_send_message`,
     label: "Pi Graphics: Send Rendered Message",
     description: "Send a displayed custom message rendered by the pi-graphics custom message renderer.",
@@ -596,6 +611,13 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-visual-contract", {
+    description: "Show the Pi kitty graphics visual contract checklist.",
+    handler: async (_args, ctx) => {
+      ctx.ui?.notify?.(buildVisualContractLines({ unicodePlacement: ensureUnicodePlacement(state), splash: shouldAutoShowSplash() }, ctx.ui?.theme).join("\n"), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-message", {
     description: "Send a displayed custom message rendered with Pi kitty graphics message chrome.",
     handler: async (args, _ctx) => {
@@ -630,6 +652,7 @@ export default function piGraphicsExtension(pi) {
         "terminal title: lifecycle Pi kitty gfx",
         "floodlight: high-contrast editor-adjacent banner",
         "live footer: branch/status beacon",
+        "visual contract: /pi-graphics-visual-contract",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -716,6 +739,7 @@ export {
   buildStartupSplashMessage,
   buildTerminalTitle,
   buildTextStagePanel,
+  buildVisualContractLines,
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,

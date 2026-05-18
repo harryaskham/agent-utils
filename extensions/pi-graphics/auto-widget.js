@@ -72,6 +72,22 @@ export function buildTerminalTitle({ stage = "ready", toolName = "" } = {}) {
   return `⬢ PI KITTY GFX // ${safeStage}${suffix}`.slice(0, 80);
 }
 
+export function buildVisualContractLines({ themeName = "kitty-graphics", unicodePlacement = false, splash = true } = {}, theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const ok = (label) => `${fg("success", "✓")} ${fg("customMessageLabel", label)}`;
+  const warn = (label) => `${fg("warning", "⚠")} ${fg("borderAccent", label)}`;
+  return [
+    fg("thinkingXhigh", "⬢ PI KITTY GRAPHICS VISUAL CONTRACT ⬢"),
+    ok(`theme requested: ${themeName}`),
+    unicodePlacement ? ok("kitty placeholder graphics active") : warn("kitty placeholder graphics fallback text active"),
+    ok("header/footer/HUD/floodlight mounted"),
+    ok("editor frame + APNG aura mounted"),
+    ok("working row + terminal title branded"),
+    splash ? ok("startup splash enabled") : warn("startup splash disabled by env"),
+    fg("muted", "If any line is absent in the UI, reload Pi packages/tools and check opt-out env vars."),
+  ];
+}
+
 function stageLabel(tone, caption) {
   const label = String(caption || "kitty graphics pulse active").toUpperCase();
   const glyph = tone === "tool" ? "⚙" : tone === "user" ? "◆" : "✦";

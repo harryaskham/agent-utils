@@ -52,6 +52,7 @@ import {
   buildStartupSplashMessage,
   buildTerminalTitle,
   buildTextStagePanel,
+  buildVisualContractLines,
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
@@ -594,6 +595,20 @@ test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor expli
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
 });
 
+test("buildVisualContractLines exposes a complete operator checklist", () => {
+  const theme = { fg(token, text) { return `<${token}>${text}</${token}>`; } };
+  const active = buildVisualContractLines({ unicodePlacement: true, splash: true }, theme);
+  assert.equal(active.length, 8);
+  assert.match(active.join("\n"), /PI KITTY GRAPHICS VISUAL CONTRACT/);
+  assert.match(active.join("\n"), /kitty placeholder graphics active/);
+  assert.match(active.join("\n"), /header\/footer\/HUD\/floodlight mounted/);
+  assert.match(active.join("\n"), /editor frame \+ APNG aura mounted/);
+  assert.match(active.join("\n"), /working row \+ terminal title branded/);
+  const fallback = buildVisualContractLines({ unicodePlacement: false, splash: false }).join("\n");
+  assert.match(fallback, /fallback text active/);
+  assert.match(fallback, /startup splash disabled by env/);
+});
+
 test("buildWorkingMessage, terminal title, and hidden thinking label brand active generation", () => {
   const calls = [];
   const theme = { fg(token, text) { calls.push([token, text]); return `<${token}>${text}</${token}>`; } };
@@ -654,6 +669,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /terminal title: lifecycle Pi kitty gfx/);
   assert.match(source, /floodlight: high-contrast editor-adjacent banner/);
   assert.match(source, /live footer: branch\/status beacon/);
+  assert.match(source, /visual contract: \/pi-graphics-visual-contract/);
+  assert.match(source, /_visual_contract/);
+  assert.match(source, /buildVisualContractLines\(\{ unicodePlacement: ensureUnicodePlacement\(state\), splash: shouldAutoShowSplash\(\) \}/);
   assert.match(source, /setStatus\?\.\("pi-gfx-mode", "⬢ floodlight"\)/);
   assert.match(source, /setStatus\?\.\("pi-gfx-pulse", "◆ APNG editor aura"\)/);
   assert.match(source, /setStatus\?\.\("pi-gfx-row", "✦ neon working row"\)/);

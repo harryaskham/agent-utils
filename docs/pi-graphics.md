@@ -54,7 +54,9 @@ and below the input area, a transcript startup splash message, and replaces the 
 between widget redraws. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or
 `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out of the widget, and set
 `PI_GRAPHICS_AUTO_SPLASH=0` (or `PI_KITTY_GRAPHICS_AUTO_SPLASH=off`) to suppress
-the startup splash.
+the startup splash. Use `/pi-graphics-visual-contract` (or the
+`pi_graphics_visual_contract` tool) to show an explicit checklist of all expected
+visible cues when judging whether the mode is active.
 
 ## How the extension cooperates with the theme
 
@@ -105,6 +107,10 @@ rendered. The extension complements those flat colors with graphical affordances
   pure TypeScript TUI component (no external `pi-tui` import) with neon rails,
   themed backgrounds, and bounded viewport rendering for displayed custom
   messages.
+* **Visual contract self-test** — `/pi-graphics-visual-contract` and
+  `pi_graphics_visual_contract` render a checklist covering theme request,
+  kitty placeholder state, header/footer/HUD/floodlight, editor frame + APNG
+  aura, working row + terminal title, and startup splash state.
 * **Accent bars** — single-cell-tall accent strips suitable for highlighting
   table rows or section headers.
 
@@ -196,7 +202,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.
