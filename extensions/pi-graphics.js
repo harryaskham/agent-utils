@@ -44,6 +44,8 @@ import {
   buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsDoctorLines,
+  buildPiGraphicsLighthouseComponent,
+  buildPiGraphicsLighthouseLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
@@ -91,6 +93,7 @@ export default function piGraphicsExtension(pi) {
   const themeSwatchWidgetId = "pi-graphics-theme-swatch";
   const photonRainWidgetId = "pi-graphics-photon-rain";
   const terminalSceneWidgetId = "pi-graphics-terminal-scene";
+  const lighthouseWidgetId = "pi-graphics-lighthouse";
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
@@ -150,6 +153,7 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setWidget?.(floodlightWidgetId, (_tui, theme) => buildPiGraphicsFloodlightComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(themeSwatchWidgetId, (_tui, theme) => buildPiGraphicsThemeSwatchComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(photonRainWidgetId, (_tui, theme) => buildPiGraphicsPhotonRainComponent(theme), { placement: "aboveEditor" });
+    ctx.ui?.setWidget?.(lighthouseWidgetId, (_tui, theme) => buildPiGraphicsLighthouseComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
     if (ensureUnicodePlacement(state)) {
@@ -232,6 +236,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(themeSwatchWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(photonRainWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(terminalSceneWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(lighthouseWidgetId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -615,6 +620,23 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_lighthouse`,
+    label: "Pi Graphics: Lighthouse Beacon",
+    description: "Render an oversized normal-TUI lighthouse beacon so Pi kitty graphics mode is impossible to miss even without image placement.",
+    promptSnippet: "Show the Pi kitty graphics lighthouse beacon.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target width in cells. Defaults to 112.", minimum: 64, maximum: 180 })),
+      phase: Type.Optional(Type.Number({ description: "Pulse phase from 0 to 1." })),
+    }),
+    async execute(_toolCallId, params) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsLighthouseLines(undefined, { width: params.width, phase: params.phase }).join("\n") }],
+        details: { width: params.width || 112, phase: params.phase || 0 },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_doctor`,
     label: "Pi Graphics: Doctor",
     description: "Report Pi kitty graphics visibility state, opt-outs, and remediation steps for diagnosing why graphics mode is not visibly different.",
@@ -770,6 +792,13 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-lighthouse", {
+    description: "Show the oversized Pi kitty graphics lighthouse beacon.",
+    handler: async (_args, ctx) => {
+      ctx.ui?.notify?.(buildPiGraphicsLighthouseLines(ctx.ui?.theme).join("\n"), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-doctor", {
     description: "Show Pi kitty graphics visibility diagnostics and trigger the main visible surfaces.",
     handler: async (_args, ctx) => {
@@ -868,6 +897,7 @@ export default function piGraphicsExtension(pi) {
         "floodlight: high-contrast editor-adjacent banner",
         "theme swatch: above editor + /pi-graphics-theme-swatch",
         "photon rain: above editor + /pi-graphics-photon-rain",
+        "lighthouse beacon: above editor + /pi-graphics-lighthouse",
         "rendered terminal scene: auto above editor + pi_graphics_render_terminal_scene",
         "transcript theme swatch: /pi-graphics-theme-swatch-message",
         "live footer: branch/status beacon",
@@ -966,6 +996,8 @@ export {
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
   buildPiGraphicsDoctorLines,
+  buildPiGraphicsLighthouseComponent,
+  buildPiGraphicsLighthouseLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,

@@ -261,6 +261,35 @@ export function buildPiGraphicsPhotonRainComponent(theme, options = {}) {
   };
 }
 
+export function buildPiGraphicsLighthouseLines(theme, { width = 112, phase = 0 } = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const cells = Math.max(64, Math.min(180, Math.trunc(width)));
+  const p = Math.abs(Math.sin(Number(phase) * Math.PI * 2));
+  const barA = (p > 0.5 ? "█▓▒░" : "░▒▓█").repeat(Math.ceil(cells / 4)).slice(0, cells);
+  const barB = (p > 0.5 ? "▰▱⬢◆✦" : "✦◆⬢▱▰").repeat(Math.ceil(cells / 5)).slice(0, cells);
+  const center = "PI KITTY GRAPHICS LIGHTHOUSE // GRAPHICAL MODE IS ACTIVE";
+  const pad = Math.max(0, Math.floor((cells - center.length) / 2));
+  return [
+    bg("selectedBg", fg("thinkingXhigh", barA)),
+    bg("customMessageBg", `${fg("borderAccent", "█".repeat(Math.max(4, pad)))} ${fg("customMessageLabel", center)} ${fg("borderAccent", "█".repeat(Math.max(4, pad)))}`),
+    bg("toolPendingBg", `${fg("accent", barB)}`),
+    bg("customMessageBg", `${fg("thinkingXhigh", "⬢")} ${fg("text", "DEEP NORDIC AURORA // CYAN-VIOLET GLOW // RENDERED TUI MIRROR // APNG READY")} ${fg("thinkingXhigh", "⬢")}`),
+    bg("selectedBg", fg("borderAccent", barA.split("").reverse().join(""))),
+  ];
+}
+
+export function buildPiGraphicsLighthouseComponent(theme, options = {}) {
+  let tick = Number(options.phase || 0);
+  return {
+    render(width = 120) {
+      tick = (tick + 0.08) % 1;
+      return boundedLines(buildPiGraphicsLighthouseLines(theme, { ...options, width, phase: tick }), width);
+    },
+    invalidate() { tick = (tick + 0.16) % 1; },
+  };
+}
+
 function footerBranch(footerData = {}) {
   if (typeof footerData.getGitBranch === "function") return footerData.getGitBranch() || "";
   return footerData?.gitBranch || "";

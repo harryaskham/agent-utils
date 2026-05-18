@@ -49,6 +49,8 @@ import {
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
   buildPiGraphicsDoctorLines,
+  buildPiGraphicsLighthouseComponent,
+  buildPiGraphicsLighthouseLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
@@ -540,6 +542,26 @@ test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width bann
   component.invalidate();
 });
 
+test("buildPiGraphicsLighthouseComponent renders an oversized unmistakable beacon", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const first = buildPiGraphicsLighthouseLines(theme, { width: 112, phase: 0 });
+  const second = buildPiGraphicsLighthouseLines(theme, { width: 112, phase: 0.25 });
+  assert.equal(first.length, 5);
+  assert.match(first.join("\n"), /PI KITTY GRAPHICS LIGHTHOUSE/);
+  assert.match(first.join("\n"), /GRAPHICAL MODE IS ACTIVE/);
+  assert.match(first.join("\n"), /DEEP NORDIC AURORA/);
+  assert.ok(first.some((line) => line.includes("selectedBg")));
+  assert.notDeepEqual(first, second);
+  const component = buildPiGraphicsLighthouseComponent(theme, { phase: 0 });
+  const rendered = component.render(90);
+  assert.equal(rendered.length, 5);
+  assert.ok(rendered.every((line) => line.length <= 91));
+  component.invalidate();
+});
+
 test("buildPiGraphicsDoctorLines reports visibility diagnostics and remediation", () => {
   const theme = { fg(token, text) { return `<${token}>${text}</${token}>`; } };
   const lines = buildPiGraphicsDoctorLines({
@@ -778,6 +800,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setWidget\?\.\(floodlightWidgetId, \(_tui, theme\) => buildPiGraphicsFloodlightComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(themeSwatchWidgetId, \(_tui, theme\) => buildPiGraphicsThemeSwatchComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(photonRainWidgetId, \(_tui, theme\) => buildPiGraphicsPhotonRainComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
+  assert.match(source, /setWidget\?\.\(lighthouseWidgetId, \(_tui, theme\) => buildPiGraphicsLighthouseComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
@@ -798,6 +821,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /floodlight: high-contrast editor-adjacent banner/);
   assert.match(source, /theme swatch: above editor \+ \/pi-graphics-theme-swatch/);
   assert.match(source, /photon rain: above editor \+ \/pi-graphics-photon-rain/);
+  assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
+  assert.match(source, /_lighthouse/);
+  assert.match(source, /pi-graphics-lighthouse/);
   assert.match(source, /live footer: branch\/status beacon/);
   assert.match(source, /_photon_rain/);
   assert.match(source, /pi-graphics-photon-rain/);
