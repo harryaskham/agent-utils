@@ -683,8 +683,8 @@ test("buildPiGraphicsCockpitWallText emits a large ANSI terminal cockpit", () =>
   assert.notEqual(first, second);
 });
 
-test("buildPiGraphicsOscPaletteSequence emits terminal palette takeover and reset OSC", () => {
-  assert.equal(shouldAutoApplyTerminalPalette({}), false);
+test("buildPiGraphicsOscPaletteSequence emits default-on terminal palette takeover and reset OSC", () => {
+  assert.equal(shouldAutoApplyTerminalPalette({}), true);
   assert.equal(shouldAutoApplyTerminalPalette({ PI_GRAPHICS_AUTO_TERMINAL_PALETTE: "1" }), true);
   assert.equal(shouldAutoApplyTerminalPalette({ PI_GRAPHICS_AUTO_TERMINAL_PALETTE: "0" }), false);
   const seq = buildPiGraphicsOscPaletteSequence();
@@ -1027,7 +1027,8 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoShowAmbientProof({}), true);
   assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "0" }), false);
   assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "1" }), true);
-  assert.equal(shouldAutoApplyTheme({}), false);
+  assert.equal(shouldAutoApplyTheme({}), true);
+  assert.equal(shouldAutoApplyTerminalPalette({}), true);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
@@ -1035,6 +1036,18 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoShowTerminalScene({ PI_GRAPHICS_AUTO_TERMINAL_SCENE: "1" }), true);
   assert.equal(shouldAutoShowTerminalScene({ PI_GRAPHICS_AUTO_TERMINAL_SCENE: "0" }), false);
   assert.equal(shouldAutoShowTerminalScene({ PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE: "off" }), false);
+});
+
+test("pi-graphics settings source maps calm mode to visibly active theme and OSC palette defaults", async () => {
+  const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
+  const source = await readFile(sourcePath, "utf8");
+  assert.match(source, /export function settingsEnvFromPiGraphics/);
+  assert.match(source, /PI_GRAPHICS_AUTO_THEME: boolToEnv\(!off && \(gfx\.autoApplyTheme \?\? auto\.theme \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv\(!off && \(features\.terminalPalette \?\? auto\.terminalPalette \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv\(!off && \(features\.ambientChrome \?\? auto\.ambientChrome \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv\(!off && \(features\.ambientProof \?\? auto\.ambientProof \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AMBIENT_FRAMES = String\(gfx\.animation\.ambientFrames\)/);
+  assert.match(source, /PI_GRAPHICS_AMBIENT_DELAY_MS = String\(gfx\.animation\.ambientDelayMs\)/);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {

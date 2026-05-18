@@ -37,8 +37,9 @@ automatically by Pi when the package is installed. **Theme and graphics mode are
 separate controls**: the theme determines Pi's colors; `settings.json` under
 `piGraphics` (or env vars) determines whether kitty/PNG graphics are calm, off,
 or showcase. The default profile is now calm but still unmistakably graphical:
-it auto-applies the selected kitty graphics theme, installs footer/status cues
-and editor/input frame widgets, and mounts a bounded APNG **rendered TUI surface**
+it auto-applies the selected kitty graphics theme, requests a bounded OSC
+terminal palette change (reset on shutdown), installs footer/status cues and
+editor/input frame widgets, and mounts a bounded APNG **rendered TUI surface**
 above the editor. That ambient surface is a TypeScript-rendered mirror of Pi UI
 chrome — transcript cards, tool lane, input box, footer beacons, deep Nordic
 gradients, radial glow, scanlines, and a pulsing waveform — uploaded once as an
@@ -70,7 +71,7 @@ Example settings:
       "cockpitWall": false,
       "ansiScene": false,
       "ansiTakeover": false,
-      "terminalPalette": false,
+      "terminalPalette": true,
       "heartbeat": false
     },
     "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 }
@@ -81,10 +82,10 @@ Example settings:
 Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
 maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
 still override settings for one run. The compact ANSI `/pi-graphics-ambient-proof`
-strip is enabled by default as a fallback visual smoke test; it includes the
-configured theme name, graphics mode, settings-derived auto flags, measured theme
-color deltas, renderer PNG bytes, color bucket count, luma delta, and reload
-sentinel. Set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
+strip and the OSC terminal-palette request are enabled by default as fallback
+visual smoke tests; the strip includes the configured theme name, graphics mode,
+settings-derived auto flags, measured theme color deltas, renderer PNG bytes,
+color bucket count, luma delta, and reload sentinel. Set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
 `PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to hide the compact always-visible rendered
 TUI surface, or tune it with
 `PI_GRAPHICS_AMBIENT_FRAMES` and `PI_GRAPHICS_AMBIENT_DELAY_MS`. Use

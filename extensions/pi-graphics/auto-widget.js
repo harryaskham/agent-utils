@@ -61,7 +61,7 @@ export function shouldAutoShowAmbientProof(env = process.env) {
 
 export function shouldAutoApplyTheme(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_THEME ?? env.PI_KITTY_GRAPHICS_AUTO_THEME;
-  return explicitOrShowcase(value, env);
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
 export function shouldAutoShowSplash(env = process.env) {
@@ -96,7 +96,7 @@ export function shouldAutoShowAnsiScene(env = process.env) {
 
 export function shouldAutoApplyTerminalPalette(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_TERMINAL_PALETTE ?? env.PI_KITTY_GRAPHICS_AUTO_TERMINAL_PALETTE;
-  return explicitOrShowcase(value, env);
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
 export function shouldAutoShowCockpitWall(env = process.env) {

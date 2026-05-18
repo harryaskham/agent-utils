@@ -136,7 +136,7 @@ function boolToEnv(value) {
   return value ? "1" : "0";
 }
 
-function settingsEnvFromPiGraphics(settings = {}) {
+export function settingsEnvFromPiGraphics(settings = {}) {
   const gfx = settings.piGraphics || settings.kittyGraphics || {};
   const mode = String(gfx.mode || "calm").toLowerCase();
   const showcase = mode === "showcase" || mode === "debug";
@@ -145,7 +145,7 @@ function settingsEnvFromPiGraphics(settings = {}) {
   const auto = gfx.auto || {};
   const env = {
     PI_GRAPHICS_SHOWCASE: showcase ? "1" : "0",
-    PI_GRAPHICS_AUTO_THEME: boolToEnv(gfx.autoApplyTheme ?? auto.theme ?? false),
+    PI_GRAPHICS_AUTO_THEME: boolToEnv(!off && (gfx.autoApplyTheme ?? auto.theme ?? true)),
     PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv(!off && (features.ambientChrome ?? auto.ambientChrome ?? true)),
     PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv(!off && (features.ambientProof ?? auto.ambientProof ?? true)),
     PI_GRAPHICS_AUTO_WIDGET: boolToEnv(!off && (features.showcaseWidgets ?? auto.widgets ?? showcase)),
@@ -155,7 +155,7 @@ function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_CONVERSATION_FRAME: boolToEnv(!off && (features.conversationFrame ?? auto.conversationFrame ?? false)),
     PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
     PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
-    PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? false)),
+    PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
     PI_GRAPHICS_AUTO_COCKPIT_WALL: boolToEnv(!off && (features.cockpitWall ?? auto.cockpitWall ?? showcase)),
     PI_GRAPHICS_AUTO_HEARTBEAT: boolToEnv(!off && (features.heartbeat ?? auto.heartbeat ?? false)),
     PI_GRAPHICS_AUTO_VISUAL_PROOF: boolToEnv(!off && (features.visualProof ?? auto.visualProof ?? showcase)),
@@ -285,7 +285,9 @@ export default function piGraphicsExtension(pi) {
 
   function applyTerminalPalette(ctx) {
     if (!shouldAutoApplyTerminalPalette(gfxEnv())) return false;
-    return writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
+    const wrote = writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
+    try { ctx?.ui?.setStatus?.("pi-gfx-palette", wrote ? "⬢ OSC terminal palette requested" : "⚠ OSC palette write unavailable"); } catch {}
+    return wrote;
   }
 
   function resetTerminalPalette(ctx) {
