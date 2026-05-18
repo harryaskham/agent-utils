@@ -192,6 +192,42 @@ export function buildPiGraphicsEditorFrameComponent(theme, options = {}) {
   };
 }
 
+export function buildEditorAuraWidget(state, {
+  columns = 54,
+  rows = 4,
+  frames = 8,
+  delayMs = 70,
+  tone = "tool",
+  caption = "editor aura active",
+} = {}) {
+  const pulse = renderTuiComponentPulseApng({ columns, rows, frames, delayMs, tone });
+  const placement = buildPlacement(state, {
+    name: `editor-aura-${pulse.tone}-${pulse.columns}x${pulse.rows}-${pulse.frames}f`,
+    png: pulse.png,
+    columns: pulse.columns,
+    rows: pulse.rows,
+    width: Math.min(120, Math.max(pulse.columns, String(caption || "").length + 18)),
+    caption: ` ⬢ ${caption}`,
+  });
+  return {
+    lines: [
+      "╭─ PI KITTY GFX EDITOR AURA ─╮",
+      ...renderToText(placement).split("\n"),
+      "╰─ actual APNG pixels below the input field ─╯",
+    ],
+    placement,
+    details: {
+      columns: pulse.columns,
+      rows: pulse.rows,
+      frames: pulse.frames,
+      delayMs: pulse.delayMs,
+      tone: pulse.tone,
+      caption,
+      metrics: pulse.metrics,
+    },
+  };
+}
+
 export function buildAutoPulseWidget(state, {
   columns = 42,
   rows = 6,

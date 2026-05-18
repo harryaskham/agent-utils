@@ -35,6 +35,7 @@ import {
 } from "../extensions/pi-graphics/runtime.js";
 import {
   buildAutoPulseWidget,
+  buildEditorAuraWidget,
   buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsEditorFrameLines,
   buildPiGraphicsFooterComponent,
@@ -396,6 +397,21 @@ test("buildAutoPulseWidget creates a visible APNG-backed startup widget", () => 
   assert.match(widget.lines[0], /kitty graphics pulse active/);
 });
 
+test("buildEditorAuraWidget adds APNG-backed editor-area graphics", () => {
+  const state = makeState();
+  const widget = buildEditorAuraWidget(state, { columns: 40, rows: 3, frames: 6, delayMs: 60, tone: "tool" });
+  assert.equal(widget.details.columns, 40);
+  assert.equal(widget.details.rows, 3);
+  assert.equal(widget.details.frames, 6);
+  assert.equal(widget.details.delayMs, 60);
+  assert.equal(widget.details.tone, "tool");
+  assert.ok(widget.lines[0].includes("PI KITTY GFX EDITOR AURA"));
+  assert.ok(widget.lines.at(-1).includes("actual APNG pixels"));
+  assert.ok(widget.details.metrics.pngBytes < 750_000);
+  assert.ok(widget.placement.transmit.length > widget.details.metrics.estimatedWireBytes);
+  assert.ok(state.ownedImageIds.has(widget.placement.imageId));
+});
+
 test("buildStagePanelWidget adds always-visible text chrome around the APNG pulse", () => {
   const state = makeState();
   const widget = buildStagePanelWidget(state, { columns: 28, rows: 5, frames: 4, delayMs: 70, tone: "tool", caption: "tool read" });
@@ -565,12 +581,15 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
+  assert.match(source, /buildEditorAuraWidget\(state, \{ caption: "editor aura active", tone: "tool" \}\)/);
+  assert.match(source, /setWidget\?\.\(editorAuraWidgetId, aura\.lines, \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setHeader\?\.\(undefined\)/);
   assert.match(source, /setFooter\?\.\(undefined\)/);
   assert.match(source, /session header: enabled/);
   assert.match(source, /session footer: enabled/);
   assert.match(source, /component HUD: below editor/);
   assert.match(source, /editor frame: above\/below editor/);
+  assert.match(source, /editor aura: APNG below editor/);
   assert.match(source, /buildStartupSplashMessage\(\)/);
   assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);
   assert.match(source, /pi-theme/);
