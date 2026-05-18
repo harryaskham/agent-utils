@@ -37,6 +37,7 @@ import { microsoftExtractorScript } from "./app-automation/microsoft.js";
 import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "./app-automation/briefing.js";
 import { readLatestMsDevRefreshSummary, renderDoctorReport } from "./app-automation/doctor.js";
 import { renderMsDevCdpRefresh, runMsDevCdpRefresh } from "./app-automation/msdev-cdp.js";
+import { checkGwsStatus, checkPersonalTodoStatus, checkRemoteGwsStatus, renderPersonalAutomationStatus } from "./app-automation/personal.js";
 import { authMissingHint, buildAuthRequiredDiagnostic, prepareDomExtractStep, playwrightCliCommand, playwrightSessionArgs } from "./app-automation/playwright-bridge.js";
 import { buildSafeRunManifest, runStatusFromResults, writeLatestRunManifest } from "./app-automation/run-manifest.js";
 import {
@@ -612,6 +613,42 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_personal_status`,
+    label: "App Automation Personal Status",
+    description: "Check personal app automation prerequisites: Google Workspace CLI auth and org todo file readiness.",
+    promptSnippet: "Use this before personal Google Calendar/Gmail or ~/org/todo.org automation. It checks the first-party gws CLI auth state and personal todo file without storing Google tokens or raw secrets.",
+    parameters: Type.Object({
+      gwsCommand: Type.Optional(Type.String({ description: "Google Workspace CLI command. Defaults to gws." })),
+      todoPath: Type.Optional(Type.String({ description: "Org todo file path. Defaults to ~/org/todo.org." })),
+      horizonDays: Type.Optional(Type.Number({ description: "Future window for timely org todo items. Defaults to 7 days." })),
+      lookbackDays: Type.Optional(Type.Number({ description: "Past window for recent org todo items. Defaults to 2 days." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for gws auth status. Defaults to 10000." })),
+      msDevSshTarget: Type.Optional(Type.String({ description: "Optional SSH target for checking gws auth on ms-dev as well as the local host." })),
+      sshConnectTimeoutSeconds: Type.Optional(Type.Number({ description: "SSH ConnectTimeout seconds for msDevSshTarget. Defaults to 10." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const exec = (command, args, options = {}) => pi.exec(command, args, { ...options, signal });
+      const [gws, msDevGws, todo] = await Promise.all([
+        checkGwsStatus({
+          command: params.gwsCommand,
+          timeoutMs: params.timeoutMs,
+          exec,
+        }),
+        checkRemoteGwsStatus({
+          sshTarget: params.msDevSshTarget,
+          command: params.gwsCommand,
+          timeoutMs: params.timeoutMs,
+          sshConnectTimeoutSeconds: params.sshConnectTimeoutSeconds,
+          exec,
+        }),
+        checkPersonalTodoStatus({ todoPath: params.todoPath, horizonDays: params.horizonDays, lookbackDays: params.lookbackDays }),
+      ]);
+      const summary = { gws, ...(msDevGws ? { msDevGws } : {}), todo };
+      return textResult(renderPersonalAutomationStatus(summary), { personalAutomation: summary });
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_msdev_cdp_refresh`,
     label: "App Automation ms-dev CDP Refresh",
     description: "Refresh Slack, Outlook, Teams, and Calendar snapshots through ms-dev Windows Chrome CDP using the PowerShell WSL escape route.",
@@ -630,6 +667,9 @@ export default function appAutomationExtension(pi) {
       appHostBrowser: Type.Optional(Type.String({ description: "Browser for ensureAppHost: edge (default) or chrome." })),
       appHostUserDataDir: Type.Optional(Type.String({ description: "Optional Windows user-data-dir for the dedicated apphost. Defaults to a cache under the Windows user profile." })),
       appHostSourceUserDataDir: Type.Optional(Type.String({ description: "Optional Windows source user-data-dir to clone when the apphost profile is not initialized. Defaults to the selected browser's normal profile root." })),
+      tabGc: Type.Optional(Type.Boolean({ description: "Close ms-dev CDP tabs created by older refresh ticks after extraction. Defaults to APP_AUTOMATION_MSDEV_TAB_GC or true." })),
+      tabGcKeepTicks: Type.Optional(Type.Number({ description: "Number of completed refresh ticks of created tabs to keep. Defaults to APP_AUTOMATION_MSDEV_TAB_GC_KEEP_TICKS or 2." })),
+      tabGcStatePath: Type.Optional(Type.String({ description: "Optional Windows path for the FIFO tab-GC state file. Defaults to a cache under the Windows user profile." })),
     }),
     async execute(_toolCallId, params, signal) {
       const summary = await runMsDevCdpRefresh({
@@ -647,6 +687,9 @@ export default function appAutomationExtension(pi) {
         appHostBrowser: params.appHostBrowser,
         appHostUserDataDir: params.appHostUserDataDir,
         appHostSourceUserDataDir: params.appHostSourceUserDataDir,
+        tabGc: params.tabGc,
+        tabGcKeepTicks: params.tabGcKeepTicks,
+        tabGcStatePath: params.tabGcStatePath,
         exec: (command, args, options = {}) => pi.exec(command, args, { ...options, signal }),
       });
       return textResult(renderMsDevCdpRefresh(summary), { msdevCdpRefresh: summary });

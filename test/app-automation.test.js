@@ -40,6 +40,7 @@ import { buildGenericSnapshot, renderGenericMarkdown } from "../extensions/app-a
 import { buildWorkBriefingIndex, renderWorkBriefingIndex } from "../extensions/app-automation/briefing.js";
 import { buildMsDevAppHostPowerShell, buildMsDevCdpPowerShell, renderMsDevCdpRefresh, runMsDevCdpRefresh } from "../extensions/app-automation/msdev-cdp.js";
 import { microsoftExtractorScript } from "../extensions/app-automation/microsoft.js";
+import { checkGwsStatus, checkRemoteGwsStatus, parseOrgTodoTimelyItems, renderPersonalAutomationStatus } from "../extensions/app-automation/personal.js";
 import { buildSafeRunManifest, runStatusFromResults } from "../extensions/app-automation/run-manifest.js";
 import { readLatestMsDevRefreshSummary, renderDoctorReport } from "../extensions/app-automation/doctor.js";
 import {
@@ -1196,6 +1197,18 @@ test("ms-dev CDP PowerShell script includes Slack desktop unread fallback", () =
   assert.match(script, /slack-desktop-window/);
 });
 
+test("ms-dev CDP PowerShell script includes FIFO tab cleanup for created targets", () => {
+  const script = buildMsDevCdpPowerShell({ cdpPort: 9224, tabGcKeepTicks: 2 });
+  assert.match(script, /\$TabGcEnabled = \$true/);
+  assert.match(script, /\$TabGcKeepTicks = 2/);
+  assert.match(script, /ms-dev-cdp-tab-runs\.json/);
+  assert.match(script, /Invoke-TabGc/);
+  assert.match(script, /Close-CdpTarget/);
+  assert.match(script, /Select-Object -Last \$TabGcKeepTicks/);
+  assert.match(script, /\$createdTargets \+= \[pscustomobject\]@\{ id=\$target\.id; app=\$targetSpec\.app/);
+  assert.match(script, /tabGc=\$tabGc/);
+});
+
 test("ms-dev CDP PowerShell script uses configured port and no raw secrets", () => {
   const script = buildMsDevCdpPowerShell({ cdpPort: 9333, targets: [{ app: "outlook", action: "notifications.snapshot", url: "https://outlook.office.com/mail/?token=secret#frag" }] });
   assert.match(script, /\$CdpPort = 9333/);
@@ -1442,6 +1455,49 @@ test("work briefing shows filtered-empty skipped-write refresh attempts", async 
   await rm(root, { recursive: true, force: true });
 });
 
+test("personal automation status checks gws auth without exposing raw account secrets", async () => {
+  const gws = await checkGwsStatus({
+    exec: async () => ({
+      code: 0,
+      stdout: 'Using keyring backend: file\n{"auth_method":"oauth2","user":"harryaskham@gmail.com","token_valid":true,"has_refresh_token":true,"scopes":["https://www.googleapis.com/auth/calendar","https://www.googleapis.com/auth/gmail.modify"]}',
+      stderr: "",
+    }),
+  });
+  assert.equal(gws.status, "ok");
+  assert.equal(gws.authenticated, true);
+  assert.equal(gws.user, "h***@gmail.com");
+  assert.equal(gws.userDomain, "gmail.com");
+  assert.deepEqual(gws.scopes, { gmail: true, calendar: true, tasks: false, drive: false });
+  const rendered = renderPersonalAutomationStatus({ gws, todo: { exists: true, displayPath: "~/org/todo.org", timelyCount: 0, timelyItems: [] } });
+  assert.match(rendered, /personalAutomation gws=ok authenticated=true userDomain=gmail\.com scopes=gmail,calendar/);
+  assert.doesNotMatch(rendered, /harryaskham@gmail\.com/);
+});
+
+test("personal automation status can check gws auth on ms-dev over ssh", async () => {
+  const commands = [];
+  const gws = await checkRemoteGwsStatus({
+    sshTarget: "ms-dev",
+    exec: async (command, args) => {
+      commands.push({ command, args });
+      return { code: 0, stdout: '{"auth_method":"oauth2","user":"harryaskham@gmail.com","token_valid":true,"scopes":["https://www.googleapis.com/auth/calendar"]}', stderr: "" };
+    },
+  });
+  assert.equal(commands[0].command, "ssh");
+  assert.equal(commands[0].args[3], "ConnectTimeout=10");
+  assert.equal(commands[0].args[4], "ms-dev");
+  assert.equal(commands[0].args[5], "'gws' auth status");
+  assert.equal(gws.host, "ms-dev");
+  assert.equal(gws.authenticated, true);
+  assert.match(renderPersonalAutomationStatus({ gws: { status: "ok" }, msDevGws: gws }), /msDevGws=ok authenticated=true userDomain=gmail\.com scopes=calendar/);
+});
+
+test("personal org todo parser returns timely open items only", () => {
+  const items = parseOrgTodoTimelyItems(`* TODO due tomorrow\nDEADLINE: <2026-05-18 Mon 09:00>\n* DONE old done\nSCHEDULED: <2026-05-18 Mon>\n* NEXT future item\nSCHEDULED: <2026-05-24 Sun>\n* TODO too far\nDEADLINE: <2026-06-30 Tue>`, { now: new Date("2026-05-17T12:00:00Z"), horizonDays: 7, lookbackDays: 1 });
+  assert.deepEqual(items.map((item) => item.title), ["due tomorrow", "future item"]);
+  assert.equal(items[0].todoState, "TODO");
+  assert.equal(items[1].todoState, "NEXT");
+});
+
 test("extension is packaged and exposes list, doctor, overview, plan, run, open bundle, refresh, bundle, one-shot, snapshot, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
@@ -1459,10 +1515,16 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(combinedSource, /tendrilProbe=/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_overview`/);
   assert.match(source, /renderWorkAppOverview/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_personal_status`/);
+  assert.match(source, /checkGwsStatus/);
+  assert.match(source, /checkRemoteGwsStatus/);
+  assert.match(source, /checkPersonalTodoStatus/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_msdev_cdp_refresh`/);
   assert.match(source, /sshConnectTimeoutSeconds/);
   assert.match(source, /preflightAttempts/);
   assert.match(source, /scriptTransfer/);
+  assert.match(source, /tabGc/);
+  assert.match(source, /tabGcKeepTicks/);
   assert.match(source, /APP_AUTOMATION_MSDEV_SSH_CONNECT_TIMEOUT_SECONDS/);
   assert.match(combinedSource, /APP_AUTOMATION_MSDEV_PREFLIGHT_ATTEMPTS/);
   assert.match(combinedSource, /APP_AUTOMATION_MSDEV_SCRIPT_TRANSFER/);

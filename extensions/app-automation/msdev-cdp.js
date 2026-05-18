@@ -13,6 +13,9 @@ export const MAX_MSDEV_PREFLIGHT_ATTEMPTS = 5;
 export const DEFAULT_MSDEV_SCRIPT_TRANSFER = "scp";
 export const DEFAULT_MSDEV_ENSURE_APPHOST = false;
 export const DEFAULT_MSDEV_APPHOST_BROWSER = "edge";
+export const DEFAULT_MSDEV_TAB_GC = true;
+export const DEFAULT_MSDEV_TAB_GC_KEEP_TICKS = 2;
+export const DEFAULT_MSDEV_TAB_GC_STATE_PATH = "";
 
 
 export const DEFAULT_MSDEV_CDP_TARGETS = [
@@ -157,6 +160,9 @@ export function msDevCdpConfig(env = process.env) {
     appHostBrowser: env.APP_AUTOMATION_MSDEV_APPHOST_BROWSER || DEFAULT_MSDEV_APPHOST_BROWSER,
     appHostUserDataDir: env.APP_AUTOMATION_MSDEV_APPHOST_USER_DATA_DIR || "",
     appHostSourceUserDataDir: env.APP_AUTOMATION_MSDEV_APPHOST_SOURCE_USER_DATA_DIR || "",
+    tabGc: !["0", "false", "no", "off"].includes(String(env.APP_AUTOMATION_MSDEV_TAB_GC ?? DEFAULT_MSDEV_TAB_GC).toLowerCase()),
+    tabGcKeepTicks: boundedInteger(env.APP_AUTOMATION_MSDEV_TAB_GC_KEEP_TICKS, DEFAULT_MSDEV_TAB_GC_KEEP_TICKS, { min: 1, max: 24 }),
+    tabGcStatePath: env.APP_AUTOMATION_MSDEV_TAB_GC_STATE_PATH || DEFAULT_MSDEV_TAB_GC_STATE_PATH,
   };
 }
 
@@ -174,6 +180,9 @@ export function msDevCdpCommandSummary(config = msDevCdpConfig()) {
     appHostBrowser: config.appHostBrowser || DEFAULT_MSDEV_APPHOST_BROWSER,
     appHostUserDataDirConfigured: Boolean(config.appHostUserDataDir),
     appHostSourceUserDataDirConfigured: Boolean(config.appHostSourceUserDataDir),
+    tabGc: config.tabGc !== false,
+    tabGcKeepTicks: boundedInteger(config.tabGcKeepTicks, DEFAULT_MSDEV_TAB_GC_KEEP_TICKS, { min: 1, max: 24 }),
+    tabGcStatePathConfigured: Boolean(config.tabGcStatePath),
   };
 }
 
@@ -240,10 +249,16 @@ Emit-AppHost 'failed' $true $false @{ pid=$proc.Id; reason='cdp_not_ready'; copy
 `;
 }
 
-export function buildMsDevCdpPowerShell({ cdpPort = DEFAULT_MSDEV_CDP_PORT, targets = DEFAULT_MSDEV_CDP_TARGETS } = {}) {
+export function buildMsDevCdpPowerShell({ cdpPort = DEFAULT_MSDEV_CDP_PORT, targets = DEFAULT_MSDEV_CDP_TARGETS, tabGc = DEFAULT_MSDEV_TAB_GC, tabGcKeepTicks = DEFAULT_MSDEV_TAB_GC_KEEP_TICKS, tabGcStatePath = DEFAULT_MSDEV_TAB_GC_STATE_PATH } = {}) {
   const targetJson = JSON.stringify(targets.map((target) => ({ app: target.app, action: target.action, url: target.url })));
+  const safeTabGcKeepTicks = boundedInteger(tabGcKeepTicks, DEFAULT_MSDEV_TAB_GC_KEEP_TICKS, { min: 1, max: 24 });
   return `$ErrorActionPreference = 'SilentlyContinue'
 $CdpPort = ${Number.parseInt(String(cdpPort), 10) || DEFAULT_MSDEV_CDP_PORT}
+$TabGcEnabled = ${tabGc === false ? "$false" : "$true"}
+$TabGcKeepTicks = ${safeTabGcKeepTicks}
+$TabGcStatePathSetting = @'
+${String(tabGcStatePath || "")}
+'@
 $TargetsJson = @'
 ${targetJson}
 '@
@@ -251,6 +266,46 @@ $Targets = $TargetsJson | ConvertFrom-Json
 function Invoke-CdpJson($Path, $Method = 'Get') {
   $uri = "http://127.0.0.1:$CdpPort$Path"
   try { return Invoke-RestMethod -Method $Method -Uri $uri -TimeoutSec 4 } catch { return $null }
+}
+function Close-CdpTarget($Id) {
+  if ([string]::IsNullOrWhiteSpace([string]$Id)) { return $false }
+  try {
+    $encoded = [System.Uri]::EscapeDataString([string]$Id)
+    $result = Invoke-CdpJson "/json/close/$encoded" 'Get'
+    return $null -ne $result
+  } catch { return $false }
+}
+function Invoke-TabGc($CreatedTargets) {
+  if (-not $TabGcEnabled) {
+    return [pscustomobject]@{ enabled=$false; keepTicks=$TabGcKeepTicks; currentTabs=@($CreatedTargets).Count; closedTabs=0; keptRuns=0 }
+  }
+  $statePath = if ([string]::IsNullOrWhiteSpace([string]$TabGcStatePathSetting)) { Join-Path $env:USERPROFILE '.cache\agent-utils-work-apphost\ms-dev-cdp-tab-runs.json' } else { [string]$TabGcStatePathSetting }
+  $runs = @()
+  if (Test-Path $statePath) {
+    try {
+      $parsed = Get-Content -Raw -Path $statePath | ConvertFrom-Json -Depth 80
+      if ($null -ne $parsed.runs) { $runs = @($parsed.runs) }
+    } catch { $runs = @() }
+  }
+  $currentRun = [pscustomobject]@{ capturedAt=(Get-Date).ToUniversalTime().ToString('o'); targets=@($CreatedTargets) }
+  $allRuns = @($runs) + $currentRun
+  $closeRuns = @()
+  if ($allRuns.Count -gt $TabGcKeepTicks) { $closeRuns = @($allRuns | Select-Object -First ($allRuns.Count - $TabGcKeepTicks)) }
+  $closed = @()
+  foreach ($run in $closeRuns) {
+    foreach ($target in @($run.targets)) {
+      $id = [string]$target.id
+      if ([string]::IsNullOrWhiteSpace($id)) { continue }
+      if (Close-CdpTarget $id) { $closed += [pscustomobject]@{ id=$id; app=$target.app; action=$target.action; url=$target.url } }
+    }
+  }
+  $keptRuns = @($allRuns | Select-Object -Last $TabGcKeepTicks)
+  try {
+    $dir = Split-Path -Parent $statePath
+    if (-not [string]::IsNullOrWhiteSpace($dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    [pscustomobject]@{ version=1; updatedAt=(Get-Date).ToUniversalTime().ToString('o'); keepTicks=$TabGcKeepTicks; runs=$keptRuns } | ConvertTo-Json -Depth 80 | Set-Content -Encoding UTF8 -Path $statePath
+  } catch {}
+  return [pscustomobject]@{ enabled=$true; keepTicks=$TabGcKeepTicks; currentTabs=@($CreatedTargets).Count; closedTabs=$closed.Count; closedRuns=$closeRuns.Count; keptRuns=$keptRuns.Count }
 }
 function New-CdpTarget($Url) {
   $encoded = [System.Uri]::EscapeDataString($Url)
@@ -375,6 +430,7 @@ $extractor = @'
 })()
 '@
 $results = @()
+$createdTargets = @()
 foreach ($targetSpec in $Targets) {
   try {
     $target = New-CdpTarget $targetSpec.url
@@ -382,6 +438,7 @@ foreach ($targetSpec in $Targets) {
       $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='cdp_unavailable'; stage='new_target'; url=$targetSpec.url }
       continue
     }
+    $createdTargets += [pscustomobject]@{ id=$target.id; app=$targetSpec.app; action=$targetSpec.action; url=$targetSpec.url; targetUrl=$target.url }
     $value = Eval-Cdp $target.webSocketDebuggerUrl $extractor
     if ($targetSpec.app -eq 'slack' -and $targetSpec.action -eq 'notifications.snapshot') {
       $desktop = Get-SlackDesktopObservation
@@ -401,7 +458,8 @@ foreach ($targetSpec in $Targets) {
     $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; stage='target_loop'; url=$targetSpec.url; error=($_.Exception.Message | Out-String).Trim() }
   }
 }
-[pscustomobject]@{ capturedAt=(Get-Date).ToUniversalTime().ToString('o'); source='ms-dev-chrome-cdp'; cdpPort=$CdpPort; results=$results } | ConvertTo-Json -Depth 80 -Compress
+$tabGc = Invoke-TabGc $createdTargets
+[pscustomobject]@{ capturedAt=(Get-Date).ToUniversalTime().ToString('o'); source='ms-dev-chrome-cdp'; cdpPort=$CdpPort; tabGc=$tabGc; results=$results } | ConvertTo-Json -Depth 80 -Compress
 `;
 }
 
@@ -689,6 +747,9 @@ export async function runMsDevCdpRefresh({
   appHostBrowser,
   appHostUserDataDir,
   appHostSourceUserDataDir,
+  tabGc,
+  tabGcKeepTicks,
+  tabGcStatePath,
   exec,
   timeoutMs = 120_000,
   env = process.env,
@@ -706,6 +767,9 @@ export async function runMsDevCdpRefresh({
     appHostBrowser: appHostBrowser ?? defaults.appHostBrowser,
     appHostUserDataDir: appHostUserDataDir ?? defaults.appHostUserDataDir,
     appHostSourceUserDataDir: appHostSourceUserDataDir ?? defaults.appHostSourceUserDataDir,
+    tabGc: tabGc ?? defaults.tabGc,
+    tabGcKeepTicks: tabGcKeepTicks ?? defaults.tabGcKeepTicks,
+    tabGcStatePath: tabGcStatePath ?? defaults.tabGcStatePath,
   };
   config.sshTarget = config.sshTarget || "";
   config.pwshPath = config.pwshPath || DEFAULT_MSDEV_PWSH;
@@ -718,6 +782,9 @@ export async function runMsDevCdpRefresh({
   config.appHostBrowser = String(config.appHostBrowser || DEFAULT_MSDEV_APPHOST_BROWSER).toLowerCase() === "chrome" ? "chrome" : DEFAULT_MSDEV_APPHOST_BROWSER;
   config.appHostUserDataDir = config.appHostUserDataDir || "";
   config.appHostSourceUserDataDir = config.appHostSourceUserDataDir || "";
+  config.tabGc = config.tabGc !== false;
+  config.tabGcKeepTicks = boundedInteger(config.tabGcKeepTicks, DEFAULT_MSDEV_TAB_GC_KEEP_TICKS, { min: 1, max: 24 });
+  config.tabGcStatePath = config.tabGcStatePath || DEFAULT_MSDEV_TAB_GC_STATE_PATH;
   if (!root) throw new Error("runMsDevCdpRefresh requires root");
   if (!exec) throw new Error("runMsDevCdpRefresh requires an exec(command, args, options) function");
   const targets = selectedTargets({ apps, actions });
@@ -727,7 +794,7 @@ export async function runMsDevCdpRefresh({
   const bridgeDir = path.join(root, "bridge");
   await mkdir(bridgeDir, { recursive: true });
   const localScriptPath = path.join(bridgeDir, "ms-dev-cdp-refresh.ps1");
-  const script = buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets });
+  const script = buildMsDevCdpPowerShell({ cdpPort: config.cdpPort, targets, tabGc: config.tabGc, tabGcKeepTicks: config.tabGcKeepTicks, tabGcStatePath: config.tabGcStatePath });
   await writeFile(localScriptPath, script, "utf8");
   const sshArgs = sshOptions(config.sshConnectTimeoutSeconds);
   let appHost = null;
@@ -803,6 +870,7 @@ export async function runMsDevCdpRefresh({
     cdpPort: payload.cdpPort || config.cdpPort,
     config: msDevCdpCommandSummary(config),
     ...(appHost ? { appHost } : {}),
+    ...(payload.tabGc ? { tabGc: payload.tabGc } : {}),
     snapshots,
     failed,
   };
@@ -821,6 +889,7 @@ export function renderMsDevCdpRefresh(summary = {}) {
   const scriptTransfer = summary.config?.scriptTransfer;
   const lines = [`ms-dev CDP refresh status=${summary.status || "unknown"} capturedAt=${summary.capturedAt || "unknown"} snapshots=${summary.snapshots?.length || 0}${snapshotStatuses ? ` snapshotStatuses=${snapshotStatuses}` : ""}${skippedWrite ? ` skippedWrite=${skippedWrite}` : ""}${summary.failed?.length ? ` failed=${summary.failed.length}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}${preflightAttempts != null ? ` preflightAttempts=${preflightAttempts}` : ""}${scriptTransfer ? ` scriptTransfer=${scriptTransfer}` : ""}`];
   if (summary.appHost) lines.push(`appHost status=${summary.appHost.status || "unknown"}${summary.appHost.started ? " started=true" : ""}${summary.appHost.cdpReady ? " cdpReady=true" : ""}${summary.appHost.browser ? ` browser=${summary.appHost.browser}` : ""}${summary.appHost.reason ? ` reason=${summary.appHost.reason}` : ""}`);
+  if (summary.tabGc) lines.push(`tabGc enabled=${summary.tabGc.enabled !== false}${summary.tabGc.keepTicks != null ? ` keepTicks=${summary.tabGc.keepTicks}` : ""}${summary.tabGc.currentTabs != null ? ` currentTabs=${summary.tabGc.currentTabs}` : ""}${summary.tabGc.closedTabs != null ? ` closedTabs=${summary.tabGc.closedTabs}` : ""}${summary.tabGc.keptRuns != null ? ` keptRuns=${summary.tabGc.keptRuns}` : ""}`);
   if (summary.manifestPath) lines.push(`manifest=${sanitizeBridgeFailureText(summary.manifestPath) || "[local-path]"}`);
   for (const snapshot of summary.snapshots || []) {
     lines.push(`${snapshot.app}.${snapshot.action}: status=${snapshot.status} items=${snapshot.count || 0}${snapshot.skippedWrite ? " skippedWrite=true" : ""}${snapshot.authRequired ? " authRequired=true" : ""}`);
