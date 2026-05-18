@@ -60,6 +60,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
+  shouldAutoShowTerminalScene,
   shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";
 import {
@@ -88,6 +89,7 @@ export default function piGraphicsExtension(pi) {
   const floodlightWidgetId = "pi-graphics-floodlight";
   const themeSwatchWidgetId = "pi-graphics-theme-swatch";
   const photonRainWidgetId = "pi-graphics-photon-rain";
+  const terminalSceneWidgetId = "pi-graphics-terminal-scene";
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
@@ -152,6 +154,20 @@ export default function piGraphicsExtension(pi) {
     if (ensureUnicodePlacement(state)) {
       const aura = buildEditorAuraWidget(state, { caption: "editor aura active", tone: "tool" });
       ctx.ui?.setWidget?.(editorAuraWidgetId, aura.lines, { placement: "belowEditor" });
+      if (shouldAutoShowTerminalScene()) {
+        const sceneFrame = renderTerminalScenePulseApng({ columns: 54, rows: 10, frames: 8, delayMs: 90 });
+        const scene = buildPlacement(state, {
+          name: "auto-terminal-scene",
+          png: sceneFrame.png,
+          columns: sceneFrame.columns,
+          rows: sceneFrame.rows,
+          caption: "auto rendered terminal scene",
+        });
+        ctx.ui?.setWidget?.(terminalSceneWidgetId, renderToText(scene).split("\n"), { placement: "aboveEditor" });
+        ctx.ui?.setStatus?.("pi-gfx-scene", `⬢ terminal scene ${sceneFrame.frames}f`);
+      }
+    } else {
+      ctx.ui?.setStatus?.("pi-gfx-scene", "⚠ terminal scene needs kitty placeholders");
     }
     ctx.ui?.setWidget?.(hudWidgetId, (_tui, theme) => buildPiGraphicsHudComponent(theme), { placement: "belowEditor" });
   }
@@ -200,6 +216,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-gfx-mode", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-pulse", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-row", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-scene", undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
     try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
@@ -213,6 +230,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(floodlightWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(themeSwatchWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(photonRainWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(terminalSceneWidgetId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -782,6 +800,7 @@ export default function piGraphicsExtension(pi) {
         `auto theme apply: ${shouldAutoApplyTheme() ? "enabled" : "disabled by env"}`,
         `startup splash: ${shouldAutoShowSplash() ? "enabled" : "disabled by env"}`,
         `startup theme swatch: ${shouldAutoShowThemeSwatchSplash() ? "enabled" : "disabled by env"}`,
+        `auto terminal scene: ${shouldAutoShowTerminalScene() ? "enabled" : "disabled by env"}`,
         "session header: enabled",
         "session footer: enabled",
         "component HUD: below editor",
@@ -792,7 +811,7 @@ export default function piGraphicsExtension(pi) {
         "floodlight: high-contrast editor-adjacent banner",
         "theme swatch: above editor + /pi-graphics-theme-swatch",
         "photon rain: above editor + /pi-graphics-photon-rain",
-        "rendered terminal scene: pi_graphics_render_terminal_scene",
+        "rendered terminal scene: auto above editor + pi_graphics_render_terminal_scene",
         "transcript theme swatch: /pi-graphics-theme-swatch-message",
         "live footer: branch/status beacon",
         "visual contract: /pi-graphics-visual-contract",
@@ -906,5 +925,6 @@ export {
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
+  shouldAutoShowTerminalScene,
   shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";

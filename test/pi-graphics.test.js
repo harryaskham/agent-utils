@@ -65,6 +65,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
+  shouldAutoShowTerminalScene,
   shouldAutoShowThemeSwatchSplash,
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
@@ -691,6 +692,9 @@ test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor expli
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
+  assert.equal(shouldAutoShowTerminalScene({}), true);
+  assert.equal(shouldAutoShowTerminalScene({ PI_GRAPHICS_AUTO_TERMINAL_SCENE: "0" }), false);
+  assert.equal(shouldAutoShowTerminalScene({ PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE: "off" }), false);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {
@@ -758,6 +762,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /buildEditorAuraWidget\(state, \{ caption: "editor aura active", tone: "tool" \}\)/);
   assert.match(source, /setWidget\?\.\(editorAuraWidgetId, aura\.lines, \{ placement: "belowEditor" \}\)/);
+  assert.match(source, /renderTerminalScenePulseApng\(\{ columns: 54, rows: 10, frames: 8, delayMs: 90 \}\)/);
+  assert.match(source, /setWidget\?\.\(terminalSceneWidgetId, renderToText\(scene\)\.split/);
+  assert.match(source, /setStatus\?\.\("pi-gfx-scene", `⬢ terminal scene \$\{sceneFrame\.frames\}f`\)/);
   assert.match(source, /setHeader\?\.\(undefined\)/);
   assert.match(source, /setFooter\?\.\(undefined\)/);
   assert.match(source, /session header: enabled/);
@@ -798,7 +805,8 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /render_contact_sheet/);
   assert.match(source, /render_terminal_scene/);
   assert.match(source, /renderTerminalScenePulseApng\(\{ columns: 52, rows: 10, frames: 8, delayMs: 90 \}\)/);
-  assert.match(source, /rendered terminal scene: pi_graphics_render_terminal_scene/);
+  assert.match(source, /rendered terminal scene: auto above editor \+ pi_graphics_render_terminal_scene/);
+  assert.match(source, /auto terminal scene: \$\{shouldAutoShowTerminalScene\(\) \? "enabled" : "disabled by env"\}/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-message"/);
   assert.match(source, /buildPiGraphicsMessageComponent\(message, options, theme\)/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-theme-swatch"/);

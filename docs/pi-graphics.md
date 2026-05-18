@@ -67,6 +67,9 @@ default; opt out with `PI_GRAPHICS_AUTO_THEME_SWATCH=0` or
 visible even when kitty image placeholders are unavailable. Use
 `pi_graphics_render_terminal_scene` for the pixel-rendered Cacophony-style
 terminal scene: cell grid, aurora glow, status chips, scanlines, and APNG pulse.
+When kitty placeholder placement is active, the extension auto-mounts this
+rendered terminal scene above the editor on startup; opt out with
+`PI_GRAPHICS_AUTO_TERMINAL_SCENE=0` or `PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE=off`.
 
 ## How the extension cooperates with the theme
 
@@ -94,8 +97,10 @@ rendered. The extension complements those flat colors with graphical affordances
 * **Rendered terminal scenes** — `pi_graphics_render_terminal_scene` draws a
   full pixel-level terminal surface (cell grid, deep-Nordic vertical gradient,
   aurora radial glows, status chips, scanlines, and bottom waveform) as PNG or
-  APNG. This is the closest TypeScript mirror of a graphical Cacophony-style TUI
-  surface and is covered by pixel-inspection tests.
+  APNG. It is auto-mounted above the editor when kitty placeholders are active,
+  making the real rendered gfx visible without a manual tool call. This is the
+  closest TypeScript mirror of a graphical Cacophony-style TUI surface and is
+  covered by pixel-inspection tests.
 * **Conversation stage panels** — the lifecycle-visible widget used during
   normal turns. It combines an APNG TUI component with explicit neon text
   chrome and a text-only fallback, making graphical mode noticeable even when
