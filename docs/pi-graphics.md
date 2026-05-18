@@ -103,9 +103,10 @@ fallback visual smoke tests. The raw bootstrap writes a bounded truecolor block
 to stdout, stderr, and a Pi notification at session start, so it does not depend
 on Pi theme APIs, widgets, editor APIs, transcript messages, kitty graphics
 placement, OSC support, or a single output stream. Transcript chrome inserts a bounded truecolor deep-Nordic rail after
-normal messages, and editor-surface chrome wraps the real input editor with a
-pulsating truecolor Nordic frame so the session visibly changes even if core Pi
-surfaces ignore theme tokens. The strip includes the configured theme name, graphics mode,
+normal messages, and editor-surface chrome best-effort wraps any existing custom input editor with a
+pulsating truecolor Nordic frame; when no editor factory is exposed, the separate
+above/below editor frame widgets remain active so the extension still loads
+without importing Pi internals. The strip includes the configured theme name, graphics mode,
 settings-derived auto flags, measured theme color deltas, renderer PNG bytes,
 color bucket count, luma delta, and reload sentinel. Set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
 `PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to hide the compact always-visible rendered

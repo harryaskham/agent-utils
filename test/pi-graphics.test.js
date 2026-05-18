@@ -1193,7 +1193,10 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /pi-gfx-raw/);
   assert.match(source, /buildPiGraphicsRawBootstrapText/);
   assert.match(source, /installEditorSurface\(ctx\)/);
-  assert.match(source, /class PiGraphicsEditorSurface extends CustomEditor/);
+  assert.doesNotMatch(source, /from "@earendil-works\/pi-coding-agent"/);
+  assert.doesNotMatch(source, /extends CustomEditor/);
+  assert.match(source, /class PiGraphicsEditorSurface/);
+  assert.match(source, /typeof previousFactory !== "function"/);
   assert.match(source, /setEditorComponent\(\(tui, theme, keybindings\) => new PiGraphicsEditorSurface/);
   assert.match(source, /buildPiGraphicsEditorSurfaceBorderLines/);
   assert.match(source, /renderTuiSurfaceScenePulseApng/);

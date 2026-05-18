@@ -30,7 +30,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
@@ -436,14 +435,17 @@ export default function piGraphicsExtension(pi) {
   function installEditorSurface(ctx) {
     if (!shouldAutoShowEditorSurface(gfxEnv()) || typeof ctx.ui?.setEditorComponent !== "function") return false;
     const previousFactory = typeof ctx.ui?.getEditorComponent === "function" ? ctx.ui.getEditorComponent() : undefined;
-    class PiGraphicsEditorSurface extends CustomEditor {
+    if (typeof previousFactory !== "function") {
+      ctx.ui?.setStatus?.("pi-gfx-editor", "⬢ editor frame widgets active");
+      return false;
+    }
+    class PiGraphicsEditorSurface {
       constructor(tui, theme, keybindings) {
-        super(tui, theme, keybindings, { paddingX: 0 });
-        this.base = typeof previousFactory === "function" ? previousFactory(tui, theme, keybindings) : undefined;
+        this.base = previousFactory(tui, theme, keybindings);
         editorSurfaceTui = tui;
       }
       render(width) {
-        const baseLines = this.base?.render?.(width) || super.render(width);
+        const baseLines = this.base?.render?.(width) || [];
         const [top, bottom] = buildPiGraphicsEditorSurfaceBorderLines({
           width,
           active: editorSurfaceWorking,
@@ -458,11 +460,11 @@ export default function piGraphicsExtension(pi) {
         return [top, ...baseLines, bottom];
       }
       invalidate() { this.base?.invalidate?.(); }
-      handleInput(data) { return this.base?.handleInput?.(data) ?? super.handleInput?.(data); }
-      getValue() { return this.base?.getValue?.() ?? super.getValue?.(); }
-      setValue(value) { return this.base?.setValue?.(value) ?? super.setValue?.(value); }
-      focus() { return this.base?.focus?.() ?? super.focus?.(); }
-      blur() { return this.base?.blur?.() ?? super.blur?.(); }
+      handleInput(data) { return this.base?.handleInput?.(data); }
+      getValue() { return this.base?.getValue?.(); }
+      setValue(value) { return this.base?.setValue?.(value); }
+      focus() { return this.base?.focus?.(); }
+      blur() { return this.base?.blur?.(); }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => new PiGraphicsEditorSurface(tui, theme, keybindings));
     ctx.ui?.setStatus?.("pi-gfx-editor", "⬢ editor surface gfx");
