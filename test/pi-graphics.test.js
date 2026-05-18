@@ -53,6 +53,8 @@ import {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
   buildPiGraphicsHeartbeatLine,
+  buildPiGraphicsValidationReportLines,
+  buildPiGraphicsValidationReportText,
   buildPiGraphicsVisualProofText,
   buildPiGraphicsHudComponent,
   buildPiGraphicsHudLines,
@@ -90,6 +92,7 @@ import {
   shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
+  shouldAutoShowValidationReport,
   shouldAutoShowVisualProof,
   shouldAutoShowThemeSwatchSplash,
 } from "../extensions/pi-graphics/auto-widget.js";
@@ -504,6 +507,24 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[0], /PROMPT CAPTURED/);
   assert.match(lines[1], /deep nordic glow/);
   assert.match(lines[2], /neon cyan/);
+});
+
+test("buildPiGraphicsValidationReportText reports real rendered pixel metrics", () => {
+  assert.equal(shouldAutoShowValidationReport({}), true);
+  assert.equal(shouldAutoShowValidationReport({ PI_GRAPHICS_AUTO_VALIDATION_REPORT: "off" }), false);
+  const lines = buildPiGraphicsValidationReportLines({ columns: 40, rows: 7, frames: 6 });
+  const report = buildPiGraphicsValidationReportText({ columns: 40, rows: 7, frames: 6 });
+  assert.equal(lines.length, 7);
+  assert.match(report, /PI GFX RENDERED VALIDATION REPORT/);
+  assert.match(report, /component PNG: \d+x\d+px \d+B wire≈\d+B/);
+  assert.match(report, /component visual: uniqueBuckets=\d+ lumaRange=\d+/);
+  assert.match(report, /terminal scene visual: uniqueBuckets=\d+ lumaRange=\d+/);
+  assert.match(report, /APNG pulse: frames=6 delayMs=90 bytes=\d+ animationMs=540/);
+  const componentRange = Number(report.match(/component visual:.*lumaRange=(\d+)/)?.[1]);
+  const sceneRange = Number(report.match(/terminal scene visual:.*lumaRange=(\d+)/)?.[1]);
+  assert.ok(componentRange > 30);
+  assert.ok(sceneRange > 30);
+  assert.match(report, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("buildPiGraphicsVisualProofText emits ANSI color chips and measurable deltas", () => {
@@ -977,6 +998,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /render metrics: \/pi-graphics-validation-report/);
+  assert.match(source, /pi-graphics-validation-report/);
+  assert.match(source, /_validation_report/);
+  assert.match(source, /writeValidationReport\(ctx/);
   assert.match(source, /visual proof: \/pi-graphics-visual-proof/);
   assert.match(source, /pi-graphics-visual-proof/);
   assert.match(source, /_visual_proof/);
@@ -1006,6 +1031,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
   assert.match(source, /pi-graphics-conversation-frame/);
   assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /shouldAutoShowValidationReport\(\)/);
   assert.match(source, /shouldAutoShowVisualProof\(\)/);
   assert.match(source, /shouldAutoShowHeartbeat\(\)/);
   assert.match(source, /shouldAutoShowCockpitWall\(\)/);

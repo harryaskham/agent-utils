@@ -50,6 +50,7 @@ import {
   buildPiGraphicsFooterComponent,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeartbeatLine,
+  buildPiGraphicsValidationReportText,
   buildPiGraphicsVisualProofText,
   buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
@@ -85,6 +86,7 @@ import {
   shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
+  shouldAutoShowValidationReport,
   shouldAutoShowVisualProof,
   shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";
@@ -198,6 +200,11 @@ export default function piGraphicsExtension(pi) {
     return writeAnsiText(ctx, buildPiGraphicsVisualProofText(options));
   }
 
+  function writeValidationReport(ctx, options = {}) {
+    if (!shouldAutoShowValidationReport()) return false;
+    return writeAnsiText(ctx, buildPiGraphicsValidationReportText(options));
+  }
+
   function applyTerminalPalette(ctx) {
     if (!shouldAutoApplyTerminalPalette()) return false;
     return writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
@@ -286,6 +293,7 @@ export default function piGraphicsExtension(pi) {
     writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // RENDERED PIXELS", phase: 0.18 });
     writeCockpitWall(ctx, { label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 });
     writeVisualProof(ctx, { label: "PI KITTY GRAPHICS VISUAL PROOF" });
+    writeValidationReport(ctx, { columns: 52, rows: 8, frames: 8 });
     startHeartbeat(ctx);
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
     if (shouldAutoShowSplash()) {
@@ -739,6 +747,24 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_validation_report`,
+    label: "Pi Graphics: Validation Report",
+    description: "Return rendered-pixel metrics from the TypeScript graphical TUI renderer: color buckets, luma range, PNG/APNG sizes, and animation bounds.",
+    promptSnippet: "Show the Pi kitty graphics rendered-pixel validation report.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Component columns.", minimum: 24, maximum: 96 })),
+      rows: Type.Optional(Type.Number({ description: "Component rows.", minimum: 4, maximum: 18 })),
+      frames: Type.Optional(Type.Number({ description: "APNG frame count.", minimum: 2, maximum: 16 })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsValidationReportText(params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, metrics: true, renderer: "typescript-rgba" },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_visual_proof`,
     label: "Pi Graphics: Visual Proof",
     description: "Return a transcript-visible truecolor ANSI proof block with palette chips, contrast metrics, and reload sentinel.",
@@ -1049,6 +1075,14 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-validation-report", {
+    description: "Write rendered-pixel validation metrics for Pi kitty graphics.",
+    handler: async (_args, ctx) => {
+      const wrote = writeValidationReport(ctx, { columns: 52, rows: 8, frames: 8 });
+      if (!wrote) ctx.ui?.notify?.(buildPiGraphicsValidationReportText(), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-visual-proof", {
     description: "Write a truecolor ANSI visual proof block with color chips and metrics.",
     handler: async (args, ctx) => {
@@ -1215,6 +1249,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "render metrics: /pi-graphics-validation-report",
         "visual proof: /pi-graphics-visual-proof",
         "live heartbeat: /pi-graphics-heartbeat",
         "cockpit wall: /pi-graphics-cockpit-wall",
@@ -1335,6 +1370,8 @@ export {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
   buildPiGraphicsHeartbeatLine,
+  buildPiGraphicsValidationReportLines,
+  buildPiGraphicsValidationReportText,
   buildPiGraphicsVisualProofText,
   buildPiGraphicsHudComponent,
   buildPiGraphicsHudLines,
@@ -1372,6 +1409,7 @@ export {
   shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
+  shouldAutoShowValidationReport,
   shouldAutoShowVisualProof,
   shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";

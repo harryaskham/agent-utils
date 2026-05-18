@@ -5,7 +5,14 @@
 // small and APNG-backed: normal sessions get an unmistakable animated glow cue,
 // but the upload stays bounded and is owned by the pi-graphics image registry.
 
-import { renderTerminalScenePixels, renderTuiComponentPulseApng } from "./components.js";
+import {
+  renderTerminalSceneFrame,
+  renderTerminalScenePixels,
+  renderTerminalScenePulseApng,
+  renderTuiComponentFrame,
+  renderTuiComponentPixels,
+  renderTuiComponentPulseApng,
+} from "./components.js";
 import { buildPlacement, renderToText } from "./runtime.js";
 
 const FALSE_RE = /^(0|false|off|no)$/i;
@@ -81,6 +88,11 @@ export function shouldAutoShowHeartbeat(env = process.env) {
 
 export function shouldAutoShowVisualProof(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_VISUAL_PROOF ?? env.PI_KITTY_GRAPHICS_AUTO_VISUAL_PROOF;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
+export function shouldAutoShowValidationReport(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_VALIDATION_REPORT ?? env.PI_KITTY_GRAPHICS_AUTO_VALIDATION_REPORT;
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
@@ -301,6 +313,46 @@ export function buildPiGraphicsHeartbeatLine(theme, { tick = 0, stage = "idle" }
   const trail = Array.from({ length: 8 }, (_unused, i) => glyphs[(index + i) % glyphs.length]).join("");
   const safeStage = String(stage || "idle").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 18);
   return `${fg("thinkingXhigh", head)} ${fg("customMessageLabel", "PI GFX HEARTBEAT")} ${fg("borderAccent", trail)} ${fg("muted", `// ${safeStage} // ${PI_GRAPHICS_RELOAD_SENTINEL}`)}`;
+}
+
+function rendererStats(pixels) {
+  let minLuma = 255;
+  let maxLuma = 0;
+  const colors = new Set();
+  const step = Math.max(4, Math.floor(pixels.length / (4 * 4096)) * 4);
+  for (let i = 0; i < pixels.length; i += step) {
+    const r = pixels[i] || 0;
+    const g = pixels[i + 1] || 0;
+    const b = pixels[i + 2] || 0;
+    const a = pixels[i + 3] || 0;
+    if (a < 12) continue;
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    minLuma = Math.min(minLuma, luma);
+    maxLuma = Math.max(maxLuma, luma);
+    colors.add(`${r >> 4}${g >> 4}${b >> 4}`);
+  }
+  return { uniqueColorBuckets: colors.size, minLuma: Math.round(minLuma), maxLuma: Math.round(maxLuma), lumaRange: Math.round(maxLuma - minLuma) };
+}
+
+export function buildPiGraphicsValidationReportLines({ columns = 52, rows = 8, frames = 8 } = {}) {
+  const component = renderTuiComponentFrame({ columns, rows, phase: 0.35, tone: "assistant" });
+  const scene = renderTerminalSceneFrame({ columns: Math.max(56, columns + 12), rows: Math.max(10, rows + 3), phase: 0.2 });
+  const pulse = renderTerminalScenePulseApng({ columns: Math.max(56, columns + 12), rows: Math.max(10, rows + 3), frames, delayMs: 90 });
+  const componentStats = rendererStats(renderTuiComponentPixels({ columns, rows, phase: 0.35, tone: "assistant" }).pixels);
+  const sceneStats = rendererStats(renderTerminalScenePixels({ columns: Math.max(56, columns + 12), rows: Math.max(10, rows + 3), phase: 0.2 }).pixels);
+  return [
+    `⬢ PI GFX RENDERED VALIDATION REPORT ⬢ ${PI_GRAPHICS_RELOAD_SENTINEL}`,
+    `component PNG: ${component.widthPx}x${component.heightPx}px ${component.metrics.pngBytes}B wire≈${component.metrics.estimatedWireBytes}B`,
+    `component visual: uniqueBuckets=${componentStats.uniqueColorBuckets} lumaRange=${componentStats.lumaRange} min=${componentStats.minLuma} max=${componentStats.maxLuma}`,
+    `terminal scene PNG: ${scene.widthPx}x${scene.heightPx}px ${scene.metrics.pngBytes}B wire≈${scene.metrics.estimatedWireBytes}B`,
+    `terminal scene visual: uniqueBuckets=${sceneStats.uniqueColorBuckets} lumaRange=${sceneStats.lumaRange} min=${sceneStats.minLuma} max=${sceneStats.maxLuma}`,
+    `APNG pulse: frames=${pulse.frames} delayMs=${pulse.delayMs} bytes=${pulse.metrics.pngBytes} animationMs=${pulse.metrics.animationMillis}`,
+    "contract: TypeScript renderer is producing real RGBA pixels, glow gradients, scanlines, bounded APNG animation, and measurable contrast.",
+  ];
+}
+
+export function buildPiGraphicsValidationReportText(options = {}) {
+  return buildPiGraphicsValidationReportLines(options).join("\n");
 }
 
 export function buildPiGraphicsVisualProofText({ width = 96, label = "PI KITTY GRAPHICS VISUAL PROOF" } = {}) {
