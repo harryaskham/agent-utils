@@ -227,6 +227,7 @@ export default function piGraphicsExtension(pi) {
   const settingsEnv = settingsEnvFromPiGraphics(settings);
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "kitty-graphics-nord");
   const configuredGraphicsMode = String(settings.piGraphics?.mode || settings.kittyGraphics?.mode || "calm");
+  const packageVersion = readJsonIfExists(fileURLToPath(new URL("../package.json", import.meta.url)))?.version || "unknown";
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const state = makeState();
   const autoWidgetId = "pi-graphics-auto-pulse";
@@ -350,6 +351,34 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.notify?.(text, "info"); wrote = true; } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-raw", wrote ? "⬢ raw stdout/stderr/notify bootstrap" : "⚠ raw bootstrap blocked"); } catch {}
     return wrote;
+  }
+
+  function buildLiveProbeText(ctx, { emitted = false } = {}) {
+    const env = gfxEnv();
+    const api = ["setTheme", "setHeader", "setFooter", "setWidget", "setEditorComponent", "getEditorComponent", "setStatus", "notify", "write"]
+      .map((name) => `${name}=${typeof ctx?.ui?.[name] === "function" ? "yes" : "no"}`)
+      .join(" ");
+    return [
+      "PI GRAPHICS LIVE PROBE",
+      `version=${packageVersion} theme=${configuredThemeName} mode=${configuredGraphicsMode}`,
+      `sentinel=${PI_GRAPHICS_RELOAD_SENTINEL}`,
+      `ui=${api}`,
+      `flags theme=${env.PI_GRAPHICS_AUTO_THEME} raw=${env.PI_GRAPHICS_AUTO_RAW_BOOTSTRAP} header=${env.PI_GRAPHICS_AUTO_HEADER_CHROME} editor=${env.PI_GRAPHICS_AUTO_EDITOR_SURFACE} transcript=${env.PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME} ambient=${env.PI_GRAPHICS_AUTO_AMBIENT_CHROME}`,
+      `themeSync dirs=${themeSync.dirs.length} writes=${themeSync.copied.length} errors=${themeSync.errors.length}`,
+      `unicodePlacement=${ensureUnicodePlacement(state) ? "yes" : "no"} emitted=${emitted ? "yes" : "no"}`,
+      "If this probe appears but chrome does not, inspect the ui= line for missing APIs. If it does not appear, the extension command/tool is not loaded.",
+    ].join("\n");
+  }
+
+  function emitLiveProbe(ctx) {
+    const raw = writeRawBootstrap(ctx);
+    applyThemeCues(ctx);
+    showAmbientChrome(ctx);
+    showAutoPulse(ctx, { caption: "live probe", tone: "tool", delayMs: 60 });
+    const text = buildLiveProbeText(ctx, { emitted: raw });
+    try { ctx?.ui?.notify?.(text, "info"); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-probe", `⬢ probe v${packageVersion}`); } catch {}
+    return text;
   }
 
   function applyTerminalPalette(ctx) {
@@ -613,6 +642,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-gfx-editor", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-header", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-raw", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-probe", undefined); } catch {}
     try { ctx?.ui?.setEditorComponent?.(undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
@@ -644,6 +674,21 @@ export default function piGraphicsExtension(pi) {
     } else if (typeof process.stdout?.write === "function") {
       process.stdout.write(cmd);
     }
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_live_probe`,
+    label: "Pi Graphics: Live Probe",
+    description: "Emit and report live Pi graphics visibility diagnostics: package version, configured theme/mode, available UI APIs, env flags, theme sync state, and visible bootstrap/header/editor/status surfaces.",
+    promptSnippet: "Run the Pi graphics live visibility probe when graphics appear invisible.",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, ctx) {
+      const text = emitLiveProbe(ctx);
+      return {
+        content: [{ type: "text", text }],
+        details: { packageVersion, configuredThemeName, configuredGraphicsMode, themeSync, env: gfxEnv() },
+      };
+    },
   });
 
   pi.registerTool({
@@ -1605,6 +1650,13 @@ export default function piGraphicsExtension(pi) {
     description: "Show the oversized Pi kitty graphics lighthouse beacon.",
     handler: async (_args, ctx) => {
       ctx.ui?.notify?.(buildPiGraphicsLighthouseLines(ctx.ui?.theme).join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("pi-graphics-live-probe", {
+    description: "Emit Pi graphics live visibility diagnostics and trigger all calm visible surfaces.",
+    handler: async (_args, ctx) => {
+      emitLiveProbe(ctx);
     },
   });
 

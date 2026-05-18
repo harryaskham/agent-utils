@@ -133,7 +133,11 @@ terminal scene: cell grid, aurora glow, status chips, scanlines, and APNG pulse.
 When kitty placeholder placement is active, the extension auto-mounts this
 rendered terminal scene above the editor on startup; opt out with
 `PI_GRAPHICS_AUTO_TERMINAL_SCENE=0` or `PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE=off`.
-If a running session still looks unchanged, run `/pi-graphics-doctor` (or
+If a running session still looks unchanged, run `/pi-graphics-live-probe` (or
+`pi_graphics_live_probe`) first. It emits the raw/bootstrap/header/editor/status
+surfaces and reports package version, configured theme/mode, UI API availability,
+settings-derived flags, theme sync counts, Unicode placement status, and the
+reload sentinel. Then run `/pi-graphics-doctor` (or
 `/pi-graphics-takeover`) to re-apply the visible surfaces and report theme,
 kitty-placeholder, opt-out, and reload diagnostics. Use `/pi-graphics-theme-delta`
 or `pi_graphics_theme_delta` to print the exact reload sentinel and quantified
@@ -425,7 +429,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame and bounded transcript-chrome rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD, editor-frame, editor-surface rendering, and raw stdout/stderr/notification bootstrap rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, default-on persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, live-probe diagnostics, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame and bounded transcript-chrome rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD, editor-frame, editor-surface rendering, and raw stdout/stderr/notification bootstrap rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, default-on persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.
