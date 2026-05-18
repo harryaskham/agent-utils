@@ -45,7 +45,9 @@ import {
   buildStagePanelWidget,
   buildStartupSplashMessage,
   buildTextStagePanel,
+  buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
+  buildWorkingMessage,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -103,6 +105,12 @@ export default function piGraphicsExtension(pi) {
     }
   }
 
+  function setWorkingChrome(ctx, stage, toolName = "") {
+    try { ctx.ui?.setWorkingVisible?.(true); } catch {}
+    try { ctx.ui?.setWorkingMessage?.(buildWorkingMessage({ stage, toolName }, ctx.ui?.theme)); } catch {}
+    try { ctx.ui?.setHiddenThinkingLabel?.(buildHiddenThinkingLabel(ctx.ui?.theme)); } catch {}
+  }
+
   function applyThemeCues(ctx) {
     if (shouldAutoApplyTheme() && typeof ctx.ui?.setTheme === "function") {
       const result = ctx.ui.setTheme("kitty-graphics");
@@ -114,6 +122,7 @@ export default function piGraphicsExtension(pi) {
       }
     }
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 90 });
+    setWorkingChrome(ctx, "ready");
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
@@ -134,19 +143,23 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
+    setWorkingChrome(ctx, "prompt captured");
     showAutoPulse(ctx, { caption: "prompt captured", tone: "user", delayMs: 80 });
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    setWorkingChrome(ctx, "agent thinking");
     showAutoPulse(ctx, { caption: "agent thinking", tone: "assistant", delayMs: 90 });
   });
 
   pi.on("tool_execution_start", (event, ctx) => {
     const toolName = String(event?.toolName || "tool").slice(0, 32);
+    setWorkingChrome(ctx, "tool execution", toolName);
     showAutoPulse(ctx, { caption: `tool ${toolName}`, tone: "tool", delayMs: 70 });
   });
 
   pi.on("agent_end", (_event, ctx) => {
+    setWorkingChrome(ctx, "ready");
     showAutoPulse(ctx, { caption: "ready", tone: "assistant", delayMs: 120 });
   });
 
@@ -158,6 +171,8 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-graphics", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-theme", undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
+    try { ctx?.ui?.setWorkingMessage?.(); } catch {}
+    try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
     try { ctx?.ui?.setHeader?.(undefined); } catch {}
     try { ctx?.ui?.setFooter?.(undefined); } catch {}
     try { ctx?.ui?.setWidget?.(hudWidgetId, undefined); } catch {}
@@ -598,6 +613,7 @@ export default function piGraphicsExtension(pi) {
         "component HUD: below editor",
         "editor frame: above/below editor",
         "editor aura: APNG below editor",
+        "working row: neon Pi kitty gfx",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -681,7 +697,9 @@ export {
   buildStagePanelWidget,
   buildStartupSplashMessage,
   buildTextStagePanel,
+  buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
+  buildWorkingMessage,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,

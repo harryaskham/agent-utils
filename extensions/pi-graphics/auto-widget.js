@@ -52,6 +52,19 @@ export function buildWorkingIndicatorFrames(theme) {
   ];
 }
 
+export function buildWorkingMessage({ stage = "active", toolName = "" } = {}, theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const safeStage = String(stage || "active").replace(/\s+/g, " ").trim().slice(0, 28).toUpperCase();
+  const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 32);
+  const suffix = safeTool ? ` // ${safeTool}` : "";
+  return `${fg("thinkingXhigh", "⬢")} ${fg("customMessageLabel", "PI KITTY GFX")} ${fg("borderAccent", `// ${safeStage}`)}${fg("muted", suffix)} ${fg("accent", "deep nordic glow")}`;
+}
+
+export function buildHiddenThinkingLabel(theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  return `${fg("thinkingXhigh", "⬢")} ${fg("customMessageLabel", "PI GFX THOUGHTSTREAM")} ${fg("muted", "folded")}`;
+}
+
 function stageLabel(tone, caption) {
   const label = String(caption || "kitty graphics pulse active").toUpperCase();
   const glyph = tone === "tool" ? "⚙" : tone === "user" ? "◆" : "✦";

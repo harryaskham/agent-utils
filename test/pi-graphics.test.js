@@ -49,7 +49,9 @@ import {
   buildStagePanelWidget,
   buildStartupSplashMessage,
   buildTextStagePanel,
+  buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
+  buildWorkingMessage,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -559,6 +561,20 @@ test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor expli
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
 });
 
+test("buildWorkingMessage and hidden thinking label brand the streaming row", () => {
+  const calls = [];
+  const theme = { fg(token, text) { calls.push([token, text]); return `<${token}>${text}</${token}>`; } };
+  const message = buildWorkingMessage({ stage: "tool execution", toolName: "very-long-tool-name-that-should-be-truncated-after-32-chars" }, theme);
+  assert.match(message, /PI KITTY GFX/);
+  assert.match(message, /TOOL EXECUTION/);
+  assert.match(message, /deep nordic glow/);
+  assert.ok(message.length < 220);
+  const label = buildHiddenThinkingLabel(theme);
+  assert.match(label, /PI GFX THOUGHTSTREAM/);
+  assert.ok(calls.some(([token]) => token === "thinkingXhigh"));
+  assert.ok(calls.some(([token]) => token === "customMessageLabel"));
+});
+
 test("buildWorkingIndicatorFrames creates a themed neon pulse sequence", () => {
   const calls = [];
   const theme = { fg(token, text) { calls.push([token, text]); return `<${token}>${text}</${token}>`; } };
@@ -576,6 +592,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /ctx\.ui\.setTheme\("kitty-graphics"\)/);
   assert.match(source, /buildWorkingIndicatorFrames\(ctx\.ui\?\.theme\)/);
   assert.match(source, /setWorkingIndicator\?\.\(\{ frames:/);
+  assert.match(source, /setWorkingVisible\?\.\(true\)/);
+  assert.match(source, /setWorkingMessage\?\.\(buildWorkingMessage\(\{ stage, toolName \}, ctx\.ui\?\.theme\)\)/);
+  assert.match(source, /setHiddenThinkingLabel\?\.\(buildHiddenThinkingLabel\(ctx\.ui\?\.theme\)\)/);
   assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
@@ -590,6 +609,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /component HUD: below editor/);
   assert.match(source, /editor frame: above\/below editor/);
   assert.match(source, /editor aura: APNG below editor/);
+  assert.match(source, /working row: neon Pi kitty gfx/);
   assert.match(source, /buildStartupSplashMessage\(\)/);
   assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);
   assert.match(source, /pi-theme/);
