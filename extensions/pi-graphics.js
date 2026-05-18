@@ -49,6 +49,7 @@ import {
   buildPiGraphicsFloodlightComponent,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsHeaderComponent,
+  buildPiGraphicsHeartbeatLine,
   buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsDoctorLines,
@@ -71,6 +72,7 @@ import {
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
+  heartbeatIntervalMs,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
@@ -79,6 +81,7 @@ import {
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
+  shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
   shouldAutoShowThemeSwatchSplash,
@@ -112,6 +115,8 @@ export default function piGraphicsExtension(pi) {
   const terminalSceneWidgetId = "pi-graphics-terminal-scene";
   const lighthouseWidgetId = "pi-graphics-lighthouse";
   let lastAutoWidgetSignature = "";
+  let heartbeatTimer = null;
+  let heartbeatTick = 0;
 
   function showAutoPulse(ctx, options = {}) {
     if (!shouldAutoShowGraphics()) return false;
@@ -202,6 +207,26 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setHiddenThinkingLabel?.(buildHiddenThinkingLabel(ctx.ui?.theme)); } catch {}
   }
 
+  function startHeartbeat(ctx) {
+    if (!shouldAutoShowHeartbeat() || heartbeatTimer) return false;
+    const update = () => {
+      heartbeatTick += 1;
+      const line = buildPiGraphicsHeartbeatLine(ctx.ui?.theme, { tick: heartbeatTick, stage: "live" });
+      try { ctx.ui?.setStatus?.("pi-gfx-heart", line); } catch {}
+      try { ctx.ui?.setTitle?.(`⬢ PI KITTY GFX // LIVE ${heartbeatTick % 8}`); } catch {}
+    };
+    update();
+    heartbeatTimer = setInterval(update, heartbeatIntervalMs());
+    if (typeof heartbeatTimer?.unref === "function") heartbeatTimer.unref();
+    return true;
+  }
+
+  function stopHeartbeat(ctx) {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+    try { ctx?.ui?.setStatus?.("pi-gfx-heart", undefined); } catch {}
+  }
+
   function applyThemeCues(ctx) {
     if (shouldAutoApplyTheme() && typeof ctx.ui?.setTheme === "function") {
       const result = ctx.ui.setTheme("kitty-graphics");
@@ -253,6 +278,7 @@ export default function piGraphicsExtension(pi) {
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
     writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // RENDERED PIXELS", phase: 0.18 });
     writeCockpitWall(ctx, { label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 });
+    startHeartbeat(ctx);
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
     if (shouldAutoShowSplash()) {
       try { pi.sendMessage?.(buildStartupSplashMessage()); } catch {}
@@ -305,6 +331,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-gfx-row", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-scene", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-build", undefined); } catch {}
+    try { stopHeartbeat(ctx); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
     try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
@@ -704,6 +731,23 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_heartbeat`,
+    label: "Pi Graphics: Heartbeat",
+    description: "Preview the lightweight live Pi kitty graphics heartbeat ticker line.",
+    promptSnippet: "Show the Pi kitty graphics live heartbeat ticker.",
+    parameters: Type.Object({
+      tick: Type.Optional(Type.Number({ description: "Heartbeat phase tick." })),
+      stage: Type.Optional(Type.String({ description: "Stage label." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsHeartbeatLine(undefined, params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, heartbeat: true },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_cockpit_wall`,
     label: "Pi Graphics: Cockpit Wall",
     description: "Return a multi-line truecolor ANSI cockpit wall combining rendered scene shader, neon rails, status panels, and reload sentinel.",
@@ -980,6 +1024,16 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-heartbeat", {
+    description: "Refresh the live Pi kitty graphics heartbeat ticker immediately.",
+    handler: async (_args, ctx) => {
+      heartbeatTick += 1;
+      const line = buildPiGraphicsHeartbeatLine(ctx.ui?.theme, { tick: heartbeatTick, stage: "manual" });
+      ctx.ui?.setStatus?.("pi-gfx-heart", line);
+      ctx.ui?.notify?.(line, "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-cockpit-wall", {
     description: "Write the full truecolor Pi kitty graphics cockpit wall.",
     handler: async (args, ctx) => {
@@ -1127,6 +1181,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "live heartbeat: /pi-graphics-heartbeat",
         "cockpit wall: /pi-graphics-cockpit-wall",
         "OSC palette: /pi-graphics-osc-palette",
         "ANSI scene shader: /pi-graphics-ansi-scene",
@@ -1244,6 +1299,7 @@ export {
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
+  buildPiGraphicsHeartbeatLine,
   buildPiGraphicsHudComponent,
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
@@ -1268,6 +1324,7 @@ export {
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
+  heartbeatIntervalMs,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
@@ -1276,6 +1333,7 @@ export {
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
+  shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
   shouldAutoShowThemeSwatchSplash,

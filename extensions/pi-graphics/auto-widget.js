@@ -74,6 +74,17 @@ export function shouldAutoShowCockpitWall(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowHeartbeat(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_HEARTBEAT ?? env.PI_KITTY_GRAPHICS_AUTO_HEARTBEAT;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
+export function heartbeatIntervalMs(env = process.env) {
+  const raw = env.PI_GRAPHICS_HEARTBEAT_MS ?? env.PI_KITTY_GRAPHICS_HEARTBEAT_MS;
+  const ms = Math.trunc(Number(raw ?? 750));
+  return Number.isFinite(ms) ? Math.max(250, Math.min(5000, ms)) : 750;
+}
+
 const OSC = "\u001b]";
 const BEL = "\u0007";
 
@@ -259,6 +270,16 @@ export function buildTerminalTitle({ stage = "ready", toolName = "" } = {}) {
   const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 28);
   const suffix = safeTool ? ` · ${safeTool}` : "";
   return `⬢ PI KITTY GFX // ${safeStage}${suffix}`.slice(0, 80);
+}
+
+export function buildPiGraphicsHeartbeatLine(theme, { tick = 0, stage = "idle" } = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const glyphs = ["⬢", "◆", "✦", "✺", "▰", "▱", "◢", "◣"];
+  const index = Math.abs(Math.trunc(Number(tick) || 0)) % glyphs.length;
+  const head = glyphs[index];
+  const trail = Array.from({ length: 8 }, (_unused, i) => glyphs[(index + i) % glyphs.length]).join("");
+  const safeStage = String(stage || "idle").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 18);
+  return `${fg("thinkingXhigh", head)} ${fg("customMessageLabel", "PI GFX HEARTBEAT")} ${fg("borderAccent", trail)} ${fg("muted", `// ${safeStage} // ${PI_GRAPHICS_RELOAD_SENTINEL}`)}`;
 }
 
 export function buildVisualContractLines({ themeName = "kitty-graphics", unicodePlacement = false, splash = true } = {}, theme) {

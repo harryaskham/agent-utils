@@ -83,9 +83,11 @@ or `pi_graphics_ansi_scene` for a half-block ANSI rendering sampled from the sam
 TypeScript pixel terminal scene used by kitty/APNG output. Use `/pi-graphics-osc-palette`
 or `pi_graphics_osc_palette` to ask compatible terminals to change their actual
 foreground/background/cursor/ANSI palette to the deep-Nordic theme. Use
-`/pi-graphics-cockpit-wall` or `pi_graphics_cockpit_wall` for the largest
-normal-output takeover wall combining ANSI scene art, status panels, rails, and
-sentinel text. Use `/pi-graphics-lighthouse` or
+`/pi-graphics-heartbeat` or `pi_graphics_heartbeat` to inspect the lightweight
+always-on status/title ticker that keeps idle sessions visibly pulsing without
+resending image payloads. Use `/pi-graphics-cockpit-wall` or
+`pi_graphics_cockpit_wall` for the largest normal-output takeover wall combining
+ANSI scene art, status panels, rails, and sentinel text. Use `/pi-graphics-lighthouse` or
 `pi_graphics_lighthouse` for the deliberately oversized normal-TUI beacon that
 should be visible even before image/APNG rendering succeeds.
 
@@ -141,6 +143,13 @@ rendered. The extension complements those flat colors with graphical affordances
   `pi-graphics-message` into the transcript so graphics mode leaves a visible
   neon block in normal conversation history even if terminal theme changes are
   subtle.
+* **Live heartbeat ticker** — `/pi-graphics-heartbeat` and `pi_graphics_heartbeat`
+  expose the same lightweight ticker that runs on a bounded interval during the
+  session. It updates `pi-gfx-heart` status and the terminal title with rotating
+  deep-Nordic glyph phases instead of re-uploading large images, so the session
+  visibly pulses even while idle. Disable it with `PI_GRAPHICS_AUTO_HEARTBEAT=0`
+  (or `PI_KITTY_GRAPHICS_AUTO_HEARTBEAT=off`); tune the bounded interval with
+  `PI_GRAPHICS_HEARTBEAT_MS` / `PI_KITTY_GRAPHICS_HEARTBEAT_MS`.
 * **Terminal cockpit wall** — `/pi-graphics-cockpit-wall` and
   `pi_graphics_cockpit_wall` print a large normal-output wall combining the ANSI
   scene shader, truecolor rails, status panels, pulse-bus labels, and reload
@@ -246,6 +255,7 @@ The extension registers the following tools through `pi.registerTool`:
   covering tones and pulse phases for human inspection.
 * `pi_graphics_send_message` — send a displayed custom message through the
   `pi-graphics-message` renderer for validating normal conversation chrome.
+* `pi_graphics_heartbeat` — preview the lightweight live heartbeat ticker line.
 * `pi_graphics_cockpit_wall` — emit the large truecolor terminal cockpit wall.
 * `pi_graphics_osc_palette` — emit OSC terminal palette takeover sequences.
 * `pi_graphics_ansi_scene` — emit the truecolor ANSI half-block terminal scene sampled from rendered pixels.
@@ -266,6 +276,7 @@ And the discoverability slash commands include:
 * `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
 * `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
 * `/pi-graphics-message [text]` — display a custom message rendered with Pi kitty graphics message chrome.
+* `/pi-graphics-heartbeat` — refresh and show the live heartbeat ticker line.
 * `/pi-graphics-cockpit-wall [label]` — write the full truecolor terminal cockpit wall.
 * `/pi-graphics-osc-palette` — apply the OSC terminal palette takeover.
 * `/pi-graphics-ansi-scene [label]` — write the truecolor ANSI scene shader sampled from rendered pixels.
@@ -316,7 +327,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

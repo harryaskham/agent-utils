@@ -52,6 +52,7 @@ import {
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
+  buildPiGraphicsHeartbeatLine,
   buildPiGraphicsHudComponent,
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
@@ -76,6 +77,7 @@ import {
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
+  heartbeatIntervalMs,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
@@ -84,6 +86,7 @@ import {
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
+  shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
   shouldAutoShowThemeSwatchSplash,
@@ -499,6 +502,22 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[0], /PROMPT CAPTURED/);
   assert.match(lines[1], /deep nordic glow/);
   assert.match(lines[2], /neon cyan/);
+});
+
+test("buildPiGraphicsHeartbeatLine emits a lightweight live pulse ticker", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+  };
+  assert.equal(shouldAutoShowHeartbeat({}), true);
+  assert.equal(shouldAutoShowHeartbeat({ PI_GRAPHICS_AUTO_HEARTBEAT: "0" }), false);
+  assert.equal(heartbeatIntervalMs({ PI_GRAPHICS_HEARTBEAT_MS: "10" }), 250);
+  assert.equal(heartbeatIntervalMs({ PI_GRAPHICS_HEARTBEAT_MS: "9999" }), 5000);
+  const first = buildPiGraphicsHeartbeatLine(theme, { tick: 0, stage: "idle" });
+  const second = buildPiGraphicsHeartbeatLine(theme, { tick: 3, stage: "idle" });
+  assert.match(first, /PI GFX HEARTBEAT/);
+  assert.match(first, /IDLE/);
+  assert.match(first, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.notEqual(first, second);
 });
 
 test("buildPiGraphicsCockpitWallText emits a large ANSI terminal cockpit", () => {
@@ -940,6 +959,11 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /live heartbeat: \/pi-graphics-heartbeat/);
+  assert.match(source, /pi-graphics-heartbeat/);
+  assert.match(source, /_heartbeat/);
+  assert.match(source, /startHeartbeat\(ctx\)/);
+  assert.match(source, /stopHeartbeat\(ctx\)/);
   assert.match(source, /cockpit wall: \/pi-graphics-cockpit-wall/);
   assert.match(source, /pi-graphics-cockpit-wall/);
   assert.match(source, /_cockpit_wall/);
@@ -960,6 +984,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
   assert.match(source, /pi-graphics-conversation-frame/);
   assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /shouldAutoShowHeartbeat\(\)/);
   assert.match(source, /shouldAutoShowCockpitWall\(\)/);
   assert.match(source, /shouldAutoApplyTerminalPalette\(\)/);
   assert.match(source, /shouldAutoShowAnsiScene\(\)/);
