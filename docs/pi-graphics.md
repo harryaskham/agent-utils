@@ -74,7 +74,9 @@ If a running session still looks unchanged, run `/pi-graphics-doctor` (or
 `/pi-graphics-takeover`) to re-apply the visible surfaces and report theme,
 kitty-placeholder, opt-out, and reload diagnostics. Use `/pi-graphics-theme-delta`
 or `pi_graphics_theme_delta` to print the exact reload sentinel and quantified
-RGB deltas against the built-in dark theme. Use `/pi-graphics-lighthouse` or
+RGB deltas against the built-in dark theme. Use `/pi-graphics-conversation-frame`
+or `pi_graphics_conversation_frame` to force normal transcript text through the
+high-contrast deep-Nordic conversation frame. Use `/pi-graphics-lighthouse` or
 `pi_graphics_lighthouse` for the deliberately oversized normal-TUI beacon that
 should be visible even before image/APNG rendering succeeds.
 
@@ -130,6 +132,12 @@ rendered. The extension complements those flat colors with graphical affordances
   `pi-graphics-message` into the transcript so graphics mode leaves a visible
   neon block in normal conversation history even if terminal theme changes are
   subtle.
+* **Conversation frame renderer** — `/pi-graphics-conversation-frame` and
+  `pi_graphics_conversation_frame` render ordinary transcript text inside a
+  deep-Nordic frame with cyan/violet rails, animated-looking block gradients,
+  and the reload sentinel. A startup sample and an assistant-turn completion
+  sample are sent by default unless `PI_GRAPHICS_AUTO_CONVERSATION_FRAME=0` (or
+  `PI_KITTY_GRAPHICS_AUTO_CONVERSATION_FRAME=off`) is set.
 * **Custom message chrome** — a `pi-graphics-message` renderer that returns a
   pure TypeScript TUI component (no external `pi-tui` import) with neon rails,
   themed backgrounds, and bounded viewport rendering for displayed custom
@@ -257,7 +265,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

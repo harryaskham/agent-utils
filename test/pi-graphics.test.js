@@ -36,6 +36,8 @@ import {
 import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsConversationFrameComponent,
+  buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsEditorFrameLines,
   buildPiGraphicsFloodlightComponent,
@@ -59,6 +61,7 @@ import {
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
   buildStagePanelWidget,
+  buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
   buildStartupThemeSwatchMessage,
   buildTerminalTitle,
@@ -69,6 +72,7 @@ import {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
@@ -487,6 +491,28 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[2], /neon cyan/);
 });
 
+test("buildPiGraphicsConversationFrameComponent renders normal transcript chrome", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const message = buildStartupConversationFrameMessage({ content: "ordinary assistant text should still be preserved inside the graphical frame", title: "assistant frame" });
+  assert.equal(message.customType, "pi-graphics-conversation-frame");
+  assert.equal(message.display, true);
+  assert.equal(shouldAutoShowConversationFrame({}), true);
+  assert.equal(shouldAutoShowConversationFrame({ PI_GRAPHICS_AUTO_CONVERSATION_FRAME: "0" }), false);
+  const lines = buildPiGraphicsConversationFrameLines({ content: message.content, role: "assistant", title: "assistant frame", width: 88 }, theme);
+  const joined = lines.join("\n");
+  assert.match(joined, /PI GFX ASSISTANT/);
+  assert.match(joined, /ordinary assistant text/);
+  assert.match(joined, /deep nordic conversation renderer/);
+  assert.match(joined, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const component = buildPiGraphicsConversationFrameComponent(message, { expanded: true }, theme);
+  const rendered = component.render(96);
+  assert.ok(rendered.length >= 6);
+  assert.ok(rendered.every((line) => line.length <= 97));
+});
+
 test("buildPiGraphicsMessageComponent renders bounded custom message chrome", () => {
   const calls = [];
   const theme = {
@@ -844,7 +870,12 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
+  assert.match(source, /pi-graphics-conversation-frame/);
+  assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-conversation-frame"/);
   assert.match(source, /_theme_delta/);
+  assert.match(source, /_conversation_frame/);
   assert.match(source, /pi-graphics-theme-delta/);
   assert.match(source, /_lighthouse/);
   assert.match(source, /pi-graphics-lighthouse/);

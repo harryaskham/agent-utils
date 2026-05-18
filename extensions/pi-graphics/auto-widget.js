@@ -49,6 +49,11 @@ export function shouldAutoShowTerminalScene(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowConversationFrame(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_CONVERSATION_FRAME ?? env.PI_KITTY_GRAPHICS_AUTO_CONVERSATION_FRAME;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function buildStartupSplashMessage({ content, tone = "assistant", title = "startup splash" } = {}) {
   const body = String(content || "PI KITTY GRAPHICS ONLINE — deep Nordic gradients, cyan/violet glow, APNG pulse, header/footer chrome, and rendered TypeScript TUI components are active.")
     .replace(/\s+/g, " ")
@@ -68,6 +73,15 @@ export function buildStartupThemeSwatchMessage({ width = 96 } = {}) {
     content: "PI KITTY GRAPHICS THEME SWATCH — actual runtime theme-token calibration bars",
     display: true,
     details: { width },
+  };
+}
+
+export function buildStartupConversationFrameMessage({ content, role = "assistant", title = "conversation chrome" } = {}) {
+  return {
+    customType: "pi-graphics-conversation-frame",
+    content: String(content || "Normal transcript output is now framed by Pi kitty graphics chrome — deep Nordic rails, cyan/violet glow, and reload sentinel active.").slice(0, 360),
+    display: true,
+    details: { role, title },
   };
 }
 
@@ -191,6 +205,63 @@ export function buildPiGraphicsMessageComponent(message, options = {}, theme) {
   }, theme);
   return {
     render(width = 120) { return boundedLines(lines, width); },
+    invalidate() {},
+  };
+}
+
+function wrapWords(text, width) {
+  const words = String(text || "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > width && line) {
+      lines.push(line);
+      line = word.slice(0, width);
+    } else {
+      line = next.slice(0, width);
+    }
+    if (lines.length >= 3) break;
+  }
+  if (line && lines.length < 3) lines.push(line);
+  return lines.length ? lines : ["Pi kitty graphics conversation frame active."];
+}
+
+export function buildPiGraphicsConversationFrameLines({ content = "Pi kitty graphics conversation frame active.", role = "assistant", title = "conversation chrome", expanded = false, width = 104 } = {}, theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const cells = Math.max(52, Math.min(180, Math.trunc(width)));
+  const inner = Math.max(28, cells - 16);
+  const safeRole = String(role || "assistant").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 18);
+  const safeTitle = String(title || "conversation chrome").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 32);
+  const aurora = "▰▱⬢◆✦✺".repeat(Math.ceil(inner / 6)).slice(0, inner);
+  const pulse = "▓▒░".repeat(Math.ceil(inner / 3)).slice(0, inner);
+  const body = wrapWords(content, inner - 4).map((line) => bg("customMessageBg", `${fg("borderAccent", "┃")} ${fg("text", line.padEnd(inner - 2, " "))} ${fg("thinkingXhigh", "┃")}`));
+  const lines = [
+    bg("selectedBg", `${fg("thinkingXhigh", "╔═⬢")} ${fg("customMessageLabel", `PI GFX ${safeRole} // ${safeTitle}`)} ${fg("borderAccent", "⬢═╗")}`),
+    bg("customMessageBg", `${fg("borderAccent", "┃")} ${fg("accent", aurora)} ${fg("thinkingXhigh", "┃")}`),
+    ...body,
+    bg("toolPendingBg", `${fg("borderAccent", "┃")} ${fg("thinkingXhigh", pulse)} ${fg("muted", "deep nordic conversation renderer")} ${fg("borderAccent", "┃")}`),
+    bg("selectedBg", `${fg("borderAccent", "╚═")}${fg("muted", PI_GRAPHICS_RELOAD_SENTINEL)}${fg("thinkingXhigh", "═╝")}`),
+  ];
+  if (expanded) {
+    lines.push(bg("customMessageBg", `${fg("accent", "expanded: ordinary transcript messages now have a graphical TypeScript frame renderer")}`));
+  }
+  return lines;
+}
+
+export function buildPiGraphicsConversationFrameComponent(message, options = {}, theme) {
+  const details = message?.details && typeof message.details === "object" ? message.details : {};
+  return {
+    render(width = 120) {
+      return boundedLines(buildPiGraphicsConversationFrameLines({
+        content: message?.content,
+        role: details.role || details.tone || "assistant",
+        title: details.title || message?.customType || "conversation chrome",
+        expanded: Boolean(options.expanded),
+        width,
+      }, theme), width);
+    },
     invalidate() {},
   };
 }

@@ -37,6 +37,8 @@ import {
 import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsConversationFrameComponent,
+  buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsFloodlightComponent,
   buildPiGraphicsFooterComponent,
@@ -54,6 +56,7 @@ import {
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
   buildStagePanelWidget,
+  buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
   buildStartupThemeSwatchMessage,
   buildTerminalTitle,
@@ -64,6 +67,7 @@ import {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
@@ -190,6 +194,9 @@ export default function piGraphicsExtension(pi) {
     if (shouldAutoShowThemeSwatchSplash()) {
       try { pi.sendMessage?.(buildStartupThemeSwatchMessage()); } catch {}
     }
+    if (shouldAutoShowConversationFrame()) {
+      try { pi.sendMessage?.(buildStartupConversationFrameMessage({ title: "startup conversation frame" })); } catch {}
+    }
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
@@ -211,12 +218,17 @@ export default function piGraphicsExtension(pi) {
   pi.on("agent_end", (_event, ctx) => {
     setWorkingChrome(ctx, "ready");
     showAutoPulse(ctx, { caption: "ready", tone: "assistant", delayMs: 120 });
+    if (shouldAutoShowConversationFrame()) {
+      try { pi.sendMessage?.(buildStartupConversationFrameMessage({ content: "Assistant turn complete — the normal transcript is carrying Pi kitty graphics conversation chrome.", title: "assistant turn frame" })); } catch {}
+    }
   });
 
   pi.registerMessageRenderer?.("pi-graphics-message", (message, options, theme) =>
     buildPiGraphicsMessageComponent(message, options, theme));
   pi.registerMessageRenderer?.("pi-graphics-theme-swatch", (message, options, theme) =>
     buildPiGraphicsThemeSwatchMessageComponent(message, options, theme));
+  pi.registerMessageRenderer?.("pi-graphics-conversation-frame", (message, options, theme) =>
+    buildPiGraphicsConversationFrameComponent(message, options, theme));
 
   pi.on("session_shutdown", (_event, ctx) => {
     try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
@@ -625,6 +637,25 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_conversation_frame`,
+    label: "Pi Graphics: Conversation Frame",
+    description: "Render a high-contrast deep-Nordic conversation frame for ordinary transcript visibility.",
+    promptSnippet: "Show a Pi kitty graphics conversation frame.",
+    parameters: Type.Object({
+      content: Type.Optional(Type.String({ description: "Text to place inside the graphical conversation frame." })),
+      role: Type.Optional(Type.String({ description: "Frame role label, e.g. assistant, user, tool." })),
+      title: Type.Optional(Type.String({ description: "Frame title." })),
+      width: Type.Optional(Type.Number({ description: "Target text width.", minimum: 52, maximum: 180 })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsConversationFrameLines(params).join("\n") }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_theme_delta`,
     label: "Pi Graphics: Theme Delta",
     description: "Show the Pi kitty graphics reload sentinel and quantified RGB deltas against the default dark theme.",
@@ -811,6 +842,13 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-conversation-frame", {
+    description: "Send a graphical deep-Nordic conversation frame message.",
+    handler: async (args, _ctx) => {
+      pi.sendMessage?.(buildStartupConversationFrameMessage({ content: args.trim() || undefined, title: "manual conversation frame" }));
+    },
+  });
+
   pi.registerCommand("pi-graphics-theme-delta", {
     description: "Show the Pi kitty graphics reload sentinel and quantified theme delta report.",
     handler: async (_args, ctx) => {
@@ -915,6 +953,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "conversation frame: /pi-graphics-conversation-frame",
         "session header: enabled",
         "session footer: enabled",
         "component HUD: below editor",
@@ -1011,6 +1050,8 @@ export {
 export {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsConversationFrameComponent,
+  buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsEditorFrameLines,
   buildPiGraphicsFloodlightComponent,
@@ -1034,6 +1075,7 @@ export {
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
   buildStagePanelWidget,
+  buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
   buildStartupThemeSwatchMessage,
   buildTerminalTitle,
@@ -1044,6 +1086,7 @@ export {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
