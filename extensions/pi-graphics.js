@@ -74,6 +74,7 @@ import {
   buildPiGraphicsThemeSwatchMessageComponent,
   buildPiGraphicsTranscriptChromeComponent,
   buildPiGraphicsEditorSurfaceBorderLines,
+  buildPiGraphicsRawBootstrapText,
   buildStagePanelWidget,
   buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
@@ -99,6 +100,7 @@ import {
   shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
+  shouldAutoShowRawBootstrap,
   shouldAutoShowTranscriptChrome,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
@@ -202,6 +204,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_CONVERSATION_FRAME: boolToEnv(!off && (features.conversationFrame ?? auto.conversationFrame ?? false)),
     PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv(!off && (features.transcriptChrome ?? auto.transcriptChrome ?? true)),
     PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv(!off && (features.editorSurface ?? auto.editorSurface ?? true)),
+    PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv(!off && (features.rawBootstrap ?? auto.rawBootstrap ?? true)),
     PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
     PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
     PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
@@ -335,6 +338,16 @@ export default function piGraphicsExtension(pi) {
   function writeAmbientProof(ctx, options = {}) {
     if (!shouldAutoShowAmbientProof(gfxEnv())) return false;
     return writeAnsiText(ctx, buildPiGraphicsAmbientProofText({ themeName: configuredThemeName, mode: configuredGraphicsMode, env: gfxEnv(), ...options }));
+  }
+
+  function writeRawBootstrap() {
+    if (!shouldAutoShowRawBootstrap(gfxEnv())) return false;
+    try {
+      process.stdout.write(`\n${buildPiGraphicsRawBootstrapText({ label: `PI GFX ${configuredThemeName} RAW BOOTSTRAP`, phase: 0.31 })}`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function applyTerminalPalette(ctx) {
@@ -503,6 +516,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.on("session_start", (_event, ctx) => {
+    writeRawBootstrap();
     applyTerminalPalette(ctx);
     applyThemeCues(ctx);
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
@@ -1845,6 +1859,7 @@ export {
   shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
+  shouldAutoShowRawBootstrap,
   shouldAutoShowTranscriptChrome,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,

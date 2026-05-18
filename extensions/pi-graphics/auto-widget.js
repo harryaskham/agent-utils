@@ -94,6 +94,11 @@ export function shouldAutoShowEditorSurface(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowRawBootstrap(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_RAW_BOOTSTRAP ?? env.PI_KITTY_GRAPHICS_AUTO_RAW_BOOTSTRAP;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function shouldAutoShowAnsiTakeover(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_ANSI_TAKEOVER ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER;
   return explicitOrShowcase(value, env);
@@ -350,6 +355,17 @@ export function buildTranscriptChromeMessage({ role = "assistant", title = "mess
     display: true,
     details: { role, title, phase },
   };
+}
+
+export function buildPiGraphicsRawBootstrapText({ width = 88, label = "PI KITTY GRAPHICS RAW BOOTSTRAP", phase = 0.2 } = {}) {
+  const cells = Math.max(48, Math.min(132, Math.trunc(width)));
+  const p = Math.abs(Math.sin(Number(phase || 0) * Math.PI * 2));
+  const rail = "⬢◆✦✺▰▱".repeat(Math.ceil(cells / 6)).slice(0, cells);
+  const labelText = ` ${String(label || "PI KITTY GRAPHICS RAW BOOTSTRAP").replace(/\s+/g, " ").trim().toUpperCase()} `;
+  const line1 = ansiLine(labelText.padStart(Math.floor((cells + labelText.length) / 2), "═").padEnd(cells, "═"), { fg: "#e9f8ff", bg: "#06142a", width: cells, fill: "═" });
+  const line2 = `${ansiBgRgb(2 + Math.round(p * 8), 3, 11 + Math.round(p * 36))}${ansiFg("#00ffd0")}${rail}${RESET}`;
+  const line3 = ansiLine(` RAW TRUECOLOR PATH ACTIVE • NO THEME/WIDGET/EDITOR/KITTY DEPENDENCY • ${PI_GRAPHICS_RELOAD_SENTINEL} `, { fg: "#f7d88b", bg: "#180735", width: cells });
+  return `${line1}\n${line2}\n${line3}\n`;
 }
 
 export function buildPiGraphicsEditorSurfaceBorderLines({ width = 96, active = false, phase = 0, label = "INPUT SURFACE" } = {}) {
