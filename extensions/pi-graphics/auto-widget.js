@@ -54,6 +54,11 @@ export function shouldAutoShowAmbientChrome(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowAmbientProof(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_AMBIENT_PROOF ?? env.PI_KITTY_GRAPHICS_AUTO_AMBIENT_PROOF;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function shouldAutoApplyTheme(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_THEME ?? env.PI_KITTY_GRAPHICS_AUTO_THEME;
   return explicitOrShowcase(value, env);
@@ -385,6 +390,33 @@ export function buildPiGraphicsValidationReportLines({ columns = 52, rows = 8, f
 
 export function buildPiGraphicsValidationReportText(options = {}) {
   return buildPiGraphicsValidationReportLines(options).join("\n");
+}
+
+function lerp(a, b, t) {
+  return Math.round(a + (b - a) * Math.max(0, Math.min(1, t)));
+}
+
+function mixRgb(a, b, t) {
+  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+}
+
+export function buildPiGraphicsAmbientProofText({ width = 76, phase = 0.25, label = "PI GFX RENDERED MODE" } = {}) {
+  const cells = Math.max(32, Math.min(120, Math.trunc(Number(width) || 76)));
+  const scene = renderTuiSurfaceSceneFrame({ columns: 48, rows: 9, phase });
+  const stats = rendererStats(renderTuiSurfaceScenePixels({ columns: 48, rows: 9, phase }).pixels);
+  const stops = [hexRgb("#07101f"), hexRgb("#06485a"), hexRgb("#9eeaff"), hexRgb("#caa6ff"), hexRgb("#72fbd6")];
+  const row = Array.from({ length: cells }, (_unused, i) => {
+    const t = i / Math.max(1, cells - 1);
+    const pos = t * (stops.length - 1);
+    const idx = Math.min(stops.length - 2, Math.floor(pos));
+    const local = pos - idx;
+    const [r, g, b] = mixRgb(stops[idx], stops[idx + 1], local);
+    const fg = i % 5 === 0 ? "#ffffff" : i % 3 === 0 ? "#07101f" : "#d8f8ff";
+    return `${ansiBgRgb(r, g, b)}${ansiFg(fg)}${i % 7 === 0 ? "⬢" : i % 5 === 0 ? "◆" : "▄"}`;
+  }).join("") + RESET;
+  const title = `${ansiFg("#9eeaff")}⬢ ${label} ⬢${RESET} ${ansiFg("#caa6ff")}TS RGBA→KITTY/APNG${RESET}`;
+  const metrics = `${ansiFg("#72fbd6")}surface=${scene.widthPx}x${scene.heightPx}px png=${scene.metrics.pngBytes}B buckets=${stats.uniqueColorBuckets} lumaΔ=${stats.lumaRange} ${PI_GRAPHICS_RELOAD_SENTINEL}${RESET}`;
+  return [title, row, metrics].join("\n");
 }
 
 function pixelAt(pixels, widthPx, heightPx, x, y) {

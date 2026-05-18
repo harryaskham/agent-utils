@@ -43,6 +43,7 @@ import {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsAmbientProofText,
   buildPiGraphicsCockpitWallText,
   buildPiGraphicsBrailleSceneText,
   buildPiGraphicsOscPaletteLines,
@@ -84,6 +85,7 @@ import {
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
   shouldAutoShowAmbientChrome,
+  shouldAutoShowAmbientProof,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowBrailleScene,
@@ -145,6 +147,7 @@ function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_SHOWCASE: showcase ? "1" : "0",
     PI_GRAPHICS_AUTO_THEME: boolToEnv(gfx.autoApplyTheme ?? auto.theme ?? false),
     PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv(!off && (features.ambientChrome ?? auto.ambientChrome ?? true)),
+    PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv(!off && (features.ambientProof ?? auto.ambientProof ?? true)),
     PI_GRAPHICS_AUTO_WIDGET: boolToEnv(!off && (features.showcaseWidgets ?? auto.widgets ?? showcase)),
     PI_GRAPHICS_AUTO_SPLASH: boolToEnv(!off && (features.startupSplash ?? auto.splash ?? showcase)),
     PI_GRAPHICS_AUTO_THEME_SWATCH: boolToEnv(!off && (features.themeSwatch ?? auto.themeSwatch ?? showcase)),
@@ -274,6 +277,11 @@ export default function piGraphicsExtension(pi) {
     return writeAnsiText(ctx, buildPiGraphicsValidationReportText(options));
   }
 
+  function writeAmbientProof(ctx, options = {}) {
+    if (!shouldAutoShowAmbientProof(gfxEnv())) return false;
+    return writeAnsiText(ctx, buildPiGraphicsAmbientProofText(options));
+  }
+
   function applyTerminalPalette(ctx) {
     if (!shouldAutoApplyTerminalPalette(gfxEnv())) return false;
     return writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
@@ -361,6 +369,7 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setStatus?.("pi-gfx-mode", "calm chrome");
     ctx.ui?.setStatus?.("pi-gfx-build", PI_GRAPHICS_RELOAD_SENTINEL);
     setWorkingChrome(ctx, "ready");
+    writeAmbientProof(ctx, { label: `PI GFX ${configuredThemeName} VISUAL PROOF`, phase: 0.18 });
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
@@ -966,6 +975,24 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_ambient_proof`,
+    label: "Pi Graphics: Ambient Proof Strip",
+    description: "Return a compact truecolor ANSI gradient proof strip backed by TypeScript-rendered TUI surface metrics, visible even when kitty image placement is unavailable.",
+    promptSnippet: "Show the compact Pi kitty graphics ambient proof strip.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target proof width.", minimum: 32, maximum: 120 })),
+      phase: Type.Optional(Type.Number({ description: "Renderer phase." })),
+      label: Type.Optional(Type.String({ description: "Proof label." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsAmbientProofText(params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, ansi: true, ambientProof: true, renderer: "typescript-rgba" },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_visual_proof`,
     label: "Pi Graphics: Visual Proof",
     description: "Return a transcript-visible truecolor ANSI proof block with palette chips, contrast metrics, and reload sentinel.",
@@ -1322,6 +1349,7 @@ export default function piGraphicsExtension(pi) {
       writeAnsiText(ctx, buildPiGraphicsAnsiSceneText({ label: "PI KITTY GRAPHICS ANSI SCENE // SHOWCASE", phase: 0.18 }));
       writeAnsiText(ctx, buildPiGraphicsBrailleSceneText({ label: "PI KITTY GRAPHICS BRAILLE PIXEL SCENE", phase: 0.28 }));
       writeAnsiText(ctx, buildPiGraphicsCockpitWallText({ label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 }));
+      writeAnsiText(ctx, buildPiGraphicsAmbientProofText({ label: "PI KITTY GRAPHICS AMBIENT PROOF", phase: 0.52 }));
       writeAnsiText(ctx, buildPiGraphicsVisualProofText({ label: "PI KITTY GRAPHICS VISUAL PROOF" }));
       writeAnsiText(ctx, buildPiGraphicsValidationReportText({ columns: 52, rows: 8, frames: 8 }));
       showAmbientChrome(ctx);
@@ -1343,6 +1371,15 @@ export default function piGraphicsExtension(pi) {
     handler: async (_args, ctx) => {
       const wrote = writeValidationReport(ctx, { columns: 52, rows: 8, frames: 8 });
       if (!wrote) ctx.ui?.notify?.(buildPiGraphicsValidationReportText(), "info");
+    },
+  });
+
+  pi.registerCommand("pi-graphics-ambient-proof", {
+    description: "Write the compact truecolor Pi kitty graphics ambient proof strip.",
+    handler: async (args, ctx) => {
+      const label = args.trim() || "PI KITTY GRAPHICS AMBIENT PROOF";
+      const wrote = writeAmbientProof(ctx, { label, phase: 0.36 });
+      if (!wrote) ctx.ui?.notify?.(buildPiGraphicsAmbientProofText({ label, phase: 0.36 }), "info");
     },
   });
 
@@ -1622,6 +1659,7 @@ export {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsAmbientProofText,
   buildPiGraphicsCockpitWallText,
   buildPiGraphicsBrailleSceneText,
   buildPiGraphicsOscPaletteLines,
@@ -1670,6 +1708,7 @@ export {
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
   shouldAutoShowAmbientChrome,
+  shouldAutoShowAmbientProof,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowBrailleScene,

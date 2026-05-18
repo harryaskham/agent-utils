@@ -38,6 +38,7 @@ import {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsAmbientProofText,
   buildPiGraphicsCockpitWallText,
   buildPiGraphicsBrailleSceneText,
   buildPiGraphicsOscPaletteLines,
@@ -86,6 +87,7 @@ import {
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
   shouldAutoShowAmbientChrome,
+  shouldAutoShowAmbientProof,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowBrailleScene,
@@ -602,6 +604,24 @@ test("buildPiGraphicsValidationReportText reports real rendered pixel metrics", 
   assert.match(report, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
+test("buildPiGraphicsAmbientProofText emits compact truecolor fallback with rendered metrics", () => {
+  assert.equal(shouldAutoShowAmbientProof({}), true);
+  assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "0" }), false);
+  assert.equal(shouldAutoShowAmbientProof({ PI_KITTY_GRAPHICS_AUTO_AMBIENT_PROOF: "off" }), false);
+  const text = buildPiGraphicsAmbientProofText({ width: 42, phase: 0.2, label: "SMOKE" });
+  const lines = text.split("\n");
+  assert.equal(lines.length, 3);
+  assert.match(text, /SMOKE/);
+  assert.match(text, /TS RGBA→KITTY\/APNG/);
+  assert.match(text, /surface=\d+x\d+px png=\d+B buckets=\d+ lumaΔ=\d+/);
+  assert.match(text, /\u001b\[48;2;/);
+  assert.match(text, /⬢|◆|▄/);
+  const buckets = Number(text.match(/buckets=(\d+)/)?.[1]);
+  const luma = Number(text.match(/lumaΔ=(\d+)/)?.[1]);
+  assert.ok(buckets > 35);
+  assert.ok(luma > 45);
+});
+
 test("buildPiGraphicsVisualProofText emits ANSI color chips and measurable deltas", () => {
   assert.equal(shouldAutoShowVisualProof({}), false);
   assert.equal(shouldAutoShowVisualProof({ PI_GRAPHICS_AUTO_VISUAL_PROOF: "1" }), true);
@@ -993,6 +1013,9 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoShowAmbientChrome({ PI_GRAPHICS_AUTO_AMBIENT_CHROME: "0" }), false);
   assert.equal(shouldAutoShowAmbientChrome({ PI_KITTY_GRAPHICS_AUTO_AMBIENT_CHROME: "off" }), false);
   assert.equal(shouldAutoShowAmbientChrome({ PI_GRAPHICS_AUTO_AMBIENT_CHROME: "1" }), true);
+  assert.equal(shouldAutoShowAmbientProof({}), true);
+  assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "0" }), false);
+  assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "1" }), true);
   assert.equal(shouldAutoApplyTheme({}), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
@@ -1061,6 +1084,10 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /showAmbientChrome\(ctx\)/);
   assert.match(source, /renderTuiSurfaceScenePulseApng/);
   assert.match(source, /shouldAutoShowAmbientChrome\(gfxEnv\(\)\)/);
+  assert.match(source, /shouldAutoShowAmbientProof\(gfxEnv\(\)\)/);
+  assert.match(source, /buildPiGraphicsAmbientProofText/);
+  assert.match(source, /pi-graphics-ambient-proof/);
+  assert.match(source, /_ambient_proof/);
   assert.match(source, /pi-graphics-tui-surface-scene/);
   assert.match(source, /_render_tui_surface_scene/);
   assert.match(source, /if \(shouldAutoShowGraphics\(gfxEnv\(\)\)\)/);

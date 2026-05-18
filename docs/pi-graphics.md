@@ -60,6 +60,7 @@ Example settings:
       "footer": true,
       "nativeChrome": true,
       "ambientChrome": true,
+      "ambientProof": true,
       "showcaseWidgets": false,
       "startupSplash": false,
       "conversationFrame": false,
@@ -79,8 +80,11 @@ Example settings:
 
 Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
 maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
-still override settings for one run. Set `PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to
-hide the compact always-visible rendered TUI surface, or tune it with
+still override settings for one run. The compact ANSI `/pi-graphics-ambient-proof`
+strip is enabled by default as a fallback visual smoke test; set
+`PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
+`PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to hide the compact always-visible rendered
+TUI surface, or tune it with
 `PI_GRAPHICS_AMBIENT_FRAMES` and `PI_GRAPHICS_AMBIENT_DELAY_MS`. Use
 `/pi-graphics-tui-surface-scene` or `pi_graphics_render_tui_surface_scene` to
 force the full TypeScript-rendered Pi TUI scene manually. Use
