@@ -36,6 +36,7 @@ import {
 import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
@@ -73,6 +74,7 @@ import {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
@@ -493,6 +495,20 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[2], /neon cyan/);
 });
 
+test("buildPiGraphicsAnsiSceneText samples rendered scene pixels into ANSI half blocks", () => {
+  assert.equal(shouldAutoShowAnsiScene({}), true);
+  assert.equal(shouldAutoShowAnsiScene({ PI_GRAPHICS_AUTO_ANSI_SCENE: "0" }), false);
+  const first = buildPiGraphicsAnsiSceneText({ columns: 72, rows: 8, phase: 0, label: "SCENE SHADER" });
+  const second = buildPiGraphicsAnsiSceneText({ columns: 72, rows: 8, phase: 0.35, label: "SCENE SHADER" });
+  assert.match(first, /\u001b\[48;2;/);
+  assert.match(first, /\u001b\[38;2;/);
+  assert.match(first, /▀/);
+  assert.match(first, /SCENE SHADER/);
+  assert.match(first, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(first.split("\n").length, 10);
+  assert.notEqual(first, second);
+});
+
 test("buildPiGraphicsAnsiTakeoverText emits raw truecolor terminal graphics", () => {
   assert.equal(shouldAutoShowAnsiTakeover({}), true);
   assert.equal(shouldAutoShowAnsiTakeover({ PI_GRAPHICS_AUTO_ANSI_TAKEOVER: "off" }), false);
@@ -885,13 +901,18 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /ANSI scene shader: \/pi-graphics-ansi-scene/);
   assert.match(source, /ANSI takeover: \/pi-graphics-ansi-takeover/);
+  assert.match(source, /pi-graphics-ansi-scene/);
+  assert.match(source, /_ansi_scene/);
+  assert.match(source, /writeAnsiScene\(ctx/);
   assert.match(source, /pi-graphics-ansi-takeover/);
   assert.match(source, /_ansi_takeover/);
   assert.match(source, /writeAnsiTakeover\(ctx/);
   assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
   assert.match(source, /pi-graphics-conversation-frame/);
   assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /shouldAutoShowAnsiScene\(\)/);
   assert.match(source, /shouldAutoShowAnsiTakeover\(\)/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-conversation-frame"/);
   assert.match(source, /_theme_delta/);

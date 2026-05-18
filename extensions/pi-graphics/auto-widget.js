@@ -5,7 +5,7 @@
 // small and APNG-backed: normal sessions get an unmistakable animated glow cue,
 // but the upload stays bounded and is owned by the pi-graphics image registry.
 
-import { renderTuiComponentPulseApng } from "./components.js";
+import { renderTerminalScenePixels, renderTuiComponentPulseApng } from "./components.js";
 import { buildPlacement, renderToText } from "./runtime.js";
 
 const FALSE_RE = /^(0|false|off|no)$/i;
@@ -59,6 +59,11 @@ export function shouldAutoShowAnsiTakeover(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowAnsiScene(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_ANSI_SCENE ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_SCENE;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 function ansiBg(hex) {
   const [r, g, b] = hexRgb(hex);
   return `\u001b[48;2;${r};${g};${b}m`;
@@ -67,6 +72,21 @@ function ansiBg(hex) {
 function ansiFg(hex) {
   const [r, g, b] = hexRgb(hex);
   return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+function ansiBgRgb(r, g, b) {
+  return `\u001b[48;2;${r};${g};${b}m`;
+}
+
+function ansiFgRgb(r, g, b) {
+  return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+function samplePixel(pixels, widthPx, heightPx, x, y) {
+  const xx = Math.max(0, Math.min(widthPx - 1, Math.trunc(x)));
+  const yy = Math.max(0, Math.min(heightPx - 1, Math.trunc(y)));
+  const offset = (yy * widthPx + xx) * 4;
+  return [pixels[offset], pixels[offset + 1], pixels[offset + 2]];
 }
 
 export function buildPiGraphicsAnsiTakeoverText({ width = 88, phase = 0, label = "PI KITTY GRAPHICS TRUECOLOR TAKEOVER" } = {}) {
@@ -87,6 +107,30 @@ export function buildPiGraphicsAnsiTakeoverText({ width = 88, phase = 0, label =
     row("▓", 2),
     row("▒", 4),
   ].join("\n");
+}
+
+export function buildPiGraphicsAnsiSceneText({ columns = 72, rows = 12, phase = 0, label = "PI GFX ANSI SCENE SHADER" } = {}) {
+  const cols = Math.max(24, Math.min(120, Math.trunc(columns)));
+  const textRows = Math.max(6, Math.min(32, Math.trunc(rows)));
+  const scene = renderTerminalScenePixels({ columns: cols, rows: Math.max(8, textRows * 2), phase });
+  const reset = "\u001b[0m";
+  const lines = [];
+  const title = ` ${String(label).replace(/\s+/g, " ").trim().slice(0, Math.max(16, cols - 4))} `;
+  lines.push(`${ansiBg("#02030b")}${ansiFg("#00ffd0")}${title.padStart(Math.floor((cols + title.length) / 2), "▓").padEnd(cols, "▓").slice(0, cols)}${reset}`);
+  const sampleW = scene.widthPx / cols;
+  const sampleH = scene.heightPx / (textRows * 2);
+  for (let row = 0; row < textRows; row += 1) {
+    let line = "";
+    for (let col = 0; col < cols; col += 1) {
+      const x = (col + 0.5) * sampleW;
+      const upper = samplePixel(scene.pixels, scene.widthPx, scene.heightPx, x, (row * 2 + 0.5) * sampleH);
+      const lower = samplePixel(scene.pixels, scene.widthPx, scene.heightPx, x, (row * 2 + 1.5) * sampleH);
+      line += `${ansiFgRgb(upper[0], upper[1], upper[2])}${ansiBgRgb(lower[0], lower[1], lower[2])}▀`;
+    }
+    lines.push(`${line}${reset}`);
+  }
+  lines.push(`${ansiBg("#33006b")}${ansiFg("#ff4dff")}${PI_GRAPHICS_RELOAD_SENTINEL.padEnd(cols).slice(0, cols)}${reset}`);
+  return lines.join("\n");
 }
 
 export function buildStartupSplashMessage({ content, tone = "assistant", title = "startup splash" } = {}) {

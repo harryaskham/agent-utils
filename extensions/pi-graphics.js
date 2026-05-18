@@ -37,6 +37,7 @@ import {
 import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
@@ -68,6 +69,7 @@ import {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
@@ -135,9 +137,7 @@ export default function piGraphicsExtension(pi) {
     }
   }
 
-  function writeAnsiTakeover(ctx, options = {}) {
-    if (!shouldAutoShowAnsiTakeover()) return false;
-    const text = buildPiGraphicsAnsiTakeoverText(options);
+  function writeAnsiText(ctx, text) {
     try {
       if (typeof ctx?.ui?.write === "function") {
         ctx.ui.write(`${text}\n`);
@@ -149,6 +149,16 @@ export default function piGraphicsExtension(pi) {
       }
     } catch {}
     return false;
+  }
+
+  function writeAnsiTakeover(ctx, options = {}) {
+    if (!shouldAutoShowAnsiTakeover()) return false;
+    return writeAnsiText(ctx, buildPiGraphicsAnsiTakeoverText(options));
+  }
+
+  function writeAnsiScene(ctx, options = {}) {
+    if (!shouldAutoShowAnsiScene()) return false;
+    return writeAnsiText(ctx, buildPiGraphicsAnsiSceneText(options));
   }
 
   function setWorkingChrome(ctx, stage, toolName = "") {
@@ -206,6 +216,7 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_start", (_event, ctx) => {
     applyThemeCues(ctx);
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
+    writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // RENDERED PIXELS", phase: 0.18 });
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
     if (shouldAutoShowSplash()) {
       try { pi.sendMessage?.(buildStartupSplashMessage()); } catch {}
@@ -656,6 +667,25 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_ansi_scene`,
+    label: "Pi Graphics: ANSI Scene Shader",
+    description: "Return a truecolor ANSI half-block rendering sampled from the TypeScript terminal scene pixels.",
+    promptSnippet: "Show the Pi kitty graphics ANSI terminal scene shader.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Rendered text columns.", minimum: 24, maximum: 120 })),
+      rows: Type.Optional(Type.Number({ description: "Rendered text rows.", minimum: 6, maximum: 32 })),
+      phase: Type.Optional(Type.Number({ description: "Pulse phase used to render the sampled scene." })),
+      label: Type.Optional(Type.String({ description: "Scene label." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsAnsiSceneText(params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, ansi: true, sampledPixels: true },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_ansi_takeover`,
     label: "Pi Graphics: ANSI Takeover",
     description: "Return a raw truecolor ANSI deep-Nordic takeover banner that does not depend on Pi theme APIs or kitty image placement.",
@@ -879,6 +909,15 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-ansi-scene", {
+    description: "Write a truecolor ANSI half-block rendering sampled from the pixel terminal scene.",
+    handler: async (args, ctx) => {
+      const label = args.trim() || "PI KITTY GRAPHICS ANSI SCENE SHADER";
+      const wrote = writeAnsiScene(ctx, { label, phase: 0.25 });
+      if (!wrote) ctx.ui?.notify?.(buildPiGraphicsAnsiSceneText({ label, phase: 0.25 }), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-ansi-takeover", {
     description: "Write a raw truecolor ANSI deep-Nordic takeover banner.",
     handler: async (args, ctx) => {
@@ -999,6 +1038,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "ANSI scene shader: /pi-graphics-ansi-scene",
         "ANSI takeover: /pi-graphics-ansi-takeover",
         "conversation frame: /pi-graphics-conversation-frame",
         "session header: enabled",
@@ -1097,6 +1137,7 @@ export {
 export {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
+  buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
@@ -1134,6 +1175,7 @@ export {
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
+  shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
