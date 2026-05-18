@@ -35,6 +35,8 @@ import {
 } from "../extensions/pi-graphics/runtime.js";
 import {
   buildAutoPulseWidget,
+  buildStagePanelWidget,
+  buildTextStagePanel,
   shouldAutoShowGraphics,
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
@@ -380,6 +382,30 @@ test("buildAutoPulseWidget creates a visible APNG-backed startup widget", () => 
   assert.match(widget.lines[0], /kitty graphics pulse active/);
 });
 
+test("buildStagePanelWidget adds always-visible text chrome around the APNG pulse", () => {
+  const state = makeState();
+  const widget = buildStagePanelWidget(state, { columns: 28, rows: 5, frames: 4, delayMs: 70, tone: "tool", caption: "tool read" });
+  assert.equal(widget.details.tone, "tool");
+  assert.equal(widget.details.caption, "tool read");
+  assert.equal(widget.details.frames, 4);
+  assert.ok(widget.lines.length > widget.details.rows, "stage panel should add visible text lines around the graphic");
+  assert.match(widget.lines[0], /PI KITTY GFX/);
+  assert.match(widget.lines[0], /TOOL READ/);
+  assert.match(widget.lines.at(-1), /neon cyan/);
+  assert.ok(widget.placement.transmit.includes("a=T"));
+  assert.ok(state.ownedImageIds.has(widget.placement.imageId));
+  assert.ok(widget.details.metrics.pngBytes < 180_000);
+});
+
+test("buildTextStagePanel remains visible when kitty placeholders are unavailable", () => {
+  const lines = buildTextStagePanel({ tone: "user", caption: "prompt captured", frames: 8, delayMs: 80 });
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /PI KITTY GFX/);
+  assert.match(lines[0], /PROMPT CAPTURED/);
+  assert.match(lines[1], /deep nordic glow/);
+  assert.match(lines[2], /neon cyan/);
+});
+
 test("shouldAutoShowGraphics defaults on and honors explicit opt-out env", () => {
   assert.equal(shouldAutoShowGraphics({}), true);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
@@ -391,15 +417,18 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
   const source = await readFile(sourcePath, "utf8");
   assert.match(source, /pi\.on\("session_start"/);
-  assert.match(source, /buildAutoPulseWidget\(state\)/);
+  assert.match(source, /buildStagePanelWidget\(state, options\)/);
+  assert.match(source, /buildTextStagePanel\(options\)/);
   assert.match(source, /setWidget\?\.\(autoWidgetId, widget\.lines, \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /render_tui_pulse/);
+  assert.match(source, /render_stage_panel/);
   assert.match(source, /render_contact_sheet/);
   assert.match(source, /pi\.on\("before_agent_start"/);
   assert.match(source, /pi\.on\("agent_start"/);
   assert.match(source, /pi\.on\("tool_execution_start"/);
   assert.match(source, /pi\.on\("agent_end"/);
   assert.match(source, /lastAutoWidgetSignature/);
+  assert.match(source, /text-stage glow fallback/);
   assert.match(source, /tool \$\{toolName\}/);
   assert.match(source, /pi-graphics-show/);
   assert.match(source, /pi-graphics-hide/);

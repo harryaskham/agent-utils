@@ -37,8 +37,11 @@ the editor on session start so graphical mode is visible without manually
 running a demo command. During normal turns the same widget changes tone/caption
 for prompt capture, agent thinking, tool execution, and ready states, giving
 regular conversation flow graphical chrome instead of a static startup-only
-banner. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`)
-to opt out.
+banner. The lifecycle widget is now a conversation **stage panel**: it wraps the
+APNG component with large text chrome (`PI KITTY GFX // ...`) so there is still
+an obvious visual cue even when kitty placeholder graphics are unavailable or an
+operator is not looking at the animated pixels. Set `PI_GRAPHICS_AUTO_WIDGET=0`
+(or `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out.
 
 ## How the extension cooperates with the theme
 
@@ -63,6 +66,10 @@ rendered. The extension complements those flat colors with graphical affordances
 * **Animated APNG pulses** — multiple TUI component phases packaged into one
   kitty-compatible animated PNG, so a continuously glowing/pulsing component
   can be uploaded once instead of re-sending a stream of static frames.
+* **Conversation stage panels** — the lifecycle-visible widget used during
+  normal turns. It combines an APNG TUI component with explicit neon text
+  chrome and a text-only fallback, making graphical mode noticeable even when
+  the theme was not selected or kitty placeholders are unavailable.
 * **Accent bars** — single-cell-tall accent strips suitable for highlighting
   table rows or section headers.
 
@@ -81,7 +88,7 @@ displayed using kitty Unicode placeholder cells, so:
 
 ## Tools
 
-The extension registers six tools through `pi.registerTool`:
+The extension registers eight tools through `pi.registerTool`:
 
 * `pi_graphics_render_prompt_enclosure` — render a graphical separator.
 * `pi_graphics_render_message_border` — render a gradient frame sized in
@@ -92,6 +99,8 @@ The extension registers six tools through `pi.registerTool`:
   frame, with optional tone/density/phase/caption controls.
 * `pi_graphics_render_tui_pulse` — render a looping APNG version of the TUI
   component for efficient continuous pulse animation.
+* `pi_graphics_render_stage_panel` — render the always-visible conversation
+  stage panel used by lifecycle chrome, including text fallback.
 * `pi_graphics_render_contact_sheet` — render a static visual regression sheet
   covering tones and pulse phases for human inspection.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
@@ -111,6 +120,7 @@ And four slash commands:
 > pi_graphics_render_glow_panel({ columns: 48, rows: 9, phase: 0.18 })
 > pi_graphics_render_tui_component({ columns: 56, rows: 9, tone: "assistant", phase: 0.2, caption: "graphical TUI" })
 > pi_graphics_render_tui_pulse({ columns: 56, rows: 9, tone: "tool", frames: 8, delayMs: 90, caption: "animated APNG pulse" })
+> pi_graphics_render_stage_panel({ tone: "assistant", caption: "agent thinking", columns: 58, rows: 7 })
 > pi_graphics_render_contact_sheet({ columns: 36, rows: 6 })
 ```
 
@@ -144,7 +154,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

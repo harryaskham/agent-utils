@@ -36,6 +36,8 @@ import {
 } from "./pi-graphics/affordances.js";
 import {
   buildAutoPulseWidget,
+  buildStagePanelWidget,
+  buildTextStagePanel,
   shouldAutoShowGraphics,
 } from "./pi-graphics/auto-widget.js";
 import {
@@ -58,20 +60,27 @@ export default function piGraphicsExtension(pi) {
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
-    if (!shouldAutoShowGraphics() || !ensureUnicodePlacement(state)) return false;
+    if (!shouldAutoShowGraphics()) return false;
     const signature = JSON.stringify({
       tone: options.tone || "assistant",
       caption: options.caption || "kitty graphics pulse active",
-      columns: options.columns || 42,
-      rows: options.rows || 6,
+      columns: options.columns || 58,
+      rows: options.rows || 7,
       frames: options.frames || 8,
-      delayMs: options.delayMs || 90,
+      delayMs: options.delayMs || 80,
     });
     if (signature === lastAutoWidgetSignature) return true;
     try {
-      const widget = buildAutoPulseWidget(state, options);
+      if (!ensureUnicodePlacement(state)) {
+        const lines = buildTextStagePanel(options);
+        ctx.ui?.setWidget?.(autoWidgetId, lines, { placement: "aboveEditor" });
+        ctx.ui?.setStatus?.("pi-graphics", "◆ text-stage glow fallback");
+        lastAutoWidgetSignature = signature;
+        return true;
+      }
+      const widget = buildStagePanelWidget(state, options);
       ctx.ui?.setWidget?.(autoWidgetId, widget.lines, { placement: "aboveEditor" });
-      ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+      ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} stage ${widget.details.frames}f ${widget.details.delayMs}ms`);
       lastAutoWidgetSignature = signature;
       return true;
     } catch (error) {
@@ -359,6 +368,44 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_render_stage_panel`,
+    label: "Pi Graphics: Conversation Stage Panel",
+    description: "Render the always-visible conversation stage panel used by pi-graphics lifecycle chrome, including textual neon header plus an APNG TUI component.",
+    promptSnippet: "Render a high-tech Pi kitty graphics conversation stage panel for normal turn chrome.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Width in terminal cells. Defaults to 58.", minimum: 12, maximum: 160 })),
+      rows: Type.Optional(Type.Number({ description: "Graphic height in terminal cells. Defaults to 7.", minimum: 4, maximum: 40 })),
+      frames: Type.Optional(Type.Number({ description: "Animation frame count. Defaults to 8.", minimum: 2, maximum: 32 })),
+      delayMs: Type.Optional(Type.Number({ description: "Per-frame delay in milliseconds. Defaults to 80." })),
+      tone: Type.Optional(Type.String({ description: "Panel tone: assistant, tool, or user." })),
+      caption: Type.Optional(Type.String({ description: "Stage caption, for example agent thinking or tool read." })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!ensureUnicodePlacement(state)) {
+        return {
+          content: [{ type: "text", text: buildTextStagePanel(params).join("\n") }],
+          details: { fallback: true },
+        };
+      }
+      const widget = buildStagePanelWidget(state, params);
+      return {
+        content: [{ type: "text", text: widget.lines.join("\n") }],
+        details: {
+          imageId: widget.placement.imageId,
+          placementId: widget.placement.placementId,
+          columns: widget.details.columns,
+          rows: widget.details.rows,
+          frames: widget.details.frames,
+          delayMs: widget.details.delayMs,
+          tone: widget.details.tone,
+          caption: widget.details.caption,
+          metrics: widget.details.metrics,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_render_contact_sheet`,
     label: "Pi Graphics: Visual Contact Sheet",
     description: "Render a static PNG contact sheet of Pi kitty graphics component tones and pulse phases for visual regression and human validation.",
@@ -437,9 +484,9 @@ export default function piGraphicsExtension(pi) {
         ctx.ui?.notify?.("pi-graphics show skipped: terminal lacks Unicode placeholder placement.", "warning");
         return;
       }
-      const widget = buildAutoPulseWidget(state);
+      const widget = buildStagePanelWidget(state, { caption: "manual graphics stage", tone: "assistant" });
       ctx.ui?.setWidget?.(autoWidgetId, widget.lines, { placement: "aboveEditor" });
-      ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} glow ${widget.details.frames}f ${widget.details.delayMs}ms`);
+      ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} stage ${widget.details.frames}f ${widget.details.delayMs}ms`);
       lastAutoWidgetSignature = "";
       ctx.ui?.notify?.("pi-graphics automatic pulse shown.", "info");
     },
@@ -524,5 +571,7 @@ export {
 } from "./pi-graphics/components.js";
 export {
   buildAutoPulseWidget,
+  buildStagePanelWidget,
+  buildTextStagePanel,
   shouldAutoShowGraphics,
 } from "./pi-graphics/auto-widget.js";
