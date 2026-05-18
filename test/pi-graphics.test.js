@@ -499,21 +499,32 @@ test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width bann
   component.invalidate();
 });
 
-test("buildPiGraphicsFooterComponent renders persistent bottom chrome", () => {
+test("buildPiGraphicsFooterComponent renders a live branch/status beacon", () => {
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
     bg(token, text) { return `[${token}]${text}[/${token}]`; },
   };
-  const lines = buildPiGraphicsFooterLines(theme, { gitBranch: "agent/demo" });
+  const footerData = {
+    getGitBranch: () => "agent/demo",
+    getExtensionStatuses: () => new Map([
+      ["pi-graphics", "◆ assistant stage 8f"],
+      ["pi-theme", "◆ kitty-graphics active"],
+      ["other", "hidden"],
+    ]),
+  };
+  const lines = buildPiGraphicsFooterLines(theme, footerData);
   assert.equal(lines.length, 1);
-  assert.match(lines[0], /KITTY-GFX/);
+  assert.match(lines[0], /KITTY-GFX LIVE FOOTER/);
   assert.match(lines[0], /deep nordic glow/);
   assert.match(lines[0], /agent\/demo/);
+  assert.match(lines[0], /pi-graphics:◆ assistant stage 8f/);
+  assert.match(lines[0], /pi-theme:◆ kitty-graphics active/);
+  assert.doesNotMatch(lines[0], /other:hidden/);
   assert.match(lines[0], /toolPendingBg/);
-  const component = buildPiGraphicsFooterComponent(theme, { gitBranch: "very-long-branch-name" });
-  const rendered = component.render(42);
+  const component = buildPiGraphicsFooterComponent(theme, footerData);
+  const rendered = component.render(64);
   assert.equal(rendered.length, 1);
-  assert.ok(rendered[0].length <= 43);
+  assert.ok(rendered[0].length <= 65);
   component.invalidate();
 });
 
@@ -642,6 +653,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /working row: neon Pi kitty gfx/);
   assert.match(source, /terminal title: lifecycle Pi kitty gfx/);
   assert.match(source, /floodlight: high-contrast editor-adjacent banner/);
+  assert.match(source, /live footer: branch\/status beacon/);
+  assert.match(source, /setStatus\?\.\("pi-gfx-mode", "⬢ floodlight"\)/);
+  assert.match(source, /setStatus\?\.\("pi-gfx-pulse", "◆ APNG editor aura"\)/);
+  assert.match(source, /setStatus\?\.\("pi-gfx-row", "✦ neon working row"\)/);
   assert.match(source, /setTitle\?\.\("pi"\)/);
   assert.match(source, /buildStartupSplashMessage\(\)/);
   assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);

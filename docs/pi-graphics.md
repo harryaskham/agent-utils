@@ -45,8 +45,8 @@ banner. The lifecycle widget is now a conversation **stage panel**: it wraps the
 APNG component with large text chrome (`PI KITTY GFX // ...`) so there is still
 an obvious visual cue even when kitty placeholder graphics are unavailable or an
 operator is not looking at the animated pixels. The extension also installs a
-persistent custom header (`PI KITTY GRAPHICS ONLINE`), a persistent footer
-(`KITTY-GFX ⬢◆✦ deep nordic glow`), a real component-backed HUD widget below the
+persistent custom header (`PI KITTY GRAPHICS ONLINE`), a live status-beacon
+footer (`KITTY-GFX LIVE FOOTER ⬢◆✦ deep nordic glow`), a real component-backed HUD widget below the
 editor, a high-contrast `PI KITTY GRAPHICS FLOODLIGHT` banner above the editor,
 an APNG-backed editor aura below the input area, neon editor-frame widgets above
 and below the input area, a transcript startup splash message, and replaces the normal streaming row and terminal/window title with branded Pi kitty graphics stage text, hidden-thinking label, and themed neon indicator
@@ -86,14 +86,17 @@ rendered. The extension complements those flat colors with graphical affordances
 * **Persistent session header/footer/HUD** — pure TypeScript components
   installed via `ctx.ui.setHeader`, `ctx.ui.setFooter`, and a `ctx.ui.setWidget`
   factory below the editor so the session announces `PI KITTY GRAPHICS ONLINE`
-  at the top, `KITTY-GFX` in the bottom chrome, a live `PI GFX HUD` near the
+  at the top, `KITTY-GFX LIVE FOOTER` plus live branch/status beacon text in the bottom chrome, a live `PI GFX HUD` near the
   editor, a full-width `PI KITTY GRAPHICS FLOODLIGHT` banner, an APNG
   `PI KITTY GFX EDITOR AURA`, and `NEON EDITOR FIELD` /
   `INPUT FIELD STABILIZED` rails around the input area with theme-colored rails
   and bounded rendering. During active turns the working row says `PI KITTY GFX`
   with the current stage (`PROMPT CAPTURED`, `AGENT THINKING`, `TOOL EXECUTION`,
   or `READY`), the terminal/window title becomes `⬢ PI KITTY GFX // <STAGE>`,
-  and the hidden-thinking label becomes `PI GFX THOUGHTSTREAM`.
+  and the hidden-thinking label becomes `PI GFX THOUGHTSTREAM`. The custom
+  footer reads Pi's runtime `footerData.getGitBranch()` and
+  `footerData.getExtensionStatuses()` APIs so it preserves/spotlights the
+  extension status cluster instead of hiding it.
 * **Startup splash** — on `session_start`, the extension sends a bounded
   `pi-graphics-message` into the transcript so graphics mode leaves a visible
   neon block in normal conversation history even if terminal theme changes are
@@ -193,7 +196,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

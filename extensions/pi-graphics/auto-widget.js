@@ -147,20 +147,38 @@ export function buildPiGraphicsHeaderComponent(theme) {
   };
 }
 
+function footerBranch(footerData = {}) {
+  if (typeof footerData.getGitBranch === "function") return footerData.getGitBranch() || "";
+  return footerData?.gitBranch || "";
+}
+
+function footerStatuses(footerData = {}) {
+  const source = typeof footerData.getExtensionStatuses === "function"
+    ? footerData.getExtensionStatuses()
+    : footerData?.extensionStatuses;
+  const entries = source instanceof Map ? Array.from(source.entries()) : Object.entries(source || {});
+  return entries
+    .filter(([key]) => String(key).startsWith("pi"))
+    .slice(0, 3)
+    .map(([key, value]) => `${key}:${String(value).replace(/\s+/g, " ").slice(0, 28)}`);
+}
+
 export function buildPiGraphicsFooterLines(theme, footerData = {}) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
   const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
-  const branch = footerData?.gitBranch ? ` • ${footerData.gitBranch}` : "";
-  const mode = fg("customMessageLabel", "KITTY-GFX");
+  const branch = footerBranch(footerData);
+  const branchText = branch ? ` • ${branch}` : "";
+  const statuses = footerStatuses(footerData);
+  const statusText = statuses.length ? ` • ${statuses.join(" • ")}` : " • gfx surfaces armed";
+  const mode = fg("customMessageLabel", "KITTY-GFX LIVE FOOTER");
   const pulse = fg("thinkingXhigh", "⬢") + fg("borderAccent", "◆") + fg("accent", "✦");
-  const status = fg("text", `deep nordic glow${branch}`);
+  const status = fg("text", `deep nordic glow${branchText}${statusText}`);
   return [bg("toolPendingBg", `${fg("borderAccent", "▰▱▰")} ${mode} ${pulse} ${status}`)];
 }
 
 export function buildPiGraphicsFooterComponent(theme, footerData = {}) {
-  const lines = buildPiGraphicsFooterLines(theme, footerData);
   return {
-    render(width = 120) { return boundedLines(lines, width); },
+    render(width = 120) { return boundedLines(buildPiGraphicsFooterLines(theme, footerData), width); },
     invalidate() {},
   };
 }

@@ -126,6 +126,9 @@ export default function piGraphicsExtension(pi) {
       }
     }
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 90 });
+    ctx.ui?.setStatus?.("pi-gfx-mode", "⬢ floodlight");
+    ctx.ui?.setStatus?.("pi-gfx-pulse", "◆ APNG editor aura");
+    ctx.ui?.setStatus?.("pi-gfx-row", "✦ neon working row");
     setWorkingChrome(ctx, "ready");
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
@@ -175,6 +178,9 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-graphics", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-theme", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-mode", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-pulse", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-row", undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
     try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
@@ -623,6 +629,7 @@ export default function piGraphicsExtension(pi) {
         "working row: neon Pi kitty gfx",
         "terminal title: lifecycle Pi kitty gfx",
         "floodlight: high-contrast editor-adjacent banner",
+        "live footer: branch/status beacon",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
