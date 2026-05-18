@@ -14,6 +14,7 @@
     ".claude-plugin",
     "extensions",
     "prompts",
+    "scripts",
     "themes",
     "web-search",
     "crates",
@@ -29,7 +30,8 @@
     "test": "node --test",
     "check": "npm run docs:check",
     "docs:build": "node scripts/render-pages.mjs",
-    "docs:check": "node scripts/render-pages.mjs --check"
+    "docs:check": "node scripts/render-pages.mjs --check",
+    "pi-graphics:smoke": "node scripts/render-pi-graphics-smoke.mjs"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

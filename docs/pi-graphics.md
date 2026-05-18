@@ -81,14 +81,17 @@ Example settings:
 Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
 maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
 still override settings for one run. The compact ANSI `/pi-graphics-ambient-proof`
-strip is enabled by default as a fallback visual smoke test; set
-`PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
+strip is enabled by default as a fallback visual smoke test; it includes the
+configured theme name, graphics mode, settings-derived auto flags, measured theme
+color deltas, renderer PNG bytes, color bucket count, luma delta, and reload
+sentinel. Set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
 `PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to hide the compact always-visible rendered
 TUI surface, or tune it with
 `PI_GRAPHICS_AMBIENT_FRAMES` and `PI_GRAPHICS_AMBIENT_DELAY_MS`. Use
 `/pi-graphics-tui-surface-scene` or `pi_graphics_render_tui_surface_scene` to
-force the full TypeScript-rendered Pi TUI scene manually. Use
-`/pi-graphics-native-chrome-demo` to preview the intended next direction:
+force the full TypeScript-rendered Pi TUI scene manually. For an inspectable file
+artefact outside Pi, run `npm run pi-graphics:smoke -- --out=artifacts/pi-graphics-smoke.png`.
+Use `/pi-graphics-native-chrome-demo` to preview the intended next direction:
 PNG-backed translucent placeholder borders/backgrounds for input, user/assistant
 messages, tool output, and info/system surfaces. Use `/pi-graphics-visual-contract` (or the
 `pi_graphics_visual_contract` tool) to show an explicit checklist of all expected

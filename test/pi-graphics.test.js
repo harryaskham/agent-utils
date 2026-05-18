@@ -506,6 +506,15 @@ test("render-pi-graphics-contact-sheet script is wired to the contact sheet rend
   assert.match(source, /writeFileSync\(out, sheet\.png\)/);
 });
 
+test("render-pi-graphics-smoke script writes a renderer-backed visual artifact", async () => {
+  const scriptPath = fileURLToPath(new URL("../scripts/render-pi-graphics-smoke.mjs", import.meta.url));
+  const source = await readFile(scriptPath, "utf8");
+  assert.match(source, /renderTuiSurfaceSceneFrame/);
+  assert.match(source, /renderTuiSurfaceScenePulseApng/);
+  assert.match(source, /pi-graphics-smoke\.png/);
+  assert.match(source, /JSON\.stringify/);
+});
+
 test("renderTuiComponentFrame tones produce visibly distinct component palettes", () => {
   const assistant = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "assistant" }).png);
   const tool = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "tool" }).png);
@@ -608,11 +617,13 @@ test("buildPiGraphicsAmbientProofText emits compact truecolor fallback with rend
   assert.equal(shouldAutoShowAmbientProof({}), true);
   assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "0" }), false);
   assert.equal(shouldAutoShowAmbientProof({ PI_KITTY_GRAPHICS_AUTO_AMBIENT_PROOF: "off" }), false);
-  const text = buildPiGraphicsAmbientProofText({ width: 42, phase: 0.2, label: "SMOKE" });
+  const text = buildPiGraphicsAmbientProofText({ width: 42, phase: 0.2, label: "SMOKE", themeName: "kitty-graphics-nord", mode: "calm", env: { PI_GRAPHICS_AUTO_THEME: "1", PI_GRAPHICS_AUTO_AMBIENT_CHROME: "1", PI_GRAPHICS_AUTO_AMBIENT_PROOF: "1" } });
   const lines = text.split("\n");
-  assert.equal(lines.length, 3);
+  assert.equal(lines.length, 5);
   assert.match(text, /SMOKE/);
   assert.match(text, /TS RGBA→KITTY\/APNG/);
+  assert.match(text, /theme=kitty-graphics-nord mode=calm autoTheme=1 ambientChrome=1 ambientProof=1/);
+  assert.match(text, /Δtheme accent=\d+ userBg=\d+ aurora=\d+/);
   assert.match(text, /surface=\d+x\d+px png=\d+B buckets=\d+ lumaΔ=\d+/);
   assert.match(text, /\u001b\[48;2;/);
   assert.match(text, /⬢|◆|▄/);
@@ -1077,6 +1088,7 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /piGraphics \|\| settings\.kittyGraphics/);
   assert.match(source, /const gfxEnv = \(\) => \(\{ \.\.\.settingsEnv, \.\.\.process\.env \}\)/);
   assert.match(source, /const configuredThemeName = String/);
+  assert.match(source, /const configuredGraphicsMode = String/);
   assert.match(source, /ctx\.ui\.setTheme\(configuredThemeName\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);

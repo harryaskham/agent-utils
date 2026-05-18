@@ -400,7 +400,14 @@ function mixRgb(a, b, t) {
   return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 }
 
-export function buildPiGraphicsAmbientProofText({ width = 76, phase = 0.25, label = "PI GFX RENDERED MODE" } = {}) {
+export function buildPiGraphicsAmbientProofText({
+  width = 76,
+  phase = 0.25,
+  label = "PI GFX RENDERED MODE",
+  themeName = "kitty-graphics-nord",
+  mode = "calm",
+  env = {},
+} = {}) {
   const cells = Math.max(32, Math.min(120, Math.trunc(Number(width) || 76)));
   const scene = renderTuiSurfaceSceneFrame({ columns: 48, rows: 9, phase });
   const stats = rendererStats(renderTuiSurfaceScenePixels({ columns: 48, rows: 9, phase }).pixels);
@@ -415,8 +422,10 @@ export function buildPiGraphicsAmbientProofText({ width = 76, phase = 0.25, labe
     return `${ansiBgRgb(r, g, b)}${ansiFg(fg)}${i % 7 === 0 ? "⬢" : i % 5 === 0 ? "◆" : "▄"}`;
   }).join("") + RESET;
   const title = `${ansiFg("#9eeaff")}⬢ ${label} ⬢${RESET} ${ansiFg("#caa6ff")}TS RGBA→KITTY/APNG${RESET}`;
+  const config = `${ansiFg("#f7d88b")}theme=${themeName} mode=${mode} autoTheme=${env.PI_GRAPHICS_AUTO_THEME ?? "?"} ambientChrome=${env.PI_GRAPHICS_AUTO_AMBIENT_CHROME ?? "?"} ambientProof=${env.PI_GRAPHICS_AUTO_AMBIENT_PROOF ?? "?"}${RESET}`;
+  const deltas = `${ansiFg("#9eeaff")}Δtheme accent=${rgbDelta("#9eeaff", "#8abeb7")} userBg=${rgbDelta("#06485a", "#343541")} aurora=${rgbDelta("#caa6ff", "#d183e8")}${RESET}`;
   const metrics = `${ansiFg("#72fbd6")}surface=${scene.widthPx}x${scene.heightPx}px png=${scene.metrics.pngBytes}B buckets=${stats.uniqueColorBuckets} lumaΔ=${stats.lumaRange} ${PI_GRAPHICS_RELOAD_SENTINEL}${RESET}`;
-  return [title, row, metrics].join("\n");
+  return [title, row, config, deltas, metrics].join("\n");
 }
 
 function pixelAt(pixels, widthPx, heightPx, x, y) {

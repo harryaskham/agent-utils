@@ -172,6 +172,7 @@ export default function piGraphicsExtension(pi) {
   const settings = readJsonIfExists(agentSettingsPath()) || {};
   const settingsEnv = settingsEnvFromPiGraphics(settings);
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "kitty-graphics-nord");
+  const configuredGraphicsMode = String(settings.piGraphics?.mode || settings.kittyGraphics?.mode || "calm");
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const state = makeState();
   const autoWidgetId = "pi-graphics-auto-pulse";
@@ -279,7 +280,7 @@ export default function piGraphicsExtension(pi) {
 
   function writeAmbientProof(ctx, options = {}) {
     if (!shouldAutoShowAmbientProof(gfxEnv())) return false;
-    return writeAnsiText(ctx, buildPiGraphicsAmbientProofText(options));
+    return writeAnsiText(ctx, buildPiGraphicsAmbientProofText({ themeName: configuredThemeName, mode: configuredGraphicsMode, env: gfxEnv(), ...options }));
   }
 
   function applyTerminalPalette(ctx) {
