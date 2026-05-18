@@ -44,6 +44,7 @@ import {
   buildPiGraphicsMessageComponent,
   buildStagePanelWidget,
   buildStartupSplashMessage,
+  buildTerminalTitle,
   buildTextStagePanel,
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
@@ -107,6 +108,7 @@ export default function piGraphicsExtension(pi) {
 
   function setWorkingChrome(ctx, stage, toolName = "") {
     try { ctx.ui?.setWorkingVisible?.(true); } catch {}
+    try { ctx.ui?.setTitle?.(buildTerminalTitle({ stage, toolName })); } catch {}
     try { ctx.ui?.setWorkingMessage?.(buildWorkingMessage({ stage, toolName }, ctx.ui?.theme)); } catch {}
     try { ctx.ui?.setHiddenThinkingLabel?.(buildHiddenThinkingLabel(ctx.ui?.theme)); } catch {}
   }
@@ -173,6 +175,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
     try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
+    try { ctx?.ui?.setTitle?.("pi"); } catch {}
     try { ctx?.ui?.setHeader?.(undefined); } catch {}
     try { ctx?.ui?.setFooter?.(undefined); } catch {}
     try { ctx?.ui?.setWidget?.(hudWidgetId, undefined); } catch {}
@@ -614,6 +617,7 @@ export default function piGraphicsExtension(pi) {
         "editor frame: above/below editor",
         "editor aura: APNG below editor",
         "working row: neon Pi kitty gfx",
+        "terminal title: lifecycle Pi kitty gfx",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -696,6 +700,7 @@ export {
   buildPiGraphicsMessageLines,
   buildStagePanelWidget,
   buildStartupSplashMessage,
+  buildTerminalTitle,
   buildTextStagePanel,
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,

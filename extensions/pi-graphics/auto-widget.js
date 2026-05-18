@@ -65,6 +65,13 @@ export function buildHiddenThinkingLabel(theme) {
   return `${fg("thinkingXhigh", "⬢")} ${fg("customMessageLabel", "PI GFX THOUGHTSTREAM")} ${fg("muted", "folded")}`;
 }
 
+export function buildTerminalTitle({ stage = "ready", toolName = "" } = {}) {
+  const safeStage = String(stage || "ready").replace(/\s+/g, " ").trim().slice(0, 28).toUpperCase();
+  const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 28);
+  const suffix = safeTool ? ` · ${safeTool}` : "";
+  return `⬢ PI KITTY GFX // ${safeStage}${suffix}`.slice(0, 80);
+}
+
 function stageLabel(tone, caption) {
   const label = String(caption || "kitty graphics pulse active").toUpperCase();
   const glyph = tone === "tool" ? "⚙" : tone === "user" ? "◆" : "✦";
