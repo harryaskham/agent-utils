@@ -39,6 +39,7 @@ import {
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsCockpitWallText,
+  buildPiGraphicsBrailleSceneText,
   buildPiGraphicsOscPaletteLines,
   buildPiGraphicsOscPaletteResetSequence,
   buildPiGraphicsOscPaletteSequence,
@@ -86,6 +87,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
+  shouldAutoShowBrailleScene,
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
@@ -98,6 +100,7 @@ import {
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
   componentFrameCacheKey,
+  renderNativeChromeFrame,
   renderPiGraphicsContactSheet,
   renderTerminalSceneFrame,
   renderTerminalScenePulseApng,
@@ -397,6 +400,19 @@ test("renderTuiComponentPulseApng packages pulse frames into one bounded animate
   assert.equal(pulse.metrics.animationMillis, 450);
 });
 
+test("renderNativeChromeFrame creates translucent PNG chrome for native Pi surfaces", () => {
+  const input = renderNativeChromeFrame({ surface: "input", columns: 48, rows: 2, phase: 0.15 });
+  const tool = renderNativeChromeFrame({ surface: "tool", columns: 48, rows: 4, phase: 0.65 });
+  assert.ok(input.png.subarray(0, 8).equals(PNG_SIGNATURE));
+  assert.ok(tool.png.subarray(0, 8).equals(PNG_SIGNATURE));
+  assert.equal(input.columns, 48);
+  assert.equal(input.rows, 2);
+  assert.equal(tool.surface, "tool");
+  assert.ok(input.metrics.pngBytes < 80_000);
+  assert.ok(tool.metrics.estimatedWireBytes > tool.metrics.pngBytes);
+  assert.notDeepEqual(input.png, tool.png);
+});
+
 test("renderTerminalSceneFrame draws a deep-Nordic terminal scene with pixel-level variation", () => {
   const scene = renderTerminalSceneFrame({ columns: 48, rows: 10, phase: 0.2 });
   assert.equal(scene.columns, 48);
@@ -509,8 +525,24 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[2], /neon cyan/);
 });
 
+test("buildPiGraphicsBrailleSceneText renders truecolor Braille from scene pixels", () => {
+  assert.equal(shouldAutoShowBrailleScene({}), false);
+  assert.equal(shouldAutoShowBrailleScene({ PI_GRAPHICS_AUTO_BRAILLE_SCENE: "1" }), true);
+  assert.equal(shouldAutoShowBrailleScene({ PI_GRAPHICS_AUTO_BRAILLE_SCENE: "0" }), false);
+  const first = buildPiGraphicsBrailleSceneText({ columns: 28, rows: 7, phase: 0.1, label: "BRAILLE SCENE" });
+  const second = buildPiGraphicsBrailleSceneText({ columns: 28, rows: 7, phase: 0.6, label: "BRAILLE SCENE" });
+  assert.match(first, /BRAILLE SCENE/);
+  assert.match(first, /RGBA→BRAILLE TRUECOLOR RENDER/);
+  assert.match(first, /[\u2801-\u28ff]/);
+  assert.match(first, /\u001b\[38;2;/);
+  assert.match(first, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.ok(first.split("\n").length >= 10);
+  assert.notEqual(first, second);
+});
+
 test("buildPiGraphicsValidationReportText reports real rendered pixel metrics", () => {
-  assert.equal(shouldAutoShowValidationReport({}), true);
+  assert.equal(shouldAutoShowValidationReport({}), false);
+  assert.equal(shouldAutoShowValidationReport({ PI_GRAPHICS_AUTO_VALIDATION_REPORT: "1" }), true);
   assert.equal(shouldAutoShowValidationReport({ PI_GRAPHICS_AUTO_VALIDATION_REPORT: "off" }), false);
   const lines = buildPiGraphicsValidationReportLines({ columns: 40, rows: 7, frames: 6 });
   const report = buildPiGraphicsValidationReportText({ columns: 40, rows: 7, frames: 6 });
@@ -528,7 +560,8 @@ test("buildPiGraphicsValidationReportText reports real rendered pixel metrics", 
 });
 
 test("buildPiGraphicsVisualProofText emits ANSI color chips and measurable deltas", () => {
-  assert.equal(shouldAutoShowVisualProof({}), true);
+  assert.equal(shouldAutoShowVisualProof({}), false);
+  assert.equal(shouldAutoShowVisualProof({ PI_GRAPHICS_AUTO_VISUAL_PROOF: "1" }), true);
   assert.equal(shouldAutoShowVisualProof({ PI_GRAPHICS_AUTO_VISUAL_PROOF: "0" }), false);
   const proof = buildPiGraphicsVisualProofText({ width: 84, label: "VISUAL PROOF" });
   assert.match(proof, /VISUAL PROOF/);
@@ -547,7 +580,8 @@ test("buildPiGraphicsHeartbeatLine emits a lightweight live pulse ticker", () =>
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
   };
-  assert.equal(shouldAutoShowHeartbeat({}), true);
+  assert.equal(shouldAutoShowHeartbeat({}), false);
+  assert.equal(shouldAutoShowHeartbeat({ PI_GRAPHICS_AUTO_HEARTBEAT: "1" }), true);
   assert.equal(shouldAutoShowHeartbeat({ PI_GRAPHICS_AUTO_HEARTBEAT: "0" }), false);
   assert.equal(heartbeatIntervalMs({ PI_GRAPHICS_HEARTBEAT_MS: "10" }), 250);
   assert.equal(heartbeatIntervalMs({ PI_GRAPHICS_HEARTBEAT_MS: "9999" }), 5000);
@@ -560,7 +594,8 @@ test("buildPiGraphicsHeartbeatLine emits a lightweight live pulse ticker", () =>
 });
 
 test("buildPiGraphicsCockpitWallText emits a large ANSI terminal cockpit", () => {
-  assert.equal(shouldAutoShowCockpitWall({}), true);
+  assert.equal(shouldAutoShowCockpitWall({}), false);
+  assert.equal(shouldAutoShowCockpitWall({ PI_GRAPHICS_AUTO_COCKPIT_WALL: "1" }), true);
   assert.equal(shouldAutoShowCockpitWall({ PI_GRAPHICS_AUTO_COCKPIT_WALL: "0" }), false);
   const first = buildPiGraphicsCockpitWallText({ width: 88, phase: 0, label: "COCKPIT WALL" });
   const second = buildPiGraphicsCockpitWallText({ width: 88, phase: 0.5, label: "COCKPIT WALL" });
@@ -575,7 +610,8 @@ test("buildPiGraphicsCockpitWallText emits a large ANSI terminal cockpit", () =>
 });
 
 test("buildPiGraphicsOscPaletteSequence emits terminal palette takeover and reset OSC", () => {
-  assert.equal(shouldAutoApplyTerminalPalette({}), true);
+  assert.equal(shouldAutoApplyTerminalPalette({}), false);
+  assert.equal(shouldAutoApplyTerminalPalette({ PI_GRAPHICS_AUTO_TERMINAL_PALETTE: "1" }), true);
   assert.equal(shouldAutoApplyTerminalPalette({ PI_GRAPHICS_AUTO_TERMINAL_PALETTE: "0" }), false);
   const seq = buildPiGraphicsOscPaletteSequence();
   assert.match(seq, /\u001b\]10;#e9f8ff\u0007/);
@@ -593,7 +629,8 @@ test("buildPiGraphicsOscPaletteSequence emits terminal palette takeover and rese
 });
 
 test("buildPiGraphicsAnsiSceneText samples rendered scene pixels into ANSI half blocks", () => {
-  assert.equal(shouldAutoShowAnsiScene({}), true);
+  assert.equal(shouldAutoShowAnsiScene({}), false);
+  assert.equal(shouldAutoShowAnsiScene({ PI_GRAPHICS_AUTO_ANSI_SCENE: "1" }), true);
   assert.equal(shouldAutoShowAnsiScene({ PI_GRAPHICS_AUTO_ANSI_SCENE: "0" }), false);
   const first = buildPiGraphicsAnsiSceneText({ columns: 72, rows: 8, phase: 0, label: "SCENE SHADER" });
   const second = buildPiGraphicsAnsiSceneText({ columns: 72, rows: 8, phase: 0.35, label: "SCENE SHADER" });
@@ -607,7 +644,8 @@ test("buildPiGraphicsAnsiSceneText samples rendered scene pixels into ANSI half 
 });
 
 test("buildPiGraphicsAnsiTakeoverText emits raw truecolor terminal graphics", () => {
-  assert.equal(shouldAutoShowAnsiTakeover({}), true);
+  assert.equal(shouldAutoShowAnsiTakeover({}), false);
+  assert.equal(shouldAutoShowAnsiTakeover({ PI_GRAPHICS_AUTO_ANSI_TAKEOVER: "1" }), true);
   assert.equal(shouldAutoShowAnsiTakeover({ PI_GRAPHICS_AUTO_ANSI_TAKEOVER: "off" }), false);
   const first = buildPiGraphicsAnsiTakeoverText({ width: 64, phase: 0, label: "TEST TAKEOVER" });
   const second = buildPiGraphicsAnsiTakeoverText({ width: 64, phase: 0.4, label: "TEST TAKEOVER" });
@@ -627,7 +665,8 @@ test("buildPiGraphicsConversationFrameComponent renders normal transcript chrome
   const message = buildStartupConversationFrameMessage({ content: "ordinary assistant text should still be preserved inside the graphical frame", title: "assistant frame" });
   assert.equal(message.customType, "pi-graphics-conversation-frame");
   assert.equal(message.display, true);
-  assert.equal(shouldAutoShowConversationFrame({}), true);
+  assert.equal(shouldAutoShowConversationFrame({}), false);
+  assert.equal(shouldAutoShowConversationFrame({ PI_GRAPHICS_AUTO_CONVERSATION_FRAME: "1" }), true);
   assert.equal(shouldAutoShowConversationFrame({ PI_GRAPHICS_AUTO_CONVERSATION_FRAME: "0" }), false);
   const lines = buildPiGraphicsConversationFrameLines({ content: message.content, role: "assistant", title: "assistant frame", width: 88 }, theme);
   const joined = lines.join("\n");
@@ -779,7 +818,8 @@ test("buildPiGraphicsPhotonRainComponent renders pulsing high-tech text chrome",
 });
 
 test("startup theme swatch message defaults on and renders transcript-visible swatch", () => {
-  assert.equal(shouldAutoShowThemeSwatchSplash({}), true);
+  assert.equal(shouldAutoShowThemeSwatchSplash({}), false);
+  assert.equal(shouldAutoShowThemeSwatchSplash({ PI_GRAPHICS_AUTO_THEME_SWATCH: "1" }), true);
   assert.equal(shouldAutoShowThemeSwatchSplash({ PI_GRAPHICS_AUTO_THEME_SWATCH: "0" }), false);
   assert.equal(shouldAutoShowThemeSwatchSplash({ PI_KITTY_GRAPHICS_AUTO_THEME_SWATCH: "off" }), false);
   const message = buildStartupThemeSwatchMessage({ width: 88 });
@@ -889,7 +929,8 @@ test("buildPiGraphicsEditorFrameComponent renders editor-edge neon chrome", () =
 });
 
 test("startup splash defaults on, can opt out, and builds bounded custom message", () => {
-  assert.equal(shouldAutoShowSplash({}), true);
+  assert.equal(shouldAutoShowSplash({}), false);
+  assert.equal(shouldAutoShowSplash({ PI_GRAPHICS_AUTO_SPLASH: "1" }), true);
   assert.equal(shouldAutoShowSplash({ PI_GRAPHICS_AUTO_SPLASH: "0" }), false);
   assert.equal(shouldAutoShowSplash({ PI_KITTY_GRAPHICS_AUTO_SPLASH: "off" }), false);
   const message = buildStartupSplashMessage({ content: "x ".repeat(200), tone: "tool", title: "boot" });
@@ -900,16 +941,17 @@ test("startup splash defaults on, can opt out, and builds bounded custom message
   assert.ok(message.content.length <= 220);
 });
 
-test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor explicit opt-out env", () => {
-  assert.equal(shouldAutoShowGraphics({}), true);
+test("pi graphics auto features default calm and honor explicit settings/env", () => {
+  assert.equal(shouldAutoShowGraphics({}), false);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_KITTY_GRAPHICS_AUTO_WIDGET: "off" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "1" }), true);
-  assert.equal(shouldAutoApplyTheme({}), true);
+  assert.equal(shouldAutoApplyTheme({}), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
-  assert.equal(shouldAutoShowTerminalScene({}), true);
+  assert.equal(shouldAutoShowTerminalScene({}), false);
+  assert.equal(shouldAutoShowTerminalScene({ PI_GRAPHICS_AUTO_TERMINAL_SCENE: "1" }), true);
   assert.equal(shouldAutoShowTerminalScene({ PI_GRAPHICS_AUTO_TERMINAL_SCENE: "0" }), false);
   assert.equal(shouldAutoShowTerminalScene({ PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE: "off" }), false);
 });
@@ -958,139 +1000,35 @@ test("buildWorkingIndicatorFrames creates a themed neon pulse sequence", () => {
   assert.deepEqual(calls.map(([token]) => token), ["dim", "muted", "accent", "borderAccent", "thinkingXhigh", "borderAccent", "accent", "muted"]);
 });
 
-test("pi-graphics extension source wires the auto pulse widget into startup and commands", async () => {
+test("pi-graphics extension source separates calm chrome from debug showcase", async () => {
   const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
   const source = await readFile(sourcePath, "utf8");
-  assert.match(source, /pi\.on\("session_start"/);
+  assert.match(source, /settingsEnvFromPiGraphics/);
+  assert.match(source, /piGraphics \|\| settings\.kittyGraphics/);
+  assert.match(source, /const gfxEnv = \(\) => \(\{ \.\.\.settingsEnv, \.\.\.process\.env \}\)/);
   assert.match(source, /ctx\.ui\.setTheme\("kitty-graphics"\)/);
-  assert.match(source, /buildWorkingIndicatorFrames\(ctx\.ui\?\.theme\)/);
-  assert.match(source, /setWorkingIndicator\?\.\(\{ frames:/);
-  assert.match(source, /setWorkingVisible\?\.\(true\)/);
-  assert.match(source, /setTitle\?\.\(buildTerminalTitle\(\{ stage, toolName \}\)\)/);
-  assert.match(source, /setWorkingMessage\?\.\(buildWorkingMessage\(\{ stage, toolName \}, ctx\.ui\?\.theme\)\)/);
-  assert.match(source, /setHiddenThinkingLabel\?\.\(buildHiddenThinkingLabel\(ctx\.ui\?\.theme\)\)/);
-  assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
-  assert.match(source, /setWidget\?\.\(floodlightWidgetId, \(_tui, theme\) => buildPiGraphicsFloodlightComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
-  assert.match(source, /setWidget\?\.\(themeSwatchWidgetId, \(_tui, theme\) => buildPiGraphicsThemeSwatchComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
-  assert.match(source, /setWidget\?\.\(photonRainWidgetId, \(_tui, theme\) => buildPiGraphicsPhotonRainComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
-  assert.match(source, /setWidget\?\.\(lighthouseWidgetId, \(_tui, theme\) => buildPiGraphicsLighthouseComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
-  assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
-  assert.match(source, /buildEditorAuraWidget\(state, \{ caption: "editor aura active", tone: "tool" \}\)/);
-  assert.match(source, /setWidget\?\.\(editorAuraWidgetId, aura\.lines, \{ placement: "belowEditor" \}\)/);
-  assert.match(source, /renderTerminalScenePulseApng\(\{ columns: 54, rows: 10, frames: 8, delayMs: 90 \}\)/);
-  assert.match(source, /setWidget\?\.\(terminalSceneWidgetId, renderToText\(scene\)\.split/);
-  assert.match(source, /setStatus\?\.\("pi-gfx-scene", `⬢ terminal scene \$\{sceneFrame\.frames\}f`\)/);
-  assert.match(source, /setHeader\?\.\(undefined\)/);
-  assert.match(source, /setFooter\?\.\(undefined\)/);
-  assert.match(source, /session header: enabled/);
-  assert.match(source, /session footer: enabled/);
-  assert.match(source, /component HUD: below editor/);
-  assert.match(source, /editor frame: above\/below editor/);
-  assert.match(source, /editor aura: APNG below editor/);
-  assert.match(source, /working row: neon Pi kitty gfx/);
-  assert.match(source, /terminal title: lifecycle Pi kitty gfx/);
-  assert.match(source, /floodlight: high-contrast editor-adjacent banner/);
-  assert.match(source, /theme swatch: above editor \+ \/pi-graphics-theme-swatch/);
-  assert.match(source, /photon rain: above editor \+ \/pi-graphics-photon-rain/);
-  assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
-  assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
-  assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
-  assert.match(source, /render metrics: \/pi-graphics-validation-report/);
-  assert.match(source, /pi-graphics-validation-report/);
-  assert.match(source, /_validation_report/);
+  assert.match(source, /if \(shouldAutoShowGraphics\(gfxEnv\(\)\)\)/);
+  assert.match(source, /pi-graphics-native-chrome-demo/);
+  assert.match(source, /_render_native_chrome/);
+  assert.match(source, /renderNativeChromeFrame/);
+  assert.match(source, /pi-graphics-showcase/);
+  assert.match(source, /Show the full Pi graphics showcase that is hidden by default in calm mode/);
+  assert.match(source, /writeBrailleScene\(ctx/);
   assert.match(source, /writeValidationReport\(ctx/);
-  assert.match(source, /visual proof: \/pi-graphics-visual-proof/);
-  assert.match(source, /pi-graphics-visual-proof/);
-  assert.match(source, /_visual_proof/);
   assert.match(source, /writeVisualProof\(ctx/);
-  assert.match(source, /live heartbeat: \/pi-graphics-heartbeat/);
-  assert.match(source, /pi-graphics-heartbeat/);
-  assert.match(source, /_heartbeat/);
-  assert.match(source, /startHeartbeat\(ctx\)/);
-  assert.match(source, /stopHeartbeat\(ctx\)/);
-  assert.match(source, /cockpit wall: \/pi-graphics-cockpit-wall/);
-  assert.match(source, /pi-graphics-cockpit-wall/);
-  assert.match(source, /_cockpit_wall/);
-  assert.match(source, /writeCockpitWall\(ctx/);
-  assert.match(source, /OSC palette: \/pi-graphics-osc-palette/);
-  assert.match(source, /pi-graphics-osc-palette/);
-  assert.match(source, /_osc_palette/);
-  assert.match(source, /applyTerminalPalette\(ctx\)/);
-  assert.match(source, /resetTerminalPalette\(ctx\)/);
-  assert.match(source, /ANSI scene shader: \/pi-graphics-ansi-scene/);
-  assert.match(source, /ANSI takeover: \/pi-graphics-ansi-takeover/);
-  assert.match(source, /pi-graphics-ansi-scene/);
-  assert.match(source, /_ansi_scene/);
-  assert.match(source, /writeAnsiScene\(ctx/);
-  assert.match(source, /pi-graphics-ansi-takeover/);
-  assert.match(source, /_ansi_takeover/);
-  assert.match(source, /writeAnsiTakeover\(ctx/);
-  assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
-  assert.match(source, /pi-graphics-conversation-frame/);
-  assert.match(source, /shouldAutoShowConversationFrame\(\)/);
-  assert.match(source, /shouldAutoShowValidationReport\(\)/);
-  assert.match(source, /shouldAutoShowVisualProof\(\)/);
-  assert.match(source, /shouldAutoShowHeartbeat\(\)/);
-  assert.match(source, /shouldAutoShowCockpitWall\(\)/);
-  assert.match(source, /shouldAutoApplyTerminalPalette\(\)/);
-  assert.match(source, /shouldAutoShowAnsiScene\(\)/);
-  assert.match(source, /shouldAutoShowAnsiTakeover\(\)/);
-  assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-conversation-frame"/);
-  assert.match(source, /_theme_delta/);
-  assert.match(source, /_conversation_frame/);
-  assert.match(source, /pi-graphics-theme-delta/);
-  assert.match(source, /_lighthouse/);
-  assert.match(source, /pi-graphics-lighthouse/);
-  assert.match(source, /live footer: branch\/status beacon/);
-  assert.match(source, /_photon_rain/);
-  assert.match(source, /pi-graphics-photon-rain/);
-  assert.match(source, /_theme_swatch/);
-  assert.match(source, /_send_theme_swatch/);
-  assert.match(source, /pi-graphics-theme-swatch/);
-  assert.match(source, /pi-graphics-theme-swatch-message/);
-  assert.match(source, /visual contract: \/pi-graphics-visual-contract/);
-  assert.match(source, /_visual_contract/);
-  assert.match(source, /buildVisualContractLines\(\{ unicodePlacement: ensureUnicodePlacement\(state\), splash: shouldAutoShowSplash\(\) \}/);
-  assert.match(source, /setStatus\?\.\("pi-gfx-mode", "⬢ floodlight"\)/);
-  assert.match(source, /setStatus\?\.\("pi-gfx-pulse", "◆ APNG editor aura"\)/);
-  assert.match(source, /setStatus\?\.\("pi-gfx-row", "✦ neon working row"\)/);
-  assert.match(source, /setTitle\?\.\("pi"\)/);
-  assert.match(source, /buildStartupSplashMessage\(\)/);
-  assert.match(source, /buildStartupThemeSwatchMessage\(\)/);
-  assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);
-  assert.match(source, /startup theme swatch: \$\{shouldAutoShowThemeSwatchSplash\(\) \? "enabled" : "disabled by env"\}/);
-  assert.match(source, /pi-theme/);
-  assert.match(source, /select \/settings → kitty-graphics/);
-  assert.match(source, /buildStagePanelWidget\(state, options\)/);
-  assert.match(source, /buildTextStagePanel\(options\)/);
-  assert.match(source, /setWidget\?\.\(autoWidgetId, widget\.lines, \{ placement: "aboveEditor" \}\)/);
-  assert.match(source, /render_tui_pulse/);
-  assert.match(source, /render_stage_panel/);
-  assert.match(source, /render_contact_sheet/);
-  assert.match(source, /render_terminal_scene/);
-  assert.match(source, /renderTerminalScenePulseApng\(\{ columns: 52, rows: 10, frames: 8, delayMs: 90 \}\)/);
-  assert.match(source, /rendered terminal scene: auto above editor \+ pi_graphics_render_terminal_scene/);
-  assert.match(source, /auto terminal scene: \$\{shouldAutoShowTerminalScene\(\) \? "enabled" : "disabled by env"\}/);
-  assert.match(source, /_doctor/);
-  assert.match(source, /pi-graphics-doctor/);
-  assert.match(source, /pi-graphics-takeover/);
-  assert.match(source, /doctor\/takeover: \/pi-graphics-doctor/);
+  assert.match(source, /showAutoPulse\(ctx, \{ caption: "showcase pulse active"/);
+  assert.match(source, /shouldAutoShowBrailleScene\(gfxEnv\(\)\)/);
+  assert.match(source, /shouldAutoShowValidationReport\(gfxEnv\(\)\)/);
+  assert.match(source, /shouldAutoShowVisualProof\(gfxEnv\(\)\)/);
+  assert.match(source, /shouldAutoShowConversationFrame\(gfxEnv\(\)\)/);
+  assert.match(source, /shouldAutoShowTerminalScene\(gfxEnv\(\)\)/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-message"/);
-  assert.match(source, /buildPiGraphicsMessageComponent\(message, options, theme\)/);
-  assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-theme-swatch"/);
-  assert.match(source, /buildPiGraphicsThemeSwatchMessageComponent\(message, options, theme\)/);
-  assert.match(source, /_send_message/);
-  assert.match(source, /pi-graphics-message/);
+  assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-conversation-frame"/);
   assert.match(source, /pi\.on\("before_agent_start"/);
-  assert.match(source, /pi\.on\("agent_start"/);
   assert.match(source, /pi\.on\("tool_execution_start"/);
-  assert.match(source, /pi\.on\("agent_end"/);
-  assert.match(source, /lastAutoWidgetSignature/);
-  assert.match(source, /text-stage glow fallback/);
-  assert.match(source, /tool \$\{toolName\}/);
   assert.match(source, /pi-graphics-show/);
   assert.match(source, /pi-graphics-hide/);
 });
@@ -1140,6 +1078,7 @@ test("package.json advertises the pi-graphics extension and theme through pi.* e
   assert.ok(pkg.pi.extensions.includes("./extensions/pi-graphics.js"), "pi.extensions must include pi-graphics.js");
   assert.ok(Array.isArray(pkg.pi.themes), "pi.themes must be an array");
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics.json"), "pi.themes must include the kitty-graphics theme");
+  assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics-nord.json"), "pi.themes must include the calm Nord kitty graphics theme");
   assert.ok(Array.isArray(pkg.files) && pkg.files.includes("themes"), "package.json files[] must ship themes/");
 });
 

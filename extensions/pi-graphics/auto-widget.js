@@ -16,6 +16,7 @@ import {
 import { buildPlacement, renderToText } from "./runtime.js";
 
 const FALSE_RE = /^(0|false|off|no)$/i;
+const TRUE_RE = /^(1|true|on|yes|debug|showcase)$/i;
 
 export const PI_GRAPHICS_RELOAD_SENTINEL = "PI-GFX-RELOAD-SENTINEL/2026-05-18/NEON-LIGHTHOUSE";
 
@@ -31,69 +32,83 @@ function rgbDelta(a, b) {
   return Math.abs(aa[0] - bb[0]) + Math.abs(aa[1] - bb[1]) + Math.abs(aa[2] - bb[2]);
 }
 
+export function shouldAutoShowcase(env = process.env) {
+  const value = env.PI_GRAPHICS_SHOWCASE ?? env.PI_KITTY_GRAPHICS_SHOWCASE;
+  return value === undefined ? false : TRUE_RE.test(String(value).trim());
+}
+
+function explicitOrShowcase(value, env) {
+  return value === undefined ? shouldAutoShowcase(env) : !FALSE_RE.test(String(value).trim());
+}
+
 export function shouldAutoShowGraphics(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_WIDGET ?? env.PI_KITTY_GRAPHICS_AUTO_WIDGET;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoApplyTheme(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_THEME ?? env.PI_KITTY_GRAPHICS_AUTO_THEME;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowSplash(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_SPLASH ?? env.PI_KITTY_GRAPHICS_AUTO_SPLASH;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowThemeSwatchSplash(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_THEME_SWATCH ?? env.PI_KITTY_GRAPHICS_AUTO_THEME_SWATCH;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowTerminalScene(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_TERMINAL_SCENE ?? env.PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowConversationFrame(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_CONVERSATION_FRAME ?? env.PI_KITTY_GRAPHICS_AUTO_CONVERSATION_FRAME;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowAnsiTakeover(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_ANSI_TAKEOVER ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowAnsiScene(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_ANSI_SCENE ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_SCENE;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoApplyTerminalPalette(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_TERMINAL_PALETTE ?? env.PI_KITTY_GRAPHICS_AUTO_TERMINAL_PALETTE;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowCockpitWall(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_COCKPIT_WALL ?? env.PI_KITTY_GRAPHICS_AUTO_COCKPIT_WALL;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowHeartbeat(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_HEARTBEAT ?? env.PI_KITTY_GRAPHICS_AUTO_HEARTBEAT;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowVisualProof(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_VISUAL_PROOF ?? env.PI_KITTY_GRAPHICS_AUTO_VISUAL_PROOF;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowValidationReport(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_VALIDATION_REPORT ?? env.PI_KITTY_GRAPHICS_AUTO_VALIDATION_REPORT;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
+}
+
+export function shouldAutoShowBrailleScene(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_BRAILLE_SCENE ?? env.PI_KITTY_GRAPHICS_AUTO_BRAILLE_SCENE;
+  return explicitOrShowcase(value, env);
 }
 
 export function heartbeatIntervalMs(env = process.env) {
@@ -104,6 +119,7 @@ export function heartbeatIntervalMs(env = process.env) {
 
 const OSC = "\u001b]";
 const BEL = "\u0007";
+const RESET = "\u001b[0m";
 
 export function buildPiGraphicsOscPaletteSequence({ includeAnsi = true } = {}) {
   const base = [
@@ -315,6 +331,10 @@ export function buildPiGraphicsHeartbeatLine(theme, { tick = 0, stage = "idle" }
   return `${fg("thinkingXhigh", head)} ${fg("customMessageLabel", "PI GFX HEARTBEAT")} ${fg("borderAccent", trail)} ${fg("muted", `// ${safeStage} // ${PI_GRAPHICS_RELOAD_SENTINEL}`)}`;
 }
 
+function rgbLuma(r, g, b) {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 function rendererStats(pixels) {
   let minLuma = 255;
   let maxLuma = 0;
@@ -326,7 +346,7 @@ function rendererStats(pixels) {
     const b = pixels[i + 2] || 0;
     const a = pixels[i + 3] || 0;
     if (a < 12) continue;
-    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const luma = rgbLuma(r, g, b);
     minLuma = Math.min(minLuma, luma);
     maxLuma = Math.max(maxLuma, luma);
     colors.add(`${r >> 4}${g >> 4}${b >> 4}`);
@@ -353,6 +373,55 @@ export function buildPiGraphicsValidationReportLines({ columns = 52, rows = 8, f
 
 export function buildPiGraphicsValidationReportText(options = {}) {
   return buildPiGraphicsValidationReportLines(options).join("\n");
+}
+
+function pixelAt(pixels, widthPx, heightPx, x, y) {
+  const xx = Math.max(0, Math.min(widthPx - 1, Math.trunc(x)));
+  const yy = Math.max(0, Math.min(heightPx - 1, Math.trunc(y)));
+  const offset = (yy * widthPx + xx) * 4;
+  return [pixels[offset] || 0, pixels[offset + 1] || 0, pixels[offset + 2] || 0, pixels[offset + 3] || 0];
+}
+
+export function buildPiGraphicsBrailleSceneText({ columns = 54, rows = 12, phase = 0.28, label = "PI KITTY GRAPHICS BRAILLE PIXEL SCENE" } = {}) {
+  const outCols = Math.max(24, Math.min(84, Math.trunc(Number(columns) || 54)));
+  const outRows = Math.max(6, Math.min(20, Math.trunc(Number(rows) || 12)));
+  const scene = renderTerminalScenePixels({ columns: Math.max(48, outCols), rows: Math.max(10, outRows + 4), phase });
+  const dotMap = [
+    [0, 0, 0x01], [0, 1, 0x02], [0, 2, 0x04], [1, 0, 0x08],
+    [1, 1, 0x10], [1, 2, 0x20], [0, 3, 0x40], [1, 3, 0x80],
+  ];
+  const lines = [
+    `${ansiFg("#00ffd0")}⬢ ${label} ⬢${RESET} ${ansiFg("#d85cff")}RGBA→BRAILLE TRUECOLOR RENDER${RESET}`,
+  ];
+  for (let row = 0; row < outRows; row += 1) {
+    let line = "";
+    for (let col = 0; col < outCols; col += 1) {
+      let bits = 0;
+      let rr = 0;
+      let gg = 0;
+      let bb = 0;
+      let lit = 0;
+      for (const [dx, dy, bit] of dotMap) {
+        const sx = ((col * 2 + dx + 0.5) / (outCols * 2)) * scene.widthPx;
+        const sy = ((row * 4 + dy + 0.5) / (outRows * 4)) * scene.heightPx;
+        const [r, g, b, a] = pixelAt(scene.pixels, scene.widthPx, scene.heightPx, sx, sy);
+        const luma = rgbLuma(r, g, b);
+        if (a > 8 && luma > 26) {
+          bits |= bit;
+          rr += r; gg += g; bb += b; lit += 1;
+        }
+      }
+      if (lit === 0) {
+        line += " ";
+      } else {
+        line += `${ansiFgRgb(Math.round(rr / lit), Math.round(gg / lit), Math.round(bb / lit))}${String.fromCharCode(0x2800 + bits)}${RESET}`;
+      }
+    }
+    lines.push(line);
+  }
+  lines.push(`${ansiFg("#e9f8ff")}${PI_GRAPHICS_RELOAD_SENTINEL}${RESET}`);
+  lines.push(`${ansiFg("#fff05a")}If this is not a cyan/violet glowing image-like block, ANSI truecolor or package reload is failing.${RESET}`);
+  return lines.join("\n");
 }
 
 export function buildPiGraphicsVisualProofText({ width = 96, label = "PI KITTY GRAPHICS VISUAL PROOF" } = {}) {

@@ -52,6 +52,7 @@
       "./prompts"
     ],
     "themes": [
+      "./themes/kitty-graphics-nord.json",
       "./themes/kitty-graphics.json"
     ]
   }

@@ -8,7 +8,8 @@ The pieces:
 
 | File | Role |
 |------|------|
-| `themes/kitty-graphics.json` | High-contrast deep-Nordic color theme registered through `pi.themes` in `package.json`. |
+| `themes/kitty-graphics-nord.json` | Calm default Nord color theme: ordinary Pi remains usable while retaining frost/aurora glow tokens. |
+| `themes/kitty-graphics.json` | Maximal cyberpunk/neon color theme registered through `pi.themes` in `package.json`. |
 | `extensions/pi-graphics.js` | Pi extension entry point (registers tools + slash commands). |
 | `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars, and glow panels. |
 | `extensions/pi-graphics/components.js` | TypeScript-side TUI component mirror: graphical card frames, rails, status chips, skeleton rows, pulse waveforms, and cache keys. |
@@ -25,36 +26,57 @@ extensions via `pi.extensions`.
 To activate the theme:
 
 ```bash
-pi /settings   # then choose "kitty-graphics"
+pi /settings   # then choose "kitty-graphics-nord" for the calm default
+# or choose "kitty-graphics" for the neon/cyberpunk palette
 # or, equivalently, in settings.json:
-# { "theme": "kitty-graphics" }
+# { "theme": "kitty-graphics-nord" }
 ```
 
 The companion extension (`./extensions/pi-graphics.js`) is loaded
-automatically by Pi when the package is installed. On session start it attempts
-to switch the active interactive theme to `kitty-graphics`, reports a `pi-theme`
-status if that succeeds, and warns with `select /settings → kitty-graphics` if
-runtime theme switching is unavailable. Set `PI_GRAPHICS_AUTO_THEME=0` (or
-`PI_KITTY_GRAPHICS_AUTO_THEME=off`) to opt out of automatic theme activation.
-By default it also shows a small animated kitty pulse widget above
-the editor on session start so graphical mode is visible without manually
-running a demo command. During normal turns the same widget changes tone/caption
-for prompt capture, agent thinking, tool execution, and ready states, giving
-regular conversation flow graphical chrome instead of a static startup-only
-banner. The lifecycle widget is now a conversation **stage panel**: it wraps the
-APNG component with large text chrome (`PI KITTY GFX // ...`) so there is still
-an obvious visual cue even when kitty placeholder graphics are unavailable or an
-operator is not looking at the animated pixels. The extension also installs a
-persistent custom header (`PI KITTY GRAPHICS ONLINE`), a live status-beacon
-footer (`KITTY-GFX LIVE FOOTER ⬢◆✦ deep nordic glow`), a real component-backed HUD widget below the
-editor, a high-contrast `PI KITTY GRAPHICS FLOODLIGHT` banner above the editor,
-an APNG-backed editor aura below the input area, neon editor-frame widgets above
-and below the input area, a transcript startup splash message, and replaces the normal streaming row and terminal/window title with branded Pi kitty graphics stage text, hidden-thinking label, and themed neon indicator
-(`✧ ✦ ◆ ✺ ⬢ ...`) so the session chrome and active generation both pulse even
-between widget redraws. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or
-`PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out of the widget, and set
-`PI_GRAPHICS_AUTO_SPLASH=0` (or `PI_KITTY_GRAPHICS_AUTO_SPLASH=off`) to suppress
-the startup splash. Use `/pi-graphics-visual-contract` (or the
+automatically by Pi when the package is installed. **Theme and graphics mode are
+separate controls**: the theme determines Pi's colors; `settings.json` under
+`piGraphics` (or env vars) determines whether kitty/PNG graphics are calm, off,
+or showcase. The default profile is now calm: it keeps native chrome useful by
+installing footer/status cues plus editor/input frame widgets, while the huge
+startup splash, cockpit wall, Braille scene, validation report, ANSI takeover,
+photon rain, lighthouse, and APNG demo widgets stay behind `/pi-graphics-showcase`
+or their explicit commands.
+
+Example settings:
+
+```json
+{
+  "theme": "kitty-graphics-nord",
+  "piGraphics": {
+    "mode": "calm",
+    "autoApplyTheme": false,
+    "features": {
+      "chrome": true,
+      "editorFrame": true,
+      "footer": true,
+      "nativeChrome": true,
+      "showcaseWidgets": false,
+      "startupSplash": false,
+      "conversationFrame": false,
+      "brailleScene": false,
+      "validationReport": false,
+      "visualProof": false,
+      "cockpitWall": false,
+      "ansiScene": false,
+      "ansiTakeover": false,
+      "terminalPalette": false,
+      "heartbeat": false
+    },
+    "animation": { "targetFps": 60, "showcaseFrames": 32 }
+  }
+}
+```
+
+Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
+maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
+still override settings for one run. Use `/pi-graphics-native-chrome-demo` to preview the intended next direction:
+PNG-backed translucent placeholder borders/backgrounds for input, user/assistant
+messages, tool output, and info/system surfaces. Use `/pi-graphics-visual-contract` (or the
 `pi_graphics_visual_contract` tool) to show an explicit checklist of all expected
 visible cues when judging whether the mode is active. Use
 `/pi-graphics-theme-swatch` (or `pi_graphics_theme_swatch`) to render actual
@@ -83,7 +105,10 @@ or `pi_graphics_ansi_scene` for a half-block ANSI rendering sampled from the sam
 TypeScript pixel terminal scene used by kitty/APNG output. Use `/pi-graphics-osc-palette`
 or `pi_graphics_osc_palette` to ask compatible terminals to change their actual
 foreground/background/cursor/ANSI palette to the deep-Nordic theme. Use
-`/pi-graphics-validation-report` or `pi_graphics_validation_report` to print real
+`/pi-graphics-braille-scene` or `pi_graphics_braille_scene` to print a
+truecolor Unicode Braille image sampled from the TypeScript rendered terminal
+scene, so normal transcript output looks graphical even without kitty placement.
+Use `/pi-graphics-validation-report` or `pi_graphics_validation_report` to print real
 TypeScript renderer metrics (PNG/APNG sizes, unique color buckets, luminance
 range, frame/animation bounds) inspired by the Caco Rust visual validation style.
 Use `/pi-graphics-visual-proof` or `pi_graphics_visual_proof` for a transcript-visible
@@ -148,6 +173,13 @@ rendered. The extension complements those flat colors with graphical affordances
   `pi-graphics-message` into the transcript so graphics mode leaves a visible
   neon block in normal conversation history even if terminal theme changes are
   subtle.
+* **Braille pixel scene** — `/pi-graphics-braille-scene` and
+  `pi_graphics_braille_scene` map rendered RGBA terminal-scene pixels into
+  Unicode Braille cells with truecolor ANSI foregrounds. This gives normal
+  transcript output an image-like deep-Nordic cyan/violet scene without relying
+  on kitty image placement. It is printed on startup by default unless
+  `PI_GRAPHICS_AUTO_BRAILLE_SCENE=0` (or
+  `PI_KITTY_GRAPHICS_AUTO_BRAILLE_SCENE=off`) is set.
 * **Rendered validation report** — `/pi-graphics-validation-report` and
   `pi_graphics_validation_report` compute metrics from the TypeScript RGBA
   renderer and print them as normal transcript output. The report includes
@@ -274,6 +306,7 @@ The extension registers the following tools through `pi.registerTool`:
   covering tones and pulse phases for human inspection.
 * `pi_graphics_send_message` — send a displayed custom message through the
   `pi-graphics-message` renderer for validating normal conversation chrome.
+* `pi_graphics_braille_scene` — emit a truecolor Unicode Braille scene sampled from rendered pixels.
 * `pi_graphics_validation_report` — emit renderer metrics for graphical components and APNG pulse bounds.
 * `pi_graphics_visual_proof` — emit the truecolor palette-chip visual proof block.
 * `pi_graphics_heartbeat` — preview the lightweight live heartbeat ticker line.
@@ -297,6 +330,7 @@ And the discoverability slash commands include:
 * `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
 * `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
 * `/pi-graphics-message [text]` — display a custom message rendered with Pi kitty graphics message chrome.
+* `/pi-graphics-braille-scene [label]` — write an image-like truecolor Braille rendering of the terminal scene.
 * `/pi-graphics-validation-report` — write rendered-pixel metrics proving the TypeScript graphical renderer is active.
 * `/pi-graphics-visual-proof [label]` — write the visual proof block with color chips and measured deltas.
 * `/pi-graphics-heartbeat` — refresh and show the live heartbeat ticker line.
@@ -350,7 +384,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

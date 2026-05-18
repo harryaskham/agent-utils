@@ -197,6 +197,43 @@ export function renderTuiComponentPulseApng({ frames = 8, delayMs = 100, plays =
   };
 }
 
+export function renderNativeChromeFrame({ columns = 72, rows = 4, phase = 0, surface = "message" } = {}) {
+  const cols = clampPositive(columns, 24, "columns");
+  const rs = clampPositive(rows, 2, "rows");
+  const widthPx = cols * CELL_PX_W;
+  const heightPx = rs * CELL_PX_H;
+  const ph = phase01(phase);
+  const p = pulse(ph);
+  const tone = surface === "user" ? PALETTES.user : surface === "tool" ? PALETTES.tool : PALETTES.assistant;
+  const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+
+  fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(tone.top, 118), withAlpha(tone.bottom, 142));
+  addRadialGlow(pixels, widthPx, widthPx * (0.18 + p * 0.12), heightPx * 0.2, Math.max(widthPx, heightPx) * 0.36, withAlpha(tone.glow, 110), 0.85);
+  addRadialGlow(pixels, widthPx, widthPx * (0.82 - p * 0.10), heightPx * 0.86, Math.max(widthPx, heightPx) * 0.36, withAlpha(tone.glow2, 100), 0.85);
+  strokeRect(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(tone.rail, 190), 1);
+  strokeRect(pixels, widthPx, 2, 2, widthPx - 4, heightPx - 4, withAlpha(tone.rail2, 96 + p * 80), 1);
+  fillHorizontalGradient(pixels, widthPx, 4, 3, widthPx - 8, 2, withAlpha(tone.rail, 175), withAlpha(tone.rail2, 132));
+  fillHorizontalGradient(pixels, widthPx, 4, heightPx - 5, widthPx - 8, 2, withAlpha(tone.rail2, 118), withAlpha(tone.rail, 150));
+  if (heightPx > 32) {
+    for (let y = 12; y < heightPx - 12; y += 9) {
+      const alpha = 26 + p * 22;
+      fillRect(pixels, widthPx, 8, y, widthPx - 16, 1, withAlpha("#d7f8ff", alpha));
+    }
+  }
+  addScanlines(pixels, widthPx, { every: 6, alpha: 6 + p * 6, color: "#d7f8ff" });
+  const png = encodeRgbaPng(pixels, widthPx, heightPx);
+  return {
+    png,
+    columns: cols,
+    rows: rs,
+    widthPx,
+    heightPx,
+    phase: ph,
+    surface,
+    metrics: metricsForPayload(png, widthPx, heightPx),
+  };
+}
+
 export function renderTerminalScenePixels({ columns = 72, rows = 14, phase = 0 } = {}) {
   const cols = clampPositive(columns, 16, "columns");
   const rs = clampPositive(rows, 8, "rows");

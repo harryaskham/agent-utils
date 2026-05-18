@@ -25,6 +25,10 @@
 // companion theme (`themes/kitty-graphics.json`) sets a Nord-inspired palette
 // that pairs with the gradient defaults below.
 
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { Type } from "@sinclair/typebox";
 
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
@@ -40,6 +44,7 @@ import {
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsCockpitWallText,
+  buildPiGraphicsBrailleSceneText,
   buildPiGraphicsOscPaletteLines,
   buildPiGraphicsOscPaletteResetSequence,
   buildPiGraphicsOscPaletteSequence,
@@ -80,6 +85,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
+  shouldAutoShowBrailleScene,
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
@@ -91,6 +97,7 @@ import {
   shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";
 import {
+  renderNativeChromeFrame,
   renderPiGraphicsContactSheet,
   renderTerminalSceneFrame,
   renderTerminalScenePulseApng,
@@ -106,7 +113,55 @@ import {
 
 const TOOL_PREFIX = "pi_graphics";
 
+function readJsonIfExists(path) {
+  try {
+    if (!path || !existsSync(path)) return null;
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function agentSettingsPath() {
+  return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "settings.json");
+}
+
+function boolToEnv(value) {
+  if (value === undefined || value === null) return undefined;
+  return value ? "1" : "0";
+}
+
+function settingsEnvFromPiGraphics(settings = {}) {
+  const gfx = settings.piGraphics || settings.kittyGraphics || {};
+  const mode = String(gfx.mode || "calm").toLowerCase();
+  const showcase = mode === "showcase" || mode === "debug";
+  const off = mode === "off" || mode === "disabled";
+  const features = gfx.features || {};
+  const auto = gfx.auto || {};
+  const env = {
+    PI_GRAPHICS_SHOWCASE: showcase ? "1" : "0",
+    PI_GRAPHICS_AUTO_THEME: boolToEnv(gfx.autoApplyTheme ?? auto.theme ?? false),
+    PI_GRAPHICS_AUTO_WIDGET: boolToEnv(!off && (features.showcaseWidgets ?? auto.widgets ?? showcase)),
+    PI_GRAPHICS_AUTO_SPLASH: boolToEnv(!off && (features.startupSplash ?? auto.splash ?? showcase)),
+    PI_GRAPHICS_AUTO_THEME_SWATCH: boolToEnv(!off && (features.themeSwatch ?? auto.themeSwatch ?? showcase)),
+    PI_GRAPHICS_AUTO_TERMINAL_SCENE: boolToEnv(!off && (features.terminalScene ?? auto.terminalScene ?? showcase)),
+    PI_GRAPHICS_AUTO_CONVERSATION_FRAME: boolToEnv(!off && (features.conversationFrame ?? auto.conversationFrame ?? false)),
+    PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
+    PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
+    PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? false)),
+    PI_GRAPHICS_AUTO_COCKPIT_WALL: boolToEnv(!off && (features.cockpitWall ?? auto.cockpitWall ?? showcase)),
+    PI_GRAPHICS_AUTO_HEARTBEAT: boolToEnv(!off && (features.heartbeat ?? auto.heartbeat ?? false)),
+    PI_GRAPHICS_AUTO_VISUAL_PROOF: boolToEnv(!off && (features.visualProof ?? auto.visualProof ?? showcase)),
+    PI_GRAPHICS_AUTO_VALIDATION_REPORT: boolToEnv(!off && (features.validationReport ?? auto.validationReport ?? showcase)),
+    PI_GRAPHICS_AUTO_BRAILLE_SCENE: boolToEnv(!off && (features.brailleScene ?? auto.brailleScene ?? showcase)),
+  };
+  if (gfx.animation?.heartbeatMs) env.PI_GRAPHICS_HEARTBEAT_MS = String(gfx.animation.heartbeatMs);
+  return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
+}
+
 export default function piGraphicsExtension(pi) {
+  const settingsEnv = settingsEnvFromPiGraphics(readJsonIfExists(agentSettingsPath()) || {});
+  const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const state = makeState();
   const autoWidgetId = "pi-graphics-auto-pulse";
   const hudWidgetId = "pi-graphics-hud-component";
@@ -123,7 +178,7 @@ export default function piGraphicsExtension(pi) {
   let heartbeatTick = 0;
 
   function showAutoPulse(ctx, options = {}) {
-    if (!shouldAutoShowGraphics()) return false;
+    if (!shouldAutoShowGraphics(gfxEnv())) return false;
     const signature = JSON.stringify({
       tone: options.tone || "assistant",
       caption: options.caption || "kitty graphics pulse active",
@@ -181,32 +236,37 @@ export default function piGraphicsExtension(pi) {
   }
 
   function writeAnsiTakeover(ctx, options = {}) {
-    if (!shouldAutoShowAnsiTakeover()) return false;
+    if (!shouldAutoShowAnsiTakeover(gfxEnv())) return false;
     return writeAnsiText(ctx, buildPiGraphicsAnsiTakeoverText(options));
   }
 
   function writeAnsiScene(ctx, options = {}) {
-    if (!shouldAutoShowAnsiScene()) return false;
+    if (!shouldAutoShowAnsiScene(gfxEnv())) return false;
     return writeAnsiText(ctx, buildPiGraphicsAnsiSceneText(options));
   }
 
+  function writeBrailleScene(ctx, options = {}) {
+    if (!shouldAutoShowBrailleScene(gfxEnv())) return false;
+    return writeAnsiText(ctx, buildPiGraphicsBrailleSceneText(options));
+  }
+
   function writeCockpitWall(ctx, options = {}) {
-    if (!shouldAutoShowCockpitWall()) return false;
+    if (!shouldAutoShowCockpitWall(gfxEnv())) return false;
     return writeAnsiText(ctx, buildPiGraphicsCockpitWallText(options));
   }
 
   function writeVisualProof(ctx, options = {}) {
-    if (!shouldAutoShowVisualProof()) return false;
+    if (!shouldAutoShowVisualProof(gfxEnv())) return false;
     return writeAnsiText(ctx, buildPiGraphicsVisualProofText(options));
   }
 
   function writeValidationReport(ctx, options = {}) {
-    if (!shouldAutoShowValidationReport()) return false;
+    if (!shouldAutoShowValidationReport(gfxEnv())) return false;
     return writeAnsiText(ctx, buildPiGraphicsValidationReportText(options));
   }
 
   function applyTerminalPalette(ctx) {
-    if (!shouldAutoApplyTerminalPalette()) return false;
+    if (!shouldAutoApplyTerminalPalette(gfxEnv())) return false;
     return writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
   }
 
@@ -222,7 +282,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function startHeartbeat(ctx) {
-    if (!shouldAutoShowHeartbeat() || heartbeatTimer) return false;
+    if (!shouldAutoShowHeartbeat(gfxEnv()) || heartbeatTimer) return false;
     const update = () => {
       heartbeatTick += 1;
       const line = buildPiGraphicsHeartbeatLine(ctx.ui?.theme, { tick: heartbeatTick, stage: "live" });
@@ -235,6 +295,18 @@ export default function piGraphicsExtension(pi) {
     return true;
   }
 
+  function buildNativeChromePlacement({ surface = "message", columns = 72, rows = 4, phase = 0.2, caption = "native chrome" } = {}) {
+    const frame = renderNativeChromeFrame({ surface, columns, rows, phase });
+    const placement = buildPlacement(state, {
+      name: `native-chrome-${surface}-${frame.columns}x${frame.rows}`,
+      png: frame.png,
+      columns: frame.columns,
+      rows: frame.rows,
+      caption,
+    });
+    return { frame, placement, text: renderToText(placement) };
+  }
+
   function stopHeartbeat(ctx) {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = null;
@@ -242,7 +314,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function applyThemeCues(ctx) {
-    if (shouldAutoApplyTheme() && typeof ctx.ui?.setTheme === "function") {
+    if (shouldAutoApplyTheme(gfxEnv()) && typeof ctx.ui?.setTheme === "function") {
       const result = ctx.ui.setTheme("kitty-graphics");
       if (result?.success) {
         ctx.ui?.setStatus?.("pi-theme", "◆ kitty-graphics active");
@@ -251,39 +323,39 @@ export default function piGraphicsExtension(pi) {
         ctx.ui?.notify?.(`pi-graphics theme not active: ${result?.error || "select kitty-graphics in /settings"}`, "warning");
       }
     }
-    ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 90 });
-    ctx.ui?.setStatus?.("pi-gfx-mode", "⬢ floodlight");
-    ctx.ui?.setStatus?.("pi-gfx-pulse", "◆ APNG editor aura");
-    ctx.ui?.setStatus?.("pi-gfx-row", "✦ neon working row");
+    ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 140 });
+    ctx.ui?.setStatus?.("pi-gfx-mode", "calm chrome");
     ctx.ui?.setStatus?.("pi-gfx-build", PI_GRAPHICS_RELOAD_SENTINEL);
     setWorkingChrome(ctx, "ready");
-    ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
-    ctx.ui?.setWidget?.(floodlightWidgetId, (_tui, theme) => buildPiGraphicsFloodlightComponent(theme), { placement: "aboveEditor" });
-    ctx.ui?.setWidget?.(themeSwatchWidgetId, (_tui, theme) => buildPiGraphicsThemeSwatchComponent(theme), { placement: "aboveEditor" });
-    ctx.ui?.setWidget?.(photonRainWidgetId, (_tui, theme) => buildPiGraphicsPhotonRainComponent(theme), { placement: "aboveEditor" });
-    ctx.ui?.setWidget?.(lighthouseWidgetId, (_tui, theme) => buildPiGraphicsLighthouseComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
-    if (ensureUnicodePlacement(state)) {
-      const aura = buildEditorAuraWidget(state, { caption: "editor aura active", tone: "tool" });
-      ctx.ui?.setWidget?.(editorAuraWidgetId, aura.lines, { placement: "belowEditor" });
-      if (shouldAutoShowTerminalScene()) {
-        const sceneFrame = renderTerminalScenePulseApng({ columns: 54, rows: 10, frames: 8, delayMs: 90 });
-        const scene = buildPlacement(state, {
-          name: "auto-terminal-scene",
-          png: sceneFrame.png,
-          columns: sceneFrame.columns,
-          rows: sceneFrame.rows,
-          caption: "auto rendered terminal scene",
-        });
-        ctx.ui?.setWidget?.(terminalSceneWidgetId, renderToText(scene).split("\n"), { placement: "aboveEditor" });
-        ctx.ui?.setStatus?.("pi-gfx-scene", `⬢ terminal scene ${sceneFrame.frames}f`);
+    if (shouldAutoShowGraphics(gfxEnv())) {
+      ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
+      ctx.ui?.setStatus?.("pi-gfx-pulse", "◆ APNG editor aura");
+      ctx.ui?.setStatus?.("pi-gfx-row", "✦ neon working row");
+      ctx.ui?.setWidget?.(floodlightWidgetId, (_tui, theme) => buildPiGraphicsFloodlightComponent(theme), { placement: "aboveEditor" });
+      ctx.ui?.setWidget?.(themeSwatchWidgetId, (_tui, theme) => buildPiGraphicsThemeSwatchComponent(theme), { placement: "aboveEditor" });
+      ctx.ui?.setWidget?.(photonRainWidgetId, (_tui, theme) => buildPiGraphicsPhotonRainComponent(theme), { placement: "aboveEditor" });
+      ctx.ui?.setWidget?.(lighthouseWidgetId, (_tui, theme) => buildPiGraphicsLighthouseComponent(theme), { placement: "aboveEditor" });
+      if (ensureUnicodePlacement(state)) {
+        const aura = buildEditorAuraWidget(state, { caption: "editor aura active", tone: "tool" });
+        ctx.ui?.setWidget?.(editorAuraWidgetId, aura.lines, { placement: "belowEditor" });
       }
-    } else {
-      ctx.ui?.setStatus?.("pi-gfx-scene", "⚠ terminal scene needs kitty placeholders");
+      ctx.ui?.setWidget?.(hudWidgetId, (_tui, theme) => buildPiGraphicsHudComponent(theme), { placement: "belowEditor" });
     }
-    ctx.ui?.setWidget?.(hudWidgetId, (_tui, theme) => buildPiGraphicsHudComponent(theme), { placement: "belowEditor" });
+    if (shouldAutoShowTerminalScene(gfxEnv()) && ensureUnicodePlacement(state)) {
+      const sceneFrame = renderTerminalScenePulseApng({ columns: 54, rows: 10, frames: 8, delayMs: 90 });
+      const scene = buildPlacement(state, {
+        name: "auto-terminal-scene",
+        png: sceneFrame.png,
+        columns: sceneFrame.columns,
+        rows: sceneFrame.rows,
+        caption: "auto rendered terminal scene",
+      });
+      ctx.ui?.setWidget?.(terminalSceneWidgetId, renderToText(scene).split("\n"), { placement: "aboveEditor" });
+      ctx.ui?.setStatus?.("pi-gfx-scene", `⬢ terminal scene ${sceneFrame.frames}f`);
+    }
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -291,18 +363,19 @@ export default function piGraphicsExtension(pi) {
     applyThemeCues(ctx);
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
     writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // RENDERED PIXELS", phase: 0.18 });
+    writeBrailleScene(ctx, { label: "PI KITTY GRAPHICS BRAILLE PIXEL SCENE", phase: 0.28 });
     writeCockpitWall(ctx, { label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 });
     writeVisualProof(ctx, { label: "PI KITTY GRAPHICS VISUAL PROOF" });
     writeValidationReport(ctx, { columns: 52, rows: 8, frames: 8 });
     startHeartbeat(ctx);
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
-    if (shouldAutoShowSplash()) {
+    if (shouldAutoShowSplash(gfxEnv())) {
       try { pi.sendMessage?.(buildStartupSplashMessage()); } catch {}
     }
-    if (shouldAutoShowThemeSwatchSplash()) {
+    if (shouldAutoShowThemeSwatchSplash(gfxEnv())) {
       try { pi.sendMessage?.(buildStartupThemeSwatchMessage()); } catch {}
     }
-    if (shouldAutoShowConversationFrame()) {
+    if (shouldAutoShowConversationFrame(gfxEnv())) {
       try { pi.sendMessage?.(buildStartupConversationFrameMessage({ title: "startup conversation frame" })); } catch {}
     }
   });
@@ -326,7 +399,7 @@ export default function piGraphicsExtension(pi) {
   pi.on("agent_end", (_event, ctx) => {
     setWorkingChrome(ctx, "ready");
     showAutoPulse(ctx, { caption: "ready", tone: "assistant", delayMs: 120 });
-    if (shouldAutoShowConversationFrame()) {
+    if (shouldAutoShowConversationFrame(gfxEnv())) {
       try { pi.sendMessage?.(buildStartupConversationFrameMessage({ content: "Assistant turn complete — the normal transcript is carrying Pi kitty graphics conversation chrome.", title: "assistant turn frame" })); } catch {}
     }
   });
@@ -747,6 +820,49 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_render_native_chrome`,
+    label: "Pi Graphics: Native Chrome Frame",
+    description: "Render a translucent PNG-backed placeholder frame for native Pi surfaces such as input, user/agent messages, tool output, and info boxes.",
+    promptSnippet: "Render PNG-backed Pi native chrome borders and backgrounds.",
+    parameters: Type.Object({
+      surface: Type.Optional(Type.Union([Type.Literal("input"), Type.Literal("user"), Type.Literal("assistant"), Type.Literal("tool"), Type.Literal("info")])),
+      columns: Type.Optional(Type.Number({ description: "Frame columns.", minimum: 24, maximum: 160 })),
+      rows: Type.Optional(Type.Number({ description: "Frame rows.", minimum: 2, maximum: 24 })),
+      phase: Type.Optional(Type.Number({ description: "Glow phase." })),
+      caption: Type.Optional(Type.String({ description: "Placeholder caption." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      if (!ensureUnicodePlacement(state)) {
+        return { content: [{ type: "text", text: "pi-graphics: Unicode placeholder placement is not active for native chrome frames." }], details: { fallback: true } };
+      }
+      const { frame, text } = buildNativeChromePlacement(params);
+      return {
+        content: [{ type: "text", text }],
+        details: { surface: frame.surface, columns: frame.columns, rows: frame.rows, metrics: frame.metrics },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_braille_scene`,
+    label: "Pi Graphics: Braille Pixel Scene",
+    description: "Return a transcript-visible truecolor Unicode Braille scene sampled from the TypeScript rendered terminal scene pixels.",
+    promptSnippet: "Show the Pi kitty graphics truecolor Braille pixel scene.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Braille output columns.", minimum: 24, maximum: 84 })),
+      rows: Type.Optional(Type.Number({ description: "Braille output rows.", minimum: 6, maximum: 20 })),
+      phase: Type.Optional(Type.Number({ description: "Rendered scene phase." })),
+      label: Type.Optional(Type.String({ description: "Scene label." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsBrailleSceneText(params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, braille: true, renderer: "typescript-rgba" },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_validation_report`,
     label: "Pi Graphics: Validation Report",
     description: "Return rendered-pixel metrics from the TypeScript graphical TUI renderer: color buckets, luma range, PNG/APNG sizes, and animation bounds.",
@@ -931,13 +1047,13 @@ export default function piGraphicsExtension(pi) {
         content: [{ type: "text", text: buildPiGraphicsDoctorLines({
           themeName: "unknown",
           unicodePlacement,
-          autoTerminalScene: shouldAutoShowTerminalScene(),
-          autoTheme: shouldAutoApplyTheme(),
-          autoWidget: shouldAutoShowGraphics(),
-          autoSplash: shouldAutoShowSplash(),
-          autoThemeSwatch: shouldAutoShowThemeSwatchSplash(),
+          autoTerminalScene: shouldAutoShowTerminalScene(gfxEnv()),
+          autoTheme: shouldAutoApplyTheme(gfxEnv()),
+          autoWidget: shouldAutoShowGraphics(gfxEnv()),
+          autoSplash: shouldAutoShowSplash(gfxEnv()),
+          autoThemeSwatch: shouldAutoShowThemeSwatchSplash(gfxEnv()),
         }).join("\n") }],
-        details: { unicodePlacement, autoTerminalScene: shouldAutoShowTerminalScene() },
+        details: { unicodePlacement, autoTerminalScene: shouldAutoShowTerminalScene(gfxEnv()) },
       };
     },
   });
@@ -1000,8 +1116,8 @@ export default function piGraphicsExtension(pi) {
     parameters: Type.Object({}),
     async execute() {
       return {
-        content: [{ type: "text", text: buildVisualContractLines({ unicodePlacement: ensureUnicodePlacement(state), splash: shouldAutoShowSplash() }).join("\n") }],
-        details: { unicodePlacement: ensureUnicodePlacement(state), startupSplash: shouldAutoShowSplash() },
+        content: [{ type: "text", text: buildVisualContractLines({ unicodePlacement: ensureUnicodePlacement(state), splash: shouldAutoShowSplash(gfxEnv()) }).join("\n") }],
+        details: { unicodePlacement: ensureUnicodePlacement(state), startupSplash: shouldAutoShowSplash(gfxEnv()) },
       };
     },
   });
@@ -1072,6 +1188,47 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} stage ${widget.details.frames}f ${widget.details.delayMs}ms`);
       lastAutoWidgetSignature = "";
       ctx.ui?.notify?.("pi-graphics automatic pulse shown.", "info");
+    },
+  });
+
+  pi.registerCommand("pi-graphics-native-chrome-demo", {
+    description: "Show PNG-backed native chrome frames for input, messages, tools, and info surfaces.",
+    handler: async (_args, ctx) => {
+      if (!ensureUnicodePlacement(state)) {
+        ctx.ui?.notify?.("pi-graphics native chrome needs Unicode placeholder placement", "warning");
+        return;
+      }
+      const surfaces = ["input", "user", "assistant", "tool", "info"];
+      const text = surfaces.map((surface, index) => buildNativeChromePlacement({
+        surface,
+        columns: 64,
+        rows: surface === "input" ? 2 : 4,
+        phase: index / surfaces.length,
+        caption: `${surface} PNG chrome`,
+      }).text).join("\n");
+      ctx.ui?.notify?.(text, "info");
+    },
+  });
+
+  pi.registerCommand("pi-graphics-showcase", {
+    description: "Show the full Pi graphics showcase that is hidden by default in calm mode.",
+    handler: async (_args, ctx) => {
+      writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // SHOWCASE" });
+      writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // SHOWCASE", phase: 0.18 });
+      writeBrailleScene(ctx, { label: "PI KITTY GRAPHICS BRAILLE PIXEL SCENE", phase: 0.28 });
+      writeCockpitWall(ctx, { label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 });
+      writeVisualProof(ctx, { label: "PI KITTY GRAPHICS VISUAL PROOF" });
+      writeValidationReport(ctx, { columns: 52, rows: 8, frames: 8 });
+      showAutoPulse(ctx, { caption: "showcase pulse active", tone: "assistant" });
+    },
+  });
+
+  pi.registerCommand("pi-graphics-braille-scene", {
+    description: "Write a truecolor Unicode Braille scene sampled from rendered pixels.",
+    handler: async (args, ctx) => {
+      const label = args.trim() || "PI KITTY GRAPHICS BRAILLE PIXEL SCENE";
+      const wrote = writeBrailleScene(ctx, { label, phase: 0.4 });
+      if (!wrote) ctx.ui?.notify?.(buildPiGraphicsBrailleSceneText({ label, phase: 0.4 }), "info");
     },
   });
 
@@ -1169,11 +1326,11 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.notify?.(buildPiGraphicsDoctorLines({
         themeName,
         unicodePlacement: ensureUnicodePlacement(state),
-        autoTerminalScene: shouldAutoShowTerminalScene(),
-        autoTheme: shouldAutoApplyTheme(),
-        autoWidget: shouldAutoShowGraphics(),
-        autoSplash: shouldAutoShowSplash(),
-        autoThemeSwatch: shouldAutoShowThemeSwatchSplash(),
+        autoTerminalScene: shouldAutoShowTerminalScene(gfxEnv()),
+        autoTheme: shouldAutoApplyTheme(gfxEnv()),
+        autoWidget: shouldAutoShowGraphics(gfxEnv()),
+        autoSplash: shouldAutoShowSplash(gfxEnv()),
+        autoThemeSwatch: shouldAutoShowThemeSwatchSplash(gfxEnv()),
       }, ctx.ui?.theme).join("\n"), "info");
     },
   });
@@ -1215,7 +1372,7 @@ export default function piGraphicsExtension(pi) {
   pi.registerCommand("pi-graphics-visual-contract", {
     description: "Show the Pi kitty graphics visual contract checklist.",
     handler: async (_args, ctx) => {
-      ctx.ui?.notify?.(buildVisualContractLines({ unicodePlacement: ensureUnicodePlacement(state), splash: shouldAutoShowSplash() }, ctx.ui?.theme).join("\n"), "info");
+      ctx.ui?.notify?.(buildVisualContractLines({ unicodePlacement: ensureUnicodePlacement(state), splash: shouldAutoShowSplash(gfxEnv()) }, ctx.ui?.theme).join("\n"), "info");
     },
   });
 
@@ -1241,14 +1398,17 @@ export default function piGraphicsExtension(pi) {
         `placement mode: ${state.config.placementMode}`,
         `passthrough: ${state.config.passthrough}`,
         `unicode placeholders active: ${placementActive ? "yes" : "no"}`,
-        `auto pulse widget: ${shouldAutoShowGraphics() ? "enabled" : "disabled by env"}`,
-        `auto theme apply: ${shouldAutoApplyTheme() ? "enabled" : "disabled by env"}`,
-        `startup splash: ${shouldAutoShowSplash() ? "enabled" : "disabled by env"}`,
-        `startup theme swatch: ${shouldAutoShowThemeSwatchSplash() ? "enabled" : "disabled by env"}`,
-        `auto terminal scene: ${shouldAutoShowTerminalScene() ? "enabled" : "disabled by env"}`,
+        `auto pulse widget: ${shouldAutoShowGraphics(gfxEnv()) ? "enabled" : "disabled by env"}`,
+        `auto theme apply: ${shouldAutoApplyTheme(gfxEnv()) ? "enabled" : "disabled by env"}`,
+        `startup splash: ${shouldAutoShowSplash(gfxEnv()) ? "enabled" : "disabled by env"}`,
+        `startup theme swatch: ${shouldAutoShowThemeSwatchSplash(gfxEnv()) ? "enabled" : "disabled by env"}`,
+        `auto terminal scene: ${shouldAutoShowTerminalScene(gfxEnv()) ? "enabled" : "disabled by env"}`,
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "native chrome demo: /pi-graphics-native-chrome-demo",
+        "debug showcase: /pi-graphics-showcase",
+        "braille scene: /pi-graphics-braille-scene",
         "render metrics: /pi-graphics-validation-report",
         "visual proof: /pi-graphics-visual-proof",
         "live heartbeat: /pi-graphics-heartbeat",
@@ -1341,6 +1501,7 @@ export {
 } from "./pi-graphics/affordances.js";
 export {
   componentFrameCacheKey,
+  renderNativeChromeFrame,
   renderPiGraphicsContactSheet,
   renderTerminalSceneFrame,
   renderTerminalScenePixels,
@@ -1356,6 +1517,7 @@ export {
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
   buildPiGraphicsCockpitWallText,
+  buildPiGraphicsBrailleSceneText,
   buildPiGraphicsOscPaletteLines,
   buildPiGraphicsOscPaletteResetSequence,
   buildPiGraphicsOscPaletteSequence,
@@ -1403,6 +1565,7 @@ export {
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
+  shouldAutoShowBrailleScene,
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
