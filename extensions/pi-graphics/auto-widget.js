@@ -89,6 +89,11 @@ export function shouldAutoShowTranscriptChrome(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowEditorSurface(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_EDITOR_SURFACE ?? env.PI_KITTY_GRAPHICS_AUTO_EDITOR_SURFACE;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function shouldAutoShowAnsiTakeover(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_ANSI_TAKEOVER ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER;
   return explicitOrShowcase(value, env);
@@ -345,6 +350,21 @@ export function buildTranscriptChromeMessage({ role = "assistant", title = "mess
     display: true,
     details: { role, title, phase },
   };
+}
+
+export function buildPiGraphicsEditorSurfaceBorderLines({ width = 96, active = false, phase = 0, label = "INPUT SURFACE" } = {}) {
+  const cells = Math.max(24, Math.min(180, Math.trunc(width)));
+  const p = Math.abs(Math.sin(Number(phase || 0) * Math.PI * 2));
+  const spinner = active ? ["⬢", "◆", "✦", "✺"][Math.floor(p * 3.999) % 4] : "◇";
+  const title = ` ${spinner} PI GFX ${String(label || "INPUT SURFACE").toUpperCase()} `;
+  const gap = Math.max(0, cells - title.length - 2);
+  const top = `${ansiBg("#02030b")}${ansiFg("#00ffd0")}╭${title}${"─".repeat(gap)}╮${RESET}`.slice(0, cells + 40);
+  const bottomLabel = ` ${active ? "PULSING" : "READY"} • DEEP NORDIC GLOW • TS RENDERED EDITOR `;
+  const bgR = Math.round(2 + p * 18);
+  const bgB = Math.round(32 + p * 72);
+  const fill = "═".repeat(Math.max(0, cells - bottomLabel.length - 2));
+  const bottom = `${ansiBgRgb(bgR, 8, bgB)}${ansiFg("#d85cff")}╰${bottomLabel}${fill}╯${RESET}`.slice(0, cells + 40);
+  return [top, bottom];
 }
 
 export function buildWorkingIndicatorFrames(theme) {

@@ -30,6 +30,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
@@ -72,6 +73,7 @@ import {
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
   buildPiGraphicsTranscriptChromeComponent,
+  buildPiGraphicsEditorSurfaceBorderLines,
   buildStagePanelWidget,
   buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
@@ -94,6 +96,7 @@ import {
   shouldAutoShowBrailleScene,
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
+  shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
   shouldAutoShowTranscriptChrome,
@@ -198,6 +201,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_TERMINAL_SCENE: boolToEnv(!off && (features.terminalScene ?? auto.terminalScene ?? showcase)),
     PI_GRAPHICS_AUTO_CONVERSATION_FRAME: boolToEnv(!off && (features.conversationFrame ?? auto.conversationFrame ?? false)),
     PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv(!off && (features.transcriptChrome ?? auto.transcriptChrome ?? true)),
+    PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv(!off && (features.editorSurface ?? auto.editorSurface ?? true)),
     PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
     PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
     PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
@@ -235,6 +239,10 @@ export default function piGraphicsExtension(pi) {
   let lastAutoWidgetSignature = "";
   let heartbeatTimer = null;
   let heartbeatTick = 0;
+  let editorSurfaceTimer = null;
+  let editorSurfacePhase = 0;
+  let editorSurfaceWorking = false;
+  let editorSurfaceTui;
 
   function showAutoPulse(ctx, options = {}) {
     if (!shouldAutoShowGraphics(gfxEnv())) return false;
@@ -404,6 +412,47 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-gfx-heart", undefined); } catch {}
   }
 
+  function stopEditorSurfacePulse() {
+    if (editorSurfaceTimer) clearInterval(editorSurfaceTimer);
+    editorSurfaceTimer = null;
+  }
+
+  function installEditorSurface(ctx) {
+    if (!shouldAutoShowEditorSurface(gfxEnv()) || typeof ctx.ui?.setEditorComponent !== "function") return false;
+    const previousFactory = typeof ctx.ui?.getEditorComponent === "function" ? ctx.ui.getEditorComponent() : undefined;
+    class PiGraphicsEditorSurface extends CustomEditor {
+      constructor(tui, theme, keybindings) {
+        super(tui, theme, keybindings, { paddingX: 0 });
+        this.base = typeof previousFactory === "function" ? previousFactory(tui, theme, keybindings) : undefined;
+        editorSurfaceTui = tui;
+      }
+      render(width) {
+        const baseLines = this.base?.render?.(width) || super.render(width);
+        const [top, bottom] = buildPiGraphicsEditorSurfaceBorderLines({
+          width,
+          active: editorSurfaceWorking,
+          phase: editorSurfacePhase,
+          label: editorSurfaceWorking ? "AGENT PULSE INPUT" : "INPUT SURFACE",
+        });
+        if (baseLines.length >= 2) {
+          baseLines[0] = top;
+          baseLines[baseLines.length - 1] = bottom;
+          return baseLines;
+        }
+        return [top, ...baseLines, bottom];
+      }
+      invalidate() { this.base?.invalidate?.(); }
+      handleInput(data) { return this.base?.handleInput?.(data) ?? super.handleInput?.(data); }
+      getValue() { return this.base?.getValue?.() ?? super.getValue?.(); }
+      setValue(value) { return this.base?.setValue?.(value) ?? super.setValue?.(value); }
+      focus() { return this.base?.focus?.() ?? super.focus?.(); }
+      blur() { return this.base?.blur?.() ?? super.blur?.(); }
+    }
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => new PiGraphicsEditorSurface(tui, theme, keybindings));
+    ctx.ui?.setStatus?.("pi-gfx-editor", "⬢ editor surface gfx");
+    return true;
+  }
+
   function applyThemeCues(ctx) {
     ctx.ui?.setStatus?.("pi-theme-sync", themeSync.errors.length ? `⚠ theme sync errors ${themeSync.errors.length}` : `◆ themes synced ${themeSync.dirs.length} dirs/${themeSync.copied.length} writes`);
     if (shouldAutoApplyTheme(gfxEnv()) && typeof ctx.ui?.setTheme === "function") {
@@ -421,6 +470,7 @@ export default function piGraphicsExtension(pi) {
     setWorkingChrome(ctx, "ready");
     writeAmbientProof(ctx, { label: `PI GFX ${configuredThemeName} VISUAL PROOF`, phase: 0.18 });
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
+    installEditorSurface(ctx);
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
     showAmbientChrome(ctx);
@@ -480,6 +530,14 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    editorSurfaceWorking = true;
+    stopEditorSurfacePulse();
+    editorSurfaceTimer = setInterval(() => {
+      editorSurfacePhase = (editorSurfacePhase + 0.07) % 1;
+      editorSurfaceTui?.requestRender?.();
+    }, 140);
+    if (typeof editorSurfaceTimer?.unref === "function") editorSurfaceTimer.unref();
+    editorSurfaceTui?.requestRender?.();
     setWorkingChrome(ctx, "agent thinking");
     showAutoPulse(ctx, { caption: "agent thinking", tone: "assistant", delayMs: 90 });
   });
@@ -491,6 +549,9 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("agent_end", (_event, ctx) => {
+    editorSurfaceWorking = false;
+    stopEditorSurfacePulse();
+    editorSurfaceTui?.requestRender?.();
     setWorkingChrome(ctx, "ready");
     showAutoPulse(ctx, { caption: "ready", tone: "assistant", delayMs: 120 });
     if (shouldAutoShowConversationFrame(gfxEnv())) {
@@ -526,6 +587,9 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-gfx-scene", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-build", undefined); } catch {}
     try { stopHeartbeat(ctx); } catch {}
+    try { stopEditorSurfacePulse(); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-editor", undefined); } catch {}
+    try { ctx?.ui?.setEditorComponent?.(undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
     try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
@@ -1755,6 +1819,7 @@ export {
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
   buildPiGraphicsTranscriptChromeComponent,
+  buildPiGraphicsEditorSurfaceBorderLines,
   buildStagePanelWidget,
   buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
@@ -1777,6 +1842,7 @@ export {
   shouldAutoShowBrailleScene,
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
+  shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
   shouldAutoShowTranscriptChrome,

@@ -48,6 +48,7 @@ import {
   buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsEditorFrameLines,
+  buildPiGraphicsEditorSurfaceBorderLines,
   buildPiGraphicsFloodlightComponent,
   buildPiGraphicsFloodlightLines,
   buildPiGraphicsFooterComponent,
@@ -96,6 +97,7 @@ import {
   shouldAutoShowBrailleScene,
   shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
+  shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
   shouldAutoShowTranscriptChrome,
@@ -1027,6 +1029,21 @@ test("buildPiGraphicsEditorFrameComponent renders editor-edge neon chrome", () =
   component.invalidate();
 });
 
+test("buildPiGraphicsEditorSurfaceBorderLines renders truecolor input-surface takeover chrome", () => {
+  assert.equal(shouldAutoShowEditorSurface({}), true);
+  assert.equal(shouldAutoShowEditorSurface({ PI_GRAPHICS_AUTO_EDITOR_SURFACE: "0" }), false);
+  assert.equal(shouldAutoShowEditorSurface({ PI_KITTY_GRAPHICS_AUTO_EDITOR_SURFACE: "off" }), false);
+  const ready = buildPiGraphicsEditorSurfaceBorderLines({ width: 74, active: false, phase: 0.1, label: "input surface" });
+  const active = buildPiGraphicsEditorSurfaceBorderLines({ width: 74, active: true, phase: 0.4, label: "agent pulse input" });
+  assert.equal(ready.length, 2);
+  assert.match(ready.join("\n"), /PI GFX INPUT SURFACE/);
+  assert.match(active.join("\n"), /PULSING/);
+  assert.match(active.join("\n"), /DEEP NORDIC GLOW/);
+  assert.match(active.join("\n"), /\u001b\[48;2;/);
+  assert.match(active.join("\n"), /\u001b\[38;2;/);
+  assert.notDeepEqual(ready, active);
+});
+
 test("startup splash defaults on, can opt out, and builds bounded custom message", () => {
   assert.equal(shouldAutoShowSplash({}), false);
   assert.equal(shouldAutoShowSplash({ PI_GRAPHICS_AUTO_SPLASH: "1" }), true);
@@ -1056,6 +1073,8 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoApplyTerminalPalette({}), true);
   assert.equal(shouldAutoShowTranscriptChrome({}), true);
   assert.equal(shouldAutoShowTranscriptChrome({ PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: "0" }), false);
+  assert.equal(shouldAutoShowEditorSurface({}), true);
+  assert.equal(shouldAutoShowEditorSurface({ PI_GRAPHICS_AUTO_EDITOR_SURFACE: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
@@ -1074,6 +1093,7 @@ test("pi-graphics settings source maps calm mode to visibly active theme and OSC
   assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv\(!off && \(features\.ambientChrome \?\? auto\.ambientChrome \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv\(!off && \(features\.ambientProof \?\? auto\.ambientProof \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv\(!off && \(features\.transcriptChrome \?\? auto\.transcriptChrome \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv\(!off && \(features\.editorSurface \?\? auto\.editorSurface \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_FRAMES = String\(gfx\.animation\.ambientFrames\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_DELAY_MS = String\(gfx\.animation\.ambientDelayMs\)/);
 });
@@ -1139,6 +1159,10 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /showAmbientChrome\(ctx\)/);
+  assert.match(source, /installEditorSurface\(ctx\)/);
+  assert.match(source, /class PiGraphicsEditorSurface extends CustomEditor/);
+  assert.match(source, /setEditorComponent\(\(tui, theme, keybindings\) => new PiGraphicsEditorSurface/);
+  assert.match(source, /buildPiGraphicsEditorSurfaceBorderLines/);
   assert.match(source, /renderTuiSurfaceScenePulseApng/);
   assert.match(source, /shouldAutoShowAmbientChrome\(gfxEnv\(\)\)/);
   assert.match(source, /shouldAutoShowAmbientProof\(gfxEnv\(\)\)/);
