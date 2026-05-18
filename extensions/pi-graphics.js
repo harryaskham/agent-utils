@@ -36,6 +36,7 @@ import {
 } from "./pi-graphics/affordances.js";
 import {
   buildAutoPulseWidget,
+  buildPiGraphicsFooterComponent,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsMessageComponent,
   buildStagePanelWidget,
@@ -105,6 +106,7 @@ export default function piGraphicsExtension(pi) {
     }
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 90 });
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
+    ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -138,6 +140,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-theme", undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setHeader?.(undefined); } catch {}
+    try { ctx?.ui?.setFooter?.(undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -567,6 +570,7 @@ export default function piGraphicsExtension(pi) {
         `auto pulse widget: ${shouldAutoShowGraphics() ? "enabled" : "disabled by env"}`,
         `auto theme apply: ${shouldAutoApplyTheme() ? "enabled" : "disabled by env"}`,
         "session header: enabled",
+        "session footer: enabled",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -636,6 +640,8 @@ export {
 } from "./pi-graphics/components.js";
 export {
   buildAutoPulseWidget,
+  buildPiGraphicsFooterComponent,
+  buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
   buildPiGraphicsMessageComponent,

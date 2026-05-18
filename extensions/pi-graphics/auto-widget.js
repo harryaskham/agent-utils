@@ -109,6 +109,24 @@ export function buildPiGraphicsHeaderComponent(theme) {
   };
 }
 
+export function buildPiGraphicsFooterLines(theme, footerData = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const branch = footerData?.gitBranch ? ` • ${footerData.gitBranch}` : "";
+  const mode = fg("customMessageLabel", "KITTY-GFX");
+  const pulse = fg("thinkingXhigh", "⬢") + fg("borderAccent", "◆") + fg("accent", "✦");
+  const status = fg("text", `deep nordic glow${branch}`);
+  return [bg("toolPendingBg", `${fg("borderAccent", "▰▱▰")} ${mode} ${pulse} ${status}`)];
+}
+
+export function buildPiGraphicsFooterComponent(theme, footerData = {}) {
+  const lines = buildPiGraphicsFooterLines(theme, footerData);
+  return {
+    render(width = 120) { return boundedLines(lines, width); },
+    invalidate() {},
+  };
+}
+
 export function buildAutoPulseWidget(state, {
   columns = 42,
   rows = 6,

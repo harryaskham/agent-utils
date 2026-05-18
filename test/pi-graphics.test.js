@@ -35,6 +35,8 @@ import {
 } from "../extensions/pi-graphics/runtime.js";
 import {
   buildAutoPulseWidget,
+  buildPiGraphicsFooterComponent,
+  buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
   buildPiGraphicsMessageComponent,
@@ -451,6 +453,24 @@ test("buildPiGraphicsHeaderComponent renders persistent branded session chrome",
   component.invalidate();
 });
 
+test("buildPiGraphicsFooterComponent renders persistent bottom chrome", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const lines = buildPiGraphicsFooterLines(theme, { gitBranch: "agent/demo" });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /KITTY-GFX/);
+  assert.match(lines[0], /deep nordic glow/);
+  assert.match(lines[0], /agent\/demo/);
+  assert.match(lines[0], /toolPendingBg/);
+  const component = buildPiGraphicsFooterComponent(theme, { gitBranch: "very-long-branch-name" });
+  const rendered = component.render(42);
+  assert.equal(rendered.length, 1);
+  assert.ok(rendered[0].length <= 43);
+  component.invalidate();
+});
+
 test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor explicit opt-out env", () => {
   assert.equal(shouldAutoShowGraphics({}), true);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
@@ -480,8 +500,11 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /buildWorkingIndicatorFrames\(ctx\.ui\?\.theme\)/);
   assert.match(source, /setWorkingIndicator\?\.\(\{ frames:/);
   assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
+  assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setHeader\?\.\(undefined\)/);
+  assert.match(source, /setFooter\?\.\(undefined\)/);
   assert.match(source, /session header: enabled/);
+  assert.match(source, /session footer: enabled/);
   assert.match(source, /pi-theme/);
   assert.match(source, /select \/settings → kitty-graphics/);
   assert.match(source, /buildStagePanelWidget\(state, options\)/);
