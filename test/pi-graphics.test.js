@@ -38,6 +38,7 @@ import {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsCockpitWallText,
   buildPiGraphicsOscPaletteLines,
   buildPiGraphicsOscPaletteResetSequence,
   buildPiGraphicsOscPaletteSequence,
@@ -80,6 +81,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
+  shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -497,6 +499,21 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[0], /PROMPT CAPTURED/);
   assert.match(lines[1], /deep nordic glow/);
   assert.match(lines[2], /neon cyan/);
+});
+
+test("buildPiGraphicsCockpitWallText emits a large ANSI terminal cockpit", () => {
+  assert.equal(shouldAutoShowCockpitWall({}), true);
+  assert.equal(shouldAutoShowCockpitWall({ PI_GRAPHICS_AUTO_COCKPIT_WALL: "0" }), false);
+  const first = buildPiGraphicsCockpitWallText({ width: 88, phase: 0, label: "COCKPIT WALL" });
+  const second = buildPiGraphicsCockpitWallText({ width: 88, phase: 0.5, label: "COCKPIT WALL" });
+  assert.match(first, /COCKPIT WALL/);
+  assert.match(first, /TRUECOLOR TERMINAL TAKEOVER/);
+  assert.match(first, /RENDER BUS: HALF-BLOCK PIXELS/);
+  assert.match(first, /\u001b\[48;2;/);
+  assert.match(first, /▀/);
+  assert.match(first, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.ok(first.split("\n").length >= 14);
+  assert.notEqual(first, second);
 });
 
 test("buildPiGraphicsOscPaletteSequence emits terminal palette takeover and reset OSC", () => {
@@ -923,6 +940,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /cockpit wall: \/pi-graphics-cockpit-wall/);
+  assert.match(source, /pi-graphics-cockpit-wall/);
+  assert.match(source, /_cockpit_wall/);
+  assert.match(source, /writeCockpitWall\(ctx/);
   assert.match(source, /OSC palette: \/pi-graphics-osc-palette/);
   assert.match(source, /pi-graphics-osc-palette/);
   assert.match(source, /_osc_palette/);
@@ -939,6 +960,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
   assert.match(source, /pi-graphics-conversation-frame/);
   assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /shouldAutoShowCockpitWall\(\)/);
   assert.match(source, /shouldAutoApplyTerminalPalette\(\)/);
   assert.match(source, /shouldAutoShowAnsiScene\(\)/);
   assert.match(source, /shouldAutoShowAnsiTakeover\(\)/);

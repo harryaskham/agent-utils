@@ -69,6 +69,11 @@ export function shouldAutoApplyTerminalPalette(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowCockpitWall(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_COCKPIT_WALL ?? env.PI_KITTY_GRAPHICS_AUTO_COCKPIT_WALL;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 const OSC = "\u001b]";
 const BEL = "\u0007";
 
@@ -143,6 +148,11 @@ export function buildPiGraphicsAnsiTakeoverText({ width = 88, phase = 0, label =
   ].join("\n");
 }
 
+function ansiLine(text, { fg = "#00ffd0", bg = "#02030b", width = 88, fill = " " } = {}) {
+  const cells = Math.max(24, Math.min(180, Math.trunc(width)));
+  return `${ansiBg(bg)}${ansiFg(fg)}${String(text).padEnd(cells, fill).slice(0, cells)}\u001b[0m`;
+}
+
 export function buildPiGraphicsAnsiSceneText({ columns = 72, rows = 12, phase = 0, label = "PI GFX ANSI SCENE SHADER" } = {}) {
   const cols = Math.max(24, Math.min(120, Math.trunc(columns)));
   const textRows = Math.max(6, Math.min(32, Math.trunc(rows)));
@@ -165,6 +175,25 @@ export function buildPiGraphicsAnsiSceneText({ columns = 72, rows = 12, phase = 
   }
   lines.push(`${ansiBg("#33006b")}${ansiFg("#ff4dff")}${PI_GRAPHICS_RELOAD_SENTINEL.padEnd(cols).slice(0, cols)}${reset}`);
   return lines.join("\n");
+}
+
+export function buildPiGraphicsCockpitWallText({ width = 88, phase = 0, label = "PI KITTY GRAPHICS COCKPIT WALL" } = {}) {
+  const cells = Math.max(64, Math.min(140, Math.trunc(width)));
+  const scene = buildPiGraphicsAnsiSceneText({ columns: Math.min(96, cells), rows: 7, phase, label: "RENDERED PIXEL SCENE // ANSI HALF-BLOCK SHADER" });
+  const scan = "⬢◆✦✺▰▱◢◣".repeat(Math.ceil(cells / 8)).slice(0, cells);
+  const rails = "═".repeat(cells);
+  const title = ` ${String(label).replace(/\s+/g, " ").trim().toUpperCase()} // TRUECOLOR TERMINAL TAKEOVER `;
+  const centered = title.padStart(Math.floor((cells + title.length) / 2), "═").padEnd(cells, "═").slice(0, cells);
+  const panels = [
+    ansiLine(centered, { fg: "#ffffff", bg: "#006ec0", width: cells, fill: "═" }),
+    ansiLine(scan, { fg: "#00ffd0", bg: "#02030b", width: cells }),
+    ansiLine(" STATUS: DEEP NORDIC VOID ACTIVE   GLOW: CYAN/VIOLET   MODE: NOT A NORMAL TERMINAL", { fg: "#00ffd0", bg: "#33006b", width: cells }),
+    scene,
+    ansiLine(" PULSE BUS: ▰▱▰▱▰▱  RENDER BUS: HALF-BLOCK PIXELS  THEME BUS: OSC PALETTE", { fg: "#ff4dff", bg: "#020b20", width: cells }),
+    ansiLine(PI_GRAPHICS_RELOAD_SENTINEL, { fg: "#fff05a", bg: "#03152a", width: cells }),
+    ansiLine(rails, { fg: "#7c4dff", bg: "#02030b", width: cells, fill: "═" }),
+  ];
+  return panels.join("\n");
 }
 
 export function buildStartupSplashMessage({ content, tone = "assistant", title = "startup splash" } = {}) {

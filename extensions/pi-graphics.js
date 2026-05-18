@@ -39,6 +39,7 @@ import {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsCockpitWallText,
   buildPiGraphicsOscPaletteLines,
   buildPiGraphicsOscPaletteResetSequence,
   buildPiGraphicsOscPaletteSequence,
@@ -75,6 +76,7 @@ import {
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
+  shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -179,6 +181,11 @@ export default function piGraphicsExtension(pi) {
     return writeAnsiText(ctx, buildPiGraphicsAnsiSceneText(options));
   }
 
+  function writeCockpitWall(ctx, options = {}) {
+    if (!shouldAutoShowCockpitWall()) return false;
+    return writeAnsiText(ctx, buildPiGraphicsCockpitWallText(options));
+  }
+
   function applyTerminalPalette(ctx) {
     if (!shouldAutoApplyTerminalPalette()) return false;
     return writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
@@ -245,6 +252,7 @@ export default function piGraphicsExtension(pi) {
     applyThemeCues(ctx);
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
     writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // RENDERED PIXELS", phase: 0.18 });
+    writeCockpitWall(ctx, { label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 });
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
     if (shouldAutoShowSplash()) {
       try { pi.sendMessage?.(buildStartupSplashMessage()); } catch {}
@@ -696,6 +704,24 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_cockpit_wall`,
+    label: "Pi Graphics: Cockpit Wall",
+    description: "Return a multi-line truecolor ANSI cockpit wall combining rendered scene shader, neon rails, status panels, and reload sentinel.",
+    promptSnippet: "Show the Pi kitty graphics cockpit wall takeover.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target wall width.", minimum: 64, maximum: 140 })),
+      phase: Type.Optional(Type.Number({ description: "Pulse phase used for the rendered scene." })),
+      label: Type.Optional(Type.String({ description: "Wall label." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsCockpitWallText(params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, ansi: true, cockpit: true },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_osc_palette`,
     label: "Pi Graphics: OSC Palette Takeover",
     description: "Return OSC sequences that ask compatible terminals to switch foreground/background/cursor and ANSI palette slots to deep-Nordic kitty graphics colors.",
@@ -954,6 +980,15 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-cockpit-wall", {
+    description: "Write the full truecolor Pi kitty graphics cockpit wall.",
+    handler: async (args, ctx) => {
+      const label = args.trim() || "PI KITTY GRAPHICS COCKPIT WALL";
+      const wrote = writeCockpitWall(ctx, { label, phase: 0.42 });
+      if (!wrote) ctx.ui?.notify?.(buildPiGraphicsCockpitWallText({ label, phase: 0.42 }), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-osc-palette", {
     description: "Apply the deep-Nordic OSC terminal palette takeover when supported by the terminal.",
     handler: async (_args, ctx) => {
@@ -1092,6 +1127,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "cockpit wall: /pi-graphics-cockpit-wall",
         "OSC palette: /pi-graphics-osc-palette",
         "ANSI scene shader: /pi-graphics-ansi-scene",
         "ANSI takeover: /pi-graphics-ansi-takeover",
@@ -1194,6 +1230,7 @@ export {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsCockpitWallText,
   buildPiGraphicsOscPaletteLines,
   buildPiGraphicsOscPaletteResetSequence,
   buildPiGraphicsOscPaletteSequence,
@@ -1236,6 +1273,7 @@ export {
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
+  shouldAutoShowCockpitWall,
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
