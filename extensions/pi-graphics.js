@@ -50,6 +50,7 @@ import {
   buildPiGraphicsFooterComponent,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeartbeatLine,
+  buildPiGraphicsVisualProofText,
   buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsDoctorLines,
@@ -84,6 +85,7 @@ import {
   shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
+  shouldAutoShowVisualProof,
   shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";
 import {
@@ -191,6 +193,11 @@ export default function piGraphicsExtension(pi) {
     return writeAnsiText(ctx, buildPiGraphicsCockpitWallText(options));
   }
 
+  function writeVisualProof(ctx, options = {}) {
+    if (!shouldAutoShowVisualProof()) return false;
+    return writeAnsiText(ctx, buildPiGraphicsVisualProofText(options));
+  }
+
   function applyTerminalPalette(ctx) {
     if (!shouldAutoApplyTerminalPalette()) return false;
     return writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
@@ -278,6 +285,7 @@ export default function piGraphicsExtension(pi) {
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
     writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // RENDERED PIXELS", phase: 0.18 });
     writeCockpitWall(ctx, { label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 });
+    writeVisualProof(ctx, { label: "PI KITTY GRAPHICS VISUAL PROOF" });
     startHeartbeat(ctx);
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
     if (shouldAutoShowSplash()) {
@@ -731,6 +739,23 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_visual_proof`,
+    label: "Pi Graphics: Visual Proof",
+    description: "Return a transcript-visible truecolor ANSI proof block with palette chips, contrast metrics, and reload sentinel.",
+    promptSnippet: "Show the Pi kitty graphics visual proof block.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target proof width.", minimum: 64, maximum: 132 })),
+      label: Type.Optional(Type.String({ description: "Proof label." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsVisualProofText(params) }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, ansi: true, proof: true },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_heartbeat`,
     label: "Pi Graphics: Heartbeat",
     description: "Preview the lightweight live Pi kitty graphics heartbeat ticker line.",
@@ -1024,6 +1049,15 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-visual-proof", {
+    description: "Write a truecolor ANSI visual proof block with color chips and metrics.",
+    handler: async (args, ctx) => {
+      const label = args.trim() || "PI KITTY GRAPHICS VISUAL PROOF";
+      const wrote = writeVisualProof(ctx, { label });
+      if (!wrote) ctx.ui?.notify?.(buildPiGraphicsVisualProofText({ label }), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-heartbeat", {
     description: "Refresh the live Pi kitty graphics heartbeat ticker immediately.",
     handler: async (_args, ctx) => {
@@ -1181,6 +1215,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "visual proof: /pi-graphics-visual-proof",
         "live heartbeat: /pi-graphics-heartbeat",
         "cockpit wall: /pi-graphics-cockpit-wall",
         "OSC palette: /pi-graphics-osc-palette",
@@ -1300,6 +1335,7 @@ export {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
   buildPiGraphicsHeartbeatLine,
+  buildPiGraphicsVisualProofText,
   buildPiGraphicsHudComponent,
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
@@ -1336,5 +1372,6 @@ export {
   shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
+  shouldAutoShowVisualProof,
   shouldAutoShowThemeSwatchSplash,
 } from "./pi-graphics/auto-widget.js";

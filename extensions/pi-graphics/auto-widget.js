@@ -79,6 +79,11 @@ export function shouldAutoShowHeartbeat(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowVisualProof(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_VISUAL_PROOF ?? env.PI_KITTY_GRAPHICS_AUTO_VISUAL_PROOF;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function heartbeatIntervalMs(env = process.env) {
   const raw = env.PI_GRAPHICS_HEARTBEAT_MS ?? env.PI_KITTY_GRAPHICS_HEARTBEAT_MS;
   const ms = Math.trunc(Number(raw ?? 750));
@@ -130,6 +135,22 @@ function ansiBgRgb(r, g, b) {
 
 function ansiFgRgb(r, g, b) {
   return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+function relativeLuminance(hex) {
+  const [r, g, b] = hexRgb(hex).map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(a, b) {
+  const aa = relativeLuminance(a);
+  const bb = relativeLuminance(b);
+  const hi = Math.max(aa, bb);
+  const lo = Math.min(aa, bb);
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 function samplePixel(pixels, widthPx, heightPx, x, y) {
@@ -280,6 +301,39 @@ export function buildPiGraphicsHeartbeatLine(theme, { tick = 0, stage = "idle" }
   const trail = Array.from({ length: 8 }, (_unused, i) => glyphs[(index + i) % glyphs.length]).join("");
   const safeStage = String(stage || "idle").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 18);
   return `${fg("thinkingXhigh", head)} ${fg("customMessageLabel", "PI GFX HEARTBEAT")} ${fg("borderAccent", trail)} ${fg("muted", `// ${safeStage} // ${PI_GRAPHICS_RELOAD_SENTINEL}`)}`;
+}
+
+export function buildPiGraphicsVisualProofText({ width = 96, label = "PI KITTY GRAPHICS VISUAL PROOF" } = {}) {
+  const reset = "\u001b[0m";
+  const cells = Math.max(64, Math.min(132, Math.trunc(Number(width) || 96)));
+  const palette = [
+    ["void", "#02030b"],
+    ["nordic", "#07182f"],
+    ["cyan", "#00ffd0"],
+    ["aurora", "#39fffd"],
+    ["violet", "#d85cff"],
+    ["magenta", "#ff2f6d"],
+    ["gold", "#fff05a"],
+    ["ice", "#e9f8ff"],
+  ];
+  const chip = ([name, hex]) => `${ansiBg(hex)}${ansiFg(contrastRatio(hex, "#02030b") > 4.5 ? "#02030b" : "#ffffff")} ${name.padEnd(7).slice(0, 7)} ${reset}`;
+  const rail = palette.map(([, hex]) => `${ansiBg(hex)}  ${reset}`).join("").repeat(Math.ceil(cells / 16)).slice(0, cells * 12);
+  const delta = [
+    ["cyan-vs-void", "#00ffd0", "#02030b"],
+    ["violet-vs-void", "#d85cff", "#02030b"],
+    ["ice-vs-nordic", "#e9f8ff", "#07182f"],
+  ].map(([name, a, b]) => `${name}:ΔRGB=${rgbDelta(a, b)} contrast=${contrastRatio(a, b).toFixed(1)}`).join("  ");
+  const title = `${ansiBg("#02030b")}${ansiFg("#00ffd0")} ${label} ${reset}${ansiFg("#d85cff")} // TRUECOLOR CHIPS + MEASURED DELTAS ${reset}`;
+  const hint = `${ansiFg("#fff05a")}If these chips are not cyan/violet/gold, terminal truecolor or Pi package reload is failing.${reset}`;
+  return [
+    rail,
+    title,
+    palette.map(chip).join(" "),
+    `${ansiFg("#39fffd")}${delta}${reset}`,
+    `${ansiFg("#e9f8ff")}${PI_GRAPHICS_RELOAD_SENTINEL}${reset}`,
+    hint,
+    rail.split(reset).reverse().join(reset),
+  ].join("\n");
 }
 
 export function buildVisualContractLines({ themeName = "kitty-graphics", unicodePlacement = false, splash = true } = {}, theme) {

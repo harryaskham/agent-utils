@@ -53,6 +53,7 @@ import {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHeaderLines,
   buildPiGraphicsHeartbeatLine,
+  buildPiGraphicsVisualProofText,
   buildPiGraphicsHudComponent,
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
@@ -89,6 +90,7 @@ import {
   shouldAutoShowHeartbeat,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
+  shouldAutoShowVisualProof,
   shouldAutoShowThemeSwatchSplash,
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
@@ -502,6 +504,22 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[0], /PROMPT CAPTURED/);
   assert.match(lines[1], /deep nordic glow/);
   assert.match(lines[2], /neon cyan/);
+});
+
+test("buildPiGraphicsVisualProofText emits ANSI color chips and measurable deltas", () => {
+  assert.equal(shouldAutoShowVisualProof({}), true);
+  assert.equal(shouldAutoShowVisualProof({ PI_GRAPHICS_AUTO_VISUAL_PROOF: "0" }), false);
+  const proof = buildPiGraphicsVisualProofText({ width: 84, label: "VISUAL PROOF" });
+  assert.match(proof, /VISUAL PROOF/);
+  assert.match(proof, /TRUECOLOR CHIPS \+ MEASURED DELTAS/);
+  assert.match(proof, /cyan\s+/);
+  assert.match(proof, /violet\s+/);
+  assert.match(proof, /contrast=/);
+  assert.match(proof, /ΔRGB=/);
+  assert.match(proof, /\u001b\[48;2;/);
+  assert.match(proof, /\u001b\[38;2;/);
+  assert.match(proof, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.ok(proof.split("\n").length >= 7);
 });
 
 test("buildPiGraphicsHeartbeatLine emits a lightweight live pulse ticker", () => {
@@ -959,6 +977,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /visual proof: \/pi-graphics-visual-proof/);
+  assert.match(source, /pi-graphics-visual-proof/);
+  assert.match(source, /_visual_proof/);
+  assert.match(source, /writeVisualProof\(ctx/);
   assert.match(source, /live heartbeat: \/pi-graphics-heartbeat/);
   assert.match(source, /pi-graphics-heartbeat/);
   assert.match(source, /_heartbeat/);
@@ -984,6 +1006,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
   assert.match(source, /pi-graphics-conversation-frame/);
   assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /shouldAutoShowVisualProof\(\)/);
   assert.match(source, /shouldAutoShowHeartbeat\(\)/);
   assert.match(source, /shouldAutoShowCockpitWall\(\)/);
   assert.match(source, /shouldAutoApplyTerminalPalette\(\)/);
