@@ -25,9 +25,10 @@
 // companion theme (`themes/kitty-graphics.json`) sets a Nord-inspired palette
 // that pairs with the gradient defaults below.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Type } from "@sinclair/typebox";
 
@@ -127,8 +128,48 @@ function readJsonIfExists(path) {
   }
 }
 
+function agentDir() {
+  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
+
 function agentSettingsPath() {
-  return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "settings.json");
+  return join(agentDir(), "settings.json");
+}
+
+function expandHome(path) {
+  return String(path || "").replace(/^~(?=$|\/)/, homedir());
+}
+
+function bundledThemePath(name) {
+  return fileURLToPath(new URL(`../themes/${name}.json`, import.meta.url));
+}
+
+function syncBundledThemes(settings = {}) {
+  const themeNames = ["kitty-graphics-nord", "kitty-graphics"];
+  const configuredDirs = Array.isArray(settings.themes) ? settings.themes.map(expandHome) : [];
+  const dirs = Array.from(new Set([
+    join(agentDir(), "themes"),
+    join(homedir(), ".pi", "agent", "themes"),
+    ...configuredDirs,
+  ].filter(Boolean)));
+  const copied = [];
+  const errors = [];
+  for (const dir of dirs) {
+    try { mkdirSync(dir, { recursive: true }); } catch (error) { errors.push(`${dir}: ${error?.message || error}`); continue; }
+    for (const name of themeNames) {
+      try {
+        const source = readFileSync(bundledThemePath(name), "utf8");
+        const target = join(dir, `${name}.json`);
+        if (!existsSync(target) || readFileSync(target, "utf8") !== source) {
+          writeFileSync(target, source);
+          copied.push(target);
+        }
+      } catch (error) {
+        errors.push(`${name}@${dir}: ${error?.message || error}`);
+      }
+    }
+  }
+  return { dirs, copied, errors };
 }
 
 function boolToEnv(value) {
@@ -170,6 +211,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
 
 export default function piGraphicsExtension(pi) {
   const settings = readJsonIfExists(agentSettingsPath()) || {};
+  const themeSync = syncBundledThemes(settings);
   const settingsEnv = settingsEnvFromPiGraphics(settings);
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "kitty-graphics-nord");
   const configuredGraphicsMode = String(settings.piGraphics?.mode || settings.kittyGraphics?.mode || "calm");
@@ -359,6 +401,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function applyThemeCues(ctx) {
+    ctx.ui?.setStatus?.("pi-theme-sync", themeSync.errors.length ? `⚠ theme sync errors ${themeSync.errors.length}` : `◆ themes synced ${themeSync.dirs.length} dirs/${themeSync.copied.length} writes`);
     if (shouldAutoApplyTheme(gfxEnv()) && typeof ctx.ui?.setTheme === "function") {
       const result = ctx.ui.setTheme(configuredThemeName);
       if (result?.success) {
@@ -462,6 +505,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-graphics", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-theme", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-theme-sync", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-mode", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-pulse", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-row", undefined); } catch {}

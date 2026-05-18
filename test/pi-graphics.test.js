@@ -1100,6 +1100,10 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /settingsEnvFromPiGraphics/);
   assert.match(source, /piGraphics \|\| settings\.kittyGraphics/);
   assert.match(source, /const gfxEnv = \(\) => \(\{ \.\.\.settingsEnv, \.\.\.process\.env \}\)/);
+  assert.match(source, /function syncBundledThemes/);
+  assert.match(source, /bundledThemePath\("kitty-graphics-nord"\)|themeNames = \["kitty-graphics-nord", "kitty-graphics"\]/);
+  assert.match(source, /join\(agentDir\(\), "themes"\)/);
+  assert.match(source, /ctx\.ui\?\.setStatus\?\.\("pi-theme-sync"/);
   assert.match(source, /const configuredThemeName = String/);
   assert.match(source, /const configuredGraphicsMode = String/);
   assert.match(source, /ctx\.ui\.setTheme\(configuredThemeName\)/);

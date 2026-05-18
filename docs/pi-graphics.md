@@ -21,7 +21,12 @@ The pieces:
 
 Install agent-utils as a Pi package per the repo README. Pi auto-discovers
 themes via the `pi.themes` entry in [`package.json`](../package.json) and
-extensions via `pi.extensions`.
+extensions via `pi.extensions`. On extension startup, `pi-graphics` also syncs
+`kitty-graphics-nord.json` and `kitty-graphics.json` into the active user theme
+directories (`$PI_CODING_AGENT_DIR/themes`, `~/.pi/agent/themes`, and any
+`settings.json` `themes[]` entries) and reports `pi-theme-sync` status. This is
+intentional: if `/settings` is reading only user theme directories, the packaged
+theme still becomes selectable without a separate manual copy step.
 
 To activate the theme:
 
@@ -82,7 +87,7 @@ Example settings:
 Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
 maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
 still override settings for one run. The compact ANSI `/pi-graphics-ambient-proof`
-strip and the OSC terminal-palette request are enabled by default as fallback
+strip, user-theme sync, and the OSC terminal-palette request are enabled by default as fallback
 visual smoke tests; the strip includes the configured theme name, graphics mode,
 settings-derived auto flags, measured theme color deltas, renderer PNG bytes,
 color bucket count, luma delta, and reload sentinel. Set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
