@@ -234,6 +234,131 @@ export function renderNativeChromeFrame({ columns = 72, rows = 4, phase = 0, sur
   };
 }
 
+function drawTuiSurfaceCard(pixels, widthPx, heightPx, { x, y, w, h, tone = "assistant", phase = 0, label = 0 } = {}) {
+  const palette = PALETTES[tone] ?? PALETTES.assistant;
+  const p = pulse(phase + label * 0.08);
+  const innerW = Math.max(12, w - 10);
+  fillVerticalGradient(pixels, widthPx, x, y, w, h, withAlpha(palette.top, 210), withAlpha(palette.bottom, 232));
+  addRadialGlow(pixels, widthPx, x + w * (0.18 + p * 0.10), y + h * 0.22, Math.max(w, h) * 0.42, withAlpha(palette.glow, 105), 0.72);
+  addRadialGlow(pixels, widthPx, x + w * (0.84 - p * 0.08), y + h * 0.78, Math.max(w, h) * 0.38, withAlpha(palette.glow2, 98), 0.68);
+  strokeRect(pixels, widthPx, x, y, w, h, withAlpha(palette.rail, 150 + p * 70), 1);
+  strokeRect(pixels, widthPx, x + 2, y + 2, w - 4, h - 4, withAlpha(palette.rail2, 74 + p * 86), 1);
+  fillVerticalGradient(pixels, widthPx, x + 3, y + 4, 3, h - 8, withAlpha(palette.rail, 230), withAlpha(palette.rail2, 165));
+  fillHorizontalGradient(pixels, widthPx, x + 9, y + 5, innerW - 8, 4, withAlpha(palette.rail, 118 + p * 78), withAlpha(palette.glow2, 82 + p * 60));
+  for (let i = 0; i < 3; i += 1) {
+    const chipW = Math.max(10, Math.floor(w * (0.07 + i * 0.006)));
+    fillRect(pixels, widthPx, x + w - 12 - (i + 1) * (chipW + 5), y + 6, chipW, 4, withAlpha(i === 0 ? palette.chip : palette.rail2, 112 + p * 78));
+  }
+  const textX = x + 13;
+  const maxBars = Math.max(2, Math.floor((h - 22) / 8));
+  for (let row = 0; row < maxBars; row += 1) {
+    const yy = y + 18 + row * 8;
+    const wave = 0.54 + Math.sin(row * 1.4 + label + phase * Math.PI * 2) * 0.16 + Math.cos(row * 0.7 + label) * 0.1;
+    const bw = Math.max(18, Math.min(innerW - 18, Math.floor(innerW * wave)));
+    fillRect(pixels, widthPx, textX, yy, bw, 3, row % 2 === 0 ? withAlpha(palette.textBar, 88 + p * 52) : withAlpha(palette.mutedBar, 60 + p * 38));
+  }
+  for (let xx = textX; xx < x + w - 13; xx += 7) {
+    const t = (xx - textX) / Math.max(1, w - 26);
+    const hh = 1 + Math.round((Math.sin((t * 3.5 + phase + label * 0.1) * Math.PI * 2) * 0.5 + 0.5) * Math.max(2, h * 0.10));
+    fillRect(pixels, widthPx, xx, y + h - 7 - hh, 2, hh, withAlpha(palette.rail2, 70 + p * 96));
+  }
+}
+
+export function renderTuiSurfaceScenePixels({ columns = 76, rows = 16, phase = 0, density = 0.78 } = {}) {
+  const cols = clampPositive(columns, 32, "columns");
+  const rs = clampPositive(rows, 10, "rows");
+  const widthPx = cols * CELL_PX_W;
+  const heightPx = rs * CELL_PX_H;
+  const ph = phase01(phase);
+  const p = pulse(ph);
+  const pixels = makeCanvas(widthPx, heightPx, "#030711ff");
+
+  fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, "#020611ff", "#111a30ff");
+  addRadialGlow(pixels, widthPx, widthPx * (0.16 + p * 0.18), heightPx * 0.12, widthPx * 0.44, "#00d8ffaa", 0.95);
+  addRadialGlow(pixels, widthPx, widthPx * (0.84 - p * 0.16), heightPx * 0.58, widthPx * 0.42, "#b48cffaa", 0.9);
+  addRadialGlow(pixels, widthPx, widthPx * 0.52, heightPx * 0.96, widthPx * 0.36, "#72fbd688", 0.65);
+
+  // Outer terminal shell: this is a TypeScript mirror of a real Pi TUI layout,
+  // not just a theme token swatch. It includes header, transcript cards,
+  // tool/status lanes, and the editor/input box as rendered pixels.
+  strokeRect(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha("#8fbcbb", 132 + p * 82), 2);
+  strokeRect(pixels, widthPx, 6, 6, widthPx - 12, heightPx - 12, withAlpha("#88c0d0", 76 + p * 84), 1);
+  fillHorizontalGradient(pixels, widthPx, 10, 9, widthPx - 20, 8, "#00d8ffaa", "#b48cffaa");
+  fillHorizontalGradient(pixels, widthPx, 10, heightPx - 12, widthPx - 20, 5, "#72fbd688", "#00d8ffaa");
+
+  const margin = Math.max(12, Math.floor(widthPx * 0.025));
+  const gutter = Math.max(7, Math.floor(widthPx * 0.012));
+  const top = CELL_PX_H + 10;
+  const footerH = CELL_PX_H + 10;
+  const inputH = Math.max(CELL_PX_H * 2, Math.floor(heightPx * 0.18));
+  const contentBottom = heightPx - footerH - inputH - 10;
+  const cardH = Math.max(CELL_PX_H * 2, Math.floor((contentBottom - top - gutter * 2) / 3));
+  const fullW = widthPx - margin * 2;
+  const userW = Math.floor(fullW * 0.72);
+  const assistantW = Math.floor(fullW * 0.84);
+  drawTuiSurfaceCard(pixels, widthPx, heightPx, { x: margin + fullW - userW, y: top, w: userW, h: cardH, tone: "user", phase: ph, label: 1 });
+  drawTuiSurfaceCard(pixels, widthPx, heightPx, { x: margin, y: top + cardH + gutter, w: assistantW, h: cardH, tone: "assistant", phase: ph, label: 2 });
+  drawTuiSurfaceCard(pixels, widthPx, heightPx, { x: margin, y: top + (cardH + gutter) * 2, w: Math.floor(fullW * 0.78), h: cardH, tone: "tool", phase: ph, label: 3 });
+
+  const inputY = heightPx - footerH - inputH - 4;
+  drawTuiSurfaceCard(pixels, widthPx, heightPx, { x: margin, y: inputY, w: fullW, h: inputH, tone: "assistant", phase: ph, label: 4 });
+  fillRect(pixels, widthPx, margin + 18, inputY + Math.floor(inputH / 2), Math.floor(fullW * Math.max(0.35, Math.min(0.88, density))), 3, withAlpha("#eceff4", 98 + p * 50));
+  fillRect(pixels, widthPx, margin + fullW - 22, inputY + 10, 3, inputH - 20, withAlpha("#72fbd6", 180 + p * 60));
+
+  // Status beacons and a cheap waveform make animation obvious even when the
+  // APNG is only uploaded once and then played by kitty.
+  for (let i = 0; i < 7; i += 1) {
+    const x = margin + i * Math.max(26, Math.floor(fullW / 8));
+    const alpha = 70 + ((i % 3) * 24) + p * 72;
+    fillRect(pixels, widthPx, x, heightPx - footerH + 8, Math.max(16, Math.floor(fullW / 13)), 5, withAlpha(i % 2 ? "#b48cff" : "#72fbd6", alpha));
+  }
+  for (let x = margin; x < margin + fullW; x += 5) {
+    const t = (x - margin) / Math.max(1, fullW);
+    const h = 2 + Math.round((Math.sin((t * 5 + ph) * Math.PI * 2) * 0.5 + 0.5) * 11);
+    fillRect(pixels, widthPx, x, heightPx - 13 - h, 2, h, withAlpha("#00d8ff", 78 + p * 100));
+  }
+
+  addScanlines(pixels, widthPx, { every: 4, alpha: 12 + p * 8, color: "#d8dee9" });
+  return { pixels, columns: cols, rows: rs, widthPx, heightPx, phase: ph };
+}
+
+export function renderTuiSurfaceSceneFrame(options = {}) {
+  const scene = renderTuiSurfaceScenePixels(options);
+  const png = encodeRgbaPng(scene.pixels, scene.widthPx, scene.heightPx);
+  return {
+    png,
+    columns: scene.columns,
+    rows: scene.rows,
+    widthPx: scene.widthPx,
+    heightPx: scene.heightPx,
+    phase: scene.phase,
+    metrics: metricsForPayload(png, scene.widthPx, scene.heightPx),
+  };
+}
+
+export function renderTuiSurfaceScenePulseApng({ frames = 10, delayMs = 70, plays = 0, ...options } = {}) {
+  const count = Math.max(2, Math.min(32, Math.trunc(Number(frames) || 10)));
+  const rendered = Array.from({ length: count }, (_unused, index) => renderTuiSurfaceScenePixels({ ...options, phase: index / count }));
+  const first = rendered[0];
+  const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
+  return {
+    png,
+    columns: first.columns,
+    rows: first.rows,
+    widthPx: first.widthPx,
+    heightPx: first.heightPx,
+    frames: count,
+    delayMs: Math.max(1, Math.trunc(delayMs || 70)),
+    plays: Math.max(0, Math.trunc(plays || 0)),
+    metrics: metricsForPayload(png, first.widthPx, first.heightPx, {
+      frames: count,
+      delayMs: Math.max(1, Math.trunc(delayMs || 70)),
+      animationMillis: count * Math.max(1, Math.trunc(delayMs || 70)),
+    }),
+  };
+}
+
+
 export function renderTerminalScenePixels({ columns = 72, rows = 14, phase = 0 } = {}) {
   const cols = clampPositive(columns, 16, "columns");
   const rs = clampPositive(rows, 8, "rows");

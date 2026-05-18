@@ -9,6 +9,9 @@ import {
   renderTerminalSceneFrame,
   renderTerminalScenePixels,
   renderTerminalScenePulseApng,
+  renderTuiSurfaceSceneFrame,
+  renderTuiSurfaceScenePixels,
+  renderTuiSurfaceScenePulseApng,
   renderTuiComponentFrame,
   renderTuiComponentPixels,
   renderTuiComponentPulseApng,
@@ -44,6 +47,11 @@ function explicitOrShowcase(value, env) {
 export function shouldAutoShowGraphics(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_WIDGET ?? env.PI_KITTY_GRAPHICS_AUTO_WIDGET;
   return explicitOrShowcase(value, env);
+}
+
+export function shouldAutoShowAmbientChrome(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_AMBIENT_CHROME ?? env.PI_KITTY_GRAPHICS_AUTO_AMBIENT_CHROME;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
 export function shouldAutoApplyTheme(env = process.env) {
@@ -357,17 +365,21 @@ function rendererStats(pixels) {
 export function buildPiGraphicsValidationReportLines({ columns = 52, rows = 8, frames = 8 } = {}) {
   const component = renderTuiComponentFrame({ columns, rows, phase: 0.35, tone: "assistant" });
   const scene = renderTerminalSceneFrame({ columns: Math.max(56, columns + 12), rows: Math.max(10, rows + 3), phase: 0.2 });
-  const pulse = renderTerminalScenePulseApng({ columns: Math.max(56, columns + 12), rows: Math.max(10, rows + 3), frames, delayMs: 90 });
+  const tuiSurface = renderTuiSurfaceSceneFrame({ columns: Math.max(64, columns + 18), rows: Math.max(12, rows + 5), phase: 0.42 });
+  const pulse = renderTuiSurfaceScenePulseApng({ columns: Math.max(64, columns + 18), rows: Math.max(12, rows + 5), frames, delayMs: 70 });
   const componentStats = rendererStats(renderTuiComponentPixels({ columns, rows, phase: 0.35, tone: "assistant" }).pixels);
   const sceneStats = rendererStats(renderTerminalScenePixels({ columns: Math.max(56, columns + 12), rows: Math.max(10, rows + 3), phase: 0.2 }).pixels);
+  const tuiSurfaceStats = rendererStats(renderTuiSurfaceScenePixels({ columns: Math.max(64, columns + 18), rows: Math.max(12, rows + 5), phase: 0.42 }).pixels);
   return [
     `⬢ PI GFX RENDERED VALIDATION REPORT ⬢ ${PI_GRAPHICS_RELOAD_SENTINEL}`,
     `component PNG: ${component.widthPx}x${component.heightPx}px ${component.metrics.pngBytes}B wire≈${component.metrics.estimatedWireBytes}B`,
     `component visual: uniqueBuckets=${componentStats.uniqueColorBuckets} lumaRange=${componentStats.lumaRange} min=${componentStats.minLuma} max=${componentStats.maxLuma}`,
     `terminal scene PNG: ${scene.widthPx}x${scene.heightPx}px ${scene.metrics.pngBytes}B wire≈${scene.metrics.estimatedWireBytes}B`,
     `terminal scene visual: uniqueBuckets=${sceneStats.uniqueColorBuckets} lumaRange=${sceneStats.lumaRange} min=${sceneStats.minLuma} max=${sceneStats.maxLuma}`,
+    `tui surface PNG: ${tuiSurface.widthPx}x${tuiSurface.heightPx}px ${tuiSurface.metrics.pngBytes}B wire≈${tuiSurface.metrics.estimatedWireBytes}B`,
+    `tui surface visual: uniqueBuckets=${tuiSurfaceStats.uniqueColorBuckets} lumaRange=${tuiSurfaceStats.lumaRange} min=${tuiSurfaceStats.minLuma} max=${tuiSurfaceStats.maxLuma}`,
     `APNG pulse: frames=${pulse.frames} delayMs=${pulse.delayMs} bytes=${pulse.metrics.pngBytes} animationMs=${pulse.metrics.animationMillis}`,
-    "contract: TypeScript renderer is producing real RGBA pixels, glow gradients, scanlines, bounded APNG animation, and measurable contrast.",
+    "contract: TypeScript renderer is producing real RGBA pixels for TUI cards, editor chrome, tool/status lanes, glow gradients, scanlines, bounded APNG animation, and measurable contrast.",
   ];
 }
 

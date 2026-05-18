@@ -85,6 +85,7 @@ import {
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
+  shouldAutoShowAmbientChrome,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowBrailleScene,
@@ -107,6 +108,8 @@ import {
   renderTuiComponentFrame,
   renderTuiComponentFrames,
   renderTuiComponentPulseApng,
+  renderTuiSurfaceSceneFrame,
+  renderTuiSurfaceScenePulseApng,
 } from "../extensions/pi-graphics/components.js";
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -442,6 +445,42 @@ test("renderTerminalScenePulseApng packages animated terminal scene frames", () 
   assert.ok(pulse.metrics.estimatedWireBytes < 500000);
 });
 
+test("renderTuiSurfaceSceneFrame mirrors a full Pi TUI with high-contrast pixel validation", () => {
+  const scene = renderTuiSurfaceSceneFrame({ columns: 64, rows: 12, phase: 0.33 });
+  assert.equal(scene.columns, 64);
+  assert.equal(scene.rows, 12);
+  assert.ok(scene.png.length > 2000);
+  assert.ok(scene.metrics.estimatedWireBytes < 400000, "surface scene should remain bounded for interactive kitty upload");
+  const decoded = decodePngRgba(scene.png);
+  const outer = pixelAt(decoded, 2, 2);
+  const userRail = pixelAt(decoded, decoded.width - 210, 34);
+  const assistantRail = pixelAt(decoded, 18, 74);
+  const inputCursor = pixelAt(decoded, decoded.width - 34, decoded.height - 52);
+  const center = pixelAt(decoded, Math.floor(decoded.width / 2), Math.floor(decoded.height / 2));
+  assert.ok(channelDistance(outer, center) > 35, "outer chrome should differ from deep background");
+  assert.ok(channelDistance(userRail, assistantRail) > 65, "user and assistant surfaces should have distinct rendered palettes");
+  assert.ok(channelDistance(inputCursor, center) > 80, "editor/input cursor rail should be visibly rendered");
+  const samples = new Set();
+  for (let y = 0; y < decoded.height; y += 7) {
+    for (let x = 0; x < decoded.width; x += 7) {
+      const [r, g, b, a] = pixelAt(decoded, x, y);
+      if (a > 12) samples.add(`${r >> 4}:${g >> 4}:${b >> 4}`);
+    }
+  }
+  assert.ok(samples.size > 42, `expected many color buckets from glow/gradient renderer, saw ${samples.size}`);
+});
+
+test("renderTuiSurfaceScenePulseApng efficiently animates the full TUI surface", () => {
+  const pulse = renderTuiSurfaceScenePulseApng({ columns: 58, rows: 10, frames: 4, delayMs: 90 });
+  const chunks = pngChunkTypes(pulse.png);
+  assert.equal(pulse.frames, 4);
+  assert.equal(pulse.delayMs, 90);
+  assert.equal(pulse.metrics.animationMillis, 360);
+  assert.equal(chunks.filter((type) => type === "fcTL").length, 4);
+  assert.equal(chunks.filter((type) => type === "fdAT").length, 3);
+  assert.ok(pulse.metrics.pngBytes < 520000, "full TUI APNG must stay bounded as one efficient kitty upload");
+});
+
 test("renderPiGraphicsContactSheet creates a bounded visual regression sheet", () => {
   const sheet = renderPiGraphicsContactSheet({ columns: 18, rows: 4, gapPx: 6 });
   assert.equal(sheet.tileCount, 12);
@@ -546,16 +585,20 @@ test("buildPiGraphicsValidationReportText reports real rendered pixel metrics", 
   assert.equal(shouldAutoShowValidationReport({ PI_GRAPHICS_AUTO_VALIDATION_REPORT: "off" }), false);
   const lines = buildPiGraphicsValidationReportLines({ columns: 40, rows: 7, frames: 6 });
   const report = buildPiGraphicsValidationReportText({ columns: 40, rows: 7, frames: 6 });
-  assert.equal(lines.length, 7);
+  assert.equal(lines.length, 9);
   assert.match(report, /PI GFX RENDERED VALIDATION REPORT/);
   assert.match(report, /component PNG: \d+x\d+px \d+B wire≈\d+B/);
   assert.match(report, /component visual: uniqueBuckets=\d+ lumaRange=\d+/);
   assert.match(report, /terminal scene visual: uniqueBuckets=\d+ lumaRange=\d+/);
-  assert.match(report, /APNG pulse: frames=6 delayMs=90 bytes=\d+ animationMs=540/);
+  assert.match(report, /tui surface PNG: \d+x\d+px \d+B wire≈\d+B/);
+  assert.match(report, /tui surface visual: uniqueBuckets=\d+ lumaRange=\d+/);
+  assert.match(report, /APNG pulse: frames=6 delayMs=70 bytes=\d+ animationMs=420/);
   const componentRange = Number(report.match(/component visual:.*lumaRange=(\d+)/)?.[1]);
   const sceneRange = Number(report.match(/terminal scene visual:.*lumaRange=(\d+)/)?.[1]);
+  const tuiSurfaceRange = Number(report.match(/tui surface visual:.*lumaRange=(\d+)/)?.[1]);
   assert.ok(componentRange > 30);
   assert.ok(sceneRange > 30);
+  assert.ok(tuiSurfaceRange > 45);
   assert.match(report, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
@@ -946,6 +989,10 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_KITTY_GRAPHICS_AUTO_WIDGET: "off" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "1" }), true);
+  assert.equal(shouldAutoShowAmbientChrome({}), true);
+  assert.equal(shouldAutoShowAmbientChrome({ PI_GRAPHICS_AUTO_AMBIENT_CHROME: "0" }), false);
+  assert.equal(shouldAutoShowAmbientChrome({ PI_KITTY_GRAPHICS_AUTO_AMBIENT_CHROME: "off" }), false);
+  assert.equal(shouldAutoShowAmbientChrome({ PI_GRAPHICS_AUTO_AMBIENT_CHROME: "1" }), true);
   assert.equal(shouldAutoApplyTheme({}), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
@@ -1006,10 +1053,16 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /settingsEnvFromPiGraphics/);
   assert.match(source, /piGraphics \|\| settings\.kittyGraphics/);
   assert.match(source, /const gfxEnv = \(\) => \(\{ \.\.\.settingsEnv, \.\.\.process\.env \}\)/);
-  assert.match(source, /ctx\.ui\.setTheme\("kitty-graphics"\)/);
+  assert.match(source, /const configuredThemeName = String/);
+  assert.match(source, /ctx\.ui\.setTheme\(configuredThemeName\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
+  assert.match(source, /showAmbientChrome\(ctx\)/);
+  assert.match(source, /renderTuiSurfaceScenePulseApng/);
+  assert.match(source, /shouldAutoShowAmbientChrome\(gfxEnv\(\)\)/);
+  assert.match(source, /pi-graphics-tui-surface-scene/);
+  assert.match(source, /_render_tui_surface_scene/);
   assert.match(source, /if \(shouldAutoShowGraphics\(gfxEnv\(\)\)\)/);
   assert.match(source, /pi-graphics-native-chrome-demo/);
   assert.match(source, /_render_native_chrome/);
@@ -1120,6 +1173,19 @@ test("themes/kitty-graphics.json is visibly different from the default text them
   assert.ok(channelDistance(resolve("customMessageBg"), resolve("userMessageBg")) > 110, "custom/extension panels should not blend into user messages");
   assert.equal(theme.export.glowCyan, "#00aaff");
   assert.equal(theme.export.glowAurora, "#ff4dff");
+});
+
+test("themes/kitty-graphics-nord.json is calm but still visibly displaced from built-in dark", async () => {
+  const themePath = fileURLToPath(new URL("../themes/kitty-graphics-nord.json", import.meta.url));
+  const theme = JSON.parse(await readFile(themePath, "utf8"));
+  assert.equal(theme.name, "kitty-graphics-nord");
+  const resolve = (token) => parseColor(theme.vars[theme.colors[token]] ?? theme.colors[token]);
+  assert.ok(channelDistance(resolve("accent"), parseColor("#8abeb7")) > 70, "Nord accent should not be mistaken for built-in dark accent");
+  assert.ok(channelDistance(resolve("userMessageBg"), parseColor("#343541")) > 65, "user message panel should visibly move away from stock dark");
+  assert.ok(channelDistance(resolve("customMessageBg"), resolve("userMessageBg")) > 55, "custom/assistant chrome should be distinct from user panels");
+  assert.ok(contrastRatio(resolve("text"), resolve("userMessageBg")) > 9, "calm Nord text should still pop against rendered panel colors");
+  assert.equal(theme.export.glowCyan, "#9eeaff");
+  assert.equal(theme.export.glowAurora, "#caa6ff");
 });
 
 test("kitty graphics theme has large measured deltas from the built-in dark palette", async () => {

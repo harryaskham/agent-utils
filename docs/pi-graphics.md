@@ -36,11 +36,15 @@ The companion extension (`./extensions/pi-graphics.js`) is loaded
 automatically by Pi when the package is installed. **Theme and graphics mode are
 separate controls**: the theme determines Pi's colors; `settings.json` under
 `piGraphics` (or env vars) determines whether kitty/PNG graphics are calm, off,
-or showcase. The default profile is now calm: it keeps native chrome useful by
-installing footer/status cues plus editor/input frame widgets, while the huge
-startup splash, cockpit wall, Braille scene, validation report, ANSI takeover,
-photon rain, lighthouse, and APNG demo widgets stay behind `/pi-graphics-showcase`
-or their explicit commands.
+or showcase. The default profile is now calm but still unmistakably graphical:
+it auto-applies the selected kitty graphics theme, installs footer/status cues
+and editor/input frame widgets, and mounts a bounded APNG **rendered TUI surface**
+above the editor. That ambient surface is a TypeScript-rendered mirror of Pi UI
+chrome — transcript cards, tool lane, input box, footer beacons, deep Nordic
+gradients, radial glow, scanlines, and a pulsing waveform — uploaded once as an
+efficient APNG. The huge startup splash, cockpit wall, Braille scene, validation
+report, ANSI takeover, photon rain, and lighthouse stay behind
+`/pi-graphics-showcase` or their explicit commands.
 
 Example settings:
 
@@ -49,12 +53,13 @@ Example settings:
   "theme": "kitty-graphics-nord",
   "piGraphics": {
     "mode": "calm",
-    "autoApplyTheme": false,
+    "autoApplyTheme": true,
     "features": {
       "chrome": true,
       "editorFrame": true,
       "footer": true,
       "nativeChrome": true,
+      "ambientChrome": true,
       "showcaseWidgets": false,
       "startupSplash": false,
       "conversationFrame": false,
@@ -67,14 +72,19 @@ Example settings:
       "terminalPalette": false,
       "heartbeat": false
     },
-    "animation": { "targetFps": 60, "showcaseFrames": 32 }
+    "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 }
   }
 }
 ```
 
 Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
 maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
-still override settings for one run. Use `/pi-graphics-native-chrome-demo` to preview the intended next direction:
+still override settings for one run. Set `PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to
+hide the compact always-visible rendered TUI surface, or tune it with
+`PI_GRAPHICS_AMBIENT_FRAMES` and `PI_GRAPHICS_AMBIENT_DELAY_MS`. Use
+`/pi-graphics-tui-surface-scene` or `pi_graphics_render_tui_surface_scene` to
+force the full TypeScript-rendered Pi TUI scene manually. Use
+`/pi-graphics-native-chrome-demo` to preview the intended next direction:
 PNG-backed translucent placeholder borders/backgrounds for input, user/assistant
 messages, tool output, and info/system surfaces. Use `/pi-graphics-visual-contract` (or the
 `pi_graphics_visual_contract` tool) to show an explicit checklist of all expected

@@ -83,6 +83,7 @@ import {
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
+  shouldAutoShowAmbientChrome,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowBrailleScene,
@@ -103,6 +104,8 @@ import {
   renderTerminalScenePulseApng,
   renderTuiComponentFrame,
   renderTuiComponentPulseApng,
+  renderTuiSurfaceSceneFrame,
+  renderTuiSurfaceScenePulseApng,
 } from "./pi-graphics/components.js";
 import {
   buildPlacement,
@@ -141,6 +144,7 @@ function settingsEnvFromPiGraphics(settings = {}) {
   const env = {
     PI_GRAPHICS_SHOWCASE: showcase ? "1" : "0",
     PI_GRAPHICS_AUTO_THEME: boolToEnv(gfx.autoApplyTheme ?? auto.theme ?? false),
+    PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv(!off && (features.ambientChrome ?? auto.ambientChrome ?? true)),
     PI_GRAPHICS_AUTO_WIDGET: boolToEnv(!off && (features.showcaseWidgets ?? auto.widgets ?? showcase)),
     PI_GRAPHICS_AUTO_SPLASH: boolToEnv(!off && (features.startupSplash ?? auto.splash ?? showcase)),
     PI_GRAPHICS_AUTO_THEME_SWATCH: boolToEnv(!off && (features.themeSwatch ?? auto.themeSwatch ?? showcase)),
@@ -156,11 +160,15 @@ function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_BRAILLE_SCENE: boolToEnv(!off && (features.brailleScene ?? auto.brailleScene ?? showcase)),
   };
   if (gfx.animation?.heartbeatMs) env.PI_GRAPHICS_HEARTBEAT_MS = String(gfx.animation.heartbeatMs);
+  if (gfx.animation?.ambientFrames) env.PI_GRAPHICS_AMBIENT_FRAMES = String(gfx.animation.ambientFrames);
+  if (gfx.animation?.ambientDelayMs) env.PI_GRAPHICS_AMBIENT_DELAY_MS = String(gfx.animation.ambientDelayMs);
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
 
 export default function piGraphicsExtension(pi) {
-  const settingsEnv = settingsEnvFromPiGraphics(readJsonIfExists(agentSettingsPath()) || {});
+  const settings = readJsonIfExists(agentSettingsPath()) || {};
+  const settingsEnv = settingsEnvFromPiGraphics(settings);
+  const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "kitty-graphics-nord");
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const state = makeState();
   const autoWidgetId = "pi-graphics-auto-pulse";
@@ -172,6 +180,7 @@ export default function piGraphicsExtension(pi) {
   const themeSwatchWidgetId = "pi-graphics-theme-swatch";
   const photonRainWidgetId = "pi-graphics-photon-rain";
   const terminalSceneWidgetId = "pi-graphics-terminal-scene";
+  const ambientChromeWidgetId = "pi-graphics-ambient-chrome";
   const lighthouseWidgetId = "pi-graphics-lighthouse";
   let lastAutoWidgetSignature = "";
   let heartbeatTimer = null;
@@ -307,6 +316,31 @@ export default function piGraphicsExtension(pi) {
     return { frame, placement, text: renderToText(placement) };
   }
 
+  function ambientFrames(env = gfxEnv()) {
+    const n = Math.trunc(Number(env.PI_GRAPHICS_AMBIENT_FRAMES ?? env.PI_KITTY_GRAPHICS_AMBIENT_FRAMES ?? 4));
+    return Number.isFinite(n) ? Math.max(4, Math.min(32, n)) : 4;
+  }
+
+  function ambientDelayMs(env = gfxEnv()) {
+    const n = Math.trunc(Number(env.PI_GRAPHICS_AMBIENT_DELAY_MS ?? env.PI_KITTY_GRAPHICS_AMBIENT_DELAY_MS ?? 90));
+    return Number.isFinite(n) ? Math.max(33, Math.min(250, n)) : 90;
+  }
+
+  function showAmbientChrome(ctx) {
+    if (!shouldAutoShowAmbientChrome(gfxEnv()) || !ensureUnicodePlacement(state)) return false;
+    const scene = renderTuiSurfaceScenePulseApng({ columns: 58, rows: 10, frames: ambientFrames(), delayMs: ambientDelayMs() });
+    const placement = buildPlacement(state, {
+      name: "ambient-tui-surface-scene",
+      png: scene.png,
+      columns: scene.columns,
+      rows: scene.rows,
+      caption: "ambient rendered Pi TUI surface",
+    });
+    ctx.ui?.setWidget?.(ambientChromeWidgetId, renderToText(placement).split("\n"), { placement: "aboveEditor" });
+    ctx.ui?.setStatus?.("pi-gfx-ambient", `⬢ rendered TUI APNG ${scene.frames}f/${scene.delayMs}ms`);
+    return true;
+  }
+
   function stopHeartbeat(ctx) {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = null;
@@ -315,12 +349,12 @@ export default function piGraphicsExtension(pi) {
 
   function applyThemeCues(ctx) {
     if (shouldAutoApplyTheme(gfxEnv()) && typeof ctx.ui?.setTheme === "function") {
-      const result = ctx.ui.setTheme("kitty-graphics");
+      const result = ctx.ui.setTheme(configuredThemeName);
       if (result?.success) {
-        ctx.ui?.setStatus?.("pi-theme", "◆ kitty-graphics active");
+        ctx.ui?.setStatus?.("pi-theme", `◆ ${configuredThemeName} active`);
       } else {
-        ctx.ui?.setStatus?.("pi-theme", "⚠ select /settings → kitty-graphics");
-        ctx.ui?.notify?.(`pi-graphics theme not active: ${result?.error || "select kitty-graphics in /settings"}`, "warning");
+        ctx.ui?.setStatus?.("pi-theme", `⚠ select /settings → ${configuredThemeName}`);
+        ctx.ui?.notify?.(`pi-graphics theme not active: ${result?.error || `select ${configuredThemeName} in /settings`}`, "warning");
       }
     }
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 140 });
@@ -330,6 +364,7 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
+    showAmbientChrome(ctx);
     if (shouldAutoShowGraphics(gfxEnv())) {
       ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
       ctx.ui?.setStatus?.("pi-gfx-pulse", "◆ APNG editor aura");
@@ -436,6 +471,8 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(themeSwatchWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(photonRainWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(terminalSceneWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(ambientChromeWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-ambient", undefined); } catch {}
     try { ctx?.ui?.setWidget?.(lighthouseWidgetId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
@@ -758,6 +795,54 @@ export default function piGraphicsExtension(pi) {
         columns: scene.columns,
         rows: scene.rows,
         caption: "rendered terminal scene",
+      });
+      return {
+        content: [{ type: "text", text: renderToText(placement) }],
+        details: {
+          imageId: placement.imageId,
+          placementId: placement.placementId,
+          columns: scene.columns,
+          rows: scene.rows,
+          widthPx: scene.widthPx,
+          heightPx: scene.heightPx,
+          frames: scene.frames || 1,
+          delayMs: scene.delayMs || 0,
+          metrics: scene.metrics,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_render_tui_surface_scene`,
+    label: "Pi Graphics: Rendered TUI Surface Scene",
+    description: "Render a full Pi-like TUI surface as actual PNG/APNG pixels: transcript cards, tool lane, editor input chrome, footer beacons, deep Nordic gradients, glow, and scanlines.",
+    promptSnippet: "Render the full high-tech Pi TUI surface scene with animated glow.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Width in terminal cells. Defaults to 76.", minimum: 32, maximum: 160 })),
+      rows: Type.Optional(Type.Number({ description: "Height in terminal cells. Defaults to 16.", minimum: 10, maximum: 48 })),
+      animated: Type.Optional(Type.Boolean({ description: "Return APNG pulse animation instead of a static PNG. Defaults to true." })),
+      frames: Type.Optional(Type.Number({ description: "Animation frame count. Defaults to 10.", minimum: 2, maximum: 32 })),
+      delayMs: Type.Optional(Type.Number({ description: "APNG frame delay. Defaults to 70ms." })),
+      phase: Type.Optional(Type.Number({ description: "Static phase when animated=false." })),
+      caption: Type.Optional(Type.String({ description: "Placeholder caption." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      if (!ensureUnicodePlacement(state)) {
+        return {
+          content: [{ type: "text", text: "pi-graphics: not running in a kitty/tmux placeholder-capable terminal; rendered TUI surface scene requires kitty image placement." }],
+          details: { fallback: true },
+        };
+      }
+      const scene = params.animated === false
+        ? renderTuiSurfaceSceneFrame({ columns: params.columns, rows: params.rows, phase: params.phase })
+        : renderTuiSurfaceScenePulseApng({ columns: params.columns, rows: params.rows, frames: params.frames, delayMs: params.delayMs });
+      const placement = buildPlacement(state, {
+        name: `tui-surface-scene-${scene.columns}x${scene.rows}`,
+        png: scene.png,
+        columns: scene.columns,
+        rows: scene.rows,
+        caption: params.caption || "rendered Pi TUI surface",
       });
       return {
         content: [{ type: "text", text: renderToText(placement) }],
@@ -1191,6 +1276,26 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-tui-surface-scene", {
+    description: "Show the full rendered Pi TUI surface scene: transcript cards, tool lane, editor input, footer, glow, scanlines, and APNG pulse.",
+    handler: async (_args, ctx) => {
+      if (!ensureUnicodePlacement(state)) {
+        ctx.ui?.notify?.("pi-graphics TUI surface scene needs Unicode placeholder placement", "warning");
+        return;
+      }
+      const scene = renderTuiSurfaceScenePulseApng({ columns: 72, rows: 14, frames: 14, delayMs: 60 });
+      const placement = buildPlacement(state, {
+        name: "manual-tui-surface-scene",
+        png: scene.png,
+        columns: scene.columns,
+        rows: scene.rows,
+        caption: "rendered Pi TUI surface scene",
+      });
+      ctx.ui?.notify?.(renderToText(placement), "info");
+      ctx.ui?.setStatus?.("pi-gfx-surface", `⬢ TUI surface ${scene.frames}f/${scene.delayMs}ms`);
+    },
+  });
+
   pi.registerCommand("pi-graphics-native-chrome-demo", {
     description: "Show PNG-backed native chrome frames for input, messages, tools, and info surfaces.",
     handler: async (_args, ctx) => {
@@ -1213,12 +1318,13 @@ export default function piGraphicsExtension(pi) {
   pi.registerCommand("pi-graphics-showcase", {
     description: "Show the full Pi graphics showcase that is hidden by default in calm mode.",
     handler: async (_args, ctx) => {
-      writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // SHOWCASE" });
-      writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // SHOWCASE", phase: 0.18 });
-      writeBrailleScene(ctx, { label: "PI KITTY GRAPHICS BRAILLE PIXEL SCENE", phase: 0.28 });
-      writeCockpitWall(ctx, { label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 });
-      writeVisualProof(ctx, { label: "PI KITTY GRAPHICS VISUAL PROOF" });
-      writeValidationReport(ctx, { columns: 52, rows: 8, frames: 8 });
+      writeAnsiText(ctx, buildPiGraphicsAnsiTakeoverText({ label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // SHOWCASE" }));
+      writeAnsiText(ctx, buildPiGraphicsAnsiSceneText({ label: "PI KITTY GRAPHICS ANSI SCENE // SHOWCASE", phase: 0.18 }));
+      writeAnsiText(ctx, buildPiGraphicsBrailleSceneText({ label: "PI KITTY GRAPHICS BRAILLE PIXEL SCENE", phase: 0.28 }));
+      writeAnsiText(ctx, buildPiGraphicsCockpitWallText({ label: "PI KITTY GRAPHICS COCKPIT WALL", phase: 0.33 }));
+      writeAnsiText(ctx, buildPiGraphicsVisualProofText({ label: "PI KITTY GRAPHICS VISUAL PROOF" }));
+      writeAnsiText(ctx, buildPiGraphicsValidationReportText({ columns: 52, rows: 8, frames: 8 }));
+      showAmbientChrome(ctx);
       showAutoPulse(ctx, { caption: "showcase pulse active", tone: "assistant" });
     },
   });
@@ -1563,6 +1669,7 @@ export {
   PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
+  shouldAutoShowAmbientChrome,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
   shouldAutoShowBrailleScene,
