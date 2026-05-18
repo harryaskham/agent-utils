@@ -48,6 +48,7 @@ import {
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
+  buildPiGraphicsDoctorLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
@@ -539,6 +540,26 @@ test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width bann
   component.invalidate();
 });
 
+test("buildPiGraphicsDoctorLines reports visibility diagnostics and remediation", () => {
+  const theme = { fg(token, text) { return `<${token}>${text}</${token}>`; } };
+  const lines = buildPiGraphicsDoctorLines({
+    themeName: "dark",
+    unicodePlacement: false,
+    autoTerminalScene: false,
+    autoTheme: false,
+    autoWidget: true,
+    autoSplash: true,
+    autoThemeSwatch: false,
+  }, theme);
+  const text = lines.join("\n");
+  assert.match(text, /PI KITTY GRAPHICS DOCTOR/);
+  assert.match(text, /select \/settings → kitty-graphics/);
+  assert.match(text, /kitty placeholders: inactive/);
+  assert.match(text, /auto terminal scene disabled/);
+  assert.match(text, /\/pi-graphics-show/);
+  assert.match(text, /pi_graphics_render_terminal_scene/);
+});
+
 test("buildPiGraphicsPhotonRainComponent renders pulsing high-tech text chrome", () => {
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
@@ -807,6 +828,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /renderTerminalScenePulseApng\(\{ columns: 52, rows: 10, frames: 8, delayMs: 90 \}\)/);
   assert.match(source, /rendered terminal scene: auto above editor \+ pi_graphics_render_terminal_scene/);
   assert.match(source, /auto terminal scene: \$\{shouldAutoShowTerminalScene\(\) \? "enabled" : "disabled by env"\}/);
+  assert.match(source, /_doctor/);
+  assert.match(source, /pi-graphics-doctor/);
+  assert.match(source, /pi-graphics-takeover/);
+  assert.match(source, /doctor\/takeover: \/pi-graphics-doctor/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-message"/);
   assert.match(source, /buildPiGraphicsMessageComponent\(message, options, theme\)/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-theme-swatch"/);

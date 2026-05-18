@@ -43,6 +43,7 @@ import {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
+  buildPiGraphicsDoctorLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
@@ -614,6 +615,29 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_doctor`,
+    label: "Pi Graphics: Doctor",
+    description: "Report Pi kitty graphics visibility state, opt-outs, and remediation steps for diagnosing why graphics mode is not visibly different.",
+    promptSnippet: "Run the Pi kitty graphics visibility doctor.",
+    parameters: Type.Object({}),
+    async execute() {
+      const unicodePlacement = ensureUnicodePlacement(state);
+      return {
+        content: [{ type: "text", text: buildPiGraphicsDoctorLines({
+          themeName: "unknown",
+          unicodePlacement,
+          autoTerminalScene: shouldAutoShowTerminalScene(),
+          autoTheme: shouldAutoApplyTheme(),
+          autoWidget: shouldAutoShowGraphics(),
+          autoSplash: shouldAutoShowSplash(),
+          autoThemeSwatch: shouldAutoShowThemeSwatchSplash(),
+        }).join("\n") }],
+        details: { unicodePlacement, autoTerminalScene: shouldAutoShowTerminalScene() },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_photon_rain`,
     label: "Pi Graphics: Photon Rain",
     description: "Render a pulsing TypeScript TUI photon-rain component using normal text chrome and theme tokens.",
@@ -746,6 +770,38 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-doctor", {
+    description: "Show Pi kitty graphics visibility diagnostics and trigger the main visible surfaces.",
+    handler: async (_args, ctx) => {
+      applyThemeCues(ctx);
+      showAutoPulse(ctx, { caption: "doctor takeover", tone: "tool", delayMs: 60 });
+      try { pi.sendMessage?.(buildStartupThemeSwatchMessage()); } catch {}
+      const themeName = ctx.ui?.theme?.name || ctx.ui?.theme?.schema || "unknown";
+      ctx.ui?.notify?.(buildPiGraphicsDoctorLines({
+        themeName,
+        unicodePlacement: ensureUnicodePlacement(state),
+        autoTerminalScene: shouldAutoShowTerminalScene(),
+        autoTheme: shouldAutoApplyTheme(),
+        autoWidget: shouldAutoShowGraphics(),
+        autoSplash: shouldAutoShowSplash(),
+        autoThemeSwatch: shouldAutoShowThemeSwatchSplash(),
+      }, ctx.ui?.theme).join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("pi-graphics-takeover", {
+    description: "Alias for /pi-graphics-doctor; re-applies all visible Pi graphics surfaces.",
+    handler: async (args, ctx) => {
+      await pi.commands?.get?.("pi-graphics-doctor")?.handler?.(args, ctx);
+      if (!pi.commands?.get) {
+        applyThemeCues(ctx);
+        showAutoPulse(ctx, { caption: "takeover", tone: "tool", delayMs: 60 });
+        try { pi.sendMessage?.(buildStartupThemeSwatchMessage()); } catch {}
+        ctx.ui?.notify?.(buildPiGraphicsDoctorLines({ themeName: ctx.ui?.theme?.name || "unknown", unicodePlacement: ensureUnicodePlacement(state) }, ctx.ui?.theme).join("\n"), "info");
+      }
+    },
+  });
+
   pi.registerCommand("pi-graphics-photon-rain", {
     description: "Show the Pi kitty graphics photon rain component.",
     handler: async (_args, ctx) => {
@@ -801,6 +857,7 @@ export default function piGraphicsExtension(pi) {
         `startup splash: ${shouldAutoShowSplash() ? "enabled" : "disabled by env"}`,
         `startup theme swatch: ${shouldAutoShowThemeSwatchSplash() ? "enabled" : "disabled by env"}`,
         `auto terminal scene: ${shouldAutoShowTerminalScene() ? "enabled" : "disabled by env"}`,
+        "doctor/takeover: /pi-graphics-doctor",
         "session header: enabled",
         "session footer: enabled",
         "component HUD: below editor",
@@ -908,6 +965,7 @@ export {
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
+  buildPiGraphicsDoctorLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,

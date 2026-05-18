@@ -70,6 +70,9 @@ terminal scene: cell grid, aurora glow, status chips, scanlines, and APNG pulse.
 When kitty placeholder placement is active, the extension auto-mounts this
 rendered terminal scene above the editor on startup; opt out with
 `PI_GRAPHICS_AUTO_TERMINAL_SCENE=0` or `PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE=off`.
+If a running session still looks unchanged, run `/pi-graphics-doctor` (or
+`/pi-graphics-takeover`) to re-apply the visible surfaces and report theme,
+kitty-placeholder, opt-out, and reload diagnostics.
 
 ## How the extension cooperates with the theme
 
@@ -139,6 +142,11 @@ rendered. The extension complements those flat colors with graphical affordances
   activation auditable in ordinary text UI chrome. `pi_graphics_send_theme_swatch`
   and `/pi-graphics-theme-swatch-message` send the same swatch into the transcript,
   and session start does this automatically unless disabled by env.
+* **Doctor / takeover diagnostics** — `/pi-graphics-doctor`,
+  `/pi-graphics-takeover`, and `pi_graphics_doctor` report the active theme,
+  kitty placeholder state, auto-surface opt-outs, and remediation steps. The
+  command also re-applies the visible surfaces and sends the transcript theme
+  swatch, giving a single in-session check when graphics mode appears unchanged.
 * **Visual contract self-test** — `/pi-graphics-visual-contract` and
   `pi_graphics_visual_contract` render a checklist covering theme request,
   kitty placeholder state, header/footer/HUD/floodlight, editor frame + APNG
@@ -234,7 +242,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

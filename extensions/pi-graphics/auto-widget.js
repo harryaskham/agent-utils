@@ -107,6 +107,25 @@ export function buildVisualContractLines({ themeName = "kitty-graphics", unicode
   ];
 }
 
+export function buildPiGraphicsDoctorLines({ themeName = "unknown", unicodePlacement = false, autoTerminalScene = true, autoTheme = true, autoWidget = true, autoSplash = true, autoThemeSwatch = true } = {}, theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const ok = (label) => `${fg("success", "✓")} ${label}`;
+  const warn = (label) => `${fg("warning", "⚠")} ${label}`;
+  const themeOk = themeName === "kitty-graphics" || themeName === "unknown";
+  return [
+    fg("thinkingXhigh", "⬢ PI KITTY GRAPHICS DOCTOR / TAKEOVER ⬢"),
+    themeOk ? ok(`theme: ${themeName}`) : warn(`theme: ${themeName} (select /settings → kitty-graphics)`),
+    unicodePlacement ? ok("kitty placeholders: active, APNG pixels can render") : warn("kitty placeholders: inactive, image/APNG surfaces fall back to text"),
+    autoTheme ? ok("auto theme apply: enabled") : warn("auto theme apply disabled by PI_GRAPHICS_AUTO_THEME"),
+    autoWidget ? ok("auto stage/floodlight/widgets: enabled") : warn("auto widgets disabled by PI_GRAPHICS_AUTO_WIDGET"),
+    autoTerminalScene ? ok("auto rendered terminal scene: enabled") : warn("auto terminal scene disabled by PI_GRAPHICS_AUTO_TERMINAL_SCENE"),
+    autoSplash ? ok("startup splash: enabled") : warn("startup splash disabled"),
+    autoThemeSwatch ? ok("transcript theme swatch: enabled") : warn("transcript theme swatch disabled"),
+    fg("customMessageLabel", "Takeover actions: /pi-graphics-show, /pi-graphics-theme-swatch-message, /pi-graphics-photon-rain, pi_graphics_render_terminal_scene."),
+    fg("muted", "If this doctor is absent after update, reload Pi tools/session; if theme says not kitty-graphics, use /settings."),
+  ];
+}
+
 function stageLabel(tone, caption) {
   const label = String(caption || "kitty graphics pulse active").toUpperCase();
   const glyph = tone === "tool" ? "⚙" : tone === "user" ? "◆" : "✦";
