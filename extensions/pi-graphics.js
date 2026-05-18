@@ -39,6 +39,9 @@ import {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsOscPaletteLines,
+  buildPiGraphicsOscPaletteResetSequence,
+  buildPiGraphicsOscPaletteSequence,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
@@ -68,6 +71,7 @@ import {
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
+  shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
@@ -137,6 +141,20 @@ export default function piGraphicsExtension(pi) {
     }
   }
 
+  function writeRawTerminal(ctx, text) {
+    try {
+      if (typeof ctx?.ui?.write === "function") {
+        ctx.ui.write(text);
+        return true;
+      }
+      if (typeof process.stdout?.write === "function") {
+        process.stdout.write(text);
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
   function writeAnsiText(ctx, text) {
     try {
       if (typeof ctx?.ui?.write === "function") {
@@ -159,6 +177,15 @@ export default function piGraphicsExtension(pi) {
   function writeAnsiScene(ctx, options = {}) {
     if (!shouldAutoShowAnsiScene()) return false;
     return writeAnsiText(ctx, buildPiGraphicsAnsiSceneText(options));
+  }
+
+  function applyTerminalPalette(ctx) {
+    if (!shouldAutoApplyTerminalPalette()) return false;
+    return writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
+  }
+
+  function resetTerminalPalette(ctx) {
+    return writeRawTerminal(ctx, buildPiGraphicsOscPaletteResetSequence());
   }
 
   function setWorkingChrome(ctx, stage, toolName = "") {
@@ -214,6 +241,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.on("session_start", (_event, ctx) => {
+    applyTerminalPalette(ctx);
     applyThemeCues(ctx);
     writeAnsiTakeover(ctx, { label: "PI KITTY GRAPHICS TRUECOLOR TAKEOVER // STARTUP" });
     writeAnsiScene(ctx, { label: "PI KITTY GRAPHICS ANSI SCENE // RENDERED PIXELS", phase: 0.18 });
@@ -273,6 +301,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
     try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
     try { ctx?.ui?.setTitle?.("pi"); } catch {}
+    try { resetTerminalPalette(ctx); } catch {}
     try { ctx?.ui?.setHeader?.(undefined); } catch {}
     try { ctx?.ui?.setFooter?.(undefined); } catch {}
     try { ctx?.ui?.setWidget?.(hudWidgetId, undefined); } catch {}
@@ -667,6 +696,22 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_osc_palette`,
+    label: "Pi Graphics: OSC Palette Takeover",
+    description: "Return OSC sequences that ask compatible terminals to switch foreground/background/cursor and ANSI palette slots to deep-Nordic kitty graphics colors.",
+    promptSnippet: "Show the Pi kitty graphics OSC terminal palette takeover sequence.",
+    parameters: Type.Object({
+      includeAnsi: Type.Optional(Type.Boolean({ description: "Include OSC 4 ANSI palette slots. Defaults to true." })),
+    }),
+    async execute(_toolCallId, params = {}) {
+      return {
+        content: [{ type: "text", text: `${buildPiGraphicsOscPaletteSequence(params)}\n${buildPiGraphicsOscPaletteLines().join("\n")}` }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL, oscPalette: true },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_ansi_scene`,
     label: "Pi Graphics: ANSI Scene Shader",
     description: "Return a truecolor ANSI half-block rendering sampled from the TypeScript terminal scene pixels.",
@@ -909,6 +954,15 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-osc-palette", {
+    description: "Apply the deep-Nordic OSC terminal palette takeover when supported by the terminal.",
+    handler: async (_args, ctx) => {
+      const wrote = applyTerminalPalette(ctx);
+      const text = buildPiGraphicsOscPaletteLines(ctx.ui?.theme).join("\n");
+      ctx.ui?.notify?.(`${wrote ? "OSC palette sequence written." : "OSC palette write unavailable."}\n${text}`, wrote ? "info" : "warning");
+    },
+  });
+
   pi.registerCommand("pi-graphics-ansi-scene", {
     description: "Write a truecolor ANSI half-block rendering sampled from the pixel terminal scene.",
     handler: async (args, ctx) => {
@@ -1038,6 +1092,7 @@ export default function piGraphicsExtension(pi) {
         "doctor/takeover: /pi-graphics-doctor",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
+        "OSC palette: /pi-graphics-osc-palette",
         "ANSI scene shader: /pi-graphics-ansi-scene",
         "ANSI takeover: /pi-graphics-ansi-takeover",
         "conversation frame: /pi-graphics-conversation-frame",
@@ -1139,6 +1194,9 @@ export {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsOscPaletteLines,
+  buildPiGraphicsOscPaletteResetSequence,
+  buildPiGraphicsOscPaletteSequence,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
@@ -1174,6 +1232,7 @@ export {
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
+  shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,

@@ -64,6 +64,40 @@ export function shouldAutoShowAnsiScene(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoApplyTerminalPalette(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_TERMINAL_PALETTE ?? env.PI_KITTY_GRAPHICS_AUTO_TERMINAL_PALETTE;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
+const OSC = "\u001b]";
+const BEL = "\u0007";
+
+export function buildPiGraphicsOscPaletteSequence({ includeAnsi = true } = {}) {
+  const base = [
+    `${OSC}10;#e9f8ff${BEL}`,
+    `${OSC}11;#02030b${BEL}`,
+    `${OSC}12;#00ffd0${BEL}`,
+  ];
+  const ansi = [
+    "#02030b", "#ff2f6d", "#00ff88", "#fff05a", "#00aaff", "#d85cff", "#00ffd0", "#ffffff",
+    "#07101f", "#ff4dff", "#72fbd6", "#ffb000", "#39fffd", "#7c4dff", "#00ffd0", "#e9f8ff",
+  ].map((color, index) => `${OSC}4;${index};${color}${BEL}`);
+  return [...base, ...(includeAnsi ? ansi : [])].join("");
+}
+
+export function buildPiGraphicsOscPaletteResetSequence() {
+  return [`${OSC}110${BEL}`, `${OSC}111${BEL}`, `${OSC}112${BEL}`].join("");
+}
+
+export function buildPiGraphicsOscPaletteLines(theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  return [
+    fg("thinkingXhigh", "⬢ PI KITTY GRAPHICS OSC PALETTE TAKEOVER ⬢"),
+    fg("borderAccent", "Sets terminal fg/bg/cursor + ANSI slots to deep Nordic cyan/violet when the terminal permits OSC palette changes."),
+    fg("muted", PI_GRAPHICS_RELOAD_SENTINEL),
+  ];
+}
+
 function ansiBg(hex) {
   const [r, g, b] = hexRgb(hex);
   return `\u001b[48;2;${r};${g};${b}m`;

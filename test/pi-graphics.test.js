@@ -38,6 +38,9 @@ import {
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
   buildPiGraphicsAnsiTakeoverText,
+  buildPiGraphicsOscPaletteLines,
+  buildPiGraphicsOscPaletteResetSequence,
+  buildPiGraphicsOscPaletteSequence,
   buildPiGraphicsConversationFrameComponent,
   buildPiGraphicsConversationFrameLines,
   buildPiGraphicsEditorFrameComponent,
@@ -73,6 +76,7 @@ import {
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
   PI_GRAPHICS_RELOAD_SENTINEL,
+  shouldAutoApplyTerminalPalette,
   shouldAutoApplyTheme,
   shouldAutoShowAnsiScene,
   shouldAutoShowAnsiTakeover,
@@ -495,6 +499,24 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[2], /neon cyan/);
 });
 
+test("buildPiGraphicsOscPaletteSequence emits terminal palette takeover and reset OSC", () => {
+  assert.equal(shouldAutoApplyTerminalPalette({}), true);
+  assert.equal(shouldAutoApplyTerminalPalette({ PI_GRAPHICS_AUTO_TERMINAL_PALETTE: "0" }), false);
+  const seq = buildPiGraphicsOscPaletteSequence();
+  assert.match(seq, /\u001b\]10;#e9f8ff\u0007/);
+  assert.match(seq, /\u001b\]11;#02030b\u0007/);
+  assert.match(seq, /\u001b\]12;#00ffd0\u0007/);
+  assert.match(seq, /\u001b\]4;0;#02030b\u0007/);
+  assert.match(seq, /\u001b\]4;15;#e9f8ff\u0007/);
+  const reset = buildPiGraphicsOscPaletteResetSequence();
+  assert.match(reset, /\u001b\]110\u0007/);
+  assert.match(reset, /\u001b\]111\u0007/);
+  assert.match(reset, /\u001b\]112\u0007/);
+  const lines = buildPiGraphicsOscPaletteLines().join("\n");
+  assert.match(lines, /OSC PALETTE TAKEOVER/);
+  assert.match(lines, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
 test("buildPiGraphicsAnsiSceneText samples rendered scene pixels into ANSI half blocks", () => {
   assert.equal(shouldAutoShowAnsiScene({}), true);
   assert.equal(shouldAutoShowAnsiScene({ PI_GRAPHICS_AUTO_ANSI_SCENE: "0" }), false);
@@ -901,6 +923,11 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
   assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
   assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /OSC palette: \/pi-graphics-osc-palette/);
+  assert.match(source, /pi-graphics-osc-palette/);
+  assert.match(source, /_osc_palette/);
+  assert.match(source, /applyTerminalPalette\(ctx\)/);
+  assert.match(source, /resetTerminalPalette\(ctx\)/);
   assert.match(source, /ANSI scene shader: \/pi-graphics-ansi-scene/);
   assert.match(source, /ANSI takeover: \/pi-graphics-ansi-takeover/);
   assert.match(source, /pi-graphics-ansi-scene/);
@@ -912,6 +939,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /conversation frame: \/pi-graphics-conversation-frame/);
   assert.match(source, /pi-graphics-conversation-frame/);
   assert.match(source, /shouldAutoShowConversationFrame\(\)/);
+  assert.match(source, /shouldAutoApplyTerminalPalette\(\)/);
   assert.match(source, /shouldAutoShowAnsiScene\(\)/);
   assert.match(source, /shouldAutoShowAnsiTakeover\(\)/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-conversation-frame"/);
