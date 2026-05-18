@@ -50,6 +50,43 @@ export function buildTextStagePanel({ tone = "assistant", caption = "kitty graph
   ];
 }
 
+export function buildPiGraphicsMessageLines({ content = "Pi graphics message", tone = "assistant", title = "rendered message", expanded = false } = {}, theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const safeContent = String(content || "Pi graphics message").replace(/\s+/g, " ").trim();
+  const safeTitle = String(title || "rendered message").replace(/\s+/g, " ").trim().toUpperCase();
+  const label = stageLabel(tone, safeTitle);
+  const rail = tone === "tool" ? fg("toolTitle", "▌") : tone === "user" ? fg("borderAccent", "▌") : fg("accent", "▌");
+  const pulse = fg("thinkingXhigh", "⬢") + fg("borderAccent", "◆") + fg("accent", "✦");
+  const body = safeContent.length > 96 ? `${safeContent.slice(0, 93)}...` : safeContent;
+  const lines = [
+    bg("customMessageBg", `${rail} ${fg("customMessageLabel", label)} ${pulse}`),
+    bg("customMessageBg", `${rail} ${fg("text", body)}`),
+    bg("customMessageBg", `${rail} ${fg("dim", "cyan/violet glow • rendered by pi_graphics message renderer")}`),
+  ];
+  if (expanded) {
+    lines.push(bg("customMessageBg", `${rail} ${fg("muted", "expanded: pure TypeScript TUI component, no external pi-tui import")}`));
+  }
+  return lines;
+}
+
+export function buildPiGraphicsMessageComponent(message, options = {}, theme) {
+  const details = message?.details && typeof message.details === "object" ? message.details : {};
+  const lines = buildPiGraphicsMessageLines({
+    content: message?.content,
+    tone: details.tone || "assistant",
+    title: details.title || message?.customType || "rendered message",
+    expanded: Boolean(options.expanded),
+  }, theme);
+  return {
+    render(width = 120) {
+      const max = Math.max(24, Math.trunc(width));
+      return lines.map((line) => line.length > max ? `${line.slice(0, Math.max(0, max - 1))}…` : line);
+    },
+    invalidate() {},
+  };
+}
+
 export function buildAutoPulseWidget(state, {
   columns = 42,
   rows = 6,

@@ -76,6 +76,10 @@ rendered. The extension complements those flat colors with graphical affordances
   normal turns. It combines an APNG TUI component with explicit neon text
   chrome and a text-only fallback, making graphical mode noticeable even when
   the theme was not selected or kitty placeholders are unavailable.
+* **Custom message chrome** — a `pi-graphics-message` renderer that returns a
+  pure TypeScript TUI component (no external `pi-tui` import) with neon rails,
+  themed backgrounds, and bounded viewport rendering for displayed custom
+  messages.
 * **Accent bars** — single-cell-tall accent strips suitable for highlighting
   table rows or section headers.
 
@@ -94,7 +98,7 @@ displayed using kitty Unicode placeholder cells, so:
 
 ## Tools
 
-The extension registers eight tools through `pi.registerTool`:
+The extension registers nine tools through `pi.registerTool`:
 
 * `pi_graphics_render_prompt_enclosure` — render a graphical separator.
 * `pi_graphics_render_message_border` — render a gradient frame sized in
@@ -109,14 +113,17 @@ The extension registers eight tools through `pi.registerTool`:
   stage panel used by lifecycle chrome, including text fallback.
 * `pi_graphics_render_contact_sheet` — render a static visual regression sheet
   covering tones and pulse phases for human inspection.
+* `pi_graphics_send_message` — send a displayed custom message through the
+  `pi-graphics-message` renderer for validating normal conversation chrome.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
 
-And four slash commands:
+And five slash commands:
 
 * `/pi-graphics-status` — report how many images are owned, whether Unicode
   placeholder placement is active, and whether the automatic pulse is enabled.
 * `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
 * `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
+* `/pi-graphics-message [text]` — display a custom message rendered with Pi kitty graphics message chrome.
 * `/pi-graphics-demo` — print a sample rule, border, glow panel, graphical TUI component frame, and animated APNG pulse into the active UI.
 
 ## Example
@@ -127,6 +134,7 @@ And four slash commands:
 > pi_graphics_render_tui_component({ columns: 56, rows: 9, tone: "assistant", phase: 0.2, caption: "graphical TUI" })
 > pi_graphics_render_tui_pulse({ columns: 56, rows: 9, tone: "tool", frames: 8, delayMs: 90, caption: "animated APNG pulse" })
 > pi_graphics_render_stage_panel({ tone: "assistant", caption: "agent thinking", columns: 58, rows: 7 })
+> pi_graphics_send_message({ content: "render this message with neon chrome", title: "visible message" })
 > pi_graphics_render_contact_sheet({ columns: 36, rows: 6 })
 ```
 
@@ -160,7 +168,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, automatic theme activation diagnostics, themed working-indicator frames, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

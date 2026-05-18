@@ -35,6 +35,8 @@ import {
 } from "../extensions/pi-graphics/runtime.js";
 import {
   buildAutoPulseWidget,
+  buildPiGraphicsMessageComponent,
+  buildPiGraphicsMessageLines,
   buildStagePanelWidget,
   buildTextStagePanel,
   buildWorkingIndicatorFrames,
@@ -408,6 +410,27 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[2], /neon cyan/);
 });
 
+test("buildPiGraphicsMessageComponent renders bounded custom message chrome", () => {
+  const calls = [];
+  const theme = {
+    fg(token, text) { calls.push(["fg", token, text]); return `<${token}>${text}</${token}>`; },
+    bg(token, text) { calls.push(["bg", token, text]); return `[${token}]${text}[/${token}]`; },
+  };
+  const lines = buildPiGraphicsMessageLines({ content: "hello graphical world", tone: "tool", title: "tool output", expanded: true }, theme);
+  assert.equal(lines.length, 4);
+  assert.match(lines[0], /PI KITTY GFX/);
+  assert.match(lines[0], /TOOL OUTPUT/);
+  assert.match(lines[1], /hello graphical world/);
+  assert.match(lines[2], /pi_graphics message renderer/);
+  assert.ok(calls.some(([, token]) => token === "customMessageBg"));
+
+  const component = buildPiGraphicsMessageComponent({ content: "x".repeat(160), customType: "pi-graphics-message", details: { tone: "assistant", title: "wide" } }, { expanded: false }, theme);
+  const rendered = component.render(48);
+  assert.equal(rendered.length, 3);
+  assert.ok(rendered.every((line) => line.length <= 49), "renderer should cap output to viewport width plus ellipsis");
+  component.invalidate();
+});
+
 test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor explicit opt-out env", () => {
   assert.equal(shouldAutoShowGraphics({}), true);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
@@ -444,6 +467,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /render_tui_pulse/);
   assert.match(source, /render_stage_panel/);
   assert.match(source, /render_contact_sheet/);
+  assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-message"/);
+  assert.match(source, /buildPiGraphicsMessageComponent\(message, options, theme\)/);
+  assert.match(source, /_send_message/);
+  assert.match(source, /pi-graphics-message/);
   assert.match(source, /pi\.on\("before_agent_start"/);
   assert.match(source, /pi\.on\("agent_start"/);
   assert.match(source, /pi\.on\("tool_execution_start"/);

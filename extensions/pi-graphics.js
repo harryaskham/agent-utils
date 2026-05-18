@@ -36,6 +36,7 @@ import {
 } from "./pi-graphics/affordances.js";
 import {
   buildAutoPulseWidget,
+  buildPiGraphicsMessageComponent,
   buildStagePanelWidget,
   buildTextStagePanel,
   buildWorkingIndicatorFrames,
@@ -125,6 +126,9 @@ export default function piGraphicsExtension(pi) {
   pi.on("agent_end", (_event, ctx) => {
     showAutoPulse(ctx, { caption: "ready", tone: "assistant", delayMs: 120 });
   });
+
+  pi.registerMessageRenderer?.("pi-graphics-message", (message, options, theme) =>
+    buildPiGraphicsMessageComponent(message, options, theme));
 
   pi.on("session_shutdown", (_event, ctx) => {
     try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
@@ -467,6 +471,30 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_send_message`,
+    label: "Pi Graphics: Send Rendered Message",
+    description: "Send a displayed custom message rendered by the pi-graphics custom message renderer.",
+    promptSnippet: "Send a visibly rendered Pi graphics custom message into the conversation.",
+    parameters: Type.Object({
+      content: Type.Optional(Type.String({ description: "Message content to render." })),
+      tone: Type.Optional(Type.String({ description: "Renderer tone: assistant, tool, or user." })),
+      title: Type.Optional(Type.String({ description: "Renderer title/caption." })),
+    }),
+    async execute(_toolCallId, params) {
+      pi.sendMessage?.({
+        customType: "pi-graphics-message",
+        content: params.content || "Pi graphics rendered message",
+        display: true,
+        details: { tone: params.tone || "assistant", title: params.title || "graphics message" },
+      });
+      return {
+        content: [{ type: "text", text: "pi-graphics: displayed rendered custom message." }],
+        details: { customType: "pi-graphics-message", tone: params.tone || "assistant" },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_clear`,
     label: "Pi Graphics: Clear",
     description: "Delete every kitty graphics image owned by the pi-graphics extension. Scoped: never deletes images owned by other extensions, never issues a global clear.",
@@ -508,6 +536,19 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} stage ${widget.details.frames}f ${widget.details.delayMs}ms`);
       lastAutoWidgetSignature = "";
       ctx.ui?.notify?.("pi-graphics automatic pulse shown.", "info");
+    },
+  });
+
+  pi.registerCommand("pi-graphics-message", {
+    description: "Send a displayed custom message rendered with Pi kitty graphics message chrome.",
+    handler: async (args, _ctx) => {
+      const content = args.trim() || "Pi kitty graphics rendered message";
+      pi.sendMessage?.({
+        customType: "pi-graphics-message",
+        content,
+        display: true,
+        details: { tone: "assistant", title: "manual message" },
+      });
     },
   });
 
@@ -591,6 +632,8 @@ export {
 } from "./pi-graphics/components.js";
 export {
   buildAutoPulseWidget,
+  buildPiGraphicsMessageComponent,
+  buildPiGraphicsMessageLines,
   buildStagePanelWidget,
   buildTextStagePanel,
   buildWorkingIndicatorFrames,
