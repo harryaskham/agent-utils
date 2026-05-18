@@ -99,6 +99,11 @@ export function shouldAutoShowRawBootstrap(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoShowHeaderChrome(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_HEADER_CHROME ?? env.PI_KITTY_GRAPHICS_AUTO_HEADER_CHROME;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function shouldAutoShowAnsiTakeover(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_ANSI_TAKEOVER ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER;
   return explicitOrShowcase(value, env);

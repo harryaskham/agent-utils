@@ -99,6 +99,7 @@ import {
   shouldAutoShowConversationFrame,
   shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
+  shouldAutoShowHeaderChrome,
   shouldAutoShowHeartbeat,
   shouldAutoShowRawBootstrap,
   shouldAutoShowTranscriptChrome,
@@ -205,6 +206,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv(!off && (features.transcriptChrome ?? auto.transcriptChrome ?? true)),
     PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv(!off && (features.editorSurface ?? auto.editorSurface ?? true)),
     PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv(!off && (features.rawBootstrap ?? auto.rawBootstrap ?? true)),
+    PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv(!off && (features.headerChrome ?? auto.headerChrome ?? true)),
     PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
     PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
     PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
@@ -483,12 +485,15 @@ export default function piGraphicsExtension(pi) {
     setWorkingChrome(ctx, "ready");
     writeAmbientProof(ctx, { label: `PI GFX ${configuredThemeName} VISUAL PROOF`, phase: 0.18 });
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
+    if (shouldAutoShowHeaderChrome(gfxEnv())) {
+      ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
+      ctx.ui?.setStatus?.("pi-gfx-header", "⬢ header chrome");
+    }
     installEditorSurface(ctx);
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
     showAmbientChrome(ctx);
     if (shouldAutoShowGraphics(gfxEnv())) {
-      ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
       ctx.ui?.setStatus?.("pi-gfx-pulse", "◆ APNG editor aura");
       ctx.ui?.setStatus?.("pi-gfx-row", "✦ neon working row");
       ctx.ui?.setWidget?.(floodlightWidgetId, (_tui, theme) => buildPiGraphicsFloodlightComponent(theme), { placement: "aboveEditor" });
@@ -603,6 +608,7 @@ export default function piGraphicsExtension(pi) {
     try { stopHeartbeat(ctx); } catch {}
     try { stopEditorSurfacePulse(); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-editor", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-header", undefined); } catch {}
     try { ctx?.ui?.setEditorComponent?.(undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
@@ -1858,6 +1864,7 @@ export {
   shouldAutoShowConversationFrame,
   shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
+  shouldAutoShowHeaderChrome,
   shouldAutoShowHeartbeat,
   shouldAutoShowRawBootstrap,
   shouldAutoShowTranscriptChrome,

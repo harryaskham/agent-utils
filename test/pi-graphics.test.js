@@ -100,6 +100,7 @@ import {
   shouldAutoShowConversationFrame,
   shouldAutoShowEditorSurface,
   shouldAutoShowGraphics,
+  shouldAutoShowHeaderChrome,
   shouldAutoShowHeartbeat,
   shouldAutoShowRawBootstrap,
   shouldAutoShowTranscriptChrome,
@@ -1094,6 +1095,8 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoShowEditorSurface({ PI_GRAPHICS_AUTO_EDITOR_SURFACE: "0" }), false);
   assert.equal(shouldAutoShowRawBootstrap({}), true);
   assert.equal(shouldAutoShowRawBootstrap({ PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: "0" }), false);
+  assert.equal(shouldAutoShowHeaderChrome({}), true);
+  assert.equal(shouldAutoShowHeaderChrome({ PI_GRAPHICS_AUTO_HEADER_CHROME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
@@ -1114,6 +1117,7 @@ test("pi-graphics settings source maps calm mode to visibly active theme and OSC
   assert.match(source, /PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv\(!off && \(features\.transcriptChrome \?\? auto\.transcriptChrome \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv\(!off && \(features\.editorSurface \?\? auto\.editorSurface \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv\(!off && \(features\.rawBootstrap \?\? auto\.rawBootstrap \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv\(!off && \(features\.headerChrome \?\? auto\.headerChrome \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_FRAMES = String\(gfx\.animation\.ambientFrames\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_DELAY_MS = String\(gfx\.animation\.ambientDelayMs\)/);
 });
@@ -1179,6 +1183,9 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /showAmbientChrome\(ctx\)/);
+  assert.match(source, /shouldAutoShowHeaderChrome\(gfxEnv\(\)\)/);
+  assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
+  assert.match(source, /pi-gfx-header/);
   assert.match(source, /writeRawBootstrap\(\)/);
   assert.match(source, /process\.stdout\.write/);
   assert.match(source, /buildPiGraphicsRawBootstrapText/);
