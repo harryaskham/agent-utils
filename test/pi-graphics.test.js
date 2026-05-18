@@ -48,6 +48,8 @@ import {
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
+  buildPiGraphicsPhotonRainComponent,
+  buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
@@ -505,6 +507,28 @@ test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width bann
   component.invalidate();
 });
 
+test("buildPiGraphicsPhotonRainComponent renders pulsing high-tech text chrome", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const first = buildPiGraphicsPhotonRainLines(theme, { width: 104, phase: 0 });
+  const second = buildPiGraphicsPhotonRainLines(theme, { width: 104, phase: 0.25 });
+  assert.equal(first.length, 5);
+  assert.match(first[0], /PI PHOTON RAIN/);
+  assert.match(first.join("\n"), /DEEP NORDIC RENDER FIELD/);
+  assert.match(first.join("\n"), /cyan ion drift/);
+  assert.match(first.join("\n"), /violet pulse scan/);
+  assert.match(first.join("\n"), /never-normal terminal/);
+  assert.ok(first.some((line) => line.includes("selectedBg")));
+  assert.notDeepEqual(first, second);
+  const component = buildPiGraphicsPhotonRainComponent(theme, { phase: 0 });
+  const rendered = component.render(80);
+  assert.equal(rendered.length, 5);
+  assert.ok(rendered.every((line) => line.length <= 81));
+  component.invalidate();
+});
+
 test("startup theme swatch message defaults on and renders transcript-visible swatch", () => {
   assert.equal(shouldAutoShowThemeSwatchSplash({}), true);
   assert.equal(shouldAutoShowThemeSwatchSplash({ PI_GRAPHICS_AUTO_THEME_SWATCH: "0" }), false);
@@ -697,6 +721,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setWidget\?\.\(floodlightWidgetId, \(_tui, theme\) => buildPiGraphicsFloodlightComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(themeSwatchWidgetId, \(_tui, theme\) => buildPiGraphicsThemeSwatchComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
+  assert.match(source, /setWidget\?\.\(photonRainWidgetId, \(_tui, theme\) => buildPiGraphicsPhotonRainComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
@@ -713,7 +738,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /terminal title: lifecycle Pi kitty gfx/);
   assert.match(source, /floodlight: high-contrast editor-adjacent banner/);
   assert.match(source, /theme swatch: above editor \+ \/pi-graphics-theme-swatch/);
+  assert.match(source, /photon rain: above editor \+ \/pi-graphics-photon-rain/);
   assert.match(source, /live footer: branch\/status beacon/);
+  assert.match(source, /_photon_rain/);
+  assert.match(source, /pi-graphics-photon-rain/);
   assert.match(source, /_theme_swatch/);
   assert.match(source, /_send_theme_swatch/);
   assert.match(source, /pi-graphics-theme-swatch/);

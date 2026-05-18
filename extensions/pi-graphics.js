@@ -43,6 +43,8 @@ import {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
+  buildPiGraphicsPhotonRainComponent,
+  buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
@@ -83,6 +85,7 @@ export default function piGraphicsExtension(pi) {
   const editorAuraWidgetId = "pi-graphics-editor-aura";
   const floodlightWidgetId = "pi-graphics-floodlight";
   const themeSwatchWidgetId = "pi-graphics-theme-swatch";
+  const photonRainWidgetId = "pi-graphics-photon-rain";
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
@@ -141,6 +144,7 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
     ctx.ui?.setWidget?.(floodlightWidgetId, (_tui, theme) => buildPiGraphicsFloodlightComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(themeSwatchWidgetId, (_tui, theme) => buildPiGraphicsThemeSwatchComponent(theme), { placement: "aboveEditor" });
+    ctx.ui?.setWidget?.(photonRainWidgetId, (_tui, theme) => buildPiGraphicsPhotonRainComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
     if (ensureUnicodePlacement(state)) {
@@ -206,6 +210,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(editorAuraWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(floodlightWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(themeSwatchWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(photonRainWidgetId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -542,6 +547,23 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_photon_rain`,
+    label: "Pi Graphics: Photon Rain",
+    description: "Render a pulsing TypeScript TUI photon-rain component using normal text chrome and theme tokens.",
+    promptSnippet: "Show the Pi kitty graphics photon rain component.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target width in cells. Defaults to 96.", minimum: 48, maximum: 180 })),
+      phase: Type.Optional(Type.Number({ description: "Animation phase from 0 to 1." })),
+    }),
+    async execute(_toolCallId, params) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsPhotonRainLines(undefined, { width: params.width, phase: params.phase }).join("\n") }],
+        details: { width: params.width || 96, phase: params.phase || 0 },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_theme_swatch`,
     label: "Pi Graphics: Theme Swatch",
     description: "Render a text/TUI theme calibration swatch using real Pi theme tokens so operators can see whether kitty-graphics is active.",
@@ -657,6 +679,13 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-photon-rain", {
+    description: "Show the Pi kitty graphics photon rain component.",
+    handler: async (_args, ctx) => {
+      ctx.ui?.notify?.(buildPiGraphicsPhotonRainLines(ctx.ui?.theme).join("\n"), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-theme-swatch", {
     description: "Show the Pi kitty graphics theme calibration swatch.",
     handler: async (_args, ctx) => {
@@ -713,6 +742,7 @@ export default function piGraphicsExtension(pi) {
         "terminal title: lifecycle Pi kitty gfx",
         "floodlight: high-contrast editor-adjacent banner",
         "theme swatch: above editor + /pi-graphics-theme-swatch",
+        "photon rain: above editor + /pi-graphics-photon-rain",
         "transcript theme swatch: /pi-graphics-theme-swatch-message",
         "live footer: branch/status beacon",
         "visual contract: /pi-graphics-visual-contract",
@@ -798,6 +828,8 @@ export {
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
+  buildPiGraphicsPhotonRainComponent,
+  buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,

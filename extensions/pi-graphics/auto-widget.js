@@ -210,6 +210,33 @@ export function buildPiGraphicsThemeSwatchMessageComponent(message, _options = {
   return buildPiGraphicsThemeSwatchComponent(theme, { width: details.width || 96, phase: details.phase || 0 });
 }
 
+export function buildPiGraphicsPhotonRainLines(theme, { width = 96, phase = 0 } = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const cells = Math.max(48, Math.min(180, Math.trunc(width)));
+  const glyphs = ["⬢", "◆", "✦", "✺", "▰", "▱", "◢", "◣"];
+  const offset = Math.abs(Math.trunc(Number(phase) * 17)) % glyphs.length;
+  const makeRain = (row) => Array.from({ length: Math.max(18, Math.min(72, cells - 28)) }, (_, i) => glyphs[(i + row + offset) % glyphs.length]).join("");
+  return [
+    bg("selectedBg", `${fg("thinkingXhigh", "╔═⬢")} ${fg("customMessageLabel", "PI PHOTON RAIN // DEEP NORDIC RENDER FIELD")} ${fg("borderAccent", "⬢═╗")}`),
+    bg("customMessageBg", `${fg("borderAccent", "║")} ${fg("accent", makeRain(0))} ${fg("muted", "cyan ion drift")}`),
+    bg("toolPendingBg", `${fg("borderAccent", "║")} ${fg("thinkingXhigh", makeRain(2))} ${fg("muted", "violet pulse scan")}`),
+    bg("customMessageBg", `${fg("borderAccent", "║")} ${fg("accent", makeRain(4))} ${fg("muted", "aurora terminal field")}`),
+    bg("selectedBg", `${fg("thinkingXhigh", "╚═")}${fg("borderAccent", "▀".repeat(Math.max(12, Math.min(64, cells - 26))))}${fg("thinkingXhigh", "═╝")} ${fg("customMessageLabel", "never-normal terminal")}`),
+  ];
+}
+
+export function buildPiGraphicsPhotonRainComponent(theme, options = {}) {
+  let tick = Number(options.phase || 0);
+  return {
+    render(width = 120) {
+      tick = (tick + 0.0625) % 1;
+      return boundedLines(buildPiGraphicsPhotonRainLines(theme, { ...options, width, phase: tick }), width);
+    },
+    invalidate() { tick = (tick + 0.125) % 1; },
+  };
+}
+
 function footerBranch(footerData = {}) {
   if (typeof footerData.getGitBranch === "function") return footerData.getGitBranch() || "";
   return footerData?.gitBranch || "";
