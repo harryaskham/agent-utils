@@ -38,6 +38,8 @@ import {
   buildAutoPulseWidget,
   buildStagePanelWidget,
   buildTextStagePanel,
+  buildWorkingIndicatorFrames,
+  shouldAutoApplyTheme,
   shouldAutoShowGraphics,
 } from "./pi-graphics/auto-widget.js";
 import {
@@ -89,7 +91,21 @@ export default function piGraphicsExtension(pi) {
     }
   }
 
+  function applyThemeCues(ctx) {
+    if (shouldAutoApplyTheme() && typeof ctx.ui?.setTheme === "function") {
+      const result = ctx.ui.setTheme("kitty-graphics");
+      if (result?.success) {
+        ctx.ui?.setStatus?.("pi-theme", "◆ kitty-graphics active");
+      } else {
+        ctx.ui?.setStatus?.("pi-theme", "⚠ select /settings → kitty-graphics");
+        ctx.ui?.notify?.(`pi-graphics theme not active: ${result?.error || "select kitty-graphics in /settings"}`, "warning");
+      }
+    }
+    ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 90 });
+  }
+
   pi.on("session_start", (_event, ctx) => {
+    applyThemeCues(ctx);
     showAutoPulse(ctx, { caption: "kitty graphics pulse active", tone: "assistant" });
   });
 
@@ -113,6 +129,8 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_shutdown", (_event, ctx) => {
     try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-graphics", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-theme", undefined); } catch {}
+    try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -484,6 +502,7 @@ export default function piGraphicsExtension(pi) {
         ctx.ui?.notify?.("pi-graphics show skipped: terminal lacks Unicode placeholder placement.", "warning");
         return;
       }
+      applyThemeCues(ctx);
       const widget = buildStagePanelWidget(state, { caption: "manual graphics stage", tone: "assistant" });
       ctx.ui?.setWidget?.(autoWidgetId, widget.lines, { placement: "aboveEditor" });
       ctx.ui?.setStatus?.("pi-graphics", `◆ ${widget.details.tone} stage ${widget.details.frames}f ${widget.details.delayMs}ms`);
@@ -502,6 +521,7 @@ export default function piGraphicsExtension(pi) {
         `passthrough: ${state.config.passthrough}`,
         `unicode placeholders active: ${placementActive ? "yes" : "no"}`,
         `auto pulse widget: ${shouldAutoShowGraphics() ? "enabled" : "disabled by env"}`,
+        `auto theme apply: ${shouldAutoApplyTheme() ? "enabled" : "disabled by env"}`,
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -573,5 +593,7 @@ export {
   buildAutoPulseWidget,
   buildStagePanelWidget,
   buildTextStagePanel,
+  buildWorkingIndicatorFrames,
+  shouldAutoApplyTheme,
   shouldAutoShowGraphics,
 } from "./pi-graphics/auto-widget.js";

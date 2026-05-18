@@ -37,6 +37,8 @@ import {
   buildAutoPulseWidget,
   buildStagePanelWidget,
   buildTextStagePanel,
+  buildWorkingIndicatorFrames,
+  shouldAutoApplyTheme,
   shouldAutoShowGraphics,
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
@@ -406,17 +408,36 @@ test("buildTextStagePanel remains visible when kitty placeholders are unavailabl
   assert.match(lines[2], /neon cyan/);
 });
 
-test("shouldAutoShowGraphics defaults on and honors explicit opt-out env", () => {
+test("shouldAutoShowGraphics and shouldAutoApplyTheme default on and honor explicit opt-out env", () => {
   assert.equal(shouldAutoShowGraphics({}), true);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_KITTY_GRAPHICS_AUTO_WIDGET: "off" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "1" }), true);
+  assert.equal(shouldAutoApplyTheme({}), true);
+  assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
+  assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
+  assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
+});
+
+test("buildWorkingIndicatorFrames creates a themed neon pulse sequence", () => {
+  const calls = [];
+  const theme = { fg(token, text) { calls.push([token, text]); return `<${token}>${text}</${token}>`; } };
+  const frames = buildWorkingIndicatorFrames(theme);
+  assert.equal(frames.length, 8);
+  assert.ok(frames.some((frame) => frame.includes("thinkingXhigh")));
+  assert.ok(frames.some((frame) => frame.includes("borderAccent")));
+  assert.deepEqual(calls.map(([token]) => token), ["dim", "muted", "accent", "borderAccent", "thinkingXhigh", "borderAccent", "accent", "muted"]);
 });
 
 test("pi-graphics extension source wires the auto pulse widget into startup and commands", async () => {
   const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
   const source = await readFile(sourcePath, "utf8");
   assert.match(source, /pi\.on\("session_start"/);
+  assert.match(source, /ctx\.ui\.setTheme\("kitty-graphics"\)/);
+  assert.match(source, /buildWorkingIndicatorFrames\(ctx\.ui\?\.theme\)/);
+  assert.match(source, /setWorkingIndicator\?\.\(\{ frames:/);
+  assert.match(source, /pi-theme/);
+  assert.match(source, /select \/settings → kitty-graphics/);
   assert.match(source, /buildStagePanelWidget\(state, options\)/);
   assert.match(source, /buildTextStagePanel\(options\)/);
   assert.match(source, /setWidget\?\.\(autoWidgetId, widget\.lines, \{ placement: "aboveEditor" \}\)/);

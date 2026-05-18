@@ -15,6 +15,25 @@ export function shouldAutoShowGraphics(env = process.env) {
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
 }
 
+export function shouldAutoApplyTheme(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_THEME ?? env.PI_KITTY_GRAPHICS_AUTO_THEME;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
+export function buildWorkingIndicatorFrames(theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  return [
+    fg("dim", "✧"),
+    fg("muted", "✦"),
+    fg("accent", "◆"),
+    fg("borderAccent", "✺"),
+    fg("thinkingXhigh", "⬢"),
+    fg("borderAccent", "✺"),
+    fg("accent", "◆"),
+    fg("muted", "✦"),
+  ];
+}
+
 function stageLabel(tone, caption) {
   const label = String(caption || "kitty graphics pulse active").toUpperCase();
   const glyph = tone === "tool" ? "⚙" : tone === "user" ? "◆" : "✦";

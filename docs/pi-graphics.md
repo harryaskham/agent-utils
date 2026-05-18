@@ -31,8 +31,12 @@ pi /settings   # then choose "kitty-graphics"
 ```
 
 The companion extension (`./extensions/pi-graphics.js`) is loaded
-automatically by Pi when the package is installed; no further setup is
-required. By default it also shows a small animated kitty pulse widget above
+automatically by Pi when the package is installed. On session start it attempts
+to switch the active interactive theme to `kitty-graphics`, reports a `pi-theme`
+status if that succeeds, and warns with `select /settings → kitty-graphics` if
+runtime theme switching is unavailable. Set `PI_GRAPHICS_AUTO_THEME=0` (or
+`PI_KITTY_GRAPHICS_AUTO_THEME=off`) to opt out of automatic theme activation.
+By default it also shows a small animated kitty pulse widget above
 the editor on session start so graphical mode is visible without manually
 running a demo command. During normal turns the same widget changes tone/caption
 for prompt capture, agent thinking, tool execution, and ready states, giving
@@ -40,8 +44,10 @@ regular conversation flow graphical chrome instead of a static startup-only
 banner. The lifecycle widget is now a conversation **stage panel**: it wraps the
 APNG component with large text chrome (`PI KITTY GFX // ...`) so there is still
 an obvious visual cue even when kitty placeholder graphics are unavailable or an
-operator is not looking at the animated pixels. Set `PI_GRAPHICS_AUTO_WIDGET=0`
-(or `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out.
+operator is not looking at the animated pixels. The extension also replaces the
+normal streaming spinner with a themed neon working indicator (`✧ ✦ ◆ ✺ ⬢ ...`)
+so active generation pulses even between widget redraws. Set
+`PI_GRAPHICS_AUTO_WIDGET=0` (or `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out.
 
 ## How the extension cooperates with the theme
 
@@ -154,7 +160,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, automatic theme activation diagnostics, themed working-indicator frames, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.
