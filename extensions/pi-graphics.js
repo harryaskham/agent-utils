@@ -38,6 +38,7 @@ import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
   buildPiGraphicsEditorFrameComponent,
+  buildPiGraphicsFloodlightComponent,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHudComponent,
@@ -74,6 +75,7 @@ export default function piGraphicsExtension(pi) {
   const editorFrameTopId = "pi-graphics-editor-frame-top";
   const editorFrameBottomId = "pi-graphics-editor-frame-bottom";
   const editorAuraWidgetId = "pi-graphics-editor-aura";
+  const floodlightWidgetId = "pi-graphics-floodlight";
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
@@ -127,6 +129,7 @@ export default function piGraphicsExtension(pi) {
     setWorkingChrome(ctx, "ready");
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
+    ctx.ui?.setWidget?.(floodlightWidgetId, (_tui, theme) => buildPiGraphicsFloodlightComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
     if (ensureUnicodePlacement(state)) {
@@ -182,6 +185,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(editorFrameTopId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(editorFrameBottomId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(editorAuraWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(floodlightWidgetId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -618,6 +622,7 @@ export default function piGraphicsExtension(pi) {
         "editor aura: APNG below editor",
         "working row: neon Pi kitty gfx",
         "terminal title: lifecycle Pi kitty gfx",
+        "floodlight: high-contrast editor-adjacent banner",
       ].join("\n");
       ctx.ui?.notify?.(summary, "info");
     },
@@ -690,6 +695,8 @@ export {
   buildEditorAuraWidget,
   buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsEditorFrameLines,
+  buildPiGraphicsFloodlightComponent,
+  buildPiGraphicsFloodlightLines,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,

@@ -38,6 +38,8 @@ import {
   buildEditorAuraWidget,
   buildPiGraphicsEditorFrameComponent,
   buildPiGraphicsEditorFrameLines,
+  buildPiGraphicsFloodlightComponent,
+  buildPiGraphicsFloodlightLines,
   buildPiGraphicsFooterComponent,
   buildPiGraphicsFooterLines,
   buildPiGraphicsHeaderComponent,
@@ -478,6 +480,25 @@ test("buildPiGraphicsHeaderComponent renders persistent branded session chrome",
   component.invalidate();
 });
 
+test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width banner", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const dim = buildPiGraphicsFloodlightLines(theme, { width: 82, phase: 0 });
+  const bright = buildPiGraphicsFloodlightLines(theme, { width: 82, phase: 0.25 });
+  assert.equal(dim.length, 5);
+  assert.match(dim[1], /PI KITTY GRAPHICS FLOODLIGHT/);
+  assert.match(dim[2], /TYPESCRIPT TUI MIRROR/);
+  assert.ok(dim.some((line) => line.includes("selectedBg")));
+  assert.notDeepEqual(dim, bright);
+  const component = buildPiGraphicsFloodlightComponent(theme, { phase: 0 });
+  const rendered = component.render(90);
+  assert.equal(rendered.length, 5);
+  assert.ok(rendered.every((line) => line.length <= 91));
+  component.invalidate();
+});
+
 test("buildPiGraphicsFooterComponent renders persistent bottom chrome", () => {
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
@@ -605,6 +626,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setHiddenThinkingLabel\?\.\(buildHiddenThinkingLabel\(ctx\.ui\?\.theme\)\)/);
   assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
+  assert.match(source, /setWidget\?\.\(floodlightWidgetId, \(_tui, theme\) => buildPiGraphicsFloodlightComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
@@ -619,6 +641,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /editor aura: APNG below editor/);
   assert.match(source, /working row: neon Pi kitty gfx/);
   assert.match(source, /terminal title: lifecycle Pi kitty gfx/);
+  assert.match(source, /floodlight: high-contrast editor-adjacent banner/);
   assert.match(source, /setTitle\?\.\("pi"\)/);
   assert.match(source, /buildStartupSplashMessage\(\)/);
   assert.match(source, /startup splash: \$\{shouldAutoShowSplash\(\) \? "enabled" : "disabled by env"\}/);

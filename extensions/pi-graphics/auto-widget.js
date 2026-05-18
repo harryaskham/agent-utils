@@ -212,6 +212,36 @@ export function buildPiGraphicsEditorFrameComponent(theme, options = {}) {
   };
 }
 
+export function buildPiGraphicsFloodlightLines(theme, { width = 96, phase = 0 } = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const cells = Math.max(40, Math.min(160, Math.trunc(width)));
+  const p = Math.abs(Math.sin(Number(phase) * Math.PI * 2));
+  const bright = p > 0.5;
+  const title = bright ? "⬢ PI KITTY GRAPHICS FLOODLIGHT ⬢" : "◆ PI KITTY GRAPHICS FLOODLIGHT ◆";
+  const rail = (bright ? "█▓▒" : "▒▓█").repeat(Math.ceil(cells / 3)).slice(0, cells);
+  const subtitle = "DEEP NORDIC GLOW // TYPESCRIPT TUI MIRROR // PULSING HIGH-TECH MODE";
+  const meter = (bright ? "⬢◆✦" : "✦◆⬢").repeat(Math.ceil(cells / 3)).slice(0, Math.min(cells, 72));
+  return [
+    bg("selectedBg", fg("thinkingXhigh", rail)),
+    bg("customMessageBg", `${fg("borderAccent", "▌")} ${fg("customMessageLabel", title)} ${fg("borderAccent", "▐")}`),
+    bg("customMessageBg", `${fg("accent", "▌")} ${fg("text", subtitle)} ${fg("accent", "▐")}`),
+    bg("toolPendingBg", `${fg("muted", "▌")} ${fg("thinkingXhigh", meter)} ${fg("muted", "▐")}`),
+    bg("selectedBg", fg("borderAccent", rail.split("").reverse().join(""))),
+  ];
+}
+
+export function buildPiGraphicsFloodlightComponent(theme, options = {}) {
+  let tick = Number(options.phase || 0);
+  return {
+    render(width = 120) {
+      tick = (tick + 0.08) % 1;
+      return boundedLines(buildPiGraphicsFloodlightLines(theme, { ...options, width, phase: tick }), width);
+    },
+    invalidate() { tick = (tick + 0.24) % 1; },
+  };
+}
+
 export function buildEditorAuraWidget(state, {
   columns = 54,
   rows = 4,

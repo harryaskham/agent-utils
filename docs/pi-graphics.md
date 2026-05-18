@@ -47,8 +47,9 @@ an obvious visual cue even when kitty placeholder graphics are unavailable or an
 operator is not looking at the animated pixels. The extension also installs a
 persistent custom header (`PI KITTY GRAPHICS ONLINE`), a persistent footer
 (`KITTY-GFX ⬢◆✦ deep nordic glow`), a real component-backed HUD widget below the
-editor, an APNG-backed editor aura below the input area, neon editor-frame
-widgets above and below the input area, a transcript startup splash message, and replaces the normal streaming row and terminal/window title with branded Pi kitty graphics stage text, hidden-thinking label, and themed neon indicator
+editor, a high-contrast `PI KITTY GRAPHICS FLOODLIGHT` banner above the editor,
+an APNG-backed editor aura below the input area, neon editor-frame widgets above
+and below the input area, a transcript startup splash message, and replaces the normal streaming row and terminal/window title with branded Pi kitty graphics stage text, hidden-thinking label, and themed neon indicator
 (`✧ ✦ ◆ ✺ ⬢ ...`) so the session chrome and active generation both pulse even
 between widget redraws. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or
 `PI_KITTY_GRAPHICS_AUTO_WIDGET=off`) to opt out of the widget, and set
@@ -86,7 +87,8 @@ rendered. The extension complements those flat colors with graphical affordances
   installed via `ctx.ui.setHeader`, `ctx.ui.setFooter`, and a `ctx.ui.setWidget`
   factory below the editor so the session announces `PI KITTY GRAPHICS ONLINE`
   at the top, `KITTY-GFX` in the bottom chrome, a live `PI GFX HUD` near the
-  editor, an APNG `PI KITTY GFX EDITOR AURA`, and `NEON EDITOR FIELD` /
+  editor, a full-width `PI KITTY GRAPHICS FLOODLIGHT` banner, an APNG
+  `PI KITTY GFX EDITOR AURA`, and `NEON EDITOR FIELD` /
   `INPUT FIELD STABILIZED` rails around the input area with theme-colored rails
   and bounded rendering. During active turns the working row says `PI KITTY GFX`
   with the current stage (`PROMPT CAPTURED`, `AGENT THINKING`, `TOOL EXECUTION`,
@@ -143,7 +145,7 @@ And five slash commands:
   placeholder placement is active, whether the automatic pulse and startup
   splash are enabled, and whether the session header/footer/HUD/editor frame and
   APNG editor aura are installed, and whether the neon working row and lifecycle
-  title branding are enabled.
+  title branding and the high-contrast floodlight banner are enabled.
 * `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
 * `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
 * `/pi-graphics-message [text]` — display a custom message rendered with Pi kitty graphics message chrome.
@@ -191,7 +193,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.
