@@ -43,8 +43,10 @@ to opt out.
 ## How the extension cooperates with the theme
 
 The theme controls Pi's existing color tokens (borders, message backgrounds,
-markdown styles, etc.). The extension complements those flat colors with
-graphical affordances:
+markdown styles, etc.). It intentionally uses near-black void backgrounds plus
+neon cyan, violet, aurora, and acid-green accents so ordinary Pi widgets are
+visibly displaced from the built-in `dark` theme even before any kitty image is
+rendered. The extension complements those flat colors with graphical affordances:
 
 * **Prompt enclosure rules** — a kitty-graphics gradient strip with a soft
   cyan/violet halo that can replace plain ASCII separators like
@@ -134,6 +136,7 @@ For a standalone visual-regression artefact, run:
 
 ```bash
 node scripts/render-pi-graphics-contact-sheet.mjs ./pi-graphics-contact-sheet.png
+node scripts/render-pi-theme-swatch.mjs ./pi-kitty-theme-swatch.png
 ```
 
 The test suite under `test/pi-graphics.test.js` covers PNG byte output,
@@ -141,7 +144,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, contact-sheet generation, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

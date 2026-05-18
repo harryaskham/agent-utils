@@ -96,6 +96,20 @@ function channelDistance(a, b) {
   return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) + Math.abs(a[3] - b[3]);
 }
 
+function relativeLuminance([r, g, b]) {
+  const linear = [r, g, b].map((channel) => {
+    const c = channel / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrastRatio(a, b) {
+  const hi = Math.max(relativeLuminance(a), relativeLuminance(b));
+  const lo = Math.min(relativeLuminance(a), relativeLuminance(b));
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 function alphaStats(decoded) {
   let transparent = 0;
   let bright = 0;
@@ -468,10 +482,43 @@ test("themes/kitty-graphics.json is visibly different from the default text them
   const themePath = fileURLToPath(new URL("../themes/kitty-graphics.json", import.meta.url));
   const theme = JSON.parse(await readFile(themePath, "utf8"));
   const resolve = (token) => parseColor(theme.vars[theme.colors[token]] ?? theme.colors[token]);
-  assert.deepEqual(resolve("accent"), parseColor("#00d8ff"));
-  assert.deepEqual(resolve("borderAccent"), parseColor("#72fbd6"));
+  assert.deepEqual(resolve("accent"), parseColor("#00aaff"));
+  assert.deepEqual(resolve("borderAccent"), parseColor("#00ffd0"));
   assert.notDeepEqual(resolve("text"), parseColor([0, 0, 0, 0]), "main text must not inherit the default terminal color");
-  assert.ok(channelDistance(resolve("selectedBg"), resolve("userMessageBg")) > 20, "selected and message backgrounds should be distinguishable");
-  assert.equal(theme.export.glowCyan, "#00d8ff");
-  assert.equal(theme.export.glowAurora, "#b48cff");
+  assert.ok(channelDistance(resolve("selectedBg"), resolve("userMessageBg")) > 90, "selected and message backgrounds should be dramatically distinguishable");
+  assert.ok(contrastRatio(resolve("text"), resolve("userMessageBg")) > 10, "message text must pop against the deep Nordic background");
+  assert.ok(contrastRatio(resolve("toolTitle"), resolve("toolPendingBg")) > 12, "tool titles should glow against pending tool boxes");
+  assert.ok(channelDistance(resolve("customMessageBg"), resolve("userMessageBg")) > 110, "custom/extension panels should not blend into user messages");
+  assert.equal(theme.export.glowCyan, "#00aaff");
+  assert.equal(theme.export.glowAurora, "#ff4dff");
+});
+
+test("kitty graphics theme has large measured deltas from the built-in dark palette", async () => {
+  const themePath = fileURLToPath(new URL("../themes/kitty-graphics.json", import.meta.url));
+  const theme = JSON.parse(await readFile(themePath, "utf8"));
+  const resolve = (token) => parseColor(theme.vars[theme.colors[token]] ?? theme.colors[token]);
+  const darkBaseline = {
+    accent: "#8abeb7",
+    border: "#5f87ff",
+    borderAccent: "#00d7ff",
+    selectedBg: "#3a3a4a",
+    userMessageBg: "#343541",
+    customMessageBg: "#2d2838",
+    toolPendingBg: "#282832",
+    toolSuccessBg: "#283228",
+    toolErrorBg: "#3c2828",
+    mdHeading: "#f0c674",
+    mdCode: "#8abeb7",
+    thinkingXhigh: "#d183e8",
+  };
+  for (const [token, darkColor] of Object.entries(darkBaseline)) {
+    assert.ok(
+      channelDistance(resolve(token), parseColor(darkColor)) > 75,
+      `${token} should be visibly displaced from built-in dark`,
+    );
+  }
+  const scriptPath = fileURLToPath(new URL("../scripts/render-pi-theme-swatch.mjs", import.meta.url));
+  const script = await readFile(scriptPath, "utf8");
+  assert.match(script, /kitty-graphics\.json/);
+  assert.match(script, /encodeRgbaPng/);
 });
