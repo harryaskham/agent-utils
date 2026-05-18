@@ -72,9 +72,11 @@ rendered terminal scene above the editor on startup; opt out with
 `PI_GRAPHICS_AUTO_TERMINAL_SCENE=0` or `PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE=off`.
 If a running session still looks unchanged, run `/pi-graphics-doctor` (or
 `/pi-graphics-takeover`) to re-apply the visible surfaces and report theme,
-kitty-placeholder, opt-out, and reload diagnostics. Use `/pi-graphics-lighthouse`
-or `pi_graphics_lighthouse` for the deliberately oversized normal-TUI beacon
-that should be visible even before image/APNG rendering succeeds.
+kitty-placeholder, opt-out, and reload diagnostics. Use `/pi-graphics-theme-delta`
+or `pi_graphics_theme_delta` to print the exact reload sentinel and quantified
+RGB deltas against the built-in dark theme. Use `/pi-graphics-lighthouse` or
+`pi_graphics_lighthouse` for the deliberately oversized normal-TUI beacon that
+should be visible even before image/APNG rendering succeeds.
 
 ## How the extension cooperates with the theme
 
@@ -149,7 +151,13 @@ rendered. The extension complements those flat colors with graphical affordances
   activation auditable in ordinary text UI chrome. `pi_graphics_send_theme_swatch`
   and `/pi-graphics-theme-swatch-message` send the same swatch into the transcript,
   and session start does this automatically unless disabled by env.
+* **Reload sentinel + theme delta** — `/pi-graphics-theme-delta` and
+  `pi_graphics_theme_delta` print `PI-GFX-RELOAD-SENTINEL/2026-05-18/NEON-LIGHTHOUSE`
+  and quantified RGB deltas for key `kitty-graphics` tokens versus the built-in
+  dark theme. The sentinel is also included in the persistent header/status
+  chrome so a stale Pi package/session can be spotted immediately.
 * **Doctor / takeover diagnostics** — `/pi-graphics-doctor`,
+
   `/pi-graphics-takeover`, and `pi_graphics_doctor` report the active theme,
   kitty placeholder state, auto-surface opt-outs, and remediation steps. The
   command also re-applies the visible surfaces and sends the transcript theme
@@ -249,7 +257,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

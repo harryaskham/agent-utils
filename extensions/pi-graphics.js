@@ -48,6 +48,8 @@ import {
   buildPiGraphicsLighthouseLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
+  buildPiGraphicsReloadSentinelLines,
+  buildPiGraphicsThemeDeltaLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
@@ -60,6 +62,7 @@ import {
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
+  PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -147,6 +150,7 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setStatus?.("pi-gfx-mode", "⬢ floodlight");
     ctx.ui?.setStatus?.("pi-gfx-pulse", "◆ APNG editor aura");
     ctx.ui?.setStatus?.("pi-gfx-row", "✦ neon working row");
+    ctx.ui?.setStatus?.("pi-gfx-build", PI_GRAPHICS_RELOAD_SENTINEL);
     setWorkingChrome(ctx, "ready");
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
@@ -222,6 +226,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setStatus?.("pi-gfx-pulse", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-row", undefined); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-scene", undefined); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-build", undefined); } catch {}
     try { ctx?.ui?.setWorkingIndicator?.(); } catch {}
     try { ctx?.ui?.setWorkingMessage?.(); } catch {}
     try { ctx?.ui?.setHiddenThinkingLabel?.(); } catch {}
@@ -620,6 +625,20 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_theme_delta`,
+    label: "Pi Graphics: Theme Delta",
+    description: "Show the Pi kitty graphics reload sentinel and quantified RGB deltas against the default dark theme.",
+    promptSnippet: "Show Pi kitty graphics theme delta and reload sentinel.",
+    parameters: Type.Object({}),
+    async execute() {
+      return {
+        content: [{ type: "text", text: [...buildPiGraphicsReloadSentinelLines(), ...buildPiGraphicsThemeDeltaLines()].join("\n") }],
+        details: { sentinel: PI_GRAPHICS_RELOAD_SENTINEL },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_lighthouse`,
     label: "Pi Graphics: Lighthouse Beacon",
     description: "Render an oversized normal-TUI lighthouse beacon so Pi kitty graphics mode is impossible to miss even without image placement.",
@@ -792,6 +811,13 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-theme-delta", {
+    description: "Show the Pi kitty graphics reload sentinel and quantified theme delta report.",
+    handler: async (_args, ctx) => {
+      ctx.ui?.notify?.([...buildPiGraphicsReloadSentinelLines(ctx.ui?.theme), ...buildPiGraphicsThemeDeltaLines(ctx.ui?.theme)].join("\n"), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-lighthouse", {
     description: "Show the oversized Pi kitty graphics lighthouse beacon.",
     handler: async (_args, ctx) => {
@@ -887,6 +913,8 @@ export default function piGraphicsExtension(pi) {
         `startup theme swatch: ${shouldAutoShowThemeSwatchSplash() ? "enabled" : "disabled by env"}`,
         `auto terminal scene: ${shouldAutoShowTerminalScene() ? "enabled" : "disabled by env"}`,
         "doctor/takeover: /pi-graphics-doctor",
+        `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
+        "theme delta: /pi-graphics-theme-delta",
         "session header: enabled",
         "session footer: enabled",
         "component HUD: below editor",
@@ -1000,6 +1028,8 @@ export {
   buildPiGraphicsLighthouseLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
+  buildPiGraphicsReloadSentinelLines,
+  buildPiGraphicsThemeDeltaLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
@@ -1012,6 +1042,7 @@ export {
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
+  PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,

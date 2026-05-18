@@ -52,6 +52,8 @@ import {
   buildPiGraphicsLighthouseComponent,
   buildPiGraphicsLighthouseLines,
   buildPiGraphicsPhotonRainComponent,
+  buildPiGraphicsReloadSentinelLines,
+  buildPiGraphicsThemeDeltaLines,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
@@ -65,6 +67,7 @@ import {
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
+  PI_GRAPHICS_RELOAD_SENTINEL,
   shouldAutoApplyTheme,
   shouldAutoShowGraphics,
   shouldAutoShowSplash,
@@ -542,6 +545,23 @@ test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width bann
   component.invalidate();
 });
 
+test("buildPiGraphicsReloadSentinelLines and theme delta report expose stale-session diagnostics", () => {
+  const theme = {
+    fg(token, text) { return `<${token}>${text}</${token}>`; },
+    bg(token, text) { return `[${token}]${text}[/${token}]`; },
+  };
+  const sentinel = buildPiGraphicsReloadSentinelLines(theme).join("\n");
+  assert.match(sentinel, /PI GFX RELOAD SENTINEL/);
+  assert.match(sentinel, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(sentinel, /older agent-utils package/);
+  const delta = buildPiGraphicsThemeDeltaLines(theme).join("\n");
+  assert.match(delta, /PI KITTY THEME DELTA REPORT/);
+  assert.match(delta, /selectedBg/);
+  assert.match(delta, /customMessageBg/);
+  assert.match(delta, /ΔRGB=/);
+  assert.match(delta, /select \/settings → kitty-graphics/);
+});
+
 test("buildPiGraphicsLighthouseComponent renders an oversized unmistakable beacon", () => {
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
@@ -822,6 +842,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /theme swatch: above editor \+ \/pi-graphics-theme-swatch/);
   assert.match(source, /photon rain: above editor \+ \/pi-graphics-photon-rain/);
   assert.match(source, /lighthouse beacon: above editor \+ \/pi-graphics-lighthouse/);
+  assert.match(source, /reload sentinel: \$\{PI_GRAPHICS_RELOAD_SENTINEL\}/);
+  assert.match(source, /theme delta: \/pi-graphics-theme-delta/);
+  assert.match(source, /_theme_delta/);
+  assert.match(source, /pi-graphics-theme-delta/);
   assert.match(source, /_lighthouse/);
   assert.match(source, /pi-graphics-lighthouse/);
   assert.match(source, /live footer: branch\/status beacon/);

@@ -10,6 +10,20 @@ import { buildPlacement, renderToText } from "./runtime.js";
 
 const FALSE_RE = /^(0|false|off|no)$/i;
 
+export const PI_GRAPHICS_RELOAD_SENTINEL = "PI-GFX-RELOAD-SENTINEL/2026-05-18/NEON-LIGHTHOUSE";
+
+function hexRgb(hex) {
+  const value = String(hex || "").replace(/^#/, "").slice(0, 6);
+  if (value.length !== 6) return [0, 0, 0];
+  return [Number.parseInt(value.slice(0, 2), 16), Number.parseInt(value.slice(2, 4), 16), Number.parseInt(value.slice(4, 6), 16)];
+}
+
+function rgbDelta(a, b) {
+  const aa = hexRgb(a);
+  const bb = hexRgb(b);
+  return Math.abs(aa[0] - bb[0]) + Math.abs(aa[1] - bb[1]) + Math.abs(aa[2] - bb[2]);
+}
+
 export function shouldAutoShowGraphics(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_WIDGET ?? env.PI_KITTY_GRAPHICS_AUTO_WIDGET;
   return value === undefined ? true : !FALSE_RE.test(String(value).trim());
@@ -189,7 +203,7 @@ export function buildPiGraphicsHeaderLines(theme) {
   return [
     bg("selectedBg", `${left} ${fg("customMessageLabel", "PI KITTY GRAPHICS ONLINE")} ${right}`),
     bg("customMessageBg", `${fg("accent", "▌")} ${fg("text", "deep Nordic void • cyan/violet glow • APNG pulse • TypeScript TUI mirror")}`),
-    bg("toolPendingBg", `${fg("muted", "▔".repeat(12))} ${fg("borderAccent", "never-a-normal-terminal mode")}`),
+    bg("toolPendingBg", `${fg("muted", "▔".repeat(12))} ${fg("borderAccent", "never-a-normal-terminal mode")} ${fg("thinkingXhigh", PI_GRAPHICS_RELOAD_SENTINEL)}`),
   ];
 }
 
@@ -288,6 +302,32 @@ export function buildPiGraphicsLighthouseComponent(theme, options = {}) {
     },
     invalidate() { tick = (tick + 0.16) % 1; },
   };
+}
+
+export function buildPiGraphicsReloadSentinelLines(theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  return [
+    bg("toolPendingBg", `${fg("thinkingXhigh", "⬢")} ${fg("customMessageLabel", "PI GFX RELOAD SENTINEL")} ${fg("borderAccent", PI_GRAPHICS_RELOAD_SENTINEL)}`),
+    bg("customMessageBg", `${fg("accent", "If you do not see this exact sentinel, this Pi session is running an older agent-utils package.")}`),
+  ];
+}
+
+export function buildPiGraphicsThemeDeltaLines(theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const pairs = [
+    ["selectedBg", "#006ec0", "#3a3a4a"],
+    ["customMessageBg", "#33006b", "#2d2838"],
+    ["toolPendingBg", "#020b20", "#282832"],
+    ["borderAccent", "#00ffd0", "#00d7ff"],
+    ["thinkingXhigh", "#ff4dff", "#d183e8"],
+  ];
+  return [
+    bg("selectedBg", `${fg("thinkingXhigh", "⬢ PI KITTY THEME DELTA REPORT ⬢")} ${fg("muted", PI_GRAPHICS_RELOAD_SENTINEL)}`),
+    ...pairs.map(([token, kitty, dark]) => bg("customMessageBg", `${fg("customMessageLabel", token)} ${fg("borderAccent", kitty)} vs dark ${dark} ${fg("thinkingXhigh", `ΔRGB=${rgbDelta(kitty, dark)}`)}`)),
+    bg("toolPendingBg", `${fg("accent", "Expected: large cyan/violet/void deltas; if UI looks dark-default, reload package or select /settings → kitty-graphics.")}`),
+  ];
 }
 
 function footerBranch(footerData = {}) {
