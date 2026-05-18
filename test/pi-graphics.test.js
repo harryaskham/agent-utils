@@ -48,6 +48,8 @@ import {
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
+  buildPiGraphicsThemeSwatchComponent,
+  buildPiGraphicsThemeSwatchLines,
   buildStagePanelWidget,
   buildStartupSplashMessage,
   buildTerminalTitle,
@@ -500,6 +502,30 @@ test("buildPiGraphicsFloodlightComponent renders a high-contrast full-width bann
   component.invalidate();
 });
 
+test("buildPiGraphicsThemeSwatchComponent renders actual theme-token calibration bars", () => {
+  const calls = [];
+  const theme = {
+    fg(token, text) { calls.push(["fg", token]); return `<${token}>${text}</${token}>`; },
+    bg(token, text) { calls.push(["bg", token]); return `[${token}]${text}[/${token}]`; },
+  };
+  const dim = buildPiGraphicsThemeSwatchLines(theme, { width: 96, phase: 0 });
+  const bright = buildPiGraphicsThemeSwatchLines(theme, { width: 96, phase: 0.25 });
+  assert.equal(dim.length, 5);
+  assert.match(dim[0], /PI THEME CALIBRATION SWATCH/);
+  assert.match(dim.join("\n"), /selectedBg \+ borderAccent/);
+  assert.match(dim.join("\n"), /toolPendingBg \+ thinkingXhigh/);
+  assert.match(dim.join("\n"), /kitty-graphics theme is not active/);
+  assert.ok(calls.some(([, token]) => token === "selectedBg"));
+  assert.ok(calls.some(([, token]) => token === "customMessageBg"));
+  assert.ok(calls.some(([, token]) => token === "toolPendingBg"));
+  assert.notDeepEqual(dim, bright);
+  const component = buildPiGraphicsThemeSwatchComponent(theme, { phase: 0 });
+  const rendered = component.render(72);
+  assert.equal(rendered.length, 5);
+  assert.ok(rendered.every((line) => line.length <= 73));
+  component.invalidate();
+});
+
 test("buildPiGraphicsFooterComponent renders a live branch/status beacon", () => {
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
@@ -653,6 +679,7 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /setHeader\?\.\(\(_tui, theme\) => buildPiGraphicsHeaderComponent\(theme\)\)/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setWidget\?\.\(floodlightWidgetId, \(_tui, theme\) => buildPiGraphicsFloodlightComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
+  assert.match(source, /setWidget\?\.\(themeSwatchWidgetId, \(_tui, theme\) => buildPiGraphicsThemeSwatchComponent\(theme\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(hudWidgetId, \(_tui, theme\) => buildPiGraphicsHudComponent\(theme\), \{ placement: "belowEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
@@ -668,7 +695,10 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /working row: neon Pi kitty gfx/);
   assert.match(source, /terminal title: lifecycle Pi kitty gfx/);
   assert.match(source, /floodlight: high-contrast editor-adjacent banner/);
+  assert.match(source, /theme swatch: above editor \+ \/pi-graphics-theme-swatch/);
   assert.match(source, /live footer: branch\/status beacon/);
+  assert.match(source, /_theme_swatch/);
+  assert.match(source, /pi-graphics-theme-swatch/);
   assert.match(source, /visual contract: \/pi-graphics-visual-contract/);
   assert.match(source, /_visual_contract/);
   assert.match(source, /buildVisualContractLines\(\{ unicodePlacement: ensureUnicodePlacement\(state\), splash: shouldAutoShowSplash\(\) \}/);

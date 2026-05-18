@@ -56,7 +56,10 @@ between widget redraws. Set `PI_GRAPHICS_AUTO_WIDGET=0` (or
 `PI_GRAPHICS_AUTO_SPLASH=0` (or `PI_KITTY_GRAPHICS_AUTO_SPLASH=off`) to suppress
 the startup splash. Use `/pi-graphics-visual-contract` (or the
 `pi_graphics_visual_contract` tool) to show an explicit checklist of all expected
-visible cues when judging whether the mode is active.
+visible cues when judging whether the mode is active. Use
+`/pi-graphics-theme-swatch` (or `pi_graphics_theme_swatch`) to render actual
+runtime theme-token calibration bars; if those bars look ordinary, the running
+session has not picked up the `kitty-graphics` theme/package yet.
 
 ## How the extension cooperates with the theme
 
@@ -85,10 +88,10 @@ rendered. The extension complements those flat colors with graphical affordances
   normal turns. It combines an APNG TUI component with explicit neon text
   chrome and a text-only fallback, making graphical mode noticeable even when
   the theme was not selected or kitty placeholders are unavailable.
-* **Persistent session header/footer/HUD** — pure TypeScript components
-  installed via `ctx.ui.setHeader`, `ctx.ui.setFooter`, and a `ctx.ui.setWidget`
-  factory below the editor so the session announces `PI KITTY GRAPHICS ONLINE`
-  at the top, `KITTY-GFX LIVE FOOTER` plus live branch/status beacon text in the bottom chrome, a live `PI GFX HUD` near the
+* **Persistent session header/footer/HUD/swatch** — pure TypeScript components
+  installed via `ctx.ui.setHeader`, `ctx.ui.setFooter`, and `ctx.ui.setWidget`
+  factories so the session announces `PI KITTY GRAPHICS ONLINE`
+  at the top, an above-editor `PI THEME CALIBRATION SWATCH` made from actual theme tokens, `KITTY-GFX LIVE FOOTER` plus live branch/status beacon text in the bottom chrome, a live `PI GFX HUD` near the
   editor, a full-width `PI KITTY GRAPHICS FLOODLIGHT` banner, an APNG
   `PI KITTY GFX EDITOR AURA`, and `NEON EDITOR FIELD` /
   `INPUT FIELD STABILIZED` rails around the input area with theme-colored rails
@@ -107,6 +110,11 @@ rendered. The extension complements those flat colors with graphical affordances
   pure TypeScript TUI component (no external `pi-tui` import) with neon rails,
   themed backgrounds, and bounded viewport rendering for displayed custom
   messages.
+* **Theme calibration swatch** — `/pi-graphics-theme-swatch` and
+  `pi_graphics_theme_swatch` render block bars using the runtime theme's
+  `selectedBg`, `customMessageBg`, `toolPendingBg`, `borderAccent`,
+  `thinkingXhigh`, and semantic success/warning/error tokens, making theme
+  activation auditable in ordinary text UI chrome.
 * **Visual contract self-test** — `/pi-graphics-visual-contract` and
   `pi_graphics_visual_contract` render a checklist covering theme request,
   kitty placeholder state, header/footer/HUD/floodlight, editor frame + APNG
@@ -202,7 +210,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

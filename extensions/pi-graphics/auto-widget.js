@@ -163,6 +163,34 @@ export function buildPiGraphicsHeaderComponent(theme) {
   };
 }
 
+export function buildPiGraphicsThemeSwatchLines(theme, { width = 96, phase = 0 } = {}) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
+  const cells = Math.max(48, Math.min(160, Math.trunc(width)));
+  const p = Math.abs(Math.sin(Number(phase) * Math.PI * 2));
+  const barWidth = Math.max(10, Math.min(34, Math.floor(cells / 4)));
+  const brightBar = (p > 0.5 ? "█▓" : "▓█").repeat(Math.ceil(barWidth / 2)).slice(0, barWidth);
+  const dimBar = (p > 0.5 ? "▒░" : "░▒").repeat(Math.ceil(barWidth / 2)).slice(0, barWidth);
+  return [
+    bg("selectedBg", `${fg("thinkingXhigh", "⬢ PI THEME CALIBRATION SWATCH ⬢")} ${fg("muted", "actual theme tokens")}`),
+    bg("customMessageBg", `${fg("borderAccent", brightBar)} ${fg("customMessageLabel", "selectedBg + borderAccent")} ${fg("accent", "cyan rail")}`),
+    bg("toolPendingBg", `${fg("thinkingXhigh", brightBar)} ${fg("customMessageLabel", "toolPendingBg + thinkingXhigh")} ${fg("muted", "violet glow")}`),
+    bg("selectedBg", `${fg("accent", dimBar)} ${fg("customMessageLabel", "accent pulse")} ${fg("success", "success")} ${fg("warning", "warning")} ${fg("error", "error")}`),
+    bg("customMessageBg", `${fg("dim", "If these bars look ordinary, the kitty-graphics theme is not active in this Pi session.")}`),
+  ];
+}
+
+export function buildPiGraphicsThemeSwatchComponent(theme, options = {}) {
+  let tick = Number(options.phase || 0);
+  return {
+    render(width = 120) {
+      tick = (tick + 0.125) % 1;
+      return boundedLines(buildPiGraphicsThemeSwatchLines(theme, { ...options, width, phase: tick }), width);
+    },
+    invalidate() { tick = (tick + 0.25) % 1; },
+  };
+}
+
 function footerBranch(footerData = {}) {
   if (typeof footerData.getGitBranch === "function") return footerData.getGitBranch() || "";
   return footerData?.gitBranch || "";

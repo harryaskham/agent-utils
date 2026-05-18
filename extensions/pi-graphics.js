@@ -43,6 +43,8 @@ import {
   buildPiGraphicsHeaderComponent,
   buildPiGraphicsHudComponent,
   buildPiGraphicsMessageComponent,
+  buildPiGraphicsThemeSwatchComponent,
+  buildPiGraphicsThemeSwatchLines,
   buildStagePanelWidget,
   buildStartupSplashMessage,
   buildTerminalTitle,
@@ -77,6 +79,7 @@ export default function piGraphicsExtension(pi) {
   const editorFrameBottomId = "pi-graphics-editor-frame-bottom";
   const editorAuraWidgetId = "pi-graphics-editor-aura";
   const floodlightWidgetId = "pi-graphics-floodlight";
+  const themeSwatchWidgetId = "pi-graphics-theme-swatch";
   let lastAutoWidgetSignature = "";
 
   function showAutoPulse(ctx, options = {}) {
@@ -134,6 +137,7 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
     ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
     ctx.ui?.setWidget?.(floodlightWidgetId, (_tui, theme) => buildPiGraphicsFloodlightComponent(theme), { placement: "aboveEditor" });
+    ctx.ui?.setWidget?.(themeSwatchWidgetId, (_tui, theme) => buildPiGraphicsThemeSwatchComponent(theme), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
     ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
     if (ensureUnicodePlacement(state)) {
@@ -193,6 +197,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.setWidget?.(editorFrameBottomId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(editorAuraWidgetId, undefined); } catch {}
     try { ctx?.ui?.setWidget?.(floodlightWidgetId, undefined); } catch {}
+    try { ctx?.ui?.setWidget?.(themeSwatchWidgetId, undefined); } catch {}
 
     const cmd = buildScopedDeleteCommand({
       ownedImageIds: state.ownedImageIds,
@@ -529,6 +534,22 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_theme_swatch`,
+    label: "Pi Graphics: Theme Swatch",
+    description: "Render a text/TUI theme calibration swatch using real Pi theme tokens so operators can see whether kitty-graphics is active.",
+    promptSnippet: "Show the Pi kitty graphics theme calibration swatch.",
+    parameters: Type.Object({
+      width: Type.Optional(Type.Number({ description: "Target swatch width in cells. Defaults to 96.", minimum: 48, maximum: 160 })),
+    }),
+    async execute(_toolCallId, params) {
+      return {
+        content: [{ type: "text", text: buildPiGraphicsThemeSwatchLines(undefined, { width: params.width }).join("\n") }],
+        details: { width: params.width || 96, usesRuntimeThemeInCommand: true },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_visual_contract`,
     label: "Pi Graphics: Visual Contract",
     description: "Return a high-contrast checklist of the expected Pi kitty graphics cues so operators can verify the mode is visibly active.",
@@ -611,6 +632,13 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-theme-swatch", {
+    description: "Show the Pi kitty graphics theme calibration swatch.",
+    handler: async (_args, ctx) => {
+      ctx.ui?.notify?.(buildPiGraphicsThemeSwatchLines(ctx.ui?.theme).join("\n"), "info");
+    },
+  });
+
   pi.registerCommand("pi-graphics-visual-contract", {
     description: "Show the Pi kitty graphics visual contract checklist.",
     handler: async (_args, ctx) => {
@@ -651,6 +679,7 @@ export default function piGraphicsExtension(pi) {
         "working row: neon Pi kitty gfx",
         "terminal title: lifecycle Pi kitty gfx",
         "floodlight: high-contrast editor-adjacent banner",
+        "theme swatch: above editor + /pi-graphics-theme-swatch",
         "live footer: branch/status beacon",
         "visual contract: /pi-graphics-visual-contract",
       ].join("\n");
@@ -735,6 +764,8 @@ export {
   buildPiGraphicsHudLines,
   buildPiGraphicsMessageComponent,
   buildPiGraphicsMessageLines,
+  buildPiGraphicsThemeSwatchComponent,
+  buildPiGraphicsThemeSwatchLines,
   buildStagePanelWidget,
   buildStartupSplashMessage,
   buildTerminalTitle,
