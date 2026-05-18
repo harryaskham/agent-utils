@@ -84,6 +84,11 @@ export function shouldAutoShowConversationFrame(env = process.env) {
   return explicitOrShowcase(value, env);
 }
 
+export function shouldAutoShowTranscriptChrome(env = process.env) {
+  const value = env.PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME ?? env.PI_KITTY_GRAPHICS_AUTO_TRANSCRIPT_CHROME;
+  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+}
+
 export function shouldAutoShowAnsiTakeover(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_ANSI_TAKEOVER ?? env.PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER;
   return explicitOrShowcase(value, env);
@@ -297,6 +302,48 @@ export function buildStartupConversationFrameMessage({ content, role = "assistan
     content: String(content || "Normal transcript output is now framed by Pi kitty graphics chrome — deep Nordic rails, cyan/violet glow, and reload sentinel active.").slice(0, 360),
     display: true,
     details: { role, title },
+  };
+}
+
+export function buildPiGraphicsTranscriptChromeLines({ role = "assistant", label = "message sealed", width = 96, phase = 0 } = {}) {
+  const cells = Math.max(48, Math.min(132, Math.trunc(width)));
+  const safeRole = String(role || "assistant").replace(/[^a-z0-9_-]+/gi, " ").trim().toUpperCase().slice(0, 18) || "MESSAGE";
+  const safeLabel = String(label || "message sealed").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 38);
+  const p = Math.abs(Math.sin(Number(phase || 0) * Math.PI * 2));
+  const left = Math.round(30 + p * 40);
+  const right = Math.round(210 - p * 40);
+  const rail = "▰▱⬢◆✦✺".repeat(Math.ceil(cells / 6)).slice(0, cells);
+  const glow = "▄".repeat(cells);
+  const scan = "·".repeat(Math.max(0, cells - 2));
+  return [
+    `${ansiBgRgb(2, 3, 11)}${ansiFgRgb(0, 255, 208)}╭${rail.slice(0, cells - 2)}╮${RESET}`,
+    `${ansiBgRgb(3, 14, 31)}${ansiFgRgb(233, 248, 255)}│ ${safeRole.padEnd(18)} ${ansiFgRgb(124, 77, 255)}${safeLabel.padEnd(Math.max(0, cells - 23)).slice(0, Math.max(0, cells - 23))}${ansiFgRgb(0, 255, 208)}│${RESET}`,
+    `${ansiBgRgb(left >> 1, 10, right >> 2)}${ansiFgRgb(0, 255, 208)}╰${glow.slice(0, cells - 2)}╯${RESET}`,
+    `${ansiBgRgb(2, 3, 11)}${ansiFgRgb(86, 200, 255)} ${scan} ${RESET}`,
+  ];
+}
+
+export function buildPiGraphicsTranscriptChromeComponent(message, options = {}, _theme) {
+  const details = message?.details && typeof message.details === "object" ? message.details : {};
+  return {
+    render(width = 120) {
+      return boundedLines(buildPiGraphicsTranscriptChromeLines({
+        role: details.role || details.tone || "assistant",
+        label: details.title || message?.content || "message sealed",
+        width,
+        phase: details.phase || 0,
+      }), width);
+    },
+    invalidate() {},
+  };
+}
+
+export function buildTranscriptChromeMessage({ role = "assistant", title = "message sealed", phase = 0 } = {}) {
+  return {
+    customType: "pi-graphics-transcript-chrome",
+    content: `${role} ${title}`,
+    display: true,
+    details: { role, title, phase },
   };
 }
 

@@ -77,6 +77,7 @@ Example settings:
       "ansiScene": false,
       "ansiTakeover": false,
       "terminalPalette": true,
+      "transcriptChrome": true,
       "heartbeat": false
     },
     "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 }
@@ -86,9 +87,13 @@ Example settings:
 
 Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
 maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
-still override settings for one run. The compact ANSI `/pi-graphics-ambient-proof`
-strip, user-theme sync, and the OSC terminal-palette request are enabled by default as fallback
-visual smoke tests; the strip includes the configured theme name, graphics mode,
+still override settings for one run. Use `PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME=0`
+to suppress the bounded per-message truecolor rail while keeping other calm
+chrome active. The compact ANSI `/pi-graphics-ambient-proof`
+strip, user-theme sync, transcript chrome, and the OSC terminal-palette request are enabled by default as fallback
+visual smoke tests; transcript chrome inserts a bounded truecolor deep-Nordic
+rail after normal messages so the transcript visibly changes even if core Pi
+surfaces ignore theme tokens. The strip includes the configured theme name, graphics mode,
 settings-derived auto flags, measured theme color deltas, renderer PNG bytes,
 color bucket count, luma delta, and reload sentinel. Set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
 `PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to hide the compact always-visible rendered
@@ -407,7 +412,7 @@ canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame transcript rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame and bounded transcript-chrome rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD and editor-frame rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

@@ -71,10 +71,12 @@ import {
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
+  buildPiGraphicsTranscriptChromeComponent,
   buildStagePanelWidget,
   buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
   buildStartupThemeSwatchMessage,
+  buildTranscriptChromeMessage,
   buildTerminalTitle,
   buildTextStagePanel,
   buildVisualContractLines,
@@ -94,6 +96,7 @@ import {
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
+  shouldAutoShowTranscriptChrome,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
   shouldAutoShowValidationReport,
@@ -194,6 +197,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_THEME_SWATCH: boolToEnv(!off && (features.themeSwatch ?? auto.themeSwatch ?? showcase)),
     PI_GRAPHICS_AUTO_TERMINAL_SCENE: boolToEnv(!off && (features.terminalScene ?? auto.terminalScene ?? showcase)),
     PI_GRAPHICS_AUTO_CONVERSATION_FRAME: boolToEnv(!off && (features.conversationFrame ?? auto.conversationFrame ?? false)),
+    PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv(!off && (features.transcriptChrome ?? auto.transcriptChrome ?? true)),
     PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
     PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
     PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
@@ -494,12 +498,22 @@ export default function piGraphicsExtension(pi) {
     }
   });
 
+  pi.on("message_end", (event) => {
+    if (!shouldAutoShowTranscriptChrome(gfxEnv())) return;
+    const role = String(event?.message?.role || "message");
+    if (role === "custom") return;
+    const phase = role === "user" ? 0.16 : role === "toolResult" ? 0.42 : 0.72;
+    try { pi.sendMessage?.(buildTranscriptChromeMessage({ role, title: "rendered transcript chrome", phase })); } catch {}
+  });
+
   pi.registerMessageRenderer?.("pi-graphics-message", (message, options, theme) =>
     buildPiGraphicsMessageComponent(message, options, theme));
   pi.registerMessageRenderer?.("pi-graphics-theme-swatch", (message, options, theme) =>
     buildPiGraphicsThemeSwatchMessageComponent(message, options, theme));
   pi.registerMessageRenderer?.("pi-graphics-conversation-frame", (message, options, theme) =>
     buildPiGraphicsConversationFrameComponent(message, options, theme));
+  pi.registerMessageRenderer?.("pi-graphics-transcript-chrome", (message, options, theme) =>
+    buildPiGraphicsTranscriptChromeComponent(message, options, theme));
 
   pi.on("session_shutdown", (_event, ctx) => {
     try { ctx?.ui?.setWidget?.(autoWidgetId, undefined); } catch {}
@@ -1740,10 +1754,12 @@ export {
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
+  buildPiGraphicsTranscriptChromeComponent,
   buildStagePanelWidget,
   buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
   buildStartupThemeSwatchMessage,
+  buildTranscriptChromeMessage,
   buildTerminalTitle,
   buildTextStagePanel,
   buildVisualContractLines,
@@ -1763,6 +1779,7 @@ export {
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
+  shouldAutoShowTranscriptChrome,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
   shouldAutoShowValidationReport,

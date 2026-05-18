@@ -72,10 +72,13 @@ import {
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
   buildPiGraphicsThemeSwatchMessageComponent,
+  buildPiGraphicsTranscriptChromeComponent,
+  buildPiGraphicsTranscriptChromeLines,
   buildStagePanelWidget,
   buildStartupConversationFrameMessage,
   buildStartupSplashMessage,
   buildStartupThemeSwatchMessage,
+  buildTranscriptChromeMessage,
   buildTerminalTitle,
   buildTextStagePanel,
   buildVisualContractLines,
@@ -95,6 +98,7 @@ import {
   shouldAutoShowConversationFrame,
   shouldAutoShowGraphics,
   shouldAutoShowHeartbeat,
+  shouldAutoShowTranscriptChrome,
   shouldAutoShowSplash,
   shouldAutoShowTerminalScene,
   shouldAutoShowValidationReport,
@@ -754,6 +758,27 @@ test("buildPiGraphicsConversationFrameComponent renders normal transcript chrome
   assert.ok(rendered.every((line) => line.length <= 97));
 });
 
+test("buildPiGraphicsTranscriptChromeComponent renders default-on truecolor transcript chrome", () => {
+  assert.equal(shouldAutoShowTranscriptChrome({}), true);
+  assert.equal(shouldAutoShowTranscriptChrome({ PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: "0" }), false);
+  assert.equal(shouldAutoShowTranscriptChrome({ PI_KITTY_GRAPHICS_AUTO_TRANSCRIPT_CHROME: "off" }), false);
+  const message = buildTranscriptChromeMessage({ role: "assistant", title: "rendered transcript chrome", phase: 0.25 });
+  assert.equal(message.customType, "pi-graphics-transcript-chrome");
+  assert.equal(message.display, true);
+  const lines = buildPiGraphicsTranscriptChromeLines({ role: "assistant", label: "rendered transcript chrome", width: 72, phase: 0.25 });
+  const joined = lines.join("\n");
+  assert.equal(lines.length, 4);
+  assert.match(joined, /ASSISTANT/);
+  assert.match(joined, /RENDERED TRANSCRIPT CHROME/);
+  assert.match(joined, /\u001b\[48;2;/);
+  assert.match(joined, /\u001b\[38;2;/);
+  assert.match(joined, /▰▱⬢◆✦✺/);
+  const component = buildPiGraphicsTranscriptChromeComponent(message, {}, null);
+  const rendered = component.render(60);
+  assert.equal(rendered.length, 4);
+  assert.ok(rendered.every((line) => line.length <= 61));
+});
+
 test("buildPiGraphicsMessageComponent renders bounded custom message chrome", () => {
   const calls = [];
   const theme = {
@@ -1029,6 +1054,8 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "1" }), true);
   assert.equal(shouldAutoApplyTheme({}), true);
   assert.equal(shouldAutoApplyTerminalPalette({}), true);
+  assert.equal(shouldAutoShowTranscriptChrome({}), true);
+  assert.equal(shouldAutoShowTranscriptChrome({ PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "1" }), true);
@@ -1046,6 +1073,7 @@ test("pi-graphics settings source maps calm mode to visibly active theme and OSC
   assert.match(source, /PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv\(!off && \(features\.terminalPalette \?\? auto\.terminalPalette \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv\(!off && \(features\.ambientChrome \?\? auto\.ambientChrome \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv\(!off && \(features\.ambientProof \?\? auto\.ambientProof \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv\(!off && \(features\.transcriptChrome \?\? auto\.transcriptChrome \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_FRAMES = String\(gfx\.animation\.ambientFrames\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_DELAY_MS = String\(gfx\.animation\.ambientDelayMs\)/);
 });
@@ -1134,8 +1162,12 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /shouldAutoShowVisualProof\(gfxEnv\(\)\)/);
   assert.match(source, /shouldAutoShowConversationFrame\(gfxEnv\(\)\)/);
   assert.match(source, /shouldAutoShowTerminalScene\(gfxEnv\(\)\)/);
+  assert.match(source, /pi\.on\("message_end"/);
+  assert.match(source, /shouldAutoShowTranscriptChrome\(gfxEnv\(\)\)/);
+  assert.match(source, /buildTranscriptChromeMessage\(/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-message"/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-conversation-frame"/);
+  assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-transcript-chrome"/);
   assert.match(source, /pi\.on\("before_agent_start"/);
   assert.match(source, /pi\.on\("tool_execution_start"/);
   assert.match(source, /pi-graphics-show/);
