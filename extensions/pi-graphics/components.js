@@ -197,6 +197,92 @@ export function renderTuiComponentPulseApng({ frames = 8, delayMs = 100, plays =
   };
 }
 
+export function renderTerminalScenePixels({ columns = 72, rows = 14, phase = 0 } = {}) {
+  const cols = clampPositive(columns, 16, "columns");
+  const rs = clampPositive(rows, 8, "rows");
+  const widthPx = cols * CELL_PX_W;
+  const heightPx = rs * CELL_PX_H;
+  const ph = phase01(phase);
+  const p = pulse(ph);
+  const pixels = makeCanvas(widthPx, heightPx, "#020611ff");
+
+  fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, "#020611ff", "#10182dff");
+  addRadialGlow(pixels, widthPx, widthPx * (0.18 + p * 0.22), heightPx * 0.18, widthPx * 0.45, "#00d8ffaa", 0.95);
+  addRadialGlow(pixels, widthPx, widthPx * (0.82 - p * 0.18), heightPx * 0.72, widthPx * 0.42, "#b48cff99", 0.9);
+  strokeRect(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha("#72fbd6", 140 + p * 80), 2);
+  strokeRect(pixels, widthPx, 6, 6, widthPx - 12, heightPx - 12, withAlpha("#00d8ff", 70 + p * 70), 1);
+
+  // Terminal cell grid and glyph-like micro blocks: a TypeScript mirror of a
+  // rendered terminal surface, not merely themed text.
+  const gridLeft = CELL_PX_W * 2;
+  const gridTop = CELL_PX_H * 2;
+  const gridCols = Math.max(8, cols - 4);
+  const gridRows = Math.max(4, rs - 5);
+  for (let y = 0; y < gridRows; y += 1) {
+    for (let x = 0; x < gridCols; x += 1) {
+      const px = gridLeft + x * CELL_PX_W;
+      const py = gridTop + y * CELL_PX_H;
+      const wave = Math.sin((x * 0.35) + (y * 0.71) + ph * Math.PI * 2);
+      if ((x + y + Math.floor(ph * 9)) % 5 === 0) {
+        fillRect(pixels, widthPx, px + 2, py + 3, Math.max(2, CELL_PX_W - 4), 2, withAlpha(wave > 0 ? "#72fbd6" : "#b48cff", 70 + Math.abs(wave) * 120));
+      }
+      if ((x * 3 + y + Math.floor(ph * 13)) % 11 === 0) {
+        fillRect(pixels, widthPx, px + 3, py + 7, 2, Math.max(2, CELL_PX_H - 9), withAlpha("#00d8ff", 90 + p * 90));
+      }
+    }
+  }
+
+  fillHorizontalGradient(pixels, widthPx, 16, 10, widthPx - 32, 8, "#00d8ff99", "#b48cffaa");
+  for (let i = 0; i < 5; i += 1) {
+    const chipW = Math.max(18, Math.floor(widthPx * 0.09));
+    const x = widthPx - 22 - (i + 1) * (chipW + 7);
+    fillRect(pixels, widthPx, x, 18, chipW, 6, withAlpha(i % 2 === 0 ? "#72fbd6" : "#b48cff", 120 + p * 80));
+  }
+  for (let x = 18; x < widthPx - 18; x += 7) {
+    const t = x / Math.max(1, widthPx - 1);
+    const h = 3 + Math.round((Math.sin((t * 5 + ph) * Math.PI * 2) * 0.5 + 0.5) * 12);
+    fillRect(pixels, widthPx, x, heightPx - 18 - h, 3, h, withAlpha("#72fbd6", 90 + p * 100));
+  }
+  addScanlines(pixels, widthPx, { every: 4, alpha: 12 + p * 10, color: "#d7f8ff" });
+  return { pixels, columns: cols, rows: rs, widthPx, heightPx, phase: ph };
+}
+
+export function renderTerminalSceneFrame(options = {}) {
+  const scene = renderTerminalScenePixels(options);
+  const png = encodeRgbaPng(scene.pixels, scene.widthPx, scene.heightPx);
+  return {
+    png,
+    columns: scene.columns,
+    rows: scene.rows,
+    widthPx: scene.widthPx,
+    heightPx: scene.heightPx,
+    phase: scene.phase,
+    metrics: metricsForPayload(png, scene.widthPx, scene.heightPx),
+  };
+}
+
+export function renderTerminalScenePulseApng({ frames = 8, delayMs = 90, plays = 0, ...options } = {}) {
+  const count = Math.max(2, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const rendered = Array.from({ length: count }, (_unused, index) => renderTerminalScenePixels({ ...options, phase: index / count }));
+  const first = rendered[0];
+  const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
+  return {
+    png,
+    columns: first.columns,
+    rows: first.rows,
+    widthPx: first.widthPx,
+    heightPx: first.heightPx,
+    frames: count,
+    delayMs: Math.max(1, Math.trunc(delayMs || 90)),
+    plays: Math.max(0, Math.trunc(plays || 0)),
+    metrics: metricsForPayload(png, first.widthPx, first.heightPx, {
+      frames: count,
+      delayMs: Math.max(1, Math.trunc(delayMs || 90)),
+      animationMillis: count * Math.max(1, Math.trunc(delayMs || 90)),
+    }),
+  };
+}
+
 function blit(src, dst, dstWidth, x, y) {
   for (let row = 0; row < src.heightPx; row += 1) {
     const srcStart = row * src.widthPx * 4;

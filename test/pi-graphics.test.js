@@ -70,6 +70,8 @@ import {
 import {
   componentFrameCacheKey,
   renderPiGraphicsContactSheet,
+  renderTerminalSceneFrame,
+  renderTerminalScenePulseApng,
   renderTuiComponentFrame,
   renderTuiComponentFrames,
   renderTuiComponentPulseApng,
@@ -364,6 +366,35 @@ test("renderTuiComponentPulseApng packages pulse frames into one bounded animate
   assert.ok(pulse.metrics.pngBytes < 220_000, "animated component should stay bounded for one kitty upload");
   assert.ok(pulse.metrics.estimatedWireBytes < 300_000, "base64 wire cost should stay bounded");
   assert.equal(pulse.metrics.animationMillis, 450);
+});
+
+test("renderTerminalSceneFrame draws a deep-Nordic terminal scene with pixel-level variation", () => {
+  const scene = renderTerminalSceneFrame({ columns: 48, rows: 10, phase: 0.2 });
+  assert.equal(scene.columns, 48);
+  assert.equal(scene.rows, 10);
+  assert.ok(scene.png.length > 1000);
+  const decoded = decodePngRgba(scene.png);
+  assert.equal(decoded.width, 48 * CELL_PX_W);
+  assert.equal(decoded.height, 10 * CELL_PX_H);
+  const topLeft = pixelAt(decoded, 4, 4);
+  const center = pixelAt(decoded, Math.floor(decoded.width / 2), Math.floor(decoded.height / 2));
+  const lower = pixelAt(decoded, Math.floor(decoded.width / 2), decoded.height - 8);
+  assert.ok(channelDistance(topLeft, center) > 25, "scene should include aurora/glow variation");
+  assert.ok(channelDistance(center, lower) > 20, "scene should include gradient/waveform variation");
+  assert.ok(scene.metrics.estimatedWireBytes < 200000, "scene should stay bounded for kitty upload");
+});
+
+test("renderTerminalScenePulseApng packages animated terminal scene frames", () => {
+  const pulse = renderTerminalScenePulseApng({ columns: 40, rows: 8, frames: 6, delayMs: 80 });
+  assert.equal(pulse.frames, 6);
+  assert.equal(pulse.delayMs, 80);
+  assert.ok(pulse.png.subarray(0, 8).equals(PNG_SIGNATURE));
+  const chunks = pngChunkTypes(pulse.png);
+  assert.ok(chunks.includes("acTL"));
+  assert.ok(chunks.includes("fcTL"));
+  assert.ok(chunks.includes("fdAT"));
+  assert.equal(pulse.metrics.animationMillis, 480);
+  assert.ok(pulse.metrics.estimatedWireBytes < 500000);
 });
 
 test("renderPiGraphicsContactSheet creates a bounded visual regression sheet", () => {
@@ -765,6 +796,9 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /render_tui_pulse/);
   assert.match(source, /render_stage_panel/);
   assert.match(source, /render_contact_sheet/);
+  assert.match(source, /render_terminal_scene/);
+  assert.match(source, /renderTerminalScenePulseApng\(\{ columns: 52, rows: 10, frames: 8, delayMs: 90 \}\)/);
+  assert.match(source, /rendered terminal scene: pi_graphics_render_terminal_scene/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-message"/);
   assert.match(source, /buildPiGraphicsMessageComponent\(message, options, theme\)/);
   assert.match(source, /registerMessageRenderer\?\.\("pi-graphics-theme-swatch"/);

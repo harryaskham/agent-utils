@@ -64,6 +64,8 @@ import {
 } from "./pi-graphics/auto-widget.js";
 import {
   renderPiGraphicsContactSheet,
+  renderTerminalSceneFrame,
+  renderTerminalScenePulseApng,
   renderTuiComponentFrame,
   renderTuiComponentPulseApng,
 } from "./pi-graphics/components.js";
@@ -504,6 +506,53 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_render_terminal_scene`,
+    label: "Pi Graphics: Rendered Terminal Scene",
+    description: "Render a deep-Nordic graphical terminal scene with cell grid, aurora glow, status chips, and pulse waveform as PNG/APNG kitty graphics output.",
+    promptSnippet: "Render a high-tech Pi kitty graphics terminal scene.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Width in terminal cells. Defaults to 72.", minimum: 16, maximum: 160 })),
+      rows: Type.Optional(Type.Number({ description: "Height in terminal cells. Defaults to 14.", minimum: 8, maximum: 48 })),
+      animated: Type.Optional(Type.Boolean({ description: "Return APNG pulse animation instead of a static PNG. Defaults to true." })),
+      frames: Type.Optional(Type.Number({ description: "Animation frame count. Defaults to 8.", minimum: 2, maximum: 32 })),
+      delayMs: Type.Optional(Type.Number({ description: "APNG frame delay. Defaults to 90ms." })),
+      phase: Type.Optional(Type.Number({ description: "Static phase when animated=false." })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!ensureUnicodePlacement(state)) {
+        return {
+          content: [{ type: "text", text: "pi-graphics: not running in a kitty/tmux placeholder-capable terminal; rendered terminal scene requires kitty image placement." }],
+          details: { fallback: true },
+        };
+      }
+      const scene = params.animated === false
+        ? renderTerminalSceneFrame({ columns: params.columns, rows: params.rows, phase: params.phase })
+        : renderTerminalScenePulseApng({ columns: params.columns, rows: params.rows, frames: params.frames, delayMs: params.delayMs });
+      const placement = buildPlacement(state, {
+        name: `terminal-scene-${scene.columns}x${scene.rows}`,
+        png: scene.png,
+        columns: scene.columns,
+        rows: scene.rows,
+        caption: "rendered terminal scene",
+      });
+      return {
+        content: [{ type: "text", text: renderToText(placement) }],
+        details: {
+          imageId: placement.imageId,
+          placementId: placement.placementId,
+          columns: scene.columns,
+          rows: scene.rows,
+          widthPx: scene.widthPx,
+          heightPx: scene.heightPx,
+          frames: scene.frames || 1,
+          delayMs: scene.delayMs || 0,
+          metrics: scene.metrics,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_render_contact_sheet`,
     label: "Pi Graphics: Visual Contact Sheet",
     description: "Render a static PNG contact sheet of Pi kitty graphics component tones and pulse phases for visual regression and human validation.",
@@ -743,6 +792,7 @@ export default function piGraphicsExtension(pi) {
         "floodlight: high-contrast editor-adjacent banner",
         "theme swatch: above editor + /pi-graphics-theme-swatch",
         "photon rain: above editor + /pi-graphics-photon-rain",
+        "rendered terminal scene: pi_graphics_render_terminal_scene",
         "transcript theme swatch: /pi-graphics-theme-swatch-message",
         "live footer: branch/status beacon",
         "visual contract: /pi-graphics-visual-contract",
@@ -786,7 +836,15 @@ export default function piGraphicsExtension(pi) {
         rows: pulseFrame.rows,
         caption: "animated pulse APNG",
       });
-      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}\n${renderToText(glow)}\n${renderToText(component)}\n${renderToText(pulse)}`, "info");
+      const sceneFrame = renderTerminalScenePulseApng({ columns: 52, rows: 10, frames: 8, delayMs: 90 });
+      const scene = buildPlacement(state, {
+        name: "demo-terminal-scene",
+        png: sceneFrame.png,
+        columns: sceneFrame.columns,
+        rows: sceneFrame.rows,
+        caption: "rendered terminal scene",
+      });
+      ctx.ui?.notify?.(`${renderToText(rule)}\n${renderToText(border)}\n${renderToText(glow)}\n${renderToText(component)}\n${renderToText(pulse)}\n${renderToText(scene)}`, "info");
     },
   });
 }
@@ -808,6 +866,9 @@ export {
 export {
   componentFrameCacheKey,
   renderPiGraphicsContactSheet,
+  renderTerminalSceneFrame,
+  renderTerminalScenePixels,
+  renderTerminalScenePulseApng,
   renderTuiComponentFrame,
   renderTuiComponentFrames,
   renderTuiComponentPixels,
