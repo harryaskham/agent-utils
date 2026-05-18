@@ -81,7 +81,7 @@ function barWidth(widthPx, index, density) {
   return Math.max(10, Math.floor(widthPx * (0.34 + density * 0.42) * wave));
 }
 
-function renderTuiComponentPixels({
+export function renderTuiComponentPixels({
   columns = 56,
   rows = 9,
   phase = 0,
@@ -194,6 +194,51 @@ export function renderTuiComponentPulseApng({ frames = 8, delayMs = 100, plays =
       delayMs: Math.max(1, Math.trunc(delayMs || 100)),
       animationMillis: count * Math.max(1, Math.trunc(delayMs || 100)),
     }),
+  };
+}
+
+function blit(src, dst, dstWidth, x, y) {
+  for (let row = 0; row < src.heightPx; row += 1) {
+    const srcStart = row * src.widthPx * 4;
+    const dstStart = ((y + row) * dstWidth + x) * 4;
+    src.pixels.copy(dst, dstStart, srcStart, srcStart + src.widthPx * 4);
+  }
+}
+
+export function renderPiGraphicsContactSheet({ columns = 36, rows = 6, gapPx = 12 } = {}) {
+  const phases = [0, 0.25, 0.5, 0.75];
+  const tones = ["assistant", "tool", "user"];
+  const tiles = [];
+  for (const tone of tones) {
+    for (const phase of phases) {
+      tiles.push(renderTuiComponentPixels({ columns, rows, tone, phase }));
+    }
+  }
+  const tileWidth = tiles[0].widthPx;
+  const tileHeight = tiles[0].heightPx;
+  const sheetCols = phases.length;
+  const sheetRows = tones.length;
+  const gap = Math.max(0, Math.trunc(gapPx));
+  const widthPx = sheetCols * tileWidth + (sheetCols + 1) * gap;
+  const heightPx = sheetRows * tileHeight + (sheetRows + 1) * gap;
+  const pixels = makeCanvas(widthPx, heightPx, "#050914ff");
+  fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, "#050914ff", "#101729ff");
+  tiles.forEach((tile, index) => {
+    const col = index % sheetCols;
+    const row = Math.floor(index / sheetCols);
+    blit(tile, pixels, widthPx, gap + col * (tileWidth + gap), gap + row * (tileHeight + gap));
+  });
+  const png = encodeRgbaPng(pixels, widthPx, heightPx);
+  return {
+    png,
+    columns: sheetCols * columns,
+    rows: sheetRows * rows,
+    widthPx,
+    heightPx,
+    tileCount: tiles.length,
+    tones,
+    phases,
+    metrics: metricsForPayload(png, widthPx, heightPx, { tileCount: tiles.length }),
   };
 }
 

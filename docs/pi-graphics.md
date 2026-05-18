@@ -90,6 +90,8 @@ The extension registers six tools through `pi.registerTool`:
   frame, with optional tone/density/phase/caption controls.
 * `pi_graphics_render_tui_pulse` — render a looping APNG version of the TUI
   component for efficient continuous pulse animation.
+* `pi_graphics_render_contact_sheet` — render a static visual regression sheet
+  covering tones and pulse phases for human inspection.
 * `pi_graphics_clear` — release every kitty image owned by the extension.
 
 And four slash commands:
@@ -107,6 +109,7 @@ And four slash commands:
 > pi_graphics_render_glow_panel({ columns: 48, rows: 9, phase: 0.18 })
 > pi_graphics_render_tui_component({ columns: 56, rows: 9, tone: "assistant", phase: 0.2, caption: "graphical TUI" })
 > pi_graphics_render_tui_pulse({ columns: 56, rows: 9, tone: "tool", frames: 8, delayMs: 90, caption: "animated APNG pulse" })
+> pi_graphics_render_contact_sheet({ columns: 36, rows: 6 })
 ```
 
 The returned tool output text contains both the kitty-graphics transmit
@@ -127,12 +130,18 @@ non-graphical terminals.
 npm test
 ```
 
+For a standalone visual-regression artefact, run:
+
+```bash
+node scripts/render-pi-graphics-contact-sheet.mjs ./pi-graphics-contact-sheet.png
+```
+
 The test suite under `test/pi-graphics.test.js` covers PNG byte output,
 canvas drawing primitives, affordance footprints, kitty graphics command
 generation, package manifest discovery, and theme schema completeness. It also
 round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
 glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, bounded PNG/APNG wire size, tone-palette differences,
+lifecycle widget wiring, contact-sheet generation, bounded PNG/APNG wire size, tone-palette differences,
 phase-independent component cache keys, and stable-layout / different-pixels
 pulse frames so graphical changes cannot silently degrade into a theme that
 looks the same as plain text.

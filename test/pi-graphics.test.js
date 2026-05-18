@@ -39,6 +39,7 @@ import {
 } from "../extensions/pi-graphics/auto-widget.js";
 import {
   componentFrameCacheKey,
+  renderPiGraphicsContactSheet,
   renderTuiComponentFrame,
   renderTuiComponentFrames,
   renderTuiComponentPulseApng,
@@ -321,6 +322,29 @@ test("renderTuiComponentPulseApng packages pulse frames into one bounded animate
   assert.equal(pulse.metrics.animationMillis, 450);
 });
 
+test("renderPiGraphicsContactSheet creates a bounded visual regression sheet", () => {
+  const sheet = renderPiGraphicsContactSheet({ columns: 18, rows: 4, gapPx: 6 });
+  assert.equal(sheet.tileCount, 12);
+  assert.deepEqual(sheet.tones, ["assistant", "tool", "user"]);
+  assert.deepEqual(sheet.phases, [0, 0.25, 0.5, 0.75]);
+  assert.equal(sheet.widthPx, 4 * 18 * CELL_PX_W + 5 * 6);
+  assert.equal(sheet.heightPx, 3 * 4 * CELL_PX_H + 4 * 6);
+  assert.ok(sheet.metrics.pngBytes < 260_000, "contact sheet should remain small enough for test artefacts");
+  const decoded = decodePngRgba(sheet.png);
+  const assistantSample = pixelAt(decoded, 6 + 3, 6 + Math.floor((4 * CELL_PX_H) / 2));
+  const toolSample = pixelAt(decoded, 6 + 3, 6 + (4 * CELL_PX_H + 6) + Math.floor((4 * CELL_PX_H) / 2));
+  const userSample = pixelAt(decoded, 6 + 3, 6 + 2 * (4 * CELL_PX_H + 6) + Math.floor((4 * CELL_PX_H) / 2));
+  assert.ok(channelDistance(assistantSample, toolSample) > 70, "contact sheet should expose distinct assistant/tool palettes");
+  assert.ok(channelDistance(toolSample, userSample) > 70, "contact sheet should expose distinct tool/user palettes");
+});
+
+test("render-pi-graphics-contact-sheet script is wired to the contact sheet renderer", async () => {
+  const scriptPath = fileURLToPath(new URL("../scripts/render-pi-graphics-contact-sheet.mjs", import.meta.url));
+  const source = await readFile(scriptPath, "utf8");
+  assert.match(source, /renderPiGraphicsContactSheet/);
+  assert.match(source, /writeFileSync\(out, sheet\.png\)/);
+});
+
 test("renderTuiComponentFrame tones produce visibly distinct component palettes", () => {
   const assistant = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "assistant" }).png);
   const tool = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "tool" }).png);
@@ -355,7 +379,8 @@ test("pi-graphics extension source wires the auto pulse widget into startup and 
   assert.match(source, /pi\.on\("session_start"/);
   assert.match(source, /buildAutoPulseWidget\(state\)/);
   assert.match(source, /setWidget\?\.\(autoWidgetId, widget\.lines, \{ placement: "aboveEditor" \}\)/);
-  assert.match(source, /pi_graphics_render_tui_pulse/);
+  assert.match(source, /render_tui_pulse/);
+  assert.match(source, /render_contact_sheet/);
   assert.match(source, /pi\.on\("before_agent_start"/);
   assert.match(source, /pi\.on\("agent_start"/);
   assert.match(source, /pi\.on\("tool_execution_start"/);

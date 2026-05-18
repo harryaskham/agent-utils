@@ -39,6 +39,7 @@ import {
   shouldAutoShowGraphics,
 } from "./pi-graphics/auto-widget.js";
 import {
+  renderPiGraphicsContactSheet,
   renderTuiComponentFrame,
   renderTuiComponentPulseApng,
 } from "./pi-graphics/components.js";
@@ -358,6 +359,49 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerTool({
+    name: `${TOOL_PREFIX}_render_contact_sheet`,
+    label: "Pi Graphics: Visual Contact Sheet",
+    description: "Render a static PNG contact sheet of Pi kitty graphics component tones and pulse phases for visual regression and human validation.",
+    promptSnippet: "Render a Pi kitty graphics visual contact sheet covering tones and pulse phases.",
+    parameters: Type.Object({
+      columns: Type.Optional(Type.Number({ description: "Tile width in terminal cells. Defaults to 36.", minimum: 8, maximum: 128 })),
+      rows: Type.Optional(Type.Number({ description: "Tile height in terminal cells. Defaults to 6.", minimum: 4, maximum: 64 })),
+      gapPx: Type.Optional(Type.Number({ description: "Pixel gap between tiles. Defaults to 12." })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!ensureUnicodePlacement(state)) {
+        return {
+          content: [{ type: "text", text: "pi-graphics: not running in a kitty/tmux placeholder-capable terminal; skipping contact sheet." }],
+          details: { fallback: true },
+        };
+      }
+      const sheet = renderPiGraphicsContactSheet({ columns: params.columns, rows: params.rows, gapPx: params.gapPx });
+      const placement = buildPlacement(state, {
+        name: `contact-sheet-${sheet.widthPx}x${sheet.heightPx}`,
+        png: sheet.png,
+        columns: Math.min(120, sheet.columns),
+        rows: Math.min(40, sheet.rows),
+        caption: "Pi graphics visual contact sheet",
+      });
+      return {
+        content: [{ type: "text", text: renderToText(placement) }],
+        details: {
+          imageId: placement.imageId,
+          placementId: placement.placementId,
+          columns: sheet.columns,
+          rows: sheet.rows,
+          widthPx: sheet.widthPx,
+          heightPx: sheet.heightPx,
+          tileCount: sheet.tileCount,
+          tones: sheet.tones,
+          phases: sheet.phases,
+          metrics: sheet.metrics,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: `${TOOL_PREFIX}_clear`,
     label: "Pi Graphics: Clear",
     description: "Delete every kitty graphics image owned by the pi-graphics extension. Scoped: never deletes images owned by other extensions, never issues a global clear.",
@@ -472,8 +516,10 @@ export {
 } from "./pi-graphics/affordances.js";
 export {
   componentFrameCacheKey,
+  renderPiGraphicsContactSheet,
   renderTuiComponentFrame,
   renderTuiComponentFrames,
+  renderTuiComponentPixels,
   renderTuiComponentPulseApng,
 } from "./pi-graphics/components.js";
 export {
