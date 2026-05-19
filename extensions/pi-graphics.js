@@ -67,6 +67,7 @@ import {
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsReloadSentinelLines,
+  buildPiGraphicsThemeActivationLines,
   buildPiGraphicsThemeDeltaLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,
@@ -353,7 +354,7 @@ export default function piGraphicsExtension(pi) {
     return wrote;
   }
 
-  function buildLiveProbeText(ctx, { emitted = false } = {}) {
+  function buildLiveProbeText(ctx, { emitted = false, setThemeResult = undefined } = {}) {
     const env = gfxEnv();
     const api = ["setTheme", "setHeader", "setFooter", "setWidget", "setEditorComponent", "getEditorComponent", "setStatus", "notify", "write"]
       .map((name) => `${name}=${typeof ctx?.ui?.[name] === "function" ? "yes" : "no"}`)
@@ -361,6 +362,14 @@ export default function piGraphicsExtension(pi) {
     return [
       "PI GRAPHICS LIVE PROBE",
       `version=${packageVersion} theme=${configuredThemeName} mode=${configuredGraphicsMode}`,
+      ...buildPiGraphicsThemeActivationLines({
+        requestedThemeName: configuredThemeName,
+        runtimeThemeName: ctx?.ui?.theme?.name || ctx?.ui?.theme?.schema || "unknown",
+        setThemeAvailable: typeof ctx?.ui?.setTheme === "function",
+        setThemeResult,
+        autoTheme: shouldAutoApplyTheme(env),
+        themeSyncErrors: themeSync.errors,
+      }, ctx?.ui?.theme),
       `sentinel=${PI_GRAPHICS_RELOAD_SENTINEL}`,
       `ui=${api}`,
       `flags theme=${env.PI_GRAPHICS_AUTO_THEME} raw=${env.PI_GRAPHICS_AUTO_RAW_BOOTSTRAP} header=${env.PI_GRAPHICS_AUTO_HEADER_CHROME} editor=${env.PI_GRAPHICS_AUTO_EDITOR_SURFACE} transcript=${env.PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME} ambient=${env.PI_GRAPHICS_AUTO_AMBIENT_CHROME}`,
@@ -372,10 +381,10 @@ export default function piGraphicsExtension(pi) {
 
   function emitLiveProbe(ctx) {
     const raw = writeRawBootstrap(ctx);
-    applyThemeCues(ctx);
+    const setThemeResult = applyThemeCues(ctx);
     showAmbientChrome(ctx);
     showAutoPulse(ctx, { caption: "live probe", tone: "tool", delayMs: 60 });
-    const text = buildLiveProbeText(ctx, { emitted: raw });
+    const text = buildLiveProbeText(ctx, { emitted: raw, setThemeResult });
     try { ctx?.ui?.notify?.(text, "info"); } catch {}
     try { ctx?.ui?.setStatus?.("pi-gfx-probe", `⬢ probe v${packageVersion}`); } catch {}
     return text;
@@ -502,14 +511,23 @@ export default function piGraphicsExtension(pi) {
 
   function applyThemeCues(ctx) {
     ctx.ui?.setStatus?.("pi-theme-sync", themeSync.errors.length ? `⚠ theme sync errors ${themeSync.errors.length}` : `◆ themes synced ${themeSync.dirs.length} dirs/${themeSync.copied.length} writes`);
+    let setThemeResult;
     if (shouldAutoApplyTheme(gfxEnv()) && typeof ctx.ui?.setTheme === "function") {
-      const result = ctx.ui.setTheme(configuredThemeName);
-      if (result?.success) {
-        ctx.ui?.setStatus?.("pi-theme", `◆ ${configuredThemeName} active`);
-      } else {
-        ctx.ui?.setStatus?.("pi-theme", `⚠ select /settings → ${configuredThemeName}`);
-        ctx.ui?.notify?.(`pi-graphics theme not active: ${result?.error || `select ${configuredThemeName} in /settings`}`, "warning");
-      }
+      setThemeResult = ctx.ui.setTheme(configuredThemeName);
+    }
+    const activationLines = buildPiGraphicsThemeActivationLines({
+      requestedThemeName: configuredThemeName,
+      runtimeThemeName: ctx?.ui?.theme?.name || ctx?.ui?.theme?.schema || "unknown",
+      setThemeAvailable: typeof ctx?.ui?.setTheme === "function",
+      setThemeResult,
+      autoTheme: shouldAutoApplyTheme(gfxEnv()),
+      themeSyncErrors: themeSync.errors,
+    }, ctx.ui?.theme);
+    if (setThemeResult?.success) {
+      ctx.ui?.setStatus?.("pi-theme", `◆ ${configuredThemeName} active`);
+    } else {
+      ctx.ui?.setStatus?.("pi-theme", "⚠ theme check: /pi-graphics-theme-status");
+      ctx.ui?.notify?.(activationLines.join("\n"), "warning");
     }
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 140 });
     ctx.ui?.setStatus?.("pi-gfx-mode", "calm chrome");
@@ -550,6 +568,7 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.setWidget?.(terminalSceneWidgetId, renderToText(scene).split("\n"), { placement: "aboveEditor" });
       ctx.ui?.setStatus?.("pi-gfx-scene", `⬢ terminal scene ${sceneFrame.frames}f`);
     }
+    return setThemeResult;
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -1351,7 +1370,10 @@ export default function piGraphicsExtension(pi) {
       const unicodePlacement = ensureUnicodePlacement(state);
       return {
         content: [{ type: "text", text: buildPiGraphicsDoctorLines({
+          requestedThemeName: configuredThemeName,
           themeName: "unknown",
+          setThemeAvailable: false,
+          themeSyncErrors: themeSync.errors,
           unicodePlacement,
           autoTerminalScene: shouldAutoShowTerminalScene(gfxEnv()),
           autoTheme: shouldAutoApplyTheme(gfxEnv()),
@@ -1663,12 +1685,16 @@ export default function piGraphicsExtension(pi) {
   pi.registerCommand("pi-graphics-doctor", {
     description: "Show Pi kitty graphics visibility diagnostics and trigger the main visible surfaces.",
     handler: async (_args, ctx) => {
-      applyThemeCues(ctx);
+      const setThemeResult = applyThemeCues(ctx);
       showAutoPulse(ctx, { caption: "doctor takeover", tone: "tool", delayMs: 60 });
       try { pi.sendMessage?.(buildStartupThemeSwatchMessage()); } catch {}
       const themeName = ctx.ui?.theme?.name || ctx.ui?.theme?.schema || "unknown";
       ctx.ui?.notify?.(buildPiGraphicsDoctorLines({
+        requestedThemeName: configuredThemeName,
         themeName,
+        setThemeAvailable: typeof ctx?.ui?.setTheme === "function",
+        setThemeResult,
+        themeSyncErrors: themeSync.errors,
         unicodePlacement: ensureUnicodePlacement(state),
         autoTerminalScene: shouldAutoShowTerminalScene(gfxEnv()),
         autoTheme: shouldAutoApplyTheme(gfxEnv()),
@@ -1687,7 +1713,7 @@ export default function piGraphicsExtension(pi) {
         applyThemeCues(ctx);
         showAutoPulse(ctx, { caption: "takeover", tone: "tool", delayMs: 60 });
         try { pi.sendMessage?.(buildStartupThemeSwatchMessage()); } catch {}
-        ctx.ui?.notify?.(buildPiGraphicsDoctorLines({ themeName: ctx.ui?.theme?.name || "unknown", unicodePlacement: ensureUnicodePlacement(state) }, ctx.ui?.theme).join("\n"), "info");
+        ctx.ui?.notify?.(buildPiGraphicsDoctorLines({ requestedThemeName: configuredThemeName, themeName: ctx.ui?.theme?.name || "unknown", setThemeAvailable: typeof ctx?.ui?.setTheme === "function", themeSyncErrors: themeSync.errors, unicodePlacement: ensureUnicodePlacement(state) }, ctx.ui?.theme).join("\n"), "info");
       }
     },
   });
@@ -1733,11 +1759,38 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
+  pi.registerCommand("pi-graphics-theme-status", {
+    description: "Report whether the requested Pi kitty graphics theme is active, synced, and reload-current.",
+    handler: async (_args, ctx) => {
+      const setThemeResult = shouldAutoApplyTheme(gfxEnv()) && typeof ctx?.ui?.setTheme === "function"
+        ? ctx.ui.setTheme(configuredThemeName)
+        : undefined;
+      const lines = buildPiGraphicsThemeActivationLines({
+        requestedThemeName: configuredThemeName,
+        runtimeThemeName: ctx?.ui?.theme?.name || ctx?.ui?.theme?.schema || "unknown",
+        setThemeAvailable: typeof ctx?.ui?.setTheme === "function",
+        setThemeResult,
+        autoTheme: shouldAutoApplyTheme(gfxEnv()),
+        themeSyncErrors: themeSync.errors,
+      }, ctx.ui?.theme);
+      ctx.ui?.setStatus?.("pi-theme", setThemeResult?.success ? `◆ ${configuredThemeName} active` : "⚠ theme status needs attention");
+      ctx.ui?.notify?.(lines.join("\n"), setThemeResult?.success ? "info" : "warning");
+    },
+  });
+
   pi.registerCommand("pi-graphics-status", {
-    description: "Report pi-graphics extension state: owned image ids and placement mode.",
+    description: "Report pi-graphics extension state: owned image ids, placement mode, and theme activation.",
     handler: async (_args, ctx) => {
       const placementActive = ensureUnicodePlacement(state);
+      const themeLines = buildPiGraphicsThemeActivationLines({
+        requestedThemeName: configuredThemeName,
+        runtimeThemeName: ctx?.ui?.theme?.name || ctx?.ui?.theme?.schema || "unknown",
+        setThemeAvailable: typeof ctx?.ui?.setTheme === "function",
+        autoTheme: shouldAutoApplyTheme(gfxEnv()),
+        themeSyncErrors: themeSync.errors,
+      }, ctx.ui?.theme);
       const summary = [
+        ...themeLines,
         `pi-graphics owned images: ${state.ownedImageIds.size}`,
         `placement mode: ${state.config.placementMode}`,
         `passthrough: ${state.config.passthrough}`,
@@ -1748,6 +1801,7 @@ export default function piGraphicsExtension(pi) {
         `startup theme swatch: ${shouldAutoShowThemeSwatchSplash(gfxEnv()) ? "enabled" : "disabled by env"}`,
         `auto terminal scene: ${shouldAutoShowTerminalScene(gfxEnv()) ? "enabled" : "disabled by env"}`,
         "doctor/takeover: /pi-graphics-doctor",
+        "theme activation: /pi-graphics-theme-status",
         `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`,
         "theme delta: /pi-graphics-theme-delta",
         "native chrome demo: /pi-graphics-native-chrome-demo",
@@ -1890,6 +1944,7 @@ export {
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsReloadSentinelLines,
+  buildPiGraphicsThemeActivationLines,
   buildPiGraphicsThemeDeltaLines,
   buildPiGraphicsThemeSwatchComponent,
   buildPiGraphicsThemeSwatchLines,

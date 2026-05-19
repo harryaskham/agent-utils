@@ -22,6 +22,7 @@ const FALSE_RE = /^(0|false|off|no)$/i;
 const TRUE_RE = /^(1|true|on|yes|debug|showcase)$/i;
 
 export const PI_GRAPHICS_RELOAD_SENTINEL = "PI-GFX-RELOAD-SENTINEL/2026-05-18/NEON-LIGHTHOUSE";
+export const PI_GRAPHICS_THEME_NAMES = ["kitty-graphics-nord", "kitty-graphics"];
 
 function hexRgb(hex) {
   const value = String(hex || "").replace(/^#/, "").slice(0, 6);
@@ -614,22 +615,80 @@ export function buildVisualContractLines({ themeName = "kitty-graphics", unicode
   ];
 }
 
-export function buildPiGraphicsDoctorLines({ themeName = "unknown", unicodePlacement = false, autoTerminalScene = true, autoTheme = true, autoWidget = true, autoSplash = true, autoThemeSwatch = true } = {}, theme) {
+function normalizeThemeName(value) {
+  return String(value || "unknown").trim().toLowerCase();
+}
+
+export function piGraphicsThemeActivationState({
+  requestedThemeName = "kitty-graphics-nord",
+  runtimeThemeName = "unknown",
+  setThemeAvailable = true,
+  setThemeResult = undefined,
+  autoTheme = true,
+  themeSyncErrors = [],
+} = {}) {
+  const requested = normalizeThemeName(requestedThemeName || PI_GRAPHICS_THEME_NAMES[0]);
+  const runtime = normalizeThemeName(runtimeThemeName);
+  const knownRequested = PI_GRAPHICS_THEME_NAMES.includes(requested);
+  const runtimeKnown = PI_GRAPHICS_THEME_NAMES.includes(runtime);
+  const runtimeMatches = runtime === requested || runtimeKnown;
+  const setThemeSuccess = Boolean(setThemeResult?.success);
+  const missingApi = !setThemeAvailable;
+  const disabled = !autoTheme;
+  const syncErrors = Array.isArray(themeSyncErrors) ? themeSyncErrors.filter(Boolean) : [];
+  const active = !disabled && (runtimeMatches || (runtime === "unknown" && setThemeSuccess));
+  const severity = active && !syncErrors.length ? "ok" : "warn";
+  let remediation = "Theme is active; use /pi-graphics-theme-swatch if you want a visible token check.";
+  if (!active && !disabled && !missingApi) remediation = `Select /settings → ${requested}, then run /restart if the reload sentinel is stale.`;
+  if (disabled) remediation = `Auto theme application is disabled by PI_GRAPHICS_AUTO_THEME; unset it or select /settings → ${requested}.`;
+  if (missingApi) remediation = "This Pi runtime does not expose ui.setTheme; select /settings → kitty-graphics-nord, then /restart or /reload-tools.";
+  if (syncErrors.length) remediation = "Bundled theme sync has errors; reload tools/session after fixing the listed theme directory writes.";
+  if (!knownRequested) remediation = `Configured theme '${requested}' is not a bundled Pi graphics theme; use kitty-graphics-nord or kitty-graphics.`;
+  return {
+    active,
+    severity,
+    requestedThemeName: requested,
+    runtimeThemeName: runtime,
+    setThemeAvailable: Boolean(setThemeAvailable),
+    setThemeSuccess,
+    setThemeError: setThemeResult?.error ? String(setThemeResult.error) : "",
+    autoTheme: Boolean(autoTheme),
+    themeSyncErrorCount: syncErrors.length,
+    remediation,
+  };
+}
+
+export function buildPiGraphicsThemeActivationLines(options = {}, theme) {
+  const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+  const state = piGraphicsThemeActivationState(options);
+  const ok = (label) => `${fg("success", "✓")} ${label}`;
+  const warn = (label) => `${fg("warning", "⚠")} ${label}`;
+  return [
+    fg("thinkingXhigh", "⬢ PI KITTY GRAPHICS THEME ACTIVATION ⬢"),
+    state.active ? ok(`active theme signal: runtime=${state.runtimeThemeName} requested=${state.requestedThemeName}`) : warn(`theme not confirmed: runtime=${state.runtimeThemeName} requested=${state.requestedThemeName}`),
+    state.setThemeAvailable ? ok(`ui.setTheme available${state.setThemeSuccess ? " and accepted request" : state.setThemeError ? ` but returned ${state.setThemeError}` : ""}`) : warn("ui.setTheme unavailable in this Pi runtime"),
+    state.autoTheme ? ok("auto theme nudge: enabled") : warn("auto theme nudge disabled by env/settings"),
+    state.themeSyncErrorCount ? warn(`theme sync errors: ${state.themeSyncErrorCount}`) : ok("bundled themes synced without recorded errors"),
+    fg(state.active ? "muted" : "warning", `nudge: ${state.remediation}`),
+    fg("muted", `reload sentinel: ${PI_GRAPHICS_RELOAD_SENTINEL}`),
+  ];
+}
+
+export function buildPiGraphicsDoctorLines({ requestedThemeName = "kitty-graphics-nord", themeName = "unknown", setThemeAvailable = true, setThemeResult = undefined, themeSyncErrors = [], unicodePlacement = false, autoTerminalScene = true, autoTheme = true, autoWidget = true, autoSplash = true, autoThemeSwatch = true } = {}, theme) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
   const ok = (label) => `${fg("success", "✓")} ${label}`;
   const warn = (label) => `${fg("warning", "⚠")} ${label}`;
-  const themeOk = themeName === "kitty-graphics" || themeName === "unknown";
   return [
     fg("thinkingXhigh", "⬢ PI KITTY GRAPHICS DOCTOR / TAKEOVER ⬢"),
-    themeOk ? ok(`theme: ${themeName}`) : warn(`theme: ${themeName} (select /settings → kitty-graphics)`),
+    ...buildPiGraphicsThemeActivationLines({ requestedThemeName, runtimeThemeName: themeName, setThemeAvailable, setThemeResult, autoTheme, themeSyncErrors }, theme).slice(1),
     unicodePlacement ? ok("kitty placeholders: active, APNG pixels can render") : warn("kitty placeholders: inactive, image/APNG surfaces fall back to text"),
     autoTheme ? ok("auto theme apply: enabled") : warn("auto theme apply disabled by PI_GRAPHICS_AUTO_THEME"),
     autoWidget ? ok("auto stage/floodlight/widgets: enabled") : warn("auto widgets disabled by PI_GRAPHICS_AUTO_WIDGET"),
     autoTerminalScene ? ok("auto rendered terminal scene: enabled") : warn("auto terminal scene disabled by PI_GRAPHICS_AUTO_TERMINAL_SCENE"),
     autoSplash ? ok("startup splash: enabled") : warn("startup splash disabled"),
     autoThemeSwatch ? ok("transcript theme swatch: enabled") : warn("transcript theme swatch disabled"),
-    fg("customMessageLabel", "Takeover actions: /pi-graphics-show, /pi-graphics-theme-swatch-message, /pi-graphics-photon-rain, pi_graphics_render_terminal_scene."),
-    fg("muted", "If this doctor is absent after update, reload Pi tools/session; if theme says not kitty-graphics, use /settings."),
+    fg("customMessageLabel", "Takeover actions: /pi-graphics-show, /pi-graphics-theme-status, /pi-graphics-theme-swatch-message, /pi-graphics-photon-rain, pi_graphics_render_terminal_scene."),
+    fg("muted", "If this doctor is absent after update, reload Pi tools/session; if theme is not confirmed, use the nudge above."),
   ];
 }
 

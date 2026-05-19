@@ -69,6 +69,7 @@ import {
   buildPiGraphicsLighthouseLines,
   buildPiGraphicsPhotonRainComponent,
   buildPiGraphicsReloadSentinelLines,
+  buildPiGraphicsThemeActivationLines,
   buildPiGraphicsThemeDeltaLines,
   buildPiGraphicsPhotonRainLines,
   buildPiGraphicsThemeSwatchComponent,
@@ -84,6 +85,7 @@ import {
   buildTerminalTitle,
   buildTextStagePanel,
   buildVisualContractLines,
+  piGraphicsThemeActivationState,
   buildHiddenThinkingLabel,
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
@@ -879,6 +881,47 @@ test("buildPiGraphicsLighthouseComponent renders an oversized unmistakable beaco
   component.invalidate();
 });
 
+test("buildPiGraphicsThemeActivationLines diagnoses active, stale, and missing theme paths", () => {
+  const theme = { fg(token, text) { return `<${token}>${text}</${token}>`; } };
+  const activeState = piGraphicsThemeActivationState({
+    requestedThemeName: "kitty-graphics-nord",
+    runtimeThemeName: "kitty-graphics-nord",
+    setThemeAvailable: true,
+    setThemeResult: { success: true },
+    autoTheme: true,
+  });
+  assert.equal(activeState.active, true);
+  assert.equal(activeState.severity, "ok");
+  const activeText = buildPiGraphicsThemeActivationLines({
+    requestedThemeName: "kitty-graphics-nord",
+    runtimeThemeName: "kitty-graphics-nord",
+    setThemeAvailable: true,
+    setThemeResult: { success: true },
+    autoTheme: true,
+  }, theme).join("\n");
+  assert.match(activeText, /PI KITTY GRAPHICS THEME ACTIVATION/);
+  assert.match(activeText, /active theme signal/);
+  assert.match(activeText, /ui\.setTheme available and accepted request/);
+  assert.match(activeText, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  const staleText = buildPiGraphicsThemeActivationLines({
+    requestedThemeName: "kitty-graphics-nord",
+    runtimeThemeName: "dark",
+    setThemeAvailable: true,
+    setThemeResult: { success: false, error: "theme not installed" },
+    autoTheme: true,
+    themeSyncErrors: ["themes: read-only"],
+  }, theme).join("\n");
+  assert.match(staleText, /theme not confirmed/);
+  assert.match(staleText, /theme not installed/);
+  assert.match(staleText, /theme sync errors: 1/);
+  assert.match(staleText, /reload tools\/session/);
+
+  const missingApi = piGraphicsThemeActivationState({ setThemeAvailable: false, runtimeThemeName: "dark" });
+  assert.equal(missingApi.active, false);
+  assert.match(missingApi.remediation, /ui\.setTheme/);
+});
+
 test("buildPiGraphicsDoctorLines reports visibility diagnostics and remediation", () => {
   const theme = { fg(token, text) { return `<${token}>${text}</${token}>`; } };
   const lines = buildPiGraphicsDoctorLines({
@@ -1179,6 +1222,8 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /const configuredThemeName = String/);
   assert.match(source, /const configuredGraphicsMode = String/);
   assert.match(source, /ctx\.ui\.setTheme\(configuredThemeName\)/);
+  assert.match(source, /buildPiGraphicsThemeActivationLines/);
+  assert.match(source, /pi-graphics-theme-status/);
   assert.match(source, /setFooter\?\.\(\(_tui, theme, footerData\) => buildPiGraphicsFooterComponent\(theme, footerData\)\)/);
   assert.match(source, /setWidget\?\.\(editorFrameTopId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "top" \}\), \{ placement: "aboveEditor" \}\)/);
   assert.match(source, /setWidget\?\.\(editorFrameBottomId, \(_tui, theme\) => buildPiGraphicsEditorFrameComponent\(theme, \{ edge: "bottom" \}\), \{ placement: "belowEditor" \}\)/);
@@ -1238,6 +1283,7 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /pi\.on\("tool_execution_start"/);
   assert.match(source, /pi-graphics-show/);
   assert.match(source, /pi-graphics-hide/);
+  assert.match(source, /theme activation: \/pi-graphics-theme-status/);
 });
 
 test("buildPlacement registers the image id and emits a virtual placement command", () => {
