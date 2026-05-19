@@ -172,7 +172,7 @@ export default function piGraphicsExtension(pi) {
     return placement.transmit ? `${placement.transmit}${cells}` : cells;
   }
 
-  function buildEditorRailRow(width, edge) {
+  function buildEditorRailRows(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
     const cell = cellMetrics();
@@ -188,18 +188,20 @@ export default function piGraphicsExtension(pi) {
       delayMs,
       plays: 0,
       glowColor: variant === "glow" ? "#b48cff" : "#00d8ff",
-      glowAlpha: Math.max(0.2, alpha * 0.55),
+      glowAlpha: Math.max(0.25, alpha * 0.7),
+      rows: 2,
     });
     const placement = buildPlacement(state, {
-      name: `editor-rail-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
+      name: `editor-rail2-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
       png: apng.png,
       columns: apng.columns,
       rows: apng.rows,
       width: cols,
       zIndex: -1073741825,
     });
-    const cells = placement.lines[0] ?? "";
-    return placement.transmit ? `${placement.transmit}${cells}` : cells;
+    const lines = placement.lines;
+    if (placement.transmit && lines.length > 0) lines[0] = `${placement.transmit}${lines[0]}`;
+    return lines;
   }
 
   function isEditorChromeLine(line) {
@@ -247,8 +249,8 @@ export default function piGraphicsExtension(pi) {
     if (typeof ctx.ui?.setWidget !== "function") return;
     const factory = (edge) => (_tui, _theme) => ({
       render(width) {
-        const line = buildEditorRailRow(width, edge);
-        return [line ?? ""];
+        const lines = buildEditorRailRows(width, edge);
+        return lines && lines.length ? lines : ["", ""];
       },
       invalidate() {},
     });
