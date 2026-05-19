@@ -188,40 +188,34 @@ function boolToEnv(value) {
 
 export function settingsEnvFromPiGraphics(settings = {}) {
   const gfx = settings.piGraphics || settings.kittyGraphics || {};
-  const mode = String(gfx.mode || "calm").toLowerCase();
-  const showcase = mode === "showcase" || mode === "debug";
-  const off = mode === "off" || mode === "disabled";
+  const rawMode = String(gfx.mode || "on").toLowerCase();
+  const off = rawMode === "off" || rawMode === "disabled";
+  const debug = rawMode === "debug" || rawMode === "showcase";
+  const on = !off;
   const features = gfx.features || {};
-  const auto = gfx.auto || {};
+  const editor = gfx.editor || {};
   const env = {
-    PI_GRAPHICS_SHOWCASE: showcase ? "1" : "0",
-    PI_GRAPHICS_AUTO_THEME: boolToEnv(!off && (gfx.autoApplyTheme ?? auto.theme ?? true)),
-    PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv(!off && (features.ambientChrome ?? auto.ambientChrome ?? showcase)),
-    PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv(!off && (features.ambientProof ?? auto.ambientProof ?? showcase)),
-    PI_GRAPHICS_AUTO_WIDGET: boolToEnv(!off && (features.showcaseWidgets ?? auto.widgets ?? showcase)),
-    PI_GRAPHICS_AUTO_SPLASH: boolToEnv(!off && (features.startupSplash ?? auto.splash ?? showcase)),
-    PI_GRAPHICS_AUTO_THEME_SWATCH: boolToEnv(!off && (features.themeSwatch ?? auto.themeSwatch ?? showcase)),
-    PI_GRAPHICS_AUTO_TERMINAL_SCENE: boolToEnv(!off && (features.terminalScene ?? auto.terminalScene ?? showcase)),
-    PI_GRAPHICS_AUTO_CONVERSATION_FRAME: boolToEnv(!off && (features.conversationFrame ?? auto.conversationFrame ?? false)),
-    PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv(!off && (features.transcriptChrome ?? auto.transcriptChrome ?? showcase)),
-    PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv(!off && (features.editorSurface ?? auto.editorSurface ?? true)),
-    PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv(!off && (features.rawBootstrap ?? auto.rawBootstrap ?? showcase)),
-    PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv(!off && (features.headerChrome ?? auto.headerChrome ?? showcase)),
-    PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
-    PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
-    PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
-    PI_GRAPHICS_AUTO_COCKPIT_WALL: boolToEnv(!off && (features.cockpitWall ?? auto.cockpitWall ?? showcase)),
-    PI_GRAPHICS_AUTO_HEARTBEAT: boolToEnv(!off && (features.heartbeat ?? auto.heartbeat ?? false)),
+    PI_GRAPHICS_MODE: off ? "off" : debug ? "debug" : "on",
+    PI_GRAPHICS_SHOWCASE: debug && on ? "1" : "0",
+    PI_GRAPHICS_AUTO_THEME: boolToEnv(on && (gfx.autoApplyTheme ?? true)),
+    PI_GRAPHICS_AUTO_SPLASH: boolToEnv(on && (features.splash ?? features.startupSplash ?? debug)),
+    PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv(on && (features.editor ?? features.editorSurface ?? true)),
+    PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(on && (features.palette ?? features.terminalPalette ?? true)),
+    PI_GRAPHICS_AUTO_HEARTBEAT: boolToEnv(on && (features.heartbeat ?? false)),
     PI_GRAPHICS_CELL_WIDTH_PX: gfx.cell?.widthPx != null ? String(gfx.cell.widthPx) : undefined,
     PI_GRAPHICS_CELL_HEIGHT_PX: gfx.cell?.heightPx != null ? String(gfx.cell.heightPx) : undefined,
     PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx.cell?.lineHeightScale != null ? String(gfx.cell.lineHeightScale) : "1.2",
-    PI_GRAPHICS_AUTO_VISUAL_PROOF: boolToEnv(!off && (features.visualProof ?? auto.visualProof ?? showcase)),
-    PI_GRAPHICS_AUTO_VALIDATION_REPORT: boolToEnv(!off && (features.validationReport ?? auto.validationReport ?? showcase)),
-    PI_GRAPHICS_AUTO_BRAILLE_SCENE: boolToEnv(!off && (features.brailleScene ?? auto.brailleScene ?? showcase)),
+    PI_GRAPHICS_EDITOR_VARIANT: editor.variant != null ? String(editor.variant) : undefined,
+    PI_GRAPHICS_EDITOR_ALPHA: editor.alpha != null ? String(editor.alpha) : undefined,
   };
   if (gfx.animation?.heartbeatMs) env.PI_GRAPHICS_HEARTBEAT_MS = String(gfx.animation.heartbeatMs);
   if (gfx.animation?.ambientFrames) env.PI_GRAPHICS_AMBIENT_FRAMES = String(gfx.animation.ambientFrames);
   if (gfx.animation?.ambientDelayMs) env.PI_GRAPHICS_AMBIENT_DELAY_MS = String(gfx.animation.ambientDelayMs);
+  if (debug) {
+    env.PI_GRAPHICS_AUTO_STATUS_CHIPS = "1";
+    env.PI_GRAPHICS_AUTO_FOOTER = "1";
+    env.PI_GRAPHICS_THEME_STATUS_NOTIFY = "1";
+  }
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
 

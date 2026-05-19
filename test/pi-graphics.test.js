@@ -1183,19 +1183,20 @@ test("pi-graphics settings source maps calm mode to visibly active theme and OSC
   const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
   const source = await readFile(sourcePath, "utf8");
   assert.match(source, /export function settingsEnvFromPiGraphics/);
-  assert.match(source, /PI_GRAPHICS_AUTO_THEME: boolToEnv\(!off && \(gfx\.autoApplyTheme \?\? auto\.theme \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv\(!off && \(features\.terminalPalette \?\? auto\.terminalPalette \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv\(!off && \(features\.ambientChrome \?\? auto\.ambientChrome \?\? showcase\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv\(!off && \(features\.ambientProof \?\? auto\.ambientProof \?\? showcase\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv\(!off && \(features\.transcriptChrome \?\? auto\.transcriptChrome \?\? showcase\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv\(!off && \(features\.editorSurface \?\? auto\.editorSurface \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv\(!off && \(features\.rawBootstrap \?\? auto\.rawBootstrap \?\? showcase\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv\(!off && \(features\.headerChrome \?\? auto\.headerChrome \?\? showcase\)\)/);
+  assert.match(source, /PI_GRAPHICS_MODE: off \? "off" : debug \? "debug" : "on"/);
+  assert.match(source, /PI_GRAPHICS_AUTO_THEME: boolToEnv\(on && \(gfx\.autoApplyTheme \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv\(on && \(features\.palette \?\? features\.terminalPalette \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv\(on && \(features\.editor \?\? features\.editorSurface \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_SPLASH: boolToEnv\(on && \(features\.splash \?\? features\.startupSplash \?\? debug\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_HEARTBEAT: boolToEnv\(on && \(features\.heartbeat \?\? false\)\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_FRAMES = String\(gfx\.animation\.ambientFrames\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_DELAY_MS = String\(gfx\.animation\.ambientDelayMs\)/);
   assert.match(source, /PI_GRAPHICS_CELL_WIDTH_PX: gfx\.cell\?\.widthPx/);
   assert.match(source, /PI_GRAPHICS_CELL_HEIGHT_PX: gfx\.cell\?\.heightPx/);
   assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
+  assert.match(source, /env\.PI_GRAPHICS_AUTO_STATUS_CHIPS = "1"/);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {
