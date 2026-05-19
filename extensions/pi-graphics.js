@@ -109,6 +109,7 @@ import {
   shouldAutoShowValidationReport,
   shouldAutoShowVisualProof,
   shouldAutoShowThemeSwatchSplash,
+  shouldAutoShowcase,
 } from "./pi-graphics/auto-widget.js";
 import {
   renderNativeChromeFrame,
@@ -395,7 +396,10 @@ export default function piGraphicsExtension(pi) {
   function applyTerminalPalette(ctx) {
     if (!shouldAutoApplyTerminalPalette(gfxEnv())) return false;
     const wrote = writeRawTerminal(ctx, buildPiGraphicsOscPaletteSequence());
-    try { ctx?.ui?.setStatus?.("pi-gfx-palette", wrote ? "⬢ OSC terminal palette requested" : "⚠ OSC palette write unavailable"); } catch {}
+    try { ctx?.ui?.setStatus?.("pi-gfx-palette", undefined); } catch {}
+    if (statusChipsEnabled()) {
+      try { ctx?.ui?.setStatus?.("pi-gfx-palette", wrote ? "⬢ OSC terminal palette requested" : "⚠ OSC palette write unavailable"); } catch {}
+    }
     return wrote;
   }
 
@@ -454,6 +458,17 @@ export default function piGraphicsExtension(pi) {
     });
   }
 
+  function statusChipsEnabled(env = gfxEnv()) {
+    if (shouldAutoShowcase(env)) return true;
+    const raw = String(env.PI_GRAPHICS_AUTO_STATUS_CHIPS ?? env.PI_KITTY_GRAPHICS_AUTO_STATUS_CHIPS ?? "").trim();
+    return /^(1|true|on|yes|debug|showcase)$/i.test(raw);
+  }
+
+  function setGfxStatus(ctx, key, value) {
+    if (!statusChipsEnabled()) return;
+    try { ctx?.ui?.setStatus?.(key, value); } catch {}
+  }
+
   function showAmbientChrome(ctx) {
     if (!shouldAutoShowAmbientChrome(gfxEnv()) || !ensureUnicodePlacement(state)) return false;
     const scene = renderTuiSurfaceScenePulseApng({ columns: 58, rows: 10, frames: ambientFrames(), delayMs: ambientDelayMs() });
@@ -484,7 +499,7 @@ export default function piGraphicsExtension(pi) {
     if (!shouldAutoShowEditorSurface(gfxEnv()) || typeof ctx.ui?.setEditorComponent !== "function") return false;
     const previousFactory = typeof ctx.ui?.getEditorComponent === "function" ? ctx.ui.getEditorComponent() : undefined;
     if (typeof previousFactory !== "function") {
-      ctx.ui?.setStatus?.("pi-gfx-editor", "⬢ editor frame widgets active");
+      setGfxStatus(ctx, "pi-gfx-editor", "⬢ editor frame widgets active");
       return false;
     }
     const ansiRe = /\x1b\[[0-9;]*m/g;
@@ -539,12 +554,12 @@ export default function piGraphicsExtension(pi) {
       blur() { return this.base?.blur?.(); }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => new PiGraphicsEditorSurface(tui, theme, keybindings));
-    ctx.ui?.setStatus?.("pi-gfx-editor", "⬢ editor surface gfx");
+    setGfxStatus(ctx, "pi-gfx-editor", "⬢ editor surface gfx");
     return true;
   }
 
   function applyThemeCues(ctx) {
-    ctx.ui?.setStatus?.("pi-theme-sync", themeSync.errors.length ? `⚠ theme sync errors ${themeSync.errors.length}` : `◆ themes synced ${themeSync.dirs.length} dirs/${themeSync.copied.length} writes`);
+    setGfxStatus(ctx, "pi-theme-sync", themeSync.errors.length ? `⚠ theme sync errors ${themeSync.errors.length}` : `◆ themes synced ${themeSync.dirs.length} dirs/${themeSync.copied.length} writes`);
     let setThemeResult;
     if (shouldAutoApplyTheme(gfxEnv()) && typeof ctx.ui?.setTheme === "function") {
       setThemeResult = ctx.ui.setTheme(configuredThemeName);
@@ -558,16 +573,16 @@ export default function piGraphicsExtension(pi) {
       themeSyncErrors: themeSync.errors,
     }, ctx.ui?.theme);
     if (setThemeResult?.success) {
-      ctx.ui?.setStatus?.("pi-theme", `◆ ${configuredThemeName} active`);
+      setGfxStatus(ctx, "pi-theme", `◆ ${configuredThemeName} active`);
     } else {
-      ctx.ui?.setStatus?.("pi-theme", "theme: /pi-graphics-theme-status");
+      setGfxStatus(ctx, "pi-theme", "theme: /pi-graphics-theme-status");
       if (shouldAutoShowcase(gfxEnv()) || /^(1|true|on|yes|debug|showcase)$/i.test(String(gfxEnv().PI_GRAPHICS_THEME_STATUS_NOTIFY || "").trim())) {
         ctx.ui?.notify?.(activationLines.join("\n"), "warning");
       }
     }
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 140 });
-    ctx.ui?.setStatus?.("pi-gfx-mode", "calm chrome");
-    ctx.ui?.setStatus?.("pi-gfx-build", PI_GRAPHICS_RELOAD_SENTINEL);
+    setGfxStatus(ctx, "pi-gfx-mode", "calm chrome");
+    setGfxStatus(ctx, "pi-gfx-build", PI_GRAPHICS_RELOAD_SENTINEL);
     setWorkingChrome(ctx, "ready");
     writeAmbientProof(ctx, { label: `PI GFX ${configuredThemeName} VISUAL PROOF`, phase: 0.18 });
     if (shouldAutoShowcase(gfxEnv()) || /^(1|true|on|yes|debug|showcase)$/i.test(String(gfxEnv().PI_GRAPHICS_AUTO_FOOTER || "").trim())) {

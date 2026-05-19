@@ -1237,7 +1237,7 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /bundledThemePath\("kitty-graphics-nord"\)|themeNames = \["kitty-graphics-nord", "kitty-graphics"\]/);
   assert.match(source, /syncEnabled = gfx\.syncBundledThemes === true/);
   assert.doesNotMatch(source, /join\(agentDir\(\), "themes"\)/);
-  assert.match(source, /ctx\.ui\?\.setStatus\?\.\("pi-theme-sync"/);
+  assert.match(source, /setGfxStatus\(ctx, "pi-theme-sync"/);
   assert.match(source, /const configuredThemeName = String/);
   assert.match(source, /const configuredGraphicsMode = String/);
   assert.match(source, /ctx\.ui\.setTheme\(configuredThemeName\)/);
