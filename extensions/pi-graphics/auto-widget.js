@@ -403,19 +403,19 @@ export function buildWorkingMessage({ stage = "active", toolName = "" } = {}, th
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
   const safeStage = String(stage || "active").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 18);
   const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 22);
-  const label = safeTool || safeStage || "active";
-  return `${fg("thinkingXhigh", "✧")} ${fg("muted", label)}`;
+  const label = safeTool || safeStage || "thinking";
+  return fg("muted", label);
 }
 
 export function buildHiddenThinkingLabel(theme) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
-  return `${fg("thinkingXhigh", "✧")} ${fg("muted", "thinking")}`;
+  return fg("muted", "thinking");
 }
 
 export function buildTerminalTitle({ stage = "ready", toolName = "" } = {}) {
   const safeStage = String(stage || "ready").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 18);
   const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 22);
-  return `Pi · ${safeTool || safeStage || "ready"}`.slice(0, 48);
+  return (safeTool || safeStage || "ready").slice(0, 48);
 }
 
 export function buildPiGraphicsHeartbeatLine(theme, { tick = 0, stage = "idle" } = {}) {
