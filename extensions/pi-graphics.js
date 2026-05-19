@@ -136,46 +136,49 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
   }
 
-  function buildEditorBoxLines(width, innerLineCount) {
+  function editorBorderCacheKey(width) {
+    const cell = cellMetrics();
+    return `${width}|${editorVariant()}|${editorAlpha().toFixed(2)}|${cell.cellWidthPx}x${cell.cellHeightPx}|${editorAnimationFrames()}@${editorAnimationDelayMs()}`;
+  }
+
+  function buildEditorBorderLine(width) {
     if (!ensureUnicodePlacement(state)) return null;
-    const padX = editorPaddingX();
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
-    const innerRows = Math.max(1, Math.trunc(Number(innerLineCount) || 1));
-    const totalRows = innerRows + 2; // 1 cell bleed above + 1 cell bleed below
+    const cell = cellMetrics();
     const variant = editorVariant();
     const alpha = editorAlpha();
-    const cell = cellMetrics();
-    const animated = editorAnimationFrames() > 1;
-    const key = `${cols}x${totalRows}-pad${padX}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${animated ? `apng${editorAnimationFrames()}@${editorAnimationDelayMs()}` : "png"}`;
-    const name = `editor-box-${key}`;
-    const rendered = animated
-      ? renderEditorBoxApng({
-          columns: cols,
-          rows: totalRows,
-          paddingCells: padX,
-          ...cell,
-          frames: editorAnimationFrames(),
-          delayMs: editorAnimationDelayMs(),
-          plays: 0,
-        })
-      : renderEditorBoxApng({
-          columns: cols,
-          rows: totalRows,
-          paddingCells: padX,
-          ...cell,
-          frames: 1,
-          delayMs: editorAnimationDelayMs(),
-          plays: 0,
-        });
+    const frames = editorAnimationFrames();
+    const delayMs = editorAnimationDelayMs();
+    const apng = renderEditorBoxApng({
+      columns: cols,
+      rows: 1,
+      paddingCells: 0,
+      ...cell,
+      frames,
+      delayMs,
+      plays: 0,
+      borderColor: "#00d8ff",
+      borderAlpha: alpha,
+      glowColor: variant === "glow" ? "#b48cff" : "#00d8ff",
+      glowAlpha: variant === "glow" ? 0.6 : 0.3,
+    });
     const placement = buildPlacement(state, {
-      name,
-      png: rendered.png,
-      columns: rendered.columns,
-      rows: rendered.rows,
+      name: `editor-border-${editorBorderCacheKey(cols)}`,
+      png: apng.png,
+      columns: apng.columns,
+      rows: apng.rows,
       width: cols,
       zIndex: -1073741825,
     });
-    return placement;
+    const cells = placement.lines[0] ?? "";
+    return placement.transmit ? `${placement.transmit}${cells}` : cells;
+  }
+
+  function isEditorChromeLine(line) {
+    const text = String(line || "").replace(/\x1b\[[0-9;]*m/g, "").trim();
+    if (text.length < 8) return false;
+    if (!/[─━═]/.test(text)) return false;
+    return /^[\s─━═╭╮╰╯╔╗╚╝┌┐└┘│┃┬┴┼·✧]+$/.test(text);
   }
 
   function installEditorSurface(ctx) {
@@ -186,38 +189,19 @@ export default function piGraphicsExtension(pi) {
     class PiGraphicsEditorSurface {
       constructor(tui, theme, keybindings) {
         this.base = previousFactory(tui, theme, keybindings);
-        this.lastKey = "";
-        this.cached = null;
       }
       render(width) {
         const baseLines = this.base?.render?.(width) || [];
-        const placement = buildEditorBoxLines(width, baseLines.length);
-        if (!placement) return baseLines;
-        const key = `${width}|${baseLines.length}|${placement.imageId}|${placement.placementId}`;
-        let cachedLines;
-        if (this.lastKey === key && this.cached) {
-          cachedLines = this.cached;
-        } else {
-          // First time we see this image id we must emit the transmit command.
-          // Subsequent renders re-emit only the placeholder lines (image data already on terminal).
-          const head = placement.transmit ? `${placement.transmit}${placement.lines[0] ?? ""}` : (placement.lines[0] ?? "");
-          cachedLines = [head, ...placement.lines.slice(1, placement.lines.length - 1), placement.lines[placement.lines.length - 1] ?? ""];
-          this.lastKey = key;
-          this.cached = cachedLines;
-        }
-        const top = cachedLines[0];
-        const middle = cachedLines.slice(1, 1 + baseLines.length);
-        const bottom = cachedLines[cachedLines.length - 1];
-        // Overlay base editor text on the middle bleed rows by using base text
-        // lines instead of placeholder middle lines so the cursor still reads
-        // input. Top/bottom remain placeholder cells so the image extends beyond.
-        return [top, ...baseLines, bottom];
+        if (baseLines.length < 2) return baseLines;
+        const border = buildEditorBorderLine(width);
+        if (!border) return baseLines;
+        return baseLines.map((line, index) => {
+          if (index === 0 || index === baseLines.length - 1) return border;
+          if (isEditorChromeLine(line)) return border;
+          return line;
+        });
       }
-      invalidate() {
-        this.lastKey = "";
-        this.cached = null;
-        this.base?.invalidate?.();
-      }
+      invalidate() { this.base?.invalidate?.(); }
       handleInput(data) { return this.base?.handleInput?.(data); }
       getValue() { return this.base?.getValue?.(); }
       setValue(value) { return this.base?.setValue?.(value); }
