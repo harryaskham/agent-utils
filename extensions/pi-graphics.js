@@ -196,17 +196,17 @@ export function settingsEnvFromPiGraphics(settings = {}) {
   const env = {
     PI_GRAPHICS_SHOWCASE: showcase ? "1" : "0",
     PI_GRAPHICS_AUTO_THEME: boolToEnv(!off && (gfx.autoApplyTheme ?? auto.theme ?? true)),
-    PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv(!off && (features.ambientChrome ?? auto.ambientChrome ?? true)),
-    PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv(!off && (features.ambientProof ?? auto.ambientProof ?? true)),
+    PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv(!off && (features.ambientChrome ?? auto.ambientChrome ?? showcase)),
+    PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv(!off && (features.ambientProof ?? auto.ambientProof ?? showcase)),
     PI_GRAPHICS_AUTO_WIDGET: boolToEnv(!off && (features.showcaseWidgets ?? auto.widgets ?? showcase)),
     PI_GRAPHICS_AUTO_SPLASH: boolToEnv(!off && (features.startupSplash ?? auto.splash ?? showcase)),
     PI_GRAPHICS_AUTO_THEME_SWATCH: boolToEnv(!off && (features.themeSwatch ?? auto.themeSwatch ?? showcase)),
     PI_GRAPHICS_AUTO_TERMINAL_SCENE: boolToEnv(!off && (features.terminalScene ?? auto.terminalScene ?? showcase)),
     PI_GRAPHICS_AUTO_CONVERSATION_FRAME: boolToEnv(!off && (features.conversationFrame ?? auto.conversationFrame ?? false)),
-    PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv(!off && (features.transcriptChrome ?? auto.transcriptChrome ?? true)),
+    PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv(!off && (features.transcriptChrome ?? auto.transcriptChrome ?? showcase)),
     PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv(!off && (features.editorSurface ?? auto.editorSurface ?? true)),
-    PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv(!off && (features.rawBootstrap ?? auto.rawBootstrap ?? true)),
-    PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv(!off && (features.headerChrome ?? auto.headerChrome ?? true)),
+    PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv(!off && (features.rawBootstrap ?? auto.rawBootstrap ?? showcase)),
+    PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv(!off && (features.headerChrome ?? auto.headerChrome ?? showcase)),
     PI_GRAPHICS_AUTO_ANSI_TAKEOVER: boolToEnv(!off && (features.ansiTakeover ?? auto.ansiTakeover ?? showcase)),
     PI_GRAPHICS_AUTO_ANSI_SCENE: boolToEnv(!off && (features.ansiScene ?? auto.ansiScene ?? showcase)),
     PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
@@ -526,8 +526,10 @@ export default function piGraphicsExtension(pi) {
     if (setThemeResult?.success) {
       ctx.ui?.setStatus?.("pi-theme", `◆ ${configuredThemeName} active`);
     } else {
-      ctx.ui?.setStatus?.("pi-theme", "⚠ theme check: /pi-graphics-theme-status");
-      ctx.ui?.notify?.(activationLines.join("\n"), "warning");
+      ctx.ui?.setStatus?.("pi-theme", "theme: /pi-graphics-theme-status");
+      if (shouldAutoShowcase(gfxEnv()) || /^(1|true|on|yes|debug|showcase)$/i.test(String(gfxEnv().PI_GRAPHICS_THEME_STATUS_NOTIFY || "").trim())) {
+        ctx.ui?.notify?.(activationLines.join("\n"), "warning");
+      }
     }
     ctx.ui?.setWorkingIndicator?.({ frames: buildWorkingIndicatorFrames(ctx.ui?.theme), intervalMs: 140 });
     ctx.ui?.setStatus?.("pi-gfx-mode", "calm chrome");

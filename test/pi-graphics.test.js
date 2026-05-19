@@ -624,8 +624,8 @@ test("buildPiGraphicsValidationReportText reports real rendered pixel metrics", 
   assert.match(report, new RegExp(PI_GRAPHICS_RELOAD_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
-test("buildPiGraphicsAmbientProofText emits compact truecolor fallback with rendered metrics", () => {
-  assert.equal(shouldAutoShowAmbientProof({}), true);
+test("buildPiGraphicsAmbientProofText emits opt-in compact truecolor fallback with rendered metrics", () => {
+  assert.equal(shouldAutoShowAmbientProof({}), false);
   assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "0" }), false);
   assert.equal(shouldAutoShowAmbientProof({ PI_KITTY_GRAPHICS_AUTO_AMBIENT_PROOF: "off" }), false);
   const text = buildPiGraphicsAmbientProofText({ width: 42, phase: 0.2, label: "SMOKE", themeName: "kitty-graphics-nord", mode: "calm", env: { PI_GRAPHICS_AUTO_THEME: "1", PI_GRAPHICS_AUTO_AMBIENT_CHROME: "1", PI_GRAPHICS_AUTO_AMBIENT_PROOF: "1" } });
@@ -765,8 +765,8 @@ test("buildPiGraphicsConversationFrameComponent renders normal transcript chrome
   assert.ok(rendered.every((line) => line.length <= 97));
 });
 
-test("buildPiGraphicsTranscriptChromeComponent renders default-on truecolor transcript chrome", () => {
-  assert.equal(shouldAutoShowTranscriptChrome({}), true);
+test("buildPiGraphicsTranscriptChromeComponent renders opt-in truecolor transcript chrome", () => {
+  assert.equal(shouldAutoShowTranscriptChrome({}), false);
   assert.equal(shouldAutoShowTranscriptChrome({ PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: "0" }), false);
   assert.equal(shouldAutoShowTranscriptChrome({ PI_KITTY_GRAPHICS_AUTO_TRANSCRIPT_CHROME: "off" }), false);
   const message = buildTranscriptChromeMessage({ role: "assistant", title: "rendered transcript chrome", phase: 0.25 });
@@ -1018,13 +1018,10 @@ test("buildPiGraphicsFooterComponent renders a live branch/status beacon", () =>
   };
   const lines = buildPiGraphicsFooterLines(theme, footerData);
   assert.equal(lines.length, 1);
-  assert.match(lines[0], /KITTY-GFX LIVE FOOTER/);
-  assert.match(lines[0], /deep nordic glow/);
+  assert.doesNotMatch(lines[0], /KITTY-GFX LIVE FOOTER|deep nordic glow|pi-graphics:|pi-theme:/);
   assert.match(lines[0], /agent\/demo/);
-  assert.match(lines[0], /pi-graphics:◆ assistant stage 8f/);
-  assert.match(lines[0], /pi-theme:◆ kitty-graphics active/);
   assert.doesNotMatch(lines[0], /other:hidden/);
-  assert.match(lines[0], /toolPendingBg/);
+  assert.match(lines[0], /thinkingXhigh/);
   const component = buildPiGraphicsFooterComponent(theme, footerData);
   const rendered = component.render(64);
   assert.equal(rendered.length, 1);
@@ -1076,8 +1073,8 @@ test("buildPiGraphicsEditorFrameComponent renders subtle editor-edge accents wit
   component.invalidate();
 });
 
-test("buildPiGraphicsRawBootstrapText emits dependency-free truecolor startup proof", () => {
-  assert.equal(shouldAutoShowRawBootstrap({}), true);
+test("buildPiGraphicsRawBootstrapText emits opt-in dependency-free truecolor startup proof", () => {
+  assert.equal(shouldAutoShowRawBootstrap({}), false);
   assert.equal(shouldAutoShowRawBootstrap({ PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: "0" }), false);
   assert.equal(shouldAutoShowRawBootstrap({ PI_KITTY_GRAPHICS_AUTO_RAW_BOOTSTRAP: "off" }), false);
   const text = buildPiGraphicsRawBootstrapText({ width: 132, label: "raw proof", phase: 0.2 });
@@ -1123,22 +1120,22 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "0" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_KITTY_GRAPHICS_AUTO_WIDGET: "off" }), false);
   assert.equal(shouldAutoShowGraphics({ PI_GRAPHICS_AUTO_WIDGET: "1" }), true);
-  assert.equal(shouldAutoShowAmbientChrome({}), true);
+  assert.equal(shouldAutoShowAmbientChrome({}), false);
   assert.equal(shouldAutoShowAmbientChrome({ PI_GRAPHICS_AUTO_AMBIENT_CHROME: "0" }), false);
   assert.equal(shouldAutoShowAmbientChrome({ PI_KITTY_GRAPHICS_AUTO_AMBIENT_CHROME: "off" }), false);
   assert.equal(shouldAutoShowAmbientChrome({ PI_GRAPHICS_AUTO_AMBIENT_CHROME: "1" }), true);
-  assert.equal(shouldAutoShowAmbientProof({}), true);
+  assert.equal(shouldAutoShowAmbientProof({}), false);
   assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "0" }), false);
   assert.equal(shouldAutoShowAmbientProof({ PI_GRAPHICS_AUTO_AMBIENT_PROOF: "1" }), true);
   assert.equal(shouldAutoApplyTheme({}), true);
   assert.equal(shouldAutoApplyTerminalPalette({}), true);
-  assert.equal(shouldAutoShowTranscriptChrome({}), true);
+  assert.equal(shouldAutoShowTranscriptChrome({}), false);
   assert.equal(shouldAutoShowTranscriptChrome({ PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: "0" }), false);
   assert.equal(shouldAutoShowEditorSurface({}), true);
   assert.equal(shouldAutoShowEditorSurface({ PI_GRAPHICS_AUTO_EDITOR_SURFACE: "0" }), false);
-  assert.equal(shouldAutoShowRawBootstrap({}), true);
+  assert.equal(shouldAutoShowRawBootstrap({}), false);
   assert.equal(shouldAutoShowRawBootstrap({ PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: "0" }), false);
-  assert.equal(shouldAutoShowHeaderChrome({}), true);
+  assert.equal(shouldAutoShowHeaderChrome({}), false);
   assert.equal(shouldAutoShowHeaderChrome({ PI_GRAPHICS_AUTO_HEADER_CHROME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_GRAPHICS_AUTO_THEME: "0" }), false);
   assert.equal(shouldAutoApplyTheme({ PI_KITTY_GRAPHICS_AUTO_THEME: "off" }), false);
@@ -1155,12 +1152,12 @@ test("pi-graphics settings source maps calm mode to visibly active theme and OSC
   assert.match(source, /export function settingsEnvFromPiGraphics/);
   assert.match(source, /PI_GRAPHICS_AUTO_THEME: boolToEnv\(!off && \(gfx\.autoApplyTheme \?\? auto\.theme \?\? true\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv\(!off && \(features\.terminalPalette \?\? auto\.terminalPalette \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv\(!off && \(features\.ambientChrome \?\? auto\.ambientChrome \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv\(!off && \(features\.ambientProof \?\? auto\.ambientProof \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv\(!off && \(features\.transcriptChrome \?\? auto\.transcriptChrome \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_CHROME: boolToEnv\(!off && \(features\.ambientChrome \?\? auto\.ambientChrome \?\? showcase\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_AMBIENT_PROOF: boolToEnv\(!off && \(features\.ambientProof \?\? auto\.ambientProof \?\? showcase\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME: boolToEnv\(!off && \(features\.transcriptChrome \?\? auto\.transcriptChrome \?\? showcase\)\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: boolToEnv\(!off && \(features\.editorSurface \?\? auto\.editorSurface \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv\(!off && \(features\.rawBootstrap \?\? auto\.rawBootstrap \?\? true\)\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv\(!off && \(features\.headerChrome \?\? auto\.headerChrome \?\? true\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_RAW_BOOTSTRAP: boolToEnv\(!off && \(features\.rawBootstrap \?\? auto\.rawBootstrap \?\? showcase\)\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv\(!off && \(features\.headerChrome \?\? auto\.headerChrome \?\? showcase\)\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_FRAMES = String\(gfx\.animation\.ambientFrames\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_DELAY_MS = String\(gfx\.animation\.ambientDelayMs\)/);
 });

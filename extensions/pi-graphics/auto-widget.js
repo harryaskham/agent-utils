@@ -52,12 +52,12 @@ export function shouldAutoShowGraphics(env = process.env) {
 
 export function shouldAutoShowAmbientChrome(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_AMBIENT_CHROME ?? env.PI_KITTY_GRAPHICS_AUTO_AMBIENT_CHROME;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowAmbientProof(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_AMBIENT_PROOF ?? env.PI_KITTY_GRAPHICS_AUTO_AMBIENT_PROOF;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoApplyTheme(env = process.env) {
@@ -87,7 +87,7 @@ export function shouldAutoShowConversationFrame(env = process.env) {
 
 export function shouldAutoShowTranscriptChrome(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME ?? env.PI_KITTY_GRAPHICS_AUTO_TRANSCRIPT_CHROME;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowEditorSurface(env = process.env) {
@@ -97,12 +97,12 @@ export function shouldAutoShowEditorSurface(env = process.env) {
 
 export function shouldAutoShowRawBootstrap(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_RAW_BOOTSTRAP ?? env.PI_KITTY_GRAPHICS_AUTO_RAW_BOOTSTRAP;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowHeaderChrome(env = process.env) {
   const value = env.PI_GRAPHICS_AUTO_HEADER_CHROME ?? env.PI_KITTY_GRAPHICS_AUTO_HEADER_CHROME;
-  return value === undefined ? true : !FALSE_RE.test(String(value).trim());
+  return explicitOrShowcase(value, env);
 }
 
 export function shouldAutoShowAnsiTakeover(env = process.env) {
@@ -952,15 +952,10 @@ function footerStatuses(footerData = {}) {
 
 export function buildPiGraphicsFooterLines(theme, footerData = {}) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
-  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
   const branch = footerBranch(footerData);
-  const branchText = branch ? ` • ${branch}` : "";
-  const statuses = footerStatuses(footerData);
-  const statusText = statuses.length ? ` • ${statuses.join(" • ")}` : " • gfx surfaces armed";
-  const mode = fg("customMessageLabel", "KITTY-GFX LIVE FOOTER");
-  const pulse = fg("thinkingXhigh", "⬢") + fg("borderAccent", "◆") + fg("accent", "✦");
-  const status = fg("text", `deep nordic glow${branchText}${statusText}`);
-  return [bg("toolPendingBg", `${fg("borderAccent", "▰▱▰")} ${mode} ${pulse} ${status}`)];
+  const branchText = branch ? ` ${branch}` : "";
+  const pulse = `${fg("thinkingXhigh", "✧")}${fg("borderAccent", "·")}${fg("accent", "✦")}`;
+  return [`${pulse}${fg("muted", branchText)}`.trimEnd()];
 }
 
 export function buildPiGraphicsFooterComponent(theme, footerData = {}) {

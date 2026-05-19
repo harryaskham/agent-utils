@@ -192,28 +192,23 @@ rendered. The extension complements those flat colors with graphical affordances
 * **Rendered terminal scenes** — `pi_graphics_render_terminal_scene` draws a
   full pixel-level terminal surface (cell grid, deep-Nordic vertical gradient,
   aurora radial glows, status chips, scanlines, and bottom waveform) as PNG or
-  APNG. It is auto-mounted above the editor when kitty placeholders are active,
-  making the real rendered gfx visible without a manual tool call. This is the
-  closest TypeScript mirror of a graphical Cacophony-style TUI surface and is
-  covered by pixel-inspection tests.
+  APNG. It is available as an explicit showcase/diagnostic surface; calm mode
+  no longer auto-mounts the large scene above the editor. This is the closest
+  TypeScript mirror of a graphical Cacophony-style TUI surface and is covered
+  by pixel-inspection tests.
 * **Conversation stage panels** — the lifecycle-visible widget used during
   normal turns. It combines an APNG TUI component with explicit neon text
   chrome and a text-only fallback, making graphical mode noticeable even when
   the theme was not selected or kitty placeholders are unavailable.
-* **Persistent session header/footer/HUD/swatch** — pure TypeScript components
-  installed via `ctx.ui.setHeader`, `ctx.ui.setFooter`, and `ctx.ui.setWidget`
-  factories so the session announces `PI KITTY GRAPHICS ONLINE`
-  at the top, an above-editor `PI THEME CALIBRATION SWATCH` made from actual theme tokens, `KITTY-GFX LIVE FOOTER` plus live branch/status beacon text in the bottom chrome, a live `PI GFX HUD` near the
-  editor, a full-width `PI KITTY GRAPHICS FLOODLIGHT` banner, an APNG
-  `PI KITTY GFX EDITOR AURA`, and `NEON EDITOR FIELD` /
-  `INPUT FIELD STABILIZED` rails around the input area with theme-colored rails
-  and bounded rendering. During active turns the working row says `PI KITTY GFX`
-  with the current stage (`PROMPT CAPTURED`, `AGENT THINKING`, `TOOL EXECUTION`,
-  or `READY`), the terminal/window title becomes `⬢ PI KITTY GFX // <STAGE>`,
-  and the hidden-thinking label becomes `PI GFX THOUGHTSTREAM`. The custom
-  footer reads Pi's runtime `footerData.getGitBranch()` and
-  `footerData.getExtensionStatuses()` APIs so it preserves/spotlights the
-  extension status cluster instead of hiding it.
+* **Persistent session accents** — pure TypeScript components installed via
+  `ctx.ui.setFooter`, `ctx.ui.setWidget`, and the editor component API. Calm
+  mode is intentionally quiet: large branded header/HUD/transcript/proof blocks
+  are showcase-only by default, the footer is reduced to tiny glyph accents plus
+  the branch name, editor rails avoid text labels, and the working row/window
+  title use short muted labels. Explicit diagnostics such as
+  `/pi-graphics-showcase`, `/pi-graphics-theme-status`, and the render tools
+  still expose the verbose branded proof surfaces when an operator asks for
+  them.
 * **Startup splash** — on `session_start`, the extension sends a bounded
   `pi-graphics-message` into the transcript so graphics mode leaves a visible
   neon block in normal conversation history even if terminal theme changes are
