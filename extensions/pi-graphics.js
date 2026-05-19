@@ -156,12 +156,10 @@ function bundledThemePath(name) {
 
 function syncBundledThemes(settings = {}) {
   const themeNames = ["kitty-graphics-nord", "kitty-graphics"];
-  const configuredDirs = Array.isArray(settings.themes) ? settings.themes.map(expandHome) : [];
-  const dirs = Array.from(new Set([
-    join(agentDir(), "themes"),
-    join(homedir(), ".pi", "agent", "themes"),
-    ...configuredDirs,
-  ].filter(Boolean)));
+  const gfx = settings.piGraphics || settings.kittyGraphics || {};
+  const syncEnabled = gfx.syncBundledThemes === true;
+  const configuredDirs = syncEnabled && Array.isArray(settings.themes) ? settings.themes.map(expandHome) : [];
+  const dirs = syncEnabled ? Array.from(new Set(configuredDirs.filter(Boolean))) : [];
   const copied = [];
   const errors = [];
   for (const dir of dirs) {
@@ -572,14 +570,18 @@ export default function piGraphicsExtension(pi) {
     ctx.ui?.setStatus?.("pi-gfx-build", PI_GRAPHICS_RELOAD_SENTINEL);
     setWorkingChrome(ctx, "ready");
     writeAmbientProof(ctx, { label: `PI GFX ${configuredThemeName} VISUAL PROOF`, phase: 0.18 });
-    ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
+    if (shouldAutoShowcase(gfxEnv()) || /^(1|true|on|yes|debug|showcase)$/i.test(String(gfxEnv().PI_GRAPHICS_AUTO_FOOTER || "").trim())) {
+      ctx.ui?.setFooter?.((_tui, theme, footerData) => buildPiGraphicsFooterComponent(theme, footerData));
+    }
     if (shouldAutoShowHeaderChrome(gfxEnv())) {
       ctx.ui?.setHeader?.((_tui, theme) => buildPiGraphicsHeaderComponent(theme));
       ctx.ui?.setStatus?.("pi-gfx-header", "⬢ header chrome");
     }
     installEditorSurface(ctx);
-    ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
-    ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
+    if (shouldAutoShowcase(gfxEnv())) {
+      ctx.ui?.setWidget?.(editorFrameTopId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "top" }), { placement: "aboveEditor" });
+      ctx.ui?.setWidget?.(editorFrameBottomId, (_tui, theme) => buildPiGraphicsEditorFrameComponent(theme, { edge: "bottom" }), { placement: "belowEditor" });
+    }
     showAmbientChrome(ctx);
     if (shouldAutoShowGraphics(gfxEnv())) {
       ctx.ui?.setStatus?.("pi-gfx-pulse", "◆ APNG editor aura");
