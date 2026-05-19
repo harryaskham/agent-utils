@@ -1335,4 +1335,29 @@ export default function appAutomationExtension(pi) {
       ctx.ui.notify(`${renderAppList(catalog.apps)}\n\n${renderDefaultOpenBundle()}\n\n${renderDefaultRefreshBundle()}\n\n${renderDefaultStaleRefresh()}`, "info");
     },
   });
+
+  const shortcutCommands = [
+    ["tendril-app-overview", "overview", "Shortcut for /tendril-app overview; accepts the same filters and app ids."],
+    ["tendril-app-briefing", "briefing", "Shortcut for /tendril-app briefing; builds the stale-aware work briefing index."],
+    ["tendril-app-links", "links", "Shortcut for /tendril-app links; accepts link filters, sort, and limits."],
+    ["tendril-app-bundle", "bundle", "Shortcut for /tendril-app bundle; shows the standard Slack/Outlook/Teams/calendar refresh bundle guidance."],
+    ["tendril-app-open-bundle", "open-bundle", "Shortcut for /tendril-app open-bundle; shows browser-warming bundle guidance."],
+    ["tendril-app-stale-refresh", "stale-refresh", "Shortcut for /tendril-app stale-refresh; shows the stale-only refresh guidance."],
+    ["tendril-app-refresh-staleness", "refresh-staleness", "Shortcut for /tendril-app refresh-staleness; reports standard refresh-action freshness."],
+    ["tendril-app-staleness", "staleness", "Shortcut for /tendril-app staleness; reports snapshot freshness."],
+  ];
+  for (const [name, prefix, description] of shortcutCommands) {
+    pi.registerCommand(name, {
+      description,
+      handler: async (args, ctx) => {
+        const handler = pi.commands?.get?.("tendril-app")?.handler;
+        const suffix = String(args || "").trim();
+        if (typeof handler !== "function") {
+          ctx.ui?.notify?.(`/tendril-app command unavailable; attempted shortcut '${name}'.`, "warning");
+          return;
+        }
+        await handler(suffix ? `${prefix} ${suffix}` : prefix, ctx);
+      },
+    });
+  }
 }

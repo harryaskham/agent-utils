@@ -1606,6 +1606,10 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /renderDefaultOpenBundle/);
   assert.match(source, /renderDefaultRefreshBundle/);
   assert.match(source, /renderDefaultStaleRefresh/);
+  assert.match(source, /tendril-app-overview/);
+  assert.match(source, /tendril-app-bundle/);
+  assert.match(source, /tendril-app-refresh-staleness/);
+  assert.match(source, /shortcutCommands/);
 });
 
 test("sanitizeId normalizes user-facing app selectors", () => {
