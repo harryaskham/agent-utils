@@ -39,14 +39,55 @@ The package registers [`extensions/app-automation.js`](../extensions/app-automat
 For Slack, Outlook, Teams, calendars, and canvas/editor work, prefer this sequence before raw browser commands:
 
 1. **Diagnose setup** — run `app_automation_doctor` or `/tendril-app doctor` to confirm the catalog, state root, Playwright CLI, Tendril bridge routing, latest ms-dev refresh status/config hints, and standard action executability. Add `probeTendrilBridge: true` (or `/tendril-app doctor probe`) when you need a safe target-count check through the configured Tendril bridge.
-2. **Refresh if stale** — on ms-dev setups, run `app_automation_msdev_cdp_refresh` to pull bounded/redacted Slack, Outlook, Teams, and Calendar observations from Windows Chrome via PowerShell/CDP when the normal local browser bridge is unavailable. If `ms-dev` is unreachable, pass a short `sshConnectTimeoutSeconds` value for a fast failure while preserving the latest manifest and stale snapshot context; if the link is flapping, pass a small `preflightAttempts` value such as `2` or `3` so the initial SSH probe can retry before copy/run; if the preflight command itself hangs after authentication, pass `preflightAttempts: 0` to skip the probe and attempt scp/PowerShell directly; if scp is the failing stage, pass `scriptTransfer: "inline"` to run PowerShell via `-EncodedCommand` over SSH instead of copying a temporary script; if the host is reachable but CDP is unavailable, pass `ensureAppHost: true` so the tool starts a dedicated Edge/Chrome apphost on the requested port before extraction; briefing/doctor output will show classified failure kinds such as `connect_timeout` when available.
-3. **Orient on current state** — run `app_automation_work_briefing` or `/tendril-app briefing` for a compact stale-aware shared summary, then run `app_automation_overview` or `/tendril-app overview` to see apps, active refreshers, app-level freshness, standard refresh-action freshness, and recent snapshot digests. Add `includeLinks: true` or `/tendril-app overview links` when you also want a small set of actionable snapshot URLs; use `/tendril-app overview links fresh kind:events host:meet.google.com source:calendar standup link-sort:newest link-limit:5 stale-after:1440` for larger daily event-link samples. Overview and snapshot-link sections render matched/truncated counts, explicit scanned artifact counts, host/source/from/app/kind/freshness distributions, and selected query/kind/freshness/sort labels so a small sample or empty filtered result is not mistaken for the full match set.
-3. **Preview browser churn** — run `app_automation_open_bundle_run_once` with `dryRun: true` before opening Slack, Calendar, Outlook mail/calendar, and Teams surfaces.
-4. **Warm sessions when needed** — run `app_automation_open_bundle_run_once` without `dryRun` if auth/session state is likely stale; inspect `auth-required.json` diagnostics if login is needed.
-5. **Refresh only what is stale** — run `app_automation_refresh_staleness` or `/tendril-app refresh-staleness` to preview exact action freshness, then run `app_automation_refresh_stale_run_once` with `dryRun: true`, then without `dryRun` when the stale/missing decisions look right. This stale-refresh path evaluates the expected artifacts for each standard app/action independently, so one fresh Outlook snapshot does not mask a missing Outlook calendar snapshot.
-6. **Force a full refresh only when necessary** — use `app_automation_refresh_bundle_run_once` for an explicit all-app refresh, or `app_automation_refresh_bundle_start` for periodic refreshers.
-7. **Inspect artifacts through tools** — use `app_automation_snapshots_staleness`, `app_automation_snapshots_digest`, `app_automation_snapshots_list`, and `app_automation_snapshot_read` instead of ad-hoc filesystem reads.
-8. **Plan cleanup conservatively** — use `app_automation_snapshots_cleanup_plan`; it is dry-run only and protects `latest-run.json` / `auth-required.json` by default.
+2. **Check staleness first** — run `app_automation_refresh_staleness`, `app_automation_snapshots_staleness`, or `/tendril-app refresh-staleness` before opening browsers. The standard refresh staleness report is per action (`slack.notifications.snapshot`, `outlook.calendar.snapshot`, and so on), so a fresh Outlook mail snapshot does not hide a missing Outlook calendar snapshot.
+3. **Refresh via ms-dev when local browser state is unavailable** — on ms-dev setups, run `app_automation_msdev_cdp_refresh` to pull bounded/redacted Slack, Outlook, Teams, and Calendar observations from Windows Chrome via PowerShell/CDP. If `ms-dev` is unreachable, pass a short `sshConnectTimeoutSeconds` value for a fast failure while preserving the latest manifest and stale snapshot context; if the link is flapping, pass a small `preflightAttempts` value such as `2` or `3`; if the preflight command itself hangs after authentication, pass `preflightAttempts: 0`; if scp is the failing stage, pass `scriptTransfer: "inline"`; if the host is reachable but CDP is unavailable, pass `ensureAppHost: true` so the tool starts a dedicated Edge/Chrome apphost on the requested port before extraction. Recurring ms-dev refreshes should leave `tabGc` enabled (default) so the generated PowerShell records only CDP targets it created and closes older FIFO runs after extraction while preserving the newest ticks and never touching unrelated user tabs.
+4. **Check personal-loop prerequisites separately** — run `app_automation_personal_status` before adding personal Google Calendar/Gmail or `~/org/todo.org` items to a daily brief. It verifies the existing `gws auth status` locally and, when requested, on ms-dev; output redacts the account local-part and reports only coarse scope/domain/readiness details plus timely org-mode TODO headings.
+5. **Generate the compact work briefing** — run `app_automation_work_briefing` or `/tendril-app briefing` after refresh. For day-start summaries use a wider freshness window such as `staleAfterMinutes: 1440` so yesterday evening's preserved snapshots can still answer morning questions while the report clearly labels truly stale/auth-required actions. The briefing index is written to `[state-root]/indexes/work-briefing.json` and summarizes action status, freshness, preserved-stale refresh attempts, filtered-empty refreshes, auth-required snapshots, and bounded samples.
+6. **Add overview and links when drafting a human briefing** — run `app_automation_overview` or `/tendril-app overview` to see apps, active refreshers, app-level freshness, standard refresh-action freshness, and recent snapshot digests. Add `includeLinks: true` or `/tendril-app overview links` when you also want a small set of actionable snapshot URLs; use `/tendril-app overview links fresh kind:events host:meet.google.com source:calendar standup link-sort:newest link-limit:5 stale-after:1440` for larger daily event-link samples. For a link-only pass, use `app_automation_snapshot_links` or `/tendril-app links` with the same query/source/from/time/host/kind/freshness filters and sort labels.
+7. **Preview browser churn before local warming** — run `app_automation_open_bundle_run_once` with `dryRun: true` before opening Slack, Calendar, Outlook mail/calendar, and Teams surfaces. Only run it without `dryRun` when auth/session state is likely stale and browser warming is acceptable; inspect `auth-required.json` diagnostics if login is needed.
+8. **Refresh only what is stale when not using ms-dev CDP** — run `app_automation_refresh_stale_run_once` with `dryRun: true`, then without `dryRun` when the stale/missing decisions look right. Use `app_automation_refresh_bundle_run_once` for an explicit all-app refresh, or `app_automation_refresh_bundle_start` for periodic refreshers.
+9. **Inspect artifacts through tools** — use `app_automation_snapshots_staleness`, `app_automation_snapshots_digest`, `app_automation_snapshots_list`, `app_automation_snapshot_links`, and `app_automation_snapshot_read` instead of ad-hoc filesystem reads.
+10. **Plan cleanup conservatively** — use `app_automation_snapshots_cleanup_plan`; it is dry-run only and protects `latest-run.json` / `auth-required.json` by default.
+
+### Daily briefing Markdown recipe
+
+When an agent needs to produce an updated operator-facing daily briefing document from the current snapshots, use the tools as the source of truth and write a short Markdown artefact outside the app-automation state root only after reviewing the rendered tool output:
+
+1. Capture the setup line from `app_automation_doctor` when setup recently changed, or from `app_automation_overview` otherwise. Include state-root freshness, active refreshers, and the latest ms-dev refresh status, not raw command stdout/stderr.
+2. Refresh with `app_automation_msdev_cdp_refresh` only if the action staleness report says the work-app snapshots are stale/missing or the operator explicitly asks for a refresh-now pass. Prefer `ensureAppHost: true` on dedicated ms-dev apphost setups and leave FIFO tab cleanup enabled. If the refresh fails, keep the stale snapshot context and include the classified failure kind from the manifest instead of treating the briefing as empty.
+3. Generate `app_automation_work_briefing` with `staleAfterMinutes: 1440` for a daily morning brief, or a shorter threshold such as `15` for an in-session “what just changed?” brief. Copy the action rows and only the useful bounded samples into the Markdown.
+4. Add `app_automation_overview` with `includeLinks: true` or a focused `app_automation_snapshot_links` query for meeting/join/action links. Record matched/truncated/scanned counts when a link sample is filtered so readers know whether the brief shows all matches or a bounded subset.
+5. If personal work is in scope, add `app_automation_personal_status` as a separate section. Keep the same redaction policy as the tool output: no raw email local-parts, no OAuth tokens, no cookie/session material, and no raw `gws` command output.
+6. Use this Markdown skeleton:
+
+```markdown
+# Daily briefing — YYYY-MM-DD
+
+## Snapshot health
+
+- State root: `[state-root]`
+- Work-app freshness: <fresh/stale/auth-required summary from work briefing>
+- Latest ms-dev refresh: <ok/failed/skipped-write/tabGc summary>
+- Personal prerequisites: <optional gws/todo status>
+
+## Calendar and meetings
+
+- <today's Outlook/Calendar/Teams rows; include join links only from sanitized snapshot-link output>
+
+## Mail, chat, and notifications
+
+- <bounded Slack/Outlook/Teams samples with source labels>
+
+## Action links
+
+- <focused links from overview/snapshot_links; include matched/truncated/scanned counts>
+
+## Caveats
+
+- <auth-required, stale-but-preserved, filtered-empty, or bridge failure notes>
+```
+
+The generated daily brief should be a human digest of tool-rendered snapshots, not a dump of raw app data. Keep samples bounded, preserve the tool's source/from/time labels, and explicitly call out when the current answer depends on preserved stale snapshots.
 
 ## Blessed initial configs
 
