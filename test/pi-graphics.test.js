@@ -330,6 +330,22 @@ test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () =
   assert.ok(channelDistance(pixelAt(decoded, 2, Math.floor(decoded.height / 2)), pixelAt(decoded, decoded.width - 3, Math.floor(decoded.height / 2))) > 80, "left/right gradient endpoints should differ visibly");
 });
 
+test("renderPromptEnclosure variants emit distinct translucent surfaces", () => {
+  const base = renderPromptEnclosure({ columns: 12, variant: "rule" });
+  const variants = ["gradient", "scanlines", "grid", "dots", "glow"];
+  const seen = new Set([base.png.toString("base64")]);
+  for (const variant of variants) {
+    const result = renderPromptEnclosure({ columns: 12, variant, alpha: 0.5 });
+    assert.equal(result.variant, variant);
+    assert.equal(result.columns, 12);
+    assert.equal(result.rows, 1);
+    assert.equal(result.png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+    const key = result.png.toString("base64");
+    assert.ok(!seen.has(key), `variant ${variant} should differ from previous variants`);
+    seen.add(key);
+  }
+});
+
 test("renderPromptEnclosure honors configurable cell metrics and 120 percent line height", () => {
   const metrics = resolveCellMetrics({ cellWidthPx: 9, lineHeightScale: 1.2 });
   assert.equal(metrics.cellWidthPx, 9);

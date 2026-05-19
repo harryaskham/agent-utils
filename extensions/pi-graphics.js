@@ -507,6 +507,16 @@ export default function piGraphicsExtension(pi) {
       const text = String(line || "").replace(ansiRe, "").trim();
       return text.length >= 8 && /[─━═]/.test(text) && /^[\s─━═╭╮╰╯╔╗╚╝┌┐└┘│┃┬┴┼·✧]+$/.test(text);
     };
+    const editorVariant = () => {
+      const env = gfxEnv();
+      const raw = String(env.PI_GRAPHICS_EDITOR_VARIANT ?? env.PI_KITTY_GRAPHICS_EDITOR_VARIANT ?? "").trim().toLowerCase();
+      return ["rule", "gradient", "scanlines", "grid", "dots", "glow"].includes(raw) ? raw : "gradient";
+    };
+    const editorAlpha = () => {
+      const env = gfxEnv();
+      const raw = Number(env.PI_GRAPHICS_EDITOR_ALPHA ?? env.PI_KITTY_GRAPHICS_EDITOR_ALPHA);
+      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.55;
+    };
     const graphicLine = (kind, width) => {
       if (!ensureUnicodePlacement(state)) {
         return buildPiGraphicsEditorSurfaceBorderLines({ width, active: editorSurfaceWorking, phase: editorSurfacePhase })[kind === "bottom" ? 1 : 0];
@@ -518,6 +528,8 @@ export default function piGraphicsExtension(pi) {
         leftColor: kind === "bottom" ? "#7c4dff" : "#00ffd0",
         rightColor: kind === "bottom" ? "#00ffd0" : "#b48cff",
         fadeEdges: true,
+        variant: editorVariant(),
+        alpha: editorAlpha(),
         phase: editorSurfacePhase + (kind === "bottom" ? 0.5 : kind.startsWith("mid") ? 0.25 : 0),
       });
       return renderToText(buildPlacement(state, {
@@ -779,6 +791,8 @@ export default function piGraphicsExtension(pi) {
       cellWidthPx: Type.Optional(Type.Number({ description: "Nominal terminal cell width in source pixels before kitty resampling.", minimum: 1, maximum: 64 })),
       cellHeightPx: Type.Optional(Type.Number({ description: "Nominal terminal cell height in source pixels before kitty resampling.", minimum: 1, maximum: 96 })),
       lineHeightScale: Type.Optional(Type.Number({ description: "Line-height multiplier used when cellHeightPx is omitted. Defaults to 1.2 for Pi calm chrome.", minimum: 0.5, maximum: 3 })),
+      variant: Type.Optional(Type.String({ description: "Visual variant: rule (default), gradient, scanlines, grid, dots, glow." })),
+      alpha: Type.Optional(Type.Number({ description: "Base alpha 0..1 for variant fills. Defaults to 0.7.", minimum: 0, maximum: 1 })),
       caption: Type.Optional(Type.String({ description: "Optional trailing caption appended after the placeholder cells." })),
     }),
     async execute(_toolCallId, params) {
@@ -791,7 +805,7 @@ export default function piGraphicsExtension(pi) {
           details: { fallback: true, columns: params.columns },
         };
       }
-      const { png, columns, rows, cellWidthPx, cellHeightPx, lineHeightScale } = renderPromptEnclosure({
+      const { png, columns, rows, cellWidthPx, cellHeightPx, lineHeightScale, variant } = renderPromptEnclosure({
         columns: params.columns,
         leftColor: params.leftColor,
         rightColor: params.rightColor,
@@ -799,6 +813,8 @@ export default function piGraphicsExtension(pi) {
         cellWidthPx: params.cellWidthPx,
         cellHeightPx: params.cellHeightPx,
         lineHeightScale: params.lineHeightScale,
+        variant: params.variant,
+        alpha: params.alpha,
       });
       const placement = buildPlacement(state, {
         name: `prompt-enclosure-${columns}`,
@@ -817,6 +833,7 @@ export default function piGraphicsExtension(pi) {
           cellWidthPx,
           cellHeightPx,
           lineHeightScale,
+          variant,
         },
       };
     },

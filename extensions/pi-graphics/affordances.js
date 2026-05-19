@@ -83,6 +83,52 @@ function drawGlowFrame(pixels, widthPx, heightPx, { phase = 0, borderThickness =
   strokeRect(pixels, widthPx, thickness + 2, thickness + 2, widthPx - (thickness + 2) * 2, heightPx - (thickness + 2) * 2, withAlpha(NORDIC_EDGE, 92 + pulse * 86), 1);
 }
 
+export const SURFACE_VARIANTS = Object.freeze(["rule", "gradient", "scanlines", "grid", "dots", "glow"]);
+
+function normalizeAlpha(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(1, n));
+}
+
+function paintSurfaceVariant(pixels, widthPx, heightPx, {
+  variant,
+  leftColor,
+  rightColor,
+  alpha,
+  phase,
+} = {}) {
+  const pulse = pulseFactor(phase);
+  const baseAlpha = Math.round(normalizeAlpha(alpha, 0.65) * 255);
+  if (variant === "gradient") {
+    fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(leftColor, baseAlpha), withAlpha(rightColor, baseAlpha));
+  } else if (variant === "scanlines") {
+    fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(leftColor, Math.round(baseAlpha * 0.55)), withAlpha(rightColor, Math.round(baseAlpha * 0.55)));
+    addScanlines(pixels, widthPx, { every: 2, alpha: Math.max(24, Math.round(baseAlpha * 0.55)), color: NORDIC_EDGE });
+  } else if (variant === "grid") {
+    fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(leftColor, Math.round(baseAlpha * 0.45)), withAlpha(rightColor, Math.round(baseAlpha * 0.45)));
+    const step = Math.max(3, Math.round(heightPx / 4));
+    for (let y = step - 1; y < heightPx; y += step) {
+      fillRect(pixels, widthPx, 0, y, widthPx, 1, withAlpha(NORDIC_EDGE, Math.round(baseAlpha * 0.5)));
+    }
+    for (let x = step - 1; x < widthPx; x += step) {
+      fillRect(pixels, widthPx, x, 0, 1, heightPx, withAlpha(NORDIC_EDGE, Math.round(baseAlpha * 0.4)));
+    }
+  } else if (variant === "dots") {
+    fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(leftColor, Math.round(baseAlpha * 0.35)), withAlpha(rightColor, Math.round(baseAlpha * 0.35)));
+    const stepX = Math.max(4, Math.round(widthPx / 24));
+    const stepY = Math.max(3, Math.round(heightPx / 3));
+    for (let y = Math.floor(stepY / 2); y < heightPx; y += stepY) {
+      for (let x = Math.floor(stepX / 2); x < widthPx; x += stepX) {
+        fillRect(pixels, widthPx, x, y, 1, 1, withAlpha(NORDIC_EDGE, Math.round(baseAlpha * 0.8)));
+      }
+    }
+  } else if (variant === "glow") {
+    addRadialGlow(pixels, widthPx, widthPx * (0.18 + pulse * 0.08), heightPx / 2, widthPx * 0.55, withAlpha(leftColor, Math.round(baseAlpha * 0.9)), 0.85);
+    addRadialGlow(pixels, widthPx, widthPx * (0.82 - pulse * 0.08), heightPx / 2, widthPx * 0.55, withAlpha(rightColor, Math.round(baseAlpha * 0.9)), 0.85);
+  }
+}
+
 /**
  * Render a horizontal "prompt enclosure" rule -- a 1-cell-tall gradient strip
  * meant to replace ASCII prompt separators like `------------------`.
@@ -95,12 +141,34 @@ function drawGlowFrame(pixels, widthPx, heightPx, { phase = 0, borderThickness =
  *   blends into surrounding text instead of butting up against margins.
  * @returns {{ png: Buffer, columns: number, rows: number, widthPx: number, heightPx: number }}
  */
-export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, phase = 0, cellWidthPx, cellHeightPx, lineHeightScale } = {}) {
+export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, phase = 0, cellWidthPx, cellHeightPx, lineHeightScale, variant = "rule", alpha = 0.7 } = {}) {
   const cols = clampPositive(columns, 1, "columns");
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;
   const heightPx = metrics.cellHeightPx;
   const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+
+  const safeVariant = SURFACE_VARIANTS.includes(variant) ? variant : "rule";
+  if (safeVariant !== "rule") {
+    paintSurfaceVariant(pixels, widthPx, heightPx, {
+      variant: safeVariant,
+      leftColor,
+      rightColor,
+      alpha,
+      phase,
+    });
+    return {
+      png: encodeRgbaPng(pixels, widthPx, heightPx),
+      columns: cols,
+      rows: 1,
+      widthPx,
+      heightPx,
+      cellWidthPx: metrics.cellWidthPx,
+      cellHeightPx: metrics.cellHeightPx,
+      lineHeightScale: metrics.lineHeightScale,
+      variant: safeVariant,
+    };
+  }
 
   const pulse = pulseFactor(phase);
   const stripeY = Math.floor(heightPx / 2) - 2;
@@ -158,6 +226,7 @@ export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LE
     cellWidthPx: metrics.cellWidthPx,
     cellHeightPx: metrics.cellHeightPx,
     lineHeightScale: metrics.lineHeightScale,
+    variant: "rule",
   };
 }
 
