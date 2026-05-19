@@ -1246,8 +1246,10 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA/);
   assert.match(source, /PI_GRAPHICS_CELL_WIDTH_PX/);
   assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE/);
-  assert.match(source, /class PiGraphicsEditorSurface/);
-  assert.match(source, /renderPromptEnclosure\(/);
+  assert.match(source, /mountEditorRails/);
+  assert.match(source, /setWidget\("pi-graphics-editor-top"/);
+  assert.match(source, /setWidget\("pi-graphics-editor-bottom"/);
+  assert.match(source, /renderEditorBoxApng\(/);
   assert.match(source, /buildPlacement\(state/);
   assert.match(source, /pi_graphics_render_prompt_enclosure/);
   assert.match(source, /pi_graphics_render_message_border/);
