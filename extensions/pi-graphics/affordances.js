@@ -48,6 +48,15 @@ function clampPositive(value, fallback, name) {
   return n;
 }
 
+export function resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale } = {}) {
+  const width = clampPositive(cellWidthPx, CELL_PX_W, "cellWidthPx");
+  const scale = Number(lineHeightScale ?? 1);
+  const safeScale = Number.isFinite(scale) && scale > 0 ? Math.max(0.5, Math.min(3, scale)) : 1;
+  const heightFallback = Math.max(1, Math.round(CELL_PX_H * safeScale));
+  const height = clampPositive(cellHeightPx, heightFallback, "cellHeightPx");
+  return { cellWidthPx: width, cellHeightPx: height, lineHeightScale: safeScale };
+}
+
 function withAlpha(color, alpha) {
   const [r, g, b] = parseColor(color);
   return [r, g, b, Math.max(0, Math.min(255, Math.trunc(alpha)))];
@@ -86,10 +95,11 @@ function drawGlowFrame(pixels, widthPx, heightPx, { phase = 0, borderThickness =
  *   blends into surrounding text instead of butting up against margins.
  * @returns {{ png: Buffer, columns: number, rows: number, widthPx: number, heightPx: number }}
  */
-export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, phase = 0 } = {}) {
+export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, phase = 0, cellWidthPx, cellHeightPx, lineHeightScale } = {}) {
   const cols = clampPositive(columns, 1, "columns");
-  const widthPx = cols * CELL_PX_W;
-  const heightPx = CELL_PX_H;
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const widthPx = cols * metrics.cellWidthPx;
+  const heightPx = metrics.cellHeightPx;
   const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
 
   const pulse = pulseFactor(phase);
@@ -145,6 +155,9 @@ export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LE
     rows: 1,
     widthPx,
     heightPx,
+    cellWidthPx: metrics.cellWidthPx,
+    cellHeightPx: metrics.cellHeightPx,
+    lineHeightScale: metrics.lineHeightScale,
   };
 }
 

@@ -26,6 +26,7 @@ import {
   renderGlowPanelFrames,
   renderGradientBorder,
   renderPromptEnclosure,
+  resolveCellMetrics,
 } from "../extensions/pi-graphics/affordances.js";
 import {
   buildPlacement,
@@ -327,6 +328,22 @@ test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () =
   const stats = alphaStats(decoded);
   assert.ok(stats.bright > result.widthPx * 2, "glow rule should contain more than a hairline of visible pixels");
   assert.ok(channelDistance(pixelAt(decoded, 2, Math.floor(decoded.height / 2)), pixelAt(decoded, decoded.width - 3, Math.floor(decoded.height / 2))) > 80, "left/right gradient endpoints should differ visibly");
+});
+
+test("renderPromptEnclosure honors configurable cell metrics and 120 percent line height", () => {
+  const metrics = resolveCellMetrics({ cellWidthPx: 9, lineHeightScale: 1.2 });
+  assert.equal(metrics.cellWidthPx, 9);
+  assert.equal(metrics.cellHeightPx, 19);
+  assert.equal(metrics.lineHeightScale, 1.2);
+  const result = renderPromptEnclosure({ columns: 10, cellWidthPx: 9, lineHeightScale: 1.2 });
+  assert.equal(result.widthPx, 90);
+  assert.equal(result.heightPx, 19);
+  assert.equal(result.cellWidthPx, 9);
+  assert.equal(result.cellHeightPx, 19);
+  assert.equal(result.lineHeightScale, 1.2);
+  const explicit = renderPromptEnclosure({ columns: 10, cellWidthPx: 7, cellHeightPx: 21, lineHeightScale: 1.2 });
+  assert.equal(explicit.widthPx, 70);
+  assert.equal(explicit.heightPx, 21);
 });
 
 test("renderGradientBorder produces opaque border edges and transparent fill", () => {
@@ -1160,6 +1177,9 @@ test("pi-graphics settings source maps calm mode to visibly active theme and OSC
   assert.match(source, /PI_GRAPHICS_AUTO_HEADER_CHROME: boolToEnv\(!off && \(features\.headerChrome \?\? auto\.headerChrome \?\? showcase\)\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_FRAMES = String\(gfx\.animation\.ambientFrames\)/);
   assert.match(source, /PI_GRAPHICS_AMBIENT_DELAY_MS = String\(gfx\.animation\.ambientDelayMs\)/);
+  assert.match(source, /PI_GRAPHICS_CELL_WIDTH_PX: gfx\.cell\?\.widthPx/);
+  assert.match(source, /PI_GRAPHICS_CELL_HEIGHT_PX: gfx\.cell\?\.heightPx/);
+  assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {
@@ -1248,6 +1268,8 @@ test("pi-graphics extension source separates calm chrome from debug showcase", a
   assert.match(source, /typeof previousFactory !== "function"/);
   assert.match(source, /setEditorComponent\(\(tui, theme, keybindings\) => new PiGraphicsEditorSurface/);
   assert.match(source, /buildPiGraphicsEditorSurfaceBorderLines/);
+  assert.match(source, /renderPromptEnclosure\(\{\n        columns,\n        \.\.\.cellMetrics\(\)/);
+  assert.match(source, /isEditorChromeLine\(line\) \? graphicLine/);
   assert.match(source, /renderTuiSurfaceScenePulseApng/);
   assert.match(source, /shouldAutoShowAmbientChrome\(gfxEnv\(\)\)/);
   assert.match(source, /shouldAutoShowAmbientProof\(gfxEnv\(\)\)/);

@@ -38,6 +38,7 @@ import {
   renderGlowPanel,
   renderGradientBorder,
   renderPromptEnclosure,
+  resolveCellMetrics,
 } from "./pi-graphics/affordances.js";
 import {
   buildAutoPulseWidget,
@@ -212,6 +213,9 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_TERMINAL_PALETTE: boolToEnv(!off && (features.terminalPalette ?? auto.terminalPalette ?? true)),
     PI_GRAPHICS_AUTO_COCKPIT_WALL: boolToEnv(!off && (features.cockpitWall ?? auto.cockpitWall ?? showcase)),
     PI_GRAPHICS_AUTO_HEARTBEAT: boolToEnv(!off && (features.heartbeat ?? auto.heartbeat ?? false)),
+    PI_GRAPHICS_CELL_WIDTH_PX: gfx.cell?.widthPx != null ? String(gfx.cell.widthPx) : undefined,
+    PI_GRAPHICS_CELL_HEIGHT_PX: gfx.cell?.heightPx != null ? String(gfx.cell.heightPx) : undefined,
+    PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx.cell?.lineHeightScale != null ? String(gfx.cell.lineHeightScale) : "1.2",
     PI_GRAPHICS_AUTO_VISUAL_PROOF: boolToEnv(!off && (features.visualProof ?? auto.visualProof ?? showcase)),
     PI_GRAPHICS_AUTO_VALIDATION_REPORT: boolToEnv(!off && (features.validationReport ?? auto.validationReport ?? showcase)),
     PI_GRAPHICS_AUTO_BRAILLE_SCENE: boolToEnv(!off && (features.brailleScene ?? auto.brailleScene ?? showcase)),
@@ -444,6 +448,14 @@ export default function piGraphicsExtension(pi) {
     return Number.isFinite(n) ? Math.max(33, Math.min(250, n)) : 90;
   }
 
+  function cellMetrics(env = gfxEnv()) {
+    return resolveCellMetrics({
+      cellWidthPx: env.PI_GRAPHICS_CELL_WIDTH_PX ?? env.PI_KITTY_GRAPHICS_CELL_WIDTH_PX,
+      cellHeightPx: env.PI_GRAPHICS_CELL_HEIGHT_PX ?? env.PI_KITTY_GRAPHICS_CELL_HEIGHT_PX,
+      lineHeightScale: env.PI_GRAPHICS_LINE_HEIGHT_SCALE ?? env.PI_KITTY_GRAPHICS_LINE_HEIGHT_SCALE ?? 1.2,
+    });
+  }
+
   function showAmbientChrome(ctx) {
     if (!shouldAutoShowAmbientChrome(gfxEnv()) || !ensureUnicodePlacement(state)) return false;
     const scene = renderTuiSurfaceScenePulseApng({ columns: 58, rows: 10, frames: ambientFrames(), delayMs: ambientDelayMs() });
@@ -477,6 +489,32 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.setStatus?.("pi-gfx-editor", "⬢ editor frame widgets active");
       return false;
     }
+    const ansiRe = /\x1b\[[0-9;]*m/g;
+    const isEditorChromeLine = (line) => {
+      const text = String(line || "").replace(ansiRe, "").trim();
+      return text.length >= 8 && /[─━═]/.test(text) && /^[\s─━═╭╮╰╯╔╗╚╝┌┐└┘│┃┬┴┼·✧]+$/.test(text);
+    };
+    const graphicLine = (kind, width) => {
+      if (!ensureUnicodePlacement(state)) {
+        return buildPiGraphicsEditorSurfaceBorderLines({ width, active: editorSurfaceWorking, phase: editorSurfacePhase })[kind === "bottom" ? 1 : 0];
+      }
+      const columns = Math.max(24, Math.min(180, Math.trunc(Number(width) || 72)));
+      const rendered = renderPromptEnclosure({
+        columns,
+        ...cellMetrics(),
+        leftColor: kind === "bottom" ? "#7c4dff" : "#00ffd0",
+        rightColor: kind === "bottom" ? "#00ffd0" : "#b48cff",
+        fadeEdges: true,
+        phase: editorSurfacePhase + (kind === "bottom" ? 0.5 : kind.startsWith("mid") ? 0.25 : 0),
+      });
+      return renderToText(buildPlacement(state, {
+        name: `editor-surface-${kind}-${columns}`,
+        png: rendered.png,
+        columns: rendered.columns,
+        rows: rendered.rows,
+        width: columns,
+      })).split("\n")[0] || "";
+    };
     class PiGraphicsEditorSurface {
       constructor(tui, theme, keybindings) {
         this.base = previousFactory(tui, theme, keybindings);
@@ -484,16 +522,14 @@ export default function piGraphicsExtension(pi) {
       }
       render(width) {
         const baseLines = this.base?.render?.(width) || [];
-        const [top, bottom] = buildPiGraphicsEditorSurfaceBorderLines({
-          width,
-          active: editorSurfaceWorking,
-          phase: editorSurfacePhase,
-          label: editorSurfaceWorking ? "AGENT PULSE INPUT" : "INPUT SURFACE",
-        });
+        const top = graphicLine("top", width);
+        const bottom = graphicLine("bottom", width);
         if (baseLines.length >= 2) {
-          baseLines[0] = top;
-          baseLines[baseLines.length - 1] = bottom;
-          return baseLines;
+          return baseLines.map((line, index) => {
+            if (index === 0) return top;
+            if (index === baseLines.length - 1) return bottom;
+            return isEditorChromeLine(line) ? graphicLine(`mid-${index}`, width) : line;
+          });
         }
         return [top, ...baseLines, bottom];
       }
@@ -722,6 +758,9 @@ export default function piGraphicsExtension(pi) {
       leftColor: Type.Optional(Type.String({ description: "Left/start CSS color (#rrggbb)." })),
       rightColor: Type.Optional(Type.String({ description: "Right/end CSS color (#rrggbb)." })),
       fadeEdges: Type.Optional(Type.Boolean({ description: "Fade alpha at start/end. Defaults to true." })),
+      cellWidthPx: Type.Optional(Type.Number({ description: "Nominal terminal cell width in source pixels before kitty resampling.", minimum: 1, maximum: 64 })),
+      cellHeightPx: Type.Optional(Type.Number({ description: "Nominal terminal cell height in source pixels before kitty resampling.", minimum: 1, maximum: 96 })),
+      lineHeightScale: Type.Optional(Type.Number({ description: "Line-height multiplier used when cellHeightPx is omitted. Defaults to 1.2 for Pi calm chrome.", minimum: 0.5, maximum: 3 })),
       caption: Type.Optional(Type.String({ description: "Optional trailing caption appended after the placeholder cells." })),
     }),
     async execute(_toolCallId, params) {
@@ -734,11 +773,14 @@ export default function piGraphicsExtension(pi) {
           details: { fallback: true, columns: params.columns },
         };
       }
-      const { png, columns, rows } = renderPromptEnclosure({
+      const { png, columns, rows, cellWidthPx, cellHeightPx, lineHeightScale } = renderPromptEnclosure({
         columns: params.columns,
         leftColor: params.leftColor,
         rightColor: params.rightColor,
         fadeEdges: params.fadeEdges,
+        cellWidthPx: params.cellWidthPx,
+        cellHeightPx: params.cellHeightPx,
+        lineHeightScale: params.lineHeightScale,
       });
       const placement = buildPlacement(state, {
         name: `prompt-enclosure-${columns}`,
@@ -754,6 +796,9 @@ export default function piGraphicsExtension(pi) {
           placementId: placement.placementId,
           columns,
           rows,
+          cellWidthPx,
+          cellHeightPx,
+          lineHeightScale,
         },
       };
     },

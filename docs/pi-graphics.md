@@ -65,8 +65,8 @@ Example settings:
       "editorFrame": true,
       "footer": true,
       "nativeChrome": true,
-      "ambientChrome": true,
-      "ambientProof": true,
+      "ambientChrome": false,
+      "ambientProof": false,
       "showcaseWidgets": false,
       "startupSplash": false,
       "conversationFrame": false,
@@ -77,41 +77,38 @@ Example settings:
       "ansiScene": false,
       "ansiTakeover": false,
       "terminalPalette": true,
-      "transcriptChrome": true,
+      "transcriptChrome": false,
       "editorSurface": true,
-      "rawBootstrap": true,
-      "headerChrome": true,
+      "rawBootstrap": false,
+      "headerChrome": false,
       "heartbeat": false
     },
-    "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 }
+    "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 },
+    "cell": { "widthPx": 8, "lineHeightScale": 1.2 }
   }
 }
 ```
 
 Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
 maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
-still override settings for one run. Use `PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME=0`
-to suppress the bounded per-message truecolor rail, or
+still override settings for one run. Calm mode keeps theme/palette application
+and the editor-surface replacement enabled, but leaves transcript/header/raw
+bootstrap/ambient proof/showcase surfaces off by default. Use
 `PI_GRAPHICS_AUTO_EDITOR_SURFACE=0` to restore the default editor surface, or
-`PI_GRAPHICS_AUTO_RAW_BOOTSTRAP=0` to suppress the direct stdout proof, or
-`PI_GRAPHICS_AUTO_HEADER_CHROME=0` to suppress the persistent top header while
-keeping other calm chrome active. The compact ANSI `/pi-graphics-ambient-proof`
-strip, user-theme sync, persistent header chrome, transcript chrome,
-editor-surface chrome, raw stdout bootstrap, and the OSC terminal-palette request
-are enabled by default as
-fallback visual smoke tests. The raw bootstrap writes a bounded truecolor block
-to stdout, stderr, and a Pi notification at session start, so it does not depend
-on Pi theme APIs, widgets, editor APIs, transcript messages, kitty graphics
-placement, OSC support, or a single output stream. Transcript chrome inserts a bounded truecolor deep-Nordic rail after
-normal messages, and editor-surface chrome best-effort wraps any existing custom input editor with a
-pulsating truecolor Nordic frame; when no editor factory is exposed, the separate
-above/below editor frame widgets remain active so the extension still loads
-without importing Pi internals. The strip includes the configured theme name, graphics mode,
-settings-derived auto flags, measured theme color deltas, renderer PNG bytes,
-color bucket count, luma delta, and reload sentinel. Set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=0` to hide it. Set
-`PI_GRAPHICS_AUTO_AMBIENT_CHROME=0` to hide the compact always-visible rendered
-TUI surface, or tune it with
-`PI_GRAPHICS_AMBIENT_FRAMES` and `PI_GRAPHICS_AMBIENT_DELAY_MS`. Use
+set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=1`, `PI_GRAPHICS_AUTO_AMBIENT_CHROME=1`,
+`PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME=1`, `PI_GRAPHICS_AUTO_RAW_BOOTSTRAP=1`, or
+`PI_GRAPHICS_AUTO_HEADER_CHROME=1` when you explicitly want those verbose proof
+surfaces for a run. Editor-surface chrome best-effort wraps any existing custom
+input editor and replaces Pi's ASCII separator lines with kitty PNG placeholder
+rules; when no editor factory is exposed, the separate above/below editor frame
+widgets remain active so the extension still loads without importing Pi
+internals. Configure PNG source-cell metrics with `piGraphics.cell.widthPx`,
+`piGraphics.cell.heightPx`, and `piGraphics.cell.lineHeightScale` (or the env
+vars `PI_GRAPHICS_CELL_WIDTH_PX`, `PI_GRAPHICS_CELL_HEIGHT_PX`, and
+`PI_GRAPHICS_LINE_HEIGHT_SCALE`). If `cellHeightPx` is omitted, the renderer uses
+`16 * lineHeightScale`; the default line-height scale is `1.2` to match Pi's
+120% line spacing. Tune the opt-in ambient APNG with `PI_GRAPHICS_AMBIENT_FRAMES`
+and `PI_GRAPHICS_AMBIENT_DELAY_MS`. Use
 `/pi-graphics-tui-surface-scene` or `pi_graphics_render_tui_surface_scene` to
 force the full TypeScript-rendered Pi TUI scene manually. For an inspectable file
 artefact outside Pi, run `npm run pi-graphics:smoke -- --out=artifacts/pi-graphics-smoke.png`.
