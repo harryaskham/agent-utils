@@ -26,6 +26,8 @@ import { Type } from "@sinclair/typebox";
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
+  renderEditorBorderApng,
+  renderEditorRailApng,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -138,14 +140,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
   }
 
-  function isEditorChromeLine(line) {
-    const text = String(line || "").replace(/\x1b\[[0-9;]*m/g, "").trim();
-    if (text.length < 8) return false;
-    if (!/[─━═]/.test(text)) return false;
-    return /^[\s─━═╭╮╰╯╔╗╚╝┌┐└┘│┃┬┴┼·✧]+$/.test(text);
-  }
-
-  function buildEditorRailLine(width, edge) {
+  function buildEditorBorderRow(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
     const cell = cellMetrics();
@@ -153,18 +148,47 @@ export default function piGraphicsExtension(pi) {
     const alpha = editorAlpha();
     const frames = editorAnimationFrames();
     const delayMs = editorAnimationDelayMs();
-    const apng = renderEditorBoxApng({
+    const apng = renderEditorBorderApng({
       columns: cols,
-      rows: 1,
-      paddingCells: 0,
+      edge,
       ...cell,
       frames,
       delayMs,
       plays: 0,
       borderColor: "#00d8ff",
-      borderAlpha: alpha,
+      borderAlpha: 0.95,
       glowColor: variant === "glow" ? "#b48cff" : "#00d8ff",
-      glowAlpha: variant === "glow" ? 0.6 : 0.3,
+      glowAlpha: Math.max(0.2, alpha * 0.7),
+    });
+    const placement = buildPlacement(state, {
+      name: `editor-border-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
+      png: apng.png,
+      columns: apng.columns,
+      rows: apng.rows,
+      width: cols,
+      zIndex: -1073741825,
+    });
+    const cells = placement.lines[0] ?? "";
+    return placement.transmit ? `${placement.transmit}${cells}` : cells;
+  }
+
+  function buildEditorRailRow(width, edge) {
+    if (!ensureUnicodePlacement(state)) return null;
+    const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
+    const cell = cellMetrics();
+    const variant = editorVariant();
+    const alpha = editorAlpha();
+    const frames = editorAnimationFrames();
+    const delayMs = editorAnimationDelayMs();
+    const apng = renderEditorRailApng({
+      columns: cols,
+      edge,
+      ...cell,
+      frames,
+      delayMs,
+      plays: 0,
+      glowColor: variant === "glow" ? "#b48cff" : "#00d8ff",
+      glowAlpha: Math.max(0.2, alpha * 0.55),
     });
     const placement = buildPlacement(state, {
       name: `editor-rail-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
@@ -178,12 +202,52 @@ export default function piGraphicsExtension(pi) {
     return placement.transmit ? `${placement.transmit}${cells}` : cells;
   }
 
+  function isEditorChromeLine(line) {
+    const text = String(line || "").replace(/\x1b\[[0-9;]*m/g, "").trim();
+    if (text.length < 8) return false;
+    if (!/[─━═]/.test(text)) return false;
+    return /^[\s─━═╭╮╰╯╔╗╚╝┌┐└┘│┃┬┴┼·✧]+$/.test(text);
+  }
+
+  function installEditorSurface(ctx) {
+    if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return false;
+    if (typeof ctx.ui?.setEditorComponent !== "function") return false;
+    const previousFactory = typeof ctx.ui?.getEditorComponent === "function" ? ctx.ui.getEditorComponent() : undefined;
+    if (typeof previousFactory !== "function") return false;
+    class PiGraphicsEditorSurface {
+      constructor(tui, theme, keybindings) {
+        this.base = previousFactory(tui, theme, keybindings);
+      }
+      render(width) {
+        const baseLines = this.base?.render?.(width) || [];
+        if (baseLines.length < 2) return baseLines;
+        const top = buildEditorBorderRow(width, "top");
+        const bottom = buildEditorBorderRow(width, "bottom");
+        if (!top || !bottom) return baseLines;
+        return baseLines.map((line, index) => {
+          if (index === 0) return top;
+          if (index === baseLines.length - 1) return bottom;
+          if (isEditorChromeLine(line)) return index < baseLines.length / 2 ? top : bottom;
+          return line;
+        });
+      }
+      invalidate() { this.base?.invalidate?.(); }
+      handleInput(data) { return this.base?.handleInput?.(data); }
+      getValue() { return this.base?.getValue?.(); }
+      setValue(value) { return this.base?.setValue?.(value); }
+      focus() { return this.base?.focus?.(); }
+      blur() { return this.base?.blur?.(); }
+    }
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => new PiGraphicsEditorSurface(tui, theme, keybindings));
+    return true;
+  }
+
   function mountEditorRails(ctx) {
     if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return;
     if (typeof ctx.ui?.setWidget !== "function") return;
     const factory = (edge) => (_tui, _theme) => ({
       render(width) {
-        const line = buildEditorRailLine(width, edge);
+        const line = buildEditorRailRow(width, edge);
         return [line ?? ""];
       },
       invalidate() {},
@@ -195,6 +259,7 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     applyTheme(ctx);
+    installEditorSurface(ctx);
     mountEditorRails(ctx);
   });
 

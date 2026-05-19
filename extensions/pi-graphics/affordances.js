@@ -515,6 +515,86 @@ export function renderEditorBoxApng({ frames = 8, delayMs = 120, plays = 0, ...o
   };
 }
 
+function paintEditorRailFrame(pixels, widthPx, heightPx, {
+  edge = "top",
+  glowColor = NORDIC_VIOLET,
+  glowAlpha = 0.5,
+  phase = 0,
+} = {}) {
+  const pulse = pulseFactor(phase);
+  const glowA = Math.round(normalizeAlpha(glowAlpha, 0.5) * 255 * (0.55 + pulse * 0.65));
+  if (edge === "bottom") {
+    fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, glowA), withAlpha(glowColor, 0));
+  } else {
+    fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, 0), withAlpha(glowColor, glowA));
+  }
+  const anchorY = edge === "bottom" ? 0 : heightPx - 1;
+  addRadialGlow(pixels, widthPx, widthPx * (0.18 + pulse * 0.08), anchorY, widthPx * 0.4, withAlpha(glowColor, glowA), 0.85);
+  addRadialGlow(pixels, widthPx, widthPx * (0.82 - pulse * 0.08), anchorY, widthPx * 0.4, withAlpha(glowColor, glowA), 0.85);
+}
+
+export function renderEditorRailFrame({ columns, edge = "top", glowColor, glowAlpha = 0.5, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
+  const cols = clampPositive(columns, 2, "columns");
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const widthPx = cols * metrics.cellWidthPx;
+  const heightPx = metrics.cellHeightPx;
+  const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+  paintEditorRailFrame(pixels, widthPx, heightPx, { edge, glowColor, glowAlpha, phase });
+  return { pixels, widthPx, heightPx, columns: cols, rows: 1, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
+}
+
+export function renderEditorRailApng({ frames = 24, delayMs = 120, plays = 0, ...options } = {}) {
+  const count = Math.max(1, Math.min(256, Math.trunc(Number(frames) || 24)));
+  const rendered = Array.from({ length: count }, (_, index) => renderEditorRailFrame({ ...options, phase: (Number(options.phase) || 0) + index / count }));
+  const first = rendered[0];
+  const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
+  return { png, columns: first.columns, rows: 1, widthPx: first.widthPx, heightPx: first.heightPx, cellWidthPx: first.cellWidthPx, cellHeightPx: first.cellHeightPx, lineHeightScale: first.lineHeightScale, frames: count, delayMs, animationMs: delayMs * count };
+}
+
+function paintEditorBorderFrame(pixels, widthPx, heightPx, {
+  edge = "top",
+  borderColor = NORDIC_CYAN,
+  borderAlpha = 0.95,
+  glowColor = NORDIC_VIOLET,
+  glowAlpha = 0.4,
+  phase = 0,
+} = {}) {
+  const pulse = pulseFactor(phase);
+  const borderA = Math.round(normalizeAlpha(borderAlpha, 0.95) * 255);
+  const glowA = Math.round(normalizeAlpha(glowAlpha, 0.4) * 255 * (0.6 + pulse * 0.6));
+  const strokeH = Math.max(2, Math.round(heightPx * 0.18));
+  if (edge === "top") {
+    fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, 0), withAlpha(glowColor, glowA));
+    fillRect(pixels, widthPx, 0, heightPx - strokeH, widthPx, strokeH, withAlpha(borderColor, borderA));
+    fillRect(pixels, widthPx, 0, heightPx - strokeH - 1, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+  } else {
+    fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, glowA), withAlpha(glowColor, 0));
+    fillRect(pixels, widthPx, 0, 0, widthPx, strokeH, withAlpha(borderColor, borderA));
+    fillRect(pixels, widthPx, 0, strokeH, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+  }
+  const anchorY = edge === "top" ? heightPx - 1 : 0;
+  addRadialGlow(pixels, widthPx, widthPx * (0.2 + pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
+  addRadialGlow(pixels, widthPx, widthPx * (0.8 - pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
+}
+
+export function renderEditorBorderFrame({ columns, edge = "top", borderColor, borderAlpha, glowColor, glowAlpha, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
+  const cols = clampPositive(columns, 2, "columns");
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const widthPx = cols * metrics.cellWidthPx;
+  const heightPx = metrics.cellHeightPx;
+  const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+  paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase });
+  return { pixels, widthPx, heightPx, columns: cols, rows: 1, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
+}
+
+export function renderEditorBorderApng({ frames = 24, delayMs = 120, plays = 0, ...options } = {}) {
+  const count = Math.max(1, Math.min(256, Math.trunc(Number(frames) || 24)));
+  const rendered = Array.from({ length: count }, (_, index) => renderEditorBorderFrame({ ...options, phase: (Number(options.phase) || 0) + index / count }));
+  const first = rendered[0];
+  const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
+  return { png, columns: first.columns, rows: 1, widthPx: first.widthPx, heightPx: first.heightPx, cellWidthPx: first.cellWidthPx, cellHeightPx: first.cellHeightPx, lineHeightScale: first.lineHeightScale, frames: count, delayMs, animationMs: delayMs * count };
+}
+
 export const DEFAULTS = Object.freeze({
   CELL_PX_W,
   CELL_PX_H,
