@@ -225,6 +225,7 @@ export function buildPngVirtualPlacementCommand({
   filePath,
   columns,
   rows,
+  zIndex,
   quiet = 2,
   passthrough = "auto",
   chunkSize,
@@ -240,6 +241,7 @@ export function buildPngVirtualPlacementCommand({
     U: 1,
     c: columns,
     r: rows,
+    z: zIndex,
     q: quiet,
   };
   const payload = pngBase64 ?? textToBase64(filePath);

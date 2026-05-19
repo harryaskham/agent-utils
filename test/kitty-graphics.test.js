@@ -43,6 +43,19 @@ test("virtual placement command transmits PNG data without cursor placement", ()
   assert.doesNotMatch(serialized, /z=/);
 });
 
+test("virtual placement command serializes zIndex below background threshold", () => {
+  const serialized = buildPngVirtualPlacementCommand({
+    imageId: 42,
+    placementId: 9,
+    pngBase64: "YWJj",
+    columns: 2,
+    rows: 3,
+    zIndex: -1073741825,
+    passthrough: "none",
+  });
+  assert.match(serialized, /z=-1073741825/);
+});
+
 test("Unicode placeholder lines encode image id, placement id, rows, and scrollable cells", () => {
   const lines = buildKittyUnicodePlaceholderLines({
     imageId: 42,

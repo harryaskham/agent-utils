@@ -36,7 +36,7 @@ function nextPlacementId(state) {
   return PLACEMENT_ID_BASE + state.placementCounter;
 }
 
-export function buildPlacement(state, { name, png, columns, rows, width, caption } = {}) {
+export function buildPlacement(state, { name, png, columns, rows, width, caption, zIndex } = {}) {
   const imageId = trackOwned(state, stableKittyImageId(`agent-utils.pi-graphics.${name}`));
   const placementId = nextPlacementId(state);
   const transmit = buildPngVirtualPlacementCommand({
@@ -45,6 +45,7 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     pngBase64: bufferToBase64(png),
     columns,
     rows,
+    zIndex,
     passthrough: state.config.passthrough,
   });
   const lines = buildKittyUnicodePlaceholderLines({

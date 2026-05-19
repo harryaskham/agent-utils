@@ -526,6 +526,7 @@ export default function piGraphicsExtension(pi) {
         columns: rendered.columns,
         rows: rendered.rows,
         width: columns,
+        zIndex: -1073741825,
       })).split("\n")[0] || "";
     };
     class PiGraphicsEditorSurface {
