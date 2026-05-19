@@ -1052,7 +1052,7 @@ test("buildPiGraphicsHudComponent renders a persistent component-backed HUD", ()
   assert.notDeepEqual(first, second);
 });
 
-test("buildPiGraphicsEditorFrameComponent renders editor-edge neon chrome", () => {
+test("buildPiGraphicsEditorFrameComponent renders subtle editor-edge accents without text labels", () => {
   const theme = {
     fg(token, text) { return `<${token}>${text}</${token}>`; },
     bg(token, text) { return `[${token}]${text}[/${token}]`; },
@@ -1061,9 +1061,10 @@ test("buildPiGraphicsEditorFrameComponent renders editor-edge neon chrome", () =
   const bottom = buildPiGraphicsEditorFrameLines(theme, { edge: "bottom", width: 72, phase: 0.75 });
   assert.equal(top.length, 1);
   assert.equal(bottom.length, 1);
-  assert.match(top[0], /NEON EDITOR FIELD/);
-  assert.match(bottom[0], /INPUT FIELD STABILIZED/);
-  assert.match(top[0], /customMessageBg/);
+  assert.doesNotMatch(top[0], /NEON|EDITOR|FIELD|PI KITTY|GRAPHICS/);
+  assert.doesNotMatch(bottom[0], /INPUT|STABILIZED|PI KITTY|GRAPHICS/);
+  assert.match(top[0], /borderAccent/);
+  assert.match(bottom[0], /thinkingXhigh/);
   assert.notDeepEqual(
     buildPiGraphicsEditorFrameLines(null, { edge: "top", width: 80, phase: 0 }),
     buildPiGraphicsEditorFrameLines(null, { edge: "top", width: 80, phase: 0.25 }),
@@ -1090,18 +1091,17 @@ test("buildPiGraphicsRawBootstrapText emits dependency-free truecolor startup pr
   assert.equal(text.trimEnd().split("\n").length, 3);
 });
 
-test("buildPiGraphicsEditorSurfaceBorderLines renders truecolor input-surface takeover chrome", () => {
+test("buildPiGraphicsEditorSurfaceBorderLines renders subtle truecolor input accents", () => {
   assert.equal(shouldAutoShowEditorSurface({}), true);
   assert.equal(shouldAutoShowEditorSurface({ PI_GRAPHICS_AUTO_EDITOR_SURFACE: "0" }), false);
   assert.equal(shouldAutoShowEditorSurface({ PI_KITTY_GRAPHICS_AUTO_EDITOR_SURFACE: "off" }), false);
   const ready = buildPiGraphicsEditorSurfaceBorderLines({ width: 74, active: false, phase: 0.1, label: "input surface" });
   const active = buildPiGraphicsEditorSurfaceBorderLines({ width: 74, active: true, phase: 0.4, label: "agent pulse input" });
   assert.equal(ready.length, 2);
-  assert.match(ready.join("\n"), /PI GFX INPUT SURFACE/);
-  assert.match(active.join("\n"), /PULSING/);
-  assert.match(active.join("\n"), /DEEP NORDIC GLOW/);
-  assert.match(active.join("\n"), /\u001b\[48;2;/);
+  assert.doesNotMatch(ready.join("\n"), /PI GFX|INPUT SURFACE|NEON|GRAPHICS/);
+  assert.doesNotMatch(active.join("\n"), /PULSING|DEEP NORDIC|RENDERED EDITOR/);
   assert.match(active.join("\n"), /\u001b\[38;2;/);
+  assert.doesNotMatch(active.join("\n"), /\u001b\[48;2;/);
   assert.notDeepEqual(ready, active);
 });
 
@@ -1179,24 +1179,25 @@ test("buildVisualContractLines exposes a complete operator checklist", () => {
   assert.match(fallback, /startup splash disabled by env/);
 });
 
-test("buildWorkingMessage, terminal title, and hidden thinking label brand active generation", () => {
+test("buildWorkingMessage, terminal title, and hidden thinking label stay subtle in calm mode", () => {
   const calls = [];
   const theme = { fg(token, text) { calls.push([token, text]); return `<${token}>${text}</${token}>`; } };
   const toolName = "very-long-tool-name-that-should-be-truncated-after-32-chars";
   const message = buildWorkingMessage({ stage: "tool execution", toolName }, theme);
-  assert.match(message, /PI KITTY GFX/);
-  assert.match(message, /TOOL EXECUTION/);
-  assert.match(message, /deep nordic glow/);
-  assert.ok(message.length < 220);
+  assert.doesNotMatch(message, /PI KITTY GFX|TOOL EXECUTION|deep nordic glow/);
+  assert.match(message, /very-long-tool-name-th/);
+  assert.ok(message.length < 96);
   const title = buildTerminalTitle({ stage: "tool execution", toolName });
-  assert.match(title, /PI KITTY GFX/);
-  assert.match(title, /TOOL EXECUTION/);
-  assert.ok(title.length <= 80);
-  assert.equal(buildTerminalTitle({ stage: "ready" }), "⬢ PI KITTY GFX // READY");
+  assert.doesNotMatch(title, /PI KITTY GFX|TOOL EXECUTION/);
+  assert.match(title, /Pi · very-long-tool-name-th/);
+  assert.ok(title.length <= 48);
+  assert.equal(buildTerminalTitle({ stage: "ready" }), "Pi · ready");
   const label = buildHiddenThinkingLabel(theme);
-  assert.match(label, /PI GFX THOUGHTSTREAM/);
+  assert.doesNotMatch(label, /PI GFX THOUGHTSTREAM/);
+  assert.match(label, /thinking/);
   assert.ok(calls.some(([token]) => token === "thinkingXhigh"));
-  assert.ok(calls.some(([token]) => token === "customMessageLabel"));
+  assert.ok(calls.some(([token]) => token === "muted"));
+  assert.ok(!calls.some(([token]) => token === "customMessageLabel"));
 });
 
 test("buildWorkingIndicatorFrames creates a themed neon pulse sequence", () => {

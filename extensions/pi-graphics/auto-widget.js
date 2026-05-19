@@ -377,15 +377,11 @@ export function buildPiGraphicsRawBootstrapText({ width = 88, label = "PI KITTY 
 export function buildPiGraphicsEditorSurfaceBorderLines({ width = 96, active = false, phase = 0, label = "INPUT SURFACE" } = {}) {
   const cells = Math.max(24, Math.min(180, Math.trunc(width)));
   const p = Math.abs(Math.sin(Number(phase || 0) * Math.PI * 2));
-  const spinner = active ? ["⬢", "◆", "✦", "✺"][Math.floor(p * 3.999) % 4] : "◇";
-  const title = ` ${spinner} PI GFX ${String(label || "INPUT SURFACE").toUpperCase()} `;
-  const gap = Math.max(0, cells - title.length - 2);
-  const top = `${ansiBg("#02030b")}${ansiFg("#00ffd0")}╭${title}${"─".repeat(gap)}╮${RESET}`.slice(0, cells + 40);
-  const bottomLabel = ` ${active ? "PULSING" : "READY"} • DEEP NORDIC GLOW • TS RENDERED EDITOR `;
-  const bgR = Math.round(2 + p * 18);
-  const bgB = Math.round(32 + p * 72);
-  const fill = "═".repeat(Math.max(0, cells - bottomLabel.length - 2));
-  const bottom = `${ansiBgRgb(bgR, 8, bgB)}${ansiFg("#d85cff")}╰${bottomLabel}${fill}╯${RESET}`.slice(0, cells + 40);
+  const pulse = active ? ["✧", "·", "✦", "·"][Math.floor(p * 3.999) % 4] : "·";
+  const topRail = "─".repeat(Math.max(0, cells - 4));
+  const bottomRail = "─".repeat(Math.max(0, cells - 4));
+  const top = `${ansiFg("#00ffd0")}╭${topRail}${pulse}╮${RESET}`.slice(0, cells + 24);
+  const bottom = `${ansiFg("#7c4dff")}╰${pulse}${bottomRail}╯${RESET}`.slice(0, cells + 24);
   return [top, bottom];
 }
 
@@ -405,22 +401,21 @@ export function buildWorkingIndicatorFrames(theme) {
 
 export function buildWorkingMessage({ stage = "active", toolName = "" } = {}, theme) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
-  const safeStage = String(stage || "active").replace(/\s+/g, " ").trim().slice(0, 28).toUpperCase();
-  const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 32);
-  const suffix = safeTool ? ` // ${safeTool}` : "";
-  return `${fg("thinkingXhigh", "⬢")} ${fg("customMessageLabel", "PI KITTY GFX")} ${fg("borderAccent", `// ${safeStage}`)}${fg("muted", suffix)} ${fg("accent", "deep nordic glow")}`;
+  const safeStage = String(stage || "active").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 18);
+  const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 22);
+  const label = safeTool || safeStage || "active";
+  return `${fg("thinkingXhigh", "✧")} ${fg("muted", label)}`;
 }
 
 export function buildHiddenThinkingLabel(theme) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
-  return `${fg("thinkingXhigh", "⬢")} ${fg("customMessageLabel", "PI GFX THOUGHTSTREAM")} ${fg("muted", "folded")}`;
+  return `${fg("thinkingXhigh", "✧")} ${fg("muted", "thinking")}`;
 }
 
 export function buildTerminalTitle({ stage = "ready", toolName = "" } = {}) {
-  const safeStage = String(stage || "ready").replace(/\s+/g, " ").trim().slice(0, 28).toUpperCase();
-  const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 28);
-  const suffix = safeTool ? ` · ${safeTool}` : "";
-  return `⬢ PI KITTY GFX // ${safeStage}${suffix}`.slice(0, 80);
+  const safeStage = String(stage || "ready").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 18);
+  const safeTool = String(toolName || "").replace(/\s+/g, " ").trim().slice(0, 22);
+  return `Pi · ${safeTool || safeStage || "ready"}`.slice(0, 48);
 }
 
 export function buildPiGraphicsHeartbeatLine(theme, { tick = 0, stage = "idle" } = {}) {
@@ -1000,15 +995,12 @@ export function buildPiGraphicsHudComponent(theme, options = {}) {
 
 export function buildPiGraphicsEditorFrameLines(theme, { edge = "top", width = 72, phase = 0 } = {}) {
   const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
-  const bg = typeof theme?.bg === "function" ? theme.bg.bind(theme) : (_token, text) => text;
   const cells = Math.max(24, Math.min(120, Math.trunc(width)));
-  const pulse = Math.abs(Math.sin(Number(phase) * Math.PI * 2)) > 0.55 ? "⬢◆✦" : "✦◆⬢";
-  const label = edge === "bottom" ? "INPUT FIELD STABILIZED" : "NEON EDITOR FIELD";
-  const railWidth = Math.max(8, cells - label.length - pulse.length - 10);
-  const rail = edge === "bottom" ? "▄".repeat(railWidth) : "▀".repeat(railWidth);
-  const left = edge === "bottom" ? "╚═" : "╔═";
-  const right = edge === "bottom" ? "═╝" : "═╗";
-  return [bg("customMessageBg", `${fg("borderAccent", left)}${fg("accent", rail)} ${fg("customMessageLabel", label)} ${fg("thinkingXhigh", pulse)}${fg("borderAccent", right)}`)];
+  const pulse = Math.abs(Math.sin(Number(phase) * Math.PI * 2)) > 0.55 ? "✧" : "·";
+  const railWidth = Math.max(6, Math.min(18, Math.floor(cells / 6)));
+  const rail = "─".repeat(railWidth);
+  const line = edge === "bottom" ? `╰${pulse}${rail}` : `╭${rail}${pulse}`;
+  return [fg(edge === "bottom" ? "thinkingXhigh" : "borderAccent", line)];
 }
 
 export function buildPiGraphicsEditorFrameComponent(theme, options = {}) {
