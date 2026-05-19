@@ -15,6 +15,7 @@
 import {
   addRadialGlow,
   addScanlines,
+  encodeRgbaApng,
   encodeRgbaPng,
   fillHorizontalGradient,
   fillRect,
@@ -389,6 +390,128 @@ export function renderAccentBar({ columns, color = DEFAULT_BORDER_COLOR, alpha =
     rows: 1,
     widthPx,
     heightPx,
+  };
+}
+
+function paintEditorBoxFrame(pixels, widthPx, heightPx, {
+  paddingCells = 1,
+  borderColor = NORDIC_CYAN,
+  borderAlpha = 0.55,
+  fillTop = NORDIC_DEEP_TOP,
+  fillBottom = NORDIC_DEEP_BOTTOM,
+  glowColor = NORDIC_VIOLET,
+  glowAlpha = 0.35,
+  cellWidthPx = CELL_PX_W,
+  cellHeightPx = CELL_PX_H,
+  phase = 0,
+} = {}) {
+  const pad = Math.max(0, Math.trunc(paddingCells));
+  const innerLeft = pad * cellWidthPx;
+  const innerRight = widthPx - pad * cellWidthPx;
+  const innerTop = cellHeightPx;
+  const innerBottom = heightPx - cellHeightPx;
+  if (innerRight <= innerLeft || innerBottom <= innerTop) return;
+  fillVerticalGradient(
+    pixels,
+    widthPx,
+    innerLeft,
+    innerTop,
+    innerRight - innerLeft,
+    innerBottom - innerTop,
+    withAlpha(fillTop, 110),
+    withAlpha(fillBottom, 150),
+  );
+  const stroke = withAlpha(borderColor, Math.round(normalizeAlpha(borderAlpha, 0.55) * 255));
+  strokeRect(pixels, widthPx, innerLeft, innerTop, innerRight - innerLeft, innerBottom - innerTop, stroke, 1);
+  const pulse = pulseFactor(phase);
+  const glow = withAlpha(glowColor, Math.round(normalizeAlpha(glowAlpha, 0.35) * 255 * (0.7 + pulse * 0.6)));
+  addRadialGlow(pixels, widthPx, widthPx * (0.2 + pulse * 0.1), innerTop, widthPx * 0.4, glow, 0.85);
+  addRadialGlow(pixels, widthPx, widthPx * (0.8 - pulse * 0.1), innerBottom, widthPx * 0.4, glow, 0.85);
+}
+
+export function renderEditorBoxFrame({
+  columns,
+  rows,
+  paddingCells = 1,
+  borderColor,
+  borderAlpha,
+  fillTop,
+  fillBottom,
+  glowColor,
+  glowAlpha,
+  cellWidthPx,
+  cellHeightPx,
+  lineHeightScale,
+  phase = 0,
+} = {}) {
+  const cols = clampPositive(columns, 2, "columns");
+  const totalRows = Math.max(3, Math.trunc(Number(rows) || 3));
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const widthPx = cols * metrics.cellWidthPx;
+  const heightPx = totalRows * metrics.cellHeightPx;
+  const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+  paintEditorBoxFrame(pixels, widthPx, heightPx, {
+    paddingCells,
+    borderColor,
+    borderAlpha,
+    fillTop,
+    fillBottom,
+    glowColor,
+    glowAlpha,
+    cellWidthPx: metrics.cellWidthPx,
+    cellHeightPx: metrics.cellHeightPx,
+    phase,
+  });
+  return {
+    pixels,
+    widthPx,
+    heightPx,
+    columns: cols,
+    rows: totalRows,
+    cellWidthPx: metrics.cellWidthPx,
+    cellHeightPx: metrics.cellHeightPx,
+    lineHeightScale: metrics.lineHeightScale,
+  };
+}
+
+export function renderEditorBox(options = {}) {
+  const frame = renderEditorBoxFrame(options);
+  return {
+    png: encodeRgbaPng(frame.pixels, frame.widthPx, frame.heightPx),
+    columns: frame.columns,
+    rows: frame.rows,
+    widthPx: frame.widthPx,
+    heightPx: frame.heightPx,
+    cellWidthPx: frame.cellWidthPx,
+    cellHeightPx: frame.cellHeightPx,
+    lineHeightScale: frame.lineHeightScale,
+  };
+}
+
+export function renderEditorBoxApng({ frames = 8, delayMs = 120, plays = 0, ...options } = {}) {
+  const count = Math.max(1, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const rendered = Array.from({ length: count }, (_, index) =>
+    renderEditorBoxFrame({ ...options, phase: (Number(options.phase) || 0) + index / count }),
+  );
+  const first = rendered[0];
+  const png = encodeRgbaApng(
+    rendered.map((frame) => frame.pixels),
+    first.widthPx,
+    first.heightPx,
+    { delayMs, plays },
+  );
+  return {
+    png,
+    columns: first.columns,
+    rows: first.rows,
+    widthPx: first.widthPx,
+    heightPx: first.heightPx,
+    cellWidthPx: first.cellWidthPx,
+    cellHeightPx: first.cellHeightPx,
+    lineHeightScale: first.lineHeightScale,
+    frames: count,
+    delayMs,
+    animationMs: delayMs * count,
   };
 }
 

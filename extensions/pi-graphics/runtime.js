@@ -18,6 +18,8 @@ const PLACEMENT_ID_BASE = 0xa1;
 export function makeState() {
   return {
     ownedImageIds: new Set(),
+    transmittedImageIds: new Set(),
+    placementByImage: new Map(),
     placementCounter: 0,
     config: {
       passthrough: "auto",
@@ -38,8 +40,12 @@ function nextPlacementId(state) {
 
 export function buildPlacement(state, { name, png, columns, rows, width, caption, zIndex } = {}) {
   const imageId = trackOwned(state, stableKittyImageId(`agent-utils.pi-graphics.${name}`));
-  const placementId = nextPlacementId(state);
-  const transmit = buildPngVirtualPlacementCommand({
+  const alreadyTransmitted = state.transmittedImageIds.has(imageId);
+  const placementId = alreadyTransmitted
+    ? (state.placementByImage.get(imageId) ?? nextPlacementId(state))
+    : nextPlacementId(state);
+  if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
+  const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementCommand({
     imageId,
     placementId,
     pngBase64: bufferToBase64(png),
@@ -48,6 +54,7 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     zIndex,
     passthrough: state.config.passthrough,
   });
+  if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
     placementId,
@@ -56,7 +63,7 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     width,
     caption,
   });
-  return { imageId, placementId, transmit, lines };
+  return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted };
 }
 
 export function ensureUnicodePlacement(state) {

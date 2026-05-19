@@ -25,6 +25,7 @@ import { Type } from "@sinclair/typebox";
 
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
+  renderEditorBoxApng,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -85,9 +86,6 @@ export default function piGraphicsExtension(pi) {
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "");
   const state = makeState();
-  let editorSurfacePhase = 0;
-  let editorSurfaceTimer = null;
-  let editorSurfaceTui = null;
 
   function envBool(name, fallback = false) {
     const value = gfxEnv()[name];
@@ -116,37 +114,68 @@ export default function piGraphicsExtension(pi) {
     return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.55;
   }
 
+  function editorPaddingX() {
+    const raw = Number(settings.editorPaddingX);
+    return Number.isFinite(raw) ? Math.max(0, Math.min(8, Math.trunc(raw))) : 0;
+  }
+
+  function editorAnimationFrames() {
+    const env = gfxEnv();
+    const raw = Number(env.PI_GRAPHICS_EDITOR_FRAMES);
+    return Number.isFinite(raw) ? Math.max(1, Math.min(24, Math.trunc(raw))) : 8;
+  }
+
+  function editorAnimationDelayMs() {
+    const env = gfxEnv();
+    const raw = Number(env.PI_GRAPHICS_EDITOR_DELAY_MS);
+    return Number.isFinite(raw) ? Math.max(40, Math.min(500, Math.trunc(raw))) : 140;
+  }
+
   function applyTheme(ctx) {
     if (!envBool("PI_GRAPHICS_AUTO_THEME", true) || !configuredThemeName) return;
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
   }
 
-  function isEditorChromeLine(line) {
-    const text = String(line || "").replace(/\x1b\[[0-9;]*m/g, "").trim();
-    if (text.length < 8) return false;
-    if (!/[─━═]/.test(text)) return false;
-    return /^[\s─━═╭╮╰╯╔╗╚╝┌┐└┘│┃┬┴┼·✧]+$/.test(text);
-  }
-
-  function graphicLine(kind, width) {
-    const columns = Math.max(24, Math.min(180, Math.trunc(Number(width) || 72)));
+  function buildEditorBoxLines(width, innerLineCount) {
     if (!ensureUnicodePlacement(state)) return null;
-    const rendered = renderPromptEnclosure({
-      columns,
-      ...cellMetrics(),
-      variant: editorVariant(),
-      alpha: editorAlpha(),
-      fadeEdges: true,
-      phase: editorSurfacePhase + (kind === "bottom" ? 0.5 : kind.startsWith("mid") ? 0.25 : 0),
-    });
-    return renderToText(buildPlacement(state, {
-      name: `editor-surface-${kind}-${columns}-${editorVariant()}`,
+    const padX = editorPaddingX();
+    const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
+    const innerRows = Math.max(1, Math.trunc(Number(innerLineCount) || 1));
+    const totalRows = innerRows + 2; // 1 cell bleed above + 1 cell bleed below
+    const variant = editorVariant();
+    const alpha = editorAlpha();
+    const cell = cellMetrics();
+    const animated = editorAnimationFrames() > 1;
+    const key = `${cols}x${totalRows}-pad${padX}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${animated ? `apng${editorAnimationFrames()}@${editorAnimationDelayMs()}` : "png"}`;
+    const name = `editor-box-${key}`;
+    const rendered = animated
+      ? renderEditorBoxApng({
+          columns: cols,
+          rows: totalRows,
+          paddingCells: padX,
+          ...cell,
+          frames: editorAnimationFrames(),
+          delayMs: editorAnimationDelayMs(),
+          plays: 0,
+        })
+      : renderEditorBoxApng({
+          columns: cols,
+          rows: totalRows,
+          paddingCells: padX,
+          ...cell,
+          frames: 1,
+          delayMs: editorAnimationDelayMs(),
+          plays: 0,
+        });
+    const placement = buildPlacement(state, {
+      name,
       png: rendered.png,
       columns: rendered.columns,
       rows: rendered.rows,
-      width: columns,
+      width: cols,
       zIndex: -1073741825,
-    })).split("\n")[0] || null;
+    });
+    return placement;
   }
 
   function installEditorSurface(ctx) {
@@ -157,24 +186,38 @@ export default function piGraphicsExtension(pi) {
     class PiGraphicsEditorSurface {
       constructor(tui, theme, keybindings) {
         this.base = previousFactory(tui, theme, keybindings);
-        editorSurfaceTui = tui;
+        this.lastKey = "";
+        this.cached = null;
       }
       render(width) {
         const baseLines = this.base?.render?.(width) || [];
-        const top = graphicLine("top", width);
-        const bottom = graphicLine("bottom", width);
-        if (baseLines.length >= 2) {
-          return baseLines.map((line, index) => {
-            if (index === 0 && top) return top;
-            if (index === baseLines.length - 1 && bottom) return bottom;
-            if (top && isEditorChromeLine(line)) return graphicLine(`mid-${index}`, width) || line;
-            return line;
-          });
+        const placement = buildEditorBoxLines(width, baseLines.length);
+        if (!placement) return baseLines;
+        const key = `${width}|${baseLines.length}|${placement.imageId}|${placement.placementId}`;
+        let cachedLines;
+        if (this.lastKey === key && this.cached) {
+          cachedLines = this.cached;
+        } else {
+          // First time we see this image id we must emit the transmit command.
+          // Subsequent renders re-emit only the placeholder lines (image data already on terminal).
+          const head = placement.transmit ? `${placement.transmit}${placement.lines[0] ?? ""}` : (placement.lines[0] ?? "");
+          cachedLines = [head, ...placement.lines.slice(1, placement.lines.length - 1), placement.lines[placement.lines.length - 1] ?? ""];
+          this.lastKey = key;
+          this.cached = cachedLines;
         }
-        if (!top && !bottom) return baseLines;
-        return [top, ...baseLines, bottom].filter(Boolean);
+        const top = cachedLines[0];
+        const middle = cachedLines.slice(1, 1 + baseLines.length);
+        const bottom = cachedLines[cachedLines.length - 1];
+        // Overlay base editor text on the middle bleed rows by using base text
+        // lines instead of placeholder middle lines so the cursor still reads
+        // input. Top/bottom remain placeholder cells so the image extends beyond.
+        return [top, ...baseLines, bottom];
       }
-      invalidate() { this.base?.invalidate?.(); }
+      invalidate() {
+        this.lastKey = "";
+        this.cached = null;
+        this.base?.invalidate?.();
+      }
       handleInput(data) { return this.base?.handleInput?.(data); }
       getValue() { return this.base?.getValue?.(); }
       setValue(value) { return this.base?.setValue?.(value); }
@@ -182,13 +225,6 @@ export default function piGraphicsExtension(pi) {
       blur() { return this.base?.blur?.(); }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => new PiGraphicsEditorSurface(tui, theme, keybindings));
-    if (!editorSurfaceTimer) {
-      editorSurfaceTimer = setInterval(() => {
-        editorSurfacePhase = (editorSurfacePhase + 0.07) % 1;
-        try { editorSurfaceTui?.invalidate?.(); } catch {}
-      }, 220);
-      if (typeof editorSurfaceTimer.unref === "function") editorSurfaceTimer.unref();
-    }
     return true;
   }
 
@@ -199,8 +235,6 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("session_end", async (_event, ctx) => {
-    if (editorSurfaceTimer) clearInterval(editorSurfaceTimer);
-    editorSurfaceTimer = null;
     try {
       const command = buildScopedDeleteCommand({ imageIds: state.ownedImageIds });
       if (command) ctx?.ui?.write?.(command);
