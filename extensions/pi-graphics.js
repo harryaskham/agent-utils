@@ -76,6 +76,8 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx.cell?.lineHeightScale != null ? String(gfx.cell.lineHeightScale) : undefined,
     PI_GRAPHICS_EDITOR_VARIANT: editor.variant != null ? String(editor.variant) : undefined,
     PI_GRAPHICS_EDITOR_ALPHA: editor.alpha != null ? String(editor.alpha) : undefined,
+    PI_GRAPHICS_EDITOR_FRAMES: editor.frames != null ? String(editor.frames) : undefined,
+    PI_GRAPHICS_EDITOR_DELAY_MS: editor.delayMs != null ? String(editor.delayMs) : undefined,
   };
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
@@ -122,13 +124,13 @@ export default function piGraphicsExtension(pi) {
   function editorAnimationFrames() {
     const env = gfxEnv();
     const raw = Number(env.PI_GRAPHICS_EDITOR_FRAMES);
-    return Number.isFinite(raw) ? Math.max(1, Math.min(24, Math.trunc(raw))) : 8;
+    return Number.isFinite(raw) ? Math.max(1, Math.min(256, Math.trunc(raw))) : 24;
   }
 
   function editorAnimationDelayMs() {
     const env = gfxEnv();
     const raw = Number(env.PI_GRAPHICS_EDITOR_DELAY_MS);
-    return Number.isFinite(raw) ? Math.max(40, Math.min(500, Math.trunc(raw))) : 140;
+    return Number.isFinite(raw) ? Math.max(20, Math.min(2000, Math.trunc(raw))) : 120;
   }
 
   function applyTheme(ctx) {

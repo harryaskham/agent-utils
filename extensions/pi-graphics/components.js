@@ -170,12 +170,12 @@ export function renderTuiComponentFrame(options = {}) {
 }
 
 export function renderTuiComponentFrames({ frames = 8, ...options } = {}) {
-  const count = Math.max(1, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const count = Math.max(1, Math.min(256, Math.trunc(Number(frames) || 24)));
   return Array.from({ length: count }, (_unused, index) => renderTuiComponentFrame({ ...options, phase: index / count }));
 }
 
 export function renderTuiComponentPulseApng({ frames = 8, delayMs = 100, plays = 0, ...options } = {}) {
-  const count = Math.max(2, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const count = Math.max(2, Math.min(256, Math.trunc(Number(frames) || 24)));
   const rendered = Array.from({ length: count }, (_unused, index) => renderTuiComponentPixels({ ...options, phase: index / count }));
   const first = rendered[0];
   const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
@@ -337,7 +337,7 @@ export function renderTuiSurfaceSceneFrame(options = {}) {
 }
 
 export function renderTuiSurfaceScenePulseApng({ frames = 10, delayMs = 70, plays = 0, ...options } = {}) {
-  const count = Math.max(2, Math.min(32, Math.trunc(Number(frames) || 10)));
+  const count = Math.max(2, Math.min(256, Math.trunc(Number(frames) || 24)));
   const rendered = Array.from({ length: count }, (_unused, index) => renderTuiSurfaceScenePixels({ ...options, phase: index / count }));
   const first = rendered[0];
   const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
@@ -424,7 +424,7 @@ export function renderTerminalSceneFrame(options = {}) {
 }
 
 export function renderTerminalScenePulseApng({ frames = 8, delayMs = 90, plays = 0, ...options } = {}) {
-  const count = Math.max(2, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const count = Math.max(2, Math.min(256, Math.trunc(Number(frames) || 24)));
   const rendered = Array.from({ length: count }, (_unused, index) => renderTerminalScenePixels({ ...options, phase: index / count }));
   const first = rendered[0];
   const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });

@@ -358,7 +358,7 @@ export function renderGlowPanel({
 }
 
 export function renderGlowPanelFrames({ frames = 8, ...options } = {}) {
-  const count = Math.max(1, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const count = Math.max(1, Math.min(256, Math.trunc(Number(frames) || 24)));
   return Array.from({ length: count }, (_, index) => renderGlowPanel({ ...options, phase: index / count }));
 }
 
@@ -489,7 +489,7 @@ export function renderEditorBox(options = {}) {
 }
 
 export function renderEditorBoxApng({ frames = 8, delayMs = 120, plays = 0, ...options } = {}) {
-  const count = Math.max(1, Math.min(32, Math.trunc(Number(frames) || 8)));
+  const count = Math.max(1, Math.min(256, Math.trunc(Number(frames) || 24)));
   const rendered = Array.from({ length: count }, (_, index) =>
     renderEditorBoxFrame({ ...options, phase: (Number(options.phase) || 0) + index / count }),
   );
