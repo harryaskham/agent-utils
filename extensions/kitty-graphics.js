@@ -312,18 +312,9 @@ export function buildPngVirtualPlacementAnimation({
       q: quiet,
     }, pngBases[i], { passthrough, chunkSize, env }));
   }
-  // 4. Start indefinite loop playback. Per kitty's animation protocol,
-  // s=3 means normal looping playback and v=1 means loop infinitely.
-  // v=0 is explicitly ignored by the terminal, so do not use it here.
-  commands.push(serializeKittyGraphicsCommand({
-    a: "a",
-    i: imageId,
-    c: 1,
-    s: 3,
-    v: 1,
-    q: quiet,
-  }, "", { passthrough, env }));
-  // 5. Create the virtual placement that the Unicode placeholder cells anchor.
+  // 4. Create the virtual placement that the Unicode placeholder cells anchor.
+  // Some terminals only advance visible animation frames after a placement
+  // exists, so place the fully-loaded image before starting playback.
   commands.push(serializeKittyGraphicsCommand({
     a: "p",
     i: imageId,
@@ -332,6 +323,17 @@ export function buildPngVirtualPlacementAnimation({
     c: columns,
     r: rows,
     z: zIndex,
+    q: quiet,
+  }, "", { passthrough, env }));
+  // 5. Start indefinite loop playback. Per kitty's animation protocol,
+  // s=3 means normal looping playback and v=1 means loop infinitely.
+  // v=0 is explicitly ignored by the terminal, so do not use it here.
+  commands.push(serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    c: 1,
+    s: 3,
+    v: 1,
     q: quiet,
   }, "", { passthrough, env }));
   return commands.join("");

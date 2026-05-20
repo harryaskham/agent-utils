@@ -82,6 +82,7 @@ test("virtual placement animation follows kitty loop semantics", () => {
   assert.match(serialized, /_Ga=f,f=100,t=d,i=42,s=2,v=1,z=17,q=2;/);
   assert.match(serialized, /_Ga=a,i=42,c=1,s=3,v=1,q=2/);
   assert.match(serialized, /_Ga=p,i=42,p=9,U=1,c=2,r=1,z=-5,q=2/);
+  assert.ok(serialized.indexOf("_Ga=p,i=42") < serialized.indexOf("_Ga=a,i=42,c=1"));
   assert.doesNotMatch(serialized, /s=3,v=0/);
 });
 
