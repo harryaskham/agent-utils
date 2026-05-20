@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -76,6 +76,43 @@ function updateLooksReloadWorthy(result) {
   if (/Updated packages/i.test(combined)) return true;
   if (/pi cannot self-update this installation/i.test(combined) && /install path is not writable/i.test(combined)) return true;
   return false;
+}
+
+function updateActuallyChangedPackages(result) {
+  const combined = `${result?.stdout || ""}\n${result?.stderr || ""}`;
+  if (/Already up to date/i.test(combined) && !/Updated\b/.test(combined)) return false;
+  if (/No (?:changes|updates)/i.test(combined)) return false;
+  if (/Updated packages/i.test(combined)) return true;
+  if (/Updated (?:npm:|git:|extension|package)/i.test(combined)) return true;
+  if (/installed (?:npm:|git:)/i.test(combined)) return true;
+  return false;
+}
+
+function envFlagFalse(value) {
+  return /^(0|false|off|no|disabled)$/i.test(String(value || "").trim());
+}
+
+function envFlagTrue(value) {
+  return /^(1|true|on|yes|enabled|force)$/i.test(String(value || "").trim());
+}
+
+function shouldAutoUpdateOnStartup({ env = process.env, settings = {} } = {}) {
+  if (envFlagTrue(env.PI_AUTO_UPDATE_ON_STARTUP)) return true;
+  if (envFlagFalse(env.PI_AUTO_UPDATE_ON_STARTUP)) return false;
+  if (envFlagTrue(env.PI_OFFLINE)) return false;
+  const cfg = settings?.piSelfUpdate ?? settings?.agentUtils?.piSelfUpdate ?? {};
+  const value = cfg.autoUpdateOnStartup;
+  if (value === false) return false;
+  return value !== undefined ? Boolean(value) : true;
+}
+
+function readAgentSettings(env = process.env) {
+  try {
+    const dir = env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+    const path = join(dir, "settings.json");
+    if (!existsSync(path)) return {};
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch { return {}; }
 }
 
 function piUpdateExecOptions(signal) {
@@ -333,7 +370,38 @@ function queueReloadToolsActivate(pi, queuedFollowUps) {
 
 export default function piSelfUpdateExtension(pi) {
   let updateRunning = false;
+  let autoUpdateStarted = false;
   const queuedFollowUps = new Set();
+
+  async function runAutoUpdateInBackground(ctx) {
+    if (autoUpdateStarted) return;
+    autoUpdateStarted = true;
+    if (updateRunning) return;
+    if (!shouldAutoUpdateOnStartup({ env: process.env, settings: readAgentSettings() })) return;
+    updateRunning = true;
+    try {
+      const result = await runPiUpdate(pi);
+      const reloadWorthy = updateLooksReloadWorthy(result);
+      const changed = updateActuallyChangedPackages(result);
+      if (reloadWorthy && changed) {
+        try {
+          ctx?.ui?.notify?.(
+            "pi extension auto-update installed new packages. Run /reload (or /reload-tools) to activate the updated extensions in this session.",
+            "info",
+          );
+        } catch {}
+      }
+    } catch {
+      // Silent on failure: this is a background convenience, not a required step.
+    } finally {
+      updateRunning = false;
+    }
+  }
+
+  pi.on?.("session_start", async (_event, ctx) => {
+    // Fire-and-forget so Pi startup is not blocked by a network operation.
+    runAutoUpdateInBackground(ctx);
+  });
 
   pi.registerCommand("update", {
     description: "Run `pi update --extensions`, then reload extensions/resources and refresh active tools. Use /update --no-reload to skip reload.",
@@ -461,18 +529,27 @@ export default function piSelfUpdateExtension(pi) {
     pi.registerTool({
       name: "pi_reload_tools",
       label: "Pi Reload Tools",
-      description: "Queue /reload-tools so Pi reloads extensions/resources and activates newly registered tools for future turns.",
-      promptSnippet: "Queue a Pi runtime reload plus active-tool refresh when newly updated extension tools are not visible yet.",
-      promptGuidelines: ["Use pi_reload_tools when the user asks to refresh or reload model-visible Pi tools without running pi update --extensions."],
+      description: "Activate every registered Pi tool inline so newly added tools become model-visible without queueing a slash command for the user.",
+      promptSnippet: "Refresh the active Pi tool list inline when newly updated extension tools are not visible yet.",
+      promptGuidelines: ["Use pi_reload_tools when newly added Pi tools should become model-visible immediately, without sending a /reload-tools user message back to the agent."],
       parameters: ToolSchema.object({
         dryRun: ToolSchema.optional(ToolSchema.boolean({ description: "Only report the command that would be queued; do not queue it." })),
       }),
       async execute(_toolCallId, params = {}) {
         const reloadCommand = "/reload-tools";
-        const queued = params.dryRun ? { queued: false, duplicate: false } : queueFollowUpCommand(pi, queuedFollowUps, reloadCommand);
+        if (params.dryRun) {
+          return {
+            content: [{ type: "text", text: `Would activate registered tools (equivalent to ${reloadCommand} --activate).` }],
+            details: { reloadCommand, queued: false, dryRun: true },
+          };
+        }
+        const result = activateAllTools(pi);
+        const text = result.ok
+          ? `Activated ${result.count} registered tools for future agent turns${result.refreshed ? " after refreshing the tool registry" : ""}${result.activeCount === null ? "" : ` (active:${result.activeCount})`}.`
+          : `Could not refresh active tools: ${result.reason}`;
         return {
-          content: [{ type: "text", text: params.dryRun ? `Would queue ${reloadCommand}.` : (queued.duplicate ? `${reloadCommand} is already queued; not adding a duplicate.` : `Queued ${reloadCommand} as a follow-up command.`) }],
-          details: { reloadCommand, queued: queued.queued, duplicate: queued.duplicate },
+          content: [{ type: "text", text }],
+          details: { reloadCommand, queued: false, activated: result.ok, count: result.count, refreshed: result.refreshed, activeCount: result.activeCount },
         };
       },
     });

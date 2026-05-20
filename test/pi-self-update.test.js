@@ -16,7 +16,9 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
   let execCount = 0;
   let idleWaitCount = 0;
   let lastExec = null;
+  const handlers = new Map();
   const pi = {
+    on(event, handler) { const arr = handlers.get(event) || []; arr.push(handler); handlers.set(event, arr); },
     registerCommand(name, definition) { commands.set(name, definition); },
     registerTool(definition) { tools.set(definition.name, definition); },
     async exec(command, args, options) {
@@ -41,7 +43,7 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
     async waitForIdle() { idleWaitCount += 1; },
     async reload() { reloadCount += 1; },
   };
-  return { pi, ctx, commands, tools, notifications, userMessages, activeToolsCalls, customEntries, get execCount() { return execCount; }, get lastExec() { return lastExec; }, get reloadCount() { return reloadCount; }, get idleWaitCount() { return idleWaitCount; }, get refreshToolsCount() { return refreshToolsCount; } };
+  return { pi, ctx, commands, tools, handlers, notifications, userMessages, activeToolsCalls, customEntries, get execCount() { return execCount; }, get lastExec() { return lastExec; }, get reloadCount() { return reloadCount; }, get idleWaitCount() { return idleWaitCount; }, get refreshToolsCount() { return refreshToolsCount; } };
 }
 
 test("/update runs pi update --extensions from home and reloads on success", async () => {
@@ -148,32 +150,32 @@ test("/reload-tools --activate enables every registered tool", async () => {
   assert.match(h.notifications.at(-1).message, /refreshing the tool registry/);
 });
 
-test("pi_reload_tools tool queues reload-tools command", async () => {
+test("pi_reload_tools tool activates registered tools inline without queueing a follow-up", async () => {
   const h = makeHarness();
   piSelfUpdateExtension(h.pi);
 
   const result = await h.tools.get("pi_reload_tools").execute("tool-1", {}, null, null, h.ctx);
 
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
-  assert.equal(result.details.queued, true);
+  assert.deepEqual(h.userMessages, []);
+  assert.equal(result.details.activated, true);
+  assert.equal(result.details.queued, false);
+  assert.match(result.content[0].text, /Activated/);
 });
 
-test("pi_reload_tools suppresses duplicate queued reload follow-ups", async () => {
+test("pi_reload_tools dryRun reports without activating or queueing", async () => {
   const h = makeHarness();
   piSelfUpdateExtension(h.pi);
 
-  const first = await h.tools.get("pi_reload_tools").execute("tool-1", {}, null, null, h.ctx);
-  const second = await h.tools.get("pi_reload_tools").execute("tool-2", {}, null, null, h.ctx);
+  const result = await h.tools.get("pi_reload_tools").execute("tool-1", { dryRun: true }, null, null, h.ctx);
 
-  assert.equal(h.userMessages.length, 1);
-  assert.equal(first.details.queued, true);
-  assert.equal(second.details.queued, false);
-  assert.equal(second.details.duplicate, true);
-  assert.match(second.content[0].text, /already queued/);
+  assert.deepEqual(h.userMessages, []);
+  assert.equal(result.details.dryRun, true);
+  assert.equal(result.details.queued, false);
+  assert.match(result.content[0].text, /Would activate/);
 
   await h.commands.get("reload-tools").handler("", h.ctx);
   assert.equal(h.reloadCount, 1);
-  assert.deepEqual(h.userMessages.map((m) => m.message), ["/reload-tools", "/reload-tools --activate"]);
+  assert.deepEqual(h.userMessages.map((m) => m.message), ["/reload-tools --activate"]);
 });
 
 test("buildPiRestartPlan preserves runtime flags, switches to current session, and drops startup prompts", () => {
@@ -245,4 +247,61 @@ test("executePiRestartPlan prefers execve with full argv", () => {
 
   assert.equal(result.method, "execve");
   assert.deepEqual(calls, [{ file: "/bin/pi", args: ["pi", "--session", "/tmp/session.jsonl"], env: { PI_RESTARTED_WITHOUT_INITIAL_PROMPT: "1" } }]);
+});
+
+test("session_start triggers a silent background pi update --extensions", async () => {
+  const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  process.env.PI_AUTO_UPDATE_ON_STARTUP = "1";
+  try {
+    const h = makeHarness({ execResult: { code: 0, stdout: "Already up to date", stderr: "" } });
+    piSelfUpdateExtension(h.pi);
+    await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h.execCount, 1);
+    assert.deepEqual(h.lastExec.args, ["update", "--extensions"]);
+    assert.equal(h.reloadCount, 0);
+    assert.equal(h.notifications.length, 0);
+  } finally {
+    if (previous === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+    else process.env.PI_AUTO_UPDATE_ON_STARTUP = previous;
+  }
+});
+
+test("background auto-update notifies the user to /reload only if packages changed", async () => {
+  const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  process.env.PI_AUTO_UPDATE_ON_STARTUP = "1";
+  try {
+    const h = makeHarness({ execResult: { code: 0, stdout: "Updated packages: agent-utils", stderr: "" } });
+    piSelfUpdateExtension(h.pi);
+    await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h.execCount, 1);
+    assert.equal(h.reloadCount, 0);
+    assert.equal(h.notifications.length, 1);
+    assert.match(h.notifications[0].message, /\/reload/);
+  } finally {
+    if (previous === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+    else process.env.PI_AUTO_UPDATE_ON_STARTUP = previous;
+  }
+});
+
+test("PI_OFFLINE disables the background auto-update", async () => {
+  const prev1 = process.env.PI_OFFLINE;
+  const prev2 = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  process.env.PI_OFFLINE = "1";
+  delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  try {
+    const h = makeHarness();
+    piSelfUpdateExtension(h.pi);
+    await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h.execCount, 0);
+  } finally {
+    if (prev1 === undefined) delete process.env.PI_OFFLINE;
+    else process.env.PI_OFFLINE = prev1;
+    if (prev2 === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+    else process.env.PI_AUTO_UPDATE_ON_STARTUP = prev2;
+  }
 });

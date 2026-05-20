@@ -564,7 +564,7 @@ test("test-pi-graphics-tmux-smoke validates tmux redraw and scoped cleanup invar
   const source = await readFile(scriptPath, "utf8");
   assert.match(source, /state\.config\.passthrough = "tmux"/);
   assert.match(source, /redraw must not re-upload image data/);
-  assert.match(source, /redraw should re-create the virtual placement/);
+  assert.match(source, /redraw must reuse the existing virtual placement without re-emitting placement commands/);
   assert.match(source, /cleanup must never delete all terminal images/);
 });
 

@@ -48,8 +48,7 @@ assert.match(firstText, new RegExp(`${ESC}Ptmux;`), "first render should use tmu
 assert.match(firstText, /a=T/, "first render uploads and creates the virtual placement");
 assert.match(firstText, /U=1/, "first render should use Unicode placeholder placement");
 assert.doesNotMatch(secondText, /a=T/, "redraw must not re-upload image data");
-assert.match(secondText, /a=p/, "redraw should re-create the virtual placement");
-assert.match(secondText, /U=1/, "redraw placement nudge should stay virtual/Unicode anchored");
+assert.doesNotMatch(secondText, /a=p/, "redraw must reuse the existing virtual placement without re-emitting placement commands");
 assert.match(cleanup, /a=d,d=i/, "cleanup must delete owned images by id");
 assert.doesNotMatch(cleanup, /d=A/, "cleanup must never delete all terminal images");
 assert.ok(firstText.startsWith(TMUX_DCS_START), "transmit should be prefixed before placeholder cells");
@@ -61,6 +60,6 @@ console.log(JSON.stringify({
   rows: rendered.rows,
   firstUpload: /a=T/.test(firstText),
   redrawUpload: /a=T/.test(secondText),
-  redrawPlaceNudge: /a=p/.test(secondText),
+  redrawReusesPlacement: !/a=p/.test(secondText),
   scopedCleanup: /a=d,d=i/.test(cleanup) && !/d=A/.test(cleanup),
 }, null, 2));
