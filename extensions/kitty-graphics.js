@@ -299,12 +299,14 @@ export function buildPngVirtualPlacementAnimation({
       q: quiet,
     }, pngBases[i], { passthrough, chunkSize, env }));
   }
-  // 4. Start indefinite loop playback (s=3 looping, v=0 infinite).
+  // 4. Start indefinite loop playback. Per kitty's animation protocol,
+  // s=3 means normal looping playback and v=1 means loop infinitely.
+  // v=0 is explicitly ignored by the terminal, so do not use it here.
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
     s: 3,
-    v: 0,
+    v: 1,
     q: quiet,
   }, "", { passthrough, env }));
   // 5. Create the virtual placement that the Unicode placeholder cells anchor.
@@ -330,7 +332,7 @@ export function buildPngVirtualPlacementAnimationPlay({ imageId, quiet = 2, pass
     a: "a",
     i: imageId,
     s: 3,
-    v: 0,
+    v: 1,
     q: quiet,
   }, "", { passthrough, env });
 }

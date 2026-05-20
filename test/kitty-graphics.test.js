@@ -6,6 +6,8 @@ import {
   KITTY_UNICODE_PLACEHOLDER,
   buildKittyUnicodePlaceholderCell,
   buildKittyUnicodePlaceholderLines,
+  buildPngVirtualPlacementAnimation,
+  buildPngVirtualPlacementAnimationPlay,
   buildPngVirtualPlacementCommand,
   buildScopedDeleteCommand,
   serializeKittyGraphicsCommand,
@@ -54,6 +56,31 @@ test("virtual placement command serializes zIndex below background threshold", (
     passthrough: "none",
   });
   assert.match(serialized, /z=-1073741825/);
+});
+
+test("virtual placement animation follows kitty loop semantics", () => {
+  const serialized = buildPngVirtualPlacementAnimation({
+    imageId: 42,
+    placementId: 9,
+    pngBases: ["Zmlyc3Q=", "c2Vjb25k"],
+    delaysMs: 17,
+    columns: 2,
+    rows: 1,
+    zIndex: -5,
+    passthrough: "none",
+  });
+
+  assert.match(serialized, /_Ga=t,f=100,t=d,i=42,q=2;Zmlyc3Q=/);
+  assert.match(serialized, /_Ga=a,i=42,r=1,z=17,q=2/);
+  assert.match(serialized, /_Ga=f,f=100,t=d,i=42,z=17,q=2;c2Vjb25k/);
+  assert.match(serialized, /_Ga=a,i=42,s=3,v=1,q=2/);
+  assert.match(serialized, /_Ga=p,i=42,p=9,U=1,c=2,r=1,z=-5,q=2/);
+  assert.doesNotMatch(serialized, /s=3,v=0/);
+});
+
+test("animation play nudge uses kitty's infinite-loop value", () => {
+  const serialized = buildPngVirtualPlacementAnimationPlay({ imageId: 42, passthrough: "none" });
+  assert.equal(serialized, `${ESC}_Ga=a,i=42,s=3,v=1,q=2${ESC}\\`);
 });
 
 test("Unicode placeholder lines encode image id, placement id, rows, and scrollable cells", () => {
