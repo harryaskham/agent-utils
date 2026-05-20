@@ -31,7 +31,8 @@
     "check": "npm run docs:check",
     "docs:build": "node scripts/render-pages.mjs",
     "docs:check": "node scripts/render-pages.mjs --check",
-    "pi-graphics:smoke": "node scripts/render-pi-graphics-smoke.mjs"
+    "pi-graphics:smoke": "node scripts/render-pi-graphics-smoke.mjs",
+    "pi-graphics:tmux-smoke": "node scripts/test-pi-graphics-tmux-smoke.mjs"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

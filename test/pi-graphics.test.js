@@ -559,6 +559,15 @@ test("render-pi-graphics-smoke script writes a renderer-backed visual artifact",
   assert.match(source, /JSON\.stringify/);
 });
 
+test("test-pi-graphics-tmux-smoke validates tmux redraw and scoped cleanup invariants", async () => {
+  const scriptPath = fileURLToPath(new URL("../scripts/test-pi-graphics-tmux-smoke.mjs", import.meta.url));
+  const source = await readFile(scriptPath, "utf8");
+  assert.match(source, /state\.config\.passthrough = "tmux"/);
+  assert.match(source, /redraw must not re-upload image data/);
+  assert.match(source, /redraw should re-create the virtual placement/);
+  assert.match(source, /cleanup must never delete all terminal images/);
+});
+
 test("renderTuiComponentFrame tones produce visibly distinct component palettes", () => {
   const assistant = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "assistant" }).png);
   const tool = decodePngRgba(renderTuiComponentFrame({ columns: 28, rows: 5, tone: "tool" }).png);
@@ -1255,6 +1264,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /pi_graphics_render_prompt_enclosure/);
   assert.match(source, /pi_graphics_render_message_border/);
   assert.match(source, /pi_graphics_clear/);
+  assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds \}\)/);
+  assert.doesNotMatch(source, /buildScopedDeleteCommand\(\{ imageIds: state\.ownedImageIds \}\)/);
   assert.doesNotMatch(source, /pi_graphics_live_probe/);
   assert.doesNotMatch(source, /buildPiGraphicsHeaderComponent/);
   assert.doesNotMatch(source, /buildPiGraphicsFooterComponent/);
@@ -1307,6 +1318,34 @@ test("renderToText concatenates the transmit sequence with placeholder lines", (
   assert.ok(text.includes(placement.lines[0]));
 });
 
+test("buildPlacement reuses image uploads while nudging virtual placement on redraw", () => {
+  const state = makeState();
+  state.config.passthrough = "none";
+  const enclosure = renderPromptEnclosure({ columns: 4 });
+  const first = buildPlacement(state, {
+    name: "stable-redraw-rule",
+    png: enclosure.png,
+    columns: enclosure.columns,
+    rows: enclosure.rows,
+    zIndex: -5,
+  });
+  const second = buildPlacement(state, {
+    name: "stable-redraw-rule",
+    png: enclosure.png,
+    columns: enclosure.columns,
+    rows: enclosure.rows,
+    zIndex: -5,
+  });
+
+  assert.equal(second.imageId, first.imageId);
+  assert.equal(second.placementId, first.placementId);
+  assert.equal(second.transmitted, false);
+  assert.match(first.transmit, /a=T/);
+  assert.match(first.transmit, /U=1/);
+  assert.doesNotMatch(second.transmit, /a=T/);
+  assert.match(second.transmit, new RegExp(`a=p,i=${first.imageId},p=${first.placementId},U=1,c=4,r=1,z=-5,q=2`));
+});
+
 test("ensureUnicodePlacement always anchors regardless of TMUX env", () => {
   const state = makeState();
   // forceAnchored = true inside ensureUnicodePlacement -> must not depend on env.
@@ -1323,6 +1362,7 @@ test("package.json advertises the pi-graphics extension and theme through pi.* e
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics.json"), "pi.themes must include the kitty-graphics theme");
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics-nord.json"), "pi.themes must include the calm Nord kitty graphics theme");
   assert.ok(Array.isArray(pkg.files) && pkg.files.includes("themes"), "package.json files[] must ship themes/");
+  assert.equal(pkg.scripts?.["pi-graphics:tmux-smoke"], "node scripts/test-pi-graphics-tmux-smoke.mjs");
 });
 
 test("themes/kitty-graphics.json declares all required color tokens with the correct schema name", async () => {

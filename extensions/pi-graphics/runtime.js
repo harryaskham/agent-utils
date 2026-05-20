@@ -48,15 +48,24 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     ? (state.placementByImage.get(imageId) ?? nextPlacementId(state))
     : nextPlacementId(state);
   if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
-  const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementCommand({
-    imageId,
-    placementId,
-    pngBase64: bufferToBase64(png),
-    columns,
-    rows,
-    zIndex,
-    passthrough: state.config.passthrough,
-  });
+  const transmit = alreadyTransmitted
+    ? buildPngVirtualPlacementAnimationPlace({
+      imageId,
+      placementId,
+      columns,
+      rows,
+      zIndex,
+      passthrough: state.config.passthrough,
+    })
+    : buildPngVirtualPlacementCommand({
+      imageId,
+      placementId,
+      pngBase64: bufferToBase64(png),
+      columns,
+      rows,
+      zIndex,
+      passthrough: state.config.passthrough,
+    });
   if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,

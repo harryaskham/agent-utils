@@ -302,7 +302,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
     try {
-      const command = buildScopedDeleteCommand({ imageIds: state.ownedImageIds });
+      const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
       if (command) ctx?.ui?.write?.(command);
     } catch {}
   });
@@ -406,7 +406,7 @@ export default function piGraphicsExtension(pi) {
     description: "Delete every kitty image owned by this extension. Scoped: never deletes images owned by others, never issues a global clear.",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, ctx) {
-      const command = buildScopedDeleteCommand({ imageIds: state.ownedImageIds });
+      const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
       if (command) {
         try { ctx?.ui?.write?.(command); } catch {}
       }
