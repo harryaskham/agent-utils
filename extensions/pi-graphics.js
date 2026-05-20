@@ -134,7 +134,7 @@ export default function piGraphicsExtension(pi) {
   function editorAnimationDelayMs() {
     const env = gfxEnv();
     const raw = Number(env.PI_GRAPHICS_EDITOR_DELAY_MS);
-    return Number.isFinite(raw) ? Math.max(20, Math.min(2000, Math.trunc(raw))) : 120;
+    return Number.isFinite(raw) ? Math.max(8, Math.min(2000, Math.trunc(raw))) : 17;
   }
 
   function applyTheme(ctx) {
