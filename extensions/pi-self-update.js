@@ -383,45 +383,60 @@ function queueReloadToolsActivate(pi, queuedFollowUps) {
   return queueFollowUpCommand(pi, queuedFollowUps, "/reload-tools --activate");
 }
 
-export default function piSelfUpdateExtension(pi) {
+export default async function piSelfUpdateExtension(pi) {
   let updateRunning = false;
   let autoUpdateStarted = false;
   const queuedFollowUps = new Set();
 
-  async function runAutoUpdateInBackground(ctx) {
-    if (autoUpdateStarted) return;
+  async function runAutoUpdateBlocking() {
+    if (autoUpdateStarted) return null;
     autoUpdateStarted = true;
-    if (updateRunning) return;
-    if (!shouldAutoUpdateOnStartup({ env: process.env, settings: readAgentSettings() })) return;
+    if (!shouldAutoUpdateOnStartup({ env: process.env, settings: readAgentSettings() })) return null;
     updateRunning = true;
     try {
       const result = await runPiUpdate(pi);
-      const reloadWorthy = updateLooksReloadWorthy(result);
-      const changed = updateActuallyChangedPackages(result);
-      if (reloadWorthy && changed) {
-        const autoReload = shouldAutoReloadAfterUpdate({ env: process.env, settings: readAgentSettings() });
-        if (autoReload && typeof ctx?.reload === "function") {
-          try { await ctx.reload(); } catch {}
-          try { activateAllTools(pi); } catch {}
-          return;
-        }
-        try {
-          ctx?.ui?.notify?.(
-            "pi extension auto-update installed new packages. Run /reload (or /reload-tools) to activate the updated extensions in this session.",
-            "info",
-          );
-        } catch {}
-      }
+      return result;
     } catch {
-      // Silent on failure: this is a background convenience, not a required step.
+      return null;
     } finally {
       updateRunning = false;
     }
   }
 
+  // Block extension load on pi update --extensions so Pi's own package-update
+  // banner does not flash before we have actually pulled. The factory promise
+  // resolves before pi continues startup and runs its checkForPackageUpdates.
+  let blockingUpdatePromise = null;
+  if (shouldAutoUpdateOnStartup({ env: process.env, settings: readAgentSettings() })) {
+    blockingUpdatePromise = runAutoUpdateBlocking();
+  }
+
+  async function maybeReloadAfterStartupUpdate(ctx) {
+    if (!blockingUpdatePromise) return;
+    const result = await blockingUpdatePromise.catch(() => null);
+    blockingUpdatePromise = null;
+    if (!result) return;
+    const reloadWorthy = updateLooksReloadWorthy(result);
+    const changed = updateActuallyChangedPackages(result);
+    if (!(reloadWorthy && changed)) return;
+    const autoReload = shouldAutoReloadAfterUpdate({ env: process.env, settings: readAgentSettings() });
+    if (autoReload && typeof ctx?.reload === "function") {
+      try { await ctx.reload(); } catch {}
+      try { activateAllTools(pi); } catch {}
+      return;
+    }
+    try {
+      ctx?.ui?.notify?.(
+        "pi extension auto-update installed new packages. Run /reload (or /reload-tools) to activate the updated extensions in this session.",
+        "info",
+      );
+    } catch {}
+  }
+
   pi.on?.("session_start", async (_event, ctx) => {
-    // Fire-and-forget so Pi startup is not blocked by a network operation.
-    runAutoUpdateInBackground(ctx);
+    // Reuse the blocking update result if it ran during extension load;
+    // otherwise no-op.
+    maybeReloadAfterStartupUpdate(ctx);
   });
 
   pi.registerCommand("update", {

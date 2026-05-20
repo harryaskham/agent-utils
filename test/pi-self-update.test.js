@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 
+process.env.PI_AUTO_UPDATE_ON_STARTUP = process.env.PI_AUTO_UPDATE_ON_STARTUP ?? "0";
+
 import piSelfUpdateExtension, { buildPiRestartPlan, executePiRestartPlan } from "../extensions/pi-self-update.js";
+
+async function loadExtension(pi) {
+  await piSelfUpdateExtension(pi);
+}
 
 function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } } = {}) {
   const commands = new Map();
@@ -48,7 +54,7 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
 
 test("/update runs pi update --extensions from home and reloads on success", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("", h.ctx);
 
@@ -64,7 +70,7 @@ test("/update runs pi update --extensions from home and reloads on success", asy
 
 test("pi update --extensions exec uses home directory cwd", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("--no-reload", h.ctx);
 
@@ -74,7 +80,7 @@ test("pi update --extensions exec uses home directory cwd", async () => {
 
 test("/update --no-reload skips reload", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("--no-reload", h.ctx);
 
@@ -84,7 +90,7 @@ test("/update --no-reload skips reload", async () => {
 
 test("/update reloads even after failed update attempts", async () => {
   const h = makeHarness({ execResult: { code: 1, stdout: "", stderr: "failed" } });
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("", h.ctx);
 
@@ -95,7 +101,7 @@ test("/update reloads even after failed update attempts", async () => {
 
 test("/update treats Nix read-only self-update failure as reload-worthy", async () => {
   const h = makeHarness({ execResult: { code: 1, stdout: "Updated packages", stderr: "error: pi cannot self-update this installation. install path is not writable" } });
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("update").handler("", h.ctx);
 
@@ -106,7 +112,7 @@ test("/update treats Nix read-only self-update failure as reload-worthy", async 
 
 test("pi_self_update tool runs update and queues reload-tools follow-up", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   const result = await h.tools.get("pi_self_update").execute("tool-1", {}, null, null, h.ctx);
 
@@ -116,7 +122,7 @@ test("pi_self_update tool runs update and queues reload-tools follow-up", async 
 
 test("pi_self_update dryRun reports without queueing", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   const result = await h.tools.get("pi_self_update").execute("tool-1", { dryRun: true }, null, null, h.ctx);
 
@@ -128,7 +134,7 @@ test("pi_self_update dryRun reports without queueing", async () => {
 
 test("/reload-tools reloads first and queues post-reload activation", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("reload-tools").handler("", h.ctx);
 
@@ -139,7 +145,7 @@ test("/reload-tools reloads first and queues post-reload activation", async () =
 
 test("/reload-tools --activate enables every registered tool", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("reload-tools").handler("--activate", h.ctx);
 
@@ -152,7 +158,7 @@ test("/reload-tools --activate enables every registered tool", async () => {
 
 test("pi_reload_tools tool activates registered tools inline without queueing a follow-up", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   const result = await h.tools.get("pi_reload_tools").execute("tool-1", {}, null, null, h.ctx);
 
@@ -164,7 +170,7 @@ test("pi_reload_tools tool activates registered tools inline without queueing a 
 
 test("pi_reload_tools dryRun reports without activating or queueing", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   const result = await h.tools.get("pi_reload_tools").execute("tool-1", { dryRun: true }, null, null, h.ctx);
 
@@ -196,7 +202,7 @@ test("buildPiRestartPlan preserves runtime flags, switches to current session, a
 
 test("/restart --dry-run reports reexec plan without executing", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("restart").handler("--dry-run", h.ctx);
 
@@ -211,7 +217,7 @@ test("/restart dry-run redacts API key argv values", async () => {
   process.argv = ["/usr/bin/node", "/old/pi/dist/cli.js", "--api-key", "secret-token", "hello"];
   try {
     const h = makeHarness();
-    piSelfUpdateExtension(h.pi);
+    await piSelfUpdateExtension(h.pi);
 
     await h.commands.get("restart").handler("--dry-run", h.ctx);
 
@@ -224,7 +230,7 @@ test("/restart dry-run redacts API key argv values", async () => {
 
 test("pi_restart tool queues restart command", async () => {
   const h = makeHarness();
-  piSelfUpdateExtension(h.pi);
+  await piSelfUpdateExtension(h.pi);
 
   const result = await h.tools.get("pi_restart").execute("tool-1", {}, null, null, h.ctx);
 
@@ -254,7 +260,7 @@ test("session_start triggers a silent background pi update --extensions", async 
   process.env.PI_AUTO_UPDATE_ON_STARTUP = "1";
   try {
     const h = makeHarness({ execResult: { code: 0, stdout: "Already up to date", stderr: "" } });
-    piSelfUpdateExtension(h.pi);
+    await piSelfUpdateExtension(h.pi);
     await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
@@ -275,7 +281,7 @@ test("background auto-update notifies the user to /reload only if packages chang
   process.env.PI_AUTO_RELOAD_AFTER_UPDATE = "0";
   try {
     const h = makeHarness({ execResult: { code: 0, stdout: "Updating abc1234..def5678\nFast-forward\n 3 files changed\nUpdated packages", stderr: "" } });
-    piSelfUpdateExtension(h.pi);
+    await piSelfUpdateExtension(h.pi);
     await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
@@ -298,7 +304,7 @@ test("background auto-update auto-reloads runtime when autoReloadAfterUpdate is 
   process.env.PI_AUTO_RELOAD_AFTER_UPDATE = "1";
   try {
     const h = makeHarness({ execResult: { code: 0, stdout: "Updating abc1234..def5678\nFast-forward\n 3 files changed\nUpdated packages", stderr: "" } });
-    piSelfUpdateExtension(h.pi);
+    await piSelfUpdateExtension(h.pi);
     await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
@@ -322,7 +328,7 @@ test("PI_OFFLINE disables the background auto-update", async () => {
   delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
   try {
     const h = makeHarness();
-    piSelfUpdateExtension(h.pi);
+    await piSelfUpdateExtension(h.pi);
     await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
     await new Promise((r) => setImmediate(r));
     assert.equal(h.execCount, 0);
