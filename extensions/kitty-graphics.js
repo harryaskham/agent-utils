@@ -272,8 +272,7 @@ export function buildPngVirtualPlacementAnimation({
     ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
     : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
   const commands = [];
-  // Frame 1: pure transmit (no placement). This keeps the image alive only
-  // because we follow it immediately with a virtual placement (a=p, U=1).
+  // 1. Transmit the image (first frame) as a quiet upload — no placement yet.
   commands.push(serializeKittyGraphicsChunks({
     a: "t",
     f: 100,
@@ -281,18 +280,7 @@ export function buildPngVirtualPlacementAnimation({
     i: imageId,
     q: quiet,
   }, pngBases[0], { passthrough, chunkSize, env }));
-  // Virtual placement so Unicode placeholder cells anchor the image.
-  commands.push(serializeKittyGraphicsCommand({
-    a: "p",
-    i: imageId,
-    p: placeholderPlacementId(placementId),
-    U: 1,
-    c: columns,
-    r: rows,
-    z: zIndex,
-    q: quiet,
-  }, "", { passthrough, env }));
-  // Set frame 1's gap.
+  // 2. Set the first frame's gap (a=a r=1 z=delay).
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
@@ -300,7 +288,7 @@ export function buildPngVirtualPlacementAnimation({
     z: delays[0],
     q: quiet,
   }, "", { passthrough, env }));
-  // Frames 2..N: append new frames via a=f.
+  // 3. Append the rest of the frames (a=f).
   for (let i = 1; i < pngBases.length; i += 1) {
     commands.push(serializeKittyGraphicsChunks({
       a: "f",
@@ -311,12 +299,23 @@ export function buildPngVirtualPlacementAnimation({
       q: quiet,
     }, pngBases[i], { passthrough, chunkSize, env }));
   }
-  // Start indefinite loop playback (s=3 = looping; v=0 = infinite loops).
+  // 4. Start indefinite loop playback (s=3 looping, v=0 infinite).
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
     s: 3,
     v: 0,
+    q: quiet,
+  }, "", { passthrough, env }));
+  // 5. Create the virtual placement that the Unicode placeholder cells anchor.
+  commands.push(serializeKittyGraphicsCommand({
+    a: "p",
+    i: imageId,
+    p: placeholderPlacementId(placementId),
+    U: 1,
+    c: columns,
+    r: rows,
+    z: zIndex,
     q: quiet,
   }, "", { passthrough, env }));
   return commands.join("");

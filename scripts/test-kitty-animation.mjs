@@ -56,3 +56,4 @@ const lines = buildKittyUnicodePlaceholderLines({
 process.stdout.write("\n");
 process.stdout.write(`${transmit}${lines[0]}\n`);
 process.stdout.write("\nIf you see a bright bump sweeping left-to-right across a dim bar above, kitty animation works.\nIf it shows but stays static, kitty isn't auto-playing the frames in this terminal.\n");
+await new Promise((r) => setTimeout(r, 8000));
