@@ -23,7 +23,9 @@ import { join } from "node:path";
 
 import { Type } from "@sinclair/typebox";
 
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder as JitiDynamicBorder } from "@earendil-works/pi-coding-agent";
+import { pathToFileURL } from "node:url";
+import { dirname, resolve } from "node:path";
 
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
@@ -246,12 +248,30 @@ export default function piGraphicsExtension(pi) {
     return true;
   }
 
-  function patchDynamicBorder() {
+  async function resolvePiDynamicBorder() {
+    const entry = process.argv[1];
+    if (!entry) return JitiDynamicBorder;
+    let dir = dirname(resolve(entry));
+    for (let i = 0; i < 8; i += 1) {
+      const direct = resolve(dir, "dist", "index.js");
+      try {
+        const mod = await import(pathToFileURL(direct).href);
+        if (mod?.DynamicBorder) return mod.DynamicBorder;
+      } catch {}
+      const next = dirname(dir);
+      if (next === dir) break;
+      dir = next;
+    }
+    return JitiDynamicBorder;
+  }
+
+  async function patchDynamicBorder() {
     if (!ensureUnicodePlacement(state)) return;
-    if (DynamicBorder.prototype.__piGraphicsPatched) return;
-    const original = DynamicBorder.prototype.render;
-    DynamicBorder.prototype.__piGraphicsPatched = true;
-    DynamicBorder.prototype.render = function patchedRender(width) {
+    const Klass = await resolvePiDynamicBorder();
+    if (!Klass?.prototype || Klass.prototype.__piGraphicsPatched) return;
+    const original = Klass.prototype.render;
+    Klass.prototype.__piGraphicsPatched = true;
+    Klass.prototype.render = function patchedRender(width) {
       const line = buildEditorBorderRow(width, "symmetric");
       if (!line) return original.call(this, width);
       return [line];
@@ -275,7 +295,7 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     applyTheme(ctx);
-    patchDynamicBorder();
+    await patchDynamicBorder();
     installEditorSurface(ctx);
   });
 
