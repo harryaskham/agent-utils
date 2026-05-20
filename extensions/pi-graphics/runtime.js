@@ -8,8 +8,6 @@
 import {
   buildKittyUnicodePlaceholderLines,
   buildPngVirtualPlacementAnimation,
-  buildPngVirtualPlacementAnimationPlace,
-  buildPngVirtualPlacementAnimationPlay,
   buildPngVirtualPlacementCommand,
   bufferToBase64,
   shouldUseUnicodePlaceholders,
@@ -48,24 +46,15 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     ? (state.placementByImage.get(imageId) ?? nextPlacementId(state))
     : nextPlacementId(state);
   if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
-  const transmit = alreadyTransmitted
-    ? buildPngVirtualPlacementAnimationPlace({
-      imageId,
-      placementId,
-      columns,
-      rows,
-      zIndex,
-      passthrough: state.config.passthrough,
-    })
-    : buildPngVirtualPlacementCommand({
-      imageId,
-      placementId,
-      pngBase64: bufferToBase64(png),
-      columns,
-      rows,
-      zIndex,
-      passthrough: state.config.passthrough,
-    });
+  const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementCommand({
+    imageId,
+    placementId,
+    pngBase64: bufferToBase64(png),
+    columns,
+    rows,
+    zIndex,
+    passthrough: state.config.passthrough,
+  });
   if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
@@ -96,21 +85,6 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     passthrough: state.config.passthrough,
   });
   if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
-  // Idempotent nudge re-emitted on every render so kitty resumes looping and
-  // the virtual placement is re-created if a TUI redraw cleared it while
-  // preserving the uploaded image frames.
-  const playNudge = buildPngVirtualPlacementAnimationPlay({
-    imageId,
-    passthrough: state.config.passthrough,
-  });
-  const placeNudge = buildPngVirtualPlacementAnimationPlace({
-    imageId,
-    placementId,
-    columns,
-    rows,
-    zIndex,
-    passthrough: state.config.passthrough,
-  });
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
     placementId,
@@ -119,7 +93,7 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     width,
     caption,
   });
-  return { imageId, placementId, transmit: `${transmit}${playNudge}${alreadyTransmitted ? placeNudge : ""}`, lines, transmitted: !alreadyTransmitted };
+  return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted };
 }
 
 export function ensureUnicodePlacement(state) {

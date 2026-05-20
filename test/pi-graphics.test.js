@@ -1318,7 +1318,7 @@ test("renderToText concatenates the transmit sequence with placeholder lines", (
   assert.ok(text.includes(placement.lines[0]));
 });
 
-test("buildPlacement reuses image uploads while nudging virtual placement on redraw", () => {
+test("buildPlacement reuses stable image and placement ids without re-uploading on redraw", () => {
   const state = makeState();
   state.config.passthrough = "none";
   const enclosure = renderPromptEnclosure({ columns: 4 });
@@ -1342,8 +1342,7 @@ test("buildPlacement reuses image uploads while nudging virtual placement on red
   assert.equal(second.transmitted, false);
   assert.match(first.transmit, /a=T/);
   assert.match(first.transmit, /U=1/);
-  assert.doesNotMatch(second.transmit, /a=T/);
-  assert.match(second.transmit, new RegExp(`a=p,i=${first.imageId},p=${first.placementId},U=1,c=4,r=1,z=-5,q=2`));
+  assert.equal(second.transmit, "");
 });
 
 test("ensureUnicodePlacement always anchors regardless of TMUX env", () => {

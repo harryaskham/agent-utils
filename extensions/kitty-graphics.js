@@ -324,50 +324,7 @@ export function buildPngVirtualPlacementAnimation({
     q: quiet,
   }, "", { passthrough, env }));
   // 5. Create the virtual placement that the Unicode placeholder cells anchor.
-  commands.push(buildPngVirtualPlacementAnimationPlace({
-    imageId,
-    placementId,
-    columns,
-    rows,
-    zIndex,
-    quiet,
-    passthrough,
-    env,
-  }));
-  return commands.join("");
-}
-
-/**
- * Emit just the loop-play start command for an image id that was previously
- * uploaded with buildPngVirtualPlacementAnimation. Idempotent.
- */
-export function buildPngVirtualPlacementAnimationPlay({ imageId, quiet = 2, passthrough = "auto", env = process.env } = {}) {
-  return serializeKittyGraphicsCommand({
-    a: "a",
-    i: imageId,
-    c: 1,
-    s: 3,
-    v: 1,
-    q: quiet,
-  }, "", { passthrough, env });
-}
-
-/**
- * Re-create the virtual placement for a previously uploaded animated image.
- * Cheap enough to emit on every TUI redraw; useful because some redraw paths
- * clear placement state while preserving image storage.
- */
-export function buildPngVirtualPlacementAnimationPlace({
-  imageId,
-  placementId,
-  columns,
-  rows,
-  zIndex,
-  quiet = 2,
-  passthrough = "auto",
-  env = process.env,
-} = {}) {
-  return serializeKittyGraphicsCommand({
+  commands.push(serializeKittyGraphicsCommand({
     a: "p",
     i: imageId,
     p: placeholderPlacementId(placementId),
@@ -376,7 +333,8 @@ export function buildPngVirtualPlacementAnimationPlace({
     r: rows,
     z: zIndex,
     q: quiet,
-  }, "", { passthrough, env });
+  }, "", { passthrough, env }));
+  return commands.join("");
 }
 
 export function buildKittyUnicodePlaceholderCell({ imageId, placementId, row = 0, column = 0, includeColumn = true } = {}) {
