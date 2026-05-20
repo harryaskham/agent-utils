@@ -139,6 +139,12 @@ export default function piGraphicsExtension(pi) {
   }
 
   let writeGraphicsCommand = null;
+  function resolveGraphicsWriter(ctx) {
+    if (typeof ctx?.ui?.write === "function") return ctx.ui.write.bind(ctx.ui);
+    if (typeof ctx?.ui?.terminal?.write === "function") return ctx.ui.terminal.write.bind(ctx.ui.terminal);
+    if (typeof ctx?.terminal?.write === "function") return ctx.terminal.write.bind(ctx.terminal);
+    return null;
+  }
   function emitGraphicsCommand(command) {
     if (!command || typeof writeGraphicsCommand !== "function") return;
     try { writeGraphicsCommand(command); } catch {}
@@ -236,7 +242,10 @@ export default function piGraphicsExtension(pi) {
         return next;
       }
     }
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => new KittyEditor(tui, theme, keybindings));
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+      writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
+      return new KittyEditor(tui, theme, keybindings);
+    });
     return true;
   }
 
@@ -299,7 +308,7 @@ export default function piGraphicsExtension(pi) {
 
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
-    writeGraphicsCommand = typeof ctx.ui?.write === "function" ? ctx.ui.write.bind(ctx.ui) : null;
+    writeGraphicsCommand = resolveGraphicsWriter(ctx);
     applyTheme(ctx);
     installEditorSurface(ctx);
   });
@@ -310,7 +319,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
     try {
       const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
-      if (command) ctx?.ui?.write?.(command);
+      if (command) resolveGraphicsWriter(ctx)?.(command);
     } catch {}
   });
 
