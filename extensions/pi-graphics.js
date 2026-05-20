@@ -23,6 +23,8 @@ import { join } from "node:path";
 
 import { Type } from "@sinclair/typebox";
 
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
@@ -244,6 +246,18 @@ export default function piGraphicsExtension(pi) {
     return true;
   }
 
+  function patchDynamicBorder() {
+    if (!ensureUnicodePlacement(state)) return;
+    if (DynamicBorder.prototype.__piGraphicsPatched) return;
+    const original = DynamicBorder.prototype.render;
+    DynamicBorder.prototype.__piGraphicsPatched = true;
+    DynamicBorder.prototype.render = function patchedRender(width) {
+      const line = buildEditorBorderRow(width, "top");
+      if (!line) return original.call(this, width);
+      return [line];
+    };
+  }
+
   function mountEditorRails(ctx) {
     if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return;
     if (typeof ctx.ui?.setWidget !== "function") return;
@@ -261,6 +275,7 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     applyTheme(ctx);
+    patchDynamicBorder();
     installEditorSurface(ctx);
     mountEditorRails(ctx);
   });
