@@ -143,6 +143,22 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
   }
 
+  let editorFrameTick = 0;
+  let editorFrameTimer = null;
+  let editorTui = null;
+  function startEditorTicker() {
+    if (editorFrameTimer) return;
+    editorFrameTimer = setInterval(() => {
+      editorFrameTick = (editorFrameTick + 1) % editorAnimationFrames();
+      try { editorTui?.invalidate?.(); } catch {}
+    }, editorAnimationDelayMs());
+    if (typeof editorFrameTimer.unref === "function") editorFrameTimer.unref();
+  }
+  function stopEditorTicker() {
+    if (editorFrameTimer) clearInterval(editorFrameTimer);
+    editorFrameTimer = null;
+  }
+
   function buildEditorBorderRow(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
@@ -150,24 +166,20 @@ export default function piGraphicsExtension(pi) {
     const variant = editorVariant();
     const alpha = editorAlpha();
     const frames = editorAnimationFrames();
-    const delayMs = editorAnimationDelayMs();
-    const apng = renderEditorBorderApng({
+    const rendered = renderEditorBorderFramesPngs({
       columns: cols,
       edge,
       ...cell,
       frames,
-      delayMs,
-      plays: 0,
-      borderColor: "#00d8ff",
       borderAlpha: 0.95,
-      glowColor: variant === "glow" ? "#b48cff" : "#00d8ff",
       glowAlpha: Math.max(0.2, alpha * 0.7),
     });
+    const frameIndex = editorFrameTick % rendered.frames;
     const placement = buildPlacement(state, {
-      name: `editor-border-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
-      png: apng.png,
-      columns: apng.columns,
-      rows: apng.rows,
+      name: `editor-border-frame-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-f${frames}-i${frameIndex}`,
+      png: rendered.pngs[frameIndex],
+      columns: rendered.columns,
+      rows: rendered.rows,
       width: cols,
       zIndex: -1073741825,
     });
@@ -223,6 +235,11 @@ export default function piGraphicsExtension(pi) {
       return text.length > 0 && /^[\s─━═]+$/.test(text);
     };
     class KittyEditor extends CustomEditor {
+      constructor(tui, theme, keybindings, options) {
+        super(tui, theme, keybindings, options);
+        editorTui = tui;
+        startEditorTicker();
+      }
       render(width) {
         const baseLines = super.render(width);
         if (!Array.isArray(baseLines) || baseLines.length < 2) return baseLines;
@@ -302,6 +319,7 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("session_end", async (_event, ctx) => {
+    stopEditorTicker();
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
     try {
