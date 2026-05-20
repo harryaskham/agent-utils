@@ -7,6 +7,7 @@ import {
   buildKittyUnicodePlaceholderCell,
   buildKittyUnicodePlaceholderLines,
   buildPngVirtualPlacementAnimation,
+  buildPngVirtualPlacementAnimationPlace,
   buildPngVirtualPlacementAnimationPlay,
   buildPngVirtualPlacementCommand,
   buildScopedDeleteCommand,
@@ -59,10 +60,17 @@ test("virtual placement command serializes zIndex below background threshold", (
 });
 
 test("virtual placement animation follows kitty loop semantics", () => {
+  const pngHeader = Buffer.alloc(24);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(pngHeader, 0);
+  pngHeader.writeUInt32BE(13, 8);
+  pngHeader.write("IHDR", 12, "ascii");
+  pngHeader.writeUInt32BE(2, 16);
+  pngHeader.writeUInt32BE(1, 20);
+  const pngBase = pngHeader.toString("base64");
   const serialized = buildPngVirtualPlacementAnimation({
     imageId: 42,
     placementId: 9,
-    pngBases: ["Zmlyc3Q=", "c2Vjb25k"],
+    pngBases: [pngBase, pngBase],
     delaysMs: 17,
     columns: 2,
     rows: 1,
@@ -70,17 +78,30 @@ test("virtual placement animation follows kitty loop semantics", () => {
     passthrough: "none",
   });
 
-  assert.match(serialized, /_Ga=t,f=100,t=d,i=42,q=2;Zmlyc3Q=/);
+  assert.match(serialized, /_Ga=t,f=100,t=d,i=42,s=2,v=1,q=2;/);
   assert.match(serialized, /_Ga=a,i=42,r=1,z=17,q=2/);
-  assert.match(serialized, /_Ga=f,f=100,t=d,i=42,z=17,q=2;c2Vjb25k/);
-  assert.match(serialized, /_Ga=a,i=42,s=3,v=1,q=2/);
+  assert.equal([...serialized.matchAll(/_Ga=f,f=100,t=d,i=42/g)].length, 1);
+  assert.match(serialized, /_Ga=f,f=100,t=d,i=42,s=2,v=1,z=17,q=2;/);
+  assert.match(serialized, /_Ga=a,i=42,c=1,s=3,v=1,q=2/);
   assert.match(serialized, /_Ga=p,i=42,p=9,U=1,c=2,r=1,z=-5,q=2/);
   assert.doesNotMatch(serialized, /s=3,v=0/);
 });
 
 test("animation play nudge uses kitty's infinite-loop value", () => {
   const serialized = buildPngVirtualPlacementAnimationPlay({ imageId: 42, passthrough: "none" });
-  assert.equal(serialized, `${ESC}_Ga=a,i=42,s=3,v=1,q=2${ESC}\\`);
+  assert.equal(serialized, `${ESC}_Ga=a,i=42,c=1,s=3,v=1,q=2${ESC}\\`);
+});
+
+test("animation place nudge re-creates virtual placement", () => {
+  const serialized = buildPngVirtualPlacementAnimationPlace({
+    imageId: 42,
+    placementId: 9,
+    columns: 2,
+    rows: 1,
+    zIndex: -5,
+    passthrough: "none",
+  });
+  assert.equal(serialized, `${ESC}_Ga=p,i=42,p=9,U=1,c=2,r=1,z=-5,q=2${ESC}\\`);
 });
 
 test("Unicode placeholder lines encode image id, placement id, rows, and scrollable cells", () => {

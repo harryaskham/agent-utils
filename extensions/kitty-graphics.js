@@ -271,13 +271,24 @@ export function buildPngVirtualPlacementAnimation({
   const delays = Array.isArray(delaysMs)
     ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
     : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
+  let imageWidth;
+  let imageHeight;
+  try {
+    const dimensions = parsePngDimensions(Buffer.from(pngBases[0], "base64"));
+    imageWidth = dimensions.width;
+    imageHeight = dimensions.height;
+  } catch {}
   const commands = [];
   // 1. Transmit the image (first frame) as a quiet upload — no placement yet.
+  // Include s/v even for PNG data so animation frame uploads can explicitly
+  // use the same full-image rectangle dimensions.
   commands.push(serializeKittyGraphicsChunks({
     a: "t",
     f: 100,
     t: "d",
     i: imageId,
+    s: imageWidth,
+    v: imageHeight,
     q: quiet,
   }, pngBases[0], { passthrough, chunkSize, env }));
   // 2. Set the first frame's gap (a=a r=1 z=delay).
@@ -295,6 +306,8 @@ export function buildPngVirtualPlacementAnimation({
       f: 100,
       t: "d",
       i: imageId,
+      s: imageWidth,
+      v: imageHeight,
       z: delays[i],
       q: quiet,
     }, pngBases[i], { passthrough, chunkSize, env }));
@@ -305,21 +318,22 @@ export function buildPngVirtualPlacementAnimation({
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
+    c: 1,
     s: 3,
     v: 1,
     q: quiet,
   }, "", { passthrough, env }));
   // 5. Create the virtual placement that the Unicode placeholder cells anchor.
-  commands.push(serializeKittyGraphicsCommand({
-    a: "p",
-    i: imageId,
-    p: placeholderPlacementId(placementId),
-    U: 1,
-    c: columns,
-    r: rows,
-    z: zIndex,
-    q: quiet,
-  }, "", { passthrough, env }));
+  commands.push(buildPngVirtualPlacementAnimationPlace({
+    imageId,
+    placementId,
+    columns,
+    rows,
+    zIndex,
+    quiet,
+    passthrough,
+    env,
+  }));
   return commands.join("");
 }
 
@@ -331,8 +345,36 @@ export function buildPngVirtualPlacementAnimationPlay({ imageId, quiet = 2, pass
   return serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
+    c: 1,
     s: 3,
     v: 1,
+    q: quiet,
+  }, "", { passthrough, env });
+}
+
+/**
+ * Re-create the virtual placement for a previously uploaded animated image.
+ * Cheap enough to emit on every TUI redraw; useful because some redraw paths
+ * clear placement state while preserving image storage.
+ */
+export function buildPngVirtualPlacementAnimationPlace({
+  imageId,
+  placementId,
+  columns,
+  rows,
+  zIndex,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  return serializeKittyGraphicsCommand({
+    a: "p",
+    i: imageId,
+    p: placeholderPlacementId(placementId),
+    U: 1,
+    c: columns,
+    r: rows,
+    z: zIndex,
     q: quiet,
   }, "", { passthrough, env });
 }
