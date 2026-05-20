@@ -272,9 +272,7 @@ export function buildPngVirtualPlacementAnimation({
     ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
     : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
   const commands = [];
-  // 1. Transmit the root frame as ordinary PNG image data. In the animation
-  // protocol the root frame is the base image data, so keep this identical to
-  // normal PNG transmission rather than adding frame-rectangle keys.
+  // 1. Transmit the root frame as ordinary PNG image data (no rectangle keys).
   commands.push(serializeKittyGraphicsChunks({
     a: "t",
     f: 100,
@@ -282,31 +280,8 @@ export function buildPngVirtualPlacementAnimation({
     i: imageId,
     q: quiet,
   }, pngBases[0], { passthrough, chunkSize, env }));
-  // 2. Set the first frame's gap (a=a r=1 z=delay).
-  commands.push(serializeKittyGraphicsCommand({
-    a: "a",
-    i: imageId,
-    r: 1,
-    z: delays[0],
-    q: quiet,
-  }, "", { passthrough, env }));
-  // 3. Append the rest of the frames (a=f). For full-frame PNG data, the
-  // protocol says this is the same as image transmission with a=f,i=<id>;
-  // x/y/s/v are only needed for partial-frame rectangles.
-  for (let i = 1; i < pngBases.length; i += 1) {
-    commands.push(serializeKittyGraphicsChunks({
-      a: "f",
-      f: 100,
-      t: "d",
-      i: imageId,
-      X: 1,
-      z: delays[i],
-      q: quiet,
-    }, pngBases[i], { passthrough, chunkSize, env }));
-  }
-  // 4. Create the virtual placement that the Unicode placeholder cells anchor.
-  // Some terminals only advance visible animation frames after a placement
-  // exists, so place the fully-loaded image before starting playback.
+  // 2. Create the virtual placement up front so the Unicode placeholder
+  //    cells anchor a visible image before any animation work happens.
   commands.push(serializeKittyGraphicsCommand({
     a: "p",
     i: imageId,
@@ -317,13 +292,34 @@ export function buildPngVirtualPlacementAnimation({
     z: zIndex,
     q: quiet,
   }, "", { passthrough, env }));
-  // 5. Start indefinite loop playback. Per kitty's animation protocol,
-  // s=3 means normal looping playback and v=1 means loop infinitely.
-  // v=0 is explicitly ignored by the terminal, so do not use it here.
+  // 3. Append the rest of the frames. The kitty graphics protocol says full-
+  //    frame PNG animation data is identical to a normal PNG transmission
+  //    with a=f,i=<id>; rectangle/composition keys are only for partial-frame
+  //    updates. Frame gap is supplied on the frame itself via z=.
+  for (let i = 1; i < pngBases.length; i += 1) {
+    commands.push(serializeKittyGraphicsChunks({
+      a: "f",
+      f: 100,
+      t: "d",
+      i: imageId,
+      z: delays[i],
+      q: quiet,
+    }, pngBases[i], { passthrough, chunkSize, env }));
+  }
+  // 4. Set the root frame gap. Per the protocol, the root frame defaults to
+  //    zero gap, so it must be set explicitly via an animation control code
+  //    after the frame set is loaded.
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
-    c: 1,
+    r: 1,
+    z: delays[0],
+    q: quiet,
+  }, "", { passthrough, env }));
+  // 5. Start indefinite loop playback. s=3 = run/loop, v=1 = loop infinitely.
+  commands.push(serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
     s: 3,
     v: 1,
     q: quiet,
