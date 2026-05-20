@@ -35,11 +35,11 @@ const DEFAULT_BORDER_COLOR = "#00d8ff";
 const DEFAULT_BORDER_FILL = [5, 10, 24, 86];
 const NORDIC_DEEP_TOP = "#07111fff";
 const NORDIC_DEEP_BOTTOM = "#101729f6";
-const NORDIC_CYAN = "#00d8ff";
-const NORDIC_AURORA = "#72fbd6";
-const NORDIC_VIOLET = "#b48cff";
-const NORDIC_BLUE = "#4f7dff";
-const NORDIC_EDGE = "#d7f8ff";
+const NORDIC_CYAN = "#88c0d0";
+const NORDIC_AURORA = "#8fbcbb";
+const NORDIC_VIOLET = "#b48ead";
+const NORDIC_BLUE = "#5e81ac";
+const NORDIC_EDGE = "#eceff4";
 
 function clampPositive(value, fallback, name) {
   const n = Math.trunc(Number(value ?? fallback));
@@ -587,6 +587,40 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
     fillRect(pixels, widthPx, 0, strokeY, widthPx, strokeH, withAlpha(borderColor, borderA));
     if (strokeY > 0) fillRect(pixels, widthPx, 0, strokeY - 1, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
     if (strokeY + strokeH < heightPx) fillRect(pixels, widthPx, 0, strokeY + strokeH, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+    // Heartbeat pulse: a bright bump that sweeps left -> right along the stroke.
+    const sweepPhase = ((Number(phase) || 0) % 1 + 1) % 1;
+    const peakX = sweepPhase * widthPx;
+    const halfWidthPx = Math.max(widthPx * 0.08, 12);
+    const peakColor = parseColor(borderColor);
+    const haloColor = parseColor(glowColor);
+    for (let x = 0; x < widthPx; x += 1) {
+      const dx = Math.abs(x - peakX);
+      if (dx > halfWidthPx * 1.8) continue;
+      const t = Math.max(0, 1 - dx / halfWidthPx);
+      const power = t * t; // ease so the peak is concentrated near the head
+      // brighten the stroke band itself
+      for (let y = strokeY; y < strokeY + strokeH; y += 1) {
+        const off = (y * widthPx + x) * 4;
+        pixels[off] = Math.min(255, Math.round(pixels[off] * (1 - power * 0.4) + peakColor[0] * power));
+        pixels[off + 1] = Math.min(255, Math.round(pixels[off + 1] * (1 - power * 0.4) + peakColor[1] * power));
+        pixels[off + 2] = Math.min(255, Math.round(pixels[off + 2] * (1 - power * 0.4) + peakColor[2] * power));
+        pixels[off + 3] = Math.min(255, Math.round(pixels[off + 3] + (255 - pixels[off + 3]) * power * 0.85));
+      }
+      // halo above/below the stroke
+      const haloReach = Math.max(2, Math.round(heightPx * 0.4));
+      for (let dyOff = 1; dyOff <= haloReach; dyOff += 1) {
+        const fade = power * (1 - dyOff / (haloReach + 1));
+        if (fade <= 0) continue;
+        for (const y of [strokeY - dyOff, strokeY + strokeH - 1 + dyOff]) {
+          if (y < 0 || y >= heightPx) continue;
+          const off = (y * widthPx + x) * 4;
+          pixels[off] = Math.min(255, Math.round(pixels[off] * (1 - fade * 0.35) + haloColor[0] * fade));
+          pixels[off + 1] = Math.min(255, Math.round(pixels[off + 1] * (1 - fade * 0.35) + haloColor[1] * fade));
+          pixels[off + 2] = Math.min(255, Math.round(pixels[off + 2] * (1 - fade * 0.35) + haloColor[2] * fade));
+          pixels[off + 3] = Math.min(255, Math.round(pixels[off + 3] + (255 - pixels[off + 3]) * fade * 0.6));
+        }
+      }
+    }
   }
   const anchors = edge === "top" ? [heightPx - 1] : edge === "bottom" ? [0] : [Math.floor(heightPx / 2)];
   for (const anchorY of anchors) {
