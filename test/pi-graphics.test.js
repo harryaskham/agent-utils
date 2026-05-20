@@ -1259,8 +1259,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /setWidget\("pi-graphics-editor-top"/);
   assert.match(source, /setWidget\("pi-graphics-editor-bottom"/);
   assert.match(source, /class KittyEditor extends CustomEditor/);
-  assert.match(source, /renderEditorBorderFramesPngs\(/);
-  assert.match(source, /buildAnimatedPlacement\(state/);
+  assert.match(source, /renderEditorBorderApng\(/);
+  assert.match(source, /buildPlacement\(state/);
   assert.match(source, /pi_graphics_render_prompt_enclosure/);
   assert.match(source, /pi_graphics_render_message_border/);
   assert.match(source, /pi_graphics_clear/);

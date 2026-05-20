@@ -28,14 +28,13 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
-  renderEditorBorderFramesPngs,
+  renderEditorBorderApng,
   renderEditorRailApng,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
 } from "./pi-graphics/affordances.js";
 import {
-  buildAnimatedPlacement,
   buildPlacement,
   ensureUnicodePlacement,
   makeState,
@@ -163,20 +162,21 @@ export default function piGraphicsExtension(pi) {
     const alpha = editorAlpha();
     const frames = editorAnimationFrames();
     const delayMs = editorAnimationDelayMs();
-    const rendered = renderEditorBorderFramesPngs({
+    const apng = renderEditorBorderApng({
       columns: cols,
       edge,
       ...cell,
       frames,
+      delayMs,
+      plays: 0,
       borderAlpha: 0.95,
       glowAlpha: Math.max(0.2, alpha * 0.7),
     });
-    const placement = buildAnimatedPlacement(state, {
-      name: `editor-border-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
-      pngs: rendered.pngs,
-      delaysMs: delayMs,
-      columns: rendered.columns,
-      rows: rendered.rows,
+    const placement = buildPlacement(state, {
+      name: `editor-border-apng-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
+      png: apng.png,
+      columns: apng.columns,
+      rows: apng.rows,
       width: cols,
       zIndex: -1073741825,
     });
