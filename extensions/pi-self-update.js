@@ -80,11 +80,17 @@ function updateLooksReloadWorthy(result) {
 
 function updateActuallyChangedPackages(result) {
   const combined = `${result?.stdout || ""}\n${result?.stderr || ""}`;
-  if (/Already up to date/i.test(combined) && !/Updated\b/.test(combined)) return false;
+  // `pi update --extensions` always prints "Updated packages" even when
+  // nothing changed. Treat the run as a real change only when there is
+  // affirmative evidence: a git pull moving HEAD, an npm install line,
+  // or an explicit "Updated <source>" line.
+  if (/is unchanged and points to/i.test(combined)) return false;
+  if (/Already up to date/i.test(combined)) return false;
   if (/No (?:changes|updates)/i.test(combined)) return false;
-  if (/Updated packages/i.test(combined)) return true;
-  if (/Updated (?:npm:|git:|extension|package)/i.test(combined)) return true;
+  if (/Updating .* -> /i.test(combined)) return true;
+  if (/Updated (?:npm:|git:)/i.test(combined)) return true;
   if (/installed (?:npm:|git:)/i.test(combined)) return true;
+  if (/Fast-forward|files? changed/i.test(combined)) return true;
   return false;
 }
 
@@ -395,12 +401,6 @@ export default function piSelfUpdateExtension(pi) {
       if (reloadWorthy && changed) {
         const autoReload = shouldAutoReloadAfterUpdate({ env: process.env, settings: readAgentSettings() });
         if (autoReload && typeof ctx?.reload === "function") {
-          try {
-            ctx?.ui?.notify?.(
-              "pi extension auto-update installed new packages; reloading runtime and refreshing tools...",
-              "info",
-            );
-          } catch {}
           try { await ctx.reload(); } catch {}
           try { activateAllTools(pi); } catch {}
           return;
