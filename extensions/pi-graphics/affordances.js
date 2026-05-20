@@ -593,6 +593,30 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
     addRadialGlow(pixels, widthPx, widthPx * (0.2 + pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
     addRadialGlow(pixels, widthPx, widthPx * (0.8 - pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
   }
+  // Hard guarantee: alpha goes to zero at the cell edges so the glyph reads as
+  // a freestanding band with no abutting cutoff. We rescale alpha within an
+  // edge fade band; the bright center stays opaque.
+  const fadeBand = Math.max(2, Math.round(heightPx * 0.3));
+  for (let y = 0; y < heightPx; y += 1) {
+    let factor = 1;
+    if (edge === "top") {
+      // bottom is the editor edge -> stay opaque; top should fade to 0
+      if (y < fadeBand) factor = y / fadeBand;
+    } else if (edge === "bottom") {
+      if (y >= heightPx - fadeBand) factor = (heightPx - 1 - y) / fadeBand;
+    } else {
+      const distTop = y;
+      const distBottom = heightPx - 1 - y;
+      const dist = Math.min(distTop, distBottom);
+      if (dist < fadeBand) factor = dist / fadeBand;
+    }
+    if (factor >= 1) continue;
+    const f = Math.max(0, Math.min(1, factor));
+    for (let x = 0; x < widthPx; x += 1) {
+      const off = (y * widthPx + x) * 4 + 3;
+      pixels[off] = Math.round(pixels[off] * f);
+    }
+  }
 }
 
 export function renderEditorBorderFrame({ columns, edge = "symmetric", borderColor, borderAlpha, glowColor, glowAlpha, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
