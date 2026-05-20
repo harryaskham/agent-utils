@@ -272,11 +272,18 @@ export function buildPngVirtualPlacementAnimation({
     ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
     : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
   const commands = [];
-  // Frame 1: transmit + virtual placement.
+  // Frame 1: pure transmit (no placement). This keeps the image alive only
+  // because we follow it immediately with a virtual placement (a=p, U=1).
   commands.push(serializeKittyGraphicsChunks({
-    a: "T",
+    a: "t",
     f: 100,
     t: "d",
+    i: imageId,
+    q: quiet,
+  }, pngBases[0], { passthrough, chunkSize, env }));
+  // Virtual placement so Unicode placeholder cells anchor the image.
+  commands.push(serializeKittyGraphicsCommand({
+    a: "p",
     i: imageId,
     p: placeholderPlacementId(placementId),
     U: 1,
@@ -284,7 +291,7 @@ export function buildPngVirtualPlacementAnimation({
     r: rows,
     z: zIndex,
     q: quiet,
-  }, pngBases[0], { passthrough, chunkSize, env }));
+  }, "", { passthrough, env }));
   // Set frame 1's gap.
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
