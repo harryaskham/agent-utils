@@ -8,6 +8,7 @@
 import {
   buildKittyUnicodePlaceholderLines,
   buildPngVirtualPlacementAnimation,
+  buildPngVirtualPlacementAnimationPlay,
   buildPngVirtualPlacementCommand,
   bufferToBase64,
   shouldUseUnicodePlaceholders,
@@ -85,6 +86,12 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     passthrough: state.config.passthrough,
   });
   if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
+  // Idempotent play-state nudge re-emitted on every render so kitty resumes
+  // looping if the placement was cleared (e.g. by cursor moves outside tmux).
+  const playNudge = buildPngVirtualPlacementAnimationPlay({
+    imageId,
+    passthrough: state.config.passthrough,
+  });
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
     placementId,
@@ -93,7 +100,7 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     width,
     caption,
   });
-  return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted };
+  return { imageId, placementId, transmit: `${transmit}${playNudge}`, lines, transmitted: !alreadyTransmitted };
 }
 
 export function ensureUnicodePlacement(state) {

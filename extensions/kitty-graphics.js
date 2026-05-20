@@ -272,6 +272,7 @@ export function buildPngVirtualPlacementAnimation({
     ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
     : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
   const commands = [];
+  // Frame 1: transmit + virtual placement.
   commands.push(serializeKittyGraphicsChunks({
     a: "T",
     f: 100,
@@ -284,6 +285,15 @@ export function buildPngVirtualPlacementAnimation({
     z: zIndex,
     q: quiet,
   }, pngBases[0], { passthrough, chunkSize, env }));
+  // Set frame 1's gap.
+  commands.push(serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    r: 1,
+    z: delays[0],
+    q: quiet,
+  }, "", { passthrough, env }));
+  // Frames 2..N: append new frames via a=f.
   for (let i = 1; i < pngBases.length; i += 1) {
     commands.push(serializeKittyGraphicsChunks({
       a: "f",
@@ -294,13 +304,7 @@ export function buildPngVirtualPlacementAnimation({
       q: quiet,
     }, pngBases[i], { passthrough, chunkSize, env }));
   }
-  commands.push(serializeKittyGraphicsCommand({
-    a: "a",
-    i: imageId,
-    r: 1,
-    z: delays[0],
-    q: quiet,
-  }, "", { passthrough, env }));
+  // Start indefinite loop playback (s=3 = looping; v=0 = infinite loops).
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
@@ -309,6 +313,20 @@ export function buildPngVirtualPlacementAnimation({
     q: quiet,
   }, "", { passthrough, env }));
   return commands.join("");
+}
+
+/**
+ * Emit just the loop-play start command for an image id that was previously
+ * uploaded with buildPngVirtualPlacementAnimation. Idempotent.
+ */
+export function buildPngVirtualPlacementAnimationPlay({ imageId, quiet = 2, passthrough = "auto", env = process.env } = {}) {
+  return serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    s: 3,
+    v: 0,
+    q: quiet,
+  }, "", { passthrough, env });
 }
 
 export function buildKittyUnicodePlaceholderCell({ imageId, placementId, row = 0, column = 0, includeColumn = true } = {}) {
