@@ -23,10 +23,6 @@ import { join } from "node:path";
 
 import { Type } from "@sinclair/typebox";
 
-import { DynamicBorder as JitiDynamicBorder } from "@earendil-works/pi-coding-agent";
-import { pathToFileURL } from "node:url";
-import { dirname, resolve } from "node:path";
-
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
@@ -223,6 +219,7 @@ export default function piGraphicsExtension(pi) {
     class PiGraphicsEditorSurface {
       constructor(tui, theme, keybindings) {
         this.base = previousFactory(tui, theme, keybindings);
+        try { patchDashRendersForTui(tui); } catch {}
       }
       render(width) {
         const baseLines = this.base?.render?.(width) || [];
@@ -248,35 +245,49 @@ export default function piGraphicsExtension(pi) {
     return true;
   }
 
-  async function resolvePiDynamicBorder() {
-    const entry = process.argv[1];
-    if (!entry) return JitiDynamicBorder;
-    let dir = dirname(resolve(entry));
-    for (let i = 0; i < 8; i += 1) {
-      const direct = resolve(dir, "dist", "index.js");
-      try {
-        const mod = await import(pathToFileURL(direct).href);
-        if (mod?.DynamicBorder) return mod.DynamicBorder;
-      } catch {}
-      const next = dirname(dir);
-      if (next === dir) break;
-      dir = next;
+  function looksLikeDashRender(component) {
+    if (!component || typeof component.render !== "function") return false;
+    if (component.__piGraphicsDashPatched) return false;
+    try {
+      const sample = component.render(8);
+      if (!Array.isArray(sample) || sample.length !== 1) return false;
+      const text = String(sample[0] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+      return /^[─━═]{2,}$/.test(text);
+    } catch {
+      return false;
     }
-    return JitiDynamicBorder;
   }
 
-  async function patchDynamicBorder() {
-    if (!ensureUnicodePlacement(state)) return;
-    const Klass = await resolvePiDynamicBorder();
-    if (!Klass?.prototype || Klass.prototype.__piGraphicsPatched) return;
-    const original = Klass.prototype.render;
-    Klass.prototype.__piGraphicsPatched = true;
-    Klass.prototype.render = function patchedRender(width) {
+  function wrapDashRender(component) {
+    const original = component.render.bind(component);
+    component.__piGraphicsDashPatched = true;
+    component.render = (width) => {
       const line = buildEditorBorderRow(width, "symmetric");
-      if (!line) return original.call(this, width);
-      return [line];
+      return line ? [line] : original(width);
     };
   }
+
+  function walkAndPatch(node, depth = 0) {
+    if (!node || depth > 32) return;
+    if (looksLikeDashRender(node)) wrapDashRender(node);
+    const kids = Array.isArray(node.children) ? node.children : null;
+    if (kids) for (const child of kids) walkAndPatch(child, depth + 1);
+  }
+
+  function patchDashRendersForTui(tui) {
+    if (!ensureUnicodePlacement(state)) return;
+    if (!tui) return;
+    walkAndPatch(tui, 0);
+    // schedule a few late sweeps because Pi may add chat borders after session_start
+    let attempts = 0;
+    const id = setInterval(() => {
+      attempts += 1;
+      try { walkAndPatch(tui, 0); } catch {}
+      if (attempts >= 8) clearInterval(id);
+    }, 250);
+    if (typeof id.unref === "function") id.unref();
+  }
+
 
   function mountEditorRails(ctx) {
     if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return;
@@ -295,7 +306,7 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     applyTheme(ctx);
-    await patchDynamicBorder();
+    await applyTheme(ctx);
     installEditorSurface(ctx);
   });
 
