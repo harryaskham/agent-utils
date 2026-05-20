@@ -36,6 +36,8 @@ import {
   resolveCellMetrics,
 } from "./pi-graphics/affordances.js";
 import {
+  buildAnimatedPlacement,
+  buildAnimationFrameTick,
   buildPlacement,
   ensureUnicodePlacement,
   makeState,
@@ -155,33 +157,84 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
   }
 
+  // Animation ticker state: keyed by imageId.
+  const animationTicks = new Map(); // imageId -> { frames, intervalId, frame, delayMs }
+
+  function stopAnimationTicker(imageId) {
+    const entry = animationTicks.get(imageId);
+    if (!entry) return;
+    try { clearInterval(entry.intervalId); } catch {}
+    animationTicks.delete(imageId);
+  }
+
+  function stopAllAnimationTickers() {
+    for (const id of [...animationTicks.keys()]) stopAnimationTicker(id);
+  }
+
+  function ensureAnimationTicker({ imageId, frames, delayMs }) {
+    if (!imageId || frames <= 1) return;
+    const existing = animationTicks.get(imageId);
+    if (existing && existing.frames === frames && existing.delayMs === delayMs) return;
+    if (existing) stopAnimationTicker(imageId);
+    if (typeof writeGraphicsCommand !== "function") return;
+    const entry = { imageId, frames, delayMs, frame: 1, intervalId: null };
+    entry.intervalId = setInterval(() => {
+      entry.frame = (entry.frame % frames) + 1;
+      const command = buildAnimationFrameTick(state, { imageId, frame: entry.frame });
+      try { writeGraphicsCommand(command); } catch {}
+    }, Math.max(8, Math.min(2000, Math.trunc(Number(delayMs) || 100))));
+    if (typeof entry.intervalId?.unref === "function") entry.intervalId.unref();
+    animationTicks.set(imageId, entry);
+  }
+
   function buildEditorBorderRow(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
     const cell = cellMetrics();
     const variant = editorVariant();
     const alpha = editorAlpha();
-    // Render a single static frame: kitty's animation protocol does not
-    // currently advance frames for virtual/U=1 Unicode-placeholder placements,
-    // and APNG fdAT chunks are not animated by the kitty graphics protocol.
-    // The static gradient border is the visible upgrade over the ASCII dash row.
+    const frames = editorAnimationFrames();
+    const delayMs = editorAnimationDelayMs();
+    if (frames <= 1) {
+      const rendered = renderEditorBorderFramesPngs({
+        columns: cols,
+        edge,
+        ...cell,
+        frames: 1,
+        borderAlpha: 0.95,
+        glowAlpha: Math.max(0.2, alpha * 0.7),
+      });
+      const placement = buildPlacement(state, {
+        name: `editor-border-static-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+        png: rendered.pngs[0],
+        columns: rendered.columns,
+        rows: rendered.rows,
+        width: cols,
+        zIndex: -1073741825,
+      });
+      emitGraphicsCommand(placement.transmit);
+      return placement.lines[0] ?? "";
+    }
     const rendered = renderEditorBorderFramesPngs({
       columns: cols,
       edge,
       ...cell,
-      frames: 1,
+      frames,
       borderAlpha: 0.95,
       glowAlpha: Math.max(0.2, alpha * 0.7),
     });
-    const placement = buildPlacement(state, {
-      name: `editor-border-static-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-      png: rendered.pngs[0],
+    const placement = buildAnimatedPlacement(state, {
+      name: `editor-border-anim-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
+      pngs: rendered.pngs,
+      delaysMs: delayMs,
       columns: rendered.columns,
       rows: rendered.rows,
       width: cols,
       zIndex: -1073741825,
+      autoLoop: false,
     });
     emitGraphicsCommand(placement.transmit);
+    ensureAnimationTicker({ imageId: placement.imageId, frames, delayMs });
     return placement.lines[0] ?? "";
   }
 
@@ -315,6 +368,7 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("session_end", async (_event, ctx) => {
+    stopAllAnimationTickers();
     writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}

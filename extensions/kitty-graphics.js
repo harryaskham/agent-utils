@@ -264,6 +264,7 @@ export function buildPngVirtualPlacementAnimation({
   passthrough = "auto",
   chunkSize,
   env = process.env,
+  autoLoop = true,
 } = {}) {
   if (!Array.isArray(pngBases) || pngBases.length === 0) {
     throw new Error("buildPngVirtualPlacementAnimation requires pngBases");
@@ -316,15 +317,39 @@ export function buildPngVirtualPlacementAnimation({
     z: delays[0],
     q: quiet,
   }, "", { passthrough, env }));
-  // 5. Start indefinite loop playback. s=3 = run/loop, v=1 = loop infinitely.
-  commands.push(serializeKittyGraphicsCommand({
+  // 5. Start indefinite loop playback (s=3, v=1). Skipped when autoLoop is
+  //    false so the caller can client-drive frame selection via a=a,c=<n>.
+  if (autoLoop) {
+    commands.push(serializeKittyGraphicsCommand({
+      a: "a",
+      i: imageId,
+      s: 3,
+      v: 1,
+      q: quiet,
+    }, "", { passthrough, env }));
+  }
+  return commands.join("");
+}
+
+// Client-driven animation tick: select frame N as the visible frame for image
+// `imageId`. Frame numbers are 1-based.
+export function buildAnimationFrameSelectCommand({
+  imageId,
+  frame,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  if (!Number.isFinite(Number(imageId)) || Number(imageId) <= 0) {
+    throw new Error("buildAnimationFrameSelectCommand requires a positive imageId");
+  }
+  const c = Math.max(1, Math.trunc(Number(frame) || 1));
+  return serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
-    s: 3,
-    v: 1,
+    c,
     q: quiet,
-  }, "", { passthrough, env }));
-  return commands.join("");
+  }, "", { passthrough, env });
 }
 
 export function buildKittyUnicodePlaceholderCell({ imageId, placementId, row = 0, column = 0, includeColumn = true } = {}) {

@@ -6,6 +6,7 @@
 // dependency on Pi internals.
 
 import {
+  buildAnimationFrameSelectCommand,
   buildKittyUnicodePlaceholderLines,
   buildPngVirtualPlacementAnimation,
   buildPngVirtualPlacementCommand,
@@ -67,7 +68,7 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
   return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted };
 }
 
-export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, rows, width, caption, zIndex } = {}) {
+export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, rows, width, caption, zIndex, autoLoop = true } = {}) {
   const imageId = trackOwned(state, stableKittyImageId(`agent-utils.pi-graphics.${name}`));
   const alreadyTransmitted = state.transmittedImageIds.has(imageId);
   const placementId = alreadyTransmitted
@@ -83,6 +84,7 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     rows,
     zIndex,
     passthrough: state.config.passthrough,
+    autoLoop,
   });
   if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
   const lines = buildKittyUnicodePlaceholderLines({
@@ -93,7 +95,15 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     width,
     caption,
   });
-  return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted };
+  return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted, frames: pngs.length };
+}
+
+export function buildAnimationFrameTick(state, { imageId, frame } = {}) {
+  return buildAnimationFrameSelectCommand({
+    imageId,
+    frame,
+    passthrough: state.config.passthrough,
+  });
 }
 
 export function ensureUnicodePlacement(state) {
