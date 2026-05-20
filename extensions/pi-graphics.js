@@ -138,6 +138,12 @@ export default function piGraphicsExtension(pi) {
     return Number.isFinite(raw) ? Math.max(8, Math.min(2000, Math.trunc(raw))) : 17;
   }
 
+  let writeGraphicsCommand = null;
+  function emitGraphicsCommand(command) {
+    if (!command || typeof writeGraphicsCommand !== "function") return;
+    try { writeGraphicsCommand(command); } catch {}
+  }
+
   function applyTheme(ctx) {
     if (!envBool("PI_GRAPHICS_AUTO_THEME", true) || !configuredThemeName) return;
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
@@ -168,8 +174,8 @@ export default function piGraphicsExtension(pi) {
       width: cols,
       zIndex: -1073741825,
     });
-    const cells = placement.lines[0] ?? "";
-    return placement.transmit ? `${placement.transmit}${cells}` : cells;
+    emitGraphicsCommand(placement.transmit);
+    return placement.lines[0] ?? "";
   }
 
   function buildEditorRailRows(width, edge) {
@@ -199,9 +205,8 @@ export default function piGraphicsExtension(pi) {
       width: cols,
       zIndex: -1073741825,
     });
-    const lines = placement.lines;
-    if (placement.transmit && lines.length > 0) lines[0] = `${placement.transmit}${lines[0]}`;
-    return lines;
+    emitGraphicsCommand(placement.transmit);
+    return placement.lines;
   }
 
   function isEditorChromeLine(line) {
@@ -294,11 +299,13 @@ export default function piGraphicsExtension(pi) {
 
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
+    writeGraphicsCommand = typeof ctx.ui?.write === "function" ? ctx.ui.write.bind(ctx.ui) : null;
     applyTheme(ctx);
     installEditorSurface(ctx);
   });
 
   pi.on("session_end", async (_event, ctx) => {
+    writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
     try {
