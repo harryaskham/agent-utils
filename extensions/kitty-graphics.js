@@ -271,24 +271,15 @@ export function buildPngVirtualPlacementAnimation({
   const delays = Array.isArray(delaysMs)
     ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
     : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
-  let imageWidth;
-  let imageHeight;
-  try {
-    const dimensions = parsePngDimensions(Buffer.from(pngBases[0], "base64"));
-    imageWidth = dimensions.width;
-    imageHeight = dimensions.height;
-  } catch {}
   const commands = [];
-  // 1. Transmit the image (first frame) as a quiet upload — no placement yet.
-  // Include s/v even for PNG data so animation frame uploads can explicitly
-  // use the same full-image rectangle dimensions.
+  // 1. Transmit the root frame as ordinary PNG image data. In the animation
+  // protocol the root frame is the base image data, so keep this identical to
+  // normal PNG transmission rather than adding frame-rectangle keys.
   commands.push(serializeKittyGraphicsChunks({
     a: "t",
     f: 100,
     t: "d",
     i: imageId,
-    s: imageWidth,
-    v: imageHeight,
     q: quiet,
   }, pngBases[0], { passthrough, chunkSize, env }));
   // 2. Set the first frame's gap (a=a r=1 z=delay).
@@ -299,15 +290,16 @@ export function buildPngVirtualPlacementAnimation({
     z: delays[0],
     q: quiet,
   }, "", { passthrough, env }));
-  // 3. Append the rest of the frames (a=f).
+  // 3. Append the rest of the frames (a=f). For full-frame PNG data, the
+  // protocol says this is the same as image transmission with a=f,i=<id>;
+  // x/y/s/v are only needed for partial-frame rectangles.
   for (let i = 1; i < pngBases.length; i += 1) {
     commands.push(serializeKittyGraphicsChunks({
       a: "f",
       f: 100,
       t: "d",
       i: imageId,
-      s: imageWidth,
-      v: imageHeight,
+      X: 1,
       z: delays[i],
       q: quiet,
     }, pngBases[i], { passthrough, chunkSize, env }));
