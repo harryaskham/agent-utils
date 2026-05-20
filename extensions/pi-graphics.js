@@ -278,13 +278,12 @@ export default function piGraphicsExtension(pi) {
     if (!ensureUnicodePlacement(state)) return;
     if (!tui) return;
     walkAndPatch(tui, 0);
-    // schedule a few late sweeps because Pi may add chat borders after session_start
     let attempts = 0;
     const id = setInterval(() => {
       attempts += 1;
       try { walkAndPatch(tui, 0); } catch {}
-      if (attempts >= 8) clearInterval(id);
-    }, 250);
+      if (attempts >= 40) clearInterval(id);
+    }, 500);
     if (typeof id.unref === "function") id.unref();
   }
 
@@ -306,8 +305,13 @@ export default function piGraphicsExtension(pi) {
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     applyTheme(ctx);
-    await applyTheme(ctx);
     installEditorSurface(ctx);
+    try {
+      ctx.ui?.setWidget?.("pi-graphics-dash-bootstrap", (tui) => {
+        try { patchDashRendersForTui(tui); } catch {}
+        return { render() { return []; }, invalidate() {} };
+      }, { placement: "aboveEditor" });
+    } catch {}
   });
 
   pi.on("session_end", async (_event, ctx) => {
