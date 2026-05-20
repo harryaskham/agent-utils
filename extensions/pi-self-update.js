@@ -96,6 +96,15 @@ function envFlagTrue(value) {
   return /^(1|true|on|yes|enabled|force)$/i.test(String(value || "").trim());
 }
 
+function shouldAutoReloadAfterUpdate({ env = process.env, settings = {} } = {}) {
+  if (envFlagTrue(env.PI_AUTO_RELOAD_AFTER_UPDATE)) return true;
+  if (envFlagFalse(env.PI_AUTO_RELOAD_AFTER_UPDATE)) return false;
+  const cfg = settings?.piSelfUpdate ?? settings?.agentUtils?.piSelfUpdate ?? {};
+  const value = cfg.autoReloadAfterUpdate;
+  if (value === false) return false;
+  return value !== undefined ? Boolean(value) : true;
+}
+
 function shouldAutoUpdateOnStartup({ env = process.env, settings = {} } = {}) {
   if (envFlagTrue(env.PI_AUTO_UPDATE_ON_STARTUP)) return true;
   if (envFlagFalse(env.PI_AUTO_UPDATE_ON_STARTUP)) return false;
@@ -384,6 +393,18 @@ export default function piSelfUpdateExtension(pi) {
       const reloadWorthy = updateLooksReloadWorthy(result);
       const changed = updateActuallyChangedPackages(result);
       if (reloadWorthy && changed) {
+        const autoReload = shouldAutoReloadAfterUpdate({ env: process.env, settings: readAgentSettings() });
+        if (autoReload && typeof ctx?.reload === "function") {
+          try {
+            ctx?.ui?.notify?.(
+              "pi extension auto-update installed new packages; reloading runtime and refreshing tools...",
+              "info",
+            );
+          } catch {}
+          try { await ctx.reload(); } catch {}
+          try { activateAllTools(pi); } catch {}
+          return;
+        }
         try {
           ctx?.ui?.notify?.(
             "pi extension auto-update installed new packages. Run /reload (or /reload-tools) to activate the updated extensions in this session.",

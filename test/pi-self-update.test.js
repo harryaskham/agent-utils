@@ -270,7 +270,9 @@ test("session_start triggers a silent background pi update --extensions", async 
 
 test("background auto-update notifies the user to /reload only if packages changed", async () => {
   const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  const prevReload = process.env.PI_AUTO_RELOAD_AFTER_UPDATE;
   process.env.PI_AUTO_UPDATE_ON_STARTUP = "1";
+  process.env.PI_AUTO_RELOAD_AFTER_UPDATE = "0";
   try {
     const h = makeHarness({ execResult: { code: 0, stdout: "Updated packages: agent-utils", stderr: "" } });
     piSelfUpdateExtension(h.pi);
@@ -284,6 +286,32 @@ test("background auto-update notifies the user to /reload only if packages chang
   } finally {
     if (previous === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
     else process.env.PI_AUTO_UPDATE_ON_STARTUP = previous;
+    if (prevReload === undefined) delete process.env.PI_AUTO_RELOAD_AFTER_UPDATE;
+    else process.env.PI_AUTO_RELOAD_AFTER_UPDATE = prevReload;
+  }
+});
+
+test("background auto-update auto-reloads runtime when autoReloadAfterUpdate is enabled", async () => {
+  const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  const prevReload = process.env.PI_AUTO_RELOAD_AFTER_UPDATE;
+  process.env.PI_AUTO_UPDATE_ON_STARTUP = "1";
+  process.env.PI_AUTO_RELOAD_AFTER_UPDATE = "1";
+  try {
+    const h = makeHarness({ execResult: { code: 0, stdout: "Updated packages: agent-utils", stderr: "" } });
+    piSelfUpdateExtension(h.pi);
+    await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h.execCount, 1);
+    assert.equal(h.reloadCount, 1);
+    assert.equal(h.activeToolsCalls.length, 1);
+    assert.match(h.notifications[0].message, /reloading runtime/i);
+  } finally {
+    if (previous === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+    else process.env.PI_AUTO_UPDATE_ON_STARTUP = previous;
+    if (prevReload === undefined) delete process.env.PI_AUTO_RELOAD_AFTER_UPDATE;
+    else process.env.PI_AUTO_RELOAD_AFTER_UPDATE = prevReload;
   }
 });
 
