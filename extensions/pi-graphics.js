@@ -225,8 +225,8 @@ export default function piGraphicsExtension(pi) {
       render(width) {
         const baseLines = this.base?.render?.(width) || [];
         if (baseLines.length < 2) return baseLines;
-        const top = buildEditorBorderRow(width, "top");
-        const bottom = buildEditorBorderRow(width, "bottom");
+        const top = buildEditorBorderRow(width, "symmetric");
+        const bottom = buildEditorBorderRow(width, "symmetric");
         if (!top || !bottom) return baseLines;
         return baseLines.map((line, index) => {
           if (index === 0) return top;
@@ -252,7 +252,7 @@ export default function piGraphicsExtension(pi) {
     const original = DynamicBorder.prototype.render;
     DynamicBorder.prototype.__piGraphicsPatched = true;
     DynamicBorder.prototype.render = function patchedRender(width) {
-      const line = buildEditorBorderRow(width, "top");
+      const line = buildEditorBorderRow(width, "symmetric");
       if (!line) return original.call(this, width);
       return [line];
     };
@@ -277,7 +277,6 @@ export default function piGraphicsExtension(pi) {
     applyTheme(ctx);
     patchDynamicBorder();
     installEditorSurface(ctx);
-    mountEditorRails(ctx);
   });
 
   pi.on("session_end", async (_event, ctx) => {

@@ -558,7 +558,7 @@ export function renderEditorRailApng({ frames = 24, delayMs = 120, plays = 0, ..
 }
 
 function paintEditorBorderFrame(pixels, widthPx, heightPx, {
-  edge = "top",
+  edge = "symmetric",
   borderColor = NORDIC_CYAN,
   borderAlpha = 0.95,
   glowColor = NORDIC_VIOLET,
@@ -573,17 +573,29 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
     fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, 0), withAlpha(glowColor, glowA));
     fillRect(pixels, widthPx, 0, heightPx - strokeH, widthPx, strokeH, withAlpha(borderColor, borderA));
     fillRect(pixels, widthPx, 0, heightPx - strokeH - 1, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
-  } else {
+  } else if (edge === "bottom") {
     fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, glowA), withAlpha(glowColor, 0));
     fillRect(pixels, widthPx, 0, 0, widthPx, strokeH, withAlpha(borderColor, borderA));
     fillRect(pixels, widthPx, 0, strokeH, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+  } else {
+    // Symmetric: alpha 0 at top -> glowA at center -> 0 at bottom.
+    // Bright stroke is centered in the cell with a 1px soft halo above and below.
+    const mid = Math.floor(heightPx / 2);
+    fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, mid, withAlpha(glowColor, 0), withAlpha(glowColor, glowA));
+    fillVerticalGradient(pixels, widthPx, 0, mid, widthPx, heightPx - mid, withAlpha(glowColor, glowA), withAlpha(glowColor, 0));
+    const strokeY = Math.max(0, mid - Math.floor(strokeH / 2));
+    fillRect(pixels, widthPx, 0, strokeY, widthPx, strokeH, withAlpha(borderColor, borderA));
+    if (strokeY > 0) fillRect(pixels, widthPx, 0, strokeY - 1, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+    if (strokeY + strokeH < heightPx) fillRect(pixels, widthPx, 0, strokeY + strokeH, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
   }
-  const anchorY = edge === "top" ? heightPx - 1 : 0;
-  addRadialGlow(pixels, widthPx, widthPx * (0.2 + pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
-  addRadialGlow(pixels, widthPx, widthPx * (0.8 - pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
+  const anchors = edge === "top" ? [heightPx - 1] : edge === "bottom" ? [0] : [Math.floor(heightPx / 2)];
+  for (const anchorY of anchors) {
+    addRadialGlow(pixels, widthPx, widthPx * (0.2 + pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
+    addRadialGlow(pixels, widthPx, widthPx * (0.8 - pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
+  }
 }
 
-export function renderEditorBorderFrame({ columns, edge = "top", borderColor, borderAlpha, glowColor, glowAlpha, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
+export function renderEditorBorderFrame({ columns, edge = "symmetric", borderColor, borderAlpha, glowColor, glowAlpha, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
   const cols = clampPositive(columns, 2, "columns");
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;
