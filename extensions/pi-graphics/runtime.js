@@ -7,6 +7,7 @@
 
 import {
   buildKittyUnicodePlaceholderLines,
+  buildPngVirtualPlacementAnimation,
   buildPngVirtualPlacementCommand,
   bufferToBase64,
   shouldUseUnicodePlaceholders,
@@ -49,6 +50,35 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     imageId,
     placementId,
     pngBase64: bufferToBase64(png),
+    columns,
+    rows,
+    zIndex,
+    passthrough: state.config.passthrough,
+  });
+  if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
+  const lines = buildKittyUnicodePlaceholderLines({
+    imageId,
+    placementId,
+    columns,
+    rows,
+    width,
+    caption,
+  });
+  return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted };
+}
+
+export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, rows, width, caption, zIndex } = {}) {
+  const imageId = trackOwned(state, stableKittyImageId(`agent-utils.pi-graphics.${name}`));
+  const alreadyTransmitted = state.transmittedImageIds.has(imageId);
+  const placementId = alreadyTransmitted
+    ? (state.placementByImage.get(imageId) ?? nextPlacementId(state))
+    : nextPlacementId(state);
+  if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
+  const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementAnimation({
+    imageId,
+    placementId,
+    pngBases: pngs.map((png) => bufferToBase64(png)),
+    delaysMs,
     columns,
     rows,
     zIndex,

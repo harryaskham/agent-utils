@@ -248,6 +248,69 @@ export function buildPngVirtualPlacementCommand({
   return serializeKittyGraphicsChunks(control, payload, { passthrough, chunkSize, env });
 }
 
+/**
+ * Build a kitty graphics command sequence that transmits multiple PNG frames
+ * for a single image id and starts an indefinite frame animation loop.
+ */
+export function buildPngVirtualPlacementAnimation({
+  imageId,
+  placementId,
+  pngBases,
+  delaysMs,
+  columns,
+  rows,
+  zIndex,
+  quiet = 2,
+  passthrough = "auto",
+  chunkSize,
+  env = process.env,
+} = {}) {
+  if (!Array.isArray(pngBases) || pngBases.length === 0) {
+    throw new Error("buildPngVirtualPlacementAnimation requires pngBases");
+  }
+  const delays = Array.isArray(delaysMs)
+    ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
+    : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
+  const commands = [];
+  commands.push(serializeKittyGraphicsChunks({
+    a: "T",
+    f: 100,
+    t: "d",
+    i: imageId,
+    p: placeholderPlacementId(placementId),
+    U: 1,
+    c: columns,
+    r: rows,
+    z: zIndex,
+    q: quiet,
+  }, pngBases[0], { passthrough, chunkSize, env }));
+  for (let i = 1; i < pngBases.length; i += 1) {
+    commands.push(serializeKittyGraphicsChunks({
+      a: "f",
+      f: 100,
+      t: "d",
+      i: imageId,
+      z: delays[i],
+      q: quiet,
+    }, pngBases[i], { passthrough, chunkSize, env }));
+  }
+  commands.push(serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    r: 1,
+    z: delays[0],
+    q: quiet,
+  }, "", { passthrough, env }));
+  commands.push(serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    s: 3,
+    v: 0,
+    q: quiet,
+  }, "", { passthrough, env }));
+  return commands.join("");
+}
+
 export function buildKittyUnicodePlaceholderCell({ imageId, placementId, row = 0, column = 0, includeColumn = true } = {}) {
   const imageColor = colorBytesForId(imageId, "placeholder image id");
   const diacritics = [diacriticForValue(row, "placeholder row")];

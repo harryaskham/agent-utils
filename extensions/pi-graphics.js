@@ -29,6 +29,7 @@ import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
   renderEditorBorderApng,
+  renderEditorBorderFramesPngs,
   renderEditorRailApng,
   renderGradientBorder,
   renderPromptEnclosure,

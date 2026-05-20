@@ -663,6 +663,14 @@ export function renderEditorBorderFrame({ columns, edge = "symmetric", borderCol
   return { pixels, widthPx, heightPx, columns: cols, rows: 1, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
 }
 
+export function renderEditorBorderFramesPngs({ frames = 24, ...options } = {}) {
+  const count = Math.max(1, Math.min(256, Math.trunc(Number(frames) || 24)));
+  const rendered = Array.from({ length: count }, (_, index) => renderEditorBorderFrame({ ...options, phase: (Number(options.phase) || 0) + index / count }));
+  const first = rendered[0];
+  const pngs = rendered.map((f) => encodeRgbaPng(f.pixels, f.widthPx, f.heightPx));
+  return { pngs, columns: first.columns, rows: first.rows, widthPx: first.widthPx, heightPx: first.heightPx, frames: count };
+}
+
 export function renderEditorBorderApng({ frames = 24, delayMs = 120, plays = 0, ...options } = {}) {
   const count = Math.max(1, Math.min(256, Math.trunc(Number(frames) || 24)));
   const rendered = Array.from({ length: count }, (_, index) => renderEditorBorderFrame({ ...options, phase: (Number(options.phase) || 0) + index / count }));
