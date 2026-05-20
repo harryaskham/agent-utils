@@ -25,7 +25,15 @@ import { Type } from "@sinclair/typebox";
 
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 
-import { buildScopedDeleteCommand } from "./kitty-graphics.js";
+import {
+  buildAnimationFrameSelectCommand,
+  buildPngCursorAnimationUpload,
+  buildPngCursorPlacementCommand,
+  bufferToBase64,
+  stableKittyImageId,
+  buildScopedDeleteCommand,
+  detectKittyPassthroughMode,
+} from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
   renderEditorBorderApng,
@@ -187,6 +195,9 @@ export default function piGraphicsExtension(pi) {
     animationTicks.set(imageId, entry);
   }
 
+  // Track cursor-anim images so we don't re-upload PNG payload every render.
+  const cursorAnimUploaded = new Set();
+
   function buildEditorBorderRow(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
@@ -215,6 +226,10 @@ export default function piGraphicsExtension(pi) {
       emitGraphicsCommand(placement.transmit);
       return placement.lines[0] ?? "";
     }
+    // Animated path: cursor-positioned placement embedded in the row text
+    // so the image lands where Pi writes the editor row. Frames are uploaded
+    // once; subsequent renders re-emit only the small a=p placement command,
+    // and a Pi-side ticker drives the visible frame via a=a,c=N.
     const rendered = renderEditorBorderFramesPngs({
       columns: cols,
       edge,
@@ -223,19 +238,34 @@ export default function piGraphicsExtension(pi) {
       borderAlpha: 0.95,
       glowAlpha: Math.max(0.2, alpha * 0.7),
     });
-    const placement = buildAnimatedPlacement(state, {
-      name: `editor-border-anim-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
-      pngs: rendered.pngs,
-      delaysMs: delayMs,
+    const imageKey = `editor-border-cursor-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
+    const imageId = stableKittyImageId(`agent-utils.pi-graphics.${imageKey}`);
+    state.ownedImageIds.add(imageId);
+    const placementId = 1;
+    if (!cursorAnimUploaded.has(imageId)) {
+      const upload = buildPngCursorAnimationUpload({
+        imageId,
+        pngBases: rendered.pngs.map((png) => bufferToBase64(png)),
+        delaysMs: delayMs,
+        passthrough: state.config.passthrough,
+      });
+      emitGraphicsCommand(upload);
+      cursorAnimUploaded.add(imageId);
+    }
+    const placeCmd = buildPngCursorPlacementCommand({
+      imageId,
+      placementId,
       columns: rendered.columns,
       rows: rendered.rows,
-      width: cols,
       zIndex: -1073741825,
-      autoLoop: false,
+      passthrough: state.config.passthrough,
     });
-    emitGraphicsCommand(placement.transmit);
-    ensureAnimationTicker({ imageId: placement.imageId, frames, delayMs });
-    return placement.lines[0] ?? "";
+    ensureAnimationTicker({ imageId, frames, delayMs });
+    // Embed the placement command in the rendered line text. The line itself
+    // is `cols` spaces so the cursor advances past the image footprint, then
+    // the placement command paints the image at the line's start position.
+    const filler = " ".repeat(Math.max(1, cols));
+    return `${placeCmd}${filler}`;
   }
 
   function buildEditorRailRows(width, edge) {

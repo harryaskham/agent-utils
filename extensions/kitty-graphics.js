@@ -248,6 +248,75 @@ export function buildPngVirtualPlacementCommand({
   return serializeKittyGraphicsChunks(control, payload, { passthrough, chunkSize, env });
 }
 
+// Cursor-positioned placement (non-virtual) suitable for animated images.
+// Emits an upload (a=t) plus a separate display placement (a=p) command so
+// subsequent renders can repeat just the small a=p command without resending
+// the PNG payload.
+export function buildPngCursorAnimationUpload({
+  imageId,
+  pngBases,
+  delaysMs,
+  quiet = 2,
+  passthrough = "auto",
+  chunkSize,
+  env = process.env,
+} = {}) {
+  if (!Array.isArray(pngBases) || pngBases.length === 0) {
+    throw new Error("buildPngCursorAnimationUpload requires pngBases");
+  }
+  const delays = Array.isArray(delaysMs)
+    ? pngBases.map((_, i) => Math.max(1, Math.trunc(Number(delaysMs[i] ?? delaysMs[0] ?? 100))))
+    : pngBases.map(() => Math.max(1, Math.trunc(Number(delaysMs) || 100)));
+  const commands = [];
+  commands.push(serializeKittyGraphicsChunks({
+    a: "t",
+    f: 100,
+    t: "d",
+    i: imageId,
+    q: quiet,
+  }, pngBases[0], { passthrough, chunkSize, env }));
+  for (let i = 1; i < pngBases.length; i += 1) {
+    commands.push(serializeKittyGraphicsChunks({
+      a: "f",
+      f: 100,
+      t: "d",
+      i: imageId,
+      z: delays[i],
+      q: quiet,
+    }, pngBases[i], { passthrough, chunkSize, env }));
+  }
+  commands.push(serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    r: 1,
+    z: delays[0],
+    q: quiet,
+  }, "", { passthrough, env }));
+  return commands.join("");
+}
+
+export function buildPngCursorPlacementCommand({
+  imageId,
+  placementId,
+  columns,
+  rows,
+  zIndex,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  return serializeKittyGraphicsCommand({
+    a: "p",
+    i: imageId,
+    p: placementId,
+    c: columns,
+    r: rows,
+    z: zIndex,
+    C: 1,
+    q: quiet,
+  }, "", { passthrough, env });
+}
+
 /**
  * Build a kitty graphics command sequence that transmits multiple PNG frames
  * for a single image id and starts an indefinite frame animation loop.
