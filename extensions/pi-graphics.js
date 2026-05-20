@@ -23,6 +23,8 @@ import { join } from "node:path";
 
 import { Type } from "@sinclair/typebox";
 
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
+
 import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
@@ -214,34 +216,24 @@ export default function piGraphicsExtension(pi) {
   function installEditorSurface(ctx) {
     if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return false;
     if (typeof ctx.ui?.setEditorComponent !== "function") return false;
-    const previousFactory = typeof ctx.ui?.getEditorComponent === "function" ? ctx.ui.getEditorComponent() : undefined;
-    if (typeof previousFactory !== "function") return false;
-    class PiGraphicsEditorSurface {
-      constructor(tui, theme, keybindings) {
-        this.base = previousFactory(tui, theme, keybindings);
-        try { patchDashRendersForTui(tui); } catch {}
-      }
+    if (typeof CustomEditor !== "function") return false;
+    const isDashLine = (line) => {
+      const text = String(line || "").replace(/\x1b\[[0-9;]*m/g, "").trim();
+      return text.length > 0 && /^[\s─━═]+$/.test(text);
+    };
+    class KittyEditor extends CustomEditor {
       render(width) {
-        const baseLines = this.base?.render?.(width) || [];
-        if (baseLines.length < 2) return baseLines;
-        const top = buildEditorBorderRow(width, "symmetric");
-        const bottom = buildEditorBorderRow(width, "symmetric");
-        if (!top || !bottom) return baseLines;
-        return baseLines.map((line, index) => {
-          if (index === 0) return top;
-          if (index === baseLines.length - 1) return bottom;
-          if (isEditorChromeLine(line)) return index < baseLines.length / 2 ? top : bottom;
-          return line;
-        });
+        const baseLines = super.render(width);
+        if (!Array.isArray(baseLines) || baseLines.length < 2) return baseLines;
+        const border = buildEditorBorderRow(width, "symmetric");
+        if (!border) return baseLines;
+        const next = baseLines.slice();
+        if (isDashLine(next[0])) next[0] = border;
+        if (isDashLine(next[next.length - 1])) next[next.length - 1] = border;
+        return next;
       }
-      invalidate() { this.base?.invalidate?.(); }
-      handleInput(data) { return this.base?.handleInput?.(data); }
-      getValue() { return this.base?.getValue?.(); }
-      setValue(value) { return this.base?.setValue?.(value); }
-      focus() { return this.base?.focus?.(); }
-      blur() { return this.base?.blur?.(); }
     }
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => new PiGraphicsEditorSurface(tui, theme, keybindings));
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => new KittyEditor(tui, theme, keybindings));
     return true;
   }
 
@@ -306,12 +298,6 @@ export default function piGraphicsExtension(pi) {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     applyTheme(ctx);
     installEditorSurface(ctx);
-    try {
-      ctx.ui?.setWidget?.("pi-graphics-dash-bootstrap", (tui) => {
-        try { patchDashRendersForTui(tui); } catch {}
-        return { render() { return []; }, invalidate() {} };
-      }, { placement: "aboveEditor" });
-    } catch {}
   });
 
   pi.on("session_end", async (_event, ctx) => {
