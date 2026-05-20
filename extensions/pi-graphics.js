@@ -29,6 +29,7 @@ import { buildScopedDeleteCommand } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
   renderEditorBorderApng,
+  renderEditorBorderFramesPngs,
   renderEditorRailApng,
   renderGradientBorder,
   renderPromptEnclosure,
@@ -160,23 +161,23 @@ export default function piGraphicsExtension(pi) {
     const cell = cellMetrics();
     const variant = editorVariant();
     const alpha = editorAlpha();
-    const frames = editorAnimationFrames();
-    const delayMs = editorAnimationDelayMs();
-    const apng = renderEditorBorderApng({
+    // Render a single static frame: kitty's animation protocol does not
+    // currently advance frames for virtual/U=1 Unicode-placeholder placements,
+    // and APNG fdAT chunks are not animated by the kitty graphics protocol.
+    // The static gradient border is the visible upgrade over the ASCII dash row.
+    const rendered = renderEditorBorderFramesPngs({
       columns: cols,
       edge,
       ...cell,
-      frames,
-      delayMs,
-      plays: 0,
+      frames: 1,
       borderAlpha: 0.95,
       glowAlpha: Math.max(0.2, alpha * 0.7),
     });
     const placement = buildPlacement(state, {
-      name: `editor-border-apng-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}@${delayMs}`,
-      png: apng.png,
-      columns: apng.columns,
-      rows: apng.rows,
+      name: `editor-border-static-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+      png: rendered.pngs[0],
+      columns: rendered.columns,
+      rows: rendered.rows,
       width: cols,
       zIndex: -1073741825,
     });
