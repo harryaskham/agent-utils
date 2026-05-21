@@ -569,24 +569,50 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   const borderA = Math.round(normalizeAlpha(borderAlpha, 0.95) * 255);
   const glowA = Math.round(normalizeAlpha(glowAlpha, 0.4) * 255 * (0.6 + pulse * 0.6));
   const strokeH = Math.max(2, Math.round(heightPx * 0.18));
+  const borderRgb = parseColor(borderColor);
+  const glowRgb = parseColor(glowColor);
+  const specularRgb = [
+    Math.min(255, borderRgb[0] + Math.round((255 - borderRgb[0]) * 0.6)),
+    Math.min(255, borderRgb[1] + Math.round((255 - borderRgb[1]) * 0.6)),
+    Math.min(255, borderRgb[2] + Math.round((255 - borderRgb[2]) * 0.6)),
+  ];
+  const shadowRgb = [
+    Math.max(0, Math.round(borderRgb[0] * 0.35)),
+    Math.max(0, Math.round(borderRgb[1] * 0.35)),
+    Math.max(0, Math.round(borderRgb[2] * 0.35)),
+  ];
+  function paintTwoToneStroke(strokeY) {
+    // Per-row vertical blend: top of stroke is `borderColor` (cool theme accent),
+    // bottom is `glowColor` (aurora/violet tint). Adds a glassy edge feel.
+    for (let dy = 0; dy < strokeH; dy += 1) {
+      const t = strokeH <= 1 ? 0 : dy / (strokeH - 1);
+      const r = Math.round(borderRgb[0] * (1 - t) + glowRgb[0] * t);
+      const g = Math.round(borderRgb[1] * (1 - t) + glowRgb[1] * t);
+      const b = Math.round(borderRgb[2] * (1 - t) + glowRgb[2] * t);
+      fillRect(pixels, widthPx, 0, strokeY + dy, widthPx, 1, [r, g, b, borderA]);
+    }
+    // 1px specular highlight just above the stroke (bright, low alpha).
+    if (strokeY - 1 >= 0) {
+      fillRect(pixels, widthPx, 0, strokeY - 1, widthPx, 1, [specularRgb[0], specularRgb[1], specularRgb[2], Math.round(borderA * 0.45)]);
+    }
+    // 1px shadow just below the stroke (darker, low alpha).
+    if (strokeY + strokeH < heightPx) {
+      fillRect(pixels, widthPx, 0, strokeY + strokeH, widthPx, 1, [shadowRgb[0], shadowRgb[1], shadowRgb[2], Math.round(borderA * 0.4)]);
+    }
+  }
   if (edge === "top") {
     fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, 0), withAlpha(glowColor, glowA));
-    fillRect(pixels, widthPx, 0, heightPx - strokeH, widthPx, strokeH, withAlpha(borderColor, borderA));
-    fillRect(pixels, widthPx, 0, heightPx - strokeH - 1, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+    paintTwoToneStroke(heightPx - strokeH);
   } else if (edge === "bottom") {
     fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, glowA), withAlpha(glowColor, 0));
-    fillRect(pixels, widthPx, 0, 0, widthPx, strokeH, withAlpha(borderColor, borderA));
-    fillRect(pixels, widthPx, 0, strokeH, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+    paintTwoToneStroke(0);
   } else {
     // Symmetric: alpha 0 at top -> glowA at center -> 0 at bottom.
-    // Bright stroke is centered in the cell with a 1px soft halo above and below.
     const mid = Math.floor(heightPx / 2);
     fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, mid, withAlpha(glowColor, 0), withAlpha(glowColor, glowA));
     fillVerticalGradient(pixels, widthPx, 0, mid, widthPx, heightPx - mid, withAlpha(glowColor, glowA), withAlpha(glowColor, 0));
     const strokeY = Math.max(0, mid - Math.floor(strokeH / 2));
-    fillRect(pixels, widthPx, 0, strokeY, widthPx, strokeH, withAlpha(borderColor, borderA));
-    if (strokeY > 0) fillRect(pixels, widthPx, 0, strokeY - 1, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
-    if (strokeY + strokeH < heightPx) fillRect(pixels, widthPx, 0, strokeY + strokeH, widthPx, 1, withAlpha(borderColor, Math.round(borderA * 0.55)));
+    paintTwoToneStroke(strokeY);
     // Heartbeat pulse: a bright bump that sweeps left -> right along the stroke.
     const sweepPhase = ((Number(phase) || 0) % 1 + 1) % 1;
     const peakX = sweepPhase * widthPx;
@@ -633,7 +659,7 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   // the border narrow to a fine point at the leftmost and rightmost columns so
   // it does not look hard-cut at the terminal edges.
   const fadeBand = Math.max(2, Math.round(heightPx * 0.3));
-  const horizontalTaperPx = Math.max(8, Math.round(widthPx * 0.04));
+  const horizontalTaperPx = Math.max(16, Math.round(widthPx * 0.12));
   for (let y = 0; y < heightPx; y += 1) {
     let vFactor = 1;
     if (edge === "top") {
@@ -651,7 +677,8 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
       const distRight = widthPx - 1 - x;
       const hDist = Math.min(distLeft, distRight);
       const hFactorRaw = hDist >= horizontalTaperPx ? 1 : hDist / horizontalTaperPx;
-      const hFactor = hFactorRaw * hFactorRaw;
+      // smoothstep ease: 3t^2 - 2t^3, gentler than t^2 with no hard knee.
+      const hFactor = hFactorRaw * hFactorRaw * (3 - 2 * hFactorRaw);
       const factor = Math.max(0, Math.min(1, vFactor * hFactor));
       if (factor >= 1) continue;
       const off = (y * widthPx + x) * 4 + 3;
