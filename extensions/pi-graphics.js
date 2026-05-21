@@ -53,7 +53,7 @@ import {
   createBoxChromeRuntime,
   installBoxChromeMonkeyPatch,
 } from "./pi-graphics/box-chrome.js";
-import { getThemeColorRgb } from "./pi-graphics/theme-colors.js";
+import { getThemeColorHex, getThemeColorRgb } from "./pi-graphics/theme-colors.js";
 import {
   renderEditorBoxApng,
   renderEditorBorderApng,
@@ -285,8 +285,8 @@ export default function piGraphicsExtension(pi) {
     const frames = editorAnimationFrames();
     const delayMs = editorAnimationDelayMs();
     if (frames <= 1) {
-      const borderColor = `rgb(${getThemeColorRgb(activeThemeRef, "accent", "#88c0d0").join(",")})`;
-      const glowColor = `rgb(${getThemeColorRgb(activeThemeRef, "borderAccent", "#b48ead").join(",")})`;
+      const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+      const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
       const rendered = renderEditorBorderFramesPngs({
         columns: cols,
         edge,
@@ -311,8 +311,8 @@ export default function piGraphicsExtension(pi) {
     // Animated path: virtual Unicode placeholder anchor + non-virtual relative
     // animation placement. Per-edge image ids prevent the two edges from
     // sharing a frame counter or placement.
-    const borderColor = `rgb(${getThemeColorRgb(activeThemeRef, "accent", "#88c0d0").join(",")})`;
-    const glowColor = `rgb(${getThemeColorRgb(activeThemeRef, "borderAccent", "#b48ead").join(",")})`;
+    const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
     const rendered = renderEditorBorderFramesPngs({
       columns: cols,
       edge,
