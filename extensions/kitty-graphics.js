@@ -353,7 +353,7 @@ export function buildRelativePlacementCommand({
 
 // Tiny 1×1 transparent PNG (89 504e ...) used as a virtual-placeholder anchor
 // for relative placements. Cached at module scope.
-const TRANSPARENT_PIXEL_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+const TRANSPARENT_PIXEL_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 export function transparentPixelPngBase64() {
   return TRANSPARENT_PIXEL_PNG_BASE64;
 }

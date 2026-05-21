@@ -113,6 +113,8 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_ALPHA: editor.alpha != null ? String(editor.alpha) : undefined,
     PI_GRAPHICS_EDITOR_FRAMES: editor.frames != null ? String(editor.frames) : undefined,
     PI_GRAPHICS_EDITOR_DELAY_MS: editor.delayMs != null ? String(editor.delayMs) : undefined,
+    PI_GRAPHICS_EDITOR_STYLE: editor.style != null ? String(editor.style) : undefined,
+    PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === true ? "1" : gfx.boxChrome === false ? "0" : undefined,
   };
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
@@ -535,6 +537,61 @@ export default function piGraphicsExtension(pi) {
     applyTheme(ctx);
     installEditorSurface(ctx);
     installBoxChromeOnce();
+  });
+
+  pi.registerCommand?.("gfx", {
+    description: "Inspect or change Pi Graphics modes (editor/box/mode). Usage: /gfx [editor static|animated] [box on|off] [mode on|off|debug]",
+    handler: async (args, ctx) => {
+      const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
+      const path = agentSettingsPath();
+      const settings = readJsonIfExists(path) || {};
+      const gfx = (settings.piGraphics = settings.piGraphics || {});
+      const editor = (gfx.editor = gfx.editor || {});
+      const describe = () => {
+        const lines = [
+          "Pi Graphics settings:",
+          `  mode:           ${gfx.mode ?? "on"}`,
+          `  editor.style:   ${editor.style ?? "static"} (also: animated)`,
+          `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
+          "",
+          "Usage: /gfx editor static|animated",
+          "       /gfx box on|off",
+          "       /gfx mode on|off|debug",
+          "Changes are written to ~/.pi/agent/settings.json and applied via /reload.",
+        ];
+        ctx.ui.notify(lines.join("\n"), "info");
+      };
+      if (tokens.length === 0) { describe(); return; }
+      let changed = false;
+      for (let i = 0; i < tokens.length; i += 2) {
+        const key = String(tokens[i] || "").toLowerCase();
+        const value = String(tokens[i + 1] || "").toLowerCase();
+        if (!key || !value) continue;
+        if (key === "editor") {
+          if (value === "static" || value === "animated") { editor.style = value; changed = true; }
+          else ctx.ui.notify(`unknown editor style: ${value} (use static|animated)`, "warning");
+        } else if (key === "box" || key === "box-chrome" || key === "boxchrome") {
+          if (/^(on|true|1)$/.test(value)) { gfx.boxChrome = true; changed = true; }
+          else if (/^(off|false|0)$/.test(value)) { gfx.boxChrome = false; changed = true; }
+          else ctx.ui.notify(`unknown box value: ${value} (use on|off)`, "warning");
+        } else if (key === "mode") {
+          if (/^(on|off|debug)$/.test(value)) { gfx.mode = value; changed = true; }
+          else ctx.ui.notify(`unknown mode: ${value} (use on|off|debug)`, "warning");
+        } else {
+          ctx.ui.notify(`unknown /gfx key: ${key}`, "warning");
+        }
+      }
+      if (!changed) { describe(); return; }
+      try {
+        mkdirSync(agentDir(), { recursive: true });
+        writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+      } catch (error) {
+        ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error");
+        return;
+      }
+      ctx.ui.notify("Saved Pi Graphics settings. Reloading runtime to apply...", "info");
+      try { await ctx.reload?.(); } catch {}
+    },
   });
 
   pi.on("session_end", async (_event, ctx) => {
