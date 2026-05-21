@@ -6,7 +6,6 @@
 // dependency on Pi internals.
 
 import {
-  buildAnimationFrameSelectCommand,
   buildKittyUnicodePlaceholderLines,
   buildPngVirtualPlacementAnimation,
   buildPngVirtualPlacementCommand,
@@ -96,14 +95,6 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     caption,
   });
   return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted, frames: pngs.length };
-}
-
-export function buildAnimationFrameTick(state, { imageId, frame } = {}) {
-  return buildAnimationFrameSelectCommand({
-    imageId,
-    frame,
-    passthrough: state.config.passthrough,
-  });
 }
 
 export function ensureUnicodePlacement(state) {

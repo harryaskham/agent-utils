@@ -37,6 +37,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import {
+  buildAnimationLoopCommand,
   buildKittyUnicodePlaceholderCell,
   buildPngCursorAnimationUpload,
   buildRelativePlacementCommand,
@@ -250,13 +251,10 @@ export default function piGraphicsExtension(pi) {
     // the animation loop natively. The earlier U=1 virtual placement path did
     // not repaint on s=3/v=1, but relative placements are ordinary placements
     // whose position is inherited from the virtual anchor.
-    const start = serializeKittyGraphicsCommand({
-      a: "a",
-      i: animImageId,
-      s: 3,
-      v: 1,
-      q: 2,
-    }, "", { passthrough: state.config.passthrough });
+    const start = buildAnimationLoopCommand({
+      imageId: animImageId,
+      passthrough: state.config.passthrough,
+    });
     emitGraphicsCommand(`${rel}${start}`);
     relativeUploaded.add(key);
   }

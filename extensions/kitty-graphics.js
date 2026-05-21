@@ -285,6 +285,8 @@ export function buildPngCursorAnimationUpload({
       q: quiet,
     }, pngBases[i], { passthrough, chunkSize, env }));
   }
+  // Set the root-frame gap. This is not client-side ticking: r=<frame>+z
+  // configures the terminal's native animation timeline for frame 1.
   commands.push(serializeKittyGraphicsCommand({
     a: "a",
     i: imageId,
@@ -293,6 +295,24 @@ export function buildPngCursorAnimationUpload({
     q: quiet,
   }, "", { passthrough, env }));
   return commands.join("");
+}
+
+export function buildAnimationLoopCommand({
+  imageId,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  if (!Number.isFinite(Number(imageId)) || Number(imageId) <= 0) {
+    throw new Error("buildAnimationLoopCommand requires a positive imageId");
+  }
+  return serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    s: 3,
+    v: 1,
+    q: quiet,
+  }, "", { passthrough, env });
 }
 
 export function buildPngCursorPlacementCommand({
@@ -429,38 +449,12 @@ export function buildPngVirtualPlacementAnimation({
     q: quiet,
   }, "", { passthrough, env }));
   // 5. Start indefinite loop playback (s=3, v=1). Skipped when autoLoop is
-  //    false so the caller can client-drive frame selection via a=a,c=<n>.
+  //    false so the caller can create a placement first, then start the same
+  //    terminal-managed loop after the image is attached.
   if (autoLoop) {
-    commands.push(serializeKittyGraphicsCommand({
-      a: "a",
-      i: imageId,
-      s: 3,
-      v: 1,
-      q: quiet,
-    }, "", { passthrough, env }));
+    commands.push(buildAnimationLoopCommand({ imageId, quiet, passthrough, env }));
   }
   return commands.join("");
-}
-
-// Client-driven animation tick: select frame N as the visible frame for image
-// `imageId`. Frame numbers are 1-based.
-export function buildAnimationFrameSelectCommand({
-  imageId,
-  frame,
-  quiet = 2,
-  passthrough = "auto",
-  env = process.env,
-} = {}) {
-  if (!Number.isFinite(Number(imageId)) || Number(imageId) <= 0) {
-    throw new Error("buildAnimationFrameSelectCommand requires a positive imageId");
-  }
-  const c = Math.max(1, Math.trunc(Number(frame) || 1));
-  return serializeKittyGraphicsCommand({
-    a: "a",
-    i: imageId,
-    c,
-    q: quiet,
-  }, "", { passthrough, env });
 }
 
 export function buildKittyUnicodePlaceholderCell({ imageId, placementId, row = 0, column = 0, includeColumn = true } = {}) {

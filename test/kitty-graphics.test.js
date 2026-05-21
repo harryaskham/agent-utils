@@ -4,8 +4,10 @@ import test from "node:test";
 
 import {
   KITTY_UNICODE_PLACEHOLDER,
+  buildAnimationLoopCommand,
   buildKittyUnicodePlaceholderCell,
   buildKittyUnicodePlaceholderLines,
+  buildPngCursorAnimationUpload,
   buildPngVirtualPlacementAnimation,
   buildPngVirtualPlacementCommand,
   buildScopedDeleteCommand,
@@ -88,6 +90,27 @@ test("virtual placement animation follows kitty loop semantics", () => {
   assert.ok(serialized.indexOf("_Ga=p,i=42") < serialized.indexOf("_Ga=f,f=100,t=d,i=42"));
   assert.ok(serialized.indexOf("_Ga=a,i=42,r=1") < serialized.indexOf("_Ga=a,i=42,s=3"));
   assert.doesNotMatch(serialized, /s=3,v=0/);
+});
+
+test("cursor animation upload configures frame gaps without client-side frame selection", () => {
+  const serialized = buildPngCursorAnimationUpload({
+    imageId: 77,
+    pngBases: ["YQ==", "Yg==", "Yw=="],
+    delaysMs: 33,
+    passthrough: "none",
+  });
+
+  assert.match(serialized, /_Ga=t,f=100,t=d,i=77,q=2;YQ==/);
+  assert.equal([...serialized.matchAll(/_Ga=f,f=100,t=d,i=77,z=33,q=2;/g)].length, 2);
+  assert.match(serialized, /_Ga=a,i=77,r=1,z=33,q=2/);
+  assert.doesNotMatch(serialized, /_Ga=a,i=77,c=/);
+  assert.doesNotMatch(serialized, /s=3/);
+});
+
+test("animation loop command uses terminal-managed infinite playback", () => {
+  const serialized = buildAnimationLoopCommand({ imageId: 77, passthrough: "none" });
+  assert.equal(serialized, `${ESC}_Ga=a,i=77,s=3,v=1,q=2${ESC}\\`);
+  assert.doesNotMatch(serialized, /c=/);
 });
 
 test("Unicode placeholder lines encode image id, placement id, rows, and scrollable cells", () => {
