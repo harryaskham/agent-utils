@@ -27,12 +27,16 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 
 import {
   buildAnimationFrameSelectCommand,
+  buildKittyUnicodePlaceholderCell,
   buildPngCursorAnimationUpload,
-  buildPngCursorPlacementCommand,
+  buildRelativePlacementCommand,
   bufferToBase64,
   stableKittyImageId,
   buildScopedDeleteCommand,
   detectKittyPassthroughMode,
+  serializeKittyGraphicsCommand,
+  serializeKittyGraphicsChunks,
+  transparentPixelPngBase64,
 } from "./kitty-graphics.js";
 import {
   renderEditorBoxApng,
@@ -195,8 +199,66 @@ export default function piGraphicsExtension(pi) {
     animationTicks.set(imageId, entry);
   }
 
-  // Track cursor-anim images so we don't re-upload PNG payload every render.
-  const cursorAnimUploaded = new Set();
+  // Track which images have already been uploaded so we never resend payload.
+  const uploadedImages = new Set();
+  const relativeUploaded = new Set();
+
+  function ensureAnchorUploaded({ anchorImageId, anchorPlacementId }) {
+    if (uploadedImages.has(anchorImageId)) return;
+    // Upload a 1×1 transparent PNG for the anchor image.
+    const upload = serializeKittyGraphicsChunks({
+      a: "t",
+      f: 100,
+      t: "d",
+      i: anchorImageId,
+      q: 2,
+    }, transparentPixelPngBase64(), { passthrough: state.config.passthrough });
+    // Create the virtual placement that Unicode placeholders will anchor to.
+    const place = serializeKittyGraphicsCommand({
+      a: "p",
+      i: anchorImageId,
+      p: anchorPlacementId,
+      U: 1,
+      c: 1,
+      r: 1,
+      z: -1073741825,
+      q: 2,
+    }, "", { passthrough: state.config.passthrough });
+    emitGraphicsCommand(`${upload}${place}`);
+    state.ownedImageIds.add(anchorImageId);
+    uploadedImages.add(anchorImageId);
+  }
+
+  function ensureRelativeAnimUploaded({ animImageId, anchorImageId, anchorPlacementId, animPlacementId, pngs, delayMs, columns, rows, frames }) {
+    const key = `${animImageId}->${anchorImageId}/${anchorPlacementId}`;
+    if (relativeUploaded.has(key)) return;
+    // Upload animation frames to the non-virtual animated image id.
+    if (!uploadedImages.has(animImageId)) {
+      const upload = buildPngCursorAnimationUpload({
+        imageId: animImageId,
+        pngBases: pngs.map((png) => bufferToBase64(png)),
+        delaysMs: delayMs,
+        passthrough: state.config.passthrough,
+      });
+      emitGraphicsCommand(upload);
+      state.ownedImageIds.add(animImageId);
+      uploadedImages.add(animImageId);
+    }
+    // Create a relative non-virtual placement attached to the anchor.
+    const rel = buildRelativePlacementCommand({
+      imageId: animImageId,
+      placementId: animPlacementId,
+      parentImageId: anchorImageId,
+      parentPlacementId: anchorPlacementId,
+      columns,
+      rows,
+      zIndex: -1073741825,
+      passthrough: state.config.passthrough,
+    });
+    emitGraphicsCommand(rel);
+    ensureAnimationTicker({ imageId: animImageId, frames, delayMs });
+    relativeUploaded.add(key);
+  }
 
   function buildEditorBorderRow(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
@@ -226,10 +288,9 @@ export default function piGraphicsExtension(pi) {
       emitGraphicsCommand(placement.transmit);
       return placement.lines[0] ?? "";
     }
-    // Animated path: cursor-positioned placement embedded in the row text
-    // so the image lands where Pi writes the editor row. Frames are uploaded
-    // once; subsequent renders re-emit only the small a=p placement command,
-    // and a Pi-side ticker drives the visible frame via a=a,c=N.
+    // Animated path: virtual Unicode placeholder anchor + non-virtual relative
+    // animation placement. Per-edge image ids prevent the two edges from
+    // sharing a frame counter or placement.
     const rendered = renderEditorBorderFramesPngs({
       columns: cols,
       edge,
@@ -238,34 +299,39 @@ export default function piGraphicsExtension(pi) {
       borderAlpha: 0.95,
       glowAlpha: Math.max(0.2, alpha * 0.7),
     });
-    const imageKey = `editor-border-cursor-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
-    const imageId = stableKittyImageId(`agent-utils.pi-graphics.${imageKey}`);
-    state.ownedImageIds.add(imageId);
-    const placementId = 1;
-    if (!cursorAnimUploaded.has(imageId)) {
-      const upload = buildPngCursorAnimationUpload({
-        imageId,
-        pngBases: rendered.pngs.map((png) => bufferToBase64(png)),
-        delaysMs: delayMs,
-        passthrough: state.config.passthrough,
-      });
-      emitGraphicsCommand(upload);
-      cursorAnimUploaded.add(imageId);
-    }
-    const placeCmd = buildPngCursorPlacementCommand({
-      imageId,
-      placementId,
+    const anchorKey = `editor-border-anchor-${edge}-${cols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    const animKey = `editor-border-anim-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
+    const anchorImageId = stableKittyImageId(`agent-utils.pi-graphics.${anchorKey}`);
+    const animImageId = stableKittyImageId(`agent-utils.pi-graphics.${animKey}`);
+    const anchorPlacementId = 0xa0 + (edge === "bottom" ? 2 : 1);
+    const animPlacementId = 0xb0 + (edge === "bottom" ? 2 : 1);
+    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
+    ensureRelativeAnimUploaded({
+      animImageId,
+      anchorImageId,
+      anchorPlacementId,
+      animPlacementId,
+      pngs: rendered.pngs,
+      delayMs,
       columns: rendered.columns,
       rows: rendered.rows,
-      zIndex: -1073741825,
-      passthrough: state.config.passthrough,
+      frames,
     });
-    ensureAnimationTicker({ imageId, frames, delayMs });
-    // Embed the placement command in the rendered line text. The line itself
-    // is `cols` spaces so the cursor advances past the image footprint, then
-    // the placement command paints the image at the line's start position.
-    const filler = " ".repeat(Math.max(1, cols));
-    return `${placeCmd}${filler}`;
+    // Render the editor row as a single Unicode placeholder cell at column 0
+    // followed by transparent spaces. The placeholder anchors the virtual
+    // placement; the relative non-virtual animation placement follows it.
+    const anchorCell = buildKittyUnicodePlaceholderCell({
+      imageId: anchorImageId,
+      placementId: anchorPlacementId,
+      row: 0,
+      column: 0,
+      includeColumn: true,
+    });
+    const ESC = "\x1b";
+    const fg = `${ESC}[38;2;${(anchorImageId >> 16) & 0xff};${(anchorImageId >> 8) & 0xff};${anchorImageId & 0xff}m`;
+    const reset = `${ESC}[39;59m`;
+    const filler = " ".repeat(Math.max(0, cols - 1));
+    return `${fg}${anchorCell}${reset}${filler}`;
   }
 
   function buildEditorRailRows(width, edge) {

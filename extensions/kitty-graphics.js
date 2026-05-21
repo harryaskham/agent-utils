@@ -317,6 +317,47 @@ export function buildPngCursorPlacementCommand({
   }, "", { passthrough, env });
 }
 
+// Relative placement: position image `imageId`/`placementId` relative to the
+// parent placement (`parentImageId`/`parentPlacementId`) with optional H/V cell
+// offsets. Used to attach a non-virtual animated image to a virtual Unicode
+// placeholder anchor so the animation follows the anchor as the TUI moves it.
+export function buildRelativePlacementCommand({
+  imageId,
+  placementId,
+  parentImageId,
+  parentPlacementId,
+  hOffset = 0,
+  vOffset = 0,
+  columns,
+  rows,
+  zIndex,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  const control = {
+    a: "p",
+    i: imageId,
+    p: placementId,
+    P: parentImageId,
+    Q: parentPlacementId,
+    c: columns,
+    r: rows,
+    z: zIndex,
+    q: quiet,
+  };
+  if (Number.isFinite(Number(hOffset)) && Number(hOffset) !== 0) control.H = Math.trunc(Number(hOffset));
+  if (Number.isFinite(Number(vOffset)) && Number(vOffset) !== 0) control.V = Math.trunc(Number(vOffset));
+  return serializeKittyGraphicsCommand(control, "", { passthrough, env });
+}
+
+// Tiny 1×1 transparent PNG (89 504e ...) used as a virtual-placeholder anchor
+// for relative placements. Cached at module scope.
+const TRANSPARENT_PIXEL_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+export function transparentPixelPngBase64() {
+  return TRANSPARENT_PIXEL_PNG_BASE64;
+}
+
 /**
  * Build a kitty graphics command sequence that transmits multiple PNG frames
  * for a single image id and starts an indefinite frame animation loop.

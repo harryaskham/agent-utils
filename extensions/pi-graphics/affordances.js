@@ -629,26 +629,33 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   }
   // Hard guarantee: alpha goes to zero at the cell edges so the glyph reads as
   // a freestanding band with no abutting cutoff. We rescale alpha within an
-  // edge fade band; the bright center stays opaque.
+  // edge fade band; the bright center stays opaque. The horizontal taper makes
+  // the border narrow to a fine point at the leftmost and rightmost columns so
+  // it does not look hard-cut at the terminal edges.
   const fadeBand = Math.max(2, Math.round(heightPx * 0.3));
+  const horizontalTaperPx = Math.max(8, Math.round(widthPx * 0.04));
   for (let y = 0; y < heightPx; y += 1) {
-    let factor = 1;
+    let vFactor = 1;
     if (edge === "top") {
-      // bottom is the editor edge -> stay opaque; top should fade to 0
-      if (y < fadeBand) factor = y / fadeBand;
+      if (y < fadeBand) vFactor = y / fadeBand;
     } else if (edge === "bottom") {
-      if (y >= heightPx - fadeBand) factor = (heightPx - 1 - y) / fadeBand;
+      if (y >= heightPx - fadeBand) vFactor = (heightPx - 1 - y) / fadeBand;
     } else {
       const distTop = y;
       const distBottom = heightPx - 1 - y;
       const dist = Math.min(distTop, distBottom);
-      if (dist < fadeBand) factor = dist / fadeBand;
+      if (dist < fadeBand) vFactor = dist / fadeBand;
     }
-    if (factor >= 1) continue;
-    const f = Math.max(0, Math.min(1, factor));
     for (let x = 0; x < widthPx; x += 1) {
+      const distLeft = x;
+      const distRight = widthPx - 1 - x;
+      const hDist = Math.min(distLeft, distRight);
+      const hFactorRaw = hDist >= horizontalTaperPx ? 1 : hDist / horizontalTaperPx;
+      const hFactor = hFactorRaw * hFactorRaw;
+      const factor = Math.max(0, Math.min(1, vFactor * hFactor));
+      if (factor >= 1) continue;
       const off = (y * widthPx + x) * 4 + 3;
-      pixels[off] = Math.round(pixels[off] * f);
+      pixels[off] = Math.round(pixels[off] * factor);
     }
   }
 }
