@@ -156,6 +156,12 @@ export default function piGraphicsExtension(pi) {
     return Number.isFinite(raw) ? Math.max(0, Math.min(8, Math.trunc(raw))) : 0;
   }
 
+  function editorStyle() {
+    const env = gfxEnv();
+    const raw = String(env.PI_GRAPHICS_EDITOR_STYLE || "").trim().toLowerCase();
+    return raw === "animated" ? "animated" : "static";
+  }
+
   function editorAnimationFrames() {
     const env = gfxEnv();
     const raw = Number(env.PI_GRAPHICS_EDITOR_FRAMES);
