@@ -539,8 +539,75 @@ export default function piGraphicsExtension(pi) {
     installBoxChromeOnce();
   });
 
+  function defaultGfxPresets(settings, ctx) {
+    const currentTheme = String(settings.theme || settings.piGraphics?.theme || "kitty-graphics-nord");
+    const themeNames = [];
+    for (const name of [currentTheme, "kitty-graphics-nord", "kitty-graphics", "dark", "light"]) {
+      if (name && !themeNames.includes(name)) themeNames.push(name);
+    }
+    const available = (() => {
+      try { return new Set((ctx?.ui?.getAllThemes?.() || []).map((t) => t.name || t)); } catch { return null; }
+    })();
+    const themes = available ? themeNames.filter((name) => available.has(name)) : themeNames;
+    const baseThemes = themes.length ? themes : [currentTheme];
+    const presets = [];
+    for (const theme of baseThemes) {
+      presets.push({ name: `${theme}:static`, theme, mode: "on", editorStyle: "static", boxChrome: false });
+      presets.push({ name: `${theme}:animated`, theme, mode: "on", editorStyle: "animated", boxChrome: false });
+      presets.push({ name: `${theme}:boxes`, theme, mode: "on", editorStyle: "static", boxChrome: true });
+    }
+    presets.push({ name: "graphics-off", theme: currentTheme, mode: "off", editorStyle: "static", boxChrome: false });
+    return presets;
+  }
+
+  function getGfxPresets(settings, ctx) {
+    const configured = settings.piGraphics?.presets;
+    if (Array.isArray(configured) && configured.length > 0) return configured;
+    return defaultGfxPresets(settings, ctx);
+  }
+
+  function applyGfxPreset(settings, preset) {
+    const gfx = (settings.piGraphics = settings.piGraphics || {});
+    const editor = (gfx.editor = gfx.editor || {});
+    if (preset.theme) {
+      settings.theme = preset.theme;
+      gfx.theme = preset.theme;
+    }
+    if (preset.mode) gfx.mode = preset.mode;
+    if (preset.editorStyle) editor.style = preset.editorStyle;
+    if (preset.editor?.style) editor.style = preset.editor.style;
+    if (preset.boxChrome !== undefined) gfx.boxChrome = Boolean(preset.boxChrome);
+    if (preset.features && typeof preset.features === "object") gfx.features = { ...(gfx.features || {}), ...preset.features };
+    gfx.activePresetIndex = preset.index;
+  }
+
+  function saveSettings(settings) {
+    mkdirSync(agentDir(), { recursive: true });
+    writeFileSync(agentSettingsPath(), JSON.stringify(settings, null, 2) + "\n");
+  }
+
+  async function applyGfxSettingsAndReload(ctx, settings, message = "Saved Pi Graphics settings. Reloading runtime to apply...") {
+    try { saveSettings(settings); }
+    catch (error) { ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error"); return false; }
+    ctx.ui.notify(message, "info");
+    try { await ctx.reload?.(); } catch {}
+    return true;
+  }
+
+  async function cycleGfxPreset(ctx, direction = 1) {
+    const settings = readJsonIfExists(agentSettingsPath()) || {};
+    const gfx = (settings.piGraphics = settings.piGraphics || {});
+    const presets = getGfxPresets(settings, ctx).map((p, index) => ({ ...p, index }));
+    if (!presets.length) { ctx.ui.notify("No Pi Graphics presets configured.", "warning"); return; }
+    const current = Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) : -1;
+    const nextIndex = ((Math.trunc(current) + direction) % presets.length + presets.length) % presets.length;
+    const preset = presets[nextIndex];
+    applyGfxPreset(settings, preset);
+    await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics preset ${nextIndex + 1}/${presets.length}: ${preset.name || "unnamed"}. Reloading...`);
+  }
+
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes (editor/box/mode). Usage: /gfx [editor static|animated] [box on|off] [mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [next|presets|preset <n|name>|editor static|animated|box on|off|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -548,20 +615,42 @@ export default function piGraphicsExtension(pi) {
       const gfx = (settings.piGraphics = settings.piGraphics || {});
       const editor = (gfx.editor = gfx.editor || {});
       const describe = () => {
+        const presets = getGfxPresets(settings, ctx);
         const lines = [
           "Pi Graphics settings:",
           `  mode:           ${gfx.mode ?? "on"}`,
+          `  theme:          ${settings.theme || gfx.theme || "(default)"}`,
           `  editor.style:   ${editor.style ?? "static"} (also: animated)`,
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
+          `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           "",
-          "Usage: /gfx editor static|animated",
+          "Usage: /gfx next | /gfx presets | /gfx preset <n|name>",
+          "       /gfx editor static|animated",
           "       /gfx box on|off",
           "       /gfx mode on|off|debug",
-          "Changes are written to ~/.pi/agent/settings.json and applied via /reload.",
+          "Ctrl+t cycles presets when keybindings free it from app.thinking.toggle.",
         ];
         ctx.ui.notify(lines.join("\n"), "info");
       };
       if (tokens.length === 0) { describe(); return; }
+      const action = String(tokens[0] || "").toLowerCase();
+      if (action === "next" || action === "cycle") { await cycleGfxPreset(ctx, 1); return; }
+      if (action === "prev" || action === "previous") { await cycleGfxPreset(ctx, -1); return; }
+      if (action === "presets") {
+        const presets = getGfxPresets(settings, ctx);
+        ctx.ui.notify(presets.map((p, i) => `${i + 1}. ${p.name || "unnamed"} — theme=${p.theme || settings.theme || "default"}, editor=${p.editorStyle || p.editor?.style || "static"}, box=${p.boxChrome ? "on" : "off"}, mode=${p.mode || "on"}`).join("\n"), "info");
+        return;
+      }
+      if (action === "preset") {
+        const query = String(tokens[1] || "");
+        const presets = getGfxPresets(settings, ctx).map((p, index) => ({ ...p, index }));
+        const number = Number(query);
+        const preset = Number.isFinite(number) ? presets[Math.trunc(number) - 1] : presets.find((p) => String(p.name || "").toLowerCase() === query.toLowerCase());
+        if (!preset) { ctx.ui.notify(`Unknown Pi Graphics preset: ${query}`, "warning"); return; }
+        applyGfxPreset(settings, preset);
+        await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics preset ${preset.index + 1}/${presets.length}: ${preset.name || "unnamed"}. Reloading...`);
+        return;
+      }
       let changed = false;
       for (let i = 0; i < tokens.length; i += 2) {
         const key = String(tokens[i] || "").toLowerCase();
@@ -577,21 +666,20 @@ export default function piGraphicsExtension(pi) {
         } else if (key === "mode") {
           if (/^(on|off|debug)$/.test(value)) { gfx.mode = value; changed = true; }
           else ctx.ui.notify(`unknown mode: ${value} (use on|off|debug)`, "warning");
+        } else if (key === "theme") {
+          settings.theme = value; gfx.theme = value; changed = true;
         } else {
           ctx.ui.notify(`unknown /gfx key: ${key}`, "warning");
         }
       }
       if (!changed) { describe(); return; }
-      try {
-        mkdirSync(agentDir(), { recursive: true });
-        writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
-      } catch (error) {
-        ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error");
-        return;
-      }
-      ctx.ui.notify("Saved Pi Graphics settings. Reloading runtime to apply...", "info");
-      try { await ctx.reload?.(); } catch {}
+      await applyGfxSettingsAndReload(ctx, settings);
     },
+  });
+
+  pi.registerShortcut?.("ctrl+t", {
+    description: "Cycle Pi Graphics visual presets",
+    handler: async (ctx) => cycleGfxPreset(ctx, 1),
   });
 
   pi.on("session_end", async (_event, ctx) => {
