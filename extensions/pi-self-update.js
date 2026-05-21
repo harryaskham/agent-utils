@@ -447,6 +447,20 @@ export default async function piSelfUpdateExtension(pi) {
         ctx.ui.notify("Usage: /update [--no-reload] — run pi update --extensions, then reload and refresh active tools.", "info");
         return;
       }
+      if (updateRunning && blockingUpdatePromise) {
+        ctx.ui.notify("Background pi update --extensions is already running; awaiting it...", "info");
+        const bgResult = await blockingUpdatePromise.catch(() => null);
+        blockingUpdatePromise = null;
+        const ok = bgResult && Number(bgResult.code || 0) === 0 && !bgResult.killed;
+        const reloadWorthy = updateLooksReloadWorthy(bgResult || {});
+        if (bgResult) ctx.ui.notify(formatUpdateResult(bgResult, { ...options, reloadWorthy }), ok || reloadWorthy ? "info" : "error");
+        if (options.reload) {
+          queueReloadToolsActivate(pi, queuedFollowUps);
+          ctx.ui.notify("Reloading Pi runtime and refreshing tools after background update...", "info");
+          await ctx.reload();
+        }
+        return;
+      }
       if (updateRunning) {
         ctx.ui.notify("pi extension update is already running in this session", "warning");
         return;
