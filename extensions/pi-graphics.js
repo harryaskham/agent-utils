@@ -23,7 +23,17 @@ import { join } from "node:path";
 
 import { Type } from "@sinclair/typebox";
 
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import {
+  AssistantMessageComponent,
+  BashExecutionComponent,
+  BranchSummaryMessageComponent,
+  CompactionSummaryMessageComponent,
+  CustomEditor,
+  CustomMessageComponent,
+  SkillInvocationMessageComponent,
+  ToolExecutionComponent,
+  UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
 
 import {
   buildAnimationFrameSelectCommand,
@@ -38,6 +48,12 @@ import {
   serializeKittyGraphicsChunks,
   transparentPixelPngBase64,
 } from "./kitty-graphics.js";
+import {
+  BOX_TYPE_THEME_TOKENS,
+  createBoxChromeRuntime,
+  installBoxChromeMonkeyPatch,
+} from "./pi-graphics/box-chrome.js";
+import { getThemeColorRgb } from "./pi-graphics/theme-colors.js";
 import {
   renderEditorBoxApng,
   renderEditorBorderApng,
@@ -269,11 +285,15 @@ export default function piGraphicsExtension(pi) {
     const frames = editorAnimationFrames();
     const delayMs = editorAnimationDelayMs();
     if (frames <= 1) {
+      const borderColor = `rgb(${getThemeColorRgb(activeThemeRef, "accent", "#88c0d0").join(",")})`;
+      const glowColor = `rgb(${getThemeColorRgb(activeThemeRef, "borderAccent", "#b48ead").join(",")})`;
       const rendered = renderEditorBorderFramesPngs({
         columns: cols,
         edge,
         ...cell,
         frames: 1,
+        borderColor,
+        glowColor,
         borderAlpha: 0.95,
         glowAlpha: Math.max(0.2, alpha * 0.7),
       });
@@ -291,11 +311,15 @@ export default function piGraphicsExtension(pi) {
     // Animated path: virtual Unicode placeholder anchor + non-virtual relative
     // animation placement. Per-edge image ids prevent the two edges from
     // sharing a frame counter or placement.
+    const borderColor = `rgb(${getThemeColorRgb(activeThemeRef, "accent", "#88c0d0").join(",")})`;
+    const glowColor = `rgb(${getThemeColorRgb(activeThemeRef, "borderAccent", "#b48ead").join(",")})`;
     const rendered = renderEditorBorderFramesPngs({
       columns: cols,
       edge,
       ...cell,
       frames,
+      borderColor,
+      glowColor,
       borderAlpha: 0.95,
       glowAlpha: Math.max(0.2, alpha * 0.7),
     });
@@ -456,11 +480,47 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui.setWidget("pi-graphics-editor-bottom", factory("bottom"), { placement: "belowEditor" }); } catch {}
   }
 
+  let boxChromeInstalled = false;
+  let activeThemeRef = null;
+
+  function installBoxChromeOnce() {
+    if (boxChromeInstalled) return;
+    if (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) return;
+    const runtime = createBoxChromeRuntime({
+      emitGraphicsCommand,
+      state,
+      passthrough: state.config.passthrough,
+      cellWidthPx: cellMetrics().cellWidthPx,
+      cellHeightPx: cellMetrics().cellHeightPx,
+      resolveTheme({ type } = {}) {
+        const token = (type && BOX_TYPE_THEME_TOKENS[type]) || "accent";
+        const colorRgb = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
+        return { colorRgb };
+      },
+    });
+    installBoxChromeMonkeyPatch({
+      components: {
+        assistant: AssistantMessageComponent,
+        tool: ToolExecutionComponent,
+        bash: BashExecutionComponent,
+        user: UserMessageComponent,
+        custom: CustomMessageComponent,
+        skill: SkillInvocationMessageComponent,
+        branch: BranchSummaryMessageComponent,
+        compaction: CompactionSummaryMessageComponent,
+      },
+      runtime,
+    });
+    boxChromeInstalled = true;
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     writeGraphicsCommand = resolveGraphicsWriter(ctx);
+    activeThemeRef = ctx?.ui?.theme || null;
     applyTheme(ctx);
     installEditorSurface(ctx);
+    installBoxChromeOnce();
   });
 
   pi.on("session_end", async (_event, ctx) => {
