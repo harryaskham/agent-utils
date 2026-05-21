@@ -16,7 +16,10 @@ import {
 import { encodeRgbaPng, makeCanvas } from "./png-renderer.js";
 import { getThemeColorRgb } from "./theme-colors.js";
 
-const BOX_Z_INDEX = -1073741825;
+// Use a shallow negative z-index: under text, but above terminal cell
+// backgrounds/non-default SGR bg fills. The previous very-negative value hid
+// chrome behind Pi's colored cell backgrounds.
+const BOX_Z_INDEX = -1;
 const ESC = "\x1b";
 
 // Type -> primary theme token mapping. Each surface picks one token that drives
@@ -30,6 +33,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   skill: "accent",
   branch: "muted",
   compaction: "muted",
+  footer: "accent",
 };
 
 function withAlpha([r, g, b], a) {

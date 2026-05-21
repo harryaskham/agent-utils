@@ -25,7 +25,7 @@ test("renderBoxStripPng produces non-empty PNG for top/mid/bot kinds", () => {
 });
 
 test("BOX_TYPE_THEME_TOKENS covers all expected types", () => {
-  for (const type of ["assistant", "tool", "bash", "user", "custom", "skill", "branch", "compaction"]) {
+  for (const type of ["assistant", "tool", "bash", "user", "custom", "skill", "branch", "compaction", "footer"]) {
     assert.ok(BOX_TYPE_THEME_TOKENS[type], `missing token for ${type}`);
   }
 });

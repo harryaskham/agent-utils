@@ -29,6 +29,7 @@ import {
   BranchSummaryMessageComponent,
   CompactionSummaryMessageComponent,
   CustomEditor,
+  FooterComponent,
   CustomMessageComponent,
   SkillInvocationMessageComponent,
   ToolExecutionComponent,
@@ -36,7 +37,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import {
-  buildAnimationFrameSelectCommand,
   buildKittyUnicodePlaceholderCell,
   buildPngCursorAnimationUpload,
   buildRelativePlacementCommand,
@@ -56,7 +56,6 @@ import {
 import { getThemeColorHex, getThemeColorRgb } from "./pi-graphics/theme-colors.js";
 import {
   renderEditorBoxApng,
-  renderEditorBorderApng,
   renderEditorBorderFramesPngs,
   renderEditorRailApng,
   renderGradientBorder,
@@ -64,8 +63,6 @@ import {
   resolveCellMetrics,
 } from "./pi-graphics/affordances.js";
 import {
-  buildAnimatedPlacement,
-  buildAnimationFrameTick,
   buildPlacement,
   ensureUnicodePlacement,
   makeState,
@@ -193,36 +190,6 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
   }
 
-  // Animation ticker state: keyed by imageId.
-  const animationTicks = new Map(); // imageId -> { frames, intervalId, frame, delayMs }
-
-  function stopAnimationTicker(imageId) {
-    const entry = animationTicks.get(imageId);
-    if (!entry) return;
-    try { clearInterval(entry.intervalId); } catch {}
-    animationTicks.delete(imageId);
-  }
-
-  function stopAllAnimationTickers() {
-    for (const id of [...animationTicks.keys()]) stopAnimationTicker(id);
-  }
-
-  function ensureAnimationTicker({ imageId, frames, delayMs }) {
-    if (!imageId || frames <= 1) return;
-    const existing = animationTicks.get(imageId);
-    if (existing && existing.frames === frames && existing.delayMs === delayMs) return;
-    if (existing) stopAnimationTicker(imageId);
-    if (typeof writeGraphicsCommand !== "function") return;
-    const entry = { imageId, frames, delayMs, frame: 1, intervalId: null };
-    entry.intervalId = setInterval(() => {
-      entry.frame = (entry.frame % frames) + 1;
-      const command = buildAnimationFrameTick(state, { imageId, frame: entry.frame });
-      try { writeGraphicsCommand(command); } catch {}
-    }, Math.max(8, Math.min(2000, Math.trunc(Number(delayMs) || 100))));
-    if (typeof entry.intervalId?.unref === "function") entry.intervalId.unref();
-    animationTicks.set(imageId, entry);
-  }
-
   // Track which images have already been uploaded so we never resend payload.
   const uploadedImages = new Set();
   const relativeUploaded = new Set();
@@ -279,8 +246,18 @@ export default function piGraphicsExtension(pi) {
       zIndex: -1073741825,
       passthrough: state.config.passthrough,
     });
-    emitGraphicsCommand(rel);
-    ensureAnimationTicker({ imageId: animImageId, frames, delayMs });
+    // Now that the non-virtual relative placement exists, let the terminal run
+    // the animation loop natively. The earlier U=1 virtual placement path did
+    // not repaint on s=3/v=1, but relative placements are ordinary placements
+    // whose position is inherited from the virtual anchor.
+    const start = serializeKittyGraphicsCommand({
+      a: "a",
+      i: animImageId,
+      s: 3,
+      v: 1,
+      q: 2,
+    }, "", { passthrough: state.config.passthrough });
+    emitGraphicsCommand(`${rel}${start}`);
     relativeUploaded.add(key);
   }
 
@@ -527,6 +504,7 @@ export default function piGraphicsExtension(pi) {
         skill: SkillInvocationMessageComponent,
         branch: BranchSummaryMessageComponent,
         compaction: CompactionSummaryMessageComponent,
+        footer: FooterComponent,
       },
       runtime,
     });
@@ -701,7 +679,6 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("session_end", async (_event, ctx) => {
-    stopAllAnimationTickers();
     writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
