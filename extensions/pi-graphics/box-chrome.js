@@ -247,7 +247,16 @@ export function createBoxChromeRuntime({
       column: 0,
       includeColumn: true,
     });
-    return `${fg}${cell}${ESC}[39m${lineText}`;
+    // Replace the first visible cell of the line with the placeholder so the
+    // rendered visible width remains unchanged. Strip leading SGR escapes,
+    // skip the first visible code point, then re-emit the original SGR
+    // prefix so the rest of the line keeps its styling.
+    const text = String(lineText || "");
+    const leadingSgr = (text.match(/^(?:\x1b\[[0-9;]*m)+/) || [""])[0];
+    const afterSgr = text.slice(leadingSgr.length);
+    const codepoints = Array.from(afterSgr);
+    const rest = codepoints.slice(1).join("");
+    return `${fg}${cell}${ESC}[39m${leadingSgr}${rest}`;
   }
 
   function applyToRows({ type, instanceId, lines }) {
@@ -283,7 +292,7 @@ function computeMaxVisibleWidth(lines) {
 }
 
 // Idempotent monkey-patcher for built-in Pi message component classes.
-export function installBoxChromeMonkeyPatch({ components, runtime }) {
+export function installBoxChromeMonkeyPatch({ components, runtime, onWrap = () => {}, onCall = () => {} }) {
   let instanceCounter = 0;
   const wrappedClasses = new Set();
   for (const [type, ComponentCls] of Object.entries(components)) {
@@ -299,6 +308,7 @@ export function installBoxChromeMonkeyPatch({ components, runtime }) {
         this.__piGraphicsInstanceId = instanceCounter;
       }
       try {
+        onCall(type);
         return runtime.applyToRows({ type, instanceId: this.__piGraphicsInstanceId, lines });
       } catch {
         return lines;
@@ -306,6 +316,7 @@ export function installBoxChromeMonkeyPatch({ components, runtime }) {
     };
     ComponentCls.__piGraphicsBoxChromeWrapped = true;
     wrappedClasses.add(ComponentCls);
+    try { onWrap(type, ComponentCls?.name); } catch {}
   }
   return { wrappedClasses };
 }

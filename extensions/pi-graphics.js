@@ -17,7 +17,7 @@
 // has been removed. The goal is to prove the graphics primitive layer before
 // adding decorative chrome.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, appendFileSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -408,11 +408,19 @@ export default function piGraphicsExtension(pi) {
       render(width) {
         const baseLines = super.render(width);
         if (!Array.isArray(baseLines) || baseLines.length < 2) return baseLines;
-        const border = buildEditorBorderRow(width, "symmetric");
-        if (!border) return baseLines;
         const next = baseLines.slice();
-        if (isDashLine(next[0])) next[0] = border;
-        if (isDashLine(next[next.length - 1])) next[next.length - 1] = border;
+        const dashIndices = [];
+        for (let i = 0; i < next.length; i += 1) {
+          if (isDashLine(next[i])) dashIndices.push(i);
+        }
+        if (dashIndices.length === 0) return baseLines;
+        const firstDash = dashIndices[0];
+        const lastDash = dashIndices[dashIndices.length - 1];
+        const top = buildEditorBorderRow(width, "top");
+        const bot = firstDash !== lastDash ? buildEditorBorderRow(width, "bottom") : null;
+        if (!top) return baseLines;
+        next[firstDash] = top;
+        if (bot && lastDash !== firstDash) next[lastDash] = bot;
         return next;
       }
     }
@@ -510,6 +518,12 @@ export default function piGraphicsExtension(pi) {
         compaction: CompactionSummaryMessageComponent,
       },
       runtime,
+      onWrap(type, clsName) {
+        try { appendFileSync(`/tmp/pi-graphics-boxchrome.log`, `${new Date().toISOString()} wrapped ${type}=${clsName}\n`); } catch {}
+      },
+      onCall(type) {
+        try { appendFileSync(`/tmp/pi-graphics-boxchrome.log`, `${new Date().toISOString()} call ${type}\n`); } catch {}
+      },
     });
     boxChromeInstalled = true;
   }
