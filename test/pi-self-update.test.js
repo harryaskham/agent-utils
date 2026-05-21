@@ -63,7 +63,7 @@ test("/update runs pi update --extensions from home and reloads on success", asy
   assert.equal(h.lastExec.command, "pi");
   assert.deepEqual(h.lastExec.args, ["update", "--extensions"]);
   assert.equal(h.notifications.at(0).message, "Running pi update --extensions from home directory...");
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
+  assert.deepEqual(h.userMessages, []);
   assert.match(h.notifications.at(-2).message, /pi update --extensions exited with code 0/);
   assert.match(h.notifications.at(-1).message, /reloading Pi runtime/);
 });
@@ -110,14 +110,15 @@ test("/update treats Nix read-only self-update failure as reload-worthy", async 
   assert.match(h.notifications.at(-2).message, /reload: requested after package update/);
 });
 
-test("pi_self_update tool runs update and queues reload-tools follow-up", async () => {
+test("pi_self_update tool runs update without queueing reload-tools follow-up", async () => {
   const h = makeHarness();
   await piSelfUpdateExtension(h.pi);
 
   const result = await h.tools.get("pi_self_update").execute("tool-1", {}, null, null, h.ctx);
 
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
-  assert.equal(result.details.queued, true);
+  assert.deepEqual(h.userMessages, []);
+  assert.equal(result.details.queued, false);
+  assert.match(result.content[0].text, /No follow-up slash command was queued/);
 });
 
 test("pi_self_update dryRun reports without queueing", async () => {
@@ -132,14 +133,14 @@ test("pi_self_update dryRun reports without queueing", async () => {
   assert.deepEqual(result.details.updateArgs, ["update", "--extensions"]);
 });
 
-test("/reload-tools reloads first and queues post-reload activation", async () => {
+test("/reload-tools reloads without queueing post-reload activation", async () => {
   const h = makeHarness();
   await piSelfUpdateExtension(h.pi);
 
   await h.commands.get("reload-tools").handler("", h.ctx);
 
   assert.equal(h.reloadCount, 1);
-  assert.deepEqual(h.userMessages, [{ message: "/reload-tools --activate", options: { deliverAs: "followUp", streamingBehavior: "followUp" } }]);
+  assert.deepEqual(h.userMessages, []);
   assert.deepEqual(h.activeToolsCalls, []);
 });
 
@@ -181,7 +182,7 @@ test("pi_reload_tools dryRun reports without activating or queueing", async () =
 
   await h.commands.get("reload-tools").handler("", h.ctx);
   assert.equal(h.reloadCount, 1);
-  assert.deepEqual(h.userMessages.map((m) => m.message), ["/reload-tools --activate"]);
+  assert.deepEqual(h.userMessages.map((m) => m.message), []);
 });
 
 test("buildPiRestartPlan preserves runtime flags, switches to current session, and drops startup prompts", () => {

@@ -121,7 +121,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
 
 export default function piGraphicsExtension(pi) {
   const settings = readJsonIfExists(agentSettingsPath()) || {};
-  const settingsEnv = settingsEnvFromPiGraphics(settings);
+  let settingsEnv = settingsEnvFromPiGraphics(settings);
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "");
   const state = makeState();
@@ -586,11 +586,26 @@ export default function piGraphicsExtension(pi) {
     writeFileSync(agentSettingsPath(), JSON.stringify(settings, null, 2) + "\n");
   }
 
+  function applyGfxSettingsLive(ctx, settings) {
+    settingsEnv = settingsEnvFromPiGraphics(settings);
+    try {
+      const themeName = settings.piGraphics?.theme || settings.theme;
+      if (themeName) ctx?.ui?.setTheme?.(themeName);
+      activeThemeRef = ctx?.ui?.theme || activeThemeRef;
+    } catch {}
+    try { ctx?.ui?.requestRender?.(true); } catch {}
+  }
+
   async function applyGfxSettingsAndReload(ctx, settings, message = "Saved Pi Graphics settings. Reloading runtime to apply...") {
     try { saveSettings(settings); }
     catch (error) { ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error"); return false; }
-    ctx.ui.notify(message, "info");
-    try { await ctx.reload?.(); } catch {}
+    if (typeof ctx.reload === "function") {
+      ctx.ui.notify(message, "info");
+      try { await ctx.reload(); } catch {}
+    } else {
+      applyGfxSettingsLive(ctx, settings);
+      ctx.ui.notify(message.replace(/\s*Reloading(?: runtime)?(?: to apply)?\.*/i, " Applied live."), "info");
+    }
     return true;
   }
 

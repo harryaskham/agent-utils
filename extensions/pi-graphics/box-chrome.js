@@ -248,15 +248,14 @@ export function createBoxChromeRuntime({
       includeColumn: true,
     });
     // Replace the first visible cell of the line with the placeholder so the
-    // rendered visible width remains unchanged. Strip leading SGR escapes,
-    // skip the first visible code point, then re-emit the original SGR
-    // prefix so the rest of the line keeps its styling.
+    // rendered visible width remains unchanged. Preserve leading terminal
+    // controls (CSI SGR and OSC 133 shell-integration markers) before the
+    // placeholder; otherwise OSC payload bytes like "]133;A" become visible.
     const text = String(lineText || "");
-    const leadingSgr = (text.match(/^(?:\x1b\[[0-9;]*m)+/) || [""])[0];
-    const afterSgr = text.slice(leadingSgr.length);
-    const codepoints = Array.from(afterSgr);
-    const rest = codepoints.slice(1).join("");
-    return `${fg}${cell}${ESC}[39m${leadingSgr}${rest}`;
+    const leadingEsc = (text.match(/^(?:(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))+/) || [""])[0];
+    const afterEsc = text.slice(leadingEsc.length);
+    const rest = Array.from(afterEsc).slice(1).join("");
+    return `${leadingEsc}${fg}${cell}${ESC}[39m${rest}`;
   }
 
   function applyToRows({ type, instanceId, lines }) {

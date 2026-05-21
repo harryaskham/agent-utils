@@ -379,9 +379,6 @@ function clearQueuedFollowUp(queuedFollowUps, command) {
   queuedFollowUps.delete(command);
 }
 
-function queueReloadToolsActivate(pi, queuedFollowUps) {
-  return queueFollowUpCommand(pi, queuedFollowUps, "/reload-tools --activate");
-}
 
 export default async function piSelfUpdateExtension(pi) {
   let updateRunning = false;
@@ -455,8 +452,7 @@ export default async function piSelfUpdateExtension(pi) {
         const reloadWorthy = updateLooksReloadWorthy(bgResult || {});
         if (bgResult) ctx.ui.notify(formatUpdateResult(bgResult, { ...options, reloadWorthy }), ok || reloadWorthy ? "info" : "error");
         if (options.reload) {
-          queueReloadToolsActivate(pi, queuedFollowUps);
-          ctx.ui.notify("Reloading Pi runtime and refreshing tools after background update...", "info");
+          ctx.ui.notify("Reloading Pi runtime after background update. No follow-up tool activation command will be queued.", "info");
           await ctx.reload();
         }
         return;
@@ -473,10 +469,9 @@ export default async function piSelfUpdateExtension(pi) {
         const reloadWorthy = updateLooksReloadWorthy(result);
         ctx.ui.notify(formatUpdateResult(result, { ...options, reloadWorthy }), ok || reloadWorthy ? "info" : "error");
         if (options.reload) {
-          queueReloadToolsActivate(pi, queuedFollowUps);
           ctx.ui.notify(reloadWorthy
-            ? "pi extension update completed package work; reloading Pi runtime and refreshing tools..."
-            : "pi extension update did not report package success, but /update reloads after attempts; reloading Pi runtime and refreshing tools...", "info");
+            ? "pi extension update completed package work; reloading Pi runtime..."
+            : "pi extension update did not report package success, but /update reloads after attempts; reloading Pi runtime...", "info");
           await ctx.reload();
           return;
         }
@@ -507,10 +502,7 @@ export default async function piSelfUpdateExtension(pi) {
         }
         return;
       }
-      const queued = queueReloadToolsActivate(pi, queuedFollowUps);
-      ctx.ui.notify(queued.duplicate
-        ? "Reloading Pi runtime; tool activation is already queued after reload..."
-        : "Reloading Pi runtime; refreshed tools will be activated immediately after reload...", "info");
+      ctx.ui.notify("Reloading Pi runtime. Run /reload-tools --activate only if newly loaded tools are still not active.", "info");
       await ctx.reload();
     },
   });
@@ -564,14 +556,13 @@ export default async function piSelfUpdateExtension(pi) {
       async execute(_toolCallId, params = {}) {
         const reloadCommand = params.skipReload ? null : "/reload-tools";
         if (params.dryRun) {
-          return { content: [{ type: "text", text: `Would run ${UPDATE_DISPLAY} from ${UPDATE_CWD}${reloadCommand ? ` and queue ${reloadCommand}` : " without reload"}.` }], details: { reloadCommand, queued: false, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS } };
+          return { content: [{ type: "text", text: `Would run ${UPDATE_DISPLAY} from ${UPDATE_CWD}${reloadCommand ? ` and report that a reload may be needed` : " without reload"}.` }], details: { reloadCommand, queued: false, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS } };
         }
         const result = await runPiUpdate(pi);
         const reloadWorthy = updateLooksReloadWorthy(result);
-        const queued = reloadCommand ? queueFollowUpCommand(pi, queuedFollowUps, reloadCommand) : { queued: false, duplicate: false };
         return {
-          content: [{ type: "text", text: `${formatUpdateResult(result, { reload: !params.skipReload, reloadWorthy })}\n\n${reloadCommand ? (queued.duplicate ? `${reloadCommand} is already queued; not adding a duplicate.` : `Queued ${reloadCommand} as a follow-up command.`) : "Reload skipped."}` }],
-          details: { reloadCommand, queued: queued.queued, duplicate: queued.duplicate, updateExitCode: result?.code ?? null, reloadWorthy, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS },
+          content: [{ type: "text", text: `${formatUpdateResult(result, { reload: !params.skipReload, reloadWorthy })}\n\n${reloadCommand ? "No follow-up slash command was queued; run /reload if you need to reload runtime code." : "Reload skipped."}` }],
+          details: { reloadCommand, queued: false, duplicate: false, updateExitCode: result?.code ?? null, reloadWorthy, cwd: UPDATE_CWD, updateArgs: UPDATE_ARGS },
         };
       },
     });
