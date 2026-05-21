@@ -17,7 +17,7 @@
 // has been removed. The goal is to prove the graphics primitive layer before
 // adding decorative chrome.
 
-import { existsSync, appendFileSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -282,7 +282,7 @@ export default function piGraphicsExtension(pi) {
     const cell = cellMetrics();
     const variant = editorVariant();
     const alpha = editorAlpha();
-    const frames = editorAnimationFrames();
+    const frames = editorStyle() === "animated" ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
     if (frames <= 1) {
       const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
@@ -493,7 +493,7 @@ export default function piGraphicsExtension(pi) {
 
   function installBoxChromeOnce() {
     if (boxChromeInstalled) return;
-    if (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) return;
+    if (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", false)) return;
     const runtime = createBoxChromeRuntime({
       emitGraphicsCommand,
       state,
@@ -518,12 +518,6 @@ export default function piGraphicsExtension(pi) {
         compaction: CompactionSummaryMessageComponent,
       },
       runtime,
-      onWrap(type, clsName) {
-        try { appendFileSync(`/tmp/pi-graphics-boxchrome.log`, `${new Date().toISOString()} wrapped ${type}=${clsName}\n`); } catch {}
-      },
-      onCall(type) {
-        try { appendFileSync(`/tmp/pi-graphics-boxchrome.log`, `${new Date().toISOString()} call ${type}\n`); } catch {}
-      },
     });
     boxChromeInstalled = true;
   }
