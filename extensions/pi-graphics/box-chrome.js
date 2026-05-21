@@ -152,12 +152,16 @@ export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx
   return { png: encodeRgbaPng(pixels, w, h), widthPx: w, heightPx: h };
 }
 
-function fgSgrForId(imageId) {
-  const low24 = imageId % 0x1000000;
+function truecolorSgr(prefix, id) {
+  const low24 = id % 0x1000000;
   const r = (low24 >> 16) & 0xff;
   const g = (low24 >> 8) & 0xff;
   const b = low24 & 0xff;
-  return `${ESC}[38;2;${r};${g};${b}m`;
+  return `${ESC}[${prefix};2;${r};${g};${b}m`;
+}
+
+function placeholderSgr({ imageId, placementId }) {
+  return `${truecolorSgr(38, imageId)}${placementId ? truecolorSgr(58, placementId) : ""}`;
 }
 
 export function createBoxChromeRuntime({
@@ -239,7 +243,7 @@ export function createBoxChromeRuntime({
   }
 
   function wrapRowText({ lineText, anchorImageId, anchorPlacementId }) {
-    const fg = fgSgrForId(anchorImageId);
+    const sgr = placeholderSgr({ imageId: anchorImageId, placementId: anchorPlacementId });
     const cell = buildKittyUnicodePlaceholderCell({
       imageId: anchorImageId,
       placementId: anchorPlacementId,
@@ -255,7 +259,7 @@ export function createBoxChromeRuntime({
     const leadingEsc = (text.match(/^(?:(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))+/) || [""])[0];
     const afterEsc = text.slice(leadingEsc.length);
     const rest = Array.from(afterEsc).slice(1).join("");
-    return `${leadingEsc}${fg}${cell}${ESC}[39m${rest}`;
+    return `${leadingEsc}${sgr}${cell}${ESC}[39;59m${rest}`;
   }
 
   function applyToRows({ type, instanceId, lines }) {

@@ -360,10 +360,13 @@ export default function piGraphicsExtension(pi) {
       includeColumn: true,
     });
     const ESC = "\x1b";
-    const fg = `${ESC}[38;2;${(anchorImageId >> 16) & 0xff};${(anchorImageId >> 8) & 0xff};${anchorImageId & 0xff}m`;
+    const low24 = anchorImageId % 0x1000000;
+    const placementLow24 = anchorPlacementId % 0x1000000;
+    const fg = `${ESC}[38;2;${(low24 >> 16) & 0xff};${(low24 >> 8) & 0xff};${low24 & 0xff}m`;
+    const underline = `${ESC}[58;2;${(placementLow24 >> 16) & 0xff};${(placementLow24 >> 8) & 0xff};${placementLow24 & 0xff}m`;
     const reset = `${ESC}[39;59m`;
     const filler = " ".repeat(Math.max(0, cols - 1));
-    return `${fg}${anchorCell}${reset}${filler}`;
+    return `${fg}${underline}${anchorCell}${reset}${filler}`;
   }
 
   function buildEditorRailRows(width, edge) {

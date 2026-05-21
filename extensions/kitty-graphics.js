@@ -344,6 +344,7 @@ export function buildRelativePlacementCommand({
     c: columns,
     r: rows,
     z: zIndex,
+    C: 1,
     q: quiet,
   };
   if (Number.isFinite(Number(hOffset)) && Number(hOffset) !== 0) control.H = Math.trunc(Number(hOffset));
