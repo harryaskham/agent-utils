@@ -629,6 +629,7 @@ export default function piGraphicsExtension(pi) {
       custom: typeof ui.custom === "function" ? ui.custom : null,
       setWidget: typeof ui.setWidget === "function" ? ui.setWidget : null,
       setFooter: typeof ui.setFooter === "function" ? ui.setFooter : null,
+      setHeader: typeof ui.setHeader === "function" ? ui.setHeader : null,
     };
     ui.__piGraphicsOriginalSurfaces = originals;
     ui.__piGraphicsSurfacesPatched = true;
@@ -658,6 +659,15 @@ export default function piGraphicsExtension(pi) {
       patchedSetFooter.__piGraphicsPatchedSurface = true;
       ui.setFooter = patchedSetFooter;
     }
+    if (originals.setHeader) {
+      const patchedSetHeader = function (componentOrFactory, ...rest) {
+        const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
+        const next = shouldSkipGraphicsOptions(options) ? componentOrFactory : wrapRenderableFactory(componentOrFactory, "header");
+        return originals.setHeader.call(this, next, ...rest);
+      };
+      patchedSetHeader.__piGraphicsPatchedSurface = true;
+      ui.setHeader = patchedSetHeader;
+    }
   }
 
   function restoreUiGraphicsSurfaces(ctx) {
@@ -667,6 +677,7 @@ export default function piGraphicsExtension(pi) {
     if (originals.custom && ui.custom?.__piGraphicsPatchedSurface) ui.custom = originals.custom;
     if (originals.setWidget && ui.setWidget?.__piGraphicsPatchedSurface) ui.setWidget = originals.setWidget;
     if (originals.setFooter && ui.setFooter?.__piGraphicsPatchedSurface) ui.setFooter = originals.setFooter;
+    if (originals.setHeader && ui.setHeader?.__piGraphicsPatchedSurface) ui.setHeader = originals.setHeader;
     delete ui.__piGraphicsOriginalSurfaces;
     delete ui.__piGraphicsSurfacesPatched;
   }

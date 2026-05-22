@@ -62,6 +62,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   customTui: "accent",
   overlay: "borderAccent",
   widget: "accent",
+  header: "borderAccent",
 };
 
 export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud"]);
@@ -97,6 +98,7 @@ export const BOX_TYPE_EFFECTS = {
   customTui: "aurora",
   overlay: "sparkle",
   widget: "circuit",
+  header: "aurora",
 };
 
 function withAlpha([r, g, b], a) {
