@@ -225,10 +225,17 @@ export default function piGraphicsExtension(pi) {
   // Track which images have already been uploaded so we never resend payload.
   const uploadedImages = new Set();
   const relativeUploaded = new Set();
+  let editorBackgroundPlacementKey = null;
+  const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
 
   function resetGraphicsUploadCaches() {
     uploadedImages.clear();
     relativeUploaded.clear();
+    editorBackgroundPlacementKey = null;
+  }
+
+  function approximateVisibleCells(text) {
+    return String(text || "").replace(ZERO_WIDTH_CONTROL_RE, "").length;
   }
 
   function ensureAnchorUploaded({ anchorImageId, anchorPlacementId }) {
@@ -473,7 +480,48 @@ export default function piGraphicsExtension(pi) {
     return `${String(line).slice(0, -match[0].length)}${tail}`;
   }
 
-  function buildEditorCursorCell() {
+  function ensureEditorRowBackground({ parentImageId, parentPlacementId, rowWidth, cursorCol }) {
+    if (!ensureUnicodePlacement(state) || rowWidth < 2) return;
+    const cell = cellMetrics();
+    const bgImageId = piGraphicsImageId(`editor-row-background-${rowWidth}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(bgImageId)) {
+      const rendered = renderPromptEnclosure({
+        columns: rowWidth,
+        variant: "glow",
+        alpha: Math.max(0.10, editorAlpha() * 0.24),
+        leftColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
+        rightColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
+        fadeEdges: true,
+        ...cell,
+      });
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: bgImageId,
+        q: 2,
+      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(bgImageId);
+      uploadedImages.add(bgImageId);
+    }
+    const bgPlacementId = piGraphicsPlacementId("editor-row-background-relative");
+    const key = `${bgImageId}:${parentImageId}:${parentPlacementId}:${rowWidth}:${cursorCol}`;
+    if (editorBackgroundPlacementKey === key) return;
+    emitGraphicsCommand(buildRelativePlacementCommand({
+      imageId: bgImageId,
+      placementId: bgPlacementId,
+      parentImageId,
+      parentPlacementId,
+      hOffset: -Math.max(0, cursorCol),
+      columns: rowWidth,
+      rows: 1,
+      zIndex: -1073741826,
+      passthrough: state.config.passthrough,
+    }));
+    editorBackgroundPlacementKey = key;
+  }
+
+  function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0 } = {}) {
     if (!ensureUnicodePlacement(state)) return null;
     const cell = cellMetrics();
     const rendered = renderPromptEnclosure({
@@ -494,19 +542,28 @@ export default function piGraphicsExtension(pi) {
       zIndex: -1073741825,
     });
     emitGraphicsCommand(placement.transmit);
+    ensureEditorRowBackground({
+      parentImageId: placement.imageId,
+      parentPlacementId: placement.placementId,
+      rowWidth,
+      cursorCol,
+    });
     return placement.lines[0] ?? null;
   }
 
-  function replaceEditorCursorChrome(line) {
+  function replaceEditorCursorChrome(line, rowWidth = 1) {
     const text = String(line || "");
     if (!text.includes("\x1b[7m")) return line;
-    const cursor = buildEditorCursorCell();
+    const match = /\x1b\[7m[^\x1b]*\x1b\[0m/.exec(text);
+    if (!match) return line;
+    const cursorCol = approximateVisibleCells(text.slice(0, match.index));
+    const cursor = buildEditorCursorCell({ rowWidth, cursorCol });
     if (!cursor) return line;
-    return text.replace(/\x1b\[7m[^\x1b]*\x1b\[0m/, cursor);
+    return `${text.slice(0, match.index)}${cursor}${text.slice(match.index + match[0].length)}`;
   }
 
-  function decorateEditorContentLine(line) {
-    return fillEditorTrailingWorkspace(replaceEditorCursorChrome(line));
+  function decorateEditorContentLine(line, rowWidth) {
+    return fillEditorTrailingWorkspace(replaceEditorCursorChrome(line, rowWidth));
   }
 
   function buildEditorRailRows(width, edge) {
@@ -572,7 +629,7 @@ export default function piGraphicsExtension(pi) {
         if (!top) return baseLines;
         next[firstDash] = top;
         if (bot && lastDash !== firstDash) next[lastDash] = bot;
-        return next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line));
+        return next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width));
       }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {

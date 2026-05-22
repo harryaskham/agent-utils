@@ -381,10 +381,12 @@ displayed using kitty Unicode placeholder cells, so:
   naturally replace the graphics. The focused editor cursor itself is also
   replaced in every editor graphics style with a one-cell glassy Unicode-placeholder
   cursor, while Pi's zero-width hardware/IME cursor marker is preserved immediately
-  before it for terminal input plumbing. Filling the editor background *under*
-  already-typed text needs a separate relative-placement background anchored to
-  the known cursor/terminal geometry; placeholder tails intentionally only occupy
-  cells that are otherwise spaces so they do not overwrite typed text.
+  before it for terminal input plumbing. The cursor placeholder also anchors a
+  low-z-index relative row background that spans the rendered editor width and
+  shifts left by the measured cursor column, so the editor can keep graphical
+  glass behind typed text without replacing the text cells themselves. Placeholder
+  tails still occupy trailing space cells as a caco-compatible fallback and as
+  workspace fill after the cursor.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows.
