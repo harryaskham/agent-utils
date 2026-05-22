@@ -132,6 +132,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_AUTO_THEME: off ? "0" : (gfx.autoApplyTheme ?? true) ? "1" : "0",
     PI_GRAPHICS_AUTO_EDITOR_SURFACE: off ? "0" : (features.editor ?? true) ? "1" : "0",
     PI_GRAPHICS_AUTO_EDITOR_CURSOR: off ? "0" : (features.editorCursor ?? features.cursor ?? editor.cursor ?? true) ? "1" : "0",
+    PI_GRAPHICS_AUTO_FOOTER: off ? "0" : (features.footer ?? true) ? "1" : "0",
     PI_GRAPHICS_CELL_WIDTH_PX: gfx.cell?.widthPx != null ? String(gfx.cell.widthPx) : undefined,
     PI_GRAPHICS_CELL_HEIGHT_PX: gfx.cell?.heightPx != null ? String(gfx.cell.heightPx) : undefined,
     PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx.cell?.lineHeightScale != null ? String(gfx.cell.lineHeightScale) : undefined,
@@ -154,6 +155,15 @@ export default function piGraphicsExtension(pi) {
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "");
   const state = makeState();
+  const footerState = {
+    model: null,
+    provider: null,
+    contextUsed: 0,
+    contextMax: 0,
+    contextPct: 0,
+    compactions: 0,
+    compactMode: "auto",
+  };
 
   function envBool(name, fallback = false) {
     const value = gfxEnv()[name];
@@ -289,6 +299,93 @@ export default function piGraphicsExtension(pi) {
 
   function approximateVisibleCells(text) {
     return String(text || "").replace(ZERO_WIDTH_CONTROL_RE, "").length;
+  }
+
+  function formatFooterTokens(n) {
+    const value = Number(n) || 0;
+    if (value >= 1_000_000) {
+      const scaled = value / 1_000_000;
+      return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, "")}m`;
+    }
+    if (value >= 1_000) {
+      const scaled = value / 1_000;
+      return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, "")}k`;
+    }
+    return `${Math.round(value)}`;
+  }
+
+  function formatFooterPct(pct) {
+    const value = Number.isFinite(Number(pct)) ? Number(pct) : 0;
+    return `${value.toFixed(1).replace(/\.0$/, "")}%`;
+  }
+
+  function prettyFooterCwd(cwd) {
+    const home = process.env.HOME;
+    const value = cwd || process.cwd();
+    if (home && value === home) return "~";
+    if (home && value?.startsWith?.(`${home}/`)) return `~/${value.slice(home.length + 1)}`;
+    return value;
+  }
+
+  function truncateFooterStart(text, width) {
+    const chars = Array.from(String(text ?? ""));
+    if (chars.length <= width) return chars.join("");
+    if (width <= 0) return "";
+    if (width === 1) return "…";
+    return `…${chars.slice(chars.length - width + 1).join("")}`;
+  }
+
+  function truncateFooterEnd(text, width) {
+    const chars = Array.from(String(text ?? ""));
+    if (chars.length <= width) return chars.join("");
+    if (width <= 0) return "";
+    if (width === 1) return "…";
+    return `${chars.slice(0, width - 1).join("")}…`;
+  }
+
+  function compactFooterModeLabel() {
+    const envMode = process.env.PI_COMPACT_MODE;
+    if (envMode && envMode !== "standard") return envMode;
+    return footerState.compactMode || "auto";
+  }
+
+  function refreshFooterContext(ctx) {
+    try {
+      const usage = ctx?.getContextUsage?.();
+      if (!usage) return;
+      const used = usage.tokens ?? usage.contextTokens ?? usage.usedTokens ?? usage.totalTokens
+        ?? (Number(usage.inputTokens || 0) + Number(usage.cacheCreationInputTokens || usage.cacheWriteTokens || 0) + Number(usage.cacheReadInputTokens || usage.cacheReadTokens || 0));
+      const max = usage.contextWindowSize ?? usage.contextWindow ?? usage.maxTokens ?? footerState.contextMax;
+      const pct = typeof usage.percent === "number" ? usage.percent
+        : typeof usage.usedPercentage === "number" ? usage.usedPercentage
+        : max > 0 ? (used / max) * 100
+        : footerState.contextPct;
+      footerState.contextUsed = used || footerState.contextUsed;
+      footerState.contextMax = max || footerState.contextMax;
+      footerState.contextPct = Math.round((pct || 0) * 10) / 10;
+    } catch {}
+  }
+
+  function refreshFooterSession(ctx) {
+    try {
+      const branch = ctx?.sessionManager?.getBranch?.() || [];
+      footerState.compactions = branch.filter((entry) => entry?.type === "compaction").length;
+    } catch {}
+  }
+
+  function refreshFooterModel(event, ctx) {
+    const model = event?.model || ctx?.model;
+    if (model) {
+      footerState.model = model.id || footerState.model;
+      footerState.provider = model.provider || footerState.provider;
+    }
+  }
+
+  function refreshFooterState(ctx, pi, event) {
+    refreshFooterModel(event, ctx);
+    refreshFooterContext(ctx);
+    refreshFooterSession(ctx);
+    try { footerState.compactMode = pi?.getCompactMode?.() || footerState.compactMode; } catch {}
   }
 
   function ensureAnchorUploaded({ anchorImageId, anchorPlacementId }) {
@@ -617,6 +714,177 @@ export default function piGraphicsExtension(pi) {
 
   function decorateEditorContentLine(line, rowWidth) {
     return fillEditorTrailingWorkspace(replaceEditorCursorChrome(line, rowWidth));
+  }
+
+  function footerSegmentValues(ctx, footerData, pi) {
+    const branch = (() => {
+      try { return footerData?.getGitBranch?.() || "no-branch"; } catch { return "no-branch"; }
+    })();
+    const context = footerState.contextMax > 0
+      ? `${formatFooterPct(footerState.contextPct)}/${formatFooterTokens(footerState.contextMax)}`
+      : "context n/a";
+    const model = footerState.model
+      ? `${footerState.provider ? `${footerState.provider}/` : ""}${footerState.model}`
+      : "model n/a";
+    return [
+      { key: "cwd", token: "muted", value: prettyFooterCwd(ctx?.cwd || process.cwd()), truncate: truncateFooterStart, min: 4, max: 34 },
+      { key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 24 },
+      { key: "context", token: "thinkingXhigh", value: context, truncate: truncateFooterEnd, min: 5, max: 18 },
+      { key: "compact", token: "borderAccent", value: `${compactFooterModeLabel()} (${footerState.compactions})`, truncate: truncateFooterEnd, min: 5, max: 16 },
+      { key: "model", token: "customMessageLabel", value: model, truncate: truncateFooterEnd, min: 8, max: 36 },
+      { key: "thinking", token: "muted", value: pi?.getThinkingLevel?.() || "off", truncate: truncateFooterEnd, min: 3, max: 12 },
+    ];
+  }
+
+  function fitFooterSegments(rawSegments, width) {
+    const terminalWidth = Math.max(1, Math.trunc(Number(width) || 1));
+    const anchorCount = rawSegments.length + 1;
+    let budget = terminalWidth - anchorCount;
+    if (budget < rawSegments.length) return null;
+    const segments = rawSegments.map((segment) => {
+      const preferred = Math.min(segment.max, approximateVisibleCells(segment.value) + 2);
+      return { ...segment, width: Math.max(segment.min, preferred) };
+    });
+    let used = segments.reduce((sum, segment) => sum + segment.width, 0);
+    const shrinkOrder = [4, 0, 1, 3, 2, 5];
+    while (used > budget) {
+      let changed = false;
+      for (const index of shrinkOrder) {
+        const segment = segments[index];
+        if (segment && segment.width > segment.min) {
+          segment.width -= 1;
+          used -= 1;
+          changed = true;
+          if (used <= budget) break;
+        }
+      }
+      if (!changed) break;
+    }
+    if (used < budget && segments.length) segments[0].width += budget - used;
+    return segments.map((segment) => {
+      const innerWidth = Math.max(0, segment.width - 2);
+      const text = segment.truncate(segment.value, innerWidth);
+      const padded = ` ${text}${" ".repeat(Math.max(0, innerWidth - approximateVisibleCells(text)))} `;
+      return { ...segment, text: padded };
+    });
+  }
+
+  function ensureFooterSegmentBackground({ anchor, segmentKey, index, width, token }) {
+    const textWidth = Math.max(1, Math.min(128, Math.trunc(Number(width) || 1)));
+    const cell = cellMetrics();
+    const color = getThemeColorHex(activeThemeRef, token || "accent", "#88c0d0");
+    const imageId = piGraphicsImageId(`footer-bg-${segmentKey}-${textWidth}-${color}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(imageId)) {
+      const rendered = renderPromptEnclosure({
+        columns: textWidth,
+        variant: "glow",
+        alpha: Math.max(0.09, editorAlpha() * 0.20),
+        leftColor: color,
+        rightColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+        fadeEdges: true,
+        ...cell,
+      });
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: imageId,
+        q: 2,
+      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(imageId);
+      uploadedImages.add(imageId);
+    }
+    const placementId = piGraphicsPlacementId(`footer-bg-${segmentKey}-${index}-${textWidth}`);
+    const key = `footer-bg:${imageId}->${anchor.imageId}/${anchor.placementId}:${placementId}`;
+    if (!relativeUploaded.has(key)) {
+      emitGraphicsCommand(buildRelativePlacementCommand({
+        imageId,
+        placementId,
+        parentImageId: anchor.imageId,
+        parentPlacementId: anchor.placementId,
+        hOffset: 1,
+        columns: textWidth,
+        rows: 1,
+        zIndex: -1073741826,
+        passthrough: state.config.passthrough,
+      }));
+      relativeUploaded.add(key);
+    }
+  }
+
+  function buildFooterAnchorCell(segmentKey, index, token = "borderAccent") {
+    if (!ensureUnicodePlacement(state)) return "│";
+    const cell = cellMetrics();
+    const color = getThemeColorHex(activeThemeRef, token, "#88c0d0");
+    const rendered = renderPromptEnclosure({
+      columns: 1,
+      variant: "glow",
+      alpha: Math.max(0.32, editorAlpha() * 0.64),
+      leftColor: color,
+      rightColor: getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead"),
+      fadeEdges: false,
+      ...cell,
+    });
+    const placement = buildPlacement(state, {
+      name: `footer-anchor-${segmentKey}-${index}-${color}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+      png: rendered.png,
+      columns: 1,
+      rows: 1,
+      width: 1,
+      zIndex: -1073741825,
+    });
+    emitGraphicsCommand(placement.transmit);
+    return { cell: placement.lines[0] ?? "│", imageId: placement.imageId, placementId: placement.placementId };
+  }
+
+  function buildSegmentedFooterLine(ctx, footerData, width, pi, theme = activeThemeRef) {
+    const rawSegments = footerSegmentValues(ctx, footerData, pi);
+    const fitted = fitFooterSegments(rawSegments, width);
+    if (!fitted) return truncateFooterEnd(" pi graphics ", Math.max(1, Math.trunc(Number(width) || 1)));
+    const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+    let line = "";
+    fitted.forEach((segment, index) => {
+      const anchor = buildFooterAnchorCell(segment.key, index, segment.token);
+      if (anchor && typeof anchor === "object") {
+        ensureFooterSegmentBackground({ anchor, segmentKey: segment.key, index, width: approximateVisibleCells(segment.text), token: segment.token });
+        line += anchor.cell;
+      } else {
+        line += anchor;
+      }
+      line += fg(segment.token, segment.text);
+    });
+    const endAnchor = buildFooterAnchorCell("end", fitted.length, "borderAccent");
+    line += typeof endAnchor === "object" ? endAnchor.cell : endAnchor;
+    const visible = approximateVisibleCells(line);
+    const target = Math.max(1, Math.trunc(Number(width) || 1));
+    return visible > target ? truncateFooterEnd(line.replace(ZERO_WIDTH_CONTROL_RE, ""), target) : line;
+  }
+
+  function installSegmentedFooter(ctx, pi, event) {
+    if (!envBool("PI_GRAPHICS_AUTO_FOOTER", true)) return false;
+    if (typeof ctx?.ui?.setFooter !== "function") return false;
+    refreshFooterState(ctx, pi, event);
+    const factory = (tui, theme, footerData) => {
+      writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
+      activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
+      const unsubscribe = (() => { try { return footerData?.onBranchChange?.(() => tui?.requestRender?.()); } catch { return null; } })();
+      return {
+        __piGraphicsNoWrap: true,
+        piGraphics: false,
+        dispose() { try { unsubscribe?.(); } catch {} },
+        invalidate() {},
+        render(width = 120) {
+          refreshFooterState(ctx, pi);
+          activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
+          return [buildSegmentedFooterLine(ctx, footerData, width, pi, activeThemeRef)];
+        },
+      };
+    };
+    factory.__piGraphicsNoWrap = true;
+    factory.piGraphics = false;
+    try { ctx.ui.setStatus?.("pi-graphics-footer", undefined); } catch {}
+    try { ctx.ui.setFooter(factory, { piGraphics: false }); } catch { return false; }
+    return true;
   }
 
   function buildEditorRailRows(width, edge) {
@@ -1026,6 +1294,7 @@ export default function piGraphicsExtension(pi) {
     activeThemeRef = ctx?.ui?.theme || null;
     applyTheme(ctx);
     installEditorSurface(ctx);
+    installSegmentedFooter(ctx, pi, _event);
     try {
       ctx.ui?.setWorkingIndicator?.({
         intervalMs: 110,
@@ -1034,6 +1303,27 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.setWorkingMessage?.(buildWorkingMessage({ stage: "working" }, ctx.ui.theme || activeThemeRef));
     } catch {}
     installBoxChromeOnce(ctx);
+  });
+
+  pi.on("model_select", async (event, ctx) => {
+    refreshFooterState(ctx, pi, event);
+    installSegmentedFooter(ctx, pi, event);
+  });
+
+  pi.on("message_end", async (event, ctx) => {
+    refreshFooterState(ctx, pi, event);
+    installSegmentedFooter(ctx, pi, event);
+  });
+
+  pi.on("turn_end", async (event, ctx) => {
+    refreshFooterState(ctx, pi, event);
+    installSegmentedFooter(ctx, pi, event);
+  });
+
+  pi.on("session_compact", async (event, ctx) => {
+    footerState.compactions += 1;
+    refreshFooterState(ctx, pi, event);
+    installSegmentedFooter(ctx, pi, event);
   });
 
   function defaultGfxPresets(settings, ctx) {
@@ -1223,6 +1513,7 @@ export default function piGraphicsExtension(pi) {
     writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
+    try { if (envBool("PI_GRAPHICS_AUTO_FOOTER", true)) ctx.ui?.setFooter?.(undefined, { piGraphics: false }); } catch {}
     try {
       const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
       if (command) resolveGraphicsWriter(ctx)?.(command);

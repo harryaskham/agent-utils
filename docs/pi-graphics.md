@@ -401,6 +401,12 @@ displayed using kitty Unicode placeholder cells, so:
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows.
+* The built-in footer can be replaced with a compact one-line segmented footer
+  (`PI_GRAPHICS_AUTO_FOOTER`, default on with graphics). It preserves the useful
+  cwd/branch/context/compaction/model/thinking layout while inserting stable
+  Unicode-placeholder divider anchors; each divider anchors a low-z relative
+  background behind its segment so the footer remains caco/tmux-compatible and
+  width-bounded.
 * The `⠼ Working...` indicator receives themed Pi graphics flair via custom
   working-indicator frames while preserving Pi's normal loader lifecycle.
 
