@@ -88,6 +88,30 @@ test("/update --no-reload skips reload", async () => {
   assert.match(h.notifications.at(-1).message, /reload: skipped/);
 });
 
+test("/update --status reports opt-in startup autoupdate controls", async () => {
+  const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  const prevReload = process.env.PI_AUTO_RELOAD_AFTER_UPDATE;
+  process.env.PI_AUTO_UPDATE_ON_STARTUP = "1";
+  process.env.PI_AUTO_RELOAD_AFTER_UPDATE = "0";
+  try {
+    const h = makeHarness();
+    await piSelfUpdateExtension(h.pi);
+
+    await h.commands.get("update").handler("--status", h.ctx);
+
+    assert.equal(h.execCount, 1, "enabled startup update should have started during extension load");
+    assert.match(h.notifications.at(-1).message, /startup auto-update: enabled/);
+    assert.match(h.notifications.at(-1).message, /auto-reload after changed update: disabled/);
+    assert.match(h.notifications.at(-1).message, /settings\.json/);
+    assert.equal(h.reloadCount, 0);
+  } finally {
+    if (previous === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+    else process.env.PI_AUTO_UPDATE_ON_STARTUP = previous;
+    if (prevReload === undefined) delete process.env.PI_AUTO_RELOAD_AFTER_UPDATE;
+    else process.env.PI_AUTO_RELOAD_AFTER_UPDATE = prevReload;
+  }
+});
+
 test("/update reloads even after failed update attempts", async () => {
   const h = makeHarness({ execResult: { code: 1, stdout: "", stderr: "failed" } });
   await piSelfUpdateExtension(h.pi);
@@ -254,6 +278,31 @@ test("executePiRestartPlan prefers execve with full argv", () => {
 
   assert.equal(result.method, "execve");
   assert.deepEqual(calls, [{ file: "/bin/pi", args: ["pi", "--session", "/tmp/session.jsonl"], env: { PI_RESTARTED_WITHOUT_INITIAL_PROMPT: "1" } }]);
+});
+
+test("startup auto-update defaults off without env or settings opt-in", async () => {
+  const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  const prevOffline = process.env.PI_OFFLINE;
+  const prevDir = process.env.PI_CODING_AGENT_DIR;
+  delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  delete process.env.PI_OFFLINE;
+  process.env.PI_CODING_AGENT_DIR = "/definitely/missing-agent-utils-test-settings";
+  try {
+    const h = makeHarness();
+    await piSelfUpdateExtension(h.pi);
+    await h.handlers.get("session_start")[0]({ reason: "startup" }, h.ctx);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h.execCount, 0);
+    assert.equal(h.reloadCount, 0);
+    assert.equal(h.notifications.length, 0);
+  } finally {
+    if (previous === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+    else process.env.PI_AUTO_UPDATE_ON_STARTUP = previous;
+    if (prevOffline === undefined) delete process.env.PI_OFFLINE;
+    else process.env.PI_OFFLINE = prevOffline;
+    if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prevDir;
+  }
 });
 
 test("session_start triggers a silent background pi update --extensions", async () => {

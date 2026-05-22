@@ -66,6 +66,7 @@ function parseUpdateArgs(args) {
   return {
     reload: !tokens.includes("--no-reload") && !tokens.includes("no-reload"),
     help: tokens.includes("--help") || tokens.includes("help") || tokens.includes("-h"),
+    status: tokens.includes("--status") || tokens.includes("status"),
   };
 }
 
@@ -118,7 +119,7 @@ function shouldAutoUpdateOnStartup({ env = process.env, settings = {} } = {}) {
   const cfg = settings?.piSelfUpdate ?? settings?.agentUtils?.piSelfUpdate ?? {};
   const value = cfg.autoUpdateOnStartup;
   if (value === false) return false;
-  return value !== undefined ? Boolean(value) : true;
+  return value !== undefined ? Boolean(value) : false;
 }
 
 function readAgentSettings(env = process.env) {
@@ -128,6 +129,34 @@ function readAgentSettings(env = process.env) {
     if (!existsSync(path)) return {};
     return JSON.parse(readFileSync(path, "utf8"));
   } catch { return {}; }
+}
+
+function autoUpdateSource({ env = process.env, settings = {} } = {}) {
+  if (envFlagTrue(env.PI_AUTO_UPDATE_ON_STARTUP)) return "PI_AUTO_UPDATE_ON_STARTUP enables startup updates";
+  if (envFlagFalse(env.PI_AUTO_UPDATE_ON_STARTUP)) return "PI_AUTO_UPDATE_ON_STARTUP disables startup updates";
+  if (envFlagTrue(env.PI_OFFLINE)) return "PI_OFFLINE disables startup updates";
+  const cfg = settings?.piSelfUpdate ?? settings?.agentUtils?.piSelfUpdate ?? {};
+  if (cfg.autoUpdateOnStartup !== undefined) return "settings.json piSelfUpdate.autoUpdateOnStartup";
+  return "default off";
+}
+
+function autoReloadSource({ env = process.env, settings = {} } = {}) {
+  if (envFlagTrue(env.PI_AUTO_RELOAD_AFTER_UPDATE)) return "PI_AUTO_RELOAD_AFTER_UPDATE enables auto-reload";
+  if (envFlagFalse(env.PI_AUTO_RELOAD_AFTER_UPDATE)) return "PI_AUTO_RELOAD_AFTER_UPDATE disables auto-reload";
+  const cfg = settings?.piSelfUpdate ?? settings?.agentUtils?.piSelfUpdate ?? {};
+  if (cfg.autoReloadAfterUpdate !== undefined) return "settings.json piSelfUpdate.autoReloadAfterUpdate";
+  return "default on when startup auto-update is enabled";
+}
+
+function formatAutoUpdateStatus({ env = process.env, settings = readAgentSettings(env) } = {}) {
+  const autoUpdate = shouldAutoUpdateOnStartup({ env, settings });
+  const autoReload = shouldAutoReloadAfterUpdate({ env, settings });
+  return [
+    `startup auto-update: ${autoUpdate ? "enabled" : "disabled"} (${autoUpdateSource({ env, settings })})`,
+    `auto-reload after changed update: ${autoReload ? "enabled" : "disabled"} (${autoReloadSource({ env, settings })})`,
+    "Enable with settings.json: { \"piSelfUpdate\": { \"autoUpdateOnStartup\": true, \"autoReloadAfterUpdate\": true } }",
+    "Environment overrides: PI_AUTO_UPDATE_ON_STARTUP=1|0, PI_AUTO_RELOAD_AFTER_UPDATE=1|0; PI_OFFLINE=1 disables startup updates.",
+  ].join("\n");
 }
 
 function piUpdateExecOptions(signal) {
@@ -441,7 +470,11 @@ export default async function piSelfUpdateExtension(pi) {
     handler: async (args, ctx) => {
       const options = parseUpdateArgs(args);
       if (options.help) {
-        ctx.ui.notify("Usage: /update [--no-reload] — run pi update --extensions, then reload and refresh active tools.", "info");
+        ctx.ui.notify("Usage: /update [--no-reload|--status] — run pi update --extensions, then reload and refresh active tools. Startup auto-update is opt-in via settings.json piSelfUpdate.autoUpdateOnStartup or PI_AUTO_UPDATE_ON_STARTUP=1.", "info");
+        return;
+      }
+      if (options.status) {
+        ctx.ui.notify(formatAutoUpdateStatus(), "info");
         return;
       }
       if (updateRunning && blockingUpdatePromise) {
