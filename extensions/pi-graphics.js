@@ -131,6 +131,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_MODE: off ? "off" : "on",
     PI_GRAPHICS_AUTO_THEME: off ? "0" : (gfx.autoApplyTheme ?? true) ? "1" : "0",
     PI_GRAPHICS_AUTO_EDITOR_SURFACE: off ? "0" : (features.editor ?? true) ? "1" : "0",
+    PI_GRAPHICS_AUTO_EDITOR_CURSOR: off ? "0" : (features.editorCursor ?? features.cursor ?? editor.cursor ?? true) ? "1" : "0",
     PI_GRAPHICS_CELL_WIDTH_PX: gfx.cell?.widthPx != null ? String(gfx.cell.widthPx) : undefined,
     PI_GRAPHICS_CELL_HEIGHT_PX: gfx.cell?.heightPx != null ? String(gfx.cell.heightPx) : undefined,
     PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx.cell?.lineHeightScale != null ? String(gfx.cell.lineHeightScale) : undefined,
@@ -207,6 +208,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   let writeGraphicsCommand = null;
+  let hardwareCursorTui = null;
   function resolveGraphicsWriter(ctx) {
     if (typeof ctx?.ui?.write === "function") return ctx.ui.write.bind(ctx.ui);
     if (typeof ctx?.ui?.terminal?.write === "function") return ctx.ui.terminal.write.bind(ctx.ui.terminal);
@@ -216,6 +218,56 @@ export default function piGraphicsExtension(pi) {
   function emitGraphicsCommand(command) {
     if (!command || typeof writeGraphicsCommand !== "function") return;
     try { writeGraphicsCommand(command); } catch {}
+  }
+
+  function cursorStylingEnabled() {
+    return !modeIsOff(gfxEnv().PI_GRAPHICS_MODE)
+      && envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)
+      && envBool("PI_GRAPHICS_AUTO_EDITOR_CURSOR", true);
+  }
+
+  function installHardwareCursorGuard(tui) {
+    if (!tui || typeof tui.setShowHardwareCursor !== "function" || typeof tui.getShowHardwareCursor !== "function") return null;
+    hardwareCursorTui = tui;
+    if (!tui.__piGraphicsHardwareCursorGuard) {
+      const originalSet = tui.setShowHardwareCursor.bind(tui);
+      const originalGet = tui.getShowHardwareCursor.bind(tui);
+      const guard = { active: false, previous: undefined, originalSet, originalGet };
+      tui.setShowHardwareCursor = (enabled) => {
+        if (guard.active) {
+          guard.previous = Boolean(enabled);
+          return guard.originalSet(false);
+        }
+        return guard.originalSet(Boolean(enabled));
+      };
+      tui.__piGraphicsHardwareCursorGuard = guard;
+    }
+    return tui.__piGraphicsHardwareCursorGuard;
+  }
+
+  function applyHardwareCursorPolicy(tui = hardwareCursorTui) {
+    const guard = installHardwareCursorGuard(tui);
+    if (!guard) return;
+    if (cursorStylingEnabled()) {
+      if (!guard.active) guard.previous = guard.originalGet();
+      guard.active = true;
+      guard.originalSet(false);
+    } else if (guard.active) {
+      guard.active = false;
+      guard.originalSet(Boolean(guard.previous));
+      guard.previous = undefined;
+    }
+  }
+
+  function restoreHardwareCursorPolicy() {
+    const tui = hardwareCursorTui;
+    const guard = tui?.__piGraphicsHardwareCursorGuard;
+    if (!guard) return;
+    if (guard.active) {
+      guard.active = false;
+      guard.originalSet(Boolean(guard.previous));
+      guard.previous = undefined;
+    }
   }
 
   function applyTheme(ctx) {
@@ -635,6 +687,7 @@ export default function piGraphicsExtension(pi) {
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
+      applyHardwareCursorPolicy(tui);
       return new KittyEditor(tui, theme, keybindings);
     });
     return true;
@@ -1049,6 +1102,7 @@ export default function piGraphicsExtension(pi) {
     } else {
       installBoxChromeOnce(ctx, { force: true });
     }
+    applyHardwareCursorPolicy();
     try { ctx?.ui?.requestRender?.(true); } catch {}
   }
 
@@ -1165,6 +1219,7 @@ export default function piGraphicsExtension(pi) {
 
   pi.on("session_end", async (_event, ctx) => {
     teardownBoxChrome(ctx);
+    restoreHardwareCursorPolicy();
     writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}

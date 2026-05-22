@@ -1243,6 +1243,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_MODE: off \? "off" : "on"/);
   assert.match(source, /PI_GRAPHICS_AUTO_THEME: off \? "0" : \(gfx\.autoApplyTheme \?\? true\)/);
   assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: off \? "0" : \(features\.editor \?\? true\)/);
+  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_CURSOR: off \? "0" : \(features\.editorCursor \?\? features\.cursor \?\? editor\.cursor \?\? true\)/);
   assert.match(source, /PI_GRAPHICS_CELL_WIDTH_PX: gfx\.cell\?\.widthPx/);
   assert.match(source, /PI_GRAPHICS_CELL_HEIGHT_PX: gfx\.cell\?\.heightPx/);
   assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
@@ -1266,6 +1267,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /columns: safeRowWidth/);
   assert.match(source, /zIndex: -1073741826/);
   assert.match(source, /renderEditorCursorVline/);
+  assert.match(source, /function cursorStylingEnabled/);
+  assert.match(source, /envBool\("PI_GRAPHICS_AUTO_EDITOR_CURSOR", true\)/);
+  assert.match(source, /function installHardwareCursorGuard\(tui\)/);
+  assert.match(source, /applyHardwareCursorPolicy\(tui\)/);
+  assert.match(source, /restoreHardwareCursorPolicy\(\)/);
   assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0 \} = \{\}\)/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
@@ -1324,6 +1330,7 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /export function settingsEnvFromPiGraphics/);
   assert.match(source, /PI_GRAPHICS_MODE: off \? "off" : "on"/);
   assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE/);
+  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_CURSOR/);
   assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA/);
   assert.match(source, /PI_GRAPHICS_CELL_WIDTH_PX/);

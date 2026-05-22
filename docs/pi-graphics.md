@@ -387,7 +387,10 @@ displayed using kitty Unicode placeholder cells, so:
   naturally replace the graphics. The focused editor cursor itself is also
   replaced in every editor graphics style with a one-cell glassy Unicode-placeholder
   cursor, while Pi's zero-width hardware/IME cursor marker is preserved immediately
-  before it for terminal input plumbing. The cursor placeholder also anchors a
+  before it for terminal input plumbing. When this graphics cursor styling is
+  active, the extension asks Pi's TUI to hide the hardware cursor so the terminal
+  blink does not fight the styled placeholder; disabling graphics cursor/editor
+  styling restores the previous hardware-cursor setting. The cursor placeholder also anchors a
   low-z-index relative row background that spans the rendered editor width and
   shifts left by the measured cursor column. The cursor glyph is a dedicated
   one-cell vertical heat line with a bright white core and bounded side glow,
