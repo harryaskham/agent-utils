@@ -366,9 +366,10 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx box-effect <name>` can select a specific effect or `/gfx box-effect auto`
   can return to per-message-type effects. `/gfx box-mode unicode` uses only
   placeholder-tied graphics for box side borders instead of relative placements.
-* Box wrapping is ANSI/OSC-safe: placeholder insertion, unicode side borders,
-  width truncation, and padding preserve terminal controls instead of slicing
-  inside color/style escape sequences.
+* Box wrapping is ANSI/OSC/APC/DCS-safe: placeholder insertion, unicode side
+  borders, width truncation, and padding preserve terminal controls instead of
+  slicing inside color/style escapes, Pi IME cursor markers, or tmux/kitty
+  passthrough sequences.
 * Editor border chrome spans the full editor/terminal width instead of being
   capped and center-aligned, so fullscreen terminals keep a visible full-width
   input frame. In `unicode` editor mode, trailing empty workspace cells after the

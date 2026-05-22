@@ -120,6 +120,23 @@ test("box chrome preserves ANSI controls while reclaiming one visible cell", () 
   assert.doesNotMatch(out[0], /\x1b\[[^m]*$/, "ANSI controls must not be truncated mid-sequence");
 });
 
+test("box chrome treats APC cursor markers and DCS controls as zero-width", () => {
+  const emitted = [];
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const cursorMarker = "\x1b_cursor\x1b\\";
+  const dcs = "\x1bP1$r q\x1b\\";
+  const out = runtime.applyToRows({ type: "editor", instanceId: 12, lines: [`ab${cursorMarker}cd${dcs}ef`], renderWidth: 6 });
+  assert.match(out[0], /ab\x1b_cursor\x1b\\cd\x1bP1\$r q\x1b\\/);
+  assert.doesNotMatch(out[0], /ef/, "visible text should truncate while zero-width controls survive");
+  assert.doesNotMatch(out[0], /\x1b[_P][^\x1b]*$/, "APC/DCS controls must not be truncated mid-sequence");
+});
+
 test("unicode box mode truncates and pads ANSI-styled rows without corrupting controls", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };

@@ -504,7 +504,7 @@ function hasKittyPlaceholder(text) {
   return String(text || "").includes("\u{10eeee}");
 }
 
-const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))/g;
+const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))|(?:\x1b[_P][\s\S]*?\x1b\\)/g;
 
 function readControlAt(text, index) {
   CONTROL_RE.lastIndex = index;
