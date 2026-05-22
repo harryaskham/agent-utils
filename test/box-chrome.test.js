@@ -85,6 +85,12 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines, renderWidth: 20 });
   const newCmds = emitted.slice(emittedBeforeSecond);
   assert.deepEqual(newCmds, [], "second render should not re-upload or re-place unchanged box chrome");
+  runtime.resetCaches();
+  const beforeResetRender = emitted.length;
+  runtime.applyToRows({ type: "assistant", instanceId: 1, lines, renderWidth: 20 });
+  const resetCmds = emitted.slice(beforeResetRender).join("");
+  assert.match(resetCmds, /a=t,f=100,t=d/, "after scoped clear, box chrome must re-upload cached strip images");
+  assert.match(resetCmds, /a=p/, "after scoped clear, box chrome must re-place anchors and relative strips");
   const beforeResize = emitted.length;
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines: ["first row wider", "second row wider", "third row wider"], renderWidth: 24 });
   const resizeCmds = emitted.slice(beforeResize).join("");

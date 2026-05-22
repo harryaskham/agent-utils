@@ -321,7 +321,10 @@ displayed using kitty Unicode placeholder cells, so:
   passthrough automatically.
 * All image ids are tracked in extension-owned state and freed via
   `buildScopedDeleteCommand`. The extension never issues a global
-  "delete all images" command. This keeps it cooperative with bd-f89780's
+  "delete all images" command. After session end or the `pi_graphics_clear`
+  tool, both global placement tracking and box-chrome
+  upload caches are reset so later redraws re-upload their placeholder graphics
+  instead of leaving stale placeholder cells behind. This keeps it cooperative with bd-f89780's
   scoped image ownership work.
 * Pi graphics image ids deliberately use the kitty protocol's full 32-bit
   namespace: Unicode placeholders encode the low 24 bits as foreground

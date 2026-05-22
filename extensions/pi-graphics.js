@@ -94,6 +94,7 @@ import {
   ensureUnicodePlacement,
   makeState,
   renderToText,
+  resetPlacementTracking,
 } from "./pi-graphics/runtime.js";
 
 const TOOL_PREFIX = "pi_graphics";
@@ -1073,6 +1074,7 @@ export default function piGraphicsExtension(pi) {
       const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
       if (command) resolveGraphicsWriter(ctx)?.(command);
     } catch {}
+    resetPlacementTracking(state);
   });
 
   pi.registerTool({
@@ -1179,7 +1181,8 @@ export default function piGraphicsExtension(pi) {
         try { ctx?.ui?.write?.(command); } catch {}
       }
       const cleared = state.ownedImageIds.size;
-      state.ownedImageIds.clear();
+      try { boxChromeRuntime?.resetCaches?.(); } catch {}
+      resetPlacementTracking(state);
       return { content: [{ type: "text", text: `cleared ${cleared} pi-graphics image(s)` }], details: { cleared } };
     },
   });

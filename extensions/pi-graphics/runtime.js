@@ -92,6 +92,12 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
   return { imageId, placementId, transmit, lines, transmitted: !alreadyTransmitted, frames: pngs.length };
 }
 
+export function resetPlacementTracking(state) {
+  state?.ownedImageIds?.clear?.();
+  state?.transmittedImageIds?.clear?.();
+  state?.placementByImage?.clear?.();
+}
+
 export function ensureUnicodePlacement(state) {
   return shouldUseUnicodePlaceholders({
     placementMode: state.config.placementMode,

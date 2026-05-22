@@ -497,7 +497,14 @@ export function createBoxChromeRuntime({
     return wrapped;
   }
 
-  return { applyToRows };
+  function resetCaches() {
+    uploadedStrips.clear();
+    anchorsUploaded.clear();
+    relativePlacements.clear();
+    relativeByAnchorRow.clear();
+  }
+
+  return { applyToRows, resetCaches };
 }
 
 function hasKittyPlaceholder(text) {

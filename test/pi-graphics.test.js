@@ -34,6 +34,7 @@ import {
   ensureUnicodePlacement,
   makeState,
   renderToText,
+  resetPlacementTracking,
 } from "../extensions/pi-graphics/runtime.js";
 import {
   piGraphicsImageId,
@@ -1313,6 +1314,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /function restoreUiGraphicsSurfaces/);
   assert.match(source, /function teardownBoxChrome/);
   assert.match(source, /restoreBuiltInBoxChrome/);
+  assert.match(source, /resetPlacementTracking\(state\)/);
+  assert.match(source, /boxChromeRuntime\?\.resetCaches\?\.\(\)/);
   assert.match(source, /ui\.__piGraphicsOriginalSurfaces = originals/);
   assert.match(source, /const patchedCustom = function \(componentOrFactory, options = undefined, \.\.\.rest\)/);
   assert.match(source, /const patchedSetWidget = function \(id, componentOrFactory, options = undefined, \.\.\.rest\)/);
@@ -1453,6 +1456,31 @@ test("buildPlacement reuses stable image and placement ids without re-uploading 
   assert.match(first.transmit, /a=T/);
   assert.match(first.transmit, /U=1/);
   assert.equal(second.transmit, "");
+});
+
+test("resetPlacementTracking forces graphics to re-upload after scoped clear", () => {
+  const state = makeState();
+  state.config.passthrough = "none";
+  const enclosure = renderPromptEnclosure({ columns: 4 });
+  const first = buildPlacement(state, {
+    name: "clear-reupload-rule",
+    png: enclosure.png,
+    columns: enclosure.columns,
+    rows: enclosure.rows,
+  });
+  resetPlacementTracking(state);
+  const second = buildPlacement(state, {
+    name: "clear-reupload-rule",
+    png: enclosure.png,
+    columns: enclosure.columns,
+    rows: enclosure.rows,
+  });
+
+  assert.equal(second.imageId, first.imageId);
+  assert.equal(second.placementId, first.placementId);
+  assert.equal(second.transmitted, true);
+  assert.match(second.transmit, /a=T/);
+  assert.ok(state.ownedImageIds.has(second.imageId));
 });
 
 test("ensureUnicodePlacement always anchors regardless of TMUX env", () => {
