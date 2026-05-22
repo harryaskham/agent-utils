@@ -226,6 +226,11 @@ export default function piGraphicsExtension(pi) {
   const uploadedImages = new Set();
   const relativeUploaded = new Set();
 
+  function resetGraphicsUploadCaches() {
+    uploadedImages.clear();
+    relativeUploaded.clear();
+  }
+
   function ensureAnchorUploaded({ anchorImageId, anchorPlacementId }) {
     if (uploadedImages.has(anchorImageId)) return;
     // Upload a 1×1 transparent PNG for the anchor image.
@@ -1073,6 +1078,7 @@ export default function piGraphicsExtension(pi) {
       const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
       if (command) resolveGraphicsWriter(ctx)?.(command);
     } catch {}
+    resetGraphicsUploadCaches();
     resetPlacementTracking(state);
   });
 
@@ -1183,6 +1189,7 @@ export default function piGraphicsExtension(pi) {
       }
       const cleared = state.ownedImageIds.size;
       try { boxChromeRuntime?.resetCaches?.(); } catch {}
+      resetGraphicsUploadCaches();
       resetPlacementTracking(state);
       return { content: [{ type: "text", text: `cleared ${cleared} pi-graphics image(s)` }], details: { cleared } };
     },

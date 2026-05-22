@@ -322,7 +322,7 @@ displayed using kitty Unicode placeholder cells, so:
 * All image ids are tracked in extension-owned state and freed via
   `buildScopedDeleteCommand`. The extension never issues a global
   "delete all images" command. After session end or the `pi_graphics_clear`
-  tool, both global placement tracking and box-chrome
+  tool, global placement tracking, editor/upload tracking, and box-chrome
   upload caches are reset so later redraws re-upload their placeholder graphics
   instead of leaving stale placeholder cells behind. This keeps it cooperative with bd-f89780's
   scoped image ownership work.

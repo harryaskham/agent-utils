@@ -1316,6 +1316,9 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /function restoreUiGraphicsSurfaces/);
   assert.match(source, /function teardownBoxChrome/);
   assert.match(source, /restoreBuiltInBoxChrome/);
+  assert.match(source, /function resetGraphicsUploadCaches\(\)/);
+  assert.match(source, /uploadedImages\.clear\(\)/);
+  assert.match(source, /relativeUploaded\.clear\(\)/);
   assert.match(source, /resetPlacementTracking\(state\)/);
   assert.match(source, /boxChromeRuntime\?\.resetCaches\?\.\(\)/);
   assert.match(source, /ui\.__piGraphicsOriginalSurfaces = originals/);
