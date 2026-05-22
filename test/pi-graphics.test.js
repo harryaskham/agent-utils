@@ -25,6 +25,7 @@ import {
   renderGlowPanel,
   renderGlowPanelFrames,
   renderEditorBorderFrame,
+  renderEditorCursorVline,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -323,6 +324,27 @@ test("setPixel composites alpha over existing color", () => {
   assert.equal(pixels[3], 0xff);
   // And the channels should be roughly halfway between black and white.
   assert.ok(pixels[0] > 0x60 && pixels[0] < 0xa0);
+});
+
+test("renderEditorCursorVline stays one cell wide with vertical heat core", () => {
+  const result = renderEditorCursorVline({ cellWidthPx: 9, lineHeightScale: 1.2 });
+  assert.equal(result.columns, 1);
+  assert.equal(result.rows, 1);
+  assert.equal(result.widthPx, 9);
+  assert.equal(result.heightPx, 19);
+  const decoded = decodePngRgba(result.png);
+  const midY = Math.floor(decoded.height / 2);
+  const centerX = Math.floor(decoded.width / 2);
+  const center = pixelAt(decoded, centerX, midY);
+  const leftEdge = pixelAt(decoded, 0, midY);
+  const rightEdge = pixelAt(decoded, decoded.width - 1, midY);
+  const topCenter = pixelAt(decoded, centerX, 0);
+  const upper = pixelAt(decoded, centerX, Math.max(0, midY - 4));
+  const lower = pixelAt(decoded, centerX, Math.min(decoded.height - 1, midY + 4));
+  assert.ok(center[3] > 220, "cursor core should be hot and prominent");
+  assert.ok(leftEdge[3] < 80 && rightEdge[3] < 100, "side glow must stay bounded inside the cell");
+  assert.ok(topCenter[3] > 220, "vertical cursor should run through the cell, not render as a middle horizontal bar");
+  assert.ok(channelDistance(upper, lower) < 35, "vertical core should be visually consistent along the cursor height");
 });
 
 test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () => {
@@ -1238,8 +1260,12 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
   assert.match(source, /function ensureEditorRowBackground/);
-  assert.match(source, /hOffset: -Math\.max\(0, cursorCol\)/);
+  assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);
+  assert.match(source, /const safeCursorCol = Math\.max\(0, Math\.min\(safeRowWidth - 1/);
+  assert.match(source, /hOffset: -safeCursorCol/);
+  assert.match(source, /columns: safeRowWidth/);
   assert.match(source, /zIndex: -1073741826/);
+  assert.match(source, /renderEditorCursorVline/);
   assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0 \} = \{\}\)/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);

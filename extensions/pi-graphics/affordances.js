@@ -142,6 +142,39 @@ function paintSurfaceVariant(pixels, widthPx, heightPx, {
  *   blends into surrounding text instead of butting up against margins.
  * @returns {{ png: Buffer, columns: number, rows: number, widthPx: number, heightPx: number }}
  */
+export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightScale, backgroundColor = NORDIC_DEEP_BOTTOM, coreColor = NORDIC_EDGE, glowColor = NORDIC_CYAN, alpha = 0.72 } = {}) {
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const widthPx = metrics.cellWidthPx;
+  const heightPx = metrics.cellHeightPx;
+  const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+  const bgAlpha = Math.round(normalizeAlpha(alpha, 0.72) * 42);
+  fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(backgroundColor, Math.round(bgAlpha * 0.45)), withAlpha(glowColor, bgAlpha));
+
+  const cx = Math.floor(widthPx / 2);
+  const coreW = Math.max(1, Math.min(2, Math.round(widthPx * 0.22)));
+  const coreX = Math.max(0, cx - Math.floor(coreW / 2));
+  for (let dx = -2; dx <= 2; dx += 1) {
+    const x = cx + dx;
+    if (x < 0 || x >= widthPx) continue;
+    const distance = Math.abs(dx);
+    const glowA = distance === 0 ? 0 : Math.max(0, 72 - distance * 24);
+    if (glowA > 0) fillRect(pixels, widthPx, x, 1, 1, Math.max(1, heightPx - 2), withAlpha(glowColor, glowA));
+  }
+  fillRect(pixels, widthPx, coreX, 0, coreW, heightPx, withAlpha(coreColor, 236));
+  fillRect(pixels, widthPx, Math.min(widthPx - 1, coreX + coreW), 1, 1, Math.max(1, heightPx - 2), withAlpha(glowColor, 96));
+  fillRect(pixels, widthPx, Math.max(0, coreX - 1), 1, 1, Math.max(1, heightPx - 2), withAlpha(coreColor, 86));
+  return {
+    png: encodeRgbaPng(pixels, widthPx, heightPx),
+    columns: 1,
+    rows: 1,
+    widthPx,
+    heightPx,
+    cellWidthPx: metrics.cellWidthPx,
+    cellHeightPx: metrics.cellHeightPx,
+    lineHeightScale: metrics.lineHeightScale,
+  };
+}
+
 export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, phase = 0, cellWidthPx, cellHeightPx, lineHeightScale, variant = "rule", alpha = 0.7 } = {}) {
   const cols = clampPositive(columns, 1, "columns");
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });

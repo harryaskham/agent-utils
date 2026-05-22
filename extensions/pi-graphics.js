@@ -83,6 +83,7 @@ import {
   renderEditorBoxApng,
   renderEditorBorderFramesPngs,
   renderEditorRailApng,
+  renderEditorCursorVline,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -482,11 +483,13 @@ export default function piGraphicsExtension(pi) {
 
   function ensureEditorRowBackground({ parentImageId, parentPlacementId, rowWidth, cursorCol }) {
     if (!ensureUnicodePlacement(state) || rowWidth < 2) return;
+    const safeRowWidth = Math.max(1, Math.min(512, Math.trunc(Number(rowWidth) || 1) - 2));
+    const safeCursorCol = Math.max(0, Math.min(safeRowWidth - 1, Math.trunc(Number(cursorCol) || 0)));
     const cell = cellMetrics();
-    const bgImageId = piGraphicsImageId(`editor-row-background-${rowWidth}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    const bgImageId = piGraphicsImageId(`editor-row-background-${safeRowWidth}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(bgImageId)) {
       const rendered = renderPromptEnclosure({
-        columns: rowWidth,
+        columns: safeRowWidth,
         variant: "glow",
         alpha: Math.max(0.10, editorAlpha() * 0.24),
         leftColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
@@ -505,15 +508,15 @@ export default function piGraphicsExtension(pi) {
       uploadedImages.add(bgImageId);
     }
     const bgPlacementId = piGraphicsPlacementId("editor-row-background-relative");
-    const key = `${bgImageId}:${parentImageId}:${parentPlacementId}:${rowWidth}:${cursorCol}`;
+    const key = `${bgImageId}:${parentImageId}:${parentPlacementId}:${safeRowWidth}:${safeCursorCol}`;
     if (editorBackgroundPlacementKey === key) return;
     emitGraphicsCommand(buildRelativePlacementCommand({
       imageId: bgImageId,
       placementId: bgPlacementId,
       parentImageId,
       parentPlacementId,
-      hOffset: -Math.max(0, cursorCol),
-      columns: rowWidth,
+      hOffset: -safeCursorCol,
+      columns: safeRowWidth,
       rows: 1,
       zIndex: -1073741826,
       passthrough: state.config.passthrough,
@@ -524,13 +527,11 @@ export default function piGraphicsExtension(pi) {
   function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0 } = {}) {
     if (!ensureUnicodePlacement(state)) return null;
     const cell = cellMetrics();
-    const rendered = renderPromptEnclosure({
-      columns: 1,
-      variant: "glow",
+    const rendered = renderEditorCursorVline({
       alpha: Math.max(0.32, editorAlpha() * 0.72),
-      leftColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
-      rightColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
-      fadeEdges: false,
+      backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+      coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
+      glowColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
       ...cell,
     });
     const placement = buildPlacement(state, {

@@ -389,7 +389,9 @@ displayed using kitty Unicode placeholder cells, so:
   cursor, while Pi's zero-width hardware/IME cursor marker is preserved immediately
   before it for terminal input plumbing. The cursor placeholder also anchors a
   low-z-index relative row background that spans the rendered editor width and
-  shifts left by the measured cursor column, so the editor can keep graphical
+  shifts left by the measured cursor column. The cursor glyph is a dedicated
+  one-cell vertical heat line with a bright white core and bounded side glow,
+  not the horizontal prompt-rule renderer, so the editor can keep graphical
   glass behind typed text without replacing the text cells themselves. Placeholder
   tails still occupy trailing space cells as a caco-compatible fallback and as
   workspace fill after the cursor.
