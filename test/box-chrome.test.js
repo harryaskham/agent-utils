@@ -172,22 +172,35 @@ test("thinking assistant content uses cloudy thought chrome", () => {
   assert.ok([...state.ownedImageIds].length >= 2, "cloud chrome should own strip and anchor images");
 });
 
-test("installBoxChromeMonkeyPatch is idempotent and wraps render", () => {
+test("installBoxChromeMonkeyPatch is idempotent, updates runtime, and restores safely", () => {
   class Fake {
     render() { return ["alpha", "beta"]; }
   }
-  const emitted = [];
-  const state = { ownedImageIds: new Set() };
-  const runtime = createBoxChromeRuntime({
-    emitGraphicsCommand: (c) => emitted.push(c),
-    state,
+  const emittedA = [];
+  const runtimeA = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emittedA.push(c),
+    state: { ownedImageIds: new Set() },
     passthrough: "none",
     resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
   });
-  installBoxChromeMonkeyPatch({ components: { assistant: Fake }, runtime });
-  installBoxChromeMonkeyPatch({ components: { assistant: Fake }, runtime });
+  const installA = installBoxChromeMonkeyPatch({ components: { assistant: Fake }, runtime: runtimeA });
+  const emittedB = [];
+  const runtimeB = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emittedB.push(c),
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    resolveTheme: () => ({ colorRgb: [180, 150, 230] }),
+  });
+  const installB = installBoxChromeMonkeyPatch({ components: { assistant: Fake }, runtime: runtimeB });
   const instance = new Fake();
   const result = instance.render(20);
   assert.equal(result.length, 2);
   assert.notEqual(result[0], "alpha");
+  assert.equal(emittedA.length, 0, "reinstall should not keep using stale runtime");
+  assert.ok(result[0].includes("\u{10eeee}"), "updated unicode runtime should render side placeholders");
+  installA.restore();
+  assert.notEqual(new Fake().render(20)[0], "alpha", "old restore should not remove newer runtime ownership");
+  installB.restore();
+  assert.deepEqual(new Fake().render(20), ["alpha", "beta"], "current restore should put original render back");
 });

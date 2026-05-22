@@ -547,6 +547,7 @@ export default function piGraphicsExtension(pi) {
 
   let boxChromeInstalled = false;
   let boxChromeRuntime = null;
+  let restoreBuiltInBoxChrome = null;
   let genericGraphicsInstanceCounter = 0;
   let activeThemeRef = null;
 
@@ -680,7 +681,7 @@ export default function piGraphicsExtension(pi) {
       },
     });
     boxChromeRuntime = runtime;
-    installBoxChromeMonkeyPatch({
+    const patch = installBoxChromeMonkeyPatch({
       components: {
         assistant: AssistantMessageComponent,
         tool: ToolExecutionComponent,
@@ -711,6 +712,7 @@ export default function piGraphicsExtension(pi) {
       },
       runtime,
     });
+    restoreBuiltInBoxChrome = typeof patch?.restore === "function" ? patch.restore : null;
     boxChromeInstalled = true;
   }
 
@@ -908,6 +910,10 @@ export default function piGraphicsExtension(pi) {
 
   pi.on("session_end", async (_event, ctx) => {
     restoreUiGraphicsSurfaces(ctx);
+    try { restoreBuiltInBoxChrome?.(); } catch {}
+    restoreBuiltInBoxChrome = null;
+    boxChromeRuntime = null;
+    boxChromeInstalled = false;
     writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}

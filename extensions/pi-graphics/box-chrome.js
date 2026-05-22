@@ -618,25 +618,44 @@ function computeMaxVisibleWidth(lines) {
   return max;
 }
 
-// Idempotent monkey-patcher for built-in Pi message component classes.
+// Idempotent, reload-safe monkey-patcher for built-in Pi message/component classes.
+// Component prototypes are process-global, so the wrapper must not close over a
+// stale runtime. Reinstalling updates class-owned runtime metadata, and the
+// returned restore function only unpatches classes still owned by this install.
+let globalInstanceCounter = 0;
+
 export function installBoxChromeMonkeyPatch({ components, runtime, onWrap = () => {}, onCall = () => {} }) {
-  let instanceCounter = 0;
   const wrappedClasses = new Set();
   for (const [type, ComponentCls] of Object.entries(components)) {
     if (!ComponentCls || typeof ComponentCls !== "function") continue;
-    if (ComponentCls.__piGraphicsBoxChromeWrapped) continue;
     if (typeof ComponentCls.prototype?.render !== "function") continue;
+    if (ComponentCls.__piGraphicsBoxChromeWrapped) {
+      ComponentCls.__piGraphicsBoxChromeRuntime = runtime;
+      ComponentCls.__piGraphicsBoxChromeType = type;
+      ComponentCls.__piGraphicsBoxChromeOnCall = onCall;
+      wrappedClasses.add(ComponentCls);
+      continue;
+    }
     const original = ComponentCls.prototype.render;
+    ComponentCls.__piGraphicsBoxChromeOriginalRender = original;
+    ComponentCls.__piGraphicsBoxChromeRuntime = runtime;
+    ComponentCls.__piGraphicsBoxChromeType = type;
+    ComponentCls.__piGraphicsBoxChromeOnCall = onCall;
     ComponentCls.prototype.render = function (width) {
       const lines = original.call(this, width);
       if (!Array.isArray(lines)) return lines;
       if (this.__piGraphicsInstanceId === undefined) {
-        instanceCounter = (instanceCounter + 1) & 0xffff;
-        this.__piGraphicsInstanceId = instanceCounter;
+        globalInstanceCounter = (globalInstanceCounter + 1) & 0xffff;
+        this.__piGraphicsInstanceId = globalInstanceCounter;
       }
+      const cls = this.constructor || ComponentCls;
+      const activeRuntime = cls.__piGraphicsBoxChromeRuntime || ComponentCls.__piGraphicsBoxChromeRuntime;
+      const activeType = cls.__piGraphicsBoxChromeType || ComponentCls.__piGraphicsBoxChromeType || type;
+      const activeOnCall = cls.__piGraphicsBoxChromeOnCall || ComponentCls.__piGraphicsBoxChromeOnCall || onCall;
+      if (!activeRuntime || typeof activeRuntime.applyToRows !== "function") return lines;
       try {
-        onCall(type);
-        return runtime.applyToRows({ type, instanceId: this.__piGraphicsInstanceId, lines, component: this, renderWidth: width });
+        activeOnCall(activeType);
+        return activeRuntime.applyToRows({ type: activeType, instanceId: this.__piGraphicsInstanceId, lines, component: this, renderWidth: width });
       } catch {
         return lines;
       }
@@ -645,5 +664,18 @@ export function installBoxChromeMonkeyPatch({ components, runtime, onWrap = () =
     wrappedClasses.add(ComponentCls);
     try { onWrap(type, ComponentCls?.name); } catch {}
   }
-  return { wrappedClasses };
+  const restore = () => {
+    for (const ComponentCls of wrappedClasses) {
+      if (!ComponentCls?.__piGraphicsBoxChromeWrapped) continue;
+      if (ComponentCls.__piGraphicsBoxChromeRuntime !== runtime) continue;
+      const original = ComponentCls.__piGraphicsBoxChromeOriginalRender;
+      if (typeof original === "function") ComponentCls.prototype.render = original;
+      delete ComponentCls.__piGraphicsBoxChromeWrapped;
+      delete ComponentCls.__piGraphicsBoxChromeOriginalRender;
+      delete ComponentCls.__piGraphicsBoxChromeRuntime;
+      delete ComponentCls.__piGraphicsBoxChromeType;
+      delete ComponentCls.__piGraphicsBoxChromeOnCall;
+    }
+  };
+  return { wrappedClasses, restore };
 }

@@ -1310,12 +1310,15 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /function wrapRenderableComponent/);
   assert.match(source, /function patchUiGraphicsSurfaces/);
   assert.match(source, /function restoreUiGraphicsSurfaces/);
+  assert.match(source, /restoreBuiltInBoxChrome/);
   assert.match(source, /ui\.__piGraphicsOriginalSurfaces = originals/);
   assert.match(source, /const patchedCustom = function \(componentOrFactory, options = undefined, \.\.\.rest\)/);
   assert.match(source, /const patchedSetWidget = function \(id, componentOrFactory, options = undefined, \.\.\.rest\)/);
   assert.match(source, /const patchedSetFooter = function \(componentOrFactory, \.\.\.rest\)/);
   assert.match(source, /__piGraphicsPatchedSurface = true/);
   assert.match(source, /ui\.custom\?\.__piGraphicsPatchedSurface/);
+  assert.match(source, /restoreBuiltInBoxChrome\?\.\(\)/);
+  assert.match(source, /boxChromeInstalled = false/);
   assert.match(source, /Array\.isArray\(value\)/);
   assert.match(source, /component\.then\(\(resolved\) => wrapRenderableFactory\(resolved, type\)\)/);
   assert.match(source, /value\.__piGraphicsNoWrap \|\| value\.piGraphics === false/);
