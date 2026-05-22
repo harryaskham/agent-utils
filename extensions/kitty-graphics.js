@@ -544,6 +544,37 @@ export function buildDeleteCommand({
   );
 }
 
+export function buildDeleteByZIndexCommand({
+  zIndex,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  const z = Number(zIndex);
+  if (!Number.isFinite(z)) throw new Error("zIndex is required for kitty delete-by-z-index");
+  return serializeKittyGraphicsCommand(
+    {
+      a: "d",
+      d: "z",
+      z: Math.trunc(z),
+      q: quiet,
+    },
+    "",
+    { passthrough, env },
+  );
+}
+
+export function buildDeleteByZIndexBandCommand({
+  zIndices,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  if (!zIndices || typeof zIndices[Symbol.iterator] !== "function") return "";
+  const unique = [...new Set([...zIndices].map((value) => Math.trunc(Number(value))).filter(Number.isFinite))];
+  return unique.map((zIndex) => buildDeleteByZIndexCommand({ zIndex, quiet, passthrough, env })).join("");
+}
+
 function fnv1a32(input) {
   const text = String(input ?? "kitty-image-preview");
   let hash = 2166136261;

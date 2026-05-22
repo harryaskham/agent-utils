@@ -1266,7 +1266,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const safeCursorCol = Math\.max\(0, Math\.min\(safeRowWidth - 1/);
   assert.match(source, /hOffset: -safeCursorCol/);
   assert.match(source, /columns: safeRowWidth/);
-  assert.match(source, /zIndex: -1073741826/);
+  assert.match(source, /zIndex: PI_GRAPHICS_Z\.BACKGROUND/);
   assert.match(source, /renderEditorCursorVline/);
   assert.match(source, /function buildSegmentedFooterLine/);
   assert.match(source, /function installSegmentedFooter/);
@@ -1352,6 +1352,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /\$\{TOOL_PREFIX\}_render_prompt_enclosure/);
   assert.match(source, /\$\{TOOL_PREFIX\}_render_message_border/);
   assert.match(source, /pi_graphics_clear/);
+  assert.match(source, /PI_GRAPHICS_RESERVED_Z_INDICES/);
+  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES \}\)/);
   assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds \}\)/);
   assert.match(source, /BorderedLoader/);
   assert.match(source, /DynamicBorder/);
@@ -1369,7 +1371,7 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /relativeUploaded\.clear\(\)/);
   assert.match(source, /resetPlacementTracking\(state\)/);
   assert.match(source, /boxChromeRuntime\?\.resetCaches\?\.\(\)/);
-  assert.match(source, /async execute\(_toolCallId, _params, _signal, _onUpdate, ctx\)/);
+  assert.match(source, /async execute\(_toolCallId, params = \{\}, _signal, _onUpdate, ctx\)/);
   assert.match(source, /resolveGraphicsWriter\(ctx\)\?\.\(command\)/);
   assert.match(source, /ui\.__piGraphicsOriginalSurfaces = originals/);
   assert.match(source, /const patchedCustom = function \(componentOrFactory, options = undefined, \.\.\.rest\)/);

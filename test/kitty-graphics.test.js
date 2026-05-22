@@ -10,6 +10,8 @@ import {
   buildPngCursorAnimationUpload,
   buildPngVirtualPlacementAnimation,
   buildPngVirtualPlacementCommand,
+  buildDeleteByZIndexBandCommand,
+  buildDeleteByZIndexCommand,
   buildScopedDeleteCommand,
   serializeKittyGraphicsCommand,
   shouldUseUnicodePlaceholders,
@@ -228,6 +230,19 @@ test("kitty multiviewer scopes delete commands to images it owns", async () => {
   // Scoped deletion uses per-image-id deletes (d=i with i=<id>) defined in the
   // shared kitty-graphics helper.
   assert.match(graphicsSource, /deleteMode: "i"/);
+});
+
+test("buildDeleteByZIndexCommand emits scoped z-index deletes", () => {
+  const cmd = buildDeleteByZIndexCommand({ zIndex: -1073741825, passthrough: "none" });
+  assert.match(cmd, /a=d,d=z,z=-1073741825,q=2/);
+  assert.throws(() => buildDeleteByZIndexCommand({ passthrough: "none" }), /zIndex is required/);
+});
+
+test("buildDeleteByZIndexBandCommand deduplicates reserved cleanup indices", () => {
+  const cmd = buildDeleteByZIndexBandCommand({ zIndices: [-2, -2, -3], passthrough: "none" });
+  assert.equal([...cmd.matchAll(/a=d,d=z/g)].length, 2);
+  assert.match(cmd, /z=-2/);
+  assert.match(cmd, /z=-3/);
 });
 
 test("buildScopedDeleteCommand emits per-image deletes for owned ids only", () => {

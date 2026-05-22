@@ -57,6 +57,7 @@ import {
   buildPngCursorAnimationUpload,
   buildRelativePlacementCommand,
   bufferToBase64,
+  buildDeleteByZIndexBandCommand,
   buildScopedDeleteCommand,
   detectKittyPassthroughMode,
   serializeKittyGraphicsCommand,
@@ -95,6 +96,7 @@ import {
   renderToText,
   resetPlacementTracking,
 } from "./pi-graphics/runtime.js";
+import { PI_GRAPHICS_RESERVED_Z_INDICES, PI_GRAPHICS_Z } from "./pi-graphics/z-index.js";
 
 const TOOL_PREFIX = "pi_graphics";
 const FALSE_RE = /^(0|false|off|no|disabled)$/i;
@@ -406,7 +408,7 @@ export default function piGraphicsExtension(pi) {
       U: 1,
       c: 1,
       r: 1,
-      z: -1073741825,
+      z: PI_GRAPHICS_Z.SURFACE,
       q: 2,
     }, "", { passthrough: state.config.passthrough });
     emitGraphicsCommand(`${upload}${place}`);
@@ -437,7 +439,7 @@ export default function piGraphicsExtension(pi) {
       parentPlacementId: anchorPlacementId,
       columns,
       rows,
-      zIndex: -1073741825,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
       passthrough: state.config.passthrough,
     });
     // Now that the non-virtual relative placement exists, let the terminal run
@@ -481,7 +483,7 @@ export default function piGraphicsExtension(pi) {
         columns: rendered.columns,
         rows: rendered.rows,
         width: visualCols,
-        zIndex: -1073741825,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
       });
       emitGraphicsCommand(placement.transmit);
       const line = placement.lines[0] ?? "";
@@ -559,7 +561,7 @@ export default function piGraphicsExtension(pi) {
       columns: rendered.columns,
       rows: rendered.rows,
       width: 1,
-      zIndex: -1073741825,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(placement.transmit);
     return placement.lines[0] ?? "";
@@ -615,7 +617,7 @@ export default function piGraphicsExtension(pi) {
       columns: rendered.columns,
       rows: rendered.rows,
       width: cols,
-      zIndex: -1073741825,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(placement.transmit);
     return placement.lines[0] ?? null;
@@ -667,7 +669,7 @@ export default function piGraphicsExtension(pi) {
       hOffset: -safeCursorCol,
       columns: safeRowWidth,
       rows: 1,
-      zIndex: -1073741826,
+      zIndex: PI_GRAPHICS_Z.BACKGROUND,
       passthrough: state.config.passthrough,
     }));
     editorBackgroundPlacementKey = key;
@@ -689,7 +691,7 @@ export default function piGraphicsExtension(pi) {
       columns: rendered.columns,
       rows: rendered.rows,
       width: 1,
-      zIndex: -1073741825,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(placement.transmit);
     ensureEditorRowBackground({
@@ -805,7 +807,7 @@ export default function piGraphicsExtension(pi) {
         hOffset: 1,
         columns: textWidth,
         rows: 1,
-        zIndex: -1073741826,
+        zIndex: PI_GRAPHICS_Z.BACKGROUND,
         passthrough: state.config.passthrough,
       }));
       relativeUploaded.add(key);
@@ -831,7 +833,7 @@ export default function piGraphicsExtension(pi) {
       columns: 1,
       rows: 1,
       width: 1,
-      zIndex: -1073741825,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(placement.transmit);
     return { cell: placement.lines[0] ?? "│", imageId: placement.imageId, placementId: placement.placementId };
@@ -912,7 +914,7 @@ export default function piGraphicsExtension(pi) {
       columns: apng.columns,
       rows: apng.rows,
       width: cols,
-      zIndex: -1073741825,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(placement.transmit);
     return placement.lines;
@@ -1621,9 +1623,13 @@ export default function piGraphicsExtension(pi) {
     name: `${TOOL_PREFIX}_clear`,
     label: "Pi Graphics: Clear",
     description: "Delete every kitty image owned by this extension. Scoped: never deletes images owned by others, never issues a global clear.",
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
+    parameters: Type.Object({
+      hostedBand: Type.Optional(Type.Boolean({ description: "Also clear the reserved Pi graphics z-index band for caco-hosted stale-view cleanup." })),
+    }),
+    async execute(_toolCallId, params = {}, _signal, _onUpdate, ctx) {
+      const scoped = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
+      const hostedBand = params.hostedBand ? buildDeleteByZIndexBandCommand({ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES }) : "";
+      const command = `${scoped}${hostedBand}`;
       if (command) {
         try { resolveGraphicsWriter(ctx)?.(command); } catch {}
       }
@@ -1631,7 +1637,7 @@ export default function piGraphicsExtension(pi) {
       try { boxChromeRuntime?.resetCaches?.(); } catch {}
       resetGraphicsUploadCaches();
       resetPlacementTracking(state);
-      return { content: [{ type: "text", text: `cleared ${cleared} pi-graphics image(s)` }], details: { cleared } };
+      return { content: [{ type: "text", text: `cleared ${cleared} pi-graphics image(s)${params.hostedBand ? " and hosted z-index band" : ""}` }], details: { cleared, hostedBand: !!params.hostedBand, zIndices: params.hostedBand ? PI_GRAPHICS_RESERVED_Z_INDICES : [] } };
     },
   });
 }

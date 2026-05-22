@@ -21,11 +21,12 @@ import {
 import { encodeRgbaPng, makeCanvas } from "./png-renderer.js";
 import { buildPlacement } from "./runtime.js";
 import { getThemeColorRgb } from "./theme-colors.js";
+import { PI_GRAPHICS_Z } from "./z-index.js";
 
-// Use a shallow negative z-index: under text, but above terminal cell
-// backgrounds/non-default SGR bg fills. The previous very-negative value hid
-// chrome behind Pi's colored cell backgrounds.
-const BOX_Z_INDEX = -1;
+// Keep box chrome inside the Pi graphics reserved z-index band so caco-hosted
+// views can clear stale Pi graphics by z-index without touching unrelated
+// terminal images. It remains negative so text stays above the chrome.
+const BOX_Z_INDEX = PI_GRAPHICS_Z.BOX_CHROME;
 const MAX_BOX_CHROME_COLUMNS = 512;
 const ESC = "\x1b";
 

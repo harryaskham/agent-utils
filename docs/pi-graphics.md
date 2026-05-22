@@ -326,6 +326,13 @@ displayed using kitty Unicode placeholder cells, so:
   upload caches are reset so later redraws re-upload their placeholder graphics
   instead of leaving stale placeholder cells behind. This keeps it cooperative with bd-f89780's
   scoped image ownership work.
+* Caco-hosted cleanup has a reserved Pi graphics z-index band in
+  `extensions/pi-graphics/z-index.js`: `-1073741827..-1073741823` (the explicit
+  set exported as `PI_GRAPHICS_RESERVED_Z_INDICES`). Pi-owned kitty placements use
+  this band so a host view switch/blur can issue kitty delete-by-z-index commands
+  for those values instead of a global clear or a caco↔Pi image registry. The
+  `pi_graphics_clear` tool still defaults to per-image scoped deletes; pass
+  `hostedBand: true` when a host needs to scrub stale reserved-band placements.
 * Pi graphics image ids deliberately use the kitty protocol's full 32-bit
   namespace: Unicode placeholders encode the low 24 bits as foreground
   truecolor and the most-significant byte as the third row/column diacritic.
@@ -414,7 +421,9 @@ displayed using kitty Unicode placeholder cells, so:
 
 The default agent-facing tool surface is intentionally small:
 
-* `pi_graphics_clear` — release every kitty image owned by the extension.
+* `pi_graphics_clear` — release every kitty image owned by the extension. It
+  also accepts `hostedBand: true` for caco-hosted cleanup, which additionally
+  emits delete-by-z-index commands for the reserved Pi graphics z-index band.
 
 Low-level drawing primitives stay client-side by default because their schemas
 and raw kitty payloads are noisy in the agent context. Operators who explicitly
