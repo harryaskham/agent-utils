@@ -341,11 +341,16 @@ displayed using kitty Unicode placeholder cells, so:
   inputs/editors/selectors, login/OAuth/model/session/settings/theme/thinking
   dialogs, image chooser, tree selector, user-message selector, and mascot/agent
   announcement components.
-* `Ctrl+t` cycles presets across the static editor border, caco-compatible
+* Box chrome is enabled by default in caco-compatible `unicode` mode unless
+  explicitly disabled with `piGraphics.boxChrome: false` or `/gfx box off`.
+  `Ctrl+t` cycles presets across the static editor border, caco-compatible
   `unicode` mode, animated editor border, and every box-effect variant;
   `/gfx box-effect <name>` can select a specific effect or `/gfx box-effect auto`
   can return to per-message-type effects. `/gfx box-mode unicode` uses only
   placeholder-tied graphics for box side borders instead of relative placements.
+* Box wrapping is ANSI/OSC-safe: placeholder insertion, unicode side borders,
+  width truncation, and padding preserve terminal controls instead of slicing
+  inside color/style escape sequences.
 * Editor border chrome spans the full editor/terminal width instead of being
   capped and center-aligned, so fullscreen terminals keep a visible full-width
   input frame. In `unicode` editor mode, trailing empty workspace cells after the

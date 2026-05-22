@@ -425,23 +425,11 @@ export function createBoxChromeRuntime({
       column: 0,
       includeColumn: true,
     });
-    // Replace the first visible cell of the line with the placeholder so the
-    // rendered visible width remains unchanged. Preserve leading terminal
-    // controls (CSI SGR and OSC 133 shell-integration markers) before the
-    // placeholder; otherwise OSC payload bytes like "]133;A" become visible.
-    const text = String(lineText || "");
-    const leadingEsc = (text.match(/^(?:(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))+/) || [""])[0];
-    const afterEsc = text.slice(leadingEsc.length);
-    const chars = Array.from(afterEsc);
-    let rest;
-    if (chars[0] && /\s/.test(chars[0])) {
-      rest = chars.slice(1).join("");
-    } else {
-      if (chars.length > 0 && /\s/.test(chars[chars.length - 1])) chars.pop();
-      else if (chars.length > 0) chars.pop();
-      rest = chars.join("");
-    }
-    return `${leadingEsc}${sgr}${cell}${ESC}[39;59m${rest}`;
+    // Insert the placeholder after leading terminal controls without corrupting
+    // ANSI/OSC sequences. If the line starts with visible text, remove the last
+    // visible cell ANSI-safely so the visible width remains stable while the
+    // readable prefix is preserved.
+    return prefixPlaceholderCell(String(lineText || ""), `${sgr}${cell}${ESC}[39;59m`);
   }
 
   function componentLooksLikeThinking(component) {
@@ -471,11 +459,8 @@ export function createBoxChromeRuntime({
       const left = makeCell("left", i, leftKind);
       const right = makeCell("right", i, rightKind);
       const plainWidth = Math.max(0, width - 2);
-      const chars = Array.from(String(line || ""));
-      let trimmed = stripTerminalControls(line).length > plainWidth ? chars.slice(0, plainWidth).join("") : String(line || "");
-      const visible = stripTerminalControls(trimmed).length;
-      if (visible > plainWidth) trimmed = Array.from(trimmed).slice(0, plainWidth).join("");
-      const pad = " ".repeat(Math.max(0, plainWidth - stripTerminalControls(trimmed).length));
+      const trimmed = truncateAnsiToVisibleWidth(String(line || ""), plainWidth);
+      const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));
       return `${left}${trimmed}${pad}${right}`;
     });
   }
@@ -509,16 +494,120 @@ function hasKittyPlaceholder(text) {
   return String(text || "").includes("\u{10eeee}");
 }
 
+const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))/g;
+
+function readControlAt(text, index) {
+  CONTROL_RE.lastIndex = index;
+  const match = CONTROL_RE.exec(text);
+  return match && match.index === index ? match[0] : null;
+}
+
 function stripTerminalControls(text) {
-  return String(text || "").replace(/(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))/g, "");
+  return String(text || "").replace(CONTROL_RE, "");
+}
+
+function charCellWidth(ch) {
+  if (!ch) return 0;
+  const code = ch.codePointAt(0) || 0;
+  if (code === 0) return 0;
+  if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
+  if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
+  if (
+    code >= 0x1100 && (
+      code <= 0x115f || code === 0x2329 || code === 0x232a ||
+      (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe19) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1faff)
+    )
+  ) return 2;
+  return 1;
+}
+
+function visibleCellWidth(text) {
+  const source = String(text || "");
+  let width = 0;
+  for (let i = 0; i < source.length;) {
+    const control = readControlAt(source, i);
+    if (control) { i += control.length; continue; }
+    const ch = String.fromCodePoint(source.codePointAt(i));
+    width += charCellWidth(ch);
+    i += ch.length;
+  }
+  return width;
+}
+
+function splitLeadingControls(text) {
+  const source = String(text || "");
+  let i = 0;
+  while (i < source.length) {
+    const control = readControlAt(source, i);
+    if (!control) break;
+    i += control.length;
+  }
+  return [source.slice(0, i), source.slice(i)];
+}
+
+function removeLastVisibleCell(text) {
+  const source = String(text || "");
+  const tokens = [];
+  for (let i = 0; i < source.length;) {
+    const control = readControlAt(source, i);
+    if (control) { tokens.push({ text: control, width: 0 }); i += control.length; continue; }
+    const ch = String.fromCodePoint(source.codePointAt(i));
+    tokens.push({ text: ch, width: charCellWidth(ch) });
+    i += ch.length;
+  }
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    if (tokens[i].width > 0) { tokens.splice(i, 1); break; }
+  }
+  return tokens.map((token) => token.text).join("");
+}
+
+function prefixPlaceholderCell(text, placeholder) {
+  const [leading, rest] = splitLeadingControls(text);
+  if (!rest) return `${leading}${placeholder}`;
+  const first = String.fromCodePoint(rest.codePointAt(0));
+  if (/\s/.test(first)) return `${leading}${placeholder}${rest.slice(first.length)}`;
+  return `${leading}${placeholder}${removeLastVisibleCell(rest)}`;
+}
+
+function truncateAnsiToVisibleWidth(text, maxWidth) {
+  const limit = Math.max(0, Math.trunc(Number(maxWidth) || 0));
+  const source = String(text || "");
+  let out = "";
+  let width = 0;
+  let i = 0;
+  for (; i < source.length;) {
+    const control = readControlAt(source, i);
+    if (control) { out += control; i += control.length; continue; }
+    const ch = String.fromCodePoint(source.codePointAt(i));
+    const w = charCellWidth(ch);
+    if (w > 0 && width + w > limit) break;
+    out += ch;
+    width += w;
+    i += ch.length;
+  }
+  // Preserve trailing controls (especially SGR resets) after truncating visible
+  // cells so styles from clipped content cannot bleed into padding/borders.
+  for (; i < source.length;) {
+    const control = readControlAt(source, i);
+    if (control) { out += control; i += control.length; continue; }
+    const ch = String.fromCodePoint(source.codePointAt(i));
+    i += ch.length;
+  }
+  return out;
 }
 
 function computeMaxVisibleWidth(lines) {
   let max = 0;
   for (const line of lines) {
-    const stripped = stripTerminalControls(line);
-    // simple visible-cell estimate; not perfect for wide chars but good enough
-    if (stripped.length > max) max = stripped.length;
+    const width = visibleCellWidth(line);
+    if (width > max) max = width;
   }
   return max;
 }

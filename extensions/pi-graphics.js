@@ -138,9 +138,9 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_FRAMES: editor.frames != null ? String(editor.frames) : undefined,
     PI_GRAPHICS_EDITOR_DELAY_MS: editor.delayMs != null ? String(editor.delayMs) : undefined,
     PI_GRAPHICS_EDITOR_STYLE: editor.style != null ? String(editor.style) : undefined,
-    PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === true ? "1" : gfx.boxChrome === false ? "0" : undefined,
+    PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === false ? "0" : "1",
     PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
-    PI_GRAPHICS_BOX_MODE: gfx.boxMode != null ? String(gfx.boxMode) : undefined,
+    PI_GRAPHICS_BOX_MODE: gfx.boxMode != null ? String(gfx.boxMode) : "unicode",
   };
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
@@ -548,7 +548,7 @@ export default function piGraphicsExtension(pi) {
 
   function installBoxChromeOnce() {
     if (boxChromeInstalled) return;
-    if (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", false)) return;
+    if (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) return;
     const runtime = createBoxChromeRuntime({
       emitGraphicsCommand,
       state,
@@ -626,7 +626,7 @@ export default function piGraphicsExtension(pi) {
     const baseThemes = themes.length ? themes : [currentTheme];
     const presets = [];
     for (const theme of baseThemes) {
-      presets.push({ name: `${theme}:static`, theme, mode: "on", editorStyle: "static", boxChrome: false });
+      presets.push({ name: `${theme}:static`, theme, mode: "on", editorStyle: "static", boxChrome: true, boxMode: "unicode", boxEffect: "glass" });
       presets.push({ name: `${theme}:unicode`, theme, mode: "on", editorStyle: "unicode", boxChrome: true, boxMode: "unicode", boxEffect: "cloud" });
       presets.push({ name: `${theme}:animated`, theme, mode: "on", editorStyle: "animated", boxChrome: false });
       for (const effect of BOX_EFFECT_NAMES) {

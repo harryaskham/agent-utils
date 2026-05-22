@@ -91,6 +91,39 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.match(resizeCmds, /a=d,d=p/, "resized rows should delete stale relative placements before replacing them");
 });
 
+test("box chrome preserves ANSI controls while reclaiming one visible cell", () => {
+  const emitted = [];
+  const state = { ownedImageIds: new Set() };
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state,
+    passthrough: "none",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 4, lines: ["\x1b[31mfirst\x1b[0m"], renderWidth: 8 });
+  assert.match(out[0], /^\x1b\[31m/);
+  assert.match(out[0], /\u{10eeee}/u);
+  assert.match(out[0], /firs\x1b\[0m$/, "trimming should remove a visible cell, not the reset sequence");
+  assert.doesNotMatch(out[0], /\x1b\[[^m]*$/, "ANSI controls must not be truncated mid-sequence");
+});
+
+test("unicode box mode truncates and pads ANSI-styled rows without corrupting controls", () => {
+  const emitted = [];
+  const state = { ownedImageIds: new Set() };
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state,
+    passthrough: "none",
+    boxMode: "unicode",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "selector", instanceId: 5, lines: ["\x1b[32mabcdef\x1b[0m"], renderWidth: 6 });
+  assert.match(out[0], /\x1b\[32mabcd\x1b\[0m/);
+  assert.match(out[0], /\u{10eeee}/u);
+  assert.doesNotMatch(out[0], /ef/, "content should be truncated to leave room for side placeholders");
+  assert.doesNotMatch(out[0], /\x1b\[[^m]*$/, "unicode truncation must not split ANSI controls");
+});
+
 test("box chrome does not double-wrap rows that already contain kitty placeholders", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };

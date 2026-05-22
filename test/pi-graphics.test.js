@@ -1226,9 +1226,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
   assert.match(source, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
-  assert.match(source, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode/);
+  assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === false \? "0" : "1"/);
+  assert.match(source, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode != null \? String\(gfx\.boxMode\) : "unicode"/);
   assert.match(source, /BOX_EFFECT_NAMES/);
   assert.match(source, /registerShortcut\?\.\("ctrl\+t"/);
+  assert.match(source, /\$\{theme\}:static`, theme, mode: "on", editorStyle: "static", boxChrome: true, boxMode: "unicode"/);
   assert.match(source, /\$\{theme\}:unicode/);
   assert.match(source, /boxes:\$\{effect\}/);
   assert.match(source, /setWorkingIndicator/);
