@@ -533,6 +533,8 @@ export default function piGraphicsExtension(pi) {
     if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return;
     if (typeof ctx.ui?.setWidget !== "function") return;
     const factory = (edge) => (_tui, _theme) => ({
+      __piGraphicsNoWrap: true,
+      piGraphics: false,
       render(width) {
         const lines = buildEditorRailRows(width, edge);
         return lines && lines.length ? lines : ["", ""];
@@ -626,20 +628,26 @@ export default function piGraphicsExtension(pi) {
     ui.__piGraphicsOriginalSurfaces = originals;
     ui.__piGraphicsSurfacesPatched = true;
     if (originals.custom) {
-      ui.custom = function (componentOrFactory, options = undefined, ...rest) {
+      const patchedCustom = function (componentOrFactory, options = undefined, ...rest) {
         const type = options?.overlay ? "overlay" : "customTui";
         return originals.custom.call(this, wrapRenderableFactory(componentOrFactory, type), options, ...rest);
       };
+      patchedCustom.__piGraphicsPatchedSurface = true;
+      ui.custom = patchedCustom;
     }
     if (originals.setWidget) {
-      ui.setWidget = function (id, componentOrFactory, options = undefined, ...rest) {
+      const patchedSetWidget = function (id, componentOrFactory, options = undefined, ...rest) {
         return originals.setWidget.call(this, id, wrapRenderableFactory(componentOrFactory, "widget"), options, ...rest);
       };
+      patchedSetWidget.__piGraphicsPatchedSurface = true;
+      ui.setWidget = patchedSetWidget;
     }
     if (originals.setFooter) {
-      ui.setFooter = function (componentOrFactory, ...rest) {
+      const patchedSetFooter = function (componentOrFactory, ...rest) {
         return originals.setFooter.call(this, wrapRenderableFactory(componentOrFactory, "footer"), ...rest);
       };
+      patchedSetFooter.__piGraphicsPatchedSurface = true;
+      ui.setFooter = patchedSetFooter;
     }
   }
 
@@ -647,9 +655,9 @@ export default function piGraphicsExtension(pi) {
     const ui = ctx?.ui;
     const originals = ui?.__piGraphicsOriginalSurfaces;
     if (!ui || !ui.__piGraphicsSurfacesPatched || !originals) return;
-    if (originals.custom) ui.custom = originals.custom;
-    if (originals.setWidget) ui.setWidget = originals.setWidget;
-    if (originals.setFooter) ui.setFooter = originals.setFooter;
+    if (originals.custom && ui.custom?.__piGraphicsPatchedSurface) ui.custom = originals.custom;
+    if (originals.setWidget && ui.setWidget?.__piGraphicsPatchedSurface) ui.setWidget = originals.setWidget;
+    if (originals.setFooter && ui.setFooter?.__piGraphicsPatchedSurface) ui.setFooter = originals.setFooter;
     delete ui.__piGraphicsOriginalSurfaces;
     delete ui.__piGraphicsSurfacesPatched;
   }
