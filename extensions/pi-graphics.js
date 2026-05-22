@@ -378,6 +378,36 @@ export default function piGraphicsExtension(pi) {
     return `${" ".repeat(leadingCells)}${chrome}${" ".repeat(Math.max(0, cols - leadingCells - visualCols))}`;
   }
 
+  function buildStatusIndicatorPrefix() {
+    if (!ensureUnicodePlacement(state)) return "";
+    const cell = cellMetrics();
+    const rendered = renderPromptEnclosure({
+      columns: 1,
+      variant: "glow",
+      alpha: Math.max(0.18, editorAlpha() * 0.38),
+      leftColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
+      rightColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
+      fadeEdges: false,
+      ...cell,
+    });
+    const placement = buildPlacement(state, {
+      name: `status-indicator-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+      png: rendered.png,
+      columns: rendered.columns,
+      rows: rendered.rows,
+      width: 1,
+      zIndex: -1073741825,
+    });
+    emitGraphicsCommand(placement.transmit);
+    return placement.lines[0] ?? "";
+  }
+
+  function decorateStatusValue(value) {
+    if (typeof value !== "string" || value.length === 0 || value.includes("\u{10eeee}")) return value;
+    const prefix = buildStatusIndicatorPrefix();
+    return prefix ? `${prefix}${value}` : value;
+  }
+
   function buildEditorWorkspaceTail(width) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(1, Math.min(256, Math.trunc(Number(width) || 0)));
@@ -631,6 +661,7 @@ export default function piGraphicsExtension(pi) {
       setFooter: typeof ui.setFooter === "function" ? ui.setFooter : null,
       setHeader: typeof ui.setHeader === "function" ? ui.setHeader : null,
       setEditorComponent: typeof ui.setEditorComponent === "function" ? ui.setEditorComponent : null,
+      setStatus: typeof ui.setStatus === "function" ? ui.setStatus : null,
     };
     ui.__piGraphicsOriginalSurfaces = originals;
     ui.__piGraphicsSurfacesPatched = true;
@@ -678,6 +709,15 @@ export default function piGraphicsExtension(pi) {
       patchedSetEditorComponent.__piGraphicsPatchedSurface = true;
       ui.setEditorComponent = patchedSetEditorComponent;
     }
+    if (originals.setStatus) {
+      const patchedSetStatus = function (id, value, ...rest) {
+        const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
+        const next = shouldSkipGraphicsOptions(options) ? value : decorateStatusValue(value);
+        return originals.setStatus.call(this, id, next, ...rest);
+      };
+      patchedSetStatus.__piGraphicsPatchedSurface = true;
+      ui.setStatus = patchedSetStatus;
+    }
   }
 
   function restoreUiGraphicsSurfaces(ctx) {
@@ -689,6 +729,7 @@ export default function piGraphicsExtension(pi) {
     if (originals.setFooter && ui.setFooter?.__piGraphicsPatchedSurface) ui.setFooter = originals.setFooter;
     if (originals.setHeader && ui.setHeader?.__piGraphicsPatchedSurface) ui.setHeader = originals.setHeader;
     if (originals.setEditorComponent && ui.setEditorComponent?.__piGraphicsPatchedSurface) ui.setEditorComponent = originals.setEditorComponent;
+    if (originals.setStatus && ui.setStatus?.__piGraphicsPatchedSurface) ui.setStatus = originals.setStatus;
     delete ui.__piGraphicsOriginalSurfaces;
     delete ui.__piGraphicsSurfacesPatched;
   }
