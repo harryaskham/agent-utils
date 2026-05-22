@@ -408,6 +408,19 @@ export default function piGraphicsExtension(pi) {
     return prefix ? `${prefix}${value}` : value;
   }
 
+  function decorateWorkingMessage(value) {
+    return decorateStatusValue(value);
+  }
+
+  function decorateWorkingIndicatorConfig(config) {
+    if (!config || config.piGraphics === false || config.piGraphics?.enabled === false) return config;
+    if (!Array.isArray(config.frames) || config.frames.length === 0) return config;
+    return {
+      ...config,
+      frames: config.frames.map((frame) => decorateStatusValue(frame)),
+    };
+  }
+
   function buildEditorWorkspaceTail(width) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(1, Math.min(256, Math.trunc(Number(width) || 0)));
@@ -662,6 +675,8 @@ export default function piGraphicsExtension(pi) {
       setHeader: typeof ui.setHeader === "function" ? ui.setHeader : null,
       setEditorComponent: typeof ui.setEditorComponent === "function" ? ui.setEditorComponent : null,
       setStatus: typeof ui.setStatus === "function" ? ui.setStatus : null,
+      setWorkingMessage: typeof ui.setWorkingMessage === "function" ? ui.setWorkingMessage : null,
+      setWorkingIndicator: typeof ui.setWorkingIndicator === "function" ? ui.setWorkingIndicator : null,
     };
     ui.__piGraphicsOriginalSurfaces = originals;
     ui.__piGraphicsSurfacesPatched = true;
@@ -718,6 +733,23 @@ export default function piGraphicsExtension(pi) {
       patchedSetStatus.__piGraphicsPatchedSurface = true;
       ui.setStatus = patchedSetStatus;
     }
+    if (originals.setWorkingMessage) {
+      const patchedSetWorkingMessage = function (value, ...rest) {
+        const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
+        const next = shouldSkipGraphicsOptions(options) ? value : decorateWorkingMessage(value);
+        return originals.setWorkingMessage.call(this, next, ...rest);
+      };
+      patchedSetWorkingMessage.__piGraphicsPatchedSurface = true;
+      ui.setWorkingMessage = patchedSetWorkingMessage;
+    }
+    if (originals.setWorkingIndicator) {
+      const patchedSetWorkingIndicator = function (config, ...rest) {
+        const next = decorateWorkingIndicatorConfig(config);
+        return originals.setWorkingIndicator.call(this, next, ...rest);
+      };
+      patchedSetWorkingIndicator.__piGraphicsPatchedSurface = true;
+      ui.setWorkingIndicator = patchedSetWorkingIndicator;
+    }
   }
 
   function restoreUiGraphicsSurfaces(ctx) {
@@ -730,6 +762,8 @@ export default function piGraphicsExtension(pi) {
     if (originals.setHeader && ui.setHeader?.__piGraphicsPatchedSurface) ui.setHeader = originals.setHeader;
     if (originals.setEditorComponent && ui.setEditorComponent?.__piGraphicsPatchedSurface) ui.setEditorComponent = originals.setEditorComponent;
     if (originals.setStatus && ui.setStatus?.__piGraphicsPatchedSurface) ui.setStatus = originals.setStatus;
+    if (originals.setWorkingMessage && ui.setWorkingMessage?.__piGraphicsPatchedSurface) ui.setWorkingMessage = originals.setWorkingMessage;
+    if (originals.setWorkingIndicator && ui.setWorkingIndicator?.__piGraphicsPatchedSurface) ui.setWorkingIndicator = originals.setWorkingIndicator;
     delete ui.__piGraphicsOriginalSurfaces;
     delete ui.__piGraphicsSurfacesPatched;
   }

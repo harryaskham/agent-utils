@@ -340,9 +340,9 @@ displayed using kitty Unicode placeholder cells, so:
   branch/compaction summaries, footer, dynamic borders, loaders, extension
   inputs/editors/selectors, login/OAuth/model/session/settings/theme/thinking
   dialogs, image chooser, tree selector, user-message selector, mascot/agent
-  announcement components, extension status indicators, and generic
-  extension-owned `custom`, widget, footer, header, editor, and overlay
-  components returned through Pi's public UI registration APIs. The generic
+  announcement components, extension status indicators, working messages,
+  working-indicator frames, and generic extension-owned `custom`, widget, footer,
+  header, editor, and overlay components returned through Pi's public UI registration APIs. The generic
   wrappers cover components, plain string-array surfaces, and promises resolving
   to either shape. Components/factories/status registrations can opt out with
   `__piGraphicsNoWrap`, `piGraphics: false`, or registration options such as
