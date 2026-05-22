@@ -203,7 +203,7 @@ rendered. The extension complements those flat colors with graphical affordances
   are showcase-only by default, the footer is reduced to tiny glyph accents plus
   the branch name, editor rails avoid text labels, and the working row/window
   title use short muted labels. Explicit diagnostics such as
-  `/pi-graphics-showcase`, `/pi-graphics-theme-status`, and the render tools
+  `/pi-graphics-showcase`, `/pi-graphics-theme-status`, and the opt-in render tools
   still expose the verbose branded proof surfaces when an operator asks for
   them.
 * **Startup splash** — on `session_start`, the extension sends a bounded
@@ -387,36 +387,23 @@ displayed using kitty Unicode placeholder cells, so:
 
 ## Tools
 
-The extension registers the following tools through `pi.registerTool`:
+The default agent-facing tool surface is intentionally small:
+
+* `pi_graphics_clear` — release every kitty image owned by the extension.
+
+Low-level drawing primitives stay client-side by default because their schemas
+and raw kitty payloads are noisy in the agent context. Operators who explicitly
+want the model to synthesize arbitrary graphics can opt in with
+`PI_GRAPHICS_EXPOSE_RENDER_TOOLS=1` or `piGraphics.exposeRenderTools: true`; that
+adds:
 
 * `pi_graphics_render_prompt_enclosure` — render a graphical separator.
-* `pi_graphics_render_message_border` — render a gradient frame sized in
-  cells.
-* `pi_graphics_render_glow_panel` — render a high-tech Nordic glow panel sized
-  in cells, optionally at a specific pulse phase.
-* `pi_graphics_render_tui_component` — render a high-tech graphical TUI card
-  frame, with optional tone/density/phase/caption controls.
-* `pi_graphics_render_tui_pulse` — render a looping APNG version of the TUI
-  component for efficient continuous pulse animation.
-* `pi_graphics_render_stage_panel` — render the always-visible conversation
-  stage panel used by lifecycle chrome, including text fallback.
-* `pi_graphics_render_contact_sheet` — render a static visual regression sheet
-  covering tones and pulse phases for human inspection.
-* `pi_graphics_send_message` — send a displayed custom message through the
-  `pi-graphics-message` renderer for validating normal conversation chrome.
-* `pi_graphics_braille_scene` — emit a truecolor Unicode Braille scene sampled from rendered pixels.
-* `pi_graphics_validation_report` — emit renderer metrics for graphical components and APNG pulse bounds.
-* `pi_graphics_visual_proof` — emit the truecolor palette-chip visual proof block.
-* `pi_graphics_heartbeat` — preview the lightweight live heartbeat ticker line.
-* `pi_graphics_cockpit_wall` — emit the large truecolor terminal cockpit wall.
-* `pi_graphics_osc_palette` — emit OSC terminal palette takeover sequences.
-* `pi_graphics_ansi_scene` — emit the truecolor ANSI half-block terminal scene sampled from rendered pixels.
-* `pi_graphics_ansi_takeover` — emit the raw truecolor ANSI takeover banner.
-* `pi_graphics_conversation_frame` — render ordinary text inside the deep-Nordic
-  conversation-frame transcript chrome.
-* `pi_graphics_theme_delta` — show the reload sentinel and quantified theme-token
-  RGB deltas against the built-in dark theme.
-* `pi_graphics_clear` — release every kitty image owned by the extension.
+* `pi_graphics_render_message_border` — render a gradient frame sized in cells.
+
+Normal graphical coverage does **not** depend on those opt-in tools: editor
+rails, message/box chrome, dialogs, selectors, notifications, working rows,
+status/footer/header/widget/custom surfaces, and extension-owned components are
+all handled inside the extension as TUI/client-side details.
 
 And the discoverability slash commands include:
 

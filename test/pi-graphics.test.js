@@ -1228,6 +1228,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
   assert.match(source, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
   assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === false \? "0" : "1"/);
+  assert.match(source, /PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx\.exposeRenderTools/);
   assert.match(source, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode != null \? String\(gfx\.boxMode\) : "unicode"/);
   assert.match(source, /BOX_EFFECT_NAMES/);
   assert.match(source, /registerShortcut\?\.\("ctrl\+t"/);
@@ -1299,8 +1300,9 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /class KittyEditor extends CustomEditor/);
   assert.match(source, /renderEditorBorderFramesPngs\(/);
   assert.match(source, /buildPlacement\(state/);
-  assert.match(source, /pi_graphics_render_prompt_enclosure/);
-  assert.match(source, /pi_graphics_render_message_border/);
+  assert.match(source, /envBool\("PI_GRAPHICS_EXPOSE_RENDER_TOOLS", false\)/);
+  assert.match(source, /\$\{TOOL_PREFIX\}_render_prompt_enclosure/);
+  assert.match(source, /\$\{TOOL_PREFIX\}_render_message_border/);
   assert.match(source, /pi_graphics_clear/);
   assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds \}\)/);
   assert.match(source, /BorderedLoader/);
