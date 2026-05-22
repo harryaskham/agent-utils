@@ -344,11 +344,15 @@ displayed using kitty Unicode placeholder cells, so:
   and overlay components returned through Pi's public UI registration APIs. The
   generic wrappers cover components, plain string-array surfaces, and promises
   resolving to either shape. Components/factories can opt out with
-  `__piGraphicsNoWrap` or `piGraphics: false`; Pi graphics' own internal rail
-  widgets use that opt-out so they are not skinned twice. The generic API
+  `__piGraphicsNoWrap`, `piGraphics: false`, or registration options such as
+  `{ piGraphics: false }`; Pi graphics' own internal rail widgets use that opt-out
+  so they are not skinned twice. The generic API
   wrappers are restored on session end so reloads do not accumulate nested
   wrappers, and restoration only replaces methods still owned by Pi graphics so
-  later extension wrappers are not clobbered. Built-in Pi component class patches
+  later extension wrappers are not clobbered. Box chrome widths are capped at
+  512 cells before kitty upload/placement to avoid pathological oversized image
+  payloads from malformed render widths while still covering ordinary fullscreen
+  terminals. Built-in Pi component class patches
   are also reload-safe: reinstallation updates the active graphics runtime rather
   than leaving old box modes/effects captured in global prototypes, and teardown
   restores prototypes only when Pi graphics still owns that runtime.

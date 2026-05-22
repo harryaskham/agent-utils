@@ -91,6 +91,19 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.match(resizeCmds, /a=d,d=p/, "resized rows should delete stale relative placements before replacing them");
 });
 
+test("box chrome caps oversized render widths before emitting kitty placements", () => {
+  const emitted = [];
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  runtime.applyToRows({ type: "assistant", instanceId: 11, lines: ["short"], renderWidth: 2000 });
+  assert.match(emitted.join(""), /(?:^|,)c=512(?:,|;)/, "kitty placements should be bounded even on huge render widths");
+  assert.doesNotMatch(emitted.join(""), /(?:^|,)c=2000(?:,|;)/);
+});
+
 test("box chrome preserves ANSI controls while reclaiming one visible cell", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };

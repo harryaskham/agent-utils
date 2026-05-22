@@ -26,6 +26,7 @@ import { getThemeColorRgb } from "./theme-colors.js";
 // backgrounds/non-default SGR bg fills. The previous very-negative value hid
 // chrome behind Pi's colored cell backgrounds.
 const BOX_Z_INDEX = -1;
+const MAX_BOX_CHROME_COLUMNS = 512;
 const ESC = "\x1b";
 
 // Type -> primary theme token mapping. Each surface picks one token that drives
@@ -478,7 +479,8 @@ export function createBoxChromeRuntime({
     const colorRgb = themeTokens.colorRgb || [136, 192, 208];
     const contentWidth = computeMaxVisibleWidth(lines);
     const requestedWidth = Math.trunc(Number(renderWidth));
-    const width = Math.max(contentWidth, Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : 0);
+    const unclampedWidth = Math.max(contentWidth, Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : 0);
+    const width = Math.min(MAX_BOX_CHROME_COLUMNS, unclampedWidth);
     if (width <= 2) return lines;
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
     if (boxMode === "unicode") return applyUnicodeBoxRows({ type: effectiveType, instanceId, lines, colorRgb, width, effect });

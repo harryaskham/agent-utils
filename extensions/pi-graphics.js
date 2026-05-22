@@ -560,6 +560,10 @@ export default function piGraphicsExtension(pi) {
     return !!(value && (value.__piGraphicsNoWrap || value.piGraphics === false || value.piGraphics?.enabled === false));
   }
 
+  function shouldSkipGraphicsOptions(options) {
+    return !!(options && (options.piGraphics === false || options.piGraphics?.enabled === false));
+  }
+
   function wrapRenderableComponent(component, type = "customTui") {
     if (!boxChromeRuntime) return component;
     if (!component || typeof component.render !== "function") return component;
@@ -631,21 +635,25 @@ export default function piGraphicsExtension(pi) {
     if (originals.custom) {
       const patchedCustom = function (componentOrFactory, options = undefined, ...rest) {
         const type = options?.overlay ? "overlay" : "customTui";
-        return originals.custom.call(this, wrapRenderableFactory(componentOrFactory, type), options, ...rest);
+        const next = shouldSkipGraphicsOptions(options) ? componentOrFactory : wrapRenderableFactory(componentOrFactory, type);
+        return originals.custom.call(this, next, options, ...rest);
       };
       patchedCustom.__piGraphicsPatchedSurface = true;
       ui.custom = patchedCustom;
     }
     if (originals.setWidget) {
       const patchedSetWidget = function (id, componentOrFactory, options = undefined, ...rest) {
-        return originals.setWidget.call(this, id, wrapRenderableFactory(componentOrFactory, "widget"), options, ...rest);
+        const next = shouldSkipGraphicsOptions(options) ? componentOrFactory : wrapRenderableFactory(componentOrFactory, "widget");
+        return originals.setWidget.call(this, id, next, options, ...rest);
       };
       patchedSetWidget.__piGraphicsPatchedSurface = true;
       ui.setWidget = patchedSetWidget;
     }
     if (originals.setFooter) {
       const patchedSetFooter = function (componentOrFactory, ...rest) {
-        return originals.setFooter.call(this, wrapRenderableFactory(componentOrFactory, "footer"), ...rest);
+        const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
+        const next = shouldSkipGraphicsOptions(options) ? componentOrFactory : wrapRenderableFactory(componentOrFactory, "footer");
+        return originals.setFooter.call(this, next, ...rest);
       };
       patchedSetFooter.__piGraphicsPatchedSurface = true;
       ui.setFooter = patchedSetFooter;
