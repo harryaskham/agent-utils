@@ -558,19 +558,28 @@ export default function piGraphicsExtension(pi) {
     if (!component || typeof component.render !== "function") return component;
     if (component.__piGraphicsGenericWrapped) return component;
     const originalRender = component.render.bind(component);
-    component.__piGraphicsGenericWrapped = true;
-    component.__piGraphicsGenericInstanceId ||= nextGenericGraphicsInstanceId();
-    component.render = (width) => {
-      const lines = originalRender(width);
-      if (!Array.isArray(lines)) return lines;
-      return boxChromeRuntime.applyToRows({
-        type,
-        instanceId: component.__piGraphicsGenericInstanceId,
-        lines,
-        component,
-        renderWidth: width,
-      });
-    };
+    const instanceId = component.__piGraphicsGenericInstanceId || nextGenericGraphicsInstanceId();
+    try {
+      component.render = (width) => {
+        const lines = originalRender(width);
+        if (!Array.isArray(lines)) return lines;
+        try {
+          return boxChromeRuntime.applyToRows({
+            type,
+            instanceId,
+            lines,
+            component,
+            renderWidth: width,
+          });
+        } catch {
+          return lines;
+        }
+      };
+      component.__piGraphicsGenericWrapped = true;
+      component.__piGraphicsGenericInstanceId = instanceId;
+    } catch {
+      return component;
+    }
     return component;
   }
 
@@ -603,22 +612,40 @@ export default function piGraphicsExtension(pi) {
   function patchUiGraphicsSurfaces(ctx) {
     const ui = ctx?.ui;
     if (!boxChromeRuntime || !ui || ui.__piGraphicsSurfacesPatched) return;
+    const originals = {
+      custom: typeof ui.custom === "function" ? ui.custom : null,
+      setWidget: typeof ui.setWidget === "function" ? ui.setWidget : null,
+      setFooter: typeof ui.setFooter === "function" ? ui.setFooter : null,
+    };
+    ui.__piGraphicsOriginalSurfaces = originals;
     ui.__piGraphicsSurfacesPatched = true;
-    if (typeof ui.custom === "function") {
-      const originalCustom = ui.custom.bind(ui);
-      ui.custom = (componentOrFactory, options = undefined) => {
+    if (originals.custom) {
+      ui.custom = function (componentOrFactory, options = undefined, ...rest) {
         const type = options?.overlay ? "overlay" : "customTui";
-        return originalCustom(wrapRenderableFactory(componentOrFactory, type), options);
+        return originals.custom.call(this, wrapRenderableFactory(componentOrFactory, type), options, ...rest);
       };
     }
-    if (typeof ui.setWidget === "function") {
-      const originalSetWidget = ui.setWidget.bind(ui);
-      ui.setWidget = (id, componentOrFactory, options = undefined) => originalSetWidget(id, wrapRenderableFactory(componentOrFactory, "widget"), options);
+    if (originals.setWidget) {
+      ui.setWidget = function (id, componentOrFactory, options = undefined, ...rest) {
+        return originals.setWidget.call(this, id, wrapRenderableFactory(componentOrFactory, "widget"), options, ...rest);
+      };
     }
-    if (typeof ui.setFooter === "function") {
-      const originalSetFooter = ui.setFooter.bind(ui);
-      ui.setFooter = (componentOrFactory) => originalSetFooter(wrapRenderableFactory(componentOrFactory, "footer"));
+    if (originals.setFooter) {
+      ui.setFooter = function (componentOrFactory, ...rest) {
+        return originals.setFooter.call(this, wrapRenderableFactory(componentOrFactory, "footer"), ...rest);
+      };
     }
+  }
+
+  function restoreUiGraphicsSurfaces(ctx) {
+    const ui = ctx?.ui;
+    const originals = ui?.__piGraphicsOriginalSurfaces;
+    if (!ui || !ui.__piGraphicsSurfacesPatched || !originals) return;
+    if (originals.custom) ui.custom = originals.custom;
+    if (originals.setWidget) ui.setWidget = originals.setWidget;
+    if (originals.setFooter) ui.setFooter = originals.setFooter;
+    delete ui.__piGraphicsOriginalSurfaces;
+    delete ui.__piGraphicsSurfacesPatched;
   }
 
   function installBoxChromeOnce() {
@@ -866,6 +893,7 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("session_end", async (_event, ctx) => {
+    restoreUiGraphicsSurfaces(ctx);
     writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
