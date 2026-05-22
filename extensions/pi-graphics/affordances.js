@@ -560,13 +560,13 @@ export function renderEditorRailApng({ frames = 24, delayMs = 120, plays = 0, ..
 function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   edge = "symmetric",
   borderColor = NORDIC_CYAN,
-  borderAlpha = 0.95,
+  borderAlpha = 0.55,
   glowColor = NORDIC_VIOLET,
-  glowAlpha = 0.4,
+  glowAlpha = 0.34,
   phase = 0,
 } = {}) {
   const pulse = pulseFactor(phase);
-  const borderA = Math.round(normalizeAlpha(borderAlpha, 0.95) * 255);
+  const borderA = Math.round(normalizeAlpha(borderAlpha, 0.55) * 255);
   const glowA = Math.round(normalizeAlpha(glowAlpha, 0.4) * 255 * (0.6 + pulse * 0.6));
   const strokeH = Math.max(2, Math.round(heightPx * 0.18));
   const borderRgb = parseColor(borderColor);
@@ -593,11 +593,11 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
     }
     // 1px specular highlight just above the stroke (bright, low alpha).
     if (strokeY - 1 >= 0) {
-      fillRect(pixels, widthPx, 0, strokeY - 1, widthPx, 1, [specularRgb[0], specularRgb[1], specularRgb[2], Math.round(borderA * 0.45)]);
+      fillRect(pixels, widthPx, 0, strokeY - 1, widthPx, 1, [specularRgb[0], specularRgb[1], specularRgb[2], Math.round(borderA * 0.38)]);
     }
     // 1px shadow just below the stroke (darker, low alpha).
     if (strokeY + strokeH < heightPx) {
-      fillRect(pixels, widthPx, 0, strokeY + strokeH, widthPx, 1, [shadowRgb[0], shadowRgb[1], shadowRgb[2], Math.round(borderA * 0.4)]);
+      fillRect(pixels, widthPx, 0, strokeY + strokeH, widthPx, 1, [shadowRgb[0], shadowRgb[1], shadowRgb[2], Math.round(borderA * 0.32)]);
     }
   }
   if (edge === "top") {
@@ -630,7 +630,7 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
         pixels[off] = Math.min(255, Math.round(pixels[off] * (1 - power * 0.4) + peakColor[0] * power));
         pixels[off + 1] = Math.min(255, Math.round(pixels[off + 1] * (1 - power * 0.4) + peakColor[1] * power));
         pixels[off + 2] = Math.min(255, Math.round(pixels[off + 2] * (1 - power * 0.4) + peakColor[2] * power));
-        pixels[off + 3] = Math.min(255, Math.round(pixels[off + 3] + (255 - pixels[off + 3]) * power * 0.85));
+        pixels[off + 3] = Math.min(255, Math.round(pixels[off + 3] + (255 - pixels[off + 3]) * power * 0.28));
       }
       // halo above/below the stroke
       const haloReach = Math.max(2, Math.round(heightPx * 0.4));
@@ -643,7 +643,7 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
           pixels[off] = Math.min(255, Math.round(pixels[off] * (1 - fade * 0.35) + haloColor[0] * fade));
           pixels[off + 1] = Math.min(255, Math.round(pixels[off + 1] * (1 - fade * 0.35) + haloColor[1] * fade));
           pixels[off + 2] = Math.min(255, Math.round(pixels[off + 2] * (1 - fade * 0.35) + haloColor[2] * fade));
-          pixels[off + 3] = Math.min(255, Math.round(pixels[off + 3] + (255 - pixels[off + 3]) * fade * 0.6));
+          pixels[off + 3] = Math.min(255, Math.round(pixels[off + 3] + (255 - pixels[off + 3]) * fade * 0.24));
         }
       }
     }
@@ -687,7 +687,7 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   }
 }
 
-export function renderEditorBorderFrame({ columns, edge = "symmetric", borderColor, borderAlpha, glowColor, glowAlpha, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
+export function renderEditorBorderFrame({ columns, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
   const cols = clampPositive(columns, 2, "columns");
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;

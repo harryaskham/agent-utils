@@ -24,6 +24,7 @@ import {
   renderAccentBar,
   renderGlowPanel,
   renderGlowPanelFrames,
+  renderEditorBorderFrame,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -328,6 +329,24 @@ test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () =
   const stats = alphaStats(decoded);
   assert.ok(stats.bright > result.widthPx * 2, "glow rule should contain more than a hairline of visible pixels");
   assert.ok(channelDistance(pixelAt(decoded, 2, Math.floor(decoded.height / 2)), pixelAt(decoded, decoded.width - 3, Math.floor(decoded.height / 2))) > 80, "left/right gradient endpoints should differ visibly");
+});
+
+test("editor border frame stays glassy instead of fade-to-solid", () => {
+  const frame = renderEditorBorderFrame({ columns: 40, edge: "symmetric", phase: 0.25 });
+  const decoded = { width: frame.widthPx, height: frame.heightPx, pixels: frame.pixels };
+  const stats = alphaStats(decoded);
+  const midY = Math.floor(decoded.height / 2);
+  const center = pixelAt(decoded, Math.floor(decoded.width / 2), midY);
+  const leftEdge = pixelAt(decoded, 0, midY);
+  const topEdge = pixelAt(decoded, Math.floor(decoded.width / 2), 0);
+
+  assert.equal(leftEdge[3], 0, "horizontal border taper should avoid hard cutoffs");
+  assert.equal(topEdge[3], 0, "vertical border fade should leave editor chrome transparent at cell edge");
+  assert.ok(center[3] > 96, "center stroke remains visible over Pi input chrome");
+  assert.ok(center[3] < 220, "center stroke remains translucent/glassy, not a solid opaque rail");
+  assert.ok(stats.opaque / stats.total < 0.01, "pulse highlights may brighten locally but must not form opaque solid-color rails");
+  assert.ok(stats.transparent / stats.total > 0.1, "edge taper should leave visible transparent holes instead of a hard rectangle");
+  assert.ok(stats.bright / stats.total < 0.6, "bright pixels should not dominate the cell into a chunky duplicate frame");
 });
 
 test("renderPromptEnclosure variants emit distinct translucent surfaces", () => {

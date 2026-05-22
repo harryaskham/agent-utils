@@ -277,8 +277,8 @@ export default function piGraphicsExtension(pi) {
         frames: 1,
         borderColor,
         glowColor,
-        borderAlpha: 0.95,
-        glowAlpha: Math.max(0.2, alpha * 0.7),
+        borderAlpha: Math.max(0.32, Math.min(0.6, alpha)),
+        glowAlpha: Math.max(0.22, alpha * 0.62),
       });
       const placement = buildPlacement(state, {
         name: `editor-border-static-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
@@ -303,8 +303,8 @@ export default function piGraphicsExtension(pi) {
       frames,
       borderColor,
       glowColor,
-      borderAlpha: 0.95,
-      glowAlpha: Math.max(0.2, alpha * 0.7),
+      borderAlpha: Math.max(0.32, Math.min(0.6, alpha)),
+      glowAlpha: Math.max(0.22, alpha * 0.62),
     });
     const anchorKey = `editor-border-anchor-${edge}-${cols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
     const animKey = `editor-border-anim-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
