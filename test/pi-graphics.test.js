@@ -1233,7 +1233,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /boxes:\$\{effect\}/);
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
-  assert.match(source, /const visualCols = Math\.max\(8, Math\.min\(cols, Math\.round\(Math\.min\(cols \* 0\.62, 48\)\)\)\)/);
+  assert.match(source, /const visualCols = cols/);
+  assert.match(source, /const leadingCells = 0/);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {

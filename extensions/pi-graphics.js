@@ -278,8 +278,8 @@ export default function piGraphicsExtension(pi) {
     const cell = cellMetrics();
     const variant = editorVariant();
     const alpha = editorAlpha();
-    const visualCols = Math.max(8, Math.min(cols, Math.round(Math.min(cols * 0.62, 48))));
-    const leadingCells = Math.max(0, Math.floor((cols - visualCols) / 2));
+    const visualCols = cols;
+    const leadingCells = 0;
     const frames = editorStyle() === "animated" ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
     if (frames <= 1) {
