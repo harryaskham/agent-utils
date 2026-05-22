@@ -110,6 +110,20 @@ test("box chrome caps oversized render widths before emitting kitty placements",
   assert.doesNotMatch(emitted.join(""), /(?:^|,)c=2000(?:,|;)/);
 });
 
+test("unicode box mode leaves render-width slack for padded containers", () => {
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "settings", instanceId: 111, lines: ["x".repeat(10)], renderWidth: 12 });
+  assert.ok(out[0].includes("\u{10eeee}"));
+  assert.match(out[0], /x{8}/, "content should be reclaimed to leave side-border slack");
+  assert.doesNotMatch(out[0], /x{10}/, "unicode wrapper must not preserve full content plus side borders when renderWidth includes container padding");
+});
+
 test("box chrome preserves ANSI controls while reclaiming one visible cell", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };

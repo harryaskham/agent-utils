@@ -373,7 +373,9 @@ displayed using kitty Unicode placeholder cells, so:
 * Box wrapping is ANSI/OSC/APC/DCS-safe: placeholder insertion, unicode side
   borders, width truncation, and padding preserve terminal controls instead of
   slicing inside color/style escapes, Pi IME cursor markers, or tmux/kitty
-  passthrough sequences.
+  passthrough sequences. Unicode box mode also leaves render-width slack for Pi
+  containers that pass widths including outer padding, preventing settings and
+  selector dialogs from exceeding pi-tui's hard terminal-width guard.
 * Editor border chrome spans the full editor/terminal width instead of being
   capped and center-aligned, so fullscreen terminals keep a visible full-width
   input frame. In `unicode` editor mode, trailing empty workspace cells after the
