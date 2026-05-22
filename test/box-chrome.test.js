@@ -25,8 +25,12 @@ test("renderBoxStripPng produces non-empty PNG for top/mid/bot kinds", () => {
   }
 });
 
-test("BOX_TYPE_THEME_TOKENS and effects cover all expected types", () => {
-  for (const type of ["assistant", "tool", "bash", "user", "custom", "skill", "branch", "compaction", "footer"]) {
+test("BOX_TYPE_THEME_TOKENS and effects cover all expected Pi TUI surface types", () => {
+  for (const type of [
+    "assistant", "tool", "bash", "user", "custom", "skill", "branch", "compaction", "footer", "thinking",
+    "loader", "border", "input", "editor", "selector", "login", "model", "oauth", "session", "settings",
+    "image", "theme", "thinkingSelector", "tree", "userSelector", "agent", "mascot",
+  ]) {
     assert.ok(BOX_TYPE_THEME_TOKENS[type], `missing token for ${type}`);
     assert.ok(BOX_TYPE_EFFECTS[type], `missing effect for ${type}`);
   }
@@ -66,7 +70,7 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
     resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
   });
   const lines = ["first row", "second row", "third row"];
-  const out = runtime.applyToRows({ type: "assistant", instanceId: 1, lines });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 1, lines, renderWidth: 20 });
   assert.equal(out.length, 3);
   assert.notEqual(out[0], lines[0]);
   assert.match(out[0], /first ro/, "box anchor replacement should preserve content while reclaiming one cell of width");
@@ -75,15 +79,31 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.ok(placementIds.length >= 3, "must allocate anchor and relative placements");
   assert.ok(placementIds.some((id) => id >= 0x800000 && id < 0x1000000), "anchor placeholders should use high 24-bit underline IDs");
   assert.ok(placementIds.some((id) => id > 0x1000000), "relative placements should use the full 32-bit protocol range");
+  assert.match(emitted.join(""), /(?:^|,)c=20(?:,|;)/, "relative chrome should use render width, not just content width");
   // Second pass with same instanceId/lines should reuse cached uploads (no new a=t).
   const emittedBeforeSecond = emitted.length;
-  runtime.applyToRows({ type: "assistant", instanceId: 1, lines });
+  runtime.applyToRows({ type: "assistant", instanceId: 1, lines, renderWidth: 20 });
   const newCmds = emitted.slice(emittedBeforeSecond);
   assert.deepEqual(newCmds, [], "second render should not re-upload or re-place unchanged box chrome");
   const beforeResize = emitted.length;
-  runtime.applyToRows({ type: "assistant", instanceId: 1, lines: ["first row wider", "second row wider", "third row wider"] });
+  runtime.applyToRows({ type: "assistant", instanceId: 1, lines: ["first row wider", "second row wider", "third row wider"], renderWidth: 24 });
   const resizeCmds = emitted.slice(beforeResize).join("");
   assert.match(resizeCmds, /a=d,d=p/, "resized rows should delete stale relative placements before replacing them");
+});
+
+test("box chrome does not double-wrap rows that already contain kitty placeholders", () => {
+  const emitted = [];
+  const state = { ownedImageIds: new Set() };
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state,
+    passthrough: "none",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const alreadyGraphical = "\u{10eeee} existing border";
+  const out = runtime.applyToRows({ type: "border", instanceId: 8, lines: [alreadyGraphical], renderWidth: 40 });
+  assert.deepEqual(out, [alreadyGraphical], "standalone DynamicBorder chrome should not be wrapped again by its parent");
+  assert.deepEqual(emitted, [], "skipped placeholder rows should not allocate duplicate placements");
 });
 
 test("unicode box mode keeps line count and uses placeholder-only side borders", () => {

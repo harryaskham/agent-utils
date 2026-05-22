@@ -330,12 +330,17 @@ displayed using kitty Unicode placeholder cells, so:
   24-bit underline-color subspace, while non-placeholder relative placements
   use full 32-bit placement ids. This avoids low-id collisions with other kitty
   graphics consumers in the same tty.
-* Message box chrome has per-message-type effects (`glass`, `aurora`,
+* Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, and `cloud`) and caches both uploads and
   relative placements so ordinary rerenders do not re-place identical box
   strips. Thinking blocks are detected from assistant message content and use
   the cloudy thought effect. If a box moves or resizes, stale relative
-  placements are explicitly deleted before the replacement is placed.
+  placements are explicitly deleted before the replacement is placed. Coverage
+  includes transcript messages, tool/bash output, skill/custom messages,
+  branch/compaction summaries, footer, dynamic borders, loaders, extension
+  inputs/editors/selectors, login/OAuth/model/session/settings/theme/thinking
+  dialogs, image chooser, tree selector, user-message selector, and mascot/agent
+  announcement components.
 * `Ctrl+t` cycles presets across the static editor border, caco-compatible
   `unicode` mode, animated editor border, and every box-effect variant;
   `/gfx box-effect <name>` can select a specific effect or `/gfx box-effect auto`

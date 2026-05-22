@@ -40,7 +40,24 @@ export const BOX_TYPE_THEME_TOKENS = {
   branch: "muted",
   compaction: "muted",
   footer: "accent",
-  thinking: "thinkingText",
+  thinking: "thinkingHigh",
+  loader: "accent",
+  border: "borderAccent",
+  input: "accent",
+  editor: "accent",
+  selector: "accent",
+  login: "accent",
+  model: "accent",
+  oauth: "accent",
+  session: "accent",
+  settings: "accent",
+  image: "accent",
+  theme: "borderAccent",
+  thinkingSelector: "thinkingHigh",
+  tree: "accent",
+  userSelector: "userMessageText",
+  agent: "accent",
+  mascot: "borderAccent",
 };
 
 export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud"]);
@@ -56,6 +73,23 @@ export const BOX_TYPE_EFFECTS = {
   branch: "scanline",
   compaction: "glass",
   footer: "circuit",
+  loader: "aurora",
+  border: "glass",
+  input: "glass",
+  editor: "glass",
+  selector: "sparkle",
+  login: "aurora",
+  model: "circuit",
+  oauth: "aurora",
+  session: "scanline",
+  settings: "circuit",
+  image: "aurora",
+  theme: "sparkle",
+  thinkingSelector: "cloud",
+  tree: "scanline",
+  userSelector: "glass",
+  agent: "aurora",
+  mascot: "sparkle",
 };
 
 function withAlpha([r, g, b], a) {
@@ -430,6 +464,7 @@ export function createBoxChromeRuntime({
       return `${placement.transmit}${placement.lines[0] || ""}`;
     };
     return lines.map((line, i) => {
+      if (hasKittyPlaceholder(line)) return line;
       const verticalKind = lines.length === 1 ? "mid" : i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
       const leftKind = verticalKind === "top" ? "top-left" : verticalKind === "bot" ? "bot-left" : "left";
       const rightKind = verticalKind === "top" ? "top-right" : verticalKind === "bot" ? "bot-right" : "right";
@@ -445,16 +480,19 @@ export function createBoxChromeRuntime({
     });
   }
 
-  function applyToRows({ type, instanceId, lines, component }) {
+  function applyToRows({ type, instanceId, lines, component, renderWidth }) {
     if (!Array.isArray(lines) || lines.length === 0) return lines;
     const effectiveType = componentLooksLikeThinking(component) ? "thinking" : type;
     const themeTokens = resolveTheme?.({ type: effectiveType }) || {};
     const colorRgb = themeTokens.colorRgb || [136, 192, 208];
-    const width = computeMaxVisibleWidth(lines);
+    const contentWidth = computeMaxVisibleWidth(lines);
+    const requestedWidth = Math.trunc(Number(renderWidth));
+    const width = Math.max(contentWidth, Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : 0);
     if (width <= 2) return lines;
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
     if (boxMode === "unicode") return applyUnicodeBoxRows({ type: effectiveType, instanceId, lines, colorRgb, width, effect });
     const wrapped = lines.map((line, i) => {
+      if (hasKittyPlaceholder(line)) return line;
       const kind = lines.length === 1 ? "mid" : i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
       const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });
       const { anchorImageId, anchorPlacementId } = ensureAnchor({ instanceId, rowIndex: i });
@@ -465,6 +503,10 @@ export function createBoxChromeRuntime({
   }
 
   return { applyToRows };
+}
+
+function hasKittyPlaceholder(text) {
+  return String(text || "").includes("\u{10eeee}");
 }
 
 function stripTerminalControls(text) {
@@ -499,7 +541,7 @@ export function installBoxChromeMonkeyPatch({ components, runtime, onWrap = () =
       }
       try {
         onCall(type);
-        return runtime.applyToRows({ type, instanceId: this.__piGraphicsInstanceId, lines, component: this });
+        return runtime.applyToRows({ type, instanceId: this.__piGraphicsInstanceId, lines, component: this, renderWidth: width });
       } catch {
         return lines;
       }

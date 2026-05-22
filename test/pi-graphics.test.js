@@ -1300,6 +1300,10 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /pi_graphics_render_message_border/);
   assert.match(source, /pi_graphics_clear/);
   assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds \}\)/);
+  assert.match(source, /BorderedLoader/);
+  assert.match(source, /DynamicBorder/);
+  assert.match(source, /ModelSelectorComponent/);
+  assert.match(source, /UserMessageSelectorComponent/);
   assert.doesNotMatch(source, /buildScopedDeleteCommand\(\{ imageIds: state\.ownedImageIds \}\)/);
   assert.doesNotMatch(source, /pi_graphics_live_probe/);
   assert.doesNotMatch(source, /buildPiGraphicsHeaderComponent/);
