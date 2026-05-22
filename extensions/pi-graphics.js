@@ -544,7 +544,82 @@ export default function piGraphicsExtension(pi) {
   }
 
   let boxChromeInstalled = false;
+  let boxChromeRuntime = null;
+  let genericGraphicsInstanceCounter = 0;
   let activeThemeRef = null;
+
+  function nextGenericGraphicsInstanceId() {
+    genericGraphicsInstanceCounter = (genericGraphicsInstanceCounter + 1) & 0xffff;
+    return `generic-${genericGraphicsInstanceCounter}`;
+  }
+
+  function wrapRenderableComponent(component, type = "customTui") {
+    if (!boxChromeRuntime) return component;
+    if (!component || typeof component.render !== "function") return component;
+    if (component.__piGraphicsGenericWrapped) return component;
+    const originalRender = component.render.bind(component);
+    component.__piGraphicsGenericWrapped = true;
+    component.__piGraphicsGenericInstanceId ||= nextGenericGraphicsInstanceId();
+    component.render = (width) => {
+      const lines = originalRender(width);
+      if (!Array.isArray(lines)) return lines;
+      return boxChromeRuntime.applyToRows({
+        type,
+        instanceId: component.__piGraphicsGenericInstanceId,
+        lines,
+        component,
+        renderWidth: width,
+      });
+    };
+    return component;
+  }
+
+  function wrapRenderableFactory(value, type = "customTui") {
+    if (!boxChromeRuntime || value == null) return value;
+    if (Array.isArray(value)) {
+      const lines = value.slice();
+      const component = {
+        __piGraphicsStaticLines: true,
+        render(width) { return lines.slice(); },
+        invalidate() {},
+      };
+      return wrapRenderableComponent(component, type);
+    }
+    if (typeof value === "function") {
+      if (value.__piGraphicsFactoryWrapped) return value;
+      const wrapped = function (...args) {
+        const component = value.apply(this, args);
+        if (component && typeof component.then === "function") {
+          return component.then((resolved) => wrapRenderableComponent(resolved, type));
+        }
+        return wrapRenderableComponent(component, type);
+      };
+      wrapped.__piGraphicsFactoryWrapped = true;
+      return wrapped;
+    }
+    return wrapRenderableComponent(value, type);
+  }
+
+  function patchUiGraphicsSurfaces(ctx) {
+    const ui = ctx?.ui;
+    if (!boxChromeRuntime || !ui || ui.__piGraphicsSurfacesPatched) return;
+    ui.__piGraphicsSurfacesPatched = true;
+    if (typeof ui.custom === "function") {
+      const originalCustom = ui.custom.bind(ui);
+      ui.custom = (componentOrFactory, options = undefined) => {
+        const type = options?.overlay ? "overlay" : "customTui";
+        return originalCustom(wrapRenderableFactory(componentOrFactory, type), options);
+      };
+    }
+    if (typeof ui.setWidget === "function") {
+      const originalSetWidget = ui.setWidget.bind(ui);
+      ui.setWidget = (id, componentOrFactory, options = undefined) => originalSetWidget(id, wrapRenderableFactory(componentOrFactory, "widget"), options);
+    }
+    if (typeof ui.setFooter === "function") {
+      const originalSetFooter = ui.setFooter.bind(ui);
+      ui.setFooter = (componentOrFactory) => originalSetFooter(wrapRenderableFactory(componentOrFactory, "footer"));
+    }
+  }
 
   function installBoxChromeOnce() {
     if (boxChromeInstalled) return;
@@ -563,6 +638,7 @@ export default function piGraphicsExtension(pi) {
         return { colorRgb };
       },
     });
+    boxChromeRuntime = runtime;
     installBoxChromeMonkeyPatch({
       components: {
         assistant: AssistantMessageComponent,
@@ -611,6 +687,7 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.setWorkingMessage?.(buildWorkingMessage({ stage: "working" }, ctx.ui.theme || activeThemeRef));
     } catch {}
     installBoxChromeOnce();
+    patchUiGraphicsSurfaces(ctx);
   });
 
   function defaultGfxPresets(settings, ctx) {

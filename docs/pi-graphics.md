@@ -339,8 +339,9 @@ displayed using kitty Unicode placeholder cells, so:
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension
   inputs/editors/selectors, login/OAuth/model/session/settings/theme/thinking
-  dialogs, image chooser, tree selector, user-message selector, and mascot/agent
-  announcement components.
+  dialogs, image chooser, tree selector, user-message selector, mascot/agent
+  announcement components, and generic extension-owned `custom`, widget, footer,
+  and overlay components returned through Pi's public UI registration APIs.
 * Box chrome is enabled by default in caco-compatible `unicode` mode unless
   explicitly disabled with `piGraphics.boxChrome: false` or `/gfx box off`.
   `Ctrl+t` cycles presets across the static editor border, caco-compatible

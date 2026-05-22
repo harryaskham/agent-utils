@@ -29,7 +29,7 @@ test("BOX_TYPE_THEME_TOKENS and effects cover all expected Pi TUI surface types"
   for (const type of [
     "assistant", "tool", "bash", "user", "custom", "skill", "branch", "compaction", "footer", "thinking",
     "loader", "border", "input", "editor", "selector", "login", "model", "oauth", "session", "settings",
-    "image", "theme", "thinkingSelector", "tree", "userSelector", "agent", "mascot",
+    "image", "theme", "thinkingSelector", "tree", "userSelector", "agent", "mascot", "customTui", "overlay", "widget",
   ]) {
     assert.ok(BOX_TYPE_THEME_TOKENS[type], `missing token for ${type}`);
     assert.ok(BOX_TYPE_EFFECTS[type], `missing effect for ${type}`);
