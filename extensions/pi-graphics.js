@@ -99,6 +99,7 @@ import {
 const TOOL_PREFIX = "pi_graphics";
 const FALSE_RE = /^(0|false|off|no|disabled)$/i;
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
+const MAX_DECORATED_NOTIFICATION_LINES = 64;
 
 function readJsonIfExists(path) {
   try {
@@ -408,6 +409,17 @@ export default function piGraphicsExtension(pi) {
     return prefix ? `${prefix}${value}` : value;
   }
 
+  function decorateNotificationValue(value) {
+    if (typeof value !== "string" || value.length === 0) return value;
+    if (!value.includes("\n")) return decorateStatusValue(value);
+    let decoratedLines = 0;
+    return value.split("\n").map((line) => {
+      if (!line.length || decoratedLines >= MAX_DECORATED_NOTIFICATION_LINES) return line;
+      decoratedLines += 1;
+      return decorateStatusValue(line);
+    }).join("\n");
+  }
+
   function decorateWorkingMessage(value) {
     return decorateStatusValue(value);
   }
@@ -685,7 +697,7 @@ export default function piGraphicsExtension(pi) {
     if (originals.notify) {
       const patchedNotify = function (message, type = undefined, ...rest) {
         const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
-        const next = shouldSkipGraphicsOptions(options) ? message : decorateStatusValue(message);
+        const next = shouldSkipGraphicsOptions(options) ? message : decorateNotificationValue(message);
         return originals.notify.call(this, next, type, ...rest);
       };
       patchedNotify.__piGraphicsPatchedSurface = true;

@@ -1323,9 +1323,14 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /wrapRenderableFactory\(componentOrFactory, "editor"\)/);
   assert.match(source, /function buildStatusIndicatorPrefix/);
   assert.match(source, /function decorateStatusValue/);
+  assert.match(source, /MAX_DECORATED_NOTIFICATION_LINES = 64/);
+  assert.match(source, /function decorateNotificationValue/);
+  assert.match(source, /decoratedLines >= MAX_DECORATED_NOTIFICATION_LINES/);
+  assert.match(source, /decoratedLines \+= 1/);
   assert.match(source, /function decorateWorkingMessage/);
   assert.match(source, /function decorateWorkingIndicatorConfig/);
   assert.match(source, /const patchedNotify = function \(message, type = undefined, \.\.\.rest\)/);
+  assert.match(source, /decorateNotificationValue\(message\)/);
   assert.match(source, /const patchedSetStatus = function \(id, value, \.\.\.rest\)/);
   assert.match(source, /decorateStatusValue\(value\)/);
   assert.match(source, /const patchedSetWorkingMessage = function \(value, \.\.\.rest\)/);
