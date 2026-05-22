@@ -1321,6 +1321,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /relativeUploaded\.clear\(\)/);
   assert.match(source, /resetPlacementTracking\(state\)/);
   assert.match(source, /boxChromeRuntime\?\.resetCaches\?\.\(\)/);
+  assert.match(source, /async execute\(_toolCallId, _params, _signal, _onUpdate, ctx\)/);
+  assert.match(source, /resolveGraphicsWriter\(ctx\)\?\.\(command\)/);
   assert.match(source, /ui\.__piGraphicsOriginalSurfaces = originals/);
   assert.match(source, /const patchedCustom = function \(componentOrFactory, options = undefined, \.\.\.rest\)/);
   assert.match(source, /const patchedSetWidget = function \(id, componentOrFactory, options = undefined, \.\.\.rest\)/);

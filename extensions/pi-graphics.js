@@ -1182,10 +1182,10 @@ export default function piGraphicsExtension(pi) {
     label: "Pi Graphics: Clear",
     description: "Delete every kitty image owned by this extension. Scoped: never deletes images owned by others, never issues a global clear.",
     parameters: Type.Object({}),
-    async execute(_toolCallId, _params, ctx) {
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
       if (command) {
-        try { ctx?.ui?.write?.(command); } catch {}
+        try { resolveGraphicsWriter(ctx)?.(command); } catch {}
       }
       const cleared = state.ownedImageIds.size;
       try { boxChromeRuntime?.resetCaches?.(); } catch {}
