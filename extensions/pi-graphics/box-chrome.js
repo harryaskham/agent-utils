@@ -19,6 +19,7 @@ import {
   piGraphicsPlaceholderPlacementId,
 } from "./id-space.js";
 import { encodeRgbaPng, makeCanvas } from "./png-renderer.js";
+import { buildPlacement } from "./runtime.js";
 import { getThemeColorRgb } from "./theme-colors.js";
 
 // Use a shallow negative z-index: under text, but above terminal cell
@@ -200,6 +201,26 @@ function fillRectAlpha(pixels, w, x, y, rw, rh, color, alpha) {
   }
 }
 
+function paintSideStrip(pixels, w, h, color, side = "left", verticalKind = "mid") {
+  const fillAlpha = 28;
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const edgeDist = side === "right" ? w - 1 - x : x;
+      const fade = Math.max(0, 1 - edgeDist / Math.max(1, w - 1));
+      const off = (y * w + x) * 4;
+      pixels[off] = color[0];
+      pixels[off + 1] = color[1];
+      pixels[off + 2] = color[2];
+      pixels[off + 3] = Math.max(pixels[off + 3], Math.round(fillAlpha * fade));
+    }
+  }
+  const strokeW = Math.max(1, Math.floor(w * 0.35));
+  const x0 = side === "right" ? w - strokeW : 0;
+  fillRectAlpha(pixels, w, x0, 0, strokeW, h, color, 190);
+  if (verticalKind === "top") fillRectAlpha(pixels, w, 0, h - Math.max(1, Math.floor(h * 0.18)), w, Math.max(1, Math.floor(h * 0.18)), color, 150);
+  if (verticalKind === "bot") fillRectAlpha(pixels, w, 0, 0, w, Math.max(1, Math.floor(h * 0.18)), color, 150);
+}
+
 function paintBottomStrip(pixels, w, h, color) {
   // Mirror of top.
   const fillAlpha = 36;
@@ -249,6 +270,8 @@ export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx
   const pixels = makeCanvas(w, h, [0, 0, 0, 0]);
   if (kind === "top") paintTopStrip(pixels, w, h, color);
   else if (kind === "bot") paintBottomStrip(pixels, w, h, color);
+  else if (kind === "left" || kind === "top-left" || kind === "bot-left") paintSideStrip(pixels, w, h, color, "left", kind.startsWith("top") ? "top" : kind.startsWith("bot") ? "bot" : "mid");
+  else if (kind === "right" || kind === "top-right" || kind === "bot-right") paintSideStrip(pixels, w, h, color, "right", kind.startsWith("top") ? "top" : kind.startsWith("bot") ? "bot" : "mid");
   else paintMidStrip(pixels, w, h, color, cellWidthPx);
   paintEffect(pixels, w, h, color, effect);
   paintTypeIcon(pixels, w, h, color, { type, rowIndex, cellWidthPx });
@@ -276,7 +299,13 @@ export function createBoxChromeRuntime({
   cellHeightPx = 16,
   resolveTheme,
   boxEffect,
+  boxMode = "relative",
 } = {}) {
+  state.ownedImageIds ||= new Set();
+  state.transmittedImageIds ||= new Set();
+  state.placementByImage ||= new Map();
+  state.config ||= { passthrough };
+  state.config.passthrough ||= passthrough;
   // Cache: stripKey -> imageId already uploaded
   const uploadedStrips = new Set();
   const anchorsUploaded = new Set();
@@ -387,6 +416,35 @@ export function createBoxChromeRuntime({
     } catch { return false; }
   }
 
+  function applyUnicodeBoxRows({ type, instanceId, lines, colorRgb, width, effect }) {
+    const makeCell = (side, rowIndex, kind) => {
+      const rendered = renderBoxStripPng({ kind, columns: 1, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex });
+      const placement = buildPlacement(state, {
+        name: `box-unicode-cell-${type}-${side}-${kind}-${effect}-${instanceId}-${rowIndex}`,
+        png: rendered.png,
+        columns: 1,
+        rows: 1,
+        width: 1,
+        zIndex: BOX_Z_INDEX,
+      });
+      return `${placement.transmit}${placement.lines[0] || ""}`;
+    };
+    return lines.map((line, i) => {
+      const verticalKind = lines.length === 1 ? "mid" : i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
+      const leftKind = verticalKind === "top" ? "top-left" : verticalKind === "bot" ? "bot-left" : "left";
+      const rightKind = verticalKind === "top" ? "top-right" : verticalKind === "bot" ? "bot-right" : "right";
+      const left = makeCell("left", i, leftKind);
+      const right = makeCell("right", i, rightKind);
+      const plainWidth = Math.max(0, width - 2);
+      const chars = Array.from(String(line || ""));
+      let trimmed = stripTerminalControls(line).length > plainWidth ? chars.slice(0, plainWidth).join("") : String(line || "");
+      const visible = stripTerminalControls(trimmed).length;
+      if (visible > plainWidth) trimmed = Array.from(trimmed).slice(0, plainWidth).join("");
+      const pad = " ".repeat(Math.max(0, plainWidth - stripTerminalControls(trimmed).length));
+      return `${left}${trimmed}${pad}${right}`;
+    });
+  }
+
   function applyToRows({ type, instanceId, lines, component }) {
     if (!Array.isArray(lines) || lines.length === 0) return lines;
     const effectiveType = componentLooksLikeThinking(component) ? "thinking" : type;
@@ -395,8 +453,9 @@ export function createBoxChromeRuntime({
     const width = computeMaxVisibleWidth(lines);
     if (width <= 2) return lines;
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
+    if (boxMode === "unicode") return applyUnicodeBoxRows({ type: effectiveType, instanceId, lines, colorRgb, width, effect });
     const wrapped = lines.map((line, i) => {
-      const kind = i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
+      const kind = lines.length === 1 ? "mid" : i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
       const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });
       const { anchorImageId, anchorPlacementId } = ensureAnchor({ instanceId, rowIndex: i });
       ensureRelativeStrip({ stripImageId: stripId, anchorImageId, anchorPlacementId, instanceId, rowIndex: i, width });

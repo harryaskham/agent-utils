@@ -32,6 +32,17 @@ test("BOX_TYPE_THEME_TOKENS and effects cover all expected types", () => {
   }
 });
 
+test("box strip edges are directional", () => {
+  const args = { columns: 3, cellWidthPx: 8, cellHeightPx: 16, color: [136, 192, 208], effect: "glass" };
+  const top = renderBoxStripPng({ ...args, kind: "top" }).png.toString("base64");
+  const bot = renderBoxStripPng({ ...args, kind: "bot" }).png.toString("base64");
+  const left = renderBoxStripPng({ ...args, kind: "left" }).png.toString("base64");
+  const right = renderBoxStripPng({ ...args, kind: "right" }).png.toString("base64");
+  assert.notEqual(top, bot, "top and bottom caps should not be the same ribbon");
+  assert.notEqual(left, right, "left and right side borders should be directional");
+  assert.notEqual(top, left, "horizontal and vertical borders should differ");
+});
+
 test("renderBoxStripPng effect variants produce distinct graphics", () => {
   const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud"];
   const payloads = new Set(variants.map((effect) => renderBoxStripPng({
@@ -73,6 +84,24 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines: ["first row wider", "second row wider", "third row wider"] });
   const resizeCmds = emitted.slice(beforeResize).join("");
   assert.match(resizeCmds, /a=d,d=p/, "resized rows should delete stale relative placements before replacing them");
+});
+
+test("unicode box mode keeps line count and uses placeholder-only side borders", () => {
+  const emitted = [];
+  const state = { ownedImageIds: new Set() };
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state,
+    passthrough: "none",
+    boxMode: "unicode",
+    boxEffect: "cloud",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const lines = ["alpha", "beta", "gamma"];
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 3, lines });
+  assert.equal(out.length, lines.length, "unicode mode should not create one-line boxes between content rows");
+  assert.ok(out.every((line) => line.includes("\u{10eeee}")), "unicode mode should anchor borders with placeholder text");
+  assert.ok(emitted.every((cmd) => !/P=/.test(cmd)), "unicode mode should not create non-placeholder relative placements");
 });
 
 test("thinking assistant content uses cloudy thought chrome", () => {
