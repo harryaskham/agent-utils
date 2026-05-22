@@ -671,9 +671,21 @@ export default function piGraphicsExtension(pi) {
     delete ui.__piGraphicsSurfacesPatched;
   }
 
-  function installBoxChromeOnce() {
+  function teardownBoxChrome(ctx) {
+    restoreUiGraphicsSurfaces(ctx);
+    try { restoreBuiltInBoxChrome?.(); } catch {}
+    restoreBuiltInBoxChrome = null;
+    boxChromeRuntime = null;
+    boxChromeInstalled = false;
+  }
+
+  function installBoxChromeOnce(ctx, { force = false } = {}) {
+    if (force) teardownBoxChrome(ctx);
     if (boxChromeInstalled) return;
-    if (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) return;
+    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || !envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) {
+      teardownBoxChrome(ctx);
+      return;
+    }
     const runtime = createBoxChromeRuntime({
       emitGraphicsCommand,
       state,
@@ -722,6 +734,7 @@ export default function piGraphicsExtension(pi) {
     });
     restoreBuiltInBoxChrome = typeof patch?.restore === "function" ? patch.restore : null;
     boxChromeInstalled = true;
+    patchUiGraphicsSurfaces(ctx);
   }
 
   pi.on("session_start", async (_event, ctx) => {
@@ -737,8 +750,7 @@ export default function piGraphicsExtension(pi) {
       });
       ctx.ui?.setWorkingMessage?.(buildWorkingMessage({ stage: "working" }, ctx.ui.theme || activeThemeRef));
     } catch {}
-    installBoxChromeOnce();
-    patchUiGraphicsSurfaces(ctx);
+    installBoxChromeOnce(ctx);
   });
 
   function defaultGfxPresets(settings, ctx) {
@@ -802,6 +814,11 @@ export default function piGraphicsExtension(pi) {
       if (themeName) ctx?.ui?.setTheme?.(themeName);
       activeThemeRef = ctx?.ui?.theme || activeThemeRef;
     } catch {}
+    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || !envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) {
+      teardownBoxChrome(ctx);
+    } else {
+      installBoxChromeOnce(ctx, { force: true });
+    }
     try { ctx?.ui?.requestRender?.(true); } catch {}
   }
 
@@ -917,11 +934,7 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.on("session_end", async (_event, ctx) => {
-    restoreUiGraphicsSurfaces(ctx);
-    try { restoreBuiltInBoxChrome?.(); } catch {}
-    restoreBuiltInBoxChrome = null;
-    boxChromeRuntime = null;
-    boxChromeInstalled = false;
+    teardownBoxChrome(ctx);
     writeGraphicsCommand = null;
     try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}

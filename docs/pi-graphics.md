@@ -355,7 +355,10 @@ displayed using kitty Unicode placeholder cells, so:
   terminals. Built-in Pi component class patches
   are also reload-safe: reinstallation updates the active graphics runtime rather
   than leaving old box modes/effects captured in global prototypes, and teardown
-  restores prototypes only when Pi graphics still owns that runtime.
+  restores prototypes only when Pi graphics still owns that runtime. Live `/gfx`
+  changes on runtimes without `ctx.reload` force-refresh the wrapper runtime or
+  tear it down when graphics/box chrome is disabled, so mode changes do not leave
+  stale chrome active.
 * Box chrome is enabled by default in caco-compatible `unicode` mode unless
   explicitly disabled with `piGraphics.boxChrome: false` or `/gfx box off`.
   `Ctrl+t` cycles presets across the static editor border, caco-compatible
