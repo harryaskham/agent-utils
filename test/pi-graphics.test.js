@@ -1306,6 +1306,7 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /DynamicBorder/);
   assert.match(source, /ModelSelectorComponent/);
   assert.match(source, /UserMessageSelectorComponent/);
+  assert.match(source, /function shouldSkipGraphicsWrap/);
   assert.match(source, /function wrapRenderableComponent/);
   assert.match(source, /function patchUiGraphicsSurfaces/);
   assert.match(source, /function restoreUiGraphicsSurfaces/);
@@ -1313,6 +1314,9 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /ui\.custom = function \(componentOrFactory, options = undefined, \.\.\.rest\)/);
   assert.match(source, /ui\.setWidget = function \(id, componentOrFactory, options = undefined, \.\.\.rest\)/);
   assert.match(source, /ui\.setFooter = function \(componentOrFactory, \.\.\.rest\)/);
+  assert.match(source, /Array\.isArray\(value\)/);
+  assert.match(source, /component\.then\(\(resolved\) => wrapRenderableFactory\(resolved, type\)\)/);
+  assert.match(source, /value\.__piGraphicsNoWrap \|\| value\.piGraphics === false/);
   assert.doesNotMatch(source, /buildScopedDeleteCommand\(\{ imageIds: state\.ownedImageIds \}\)/);
   assert.doesNotMatch(source, /pi_graphics_live_probe/);
   assert.doesNotMatch(source, /buildPiGraphicsHeaderComponent/);

@@ -553,9 +553,14 @@ export default function piGraphicsExtension(pi) {
     return `generic-${genericGraphicsInstanceCounter}`;
   }
 
+  function shouldSkipGraphicsWrap(value) {
+    return !!(value && (value.__piGraphicsNoWrap || value.piGraphics === false || value.piGraphics?.enabled === false));
+  }
+
   function wrapRenderableComponent(component, type = "customTui") {
     if (!boxChromeRuntime) return component;
     if (!component || typeof component.render !== "function") return component;
+    if (shouldSkipGraphicsWrap(component)) return component;
     if (component.__piGraphicsGenericWrapped) return component;
     const originalRender = component.render.bind(component);
     const instanceId = component.__piGraphicsGenericInstanceId || nextGenericGraphicsInstanceId();
@@ -585,23 +590,24 @@ export default function piGraphicsExtension(pi) {
 
   function wrapRenderableFactory(value, type = "customTui") {
     if (!boxChromeRuntime || value == null) return value;
+    if (shouldSkipGraphicsWrap(value)) return value;
     if (Array.isArray(value)) {
       const lines = value.slice();
       const component = {
         __piGraphicsStaticLines: true,
-        render(width) { return lines.slice(); },
+        render(_width) { return lines.slice(); },
         invalidate() {},
       };
       return wrapRenderableComponent(component, type);
     }
     if (typeof value === "function") {
-      if (value.__piGraphicsFactoryWrapped) return value;
+      if (value.__piGraphicsFactoryWrapped || shouldSkipGraphicsWrap(value)) return value;
       const wrapped = function (...args) {
         const component = value.apply(this, args);
         if (component && typeof component.then === "function") {
-          return component.then((resolved) => wrapRenderableComponent(resolved, type));
+          return component.then((resolved) => wrapRenderableFactory(resolved, type));
         }
-        return wrapRenderableComponent(component, type);
+        return wrapRenderableFactory(component, type);
       };
       wrapped.__piGraphicsFactoryWrapped = true;
       return wrapped;

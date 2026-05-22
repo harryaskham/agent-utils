@@ -342,8 +342,10 @@ displayed using kitty Unicode placeholder cells, so:
   dialogs, image chooser, tree selector, user-message selector, mascot/agent
   announcement components, and generic extension-owned `custom`, widget, footer,
   and overlay components returned through Pi's public UI registration APIs. The
-  generic API wrappers are restored on session end so reloads do not accumulate
-  nested wrappers.
+  generic wrappers cover components, plain string-array surfaces, and promises
+  resolving to either shape. Components/factories can opt out with
+  `__piGraphicsNoWrap` or `piGraphics: false`. The generic API wrappers are
+  restored on session end so reloads do not accumulate nested wrappers.
 * Box chrome is enabled by default in caco-compatible `unicode` mode unless
   explicitly disabled with `piGraphics.boxChrome: false` or `/gfx box off`.
   `Ctrl+t` cycles presets across the static editor border, caco-compatible
