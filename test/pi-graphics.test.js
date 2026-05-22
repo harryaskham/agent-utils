@@ -1396,13 +1396,17 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.doesNotMatch(source, /PI_GRAPHICS_SHOWCASE/);
 });
 
-test("pi graphics scoped ids are stable within a process but salted by namespace", () => {
+test("pi graphics scoped ids are stable within a process but salted by namespace and pid", () => {
   const envA = { PI_GRAPHICS_ID_NAMESPACE: "session-a" };
   const envB = { PI_GRAPHICS_ID_NAMESPACE: "session-b" };
-  assert.equal(piGraphicsIdScope({ env: envA, pid: 11, cwd: "/repo" }), "session-a");
-  assert.equal(
+  assert.equal(piGraphicsIdScope({ env: envA, pid: 11, cwd: "/repo" }), "session-a:pid:11");
+  assert.notEqual(
     piGraphicsImageId("editor-border", { env: envA, pid: 11, cwd: "/repo" }),
     piGraphicsImageId("editor-border", { env: envA, pid: 99, cwd: "/elsewhere" }),
+  );
+  assert.equal(
+    piGraphicsIdScope({ env: { ...envA, PI_GRAPHICS_ID_NAMESPACE_EXACT: "1" }, pid: 11, cwd: "/repo" }),
+    "session-a",
   );
   assert.notEqual(
     piGraphicsImageId("editor-border", { env: envA, pid: 11, cwd: "/repo" }),

@@ -17,17 +17,21 @@ export const PI_GRAPHICS_ID_PREFIX = "agent-utils.pi-graphics.v2";
 
 export function piGraphicsIdScope({ env = process.env, pid = process.pid, cwd = process.cwd() } = {}) {
   const configured = env.PI_GRAPHICS_ID_NAMESPACE || env.PI_KITTY_GRAPHICS_NAMESPACE;
-  if (configured) return String(configured);
-  const sessionish = env.PI_CODING_AGENT_SESSION
+  const sessionish = configured
+    || env.PI_CODING_AGENT_SESSION
     || env.PI_CODING_AGENT_SESSION_FILE
     || env.PI_CODING_AGENT_DIR
     || env.CACO_AGENT_ID
     || cwd
     || "unknown-session";
-  // Include pid so two live Pi processes that share the same agent/settings dir
-  // still allocate disjoint terminal ids. Redraw stability only needs to hold
-  // inside the current process; after restart, avoiding stale-placeholder pop-in
-  // is more important than reusing old ids.
+  // Include pid even when an operator provided a namespace: tmux panes commonly
+  // run several live Pi instances with the same home/profile namespace, and
+  // kitty image ids are terminal-global. Redraw stability only needs to hold
+  // inside the current process; after restart, avoiding cross-pane stale image
+  // pop-in is more important than reusing old ids.
+  if (env.PI_GRAPHICS_ID_NAMESPACE_EXACT === "1" || env.PI_KITTY_GRAPHICS_NAMESPACE_EXACT === "1") {
+    return String(sessionish);
+  }
   return `${sessionish}:pid:${pid || 0}`;
 }
 

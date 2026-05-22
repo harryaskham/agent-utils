@@ -331,8 +331,12 @@ displayed using kitty Unicode placeholder cells, so:
   truecolor and the most-significant byte as the third row/column diacritic.
   Placeholder-selectable virtual placements stay in the high half of the
   24-bit underline-color subspace, while non-placeholder relative placements
-  use full 32-bit placement ids. This avoids low-id collisions with other kitty
-  graphics consumers in the same tty.
+  use full 32-bit placement ids. The id scope includes the live process id even
+  when `PI_GRAPHICS_ID_NAMESPACE` is configured, because multiple Pi instances
+  in tmux share one terminal-global kitty id space. Set
+  `PI_GRAPHICS_ID_NAMESPACE_EXACT=1` only for tests/debugging that require exact
+  historical ids. This avoids low-id and cross-process collisions with other
+  kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, and `cloud`) and caches both uploads and
   relative placements so ordinary rerenders do not re-place identical box
