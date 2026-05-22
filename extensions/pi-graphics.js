@@ -473,6 +473,43 @@ export default function piGraphicsExtension(pi) {
     return `${String(line).slice(0, -match[0].length)}${tail}`;
   }
 
+  function buildEditorCursorCell() {
+    if (!ensureUnicodePlacement(state)) return null;
+    const cell = cellMetrics();
+    const rendered = renderPromptEnclosure({
+      columns: 1,
+      variant: "glow",
+      alpha: Math.max(0.32, editorAlpha() * 0.72),
+      leftColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
+      rightColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
+      fadeEdges: false,
+      ...cell,
+    });
+    const placement = buildPlacement(state, {
+      name: `editor-cursor-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+      png: rendered.png,
+      columns: rendered.columns,
+      rows: rendered.rows,
+      width: 1,
+      zIndex: -1073741825,
+    });
+    emitGraphicsCommand(placement.transmit);
+    return placement.lines[0] ?? null;
+  }
+
+  function replaceEditorCursorChrome(line) {
+    if (editorStyle() !== "unicode") return line;
+    const text = String(line || "");
+    if (!text.includes("\x1b[7m")) return line;
+    const cursor = buildEditorCursorCell();
+    if (!cursor) return line;
+    return text.replace(/\x1b\[7m[^\x1b]*\x1b\[0m/, cursor);
+  }
+
+  function decorateEditorContentLine(line) {
+    return fillEditorTrailingWorkspace(replaceEditorCursorChrome(line));
+  }
+
   function buildEditorRailRows(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
@@ -536,7 +573,7 @@ export default function piGraphicsExtension(pi) {
         if (!top) return baseLines;
         next[firstDash] = top;
         if (bot && lastDash !== firstDash) next[lastDash] = bot;
-        return next.map((line, index) => dashIndices.includes(index) ? line : fillEditorTrailingWorkspace(line));
+        return next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line));
       }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {

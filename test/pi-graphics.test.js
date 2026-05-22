@@ -1237,6 +1237,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /boxes:\$\{effect\}/);
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
+  assert.match(source, /function buildEditorCursorCell/);
+  assert.match(source, /function replaceEditorCursorChrome/);
+  assert.match(source, /text\.replace\(\/\\x1b\\\[7m\[\^\\x1b\]\*\\x1b\\\[0m\//);
+  assert.match(source, /decorateEditorContentLine\(line\)/);
   assert.match(source, /const visualCols = cols/);
   assert.match(source, /const leadingCells = 0/);
 });
