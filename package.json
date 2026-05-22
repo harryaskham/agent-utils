@@ -49,6 +49,7 @@
       "./extensions/realtime-agent.js",
       "./extensions/pi-self-update.js",
       "./extensions/effort.js",
+      "./extensions/true-defaults.js",
       "./extensions/tendril-share.js",
       "./extensions/app-automation.js"
     ],
