@@ -1225,6 +1225,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
   assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
+  assert.match(source, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
+  assert.match(source, /BOX_EFFECT_NAMES/);
+  assert.match(source, /registerShortcut\?\.\("ctrl\+t"/);
+  assert.match(source, /boxes:\$\{effect\}/);
+  assert.match(source, /const visualCols = Math\.max\(8, Math\.min\(cols, Math\.round\(Math\.min\(cols \* 0\.62, 48\)\)\)\)/);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {

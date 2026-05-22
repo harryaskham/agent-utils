@@ -6,6 +6,7 @@
 
 import {
   bufferToBase64,
+  buildDeleteCommand,
   buildKittyUnicodePlaceholderCell,
   buildRelativePlacementCommand,
   serializeKittyGraphicsChunks,
@@ -38,10 +39,14 @@ export const BOX_TYPE_THEME_TOKENS = {
   branch: "muted",
   compaction: "muted",
   footer: "accent",
+  thinking: "thinkingText",
 };
+
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "aurora",
+  thinking: "cloud",
   tool: "circuit",
   bash: "scanline",
   user: "glass",
@@ -120,7 +125,17 @@ function paintMidStrip(pixels, w, h, color, cellW) {
 }
 
 function paintEffect(pixels, w, h, color, effect = "glass") {
-  if (effect === "scanline") {
+  if (effect === "cloud") {
+    for (let x = 0; x < w; x += 1) {
+      const a = Math.round(18 + 18 * ((Math.sin(x / 11) + Math.sin(x / 23 + 1.3) + 2) / 4));
+      const y = Math.max(0, Math.min(h - 1, Math.round(h * (0.45 + 0.25 * Math.sin(x / 17)))));
+      fillRectAlpha(pixels, w, x, y, 1, Math.min(3, h - y), color, a);
+    }
+    for (let x = 4; x < w; x += 19) {
+      const y = 2 + ((x * 5) % Math.max(1, h - 5));
+      fillRectAlpha(pixels, w, x, y, Math.min(10, w - x), 2, color, 42);
+    }
+  } else if (effect === "scanline") {
     for (let y = 1; y < h; y += 4) fillRectAlpha(pixels, w, 0, y, w, 1, color, 34);
   } else if (effect === "circuit") {
     const y = Math.max(1, Math.floor(h * 0.35));
@@ -138,6 +153,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(0, Math.min(h - 1, Math.round((h - 1) * wave)));
       fillRectAlpha(pixels, w, x, y, 1, Math.min(2, h - y), color, 36);
     }
+  }
+}
+
+function paintTypeIcon(pixels, w, h, color, { type = "assistant", rowIndex = 0, cellWidthPx = 8 } = {}) {
+  if (rowIndex < 0 || rowIndex >= 3) return;
+  const iconW = Math.max(8, Math.round(cellWidthPx * 6));
+  const iconH = h * 3;
+  const yBase = -rowIndex * h;
+  const cx = Math.floor(iconW * 0.45);
+  const cy = Math.floor(iconH * 0.5);
+  const typeKey = type === "thinking" ? "cloud" : type;
+  const mark = (x, y, a = 30, rw = 1, rh = 1) => fillRectAlpha(pixels, w, 2 + x, yBase + y, rw, rh, color, a);
+  if (typeKey === "cloud") {
+    for (let y = 0; y < iconH; y += 1) for (let x = 0; x < iconW; x += 1) {
+      const d1 = ((x - cx) / 18) ** 2 + ((y - cy) / 8) ** 2;
+      const d2 = ((x - cx + 12) / 13) ** 2 + ((y - cy + 3) / 7) ** 2;
+      const d3 = ((x - cx - 10) / 14) ** 2 + ((y - cy + 2) / 9) ** 2;
+      const density = Math.max(0, 1 - Math.min(d1, d2, d3));
+      if (density > 0) mark(x, y, Math.round(18 + density * 42));
+    }
+  } else if (typeKey === "tool" || typeKey === "circuit") {
+    for (let x = 3; x < iconW - 4; x += 8) mark(x, cy, 48, 5, 1);
+    for (let y = 5; y < iconH - 4; y += 8) mark(cx, y, 38, 1, 5);
+  } else if (typeKey === "bash") {
+    mark(5, cy - 5, 55, 10, 2); mark(13, cy - 2, 55, 8, 2); mark(5, cy + 5, 42, 28, 2);
+  } else if (typeKey === "user") {
+    mark(cx - 4, cy - 9, 45, 8, 8); mark(cx - 12, cy + 1, 34, 24, 9);
+  } else if (typeKey === "branch") {
+    mark(cx, 5, 40, 2, iconH - 10); mark(cx - 12, cy, 45, 14, 2); mark(cx - 12, cy - 5, 35, 2, 10);
+  } else {
+    for (let i = 0; i < 6; i += 1) mark(cx - i * 3, cy - i, 24 + i * 4, i * 6 + 3, 1);
+    mark(cx - 2, cy - 8, 42, 4, 16);
   }
 }
 
@@ -196,7 +243,7 @@ function taperEdges(pixels, w, h) {
   }
 }
 
-export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx = 16, color, effect = "glass" }) {
+export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx = 16, color, effect = "glass", type = "assistant", rowIndex = 0 }) {
   const w = Math.max(8, Math.round(columns * cellWidthPx));
   const h = cellHeightPx;
   const pixels = makeCanvas(w, h, [0, 0, 0, 0]);
@@ -204,6 +251,7 @@ export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx
   else if (kind === "bot") paintBottomStrip(pixels, w, h, color);
   else paintMidStrip(pixels, w, h, color, cellWidthPx);
   paintEffect(pixels, w, h, color, effect);
+  paintTypeIcon(pixels, w, h, color, { type, rowIndex, cellWidthPx });
   taperEdges(pixels, w, h);
   return { png: encodeRgbaPng(pixels, w, h), widthPx: w, heightPx: h };
 }
@@ -227,17 +275,19 @@ export function createBoxChromeRuntime({
   cellWidthPx = 8,
   cellHeightPx = 16,
   resolveTheme,
+  boxEffect,
 } = {}) {
   // Cache: stripKey -> imageId already uploaded
   const uploadedStrips = new Set();
   const anchorsUploaded = new Set();
   const relativePlacements = new Set();
+  const relativeByAnchorRow = new Map();
 
-  function ensureStripUploaded({ kind, type, width, colorRgb, effect }) {
-    const stripKey = `box-strip-${type}-${kind}-${effect}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
+  function ensureStripUploaded({ kind, type, width, colorRgb, effect, rowIndex }) {
+    const stripKey = `box-strip-${type}-${kind}-${effect}-${rowIndex}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
     const imageId = piGraphicsImageId(stripKey);
     if (uploadedStrips.has(imageId)) return imageId;
-    const { png } = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb, effect });
+    const { png } = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex });
     const upload = serializeKittyGraphicsChunks({
       a: "t",
       f: 100,
@@ -280,9 +330,14 @@ export function createBoxChromeRuntime({
   }
 
   function ensureRelativeStrip({ stripImageId, anchorImageId, anchorPlacementId, instanceId, rowIndex, width }) {
-    const relKey = `${stripImageId}.${anchorImageId}.${anchorPlacementId}.${instanceId}.${rowIndex}.${width}`;
+    const anchorRowKey = `${anchorImageId}.${anchorPlacementId}.${instanceId}.${rowIndex}`;
+    const relKey = `${stripImageId}.${anchorRowKey}.${width}`;
     if (relativePlacements.has(relKey)) return;
-    const relPlacementId = piGraphicsPlacementId(`box-relative-strip.${relKey}`);
+    const relPlacementId = piGraphicsPlacementId(`box-relative-strip.${anchorRowKey}`);
+    const previous = relativeByAnchorRow.get(anchorRowKey);
+    if (previous && (previous.stripImageId !== stripImageId || previous.relPlacementId !== relPlacementId)) {
+      emitGraphicsCommand(buildDeleteCommand({ imageId: previous.stripImageId, placementId: previous.relPlacementId, deleteMode: "p", passthrough }));
+    }
     const cmd = buildRelativePlacementCommand({
       imageId: stripImageId,
       placementId: relPlacementId,
@@ -295,6 +350,7 @@ export function createBoxChromeRuntime({
     });
     emitGraphicsCommand(cmd);
     relativePlacements.add(relKey);
+    relativeByAnchorRow.set(anchorRowKey, { stripImageId, relPlacementId });
   }
 
   function wrapRowText({ lineText, anchorImageId, anchorPlacementId }) {
@@ -313,23 +369,35 @@ export function createBoxChromeRuntime({
     const text = String(lineText || "");
     const leadingEsc = (text.match(/^(?:(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))+/) || [""])[0];
     const afterEsc = text.slice(leadingEsc.length);
-    const rest = Array.from(afterEsc).slice(1).join("");
+    const chars = Array.from(afterEsc);
+    let rest;
+    if (chars[0] && /\s/.test(chars[0])) {
+      rest = chars.slice(1).join("");
+    } else {
+      if (chars.length > 0 && /\s/.test(chars[chars.length - 1])) chars.pop();
+      else if (chars.length > 0) chars.pop();
+      rest = chars.join("");
+    }
     return `${leadingEsc}${sgr}${cell}${ESC}[39;59m${rest}`;
   }
 
-  function applyToRows({ type, instanceId, lines }) {
+  function componentLooksLikeThinking(component) {
+    try {
+      return !!component?.lastMessage?.content?.some?.((c) => c?.type === "thinking" && String(c.thinking || "").trim());
+    } catch { return false; }
+  }
+
+  function applyToRows({ type, instanceId, lines, component }) {
     if (!Array.isArray(lines) || lines.length === 0) return lines;
-    const themeTokens = resolveTheme?.({ type }) || {};
+    const effectiveType = componentLooksLikeThinking(component) ? "thinking" : type;
+    const themeTokens = resolveTheme?.({ type: effectiveType }) || {};
     const colorRgb = themeTokens.colorRgb || [136, 192, 208];
     const width = computeMaxVisibleWidth(lines);
     if (width <= 2) return lines;
-    const effect = BOX_TYPE_EFFECTS[type] || "glass";
-    const stripIdTop = ensureStripUploaded({ kind: "top", type, width, colorRgb, effect });
-    const stripIdMid = ensureStripUploaded({ kind: "mid", type, width, colorRgb, effect });
-    const stripIdBot = ensureStripUploaded({ kind: "bot", type, width, colorRgb, effect });
+    const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
     const wrapped = lines.map((line, i) => {
       const kind = i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
-      const stripId = kind === "top" ? stripIdTop : kind === "bot" ? stripIdBot : stripIdMid;
+      const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });
       const { anchorImageId, anchorPlacementId } = ensureAnchor({ instanceId, rowIndex: i });
       ensureRelativeStrip({ stripImageId: stripId, anchorImageId, anchorPlacementId, instanceId, rowIndex: i, width });
       return wrapRowText({ lineText: line, anchorImageId, anchorPlacementId });
@@ -340,10 +408,14 @@ export function createBoxChromeRuntime({
   return { applyToRows };
 }
 
+function stripTerminalControls(text) {
+  return String(text || "").replace(/(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))/g, "");
+}
+
 function computeMaxVisibleWidth(lines) {
   let max = 0;
   for (const line of lines) {
-    const stripped = String(line || "").replace(/\x1b\[[0-9;]*m/g, "");
+    const stripped = stripTerminalControls(line);
     // simple visible-cell estimate; not perfect for wide chars but good enough
     if (stripped.length > max) max = stripped.length;
   }
@@ -368,7 +440,7 @@ export function installBoxChromeMonkeyPatch({ components, runtime, onWrap = () =
       }
       try {
         onCall(type);
-        return runtime.applyToRows({ type, instanceId: this.__piGraphicsInstanceId, lines });
+        return runtime.applyToRows({ type, instanceId: this.__piGraphicsInstanceId, lines, component: this });
       } catch {
         return lines;
       }

@@ -49,6 +49,7 @@ import {
   transparentPixelPngBase64,
 } from "./kitty-graphics.js";
 import {
+  BOX_EFFECT_NAMES,
   BOX_TYPE_THEME_TOKENS,
   createBoxChromeRuntime,
   installBoxChromeMonkeyPatch,
@@ -117,6 +118,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_DELAY_MS: editor.delayMs != null ? String(editor.delayMs) : undefined,
     PI_GRAPHICS_EDITOR_STYLE: editor.style != null ? String(editor.style) : undefined,
     PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === true ? "1" : gfx.boxChrome === false ? "0" : undefined,
+    PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
   };
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
@@ -269,13 +271,15 @@ export default function piGraphicsExtension(pi) {
     const cell = cellMetrics();
     const variant = editorVariant();
     const alpha = editorAlpha();
+    const visualCols = Math.max(8, Math.min(cols, Math.round(Math.min(cols * 0.62, 48))));
+    const leadingCells = Math.max(0, Math.floor((cols - visualCols) / 2));
     const frames = editorStyle() === "animated" ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
     if (frames <= 1) {
       const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
       const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
       const rendered = renderEditorBorderFramesPngs({
-        columns: cols,
+        columns: visualCols,
         edge,
         ...cell,
         frames: 1,
@@ -285,15 +289,16 @@ export default function piGraphicsExtension(pi) {
         glowAlpha: Math.max(0.22, alpha * 0.62),
       });
       const placement = buildPlacement(state, {
-        name: `editor-border-static-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+        name: `editor-border-static-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
         png: rendered.pngs[0],
         columns: rendered.columns,
         rows: rendered.rows,
-        width: cols,
+        width: visualCols,
         zIndex: -1073741825,
       });
       emitGraphicsCommand(placement.transmit);
-      return placement.lines[0] ?? "";
+      const line = placement.lines[0] ?? "";
+      return `${" ".repeat(leadingCells)}${line}${" ".repeat(Math.max(0, cols - leadingCells - visualCols))}`;
     }
     // Animated path: virtual Unicode placeholder anchor + non-virtual relative
     // animation placement. Per-edge image ids prevent the two edges from
@@ -301,7 +306,7 @@ export default function piGraphicsExtension(pi) {
     const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
     const rendered = renderEditorBorderFramesPngs({
-      columns: cols,
+      columns: visualCols,
       edge,
       ...cell,
       frames,
@@ -310,12 +315,12 @@ export default function piGraphicsExtension(pi) {
       borderAlpha: Math.max(0.32, Math.min(0.6, alpha)),
       glowAlpha: Math.max(0.22, alpha * 0.62),
     });
-    const anchorKey = `editor-border-anchor-${edge}-${cols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-    const animKey = `editor-border-anim-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
+    const anchorKey = `editor-border-anchor-${edge}-${visualCols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    const animKey = `editor-border-anim-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
     const anchorImageId = piGraphicsImageId(anchorKey);
     const animImageId = piGraphicsImageId(animKey);
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${cols}`);
-    const animPlacementId = piGraphicsPlacementId(`editor-border-anim-placement-${edge}-${cols}`);
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${visualCols}`);
+    const animPlacementId = piGraphicsPlacementId(`editor-border-anim-placement-${edge}-${visualCols}`);
     ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
     ensureRelativeAnimUploaded({
       animImageId,
@@ -344,8 +349,9 @@ export default function piGraphicsExtension(pi) {
     const fg = `${ESC}[38;2;${(low24 >> 16) & 0xff};${(low24 >> 8) & 0xff};${low24 & 0xff}m`;
     const underline = `${ESC}[58;2;${(placementLow24 >> 16) & 0xff};${(placementLow24 >> 8) & 0xff};${placementLow24 & 0xff}m`;
     const reset = `${ESC}[39;59m`;
-    const filler = " ".repeat(Math.max(0, cols - 1));
-    return `${fg}${underline}${anchorCell}${reset}${filler}`;
+    const filler = " ".repeat(Math.max(0, visualCols - 1));
+    const chrome = `${fg}${underline}${anchorCell}${reset}${filler}`;
+    return `${" ".repeat(leadingCells)}${chrome}${" ".repeat(Math.max(0, cols - leadingCells - visualCols))}`;
   }
 
   function buildEditorRailRows(width, edge) {
@@ -490,6 +496,7 @@ export default function piGraphicsExtension(pi) {
       passthrough: state.config.passthrough,
       cellWidthPx: cellMetrics().cellWidthPx,
       cellHeightPx: cellMetrics().cellHeightPx,
+      boxEffect: gfxEnv().PI_GRAPHICS_BOX_EFFECT,
       resolveTheme({ type } = {}) {
         const token = (type && BOX_TYPE_THEME_TOKENS[type]) || "accent";
         const colorRgb = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
@@ -537,7 +544,9 @@ export default function piGraphicsExtension(pi) {
     for (const theme of baseThemes) {
       presets.push({ name: `${theme}:static`, theme, mode: "on", editorStyle: "static", boxChrome: false });
       presets.push({ name: `${theme}:animated`, theme, mode: "on", editorStyle: "animated", boxChrome: false });
-      presets.push({ name: `${theme}:boxes`, theme, mode: "on", editorStyle: "static", boxChrome: true });
+      for (const effect of BOX_EFFECT_NAMES) {
+        presets.push({ name: `${theme}:boxes:${effect}`, theme, mode: "on", editorStyle: "static", boxChrome: true, boxEffect: effect });
+      }
     }
     presets.push({ name: "graphics-off", theme: currentTheme, mode: "off", editorStyle: "static", boxChrome: false });
     return presets;
@@ -560,6 +569,8 @@ export default function piGraphicsExtension(pi) {
     if (preset.editorStyle) editor.style = preset.editorStyle;
     if (preset.editor?.style) editor.style = preset.editor.style;
     if (preset.boxChrome !== undefined) gfx.boxChrome = Boolean(preset.boxChrome);
+    if (preset.boxEffect) gfx.boxEffect = preset.boxEffect;
+    else if (preset.boxChrome === false) delete gfx.boxEffect;
     if (preset.features && typeof preset.features === "object") gfx.features = { ...(gfx.features || {}), ...preset.features };
     gfx.activePresetIndex = preset.index;
   }
@@ -605,7 +616,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [next|presets|preset <n|name>|editor static|animated|box on|off|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [next|presets|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -620,11 +631,13 @@ export default function piGraphicsExtension(pi) {
           `  theme:          ${settings.theme || gfx.theme || "(default)"}`,
           `  editor.style:   ${editor.style ?? "static"} (also: animated)`,
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
+          `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           "",
           "Usage: /gfx next | /gfx presets | /gfx preset <n|name>",
           "       /gfx editor static|animated",
           "       /gfx box on|off",
+          `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
           "       /gfx mode on|off|debug",
           "Ctrl+t cycles presets when keybindings free it from app.thinking.toggle.",
         ];
@@ -636,7 +649,7 @@ export default function piGraphicsExtension(pi) {
       if (action === "prev" || action === "previous") { await cycleGfxPreset(ctx, -1); return; }
       if (action === "presets") {
         const presets = getGfxPresets(settings, ctx);
-        ctx.ui.notify(presets.map((p, i) => `${i + 1}. ${p.name || "unnamed"} — theme=${p.theme || settings.theme || "default"}, editor=${p.editorStyle || p.editor?.style || "static"}, box=${p.boxChrome ? "on" : "off"}, mode=${p.mode || "on"}`).join("\n"), "info");
+        ctx.ui.notify(presets.map((p, i) => `${i + 1}. ${p.name || "unnamed"} — theme=${p.theme || settings.theme || "default"}, editor=${p.editorStyle || p.editor?.style || "static"}, box=${p.boxChrome ? "on" : "off"}, effect=${p.boxEffect || "per-type"}, mode=${p.mode || "on"}`).join("\n"), "info");
         return;
       }
       if (action === "preset") {
@@ -661,6 +674,10 @@ export default function piGraphicsExtension(pi) {
           if (/^(on|true|1)$/.test(value)) { gfx.boxChrome = true; changed = true; }
           else if (/^(off|false|0)$/.test(value)) { gfx.boxChrome = false; changed = true; }
           else ctx.ui.notify(`unknown box value: ${value} (use on|off)`, "warning");
+        } else if (key === "box-effect" || key === "boxeffect" || key === "effect") {
+          if (BOX_EFFECT_NAMES.includes(value)) { gfx.boxEffect = value; gfx.boxChrome = true; changed = true; }
+          else if (value === "auto" || value === "per-type" || value === "default") { delete gfx.boxEffect; changed = true; }
+          else ctx.ui.notify(`unknown box effect: ${value} (use ${BOX_EFFECT_NAMES.join("|")} or auto)`, "warning");
         } else if (key === "mode") {
           if (/^(on|off|debug)$/.test(value)) { gfx.mode = value; changed = true; }
           else ctx.ui.notify(`unknown mode: ${value} (use on|off|debug)`, "warning");

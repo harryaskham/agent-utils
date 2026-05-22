@@ -33,7 +33,7 @@ test("BOX_TYPE_THEME_TOKENS and effects cover all expected types", () => {
 });
 
 test("renderBoxStripPng effect variants produce distinct graphics", () => {
-  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle"];
+  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud"];
   const payloads = new Set(variants.map((effect) => renderBoxStripPng({
     kind: "mid",
     columns: 24,
@@ -58,6 +58,7 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   const out = runtime.applyToRows({ type: "assistant", instanceId: 1, lines });
   assert.equal(out.length, 3);
   assert.notEqual(out[0], lines[0]);
+  assert.match(out[0], /first ro/, "box anchor replacement should preserve content while reclaiming one cell of width");
   assert.ok(emitted.some((c) => /a=t,f=100,t=d/.test(c)), "must upload strip + anchor");
   const placementIds = [...emitted.join("").matchAll(/(?:^|,)p=(\d+)/g)].map((match) => Number(match[1]));
   assert.ok(placementIds.length >= 3, "must allocate anchor and relative placements");
@@ -68,6 +69,25 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines });
   const newCmds = emitted.slice(emittedBeforeSecond);
   assert.deepEqual(newCmds, [], "second render should not re-upload or re-place unchanged box chrome");
+  const beforeResize = emitted.length;
+  runtime.applyToRows({ type: "assistant", instanceId: 1, lines: ["first row wider", "second row wider", "third row wider"] });
+  const resizeCmds = emitted.slice(beforeResize).join("");
+  assert.match(resizeCmds, /a=d,d=p/, "resized rows should delete stale relative placements before replacing them");
+});
+
+test("thinking assistant content uses cloudy thought chrome", () => {
+  const emitted = [];
+  const state = { ownedImageIds: new Set() };
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state,
+    passthrough: "none",
+    resolveTheme: () => ({ colorRgb: [180, 150, 230] }),
+  });
+  const component = { lastMessage: { content: [{ type: "thinking", thinking: "pondering" }] } };
+  runtime.applyToRows({ type: "assistant", instanceId: 9, component, lines: [" thinking line", " still thinking"] });
+  assert.ok(emitted.some((c) => /a=t,f=100,t=d/.test(c)), "cloud chrome should upload strips");
+  assert.ok([...state.ownedImageIds].length >= 2, "cloud chrome should own strip and anchor images");
 });
 
 test("installBoxChromeMonkeyPatch is idempotent and wraps render", () => {
