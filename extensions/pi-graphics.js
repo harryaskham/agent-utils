@@ -57,6 +57,7 @@ import { getThemeColorHex, getThemeColorRgb } from "./pi-graphics/theme-colors.j
 import {
   piGraphicsImageId,
   piGraphicsPlacementId,
+  piGraphicsPlaceholderPlacementId,
 } from "./pi-graphics/id-space.js";
 import {
   renderEditorBoxApng,
@@ -313,7 +314,7 @@ export default function piGraphicsExtension(pi) {
     const animKey = `editor-border-anim-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
     const anchorImageId = piGraphicsImageId(anchorKey);
     const animImageId = piGraphicsImageId(animKey);
-    const anchorPlacementId = piGraphicsPlacementId(`editor-border-anchor-placement-${edge}-${cols}`);
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${cols}`);
     const animPlacementId = piGraphicsPlacementId(`editor-border-anim-placement-${edge}-${cols}`);
     ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
     ensureRelativeAnimUploaded({

@@ -14,7 +14,7 @@ import {
 } from "../kitty-graphics.js";
 import {
   piGraphicsImageId,
-  piGraphicsPlacementId,
+  piGraphicsPlaceholderPlacementId,
 } from "./id-space.js";
 
 export function makeState() {
@@ -35,7 +35,7 @@ function trackOwned(state, id) {
 }
 
 function placementIdForName(name) {
-  return piGraphicsPlacementId(`placement.${name}`);
+  return piGraphicsPlaceholderPlacementId(`placement.${name}`);
 }
 
 export function buildPlacement(state, { name, png, columns, rows, width, caption, zIndex } = {}) {

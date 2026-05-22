@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  BOX_TYPE_EFFECTS,
   BOX_TYPE_THEME_TOKENS,
   createBoxChromeRuntime,
   installBoxChromeMonkeyPatch,
@@ -24,10 +25,24 @@ test("renderBoxStripPng produces non-empty PNG for top/mid/bot kinds", () => {
   }
 });
 
-test("BOX_TYPE_THEME_TOKENS covers all expected types", () => {
+test("BOX_TYPE_THEME_TOKENS and effects cover all expected types", () => {
   for (const type of ["assistant", "tool", "bash", "user", "custom", "skill", "branch", "compaction", "footer"]) {
     assert.ok(BOX_TYPE_THEME_TOKENS[type], `missing token for ${type}`);
+    assert.ok(BOX_TYPE_EFFECTS[type], `missing effect for ${type}`);
   }
+});
+
+test("renderBoxStripPng effect variants produce distinct graphics", () => {
+  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle"];
+  const payloads = new Set(variants.map((effect) => renderBoxStripPng({
+    kind: "mid",
+    columns: 24,
+    cellWidthPx: 8,
+    cellHeightPx: 16,
+    color: [136, 192, 208],
+    effect,
+  }).png.toString("base64")));
+  assert.equal(payloads.size, variants.length);
 });
 
 test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
@@ -46,12 +61,13 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.ok(emitted.some((c) => /a=t,f=100,t=d/.test(c)), "must upload strip + anchor");
   const placementIds = [...emitted.join("").matchAll(/(?:^|,)p=(\d+)/g)].map((match) => Number(match[1]));
   assert.ok(placementIds.length >= 3, "must allocate anchor and relative placements");
-  assert.ok(placementIds.every((id) => id >= 0x800000 && id < 0x1000000), "box chrome placements should live in high 24-bit collision-resistant space");
+  assert.ok(placementIds.some((id) => id >= 0x800000 && id < 0x1000000), "anchor placeholders should use high 24-bit underline IDs");
+  assert.ok(placementIds.some((id) => id > 0x1000000), "relative placements should use the full 32-bit protocol range");
   // Second pass with same instanceId/lines should reuse cached uploads (no new a=t).
   const emittedBeforeSecond = emitted.length;
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines });
   const newCmds = emitted.slice(emittedBeforeSecond);
-  assert.ok(newCmds.every((c) => !/a=t,f=100,t=d/.test(c)), "no re-upload on second render");
+  assert.deepEqual(newCmds, [], "second render should not re-upload or re-place unchanged box chrome");
 });
 
 test("installBoxChromeMonkeyPatch is idempotent and wraps render", () => {

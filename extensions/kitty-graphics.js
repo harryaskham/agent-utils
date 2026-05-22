@@ -544,24 +544,38 @@ export function buildDeleteCommand({
   );
 }
 
-export function stableKittyImageId(input) {
-  // 31-bit positive integer, avoiding zero because many terminal protocols use
-  // zero as an omitted/default id sentinel.
+function fnv1a32(input) {
   const text = String(input ?? "kitty-image-preview");
   let hash = 2166136261;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return (hash >>> 1) || 1;
+  return hash >>> 0;
+}
+
+export function stableKittyImageId(input) {
+  // Protocol reference: image ids are 32-bit unsigned integers (0..4294967295),
+  // and Unicode placeholders can encode the most-significant byte as a third
+  // diacritic. Force that byte non-zero so placeholder users actually consume
+  // the larger tty-global namespace instead of silently collapsing to 24 bits.
+  const hash = fnv1a32(input);
+  const high = (hash >>> 24) || 0x80;
+  return ((high << 24) >>> 0) + (hash & 0x00ffffff);
 }
 
 export function stableKittyPlacementId(input) {
-  // Unicode placeholders encode placement ids through 24-bit underline color.
-  // Allocate from the high half of that space so agent-utils placements do not
-  // overlap conventional small placement ids (1, 7, 0xa1, etc.) used by other
-  // kitty graphics examples/tools.
-  const low23 = stableKittyImageId(input) % 0x800000;
+  // Real placement ids are also 32-bit. Use the full namespace for non-Unicode
+  // relative placements; virtual placements that must be selected by underline
+  // color should use stableKittyPlaceholderPlacementId() below.
+  return fnv1a32(input) || 1;
+}
+
+export function stableKittyPlaceholderPlacementId(input) {
+  // Unicode placeholders encode placement ids through truecolor underline SGR,
+  // so only 24 bits are available there. Allocate from the high half of that
+  // 24-bit subspace to avoid conventional small ids (1, 7, 0xa1, etc.).
+  const low23 = fnv1a32(input) % 0x800000;
   return 0x800000 + low23;
 }
 

@@ -323,6 +323,16 @@ displayed using kitty Unicode placeholder cells, so:
   `buildScopedDeleteCommand`. The extension never issues a global
   "delete all images" command. This keeps it cooperative with bd-f89780's
   scoped image ownership work.
+* Pi graphics image ids deliberately use the kitty protocol's full 32-bit
+  namespace: Unicode placeholders encode the low 24 bits as foreground
+  truecolor and the most-significant byte as the third row/column diacritic.
+  Placeholder-selectable virtual placements stay in the high half of the
+  24-bit underline-color subspace, while non-placeholder relative placements
+  use full 32-bit placement ids. This avoids low-id collisions with other kitty
+  graphics consumers in the same tty.
+* Message box chrome has per-message-type effects (`glass`, `aurora`,
+  `scanline`, `circuit`, and `sparkle`) and caches both uploads and relative
+  placements so ordinary rerenders do not re-place identical box strips.
 
 ## Tools
 

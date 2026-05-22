@@ -39,6 +39,7 @@ import {
   piGraphicsImageId,
   piGraphicsIdScope,
   piGraphicsPlacementId,
+  piGraphicsPlaceholderPlacementId,
 } from "../extensions/pi-graphics/id-space.js";
 import {
   buildAutoPulseWidget,
@@ -1323,8 +1324,10 @@ test("pi graphics scoped ids are stable within a process but salted by namespace
     piGraphicsImageId("editor-border", { env: envA, pid: 11, cwd: "/repo" }),
     piGraphicsImageId("editor-border", { env: envB, pid: 11, cwd: "/repo" }),
   );
-  const placement = piGraphicsPlacementId("editor-border", { env: envA, pid: 11, cwd: "/repo" });
-  assert.ok(placement >= 0x800000 && placement < 0x1000000);
+  const realPlacement = piGraphicsPlacementId("editor-border", { env: envA, pid: 11, cwd: "/repo" });
+  const placeholderPlacement = piGraphicsPlaceholderPlacementId("editor-border", { env: envA, pid: 11, cwd: "/repo" });
+  assert.ok(realPlacement >= 1 && realPlacement <= 0xffffffff);
+  assert.ok(placeholderPlacement >= 0x800000 && placeholderPlacement < 0x1000000);
 });
 
 test("buildPlacement registers the image id and emits a virtual placement command", () => {
@@ -1336,8 +1339,8 @@ test("buildPlacement registers the image id and emits a virtual placement comman
     columns: enclosure.columns,
     rows: enclosure.rows,
   });
-  assert.ok(placement.imageId > 0, "image id must be a positive integer");
-  assert.ok(placement.placementId >= 0x800000 && placement.placementId < 0x1000000, "placement id should avoid low conventional kitty ids");
+  assert.ok(placement.imageId >= 0x01000000 && placement.imageId <= 0xffffffff, "image id should use the protocol's larger 32-bit namespace");
+  assert.ok(placement.placementId >= 0x800000 && placement.placementId < 0x1000000, "placeholder placement id should avoid low conventional kitty ids");
   assert.ok(state.ownedImageIds.has(placement.imageId), "extension state must track the new image id");
   assert.match(placement.transmit, /\x1b_G/);
   assert.match(placement.transmit, /a=T/);

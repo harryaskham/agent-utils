@@ -15,6 +15,7 @@ import {
 import {
   piGraphicsImageId,
   piGraphicsPlacementId,
+  piGraphicsPlaceholderPlacementId,
 } from "./id-space.js";
 import { encodeRgbaPng, makeCanvas } from "./png-renderer.js";
 import { getThemeColorRgb } from "./theme-colors.js";
@@ -37,6 +38,18 @@ export const BOX_TYPE_THEME_TOKENS = {
   branch: "muted",
   compaction: "muted",
   footer: "accent",
+};
+
+export const BOX_TYPE_EFFECTS = {
+  assistant: "aurora",
+  tool: "circuit",
+  bash: "scanline",
+  user: "glass",
+  custom: "sparkle",
+  skill: "aurora",
+  branch: "scanline",
+  compaction: "glass",
+  footer: "circuit",
 };
 
 function withAlpha([r, g, b], a) {
@@ -106,6 +119,40 @@ function paintMidStrip(pixels, w, h, color, cellW) {
   taperEdges(pixels, w, h);
 }
 
+function paintEffect(pixels, w, h, color, effect = "glass") {
+  if (effect === "scanline") {
+    for (let y = 1; y < h; y += 4) fillRectAlpha(pixels, w, 0, y, w, 1, color, 34);
+  } else if (effect === "circuit") {
+    const y = Math.max(1, Math.floor(h * 0.35));
+    for (let x = 0; x < w; x += 17) fillRectAlpha(pixels, w, x, y + ((x / 17) % 2 ? 3 : 0), Math.min(9, w - x), 1, color, 72);
+    for (let x = 6; x < w; x += 31) fillRectAlpha(pixels, w, x, 2, 1, Math.max(2, h - 4), color, 50);
+  } else if (effect === "sparkle") {
+    for (let x = 5; x < w; x += 23) {
+      const y = 2 + ((x * 7) % Math.max(1, h - 4));
+      fillRectAlpha(pixels, w, x, y, Math.min(3, w - x), 1, color, 105);
+      if (y + 1 < h) fillRectAlpha(pixels, w, x + 1, y - 1, 1, 3, color, 70);
+    }
+  } else if (effect === "aurora") {
+    for (let x = 0; x < w; x += 1) {
+      const wave = (Math.sin(x / 19) + 1) / 2;
+      const y = Math.max(0, Math.min(h - 1, Math.round((h - 1) * wave)));
+      fillRectAlpha(pixels, w, x, y, 1, Math.min(2, h - y), color, 36);
+    }
+  }
+}
+
+function fillRectAlpha(pixels, w, x, y, rw, rh, color, alpha) {
+  for (let yy = Math.max(0, y); yy < Math.min(Math.ceil(y + rh), pixels.length / 4 / w); yy += 1) {
+    for (let xx = Math.max(0, x); xx < Math.min(Math.ceil(x + rw), w); xx += 1) {
+      const off = (yy * w + xx) * 4;
+      pixels[off] = color[0];
+      pixels[off + 1] = color[1];
+      pixels[off + 2] = color[2];
+      pixels[off + 3] = Math.max(pixels[off + 3], alpha);
+    }
+  }
+}
+
 function paintBottomStrip(pixels, w, h, color) {
   // Mirror of top.
   const fillAlpha = 36;
@@ -149,13 +196,15 @@ function taperEdges(pixels, w, h) {
   }
 }
 
-export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx = 16, color }) {
+export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx = 16, color, effect = "glass" }) {
   const w = Math.max(8, Math.round(columns * cellWidthPx));
   const h = cellHeightPx;
   const pixels = makeCanvas(w, h, [0, 0, 0, 0]);
   if (kind === "top") paintTopStrip(pixels, w, h, color);
   else if (kind === "bot") paintBottomStrip(pixels, w, h, color);
   else paintMidStrip(pixels, w, h, color, cellWidthPx);
+  paintEffect(pixels, w, h, color, effect);
+  taperEdges(pixels, w, h);
   return { png: encodeRgbaPng(pixels, w, h), widthPx: w, heightPx: h };
 }
 
@@ -182,12 +231,13 @@ export function createBoxChromeRuntime({
   // Cache: stripKey -> imageId already uploaded
   const uploadedStrips = new Set();
   const anchorsUploaded = new Set();
+  const relativePlacements = new Set();
 
-  function ensureStripUploaded({ kind, type, width, colorRgb }) {
-    const stripKey = `box-strip-${type}-${kind}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
+  function ensureStripUploaded({ kind, type, width, colorRgb, effect }) {
+    const stripKey = `box-strip-${type}-${kind}-${effect}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
     const imageId = piGraphicsImageId(stripKey);
     if (uploadedStrips.has(imageId)) return imageId;
-    const { png } = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb });
+    const { png } = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb, effect });
     const upload = serializeKittyGraphicsChunks({
       a: "t",
       f: 100,
@@ -204,7 +254,7 @@ export function createBoxChromeRuntime({
   function ensureAnchor({ instanceId, rowIndex }) {
     const anchorKey = `box-anchor.${instanceId}.${rowIndex}`;
     const anchorImageId = piGraphicsImageId(anchorKey);
-    const placementId = piGraphicsPlacementId(`box-anchor-placement.${instanceId}.${rowIndex}`);
+    const placementId = piGraphicsPlaceholderPlacementId(`box-anchor-placement.${instanceId}.${rowIndex}`);
     if (anchorsUploaded.has(anchorImageId)) return { anchorImageId, anchorPlacementId: placementId };
     const upload = serializeKittyGraphicsChunks({
       a: "t",
@@ -230,7 +280,9 @@ export function createBoxChromeRuntime({
   }
 
   function ensureRelativeStrip({ stripImageId, anchorImageId, anchorPlacementId, instanceId, rowIndex, width }) {
-    const relPlacementId = piGraphicsPlacementId(`box-relative-strip.${stripImageId}.${anchorPlacementId}.${instanceId}.${rowIndex}.${width}`);
+    const relKey = `${stripImageId}.${anchorImageId}.${anchorPlacementId}.${instanceId}.${rowIndex}.${width}`;
+    if (relativePlacements.has(relKey)) return;
+    const relPlacementId = piGraphicsPlacementId(`box-relative-strip.${relKey}`);
     const cmd = buildRelativePlacementCommand({
       imageId: stripImageId,
       placementId: relPlacementId,
@@ -242,6 +294,7 @@ export function createBoxChromeRuntime({
       passthrough,
     });
     emitGraphicsCommand(cmd);
+    relativePlacements.add(relKey);
   }
 
   function wrapRowText({ lineText, anchorImageId, anchorPlacementId }) {
@@ -270,9 +323,10 @@ export function createBoxChromeRuntime({
     const colorRgb = themeTokens.colorRgb || [136, 192, 208];
     const width = computeMaxVisibleWidth(lines);
     if (width <= 2) return lines;
-    const stripIdTop = ensureStripUploaded({ kind: "top", type, width, colorRgb });
-    const stripIdMid = ensureStripUploaded({ kind: "mid", type, width, colorRgb });
-    const stripIdBot = ensureStripUploaded({ kind: "bot", type, width, colorRgb });
+    const effect = BOX_TYPE_EFFECTS[type] || "glass";
+    const stripIdTop = ensureStripUploaded({ kind: "top", type, width, colorRgb, effect });
+    const stripIdMid = ensureStripUploaded({ kind: "mid", type, width, colorRgb, effect });
+    const stripIdBot = ensureStripUploaded({ kind: "bot", type, width, colorRgb, effect });
     const wrapped = lines.map((line, i) => {
       const kind = i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
       const stripId = kind === "top" ? stripIdTop : kind === "bot" ? stripIdBot : stripIdMid;

@@ -10,6 +10,7 @@
 import {
   stableKittyImageId,
   stableKittyPlacementId,
+  stableKittyPlaceholderPlacementId,
 } from "../kitty-graphics.js";
 
 export const PI_GRAPHICS_ID_PREFIX = "agent-utils.pi-graphics.v2";
@@ -36,4 +37,8 @@ export function piGraphicsImageId(name, options = {}) {
 
 export function piGraphicsPlacementId(name, options = {}) {
   return stableKittyPlacementId(`${PI_GRAPHICS_ID_PREFIX}.${piGraphicsIdScope(options)}.${String(name ?? "placement")}`);
+}
+
+export function piGraphicsPlaceholderPlacementId(name, options = {}) {
+  return stableKittyPlaceholderPlacementId(`${PI_GRAPHICS_ID_PREFIX}.${piGraphicsIdScope(options)}.${String(name ?? "placement")}`);
 }

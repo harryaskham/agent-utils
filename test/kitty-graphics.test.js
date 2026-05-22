@@ -13,7 +13,9 @@ import {
   buildScopedDeleteCommand,
   serializeKittyGraphicsCommand,
   shouldUseUnicodePlaceholders,
+  stableKittyImageId,
   stableKittyPlacementId,
+  stableKittyPlaceholderPlacementId,
   viewportHalfRowLimit,
   clampRowsToViewportHalf,
 } from "../extensions/kitty-graphics.js";
@@ -33,15 +35,16 @@ test("tmux passthrough wraps APC and doubles inner escape bytes", () => {
   assert.equal(serialized, `${ESC}Ptmux;${ESC}${ESC}_Ga=p,i=42,q=2${ESC}${ESC}\\${ESC}\\`);
 });
 
-test("stable placement ids use high 24-bit space", () => {
-  const first = stableKittyPlacementId("agent-utils.pi-graphics.test");
-  const second = stableKittyPlacementId("agent-utils.pi-graphics.test");
-  const other = stableKittyPlacementId("agent-utils.pi-graphics.other");
+test("stable kitty ids use protocol-sized namespaces", () => {
+  const imageId = stableKittyImageId("agent-utils.pi-graphics.test");
+  const placementId = stableKittyPlacementId("agent-utils.pi-graphics.test");
+  const placeholderPlacementId = stableKittyPlaceholderPlacementId("agent-utils.pi-graphics.test");
 
-  assert.equal(first, second);
-  assert.notEqual(first, other);
-  assert.ok(first >= 0x800000);
-  assert.ok(first < 0x1000000);
+  assert.equal(stableKittyImageId("agent-utils.pi-graphics.test"), imageId);
+  assert.notEqual(stableKittyImageId("agent-utils.pi-graphics.other"), imageId);
+  assert.ok(imageId >= 0x01000000 && imageId <= 0xffffffff, "image IDs should force the larger 32-bit placeholder namespace");
+  assert.ok(placementId >= 1 && placementId <= 0xffffffff, "real placement IDs use the 32-bit protocol range");
+  assert.ok(placeholderPlacementId >= 0x800000 && placeholderPlacementId < 0x1000000, "placeholder placement IDs fit underline truecolor");
 });
 
 test("virtual placement command transmits PNG data without cursor placement", () => {
