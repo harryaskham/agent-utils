@@ -669,6 +669,7 @@ export default function piGraphicsExtension(pi) {
     const ui = ctx?.ui;
     if (!boxChromeRuntime || !ui || ui.__piGraphicsSurfacesPatched) return;
     const originals = {
+      notify: typeof ui.notify === "function" ? ui.notify : null,
       custom: typeof ui.custom === "function" ? ui.custom : null,
       setWidget: typeof ui.setWidget === "function" ? ui.setWidget : null,
       setFooter: typeof ui.setFooter === "function" ? ui.setFooter : null,
@@ -677,9 +678,19 @@ export default function piGraphicsExtension(pi) {
       setStatus: typeof ui.setStatus === "function" ? ui.setStatus : null,
       setWorkingMessage: typeof ui.setWorkingMessage === "function" ? ui.setWorkingMessage : null,
       setWorkingIndicator: typeof ui.setWorkingIndicator === "function" ? ui.setWorkingIndicator : null,
+      setHiddenThinkingLabel: typeof ui.setHiddenThinkingLabel === "function" ? ui.setHiddenThinkingLabel : null,
     };
     ui.__piGraphicsOriginalSurfaces = originals;
     ui.__piGraphicsSurfacesPatched = true;
+    if (originals.notify) {
+      const patchedNotify = function (message, type = undefined, ...rest) {
+        const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
+        const next = shouldSkipGraphicsOptions(options) ? message : decorateStatusValue(message);
+        return originals.notify.call(this, next, type, ...rest);
+      };
+      patchedNotify.__piGraphicsPatchedSurface = true;
+      ui.notify = patchedNotify;
+    }
     if (originals.custom) {
       const patchedCustom = function (componentOrFactory, options = undefined, ...rest) {
         const type = options?.overlay ? "overlay" : "customTui";
@@ -750,12 +761,22 @@ export default function piGraphicsExtension(pi) {
       patchedSetWorkingIndicator.__piGraphicsPatchedSurface = true;
       ui.setWorkingIndicator = patchedSetWorkingIndicator;
     }
+    if (originals.setHiddenThinkingLabel) {
+      const patchedSetHiddenThinkingLabel = function (label, ...rest) {
+        const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
+        const next = shouldSkipGraphicsOptions(options) ? label : decorateStatusValue(label);
+        return originals.setHiddenThinkingLabel.call(this, next, ...rest);
+      };
+      patchedSetHiddenThinkingLabel.__piGraphicsPatchedSurface = true;
+      ui.setHiddenThinkingLabel = patchedSetHiddenThinkingLabel;
+    }
   }
 
   function restoreUiGraphicsSurfaces(ctx) {
     const ui = ctx?.ui;
     const originals = ui?.__piGraphicsOriginalSurfaces;
     if (!ui || !ui.__piGraphicsSurfacesPatched || !originals) return;
+    if (originals.notify && ui.notify?.__piGraphicsPatchedSurface) ui.notify = originals.notify;
     if (originals.custom && ui.custom?.__piGraphicsPatchedSurface) ui.custom = originals.custom;
     if (originals.setWidget && ui.setWidget?.__piGraphicsPatchedSurface) ui.setWidget = originals.setWidget;
     if (originals.setFooter && ui.setFooter?.__piGraphicsPatchedSurface) ui.setFooter = originals.setFooter;
@@ -764,6 +785,7 @@ export default function piGraphicsExtension(pi) {
     if (originals.setStatus && ui.setStatus?.__piGraphicsPatchedSurface) ui.setStatus = originals.setStatus;
     if (originals.setWorkingMessage && ui.setWorkingMessage?.__piGraphicsPatchedSurface) ui.setWorkingMessage = originals.setWorkingMessage;
     if (originals.setWorkingIndicator && ui.setWorkingIndicator?.__piGraphicsPatchedSurface) ui.setWorkingIndicator = originals.setWorkingIndicator;
+    if (originals.setHiddenThinkingLabel && ui.setHiddenThinkingLabel?.__piGraphicsPatchedSurface) ui.setHiddenThinkingLabel = originals.setHiddenThinkingLabel;
     delete ui.__piGraphicsOriginalSurfaces;
     delete ui.__piGraphicsSurfacesPatched;
   }
