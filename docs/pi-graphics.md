@@ -379,9 +379,12 @@ displayed using kitty Unicode placeholder cells, so:
   input frame. In `unicode` editor mode, trailing empty workspace cells after the
   cursor are filled with Unicode-placeholder glow cells so typed characters
   naturally replace the graphics. The focused editor cursor itself is also
-  replaced in `unicode` mode with a one-cell glassy Unicode-placeholder cursor,
-  while Pi's zero-width hardware/IME cursor marker is preserved immediately
-  before it for terminal input plumbing.
+  replaced in every editor graphics style with a one-cell glassy Unicode-placeholder
+  cursor, while Pi's zero-width hardware/IME cursor marker is preserved immediately
+  before it for terminal input plumbing. Filling the editor background *under*
+  already-typed text needs a separate relative-placement background anchored to
+  the known cursor/terminal geometry; placeholder tails intentionally only occupy
+  cells that are otherwise spaces so they do not overwrite typed text.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows.

@@ -498,7 +498,6 @@ export default function piGraphicsExtension(pi) {
   }
 
   function replaceEditorCursorChrome(line) {
-    if (editorStyle() !== "unicode") return line;
     const text = String(line || "");
     if (!text.includes("\x1b[7m")) return line;
     const cursor = buildEditorCursorCell();
