@@ -11,17 +11,17 @@ import {
   buildPngVirtualPlacementCommand,
   bufferToBase64,
   shouldUseUnicodePlaceholders,
-  stableKittyImageId,
 } from "../kitty-graphics.js";
-
-const PLACEMENT_ID_BASE = 0xa1;
+import {
+  piGraphicsImageId,
+  piGraphicsPlacementId,
+} from "./id-space.js";
 
 export function makeState() {
   return {
     ownedImageIds: new Set(),
     transmittedImageIds: new Set(),
     placementByImage: new Map(),
-    placementCounter: 0,
     config: {
       passthrough: "auto",
       placementMode: "auto",
@@ -34,17 +34,14 @@ function trackOwned(state, id) {
   return id;
 }
 
-function nextPlacementId(state) {
-  state.placementCounter = (state.placementCounter + 1) % 0xffffff;
-  return PLACEMENT_ID_BASE + state.placementCounter;
+function placementIdForName(name) {
+  return piGraphicsPlacementId(`placement.${name}`);
 }
 
 export function buildPlacement(state, { name, png, columns, rows, width, caption, zIndex } = {}) {
-  const imageId = trackOwned(state, stableKittyImageId(`agent-utils.pi-graphics.${name}`));
+  const imageId = trackOwned(state, piGraphicsImageId(name));
   const alreadyTransmitted = state.transmittedImageIds.has(imageId);
-  const placementId = alreadyTransmitted
-    ? (state.placementByImage.get(imageId) ?? nextPlacementId(state))
-    : nextPlacementId(state);
+  const placementId = state.placementByImage.get(imageId) ?? placementIdForName(name);
   if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
   const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementCommand({
     imageId,
@@ -68,11 +65,9 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
 }
 
 export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, rows, width, caption, zIndex, autoLoop = true } = {}) {
-  const imageId = trackOwned(state, stableKittyImageId(`agent-utils.pi-graphics.${name}`));
+  const imageId = trackOwned(state, piGraphicsImageId(name));
   const alreadyTransmitted = state.transmittedImageIds.has(imageId);
-  const placementId = alreadyTransmitted
-    ? (state.placementByImage.get(imageId) ?? nextPlacementId(state))
-    : nextPlacementId(state);
+  const placementId = state.placementByImage.get(imageId) ?? placementIdForName(name);
   if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
   const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementAnimation({
     imageId,

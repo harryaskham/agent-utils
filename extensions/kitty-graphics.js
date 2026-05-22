@@ -556,6 +556,15 @@ export function stableKittyImageId(input) {
   return (hash >>> 1) || 1;
 }
 
+export function stableKittyPlacementId(input) {
+  // Unicode placeholders encode placement ids through 24-bit underline color.
+  // Allocate from the high half of that space so agent-utils placements do not
+  // overlap conventional small placement ids (1, 7, 0xa1, etc.) used by other
+  // kitty graphics examples/tools.
+  const low23 = stableKittyImageId(input) % 0x800000;
+  return 0x800000 + low23;
+}
+
 export function estimateRowsForImage({ imageWidth, imageHeight, columns, maxRows = 24, minRows = 4 } = {}) {
   if (!imageWidth || !imageHeight || !columns) return Math.max(minRows, Math.min(maxRows, 16));
   // Terminal cells are usually about twice as tall as they are wide in pixel

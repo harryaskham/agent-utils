@@ -44,6 +44,9 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.equal(out.length, 3);
   assert.notEqual(out[0], lines[0]);
   assert.ok(emitted.some((c) => /a=t,f=100,t=d/.test(c)), "must upload strip + anchor");
+  const placementIds = [...emitted.join("").matchAll(/(?:^|,)p=(\d+)/g)].map((match) => Number(match[1]));
+  assert.ok(placementIds.length >= 3, "must allocate anchor and relative placements");
+  assert.ok(placementIds.every((id) => id >= 0x800000 && id < 0x1000000), "box chrome placements should live in high 24-bit collision-resistant space");
   // Second pass with same instanceId/lines should reuse cached uploads (no new a=t).
   const emittedBeforeSecond = emitted.length;
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines });

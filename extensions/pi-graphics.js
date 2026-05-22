@@ -42,7 +42,6 @@ import {
   buildPngCursorAnimationUpload,
   buildRelativePlacementCommand,
   bufferToBase64,
-  stableKittyImageId,
   buildScopedDeleteCommand,
   detectKittyPassthroughMode,
   serializeKittyGraphicsCommand,
@@ -55,6 +54,10 @@ import {
   installBoxChromeMonkeyPatch,
 } from "./pi-graphics/box-chrome.js";
 import { getThemeColorHex, getThemeColorRgb } from "./pi-graphics/theme-colors.js";
+import {
+  piGraphicsImageId,
+  piGraphicsPlacementId,
+} from "./pi-graphics/id-space.js";
 import {
   renderEditorBoxApng,
   renderEditorBorderFramesPngs,
@@ -308,10 +311,10 @@ export default function piGraphicsExtension(pi) {
     });
     const anchorKey = `editor-border-anchor-${edge}-${cols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
     const animKey = `editor-border-anim-${edge}-${cols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
-    const anchorImageId = stableKittyImageId(`agent-utils.pi-graphics.${anchorKey}`);
-    const animImageId = stableKittyImageId(`agent-utils.pi-graphics.${animKey}`);
-    const anchorPlacementId = 0xa0 + (edge === "bottom" ? 2 : 1);
-    const animPlacementId = 0xb0 + (edge === "bottom" ? 2 : 1);
+    const anchorImageId = piGraphicsImageId(anchorKey);
+    const animImageId = piGraphicsImageId(animKey);
+    const anchorPlacementId = piGraphicsPlacementId(`editor-border-anchor-placement-${edge}-${cols}`);
+    const animPlacementId = piGraphicsPlacementId(`editor-border-anim-placement-${edge}-${cols}`);
     ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
     ensureRelativeAnimUploaded({
       animImageId,

@@ -10,9 +10,12 @@ import {
   buildRelativePlacementCommand,
   serializeKittyGraphicsChunks,
   serializeKittyGraphicsCommand,
-  stableKittyImageId,
   transparentPixelPngBase64,
 } from "../kitty-graphics.js";
+import {
+  piGraphicsImageId,
+  piGraphicsPlacementId,
+} from "./id-space.js";
 import { encodeRgbaPng, makeCanvas } from "./png-renderer.js";
 import { getThemeColorRgb } from "./theme-colors.js";
 
@@ -179,16 +182,10 @@ export function createBoxChromeRuntime({
   // Cache: stripKey -> imageId already uploaded
   const uploadedStrips = new Set();
   const anchorsUploaded = new Set();
-  let anchorCounter = 0;
-
-  function nextAnchorPlacementId() {
-    anchorCounter = (anchorCounter + 1) % 0xffffff;
-    return 0xc000 + anchorCounter;
-  }
 
   function ensureStripUploaded({ kind, type, width, colorRgb }) {
     const stripKey = `box-strip-${type}-${kind}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
-    const imageId = stableKittyImageId(`agent-utils.pi-graphics.${stripKey}`);
+    const imageId = piGraphicsImageId(stripKey);
     if (uploadedStrips.has(imageId)) return imageId;
     const { png } = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb });
     const upload = serializeKittyGraphicsChunks({
@@ -205,8 +202,9 @@ export function createBoxChromeRuntime({
   }
 
   function ensureAnchor({ instanceId, rowIndex }) {
-    const anchorImageId = stableKittyImageId(`agent-utils.pi-graphics.box-anchor.${instanceId}.${rowIndex}`);
-    const placementId = (instanceId * 31 + rowIndex + 7) & 0xffffff || 1;
+    const anchorKey = `box-anchor.${instanceId}.${rowIndex}`;
+    const anchorImageId = piGraphicsImageId(anchorKey);
+    const placementId = piGraphicsPlacementId(`box-anchor-placement.${instanceId}.${rowIndex}`);
     if (anchorsUploaded.has(anchorImageId)) return { anchorImageId, anchorPlacementId: placementId };
     const upload = serializeKittyGraphicsChunks({
       a: "t",
@@ -232,7 +230,7 @@ export function createBoxChromeRuntime({
   }
 
   function ensureRelativeStrip({ stripImageId, anchorImageId, anchorPlacementId, instanceId, rowIndex, width }) {
-    const relPlacementId = (((stripImageId ^ anchorPlacementId) + instanceId * 17 + rowIndex) & 0xffffff) || 1;
+    const relPlacementId = piGraphicsPlacementId(`box-relative-strip.${stripImageId}.${anchorPlacementId}.${instanceId}.${rowIndex}.${width}`);
     const cmd = buildRelativePlacementCommand({
       imageId: stripImageId,
       placementId: relPlacementId,

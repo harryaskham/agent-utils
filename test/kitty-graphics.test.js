@@ -13,6 +13,7 @@ import {
   buildScopedDeleteCommand,
   serializeKittyGraphicsCommand,
   shouldUseUnicodePlaceholders,
+  stableKittyPlacementId,
   viewportHalfRowLimit,
   clampRowsToViewportHalf,
 } from "../extensions/kitty-graphics.js";
@@ -30,6 +31,17 @@ test("tmux passthrough wraps APC and doubles inner escape bytes", () => {
   );
 
   assert.equal(serialized, `${ESC}Ptmux;${ESC}${ESC}_Ga=p,i=42,q=2${ESC}${ESC}\\${ESC}\\`);
+});
+
+test("stable placement ids use high 24-bit space", () => {
+  const first = stableKittyPlacementId("agent-utils.pi-graphics.test");
+  const second = stableKittyPlacementId("agent-utils.pi-graphics.test");
+  const other = stableKittyPlacementId("agent-utils.pi-graphics.other");
+
+  assert.equal(first, second);
+  assert.notEqual(first, other);
+  assert.ok(first >= 0x800000);
+  assert.ok(first < 0x1000000);
 });
 
 test("virtual placement command transmits PNG data without cursor placement", () => {

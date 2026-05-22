@@ -36,6 +36,11 @@ import {
   renderToText,
 } from "../extensions/pi-graphics/runtime.js";
 import {
+  piGraphicsImageId,
+  piGraphicsIdScope,
+  piGraphicsPlacementId,
+} from "../extensions/pi-graphics/id-space.js";
+import {
   buildAutoPulseWidget,
   buildEditorAuraWidget,
   buildPiGraphicsAnsiSceneText,
@@ -1306,6 +1311,22 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.doesNotMatch(source, /PI_GRAPHICS_SHOWCASE/);
 });
 
+test("pi graphics scoped ids are stable within a process but salted by namespace", () => {
+  const envA = { PI_GRAPHICS_ID_NAMESPACE: "session-a" };
+  const envB = { PI_GRAPHICS_ID_NAMESPACE: "session-b" };
+  assert.equal(piGraphicsIdScope({ env: envA, pid: 11, cwd: "/repo" }), "session-a");
+  assert.equal(
+    piGraphicsImageId("editor-border", { env: envA, pid: 11, cwd: "/repo" }),
+    piGraphicsImageId("editor-border", { env: envA, pid: 99, cwd: "/elsewhere" }),
+  );
+  assert.notEqual(
+    piGraphicsImageId("editor-border", { env: envA, pid: 11, cwd: "/repo" }),
+    piGraphicsImageId("editor-border", { env: envB, pid: 11, cwd: "/repo" }),
+  );
+  const placement = piGraphicsPlacementId("editor-border", { env: envA, pid: 11, cwd: "/repo" });
+  assert.ok(placement >= 0x800000 && placement < 0x1000000);
+});
+
 test("buildPlacement registers the image id and emits a virtual placement command", () => {
   const state = makeState();
   const enclosure = renderPromptEnclosure({ columns: 4 });
@@ -1316,6 +1337,7 @@ test("buildPlacement registers the image id and emits a virtual placement comman
     rows: enclosure.rows,
   });
   assert.ok(placement.imageId > 0, "image id must be a positive integer");
+  assert.ok(placement.placementId >= 0x800000 && placement.placementId < 0x1000000, "placement id should avoid low conventional kitty ids");
   assert.ok(state.ownedImageIds.has(placement.imageId), "extension state must track the new image id");
   assert.match(placement.transmit, /\x1b_G/);
   assert.match(placement.transmit, /a=T/);
