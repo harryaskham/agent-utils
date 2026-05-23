@@ -94,7 +94,8 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   const beforeResize = emitted.length;
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines: ["first row wider", "second row wider", "third row wider"], renderWidth: 24 });
   const resizeCmds = emitted.slice(beforeResize).join("");
-  assert.match(resizeCmds, /a=d,d=p/, "resized rows should delete stale relative placements before replacing them");
+  assert.match(resizeCmds, /a=d,d=i,i=\d+,p=\d+/, "resized rows should delete stale relative placements by image id plus placement id");
+  assert.doesNotMatch(resizeCmds, /a=d,d=p/, "d=p is cell-intersection deletion in the Kitty protocol, not placement-id deletion");
 });
 
 test("box chrome caps oversized render widths before emitting kitty placements", () => {

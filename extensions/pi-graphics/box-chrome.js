@@ -2924,7 +2924,7 @@ export function createBoxChromeRuntime({
     const relPlacementId = piGraphicsPlacementId(`box-relative-strip.${anchorRowKey}`);
     const previous = relativeByAnchorRow.get(anchorRowKey);
     if (previous && (previous.stripImageId !== stripImageId || previous.relPlacementId !== relPlacementId)) {
-      emitGraphicsCommand(buildDeleteCommand({ imageId: previous.stripImageId, placementId: previous.relPlacementId, deleteMode: "p", passthrough }));
+      emitGraphicsCommand(buildDeleteCommand({ imageId: previous.stripImageId, placementId: previous.relPlacementId, deleteMode: "i", passthrough }));
     }
     const cmd = buildRelativePlacementCommand({
       imageId: stripImageId,
