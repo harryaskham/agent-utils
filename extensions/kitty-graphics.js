@@ -222,6 +222,7 @@ export function buildPngDisplayCommand({
     c: columns,
     r: rows,
     z: zIndex,
+    C: transmitOnly ? undefined : 1,
     q: quiet,
   };
   const payload = pngBase64 ?? textToBase64(filePath);

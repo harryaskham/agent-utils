@@ -8,6 +8,7 @@ import {
   buildKittyUnicodePlaceholderCell,
   buildKittyUnicodePlaceholderLines,
   buildPngCursorAnimationUpload,
+  buildPngDisplayCommand,
   buildPngVirtualPlacementAnimation,
   buildPngVirtualPlacementCommand,
   buildDeleteByZIndexBandCommand,
@@ -61,6 +62,19 @@ test("virtual placement command transmits PNG data without cursor placement", ()
 
   assert.equal(serialized, `${ESC}_Ga=T,f=100,t=d,i=42,p=9,U=1,c=2,r=3,q=2;YWJj${ESC}\\`);
   assert.doesNotMatch(serialized, /z=/);
+});
+
+test("cursor display command suppresses protocol cursor movement", () => {
+  const serialized = buildPngDisplayCommand({
+    imageId: 42,
+    placementId: 9,
+    pngBase64: "YWJj",
+    columns: 2,
+    rows: 3,
+    passthrough: "none",
+  });
+
+  assert.equal(serialized, `${ESC}_Ga=T,f=100,t=d,i=42,p=9,c=2,r=3,C=1,q=2;YWJj${ESC}\\`);
 });
 
 test("virtual placement command serializes zIndex below background threshold", () => {
