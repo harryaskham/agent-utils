@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -77,7 +77,7 @@ export const BOX_TYPE_EFFECTS = {
   custom: "constellation",
   skill: "rune",
   branch: "signal",
-  compaction: "signal",
+  compaction: "fold",
   footer: "holo",
   loader: "signal",
   border: "halo",
@@ -497,6 +497,30 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 20; x < w; x += 45) {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 15) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 1, stroke, 24);
+    }
+  } else if (effect === "fold") {
+    const crease = [
+      Math.min(255, Math.round(color[0] * 0.40 + 95)),
+      Math.min(255, Math.round(color[1] * 0.55 + 85)),
+      Math.min(255, Math.round(color[2] * 0.78 + 55)),
+    ];
+    const highlight = [
+      Math.min(255, Math.round(color[0] * 0.72 + 70)),
+      Math.min(255, Math.round(color[1] * 0.72 + 70)),
+      Math.min(255, Math.round(color[2] * 0.55 + 110)),
+    ];
+    // Fold chrome for compaction summaries: accordion creases and tiny page
+    // tabs make compressed context look intentionally folded away. It stays
+    // sparse and rect-only, so old summaries don't become expensive to render.
+    for (let x = 4; x < w; x += 22) {
+      const peak = Math.max(1, Math.min(h - 3, 2 + (Math.floor(x / 22) % Math.max(1, h - 4))));
+      fillRectAlpha(pixels, w, x, peak, 1, Math.min(8, h - peak), crease, 64);
+      fillRectAlpha(pixels, w, x + 1, peak, Math.min(10, w - x - 1), 1, highlight, 46);
+      if (peak + 5 < h) fillRectAlpha(pixels, w, x + 4, peak + 5, Math.min(8, w - x - 4), 1, crease, 38);
+    }
+    for (let x = 14; x < w; x += 44) {
+      const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.68) - (Math.floor(x / 44) % 2)));
+      fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 2, highlight, 38);
     }
   }
 }
