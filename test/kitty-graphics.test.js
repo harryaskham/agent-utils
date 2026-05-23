@@ -76,6 +76,37 @@ test("virtual placement command serializes zIndex below background threshold", (
   assert.match(serialized, /z=-1073741825/);
 });
 
+test("direct transfer chunks stay within kitty protocol size limits", () => {
+  const oversized = buildPngVirtualPlacementCommand({
+    imageId: 42,
+    placementId: 9,
+    pngBase64: "A".repeat(5000),
+    columns: 2,
+    rows: 3,
+    passthrough: "none",
+    chunkSize: 8192,
+  });
+  const oversizedChunks = [...oversized.matchAll(/\x1b_G([^;]*);([^\x1b]*)\x1b\\/g)];
+  assert.equal(oversizedChunks.length, 2, "payload above 4096 bytes must be chunked even when config asks for larger chunks");
+  assert.match(oversizedChunks[0][1], /m=1/);
+  assert.equal(oversizedChunks[0][2].length, 4096);
+  assert.match(oversizedChunks[1][1], /m=0/);
+  assert.ok(oversizedChunks.every((chunk) => chunk[2].length <= 4096));
+
+  const odd = buildPngVirtualPlacementCommand({
+    imageId: 42,
+    placementId: 9,
+    pngBase64: "A".repeat(1100),
+    columns: 2,
+    rows: 3,
+    passthrough: "none",
+    chunkSize: 513,
+  });
+  const oddChunks = [...odd.matchAll(/\x1b_G([^;]*);([^\x1b]*)\x1b\\/g)];
+  assert.equal(oddChunks[0][2].length, 512, "non-final chunks must be rounded to a multiple of 4");
+  assert.ok(oddChunks.slice(0, -1).every((chunk) => chunk[2].length % 4 === 0));
+});
+
 test("virtual placement animation follows kitty loop semantics", () => {
   const pngHeader = Buffer.alloc(24);
   Buffer.from("89504e470d0a1a0a", "hex").copy(pngHeader, 0);
@@ -122,6 +153,25 @@ test("cursor animation upload configures frame gaps without client-side frame se
   assert.match(serialized, /_Ga=a,i=77,r=1,z=33,q=2/);
   assert.doesNotMatch(serialized, /_Ga=a,i=77,c=/);
   assert.doesNotMatch(serialized, /s=3/);
+});
+
+test("chunked animation frame continuations keep a=f", () => {
+  const frame = "A".repeat(1300);
+  const serialized = buildPngCursorAnimationUpload({
+    imageId: 77,
+    pngBases: ["YQ==", frame],
+    delaysMs: 33,
+    passthrough: "none",
+    chunkSize: 512,
+  });
+
+  const frameCommands = [...serialized.matchAll(/\x1b_G([^;]*);/g)]
+    .map((match) => match[1])
+    .filter((control) => control.includes("a=f") || control.includes("m="));
+  assert.ok(frameCommands.length >= 3, "test payload should force chunked frame transfer");
+  assert.match(frameCommands[0], /a=f,f=100,t=d,i=77,z=33,q=2,m=1/);
+  assert.ok(frameCommands.slice(1).every((control) => /(?:^|,)a=f(?:,|$)/.test(control)), "every animation frame continuation must repeat a=f");
+  assert.ok(frameCommands.slice(1).every((control) => /(?:^|,)m=[01](?:,|$)/.test(control)), "continuations keep chunk markers");
 });
 
 test("animation loop command uses terminal-managed infinite playback", () => {

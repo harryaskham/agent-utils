@@ -172,8 +172,14 @@ export function chunkBase64(payloadBase64, chunkSize = DEFAULT_CHUNK_SIZE) {
   return chunks;
 }
 
+function normalizeChunkSize(value = DEFAULT_CHUNK_SIZE) {
+  const requested = Math.trunc(Number(value) || DEFAULT_CHUNK_SIZE);
+  const clamped = Math.max(512, Math.min(DEFAULT_CHUNK_SIZE, requested));
+  return clamped - (clamped % 4);
+}
+
 export function serializeKittyGraphicsChunks(control, payloadBase64 = "", options = {}) {
-  const chunkSize = Math.max(512, Math.trunc(options.chunkSize ?? DEFAULT_CHUNK_SIZE));
+  const chunkSize = normalizeChunkSize(options.chunkSize ?? DEFAULT_CHUNK_SIZE);
   const chunks = chunkBase64(payloadBase64, chunkSize);
   if (chunks.length <= 1) {
     return serializeKittyGraphicsCommand(control, payloadBase64, options);
@@ -183,6 +189,10 @@ export function serializeKittyGraphicsChunks(control, payloadBase64 = "", option
     .map((chunk, index) => {
       const more = index < chunks.length - 1 ? 1 : 0;
       const chunkControl = index === 0 ? { ...control, m: more } : { m: more };
+      if (index > 0 && control.a === "f") {
+        chunkControl.a = "f";
+        if (control.q !== undefined) chunkControl.q = control.q;
+      }
       return serializeKittyGraphicsCommand(chunkControl, chunk, options);
     })
     .join("");

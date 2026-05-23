@@ -1001,7 +1001,7 @@ function applyConfig(state, config = {}) {
   if (["auto", "tmux", "none"].includes(config.passthrough)) state.config.passthrough = config.passthrough;
   if (["auto", "unicode", "cursor"].includes(config.placementMode)) state.config.placementMode = config.placementMode;
   if (config.placementId !== undefined) state.config.placementId = clampInteger(config.placementId, state.config.placementId, 1, 2147483647);
-  if (config.chunkSize !== undefined) state.config.chunkSize = clampInteger(config.chunkSize, state.config.chunkSize, 512, 65536);
+  if (config.chunkSize !== undefined) state.config.chunkSize = clampInteger(config.chunkSize, state.config.chunkSize, 512, 4096);
   state.currentCommand = undefined;
 }
 
