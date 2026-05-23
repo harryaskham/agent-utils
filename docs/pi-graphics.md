@@ -349,8 +349,8 @@ displayed using kitty Unicode placeholder cells, so:
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
   `metronome`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `orbit`,
   `rune`, `fold`, `lantern`, `nebula`, `waveform`, `ribbon`, `aperture`, `dial`,
-  `slider`, `caliper`, `mosaic`, `keystone`, `badge`, `compass`, `prompt`, and
-  `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
+  `slider`, `caliper`, `mosaic`, `keyring`, `keystone`, `badge`, `compass`, `prompt`,
+  and `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
   box strips. Thinking blocks are detected from assistant message content and get
   warm lantern slats, assistant surfaces get illuminated manuscript margins, skill/custom-TUI
   surfaces get compact rune sigils, tool surfaces get schematic bus traces and pads,
@@ -359,8 +359,9 @@ displayed using kitty Unicode placeholder cells, so:
   static metronome beat bars, compaction summaries get accordion fold creases,
   agent/mascot surfaces get static orbit arcs and satellite pips, custom/theme surfaces
   get sparse constellation nodes, user surfaces get tactile woven thread strokes,
-  user-selector surfaces get badge-like identity plates, login/OAuth surfaces get
-  keystone gateway marks, selector surfaces get directional compass ticks, image
+  user-selector surfaces get badge-like identity plates, login surfaces get
+  keystone gateway marks, OAuth provider selectors get keyring token-exchange marks,
+  selector surfaces get directional compass ticks, image
   surfaces get shutter-like aperture fragments, editor surfaces get slim
   caret beams, border surfaces get beveled chamfer cuts, input surfaces get a
   lightweight prism-facet glass treatment, overlay surfaces get gauzy veil folds,

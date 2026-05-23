@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -86,7 +86,7 @@ export const BOX_TYPE_EFFECTS = {
   selector: "compass",
   login: "keystone",
   model: "dial",
-  oauth: "keystone",
+  oauth: "keyring",
   session: "ribbon",
   settings: "slider",
   image: "aperture",
@@ -1038,6 +1038,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 12; x < w; x += 40) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(14, w - x), 1, tile, 24);
       fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(12, w - x - 5), 1, grout, 22);
+    }
+  } else if (effect === "keyring") {
+    const ring = [
+      Math.min(255, Math.round(color[0] * 0.58 + 88)),
+      Math.min(255, Math.round(color[1] * 0.50 + 118)),
+      Math.min(255, Math.round(color[2] * 0.72 + 72)),
+    ];
+    const tooth = [
+      Math.min(255, Math.round(color[0] * 0.78 + 58)),
+      Math.min(255, Math.round(color[1] * 0.62 + 82)),
+      Math.min(255, Math.round(color[2] * 0.42 + 132)),
+    ];
+    // Keyring chrome for OAuth provider selectors: repeated ring segments and
+    // tiny key teeth distinguish token handshakes from login gateways without
+    // provider logos, glyphs, masks, or sensitive token-like imagery.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 6; x < w; x += 30) {
+      const y = Math.max(1, Math.min(h - 3, mid - 2 + (Math.floor(x / 30) % 3)));
+      fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 1, ring, 36);
+      fillRectAlpha(pixels, w, x + 1, y + 2, Math.min(7, w - x - 1), 1, ring, 30);
+      if (x + 12 < w) fillRectAlpha(pixels, w, x + 12, y, Math.min(9, w - x - 12), 1, tooth, 28);
+      if (x + 19 < w) fillRectAlpha(pixels, w, x + 19, Math.min(h - 2, y + 2), 2, 3, tooth, 36);
+    }
+    for (let x = 20; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 2, Math.min(8, h - 2), ring, 24);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(12, w - x - 5), 1, tooth, 26);
     }
   } else if (effect === "keystone") {
     const arch = [
