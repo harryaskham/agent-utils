@@ -66,13 +66,13 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
   thinking: "nebula",
   tool: "blueprint",
-  bash: "blueprint",
+  bash: "prompt",
   user: "weave",
   custom: "constellation",
   skill: "rune",
@@ -417,6 +417,30 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 16; x < w; x += 52) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(4, h - 1), needle, 38);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(12, w - x - 3), 1, ring, 22);
+    }
+  } else if (effect === "prompt") {
+    const prompt = [
+      Math.min(255, Math.round(color[0] * 0.50 + 120)),
+      Math.min(255, Math.round(color[1] * 0.78 + 46)),
+      Math.min(255, Math.round(color[2] * 0.56 + 100)),
+    ];
+    const cursor = [
+      Math.min(255, Math.round(color[0] * 0.78 + 62)),
+      Math.min(255, Math.round(color[1] * 0.52 + 108)),
+      Math.min(255, Math.round(color[2] * 0.42 + 134)),
+    ];
+    // Prompt chrome for bash panes: shell rails and cursor blocks suggest a
+    // live terminal without blinking or streaming animation. Fixed sparse marks
+    // keep command-output chrome cheap and cacheable.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 4; x < w; x += 21) {
+      const y = Math.max(1, Math.min(h - 2, mid + (Math.floor(x / 21) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(10, w - x), 1, prompt, 42);
+      if (x + 12 < w) fillRectAlpha(pixels, w, x + 12, Math.max(1, y - 2), 2, 4, cursor, 36);
+    }
+    for (let x = 15; x < w; x += 49) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(12, w - x), 1, cursor, 24);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(10, w - x - 4), 1, prompt, 22);
     }
   } else if (effect === "blueprint") {
     const rule = [

@@ -349,12 +349,12 @@ displayed using kitty Unicode placeholder cells, so:
   `contour`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`, `metronome`,
   `signal`, `halo`, `caret`, `chamfer`, `constellation`, `orbit`, `rune`, `fold`,
   `nebula`, `waveform`, `ribbon`, `aperture`, `caliper`, `mosaic`, `keystone`,
-  `badge`, and `compass`) and caches both uploads and relative placements so ordinary
-  rerenders do not re-place identical box strips. Thinking blocks are detected from
-  assistant message content and get sparse nebula mist lanes, assistant surfaces get
-  calm topographic contour bands, skill/custom-TUI surfaces get compact rune sigils,
-  tool/bash surfaces get sparse blueprint drafting rules, tree surfaces get branching
-  dendrite strokes, branch surfaces get interlaced braid strands, loader surfaces get
+  `badge`, `compass`, and `prompt`) and caches both uploads and relative placements
+  so ordinary rerenders do not re-place identical box strips. Thinking blocks are
+  detected from assistant message content and get sparse nebula mist lanes, assistant
+  surfaces get calm topographic contour bands, skill/custom-TUI surfaces get compact
+  rune sigils, tool surfaces get sparse blueprint drafting rules, bash surfaces get
+  shell prompt rails, tree surfaces get branching dendrite strokes, branch surfaces get interlaced braid strands, loader surfaces get
   static metronome beat bars, compaction summaries get accordion fold creases,
   agent/mascot surfaces get static orbit arcs and satellite pips, custom/theme surfaces
   get sparse constellation nodes, user surfaces get tactile woven thread strokes,
