@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -92,7 +92,7 @@ export const BOX_TYPE_EFFECTS = {
   image: "lens",
   theme: "palette",
   thinkingSelector: "choice",
-  tree: "dendrite",
+  tree: "vine",
   userSelector: "badge",
   agent: "orbit",
   mascot: "crest",
@@ -541,6 +541,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, y, 5, 1, rule, 44);
       fillRectAlpha(pixels, w, x + 2, y - 2, 1, 5, rule, 36);
     }
+  } else if (effect === "vine") {
+    const stem = [
+      Math.min(255, Math.round(color[0] * 0.42 + 82)),
+      Math.min(255, Math.round(color[1] * 0.78 + 56)),
+      Math.min(255, Math.round(color[2] * 0.46 + 118)),
+    ];
+    const leaf = [
+      Math.min(255, Math.round(color[0] * 0.30 + 72)),
+      Math.min(255, Math.round(color[1] * 0.70 + 74)),
+      Math.min(255, Math.round(color[2] * 0.66 + 82)),
+    ];
+    const joint = [
+      Math.min(255, Math.round(color[0] * 0.70 + 58)),
+      Math.min(255, Math.round(color[1] * 0.50 + 118)),
+      Math.min(255, Math.round(color[2] * 0.78 + 62)),
+    ];
+    // Vine chrome for tree selectors: sparse stems, leaf pins, and route joints
+    // suggest branching navigation without drawing a graph layout. Fixed-step
+    // rectangles stay deterministic, cached, and PNG-friendly.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 6; x < w; x += 28) {
+      const lift = Math.floor(x / 28) % 3;
+      const y = Math.max(1, Math.min(h - 3, mid + lift - 1));
+      fillRectAlpha(pixels, w, x, Math.max(1, top), 1, Math.min(bottom - top + 1, h - top), stem, 30);
+      fillRectAlpha(pixels, w, x, y, Math.min(13, w - x), 1, stem, 36);
+      if (x + 7 < w) fillRectAlpha(pixels, w, x + 7, Math.max(1, y - 2), 4, 2, leaf, 34);
+      if (x + 13 < w) fillRectAlpha(pixels, w, x + 13, Math.min(h - 2, y + 2), 2, 2, joint, 38);
+    }
+    for (let x = 20; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 4), Math.min(15, w - x), 1, stem, 22);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, bottom), Math.min(8, w - x - 4), 1, leaf, 24);
+    }
   } else if (effect === "dendrite") {
     const branch = [
       Math.min(255, Math.round(color[0] * 0.48 + 84)),
@@ -552,9 +586,9 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.62 + 88)),
       Math.min(255, Math.round(color[2] * 0.82 + 62)),
     ];
-    // Dendrite chrome for tree/file panes: small branching strokes suggest a
-    // navigable hierarchy while staying static and sparse. It avoids full grid
-    // fills and font glyphs, keeping cached tree strips cheap to compress.
+    // Dendrite remains available as an explicit tree variant: small branching
+    // strokes suggest hierarchy while staying static and sparse. It avoids full
+    // grid fills and font glyphs, keeping cached tree strips cheap to compress.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 6; x < w; x += 25) {
       const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 25) % 3) - 1));
