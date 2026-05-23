@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -79,7 +79,7 @@ export const BOX_TYPE_EFFECTS = {
   branch: "braid",
   compaction: "fold",
   footer: "waveform",
-  loader: "signal",
+  loader: "metronome",
   border: "halo",
   input: "prism",
   editor: "halo",
@@ -420,6 +420,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 16; x < w; x += 48) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(13, w - x), 1, strand, 24);
       fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, mid + 5), Math.min(11, w - x - 6), 1, shadow, 22);
+    }
+  } else if (effect === "metronome") {
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.68 + 76)),
+      Math.min(255, Math.round(color[1] * 0.76 + 52)),
+      Math.min(255, Math.round(color[2] * 0.48 + 126)),
+    ];
+    const rest = [
+      Math.min(255, Math.round(color[0] * 0.24 + 58)),
+      Math.min(255, Math.round(color[1] * 0.54 + 82)),
+      Math.min(255, Math.round(color[2] * 0.84 + 60)),
+    ];
+    // Metronome chrome for loader surfaces: static beat bars and small timing
+    // pips imply progress cadence without client timers or APNG. The marks are
+    // sparse and stride-based so loader strips stay cheap and low entropy.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 6; x < w; x += 18) {
+      const beat = Math.floor(x / 18) % 4;
+      const height = beat === 0 ? 7 : beat === 2 ? 5 : 3;
+      const y = Math.max(1, Math.min(h - 2, mid - Math.floor(height / 2)));
+      fillRectAlpha(pixels, w, x, y, 2, Math.min(height, h - y), beat === 0 ? tick : rest, beat === 0 ? 54 : 34);
+      if (x + 4 < w) fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 3), Math.min(7, w - x - 4), 1, tick, beat === 0 ? 30 : 22);
+    }
+    for (let x = 14; x < w; x += 45) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(10, w - x), 1, tick, 24);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(10, w - x - 5), 1, rest, 22);
     }
   } else if (effect === "signal") {
     const pulse = [
