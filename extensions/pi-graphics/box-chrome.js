@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -80,9 +80,9 @@ export const BOX_TYPE_EFFECTS = {
   compaction: "signal",
   footer: "holo",
   loader: "signal",
-  border: "glass",
+  border: "halo",
   input: "prism",
-  editor: "glass",
+  editor: "halo",
   selector: "glyph",
   login: "weave",
   model: "lattice",
@@ -395,6 +395,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 12; x < w; x += 55) {
       const y = Math.max(1, Math.min(h - 3, 2 + ((x * 5) % Math.max(1, h - 5))));
       fillRectAlpha(pixels, w, x, y, 1, 5, pulse, 38);
+    }
+  } else if (effect === "halo") {
+    const inner = [
+      Math.min(255, Math.round(color[0] * 0.58 + 105)),
+      Math.min(255, Math.round(color[1] * 0.70 + 75)),
+      Math.min(255, Math.round(color[2] * 0.80 + 70)),
+    ];
+    const outer = [
+      Math.min(255, Math.round(color[0] * 0.25 + 70)),
+      Math.min(255, Math.round(color[1] * 0.55 + 80)),
+      Math.min(255, Math.round(color[2] * 0.95 + 60)),
+    ];
+    // Halo chrome for editor/border surfaces: soft inner/outer guide rails and
+    // sparse corner blooms imply focus without repainting a dense glow field.
+    // Coarse rectangles keep generation predictable and cached PNGs compact.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    fillRectAlpha(pixels, w, 0, top, w, 1, inner, 28);
+    fillRectAlpha(pixels, w, 0, bottom, w, 1, outer, 22);
+    for (let x = 6; x < w; x += 29) {
+      const y = x % 2 ? top : bottom;
+      fillRectAlpha(pixels, w, x, y, Math.min(11, w - x), 1, x % 3 ? inner : outer, 38);
+    }
+    for (const x of [2, Math.max(2, w - 15)]) {
+      fillRectAlpha(pixels, w, x, Math.max(0, top - 1), Math.min(12, w - x), 2, inner, 46);
+      fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, bottom), Math.min(8, w - x - 2), 1, outer, 34);
     }
   }
 }

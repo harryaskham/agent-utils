@@ -346,17 +346,18 @@ displayed using kitty Unicode placeholder cells, so:
   kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `holo`, `lattice`,
-  `contour`, `weave`, `glyph`, `blueprint`, and `signal`) and caches both uploads
-  and relative placements so ordinary rerenders do not re-place identical box
-  strips. Thinking blocks are detected from assistant message content and use the
-  cloudy thought effect, assistant/skill/custom-TUI surfaces get calm topographic
-  contour bands, tool/bash/tree surfaces get sparse blueprint drafting rules,
-  branch/compaction/loader/agent surfaces get beacon-like signal pips, user/login/
-  OAuth surfaces get tactile woven thread strokes, selector/image/theme/mascot
-  surfaces get sparse graphical glyph marks, input/overlay surfaces get a lightweight
-  prism-facet glass treatment, header/footer/session surfaces get a sparse
-  holographic laminate, and model/settings/widget surfaces get a low-entropy
-  structural lattice. If a box moves or resizes, stale relative
+  `contour`, `weave`, `glyph`, `blueprint`, `signal`, and `halo`) and caches both
+  uploads and relative placements so ordinary rerenders do not re-place identical
+  box strips. Thinking blocks are detected from assistant message content and use
+  the cloudy thought effect, assistant/skill/custom-TUI surfaces get calm
+  topographic contour bands, tool/bash/tree surfaces get sparse blueprint drafting
+  rules, branch/compaction/loader/agent surfaces get beacon-like signal pips,
+  user/login/OAuth surfaces get tactile woven thread strokes, selector/image/theme/
+  mascot surfaces get sparse graphical glyph marks, editor/border surfaces get soft
+  focus halo rails, input/overlay surfaces get a lightweight prism-facet glass
+  treatment, header/footer/session surfaces get a sparse holographic laminate, and
+  model/settings/widget surfaces get a low-entropy structural lattice. If a box
+  moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension
