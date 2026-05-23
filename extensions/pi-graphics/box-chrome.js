@@ -66,13 +66,13 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "studio", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "recipe", "sigil", "rune", "workbench", "panel", "fold", "capsule", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "studio", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "recipe", "sigil", "rune", "workbench", "panel", "fold", "capsule", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "shell", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
   thinking: "candle",
   tool: "rig",
-  bash: "terminal",
+  bash: "shell",
   user: "note",
   custom: "studio",
   skill: "recipe",
@@ -757,6 +757,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 16; x < w; x += 52) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(4, h - 1), needle, 38);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(12, w - x - 3), 1, ring, 22);
+    }
+  } else if (effect === "shell") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.50 + 112)),
+      Math.min(255, Math.round(color[1] * 0.74 + 56)),
+      Math.min(255, Math.round(color[2] * 0.58 + 98)),
+    ];
+    const slot = [
+      Math.min(255, Math.round(color[0] * 0.76 + 68)),
+      Math.min(255, Math.round(color[1] * 0.48 + 120)),
+      Math.min(255, Math.round(color[2] * 0.44 + 132)),
+    ];
+    const status = [
+      Math.min(255, Math.round(color[0] * 0.30 + 88)),
+      Math.min(255, Math.round(color[1] * 0.68 + 68)),
+      Math.min(255, Math.round(color[2] * 0.86 + 46)),
+    ];
+    // Shell chrome for bash panes: prompt rails, command slots, and exit-status
+    // ticks suggest command execution without blinking cursors, streaming
+    // animation, glyph dependencies, graph layout, dense texture, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.27));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 4; x < w; x += 30) {
+      fillRectAlpha(pixels, w, x, top, Math.min(16, w - x), 1, rail, 32);
+      fillRectAlpha(pixels, w, x + 3, lower, Math.min(12, w - x - 3), 1, rail, 24);
+      fillRectAlpha(pixels, w, x + 12, Math.max(1, mid - 1), Math.min(9, w - x - 12), 2, slot, 34);
+      if (x + 23 < w) fillRectAlpha(pixels, w, x + 23, mid, 2, 2, status, 42);
+    }
+    for (let x = 18; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 3), 1, Math.min(8, h - 2), status, 30);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, lower + 1), Math.min(14, w - x - 4), 1, slot, 18);
     }
   } else if (effect === "terminal") {
     const rail = [
