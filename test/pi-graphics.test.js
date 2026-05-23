@@ -377,6 +377,20 @@ test("renderEditorCursorVline adds directional heat trail behind cursor motion",
   assert.ok(mirroredRightTrace[3] > mirroredLeftTrace[3] + 18, "leftward motion should leave a hotter trail to the right of the core");
 });
 
+test("renderEditorCursorVline adds heat frame brackets at high typing heat", () => {
+  const cool = renderEditorCursorVline({ cellWidthPx: 8, cellHeightPx: 16, columns: 6, rows: 3, heat: 0.05 });
+  const hot = renderEditorCursorVline({ cellWidthPx: 8, cellHeightPx: 16, columns: 6, rows: 3, heat: 1, trailCells: 3 });
+  const coolDecoded = decodePngRgba(cool.png);
+  const hotDecoded = decodePngRgba(hot.png);
+  const leftBracket = pixelAt(hotDecoded, 20, 8);
+  const rightBracket = pixelAt(hotDecoded, 34, 8);
+  const coolLeft = pixelAt(coolDecoded, 20, 8);
+  const emberCap = pixelAt(hotDecoded, 28, 7);
+  assert.ok(leftBracket[3] > coolLeft[3] + 60, "hot cursor should add a visible left bracket tick");
+  assert.ok(rightBracket[3] > 120, "hot cursor should add a visible right bracket tick");
+  assert.ok(emberCap[3] > 80, "hot cursor should add an ember cap above the core");
+});
+
 test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () => {
   const result = renderPromptEnclosure({ columns: 8, phase: 0.25 });
   assert.equal(result.columns, 8);

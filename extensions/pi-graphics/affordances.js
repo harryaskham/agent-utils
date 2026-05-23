@@ -196,6 +196,30 @@ export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightS
   fillRect(pixels, widthPx, coreX, coreTop, coreW, coreH, withAlpha(coreColor, Math.round(224 + safeHeat * 31)));
   fillRect(pixels, widthPx, Math.min(widthPx - 1, coreX + coreW), coreTop + 1, 1, Math.max(1, coreH - 2), withAlpha(glowColor, Math.round(96 + safeHeat * 90)));
   fillRect(pixels, widthPx, Math.max(0, coreX - 1), coreTop + 1, 1, Math.max(1, coreH - 2), withAlpha(coreColor, Math.round(82 + safeHeat * 72)));
+
+  if (cols > 1 && safeHeat > 0.28) {
+    const frameAlpha = Math.round(42 + safeHeat * 142);
+    const capAlpha = Math.round(34 + safeHeat * 120);
+    const flareAlpha = Math.round(Math.max(0, safeHeat - 0.62) * 230);
+    const bracketW = Math.max(2, Math.round(metrics.cellWidthPx * (0.42 + safeHeat * 0.14)));
+    const bracketH = Math.max(1, Math.round(metrics.cellHeightPx * 0.12));
+    const inset = Math.max(2, Math.round(metrics.cellWidthPx * (0.82 + safeHeat * 0.22)));
+    const leftX = Math.max(0, coreX - inset);
+    const rightX = Math.min(widthPx - bracketW, coreX + coreW + inset - bracketW);
+    const topY = Math.max(0, coreTop - bracketH - 1);
+    const bottomY = Math.min(heightPx - bracketH, coreTop + coreH + 1);
+    fillRect(pixels, widthPx, leftX, topY, bracketW, bracketH, withAlpha(glowColor, frameAlpha));
+    fillRect(pixels, widthPx, rightX, topY, bracketW, bracketH, withAlpha(glowColor, frameAlpha));
+    fillRect(pixels, widthPx, leftX, bottomY, bracketW, bracketH, withAlpha(coreColor, capAlpha));
+    fillRect(pixels, widthPx, rightX, bottomY, bracketW, bracketH, withAlpha(coreColor, capAlpha));
+    fillRect(pixels, widthPx, leftX, topY, 1, Math.max(1, Math.round(metrics.cellHeightPx * 0.42)), withAlpha(coreColor, Math.round(frameAlpha * 0.62)));
+    fillRect(pixels, widthPx, rightX + bracketW - 1, topY, 1, Math.max(1, Math.round(metrics.cellHeightPx * 0.42)), withAlpha(coreColor, Math.round(frameAlpha * 0.62)));
+    if (flareAlpha > 0) {
+      fillRect(pixels, widthPx, coreX - Math.max(1, Math.round(metrics.cellWidthPx * 0.5)), topY - 1, Math.max(2, coreW + Math.round(metrics.cellWidthPx)), 1, withAlpha(glowColor, flareAlpha));
+      fillRect(pixels, widthPx, coreX - Math.max(1, Math.round(metrics.cellWidthPx * 0.5)), bottomY + bracketH, Math.max(2, coreW + Math.round(metrics.cellWidthPx)), 1, withAlpha(glowColor, Math.round(flareAlpha * 0.72)));
+    }
+  }
+
   return {
     png: encodeRgbaPng(pixels, widthPx, heightPx),
     columns: cols,
