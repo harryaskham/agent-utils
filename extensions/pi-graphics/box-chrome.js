@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -84,7 +84,7 @@ export const BOX_TYPE_EFFECTS = {
   input: "prism",
   editor: "caret",
   selector: "compass",
-  login: "keystone",
+  login: "portal",
   model: "gauge",
   oauth: "keyring",
   session: "ledger",
@@ -1456,6 +1456,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 2, Math.min(8, h - 2), ring, 24);
       fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(12, w - x - 5), 1, tooth, 26);
     }
+  } else if (effect === "portal") {
+    const frame = [
+      Math.min(255, Math.round(color[0] * 0.50 + 104)),
+      Math.min(255, Math.round(color[1] * 0.66 + 74)),
+      Math.min(255, Math.round(color[2] * 0.60 + 96)),
+    ];
+    const step = [
+      Math.min(255, Math.round(color[0] * 0.30 + 76)),
+      Math.min(255, Math.round(color[1] * 0.72 + 54)),
+      Math.min(255, Math.round(color[2] * 0.46 + 126)),
+    ];
+    const glint = [
+      Math.min(255, Math.round(color[0] * 0.78 + 64)),
+      Math.min(255, Math.round(color[1] * 0.52 + 116)),
+      Math.min(255, Math.round(color[2] * 0.72 + 70)),
+    ];
+    // Portal chrome for login panels: sparse threshold frames, lock-step bars,
+    // and entry glints make authentication read as a controlled doorway without
+    // logos, glyphs, sensitive token imagery, masks, or animation.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 32) {
+      fillRectAlpha(pixels, w, x, top, Math.min(16, w - x), 1, frame, 34);
+      fillRectAlpha(pixels, w, x, top, 1, Math.min(8, h - top), frame, 30);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, top, 1, Math.min(8, h - top), frame, 26);
+      fillRectAlpha(pixels, w, x + 3, bottom, Math.min(12, w - x - 3), 1, step, 30);
+      fillRectAlpha(pixels, w, x + 6, Math.max(1, mid - 1), Math.min(9, w - x - 6), 1, glint, 28);
+      if (x + 12 < w) fillRectAlpha(pixels, w, x + 12, Math.min(h - 2, mid + 3), 2, 2, glint, 36);
+    }
+    for (let x = 18; x < w; x += 64) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(22, w - x), 1, frame, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(16, w - x - 8), 1, step, 18);
+    }
   } else if (effect === "keystone") {
     const arch = [
       Math.min(255, Math.round(color[0] * 0.44 + 106)),
@@ -1467,8 +1501,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.46 + 122)),
       Math.min(255, Math.round(color[2] * 0.50 + 118)),
     ];
-    // Keystone chrome for login/OAuth panels: sparse arch stones and small
-    // seal pips make authentication feel like a deliberate gateway. It stays
+    // Keystone remains available as an explicit gateway variant: sparse arch
+    // stones and small seal pips make authentication feel deliberate. It stays
     // static and low-entropy: short fixed-step rectangles, no glyph dependence.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 5; x < w; x += 22) {

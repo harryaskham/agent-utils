@@ -349,7 +349,7 @@ displayed using kitty Unicode placeholder cells, so:
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
   `metronome`, `hourglass`, `signal`, `halo`, `caret`, `bevel`, `chamfer`, `constellation`, `palette`, `orbit`, `crest`,
   `rune`, `panel`, `fold`, `archive`, `lantern`, `choice`, `nebula`, `waveform`, `marquee`, `ribbon`, `ledger`, `lens`, `aperture`, `gauge`, `dial`,
-  `slider`, `caliper`, `tile`, `mosaic`, `keyring`, `keystone`, `badge`, `compass`, `prompt`,
+  `slider`, `caliper`, `tile`, `mosaic`, `portal`, `keyring`, `keystone`, `badge`, `compass`, `prompt`,
   and `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
   box strips. Thinking blocks are detected from assistant message content and get
   warm lantern slats, thinking selector surfaces get stepped choice rails and decision ticks, assistant surfaces get illuminated manuscript margins, skill surfaces get compact rune sigils,
@@ -360,12 +360,12 @@ displayed using kitty Unicode placeholder cells, so:
   agent surfaces get static orbit arcs and satellite pips, mascot surfaces get crest plates and chevrons, custom surfaces
   get sparse constellation nodes, theme surfaces get palette chip bars and calibration ticks, user surfaces get tactile woven thread strokes,
   user-selector surfaces get badge-like identity plates, login surfaces get
-  keystone gateway marks, OAuth provider selectors get keyring token-exchange marks,
+  portal threshold frames and entry glints, OAuth provider selectors get keyring token-exchange marks,
   selector surfaces get directional compass ticks, image
   surfaces get lens focus brackets, glass glints, and crop-guide ticks, editor surfaces get slim
   caret beams, border surfaces get bevel planes, clipped-corner highlights, and shadow seams, input surfaces get a
   lightweight prism-facet glass treatment, overlay surfaces get frosted corner crystals and cold edge glints,
-  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse dashboard tiles, corner pins, and pane separators. `aperture` remains available as an explicit shutter variant, `chamfer` remains available as an explicit cut-corner border variant, `dial` remains available as an explicit instrument variant, and `mosaic` remains available as an explicit assembled-tile variant. If a box moves or resizes, stale relative
+  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse dashboard tiles, corner pins, and pane separators. `aperture` remains available as an explicit shutter variant, `chamfer` remains available as an explicit cut-corner border variant, `dial` remains available as an explicit instrument variant, `mosaic` remains available as an explicit assembled-tile variant, and `keystone` remains available as an explicit gateway variant. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension
