@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -79,7 +79,7 @@ export const BOX_TYPE_EFFECTS = {
   branch: "helix",
   compaction: "archive",
   footer: "ticker",
-  loader: "hourglass",
+  loader: "shuttle",
   border: "bevel",
   input: "facet",
   editor: "caret",
@@ -816,6 +816,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(10, w - x), 1, tick, 24);
       fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(10, w - x - 5), 1, rest, 22);
     }
+  } else if (effect === "shuttle") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.52 + 100)),
+      Math.min(255, Math.round(color[1] * 0.70 + 62)),
+      Math.min(255, Math.round(color[2] * 0.66 + 82)),
+    ];
+    const gate = [
+      Math.min(255, Math.round(color[0] * 0.30 + 126)),
+      Math.min(255, Math.round(color[1] * 0.56 + 104)),
+      Math.min(255, Math.round(color[2] * 0.84 + 48)),
+    ];
+    const pip = [
+      Math.min(255, Math.round(color[0] * 0.76 + 68)),
+      Math.min(255, Math.round(color[1] * 0.42 + 132)),
+      Math.min(255, Math.round(color[2] * 0.50 + 118)),
+    ];
+    // Shuttle chrome for loader surfaces: static launch rails, docking gates,
+    // and progress pips imply work-in-flight without timers, animation loops,
+    // dense texture, masks, glyphs, or repaint-driven state.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 4; x < w; x += 28) {
+      fillRectAlpha(pixels, w, x, top, Math.min(19, w - x), 1, rail, 30);
+      fillRectAlpha(pixels, w, x + 2, bottom, Math.min(17, w - x - 2), 1, rail, 24);
+      fillRectAlpha(pixels, w, x + 7, mid - 1, Math.min(7, w - x - 7), 3, gate, 36);
+      fillRectAlpha(pixels, w, x + 17, mid, 2, 2, pip, 48);
+    }
+    for (let x = 18; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(7, h - 2), gate, 34);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, bottom + 1), Math.min(16, w - x - 5), 1, pip, 20);
+    }
   } else if (effect === "hourglass") {
     const sand = [
       Math.min(255, Math.round(color[0] * 0.72 + 76)),
@@ -827,9 +859,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.55 + 105)),
       Math.min(255, Math.round(color[2] * 0.82 + 55)),
     ];
-    // Hourglass chrome for loader surfaces: static sand columns, pinch marks,
-    // and timing ticks imply waiting without APNG/timers. Sparse fixed-stride
-    // geometry keeps loader strips deterministic and cheap to cache.
+    // Hourglass remains available as an explicit loader variant: static sand
+    // columns, pinch marks, and timing ticks imply waiting without APNG/timers.
     const top = Math.max(1, Math.floor(h * 0.20));
     const mid = Math.max(1, Math.floor(h * 0.52));
     const bottom = Math.min(h - 2, Math.floor(h * 0.80));
