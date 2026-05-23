@@ -252,7 +252,10 @@ test("/rt status widget shows realtime control panel details", async () => {
     assert.match(panel, /chime:on/);
     assert.match(panel, /speed:1\.2/);
     assert.match(panel, /pulse: server:host:4713/);
-    assert.match(panel, /controls: \/rt mic off/);
+    assert.match(panel, /backend:out:pulse\/in:pulse/);
+    assert.match(panel, /mic capture: inactive/);
+    assert.match(panel, /next: \/rt start vad begins realtime/);
+    assert.match(panel, /controls: \/rt-stop · \/rt-cancel/);
 
     await commands.get("rt-hide-status").handler("", ctx);
     assert.equal(widgets.has("realtime-status"), false);
@@ -340,6 +343,8 @@ test("/rt-status full emits the same diagnostics without requiring a live realti
   assert.match(message, /Realtime doctor/);
   assert.match(message, /record:/);
   assert.match(message, /playback:/);
+  assert.match(message, /nextStep:/);
+  assert.match(message, /mic capture: inactive/);
 });
 
 test("server VAD turn detection honors threshold, silence, and prefix env controls", async () => {
