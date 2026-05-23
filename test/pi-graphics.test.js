@@ -1332,6 +1332,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-cursor-glow-relative/);
   assert.match(source, /trailCells: heat > 0\.04/);
   assert.match(source, /editorCursorTrailDirection = safeCol > editorCursorLastCol \? 1 : -1/);
+  assert.match(source, /function buildEditorCursorPreviewLines\(\)/);
+  assert.match(source, /editor-cursor-preview-/);
+  assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);
+  assert.match(source, /\/gfx cursor preview shows cool\/warm\/hot editor cursor variants/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);

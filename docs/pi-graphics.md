@@ -400,8 +400,10 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx status` prints the text summary. `/gfx box-effect <name>` can select a
   specific effect or `/gfx box-effect auto` can return to per-message-type effects.
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
-  placeholder cells, and `/gfx box-mode unicode` uses only placeholder-tied graphics
-  for box side borders instead of relative placements.
+  placeholder cells. `/gfx cursor preview` emits bounded cool/warm/hot cursor PNG
+  variants so the heat glow, directional trail, and frame ticks can be inspected
+  without typing at a precise speed. `/gfx box-mode unicode` uses only
+  placeholder-tied graphics for box side borders instead of relative placements.
 * Box wrapping is ANSI/OSC/APC/DCS-safe: placeholder insertion, unicode side
   borders, width truncation, and padding preserve terminal controls instead of
   slicing inside color/style escapes, Pi IME cursor markers, or tmux/kitty

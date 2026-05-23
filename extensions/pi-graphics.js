@@ -1544,7 +1544,8 @@ export default function piGraphicsExtension(pi) {
       `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
       `debug=${gfx.debug ? "on" : "off"} placeholders=${(gfx.debugPlaceholders ?? gfx.debug) ? "visible U" : "kitty"}`,
       `cell=${gfx.cell?.widthPx || 8}x${gfx.cell?.heightPx || "auto"} line=${gfx.cell?.lineHeightScale || 1.2}`,
-      "Use /gfx debug to toggle; /gfx box-effect auto for per-surface chrome.",
+      "Use /gfx debug to toggle; /gfx cursor preview to inspect heat variants.",
+      "Use /gfx box-effect auto for per-surface chrome.",
     ];
   }
 
@@ -1553,6 +1554,64 @@ export default function piGraphicsExtension(pi) {
     try {
       ctx?.ui?.setWidget?.("pi-graphics-debug", gfx.debug ? debugPanelLines(settings) : undefined, { placement: "belowEditor" });
     } catch {}
+  }
+
+  function buildEditorCursorPreviewLines() {
+    if (!ensureUnicodePlacement(state)) {
+      return [
+        "Pi Graphics cursor preview",
+        "Unicode placeholder placement is unavailable; enable kitty placeholder graphics to inspect cursor PNG variants.",
+      ];
+    }
+    const cell = cellMetrics();
+    const variants = [
+      { label: "cool beam", heat: 0.05, wpm: 0, trailDirection: 1 },
+      { label: "warm trail", heat: 0.55, wpm: 80, trailDirection: 1 },
+      { label: "hot back", heat: 1, wpm: 220, trailDirection: -1 },
+    ];
+    const lines = [
+      "Pi Graphics cursor preview",
+      "cool/warm/hot variants use the same 6x3 anchor-relative artwork as the live editor cursor.",
+      "",
+    ];
+    variants.forEach((variant) => {
+      const trailBucket = Math.max(0, Math.min(4, Math.round((Number(variant.wpm) || 0) / 60)));
+      const directionBucket = Number(variant.trailDirection) < 0 ? "left" : "right";
+      const heatBucket = Math.max(0, Math.min(5, Math.round((Number(variant.heat) || 0) * 5)));
+      const glowColor = heatBucket >= 4
+        ? "#ff9f5a"
+        : heatBucket >= 2
+          ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
+          : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+      const rendered = renderEditorCursorVline({
+        alpha: Math.max(0.38, editorAlpha() * (0.70 + variant.heat * 0.40)),
+        backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+        coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
+        glowColor,
+        columns: 6,
+        rows: 3,
+        heat: variant.heat,
+        glowRadiusCells: 1.3 + variant.heat * 1.5,
+        trailCells: variant.heat > 0.04 ? 0.8 + trailBucket * 0.42 + variant.heat * 1.2 : 0,
+        trailDirection: variant.trailDirection,
+        ...cell,
+      });
+      const placement = buildPlacement(state, {
+        name: `editor-cursor-preview-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+        png: rendered.png,
+        columns: rendered.columns,
+        rows: rendered.rows,
+        width: rendered.columns,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+      });
+      emitGraphicsCommand(placement.transmit);
+      const [first, ...rest] = placement.lines;
+      lines.push(`${variant.label.padEnd(12)} ${first ?? ""}`);
+      rest.forEach((line) => lines.push(`${"".padEnd(12)} ${line}`));
+      lines.push("");
+    });
+    lines.push("Use /gfx debug for visible placeholder IDs; /gfx cursor preview only emits bounded cached variants.");
+    return lines;
   }
 
   async function showGfxSettingsWindow(ctx, settings, gfx, editor) {
@@ -1585,6 +1644,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("", "Preview:");
         lines.push("  assistant=manuscript  tool=schematic  oauth=keyring");
         lines.push("  model=dial  settings=slider  thinking=lantern");
+        lines.push("  /gfx cursor preview shows cool/warm/hot editor cursor variants.");
         lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
         return lines.map((line) => renderLine(width, line));
       },
@@ -1621,7 +1681,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|cursor preview|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1640,7 +1700,7 @@ export default function piGraphicsExtension(pi) {
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx cursor preview | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -1671,6 +1731,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "themes" || action === "theme-provenance") {
         ctx.ui.notify(themeProvenanceLines(ctx, settings).join("\n"), "info");
+        return;
+      }
+      if (action === "cursor-preview" || action === "preview" || (action === "cursor" && String(tokens[1] || "").toLowerCase() === "preview")) {
+        ctx.ui.notify(buildEditorCursorPreviewLines().join("\n"), "info");
         return;
       }
       if (action === "preset") {
