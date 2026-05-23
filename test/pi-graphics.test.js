@@ -1358,6 +1358,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /rows: 5/);
   assert.match(source, /trailCells: heat > 0\.04/);
   assert.match(source, /editorCursorTrailDirection = safeCol > editorCursorLastCol \? 1 : -1/);
+  assert.match(source, /function buildAnchoredEditorCursorPreviewLine\(\{ label, heat = 0, wpm = 0, trailDirection = 1 \} = \{\}\)/);
+  assert.match(source, /editor-cursor-preview-anchor-/);
+  assert.match(source, /editor-cursor-preview-relative-placement-/);
+  assert.match(source, /lines\.push\(buildAnchoredEditorCursorPreviewLine\(\{ label: "anchored", heat: 0\.55, wpm: 80, trailDirection: 1 \}\)\)/);
   assert.match(source, /function buildEditorCursorPreviewLines\(\)/);
   assert.match(source, /editor-cursor-preview-/);
   assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);

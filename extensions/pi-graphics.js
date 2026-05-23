@@ -855,6 +855,88 @@ export default function piGraphicsExtension(pi) {
     return anchorLine ? `${anchorLine}${relativePlacement}` : null;
   }
 
+  function buildAnchoredEditorCursorPreviewLine({ label, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
+    const cell = cellMetrics();
+    const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
+    const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
+    const heatBucket = Math.max(0, Math.min(5, Math.round((Number(heat) || 0) * 5)));
+    const glowColor = heatBucket >= 4
+      ? "#ff9f5a"
+      : heatBucket >= 2
+        ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
+        : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const anchorImageId = piGraphicsImageId(`editor-cursor-preview-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(anchorImageId)) {
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: anchorImageId,
+        q: 2,
+      }, transparentPixelPngBase64(), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(anchorImageId);
+      uploadedImages.add(anchorImageId);
+    }
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-preview-anchor-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    emitGraphicsCommand(serializeKittyGraphicsCommand({
+      a: "p",
+      i: anchorImageId,
+      p: anchorPlacementId,
+      U: 1,
+      c: 1,
+      r: 1,
+      z: PI_GRAPHICS_Z.SURFACE,
+      q: 2,
+    }, "", { passthrough: state.config.passthrough }));
+    const rendered = renderEditorCursorVline({
+      alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
+      backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+      coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
+      glowColor,
+      columns: 11,
+      rows: 5,
+      heat,
+      glowRadiusCells: 0.9 + heat * 0.9,
+      trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
+      trailDirection,
+      ...cell,
+    });
+    const imageId = piGraphicsImageId(`editor-cursor-preview-relative-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(imageId)) {
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: imageId,
+        q: 2,
+      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(imageId);
+      uploadedImages.add(imageId);
+    }
+    const cursorColumns = 11;
+    const cursorRows = 5;
+    const relativePlacement = buildRelativePlacementCommand({
+      imageId,
+      placementId: piGraphicsPlacementId(`editor-cursor-preview-relative-placement-${heatBucket}-${trailBucket}-${directionBucket}`),
+      parentImageId: anchorImageId,
+      parentPlacementId: anchorPlacementId,
+      hOffset: -Math.floor(cursorColumns / 2),
+      vOffset: -Math.floor(cursorRows / 2),
+      columns: cursorColumns,
+      rows: cursorRows,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
+      passthrough: state.config.passthrough,
+    });
+    const anchorLine = buildKittyUnicodePlaceholderLines({
+      imageId: anchorImageId,
+      placementId: anchorPlacementId,
+      columns: 1,
+      rows: 1,
+      width: 1,
+    })[0] ?? "";
+    return `${String(label || "anchored").padEnd(12)} ${anchorLine}${relativePlacement}`;
+  }
+
   function replaceEditorCursorChrome(line, rowWidth = 1) {
     const text = String(line || "");
     if (!text.includes("\x1b[7m")) return line;
@@ -1661,6 +1743,8 @@ export default function piGraphicsExtension(pi) {
       "live diagnostics: fresh anchor placement ids, offsets=-5,-2, staleDelete=p, reverse reset=0/27.",
       "",
     ];
+    lines.push(buildAnchoredEditorCursorPreviewLine({ label: "anchored", heat: 0.55, wpm: 80, trailDirection: 1 }));
+    lines.push("");
     variants.forEach((variant) => {
       const trailBucket = Math.max(0, Math.min(4, Math.round((Number(variant.wpm) || 0) / 60)));
       const directionBucket = Number(variant.trailDirection) < 0 ? "left" : "right";
