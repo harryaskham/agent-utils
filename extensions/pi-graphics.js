@@ -1712,6 +1712,10 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function cursorAnchorDiagnosticLine() {
+    return `cursor anchorSeq=${editorCursorAnchorSeq} visiblePlacement=${editorCursorRelativePlacement?.placementId ?? "none"} offsets=-5,-2 staleDelete=p reset=0/27`;
+  }
+
   function debugPanelLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
     return [
@@ -1720,7 +1724,7 @@ export default function piGraphicsExtension(pi) {
       `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
       `debug=${gfx.debug ? "on" : "off"} placeholders=${(gfx.debugPlaceholders ?? gfx.debug) ? "visible U" : "kitty"}`,
       `cell=${gfx.cell?.widthPx || 8}x${gfx.cell?.heightPx || "auto"} line=${gfx.cell?.lineHeightScale || 1.2}`,
-      `cursor anchorSeq=${editorCursorAnchorSeq} visiblePlacement=${editorCursorRelativePlacement?.placementId ?? "none"} offsets=-5,-2 staleDelete=p reset=0/27`,
+      cursorAnchorDiagnosticLine(),
       "Use /gfx debug to toggle; /gfx cursor preview to inspect heat variants.",
       "Use /gfx box-effect auto for per-surface chrome.",
     ];
@@ -1753,7 +1757,7 @@ export default function piGraphicsExtension(pi) {
     const lines = [
       "Pi Graphics cursor preview",
       "cool/warm/hot variants use the same 11x5 centered anchor-relative artwork as the live editor cursor.",
-      "live diagnostics: fresh anchor placement ids, offsets=-5,-2, staleDelete=p, reverse reset=0/27.",
+      `live diagnostics: ${cursorAnchorDiagnosticLine()}.`,
       "",
     ];
     lines.push(buildAnchoredEditorCursorPreviewLine({ label: "anchored", heat: 0.55, wpm: 80, trailDirection: 1 }));
@@ -1878,6 +1882,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("  model=dial  settings=slider  thinking=lantern");
         lines.push("  /gfx box preview shows per-surface chrome strips.");
         lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
+        lines.push("  /gfx cursor status prints diagnostics without rendering.");
         lines.push("  /gfx cursor clear deletes stale live cursor placement only.");
         lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
         return lines.map((line) => renderLine(width, line));
@@ -1915,7 +1920,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|cursor status|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1934,7 +1939,7 @@ export default function piGraphicsExtension(pi) {
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -1969,6 +1974,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "cursor-preview" || action === "preview" || (action === "cursor" && String(tokens[1] || "").toLowerCase() === "preview")) {
         ctx.ui.notify(buildEditorCursorPreviewLines().join("\n"), "info");
+        return;
+      }
+      if (action === "cursor-status" || (action === "cursor" && ["status", "diagnostics", "diag"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(["Pi Graphics cursor status", cursorAnchorDiagnosticLine(), "No graphics were emitted or settings changed."].join("\n"), "info");
         return;
       }
       if (action === "cursor-clear" || (action === "cursor" && ["clear", "reset", "cleanup"].includes(String(tokens[1] || "").toLowerCase()))) {

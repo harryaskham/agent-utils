@@ -1317,8 +1317,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-workspace-tail-\$\{cols\}-heat-\$\{heatBucket\}/);
   assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /actual heat image is a larger relative placement centered on that anchor/);
+  assert.match(source, /function cursorAnchorDiagnosticLine\(\)/);
   assert.match(source, /cursor anchorSeq=\$\{editorCursorAnchorSeq\} visiblePlacement=\$\{editorCursorRelativePlacement\?\.placementId \?\? "none"\} offsets=-5,-2 staleDelete=p reset=0\/27/);
-  assert.match(source, /live diagnostics: fresh anchor placement ids, offsets=-5,-2, staleDelete=p, reverse reset=0\/27\./);
+  assert.match(source, /`live diagnostics: \$\{cursorAnchorDiagnosticLine\(\)\}\.`/);
   assert.match(source, /let editorCursorAnchorSeq = 0/);
   assert.match(source, /let editorCursorRelativePlacement = null/);
   assert.match(source, /editorCursorAnchorSeq = \(editorCursorAnchorSeq \+ 1\) % 0x800000/);
@@ -1367,10 +1368,14 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function buildEditorCursorPreviewLines\(\)/);
   assert.match(source, /editor-cursor-preview-/);
   assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);
+  assert.match(source, /action === "cursor-status"/);
+  assert.match(source, /\["status", "diagnostics", "diag"\]\.includes/);
+  assert.match(source, /No graphics were emitted or settings changed\./);
   assert.match(source, /action === "cursor-clear"/);
   assert.match(source, /\["clear", "reset", "cleanup"\]\.includes/);
   assert.match(source, /Pi Graphics cursor placement cleared; it will re-anchor on the next editor render\./);
   assert.match(source, /\/gfx cursor preview shows anchored cool\/warm\/hot variants/);
+  assert.match(source, /\/gfx cursor status prints diagnostics without rendering/);
   assert.match(source, /\/gfx cursor clear deletes stale live cursor placement only/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
