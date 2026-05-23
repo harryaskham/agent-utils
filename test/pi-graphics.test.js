@@ -1313,6 +1313,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-workspace-tail-\$\{cols\}-heat-\$\{heatBucket\}/);
   assert.match(source, /variant: safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /actual heat image is a larger relative placement centered on that anchor/);
+  assert.match(source, /let editorCursorRelativePlacement = null/);
+  assert.match(source, /buildDeleteCommand\(\{\n\s+imageId: editorCursorRelativePlacement\.imageId,\n\s+placementId: editorCursorRelativePlacement\.placementId,\n\s+deleteMode: "p"/);
+  assert.match(source, /hOffset: -Math\.floor\(rendered\.columns \/ 2\)/);
+  assert.match(source, /vOffset: -Math\.floor\(rendered\.rows \/ 2\)/);
+  assert.match(source, /const anchorLine = anchor\.lines\[0\] \?\? null;\n\s+return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null;/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);
   assert.match(source, /const safeCursorCol = Math\.max\(0, Math\.min\(safeRowWidth - 1/);
@@ -1335,6 +1340,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /restoreHardwareCursorPolicy\(\)/);
   assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 \} = \{\}\)/);
   assert.match(source, /editor-cursor-glow-relative/);
+  assert.match(source, /columns: 11/);
+  assert.match(source, /rows: 5/);
   assert.match(source, /trailCells: heat > 0\.04/);
   assert.match(source, /editorCursorTrailDirection = safeCol > editorCursorLastCol \? 1 : -1/);
   assert.match(source, /function buildEditorCursorPreviewLines\(\)/);

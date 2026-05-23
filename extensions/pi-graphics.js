@@ -57,6 +57,7 @@ import {
   buildPngCursorAnimationUpload,
   buildRelativePlacementCommand,
   bufferToBase64,
+  buildDeleteCommand,
   buildDeleteByZIndexBandCommand,
   buildScopedDeleteCommand,
   detectKittyPassthroughMode,
@@ -301,6 +302,7 @@ export default function piGraphicsExtension(pi) {
   let editorCursorLastCol = null;
   let editorCursorTrailDirection = 1;
   let editorCursorHeat = 0;
+  let editorCursorRelativePlacement = null;
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
 
   function resetGraphicsUploadCaches() {
@@ -743,10 +745,10 @@ export default function piGraphicsExtension(pi) {
       backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
       coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
       glowColor,
-      columns: 6,
-      rows: 3,
+      columns: 11,
+      rows: 5,
       heat,
-      glowRadiusCells: 1.3 + heat * 1.5,
+      glowRadiusCells: 0.9 + heat * 0.9,
       trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
       trailDirection,
       ...cell,
@@ -764,25 +766,38 @@ export default function piGraphicsExtension(pi) {
       uploadedImages.add(imageId);
     }
     const placementId = piGraphicsPlacementId("editor-cursor-glow-relative");
-    emitGraphicsCommand(buildRelativePlacementCommand({
+    if (editorCursorRelativePlacement) {
+      emitGraphicsCommand(buildDeleteCommand({
+        imageId: editorCursorRelativePlacement.imageId,
+        placementId: editorCursorRelativePlacement.placementId,
+        deleteMode: "p",
+        passthrough: state.config.passthrough,
+      }));
+    }
+    const relativePlacement = buildRelativePlacementCommand({
       imageId,
       placementId,
       parentImageId: anchor.imageId,
       parentPlacementId: anchor.placementId,
-      hOffset: -3,
-      vOffset: -1,
+      hOffset: -Math.floor(rendered.columns / 2),
+      vOffset: -Math.floor(rendered.rows / 2),
       columns: rendered.columns,
       rows: rendered.rows,
       zIndex: PI_GRAPHICS_Z.SURFACE,
       passthrough: state.config.passthrough,
-    }));
+    });
+    editorCursorRelativePlacement = { imageId, placementId };
     // The cursor anchor remains a single Unicode placeholder cell, while the
     // actual heat image is a larger relative placement centered on that anchor.
+    // The relative placement command is emitted inline after the placeholder,
+    // not before the TUI renders it, so kitty can resolve the parent position
+    // before applying the negative half-width/half-height offsets.
     // Heat is inferred from recent editor text deltas and naturally decays when
     // typing stops; high heat adds a short deterministic afterimage behind the
     // latest cursor motion without timers or repaint loops. Row-wide backgrounds
     // are deliberately not cursor-anchored.
-    return anchor.lines[0] ?? null;
+    const anchorLine = anchor.lines[0] ?? null;
+    return anchorLine ? `${anchorLine}${relativePlacement}` : null;
   }
 
   function replaceEditorCursorChrome(line, rowWidth = 1) {
@@ -1581,7 +1596,7 @@ export default function piGraphicsExtension(pi) {
     ];
     const lines = [
       "Pi Graphics cursor preview",
-      "cool/warm/hot variants use the same 6x3 anchor-relative artwork as the live editor cursor.",
+      "cool/warm/hot variants use the same 11x5 centered anchor-relative artwork as the live editor cursor.",
       "",
     ];
     variants.forEach((variant) => {
@@ -1598,10 +1613,10 @@ export default function piGraphicsExtension(pi) {
         backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
         coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
         glowColor,
-        columns: 6,
-        rows: 3,
+        columns: 11,
+        rows: 5,
         heat: variant.heat,
-        glowRadiusCells: 1.3 + variant.heat * 1.5,
+        glowRadiusCells: 0.9 + variant.heat * 0.9,
         trailCells: variant.heat > 0.04 ? 0.8 + trailBucket * 0.42 + variant.heat * 1.2 : 0,
         trailDirection: variant.trailDirection,
         ...cell,

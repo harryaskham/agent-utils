@@ -428,9 +428,12 @@ displayed using kitty Unicode placeholder cells, so:
   blink does not fight the styled placeholder; disabling graphics cursor/editor
   styling restores the previous hardware-cursor setting. The cursor anchor remains
   a single Unicode placeholder cell, but the visible cursor art is a larger
-  relative kitty placement (roughly 6 columns by 3 rows) centered on that anchor.
-  It keeps a bright vertical core in the middle cell while transparent glow extends
-  into neighbouring rows. The glow colour/radius is bucketed from inferred recent
+  relative kitty placement (roughly 11 columns by 5 rows) centered on that anchor.
+  The relative placement is emitted inline with the placeholder row and the prior
+  cursor placement is deleted before the next one is attached, preventing stale
+  cursor ghosts when the editor moves. It keeps a bright vertical core in the
+  middle cell while transparent glow has enough transparent padding to avoid
+  clipping at the image edges. The glow colour/radius is bucketed from inferred recent
   inter-character typing speed and decays after typing stops. Fast cursor motion
   also selects a deterministic left/right heat-trail variant: forward typing leaves
   a short afterimage behind the cursor, while backspacing or leftward movement flips
