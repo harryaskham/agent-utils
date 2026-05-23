@@ -1650,9 +1650,11 @@ export default function piGraphicsExtension(pi) {
     }
     const cell = cellMetrics();
     const samples = Object.keys(BOX_TYPE_EFFECTS);
+    const representedEffects = new Set(samples.map((type) => BOX_TYPE_EFFECTS[type] || "glass"));
     const lines = [
       "Pi Graphics box preview",
       "Registry-derived per-surface chrome effects in compact paired rows; this does not change piGraphics.boxEffect.",
+      `${samples.length} mapped surfaces; ${representedEffects.size} unique effects represented.`,
       "",
     ];
     const previewColumns = 10;

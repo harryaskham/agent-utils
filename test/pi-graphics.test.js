@@ -1355,7 +1355,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
   assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
+  assert.match(source, /const representedEffects = new Set\(samples\.map\(\(type\) => BOX_TYPE_EFFECTS\[type\] \|\| "glass"\)\)/);
   assert.match(source, /Registry-derived per-surface chrome effects in compact paired rows/);
+  assert.match(source, /\$\{samples\.length\} mapped surfaces; \$\{representedEffects\.size\} unique effects represented\./);
   assert.doesNotMatch(source, /const samples = \[\n\s+"assistant"/);
   assert.match(source, /compact paired rows/);
   assert.match(source, /const previewColumns = 10/);
