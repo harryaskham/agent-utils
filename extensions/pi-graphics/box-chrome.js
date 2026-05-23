@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -80,7 +80,7 @@ export const BOX_TYPE_EFFECTS = {
   compaction: "fold",
   footer: "waveform",
   loader: "metronome",
-  border: "halo",
+  border: "chamfer",
   input: "prism",
   editor: "halo",
   selector: "glyph",
@@ -525,6 +525,33 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (const x of [2, Math.max(2, w - 15)]) {
       fillRectAlpha(pixels, w, x, Math.max(0, top - 1), Math.min(12, w - x), 2, inner, 46);
       fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, bottom), Math.min(8, w - x - 2), 1, outer, 34);
+    }
+  } else if (effect === "chamfer") {
+    const edge = [
+      Math.min(255, Math.round(color[0] * 0.66 + 78)),
+      Math.min(255, Math.round(color[1] * 0.62 + 88)),
+      Math.min(255, Math.round(color[2] * 0.72 + 64)),
+    ];
+    const cut = [
+      Math.min(255, Math.round(color[0] * 0.34 + 82)),
+      Math.min(255, Math.round(color[1] * 0.72 + 54)),
+      Math.min(255, Math.round(color[2] * 0.48 + 126)),
+    ];
+    // Chamfer chrome for structural borders: beveled cut marks make frames feel
+    // like rendered UI plates, not ASCII boxes. Sparse corner/edge ticks avoid
+    // dense fills while staying deterministic and PNG-friendly.
+    const top = Math.max(1, Math.floor(h * 0.20));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.80));
+    fillRectAlpha(pixels, w, 0, top, w, 1, edge, 24);
+    fillRectAlpha(pixels, w, 0, bottom, w, 1, cut, 22);
+    for (let x = 5; x < w; x += 24) {
+      const y = Math.floor(x / 24) % 2 ? top : bottom;
+      fillRectAlpha(pixels, w, x, y, Math.min(13, w - x), 1, edge, 36);
+      if (x + 3 < w) fillRectAlpha(pixels, w, x + 3, Math.max(1, Math.min(h - 2, y + (y === top ? 3 : -3))), Math.min(8, w - x - 3), 1, cut, 28);
+    }
+    for (const x of [2, Math.max(2, w - 18)]) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(14, w - x), 2, edge, 42);
+      fillRectAlpha(pixels, w, x + 5, bottom, Math.min(10, w - x - 5), 1, cut, 34);
     }
   } else if (effect === "constellation") {
     const star = [
