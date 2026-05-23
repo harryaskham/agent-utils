@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "aperture", "caliper", "tile", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -89,7 +89,7 @@ export const BOX_TYPE_EFFECTS = {
   oauth: "keyring",
   session: "ledger",
   settings: "slider",
-  image: "aperture",
+  image: "lens",
   theme: "palette",
   thinkingSelector: "choice",
   tree: "dendrite",
@@ -1152,6 +1152,43 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, mid, Math.min(16, w - x), 1, rule, 24);
       fillRectAlpha(pixels, w, x + 6, Math.max(1, top - 1), Math.min(9, w - x - 6), 1, tab, 22);
     }
+  } else if (effect === "lens") {
+    const glass = [
+      Math.min(255, Math.round(color[0] * 0.46 + 104)),
+      Math.min(255, Math.round(color[1] * 0.62 + 88)),
+      Math.min(255, Math.round(color[2] * 0.78 + 58)),
+    ];
+    const focus = [
+      Math.min(255, Math.round(color[0] * 0.76 + 58)),
+      Math.min(255, Math.round(color[1] * 0.54 + 108)),
+      Math.min(255, Math.round(color[2] * 0.42 + 136)),
+    ];
+    const crop = [
+      Math.min(255, Math.round(color[0] * 0.30 + 74)),
+      Math.min(255, Math.round(color[1] * 0.74 + 54)),
+      Math.min(255, Math.round(color[2] * 0.52 + 112)),
+    ];
+    // Lens chrome for image choosers: sparse focus brackets, glass glints, and
+    // crop-guide ticks make image surfaces feel inspected rather than shuttered.
+    // It stays rectangle-only and fixed-stride for small cached PNG strips.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 32) {
+      fillRectAlpha(pixels, w, x, top, Math.min(10, w - x), 1, focus, 34);
+      fillRectAlpha(pixels, w, x, top, 1, Math.min(5, h - top), focus, 30);
+      if (x + 14 < w) {
+        fillRectAlpha(pixels, w, x + 14, bottom, Math.min(10, w - x - 14), 1, focus, 32);
+        fillRectAlpha(pixels, w, x + 23, Math.max(1, bottom - 4), 1, 5, focus, 28);
+      }
+      fillRectAlpha(pixels, w, x + 5, mid, Math.min(14, w - x - 5), 1, glass, 26);
+      fillRectAlpha(pixels, w, x + 9, Math.max(1, mid - 3), Math.min(8, w - x - 9), 1, glass, 22);
+      if (x + 20 < w) fillRectAlpha(pixels, w, x + 20, Math.max(1, mid - 1), 2, 3, crop, 34);
+    }
+    for (let x = 18; x < w; x += 64) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(20, w - x), 1, glass, 16);
+      fillRectAlpha(pixels, w, x + 7, Math.min(h - 2, bottom + 1), Math.min(16, w - x - 7), 1, crop, 18);
+    }
   } else if (effect === "aperture") {
     const blade = [
       Math.min(255, Math.round(color[0] * 0.38 + 92)),
@@ -1163,9 +1200,9 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.58 + 96)),
       Math.min(255, Math.round(color[2] * 0.50 + 128)),
     ];
-    // Aperture chrome for image panels: shutter-blade fragments and focus ticks
-    // make rendered images feel physically framed by the graphics layer. The
-    // motif is static, sparse, and rectangle-only, avoiding costly masks.
+    // Aperture remains available as an explicit variant: shutter-blade fragments
+    // and focus ticks make rendered images feel physically framed. The motif is
+    // static, sparse, and rectangle-only, avoiding costly masks.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 5; x < w; x += 24) {
       const step = Math.floor(x / 24) % 3;
