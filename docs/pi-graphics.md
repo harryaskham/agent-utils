@@ -348,11 +348,11 @@ displayed using kitty Unicode placeholder cells, so:
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `holo`, `lattice`,
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
   `metronome`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `orbit`,
-  `rune`, `fold`, `nebula`, `waveform`, `ribbon`, `aperture`, `caliper`, `mosaic`,
-  `keystone`, `badge`, `compass`, `prompt`, and `schematic`) and caches both uploads
-  and relative placements so ordinary rerenders do not re-place identical box strips.
-  Thinking blocks are detected from assistant message content and get sparse nebula
-  mist lanes, assistant surfaces get illuminated manuscript margins, skill/custom-TUI
+  `rune`, `fold`, `lantern`, `nebula`, `waveform`, `ribbon`, `aperture`, `caliper`,
+  `mosaic`, `keystone`, `badge`, `compass`, `prompt`, and `schematic`) and caches
+  both uploads and relative placements so ordinary rerenders do not re-place identical
+  box strips. Thinking blocks are detected from assistant message content and get
+  warm lantern slats, assistant surfaces get illuminated manuscript margins, skill/custom-TUI
   surfaces get compact rune sigils, tool surfaces get schematic bus traces and pads,
   bash surfaces get shell prompt rails, tree surfaces get branching dendrite strokes,
   branch surfaces get interlaced braid strands, loader surfaces get

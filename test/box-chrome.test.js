@@ -48,7 +48,7 @@ test("box strip edges are directional", () => {
 });
 
 test("renderBoxStripPng effect variants produce distinct graphics", () => {
-  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "veil", "holo", "lattice", "contour", "manuscript", "weave", "badge", "glyph", "compass", "prompt", "schematic", "blueprint", "dendrite", "braid", "metronome", "signal", "halo", "caret", "chamfer", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone"];
+  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "veil", "holo", "lattice", "contour", "manuscript", "weave", "badge", "glyph", "compass", "prompt", "schematic", "blueprint", "dendrite", "braid", "metronome", "signal", "halo", "caret", "chamfer", "constellation", "orbit", "rune", "fold", "lantern", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone"];
   const payloads = new Set(variants.map((effect) => renderBoxStripPng({
     kind: "mid",
     columns: 24,
@@ -207,7 +207,7 @@ test("unicode box mode keeps line count and uses placeholder-only side borders",
   assert.ok(emitted.every((cmd) => !/P=/.test(cmd)), "unicode mode should not create non-placeholder relative placements");
 });
 
-test("thinking assistant content uses cloudy thought chrome", () => {
+test("thinking assistant content uses dedicated thought chrome", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };
   const runtime = createBoxChromeRuntime({
@@ -218,8 +218,8 @@ test("thinking assistant content uses cloudy thought chrome", () => {
   });
   const component = { lastMessage: { content: [{ type: "thinking", thinking: "pondering" }] } };
   runtime.applyToRows({ type: "assistant", instanceId: 9, component, lines: [" thinking line", " still thinking"] });
-  assert.ok(emitted.some((c) => /a=t,f=100,t=d/.test(c)), "cloud chrome should upload strips");
-  assert.ok([...state.ownedImageIds].length >= 2, "cloud chrome should own strip and anchor images");
+  assert.ok(emitted.some((c) => /a=t,f=100,t=d/.test(c)), "thought chrome should upload strips");
+  assert.ok([...state.ownedImageIds].length >= 2, "thought chrome should own strip and anchor images");
 });
 
 test("installBoxChromeMonkeyPatch is idempotent, updates runtime, and restores safely", () => {

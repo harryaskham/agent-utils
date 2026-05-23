@@ -66,11 +66,11 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
-  thinking: "nebula",
+  thinking: "lantern",
   tool: "schematic",
   bash: "prompt",
   user: "weave",
@@ -91,7 +91,7 @@ export const BOX_TYPE_EFFECTS = {
   settings: "caliper",
   image: "aperture",
   theme: "constellation",
-  thinkingSelector: "nebula",
+  thinkingSelector: "lantern",
   tree: "dendrite",
   userSelector: "badge",
   agent: "orbit",
@@ -804,6 +804,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 14; x < w; x += 44) {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.68) - (Math.floor(x / 44) % 2)));
       fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 2, highlight, 38);
+    }
+  } else if (effect === "lantern") {
+    const glow = [
+      Math.min(255, Math.round(color[0] * 0.76 + 70)),
+      Math.min(255, Math.round(color[1] * 0.58 + 104)),
+      Math.min(255, Math.round(color[2] * 0.42 + 126)),
+    ];
+    const shade = [
+      Math.min(255, Math.round(color[0] * 0.34 + 62)),
+      Math.min(255, Math.round(color[1] * 0.46 + 74)),
+      Math.min(255, Math.round(color[2] * 0.86 + 42)),
+    ];
+    // Lantern chrome for thinking surfaces: quiet window slats and warm glows
+    // imply cognition happening behind translucent panels. It is fixed-stride,
+    // rectangle-only, and static, so thought updates reuse cached strip PNGs.
+    const mid = Math.max(1, Math.floor(h * 0.50));
+    for (let x = 6; x < w; x += 26) {
+      const y = Math.max(1, Math.min(h - 4, mid - 3 + (Math.floor(x / 26) % 3)));
+      fillRectAlpha(pixels, w, x, y, Math.min(8, w - x), 1, glow, 36);
+      fillRectAlpha(pixels, w, x + 2, y + 2, Math.min(10, w - x - 2), 1, shade, 24);
+      if (x + 12 < w) fillRectAlpha(pixels, w, x + 12, Math.max(1, y - 1), 2, Math.min(6, h - y), glow, 34);
+    }
+    for (let x = 19; x < w; x += 52) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 6), Math.min(14, w - x), 1, shade, 22);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(9, w - x - 4), 1, glow, 30);
     }
   } else if (effect === "nebula") {
     const mist = [
