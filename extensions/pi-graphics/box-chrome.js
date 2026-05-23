@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -81,7 +81,7 @@ export const BOX_TYPE_EFFECTS = {
   footer: "ticker",
   loader: "shuttle",
   border: "bevel",
-  input: "facet",
+  input: "compose",
   editor: "caret",
   selector: "sextant",
   login: "portal",
@@ -188,6 +188,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const wave = (Math.sin(x / 19) + 1) / 2;
       const y = Math.max(0, Math.min(h - 1, Math.round((h - 1) * wave)));
       fillRectAlpha(pixels, w, x, y, 1, Math.min(2, h - y), color, 36);
+    }
+  } else if (effect === "compose") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.54 + 104)),
+      Math.min(255, Math.round(color[1] * 0.56 + 96)),
+      Math.min(255, Math.round(color[2] * 0.70 + 70)),
+    ];
+    const bracket = [
+      Math.min(255, Math.round(color[0] * 0.78 + 62)),
+      Math.min(255, Math.round(color[1] * 0.46 + 120)),
+      Math.min(255, Math.round(color[2] * 0.52 + 116)),
+    ];
+    const pad = [
+      Math.min(255, Math.round(color[0] * 0.30 + 82)),
+      Math.min(255, Math.round(color[1] * 0.68 + 66)),
+      Math.min(255, Math.round(color[2] * 0.86 + 46)),
+    ];
+    // Compose chrome for input fields: sparse entry rails, prompt brackets, and
+    // caret pads frame the writing area without timers, dense texture, masks,
+    // glyph dependencies, graph layout, animation loops, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.54));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 29) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 29) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(15, w - x), 1, rail, 34);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, top - 1), 2, Math.min(5, h - 2), bracket, 30);
+      fillRectAlpha(pixels, w, x + 9, bottom, Math.min(8, w - x - 9), 1, pad, 28);
+      if (x + 18 < w) fillRectAlpha(pixels, w, x + 18, Math.max(1, y - 3), 2, 2, bracket, 38);
+    }
+    for (let x = 17; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, top, Math.min(18, w - x), 1, rail, 18);
+      fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, bottom + 1), Math.min(12, w - x - 6), 1, pad, 22);
     }
   } else if (effect === "facet") {
     const face = [
