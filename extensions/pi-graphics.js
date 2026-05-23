@@ -1664,16 +1664,17 @@ export default function piGraphicsExtension(pi) {
     ];
     const lines = [
       "Pi Graphics box preview",
-      "Representative per-surface chrome effects, including recent dedicated mappings; this does not change piGraphics.boxEffect.",
+      "Representative per-surface chrome effects in compact paired rows; this does not change piGraphics.boxEffect.",
       "",
     ];
-    samples.forEach((type) => {
+    const previewColumns = 10;
+    const previews = samples.map((type) => {
       const effect = BOX_TYPE_EFFECTS[type] || "glass";
       const token = BOX_TYPE_THEME_TOKENS[type] || "accent";
       const color = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
       const rendered = renderBoxStripPng({
         kind: "mid",
-        columns: 14,
+        columns: previewColumns,
         color,
         effect,
         type,
@@ -1681,16 +1682,22 @@ export default function piGraphicsExtension(pi) {
         ...cell,
       });
       const placement = buildPlacement(state, {
-        name: `box-effect-preview-${type}-${effect}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+        name: `box-effect-preview-${type}-${effect}-${previewColumns}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
         png: rendered.png,
-        columns: 14,
+        columns: previewColumns,
         rows: 1,
-        width: 14,
+        width: previewColumns,
         zIndex: PI_GRAPHICS_Z.SURFACE,
       });
       emitGraphicsCommand(placement.transmit);
-      lines.push(`${type.padEnd(12)} ${String(effect).padEnd(11)} ${placement.lines[0] ?? ""}`);
+      return { type, effect, line: placement.lines[0] ?? "" };
     });
+    const formatPreview = ({ type, effect, line }) => `${type.padEnd(16)} ${String(effect).padEnd(10)} ${line}`;
+    for (let i = 0; i < previews.length; i += 2) {
+      const left = formatPreview(previews[i]);
+      const right = previews[i + 1] ? formatPreview(previews[i + 1]) : "";
+      lines.push(right ? `${left}  ${right}` : left);
+    }
     lines.push("", "Use /gfx box-effect auto for live per-surface mappings; /gfx debug for visible placeholder IDs.");
     return lines;
   }
