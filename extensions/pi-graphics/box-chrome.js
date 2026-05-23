@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -76,7 +76,7 @@ export const BOX_TYPE_EFFECTS = {
   user: "tapestry",
   custom: "constellation",
   skill: "sigil",
-  branch: "braid",
+  branch: "helix",
   compaction: "archive",
   footer: "waveform",
   loader: "hourglass",
@@ -701,6 +701,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, y, 2, 2, leaf, 48);
       fillRectAlpha(pixels, w, x + 2, y, Math.min(9, w - x - 2), 1, branch, 24);
     }
+  } else if (effect === "helix") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.62 + 82)),
+      Math.min(255, Math.round(color[1] * 0.70 + 62)),
+      Math.min(255, Math.round(color[2] * 0.54 + 116)),
+    ];
+    const shadow = [
+      Math.min(255, Math.round(color[0] * 0.28 + 68)),
+      Math.min(255, Math.round(color[1] * 0.56 + 82)),
+      Math.min(255, Math.round(color[2] * 0.82 + 58)),
+    ];
+    const pin = [
+      Math.min(255, Math.round(color[0] * 0.78 + 56)),
+      Math.min(255, Math.round(color[1] * 0.50 + 116)),
+      Math.min(255, Math.round(color[2] * 0.68 + 80)),
+    ];
+    // Helix chrome for branch/status summaries: intertwined rails, merge pins,
+    // and lineage ticks suggest history without drawing a graph layout. Fixed
+    // strides keep strips deterministic, sparse, and PNG-compressible.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 4; x < w; x += 26) {
+      const flip = Math.floor(x / 26) % 2;
+      const upper = Math.max(1, mid - (flip ? 1 : 4));
+      const lower = Math.min(h - 2, mid + (flip ? 4 : 1));
+      fillRectAlpha(pixels, w, x, upper, Math.min(14, w - x), 1, rail, 38);
+      fillRectAlpha(pixels, w, x + 4, lower, Math.min(14, w - x - 4), 1, shadow, 30);
+      if (x + 10 < w) fillRectAlpha(pixels, w, x + 10, Math.max(1, mid - 1), 2, 2, pin, 38);
+    }
+    for (let x = 18; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(18, w - x), 1, rail, 18);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, mid + 5), Math.min(14, w - x - 8), 1, shadow, 18);
+    }
   } else if (effect === "braid") {
     const strand = [
       Math.min(255, Math.round(color[0] * 0.60 + 82)),
@@ -712,9 +744,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.52 + 88)),
       Math.min(255, Math.round(color[2] * 0.86 + 54)),
     ];
-    // Braid chrome for branch/status summaries: interlaced strands suggest
-    // divergent history and merge paths without drawing a dense graph. Static
-    // fixed-stride strokes keep branch strips cheap and PNG-compressible.
+    // Braid remains available as an explicit branch variant: interlaced strands
+    // suggest divergent history and merge paths without drawing a dense graph.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 4; x < w; x += 20) {
       const flip = Math.floor(x / 20) % 2;
