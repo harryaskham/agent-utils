@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -97,7 +97,7 @@ export const BOX_TYPE_EFFECTS = {
   agent: "orbit",
   mascot: "orbit",
   customTui: "rune",
-  overlay: "prism",
+  overlay: "veil",
   widget: "mosaic",
   header: "waveform",
 };
@@ -218,6 +218,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.18)), w, 1, secondary, 26);
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.72)), w, 1, color, 22);
+  } else if (effect === "veil") {
+    const sheer = [
+      Math.min(255, Math.round(color[0] * 0.50 + 112)),
+      Math.min(255, Math.round(color[1] * 0.44 + 112)),
+      Math.min(255, Math.round(color[2] * 0.84 + 42)),
+    ];
+    const hem = [
+      Math.min(255, Math.round(color[0] * 0.28 + 82)),
+      Math.min(255, Math.round(color[1] * 0.62 + 72)),
+      Math.min(255, Math.round(color[2] * 0.72 + 82)),
+    ];
+    // Veil chrome for overlays: gauzy offset folds make temporary panes feel
+    // layered above the session without heavy opacity fields. Sparse static
+    // strokes keep overlays cheap and robust in the cached strip renderer.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 3; x < w; x += 19) {
+      const fold = Math.floor(x / 19) % 4;
+      const y = Math.max(1, Math.min(h - 2, mid + fold - 2));
+      fillRectAlpha(pixels, w, x, y, Math.min(13, w - x), 1, sheer, 30);
+      if (x + 5 < w) fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, y + 3), Math.min(9, w - x - 5), 1, hem, 24);
+    }
+    for (let x = 11; x < w; x += 43) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(9, h - 1), sheer, 34);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, mid - 3), Math.min(12, w - x - 2), 1, hem, 22);
+    }
   } else if (effect === "holo") {
     const cyan = [
       Math.min(255, Math.round(color[0] * 0.45 + 105)),

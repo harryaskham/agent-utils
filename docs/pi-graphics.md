@@ -345,7 +345,7 @@ displayed using kitty Unicode placeholder cells, so:
   historical ids. This avoids low-id and cross-process collisions with other
   kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
-  `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `holo`, `lattice`,
+  `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `holo`, `lattice`,
   `contour`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`, `metronome`,
   `signal`, `halo`, `constellation`, `orbit`, `rune`, `fold`, `nebula`, `waveform`,
   `ribbon`, `aperture`, `caliper`, `mosaic`, and `keystone`) and caches both uploads
@@ -359,10 +359,10 @@ displayed using kitty Unicode placeholder cells, so:
   custom/theme surfaces get sparse constellation nodes, user/user-selector surfaces
   get tactile woven thread strokes, login/OAuth surfaces get keystone gateway marks,
   selector surfaces get sparse graphical glyph marks, image surfaces get shutter-like
-  aperture fragments, editor/border surfaces get soft focus halo rails, input/overlay
-  surfaces get a lightweight prism-facet glass treatment, header/footer surfaces get
-  static waveform rails, session surfaces get interleaved ribbon strips, model/settings
-  surfaces get precise caliper ticks, and widget surfaces get sparse mosaic tiles. If a box moves or resizes, stale relative
+  aperture fragments, editor/border surfaces get soft focus halo rails, input surfaces
+  get a lightweight prism-facet glass treatment, overlay surfaces get gauzy veil folds,
+  header/footer surfaces get static waveform rails, session surfaces get interleaved
+  ribbon strips, model/settings surfaces get precise caliper ticks, and widget surfaces get sparse mosaic tiles. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension
