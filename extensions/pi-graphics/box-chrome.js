@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "aurora",
@@ -85,10 +85,10 @@ export const BOX_TYPE_EFFECTS = {
   editor: "glass",
   selector: "sparkle",
   login: "aurora",
-  model: "circuit",
+  model: "lattice",
   oauth: "aurora",
   session: "holo",
-  settings: "circuit",
+  settings: "lattice",
   image: "aurora",
   theme: "sparkle",
   thinkingSelector: "cloud",
@@ -98,7 +98,7 @@ export const BOX_TYPE_EFFECTS = {
   mascot: "sparkle",
   customTui: "aurora",
   overlay: "prism",
-  widget: "circuit",
+  widget: "lattice",
   header: "holo",
 };
 
@@ -246,6 +246,27 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = 2 + ((x * 5) % Math.max(1, h - 5));
       fillRectAlpha(pixels, w, x, y, Math.min(13, w - x), 2, x % 2 ? violet : cyan, 32);
     }
+  } else if (effect === "lattice") {
+    const node = [
+      Math.min(255, Math.round(color[0] * 0.50 + 95)),
+      Math.min(255, Math.round(color[1] * 0.75 + 55)),
+      Math.min(255, Math.round(color[2] * 0.65 + 80)),
+    ];
+    // Structural mesh for dialog/control chrome: diagonal struts and small
+    // junction nodes imply a rendered UI frame without per-pixel noise. The
+    // stride is fixed so work and PNG entropy scale gently with terminal width.
+    for (let x = -h; x < w; x += 12) {
+      for (let d = 0; d < Math.min(h, 10); d += 1) {
+        fillRectAlpha(pixels, w, x + d, d, 1, 1, color, 34);
+        fillRectAlpha(pixels, w, x + d, h - 1 - d, 1, 1, node, 30);
+      }
+    }
+    for (let x = 6; x < w; x += 24) {
+      const y = 2 + ((x / 6) % Math.max(1, h - 4));
+      fillRectAlpha(pixels, w, x, y, 3, 3, node, 58);
+      fillRectAlpha(pixels, w, x + 3, y + 1, Math.min(8, w - x - 3), 1, color, 36);
+    }
+    fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.5)), w, 1, node, 18);
   }
 }
 
