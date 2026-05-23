@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -97,7 +97,7 @@ export const BOX_TYPE_EFFECTS = {
   agent: "satellite",
   mascot: "emblem",
   customTui: "panel",
-  overlay: "frost",
+  overlay: "scrim",
   widget: "tile",
   header: "masthead",
 };
@@ -268,6 +268,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(9, h - 1), sheer, 34);
       fillRectAlpha(pixels, w, x + 2, Math.max(1, mid - 3), Math.min(12, w - x - 2), 1, hem, 22);
     }
+  } else if (effect === "scrim") {
+    const curtain = [
+      Math.min(255, Math.round(color[0] * 0.30 + 82)),
+      Math.min(255, Math.round(color[1] * 0.48 + 88)),
+      Math.min(255, Math.round(color[2] * 0.76 + 64)),
+    ];
+    const focus = [
+      Math.min(255, Math.round(color[0] * 0.72 + 74)),
+      Math.min(255, Math.round(color[1] * 0.58 + 100)),
+      Math.min(255, Math.round(color[2] * 0.62 + 92)),
+    ];
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.44 + 132)),
+      Math.min(255, Math.round(color[1] * 0.70 + 64)),
+      Math.min(255, Math.round(color[2] * 0.52 + 124)),
+    ];
+    // Scrim chrome for overlays: sparse dimmer curtains, focus brackets, and
+    // modal edge ticks read as an active overlay layer without broad opacity
+    // fields, masks, timers, animation loops, or high-entropy frost/noise.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.50));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 3; x < w; x += 26) {
+      fillRectAlpha(pixels, w, x, top, 1, Math.min(7, h - 2), curtain, 30);
+      fillRectAlpha(pixels, w, x + 4, mid - 1, Math.min(10, w - x - 4), 1, focus, 32);
+      fillRectAlpha(pixels, w, x + 4, mid + 2, Math.min(10, w - x - 4), 1, focus, 24);
+      fillRectAlpha(pixels, w, x + 16, bottom, Math.min(7, w - x - 16), 1, tick, 28);
+    }
+    for (let x = 16; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(15, w - x), 1, tick, 18);
+      fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, bottom + 1), Math.min(17, w - x - 2), 1, curtain, 18);
+    }
   } else if (effect === "frost") {
     const ice = [
       Math.min(255, Math.round(color[0] * 0.42 + 130)),
@@ -279,9 +311,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.22 + 205)),
       Math.min(255, Math.round(color[2] * 0.30 + 205)),
     ];
-    // Frost overlay chrome: small static corner crystals and cold edge glints.
-    // It avoids random snow/noise fields and keeps PNG entropy low while giving
-    // modal overlays a colder, more glassy visual identity than the gauzy veil.
+    // Frost remains available as an explicit cold overlay variant: small static
+    // corner crystals and edge glints avoid random snow/noise fields.
     const corner = Math.max(3, Math.min(10, Math.floor(h * 0.55)));
     for (const x0 of [1, Math.max(1, w - corner - 1)]) {
       const dir = x0 < w / 2 ? 1 : -1;
