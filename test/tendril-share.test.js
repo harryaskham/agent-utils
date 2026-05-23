@@ -85,7 +85,44 @@ test("tendril bridge doctor reports bridge settings and probes targets", async (
   const result = await tools.get("tendril_bridge_doctor").execute("call-1", {}, new AbortController().signal);
   assert.match(result.content[0].text, /wslTunnel=false/);
   assert.match(result.content[0].text, /probe=ok targets=2/);
+  assert.match(result.content[0].text, /hint=none/);
   assert.deepEqual(execCalls[0], { command: "tendril", args: ["list", "--json"] });
+});
+
+test("tendril bridge doctor flags stale remote WSL tunnel support", async () => {
+  const previous = {
+    remote: process.env.AGENT_UTILS_TENDRIL_REMOTE,
+    wsl: process.env.AGENT_UTILS_TENDRIL_WSL_TUNNEL,
+  };
+  process.env.AGENT_UTILS_TENDRIL_REMOTE = "ms-dev";
+  process.env.AGENT_UTILS_TENDRIL_WSL_TUNNEL = "1";
+  try {
+    const tools = new Map();
+    const execCalls = [];
+    const pi = {
+      registerCommand() {},
+      registerTool: (tool) => tools.set(tool.name, tool),
+      on() {},
+      async exec(command, args) {
+        execCalls.push({ command, args });
+        return { code: 2, stdout: "", stderr: "error: unexpected argument '--wsl-tunnel' found" };
+      },
+    };
+    tendrilShareExtension(pi);
+
+    const result = await tools.get("tendril_bridge_doctor").execute("call-1", {}, new AbortController().signal);
+
+    assert.deepEqual(execCalls[0], { command: "tendril", args: ["--remote", "ms-dev", "--wsl-tunnel", "list", "--json"] });
+    assert.match(result.content[0].text, /remote=ms-dev wslTunnel=true/);
+    assert.match(result.content[0].text, /probe=error/);
+    assert.match(result.content[0].text, /stale.*--wsl-tunnel|--wsl-tunnel.*stale/i);
+    assert.match(result.data.hint, /remote Tendril binary appears stale/);
+  } finally {
+    if (previous.remote === undefined) delete process.env.AGENT_UTILS_TENDRIL_REMOTE;
+    else process.env.AGENT_UTILS_TENDRIL_REMOTE = previous.remote;
+    if (previous.wsl === undefined) delete process.env.AGENT_UTILS_TENDRIL_WSL_TUNNEL;
+    else process.env.AGENT_UTILS_TENDRIL_WSL_TUNNEL = previous.wsl;
+  }
 });
 
 test("/tendril window captures and sends image content to the model", async () => {

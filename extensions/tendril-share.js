@@ -75,6 +75,10 @@ function parseJsonEnvelope(stdout, commandName = "tendril") {
 export async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const tendril = buildTendrilCommand(args);
   const result = await pi.exec(tendril.command, tendril.args, { signal, timeout });
+  if (result.code !== 0 && !String(result.stdout || "").trim()) {
+    const message = result.stderr || `tendril exited with code ${result.code}`;
+    throw new Error(`tendril ${args[0] || "command"} failed: ${message}`);
+  }
   const envelope = parseJsonEnvelope(result.stdout, `tendril ${args[0] || ""}`);
   if (result.code !== 0 || envelope.status === "error") {
     const message = envelope.error?.message || result.stderr || `tendril exited with code ${result.code}`;
@@ -82,6 +86,18 @@ export async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEO
     throw new Error(`tendril ${args[0] || "command"} failed${code}: ${message}`);
   }
   return envelope;
+}
+
+function classifyTendrilBridgeProbe(summary, probe) {
+  const error = String(probe?.error || "");
+  if (!error) return null;
+  if (summary?.wslTunnel && /(?:--wsl-tunnel|wsl.?tunnel)/i.test(error) && /(?:unknown|unexpected|unrecognized|found argument|invalid|not expected)/i.test(error)) {
+    return "remote Tendril binary appears stale and does not support --wsl-tunnel; update Tendril on the remote host or unset AGENT_UTILS_TENDRIL_WSL_TUNNEL";
+  }
+  if (summary?.remote && /(?:connection refused|could not resolve|no route|timed out|ssh|unreachable)/i.test(error)) {
+    return "remote Tendril bridge is unreachable; check AGENT_UTILS_TENDRIL_REMOTE, SSH/Tailscale reachability, and that Tendril is installed remotely";
+  }
+  return null;
 }
 
 function getCaptureDir(ctx) {
@@ -426,12 +442,14 @@ export default function tendrilShareExtension(pi) {
       const probe = params.probe === false ? null : await runTendrilJson(pi, ["list", "--json"], { signal, timeout: params.timeoutMs || DEFAULT_TIMEOUT_MS })
         .then((envelope) => ({ status: envelope.status || "ok", targets: envelope.data?.targets?.length || 0 }))
         .catch((error) => ({ status: "error", error: error.message || String(error) }));
+      const hint = classifyTendrilBridgeProbe(summary, probe);
       const lines = [
         `tendril bridge command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel}`,
         `argsPrefix=${summary.argsPrefix.join(" ") || "none"}`,
         probe ? `probe=${probe.status}${probe.targets != null ? ` targets=${probe.targets}` : ""}${probe.error ? ` error=${probe.error}` : ""}` : "probe=skipped",
+        hint ? `hint=${hint}` : "hint=none",
       ];
-      return { content: [{ type: "text", text: lines.join("\n") }], data: { summary, probe } };
+      return { content: [{ type: "text", text: lines.join("\n") }], data: { summary, probe, hint } };
     },
   });
 
@@ -456,4 +474,5 @@ export const __tendrilShareTest = {
   stopStream,
   buildTendrilCommand,
   tendrilCommandSummary,
+  classifyTendrilBridgeProbe,
 };
