@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "nebula", "waveform", "marquee", "ribbon", "ledger", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -87,7 +87,7 @@ export const BOX_TYPE_EFFECTS = {
   login: "keystone",
   model: "dial",
   oauth: "keyring",
-  session: "ribbon",
+  session: "ledger",
   settings: "slider",
   image: "aperture",
   theme: "palette",
@@ -1070,6 +1070,33 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 12; x < w; x += 54) {
       fillRectAlpha(pixels, w, x, upper, Math.min(18, w - x), 1, silk, 26);
       fillRectAlpha(pixels, w, x + 7, lower, Math.min(16, w - x - 7), 1, shadow, 24);
+    }
+  } else if (effect === "ledger") {
+    const rule = [
+      Math.min(255, Math.round(color[0] * 0.48 + 112)),
+      Math.min(255, Math.round(color[1] * 0.58 + 92)),
+      Math.min(255, Math.round(color[2] * 0.74 + 66)),
+    ];
+    const tab = [
+      Math.min(255, Math.round(color[0] * 0.74 + 72)),
+      Math.min(255, Math.round(color[1] * 0.50 + 118)),
+      Math.min(255, Math.round(color[2] * 0.62 + 98)),
+    ];
+    // Ledger chrome for session containers: notebook binding ticks, page rules,
+    // and index tabs give session selectors a durable archive feel without
+    // dense paper textures. Sparse static marks stay cheap and compressible.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 4; x < w; x += 20) {
+      const phase = Math.floor(x / 20) % 3;
+      fillRectAlpha(pixels, w, x, top + phase, Math.min(11, w - x), 1, rule, 32);
+      fillRectAlpha(pixels, w, x + 3, lower, Math.min(8, w - x - 3), 2, tab, 34);
+      if (phase === 0) fillRectAlpha(pixels, w, x + 1, Math.max(1, mid - 4), 1, Math.min(9, h - 2), rule, 28);
+    }
+    for (let x = 15; x < w; x += 47) {
+      fillRectAlpha(pixels, w, x, mid, Math.min(16, w - x), 1, rule, 24);
+      fillRectAlpha(pixels, w, x + 6, Math.max(1, top - 1), Math.min(9, w - x - 6), 1, tab, 22);
     }
   } else if (effect === "aperture") {
     const blade = [
