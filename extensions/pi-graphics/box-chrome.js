@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -87,7 +87,7 @@ export const BOX_TYPE_EFFECTS = {
   login: "portal",
   model: "gauge",
   oauth: "keyring",
-  session: "ledger",
+  session: "logbook",
   settings: "slider",
   image: "lens",
   theme: "swatch",
@@ -1701,6 +1701,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, upper, Math.min(18, w - x), 1, silk, 26);
       fillRectAlpha(pixels, w, x + 7, lower, Math.min(16, w - x - 7), 1, shadow, 24);
     }
+  } else if (effect === "logbook") {
+    const binding = [
+      Math.min(255, Math.round(color[0] * 0.44 + 120)),
+      Math.min(255, Math.round(color[1] * 0.62 + 82)),
+      Math.min(255, Math.round(color[2] * 0.72 + 70)),
+    ];
+    const tab = [
+      Math.min(255, Math.round(color[0] * 0.76 + 64)),
+      Math.min(255, Math.round(color[1] * 0.46 + 124)),
+      Math.min(255, Math.round(color[2] * 0.58 + 104)),
+    ];
+    const mark = [
+      Math.min(255, Math.round(color[0] * 0.28 + 92)),
+      Math.min(255, Math.round(color[1] * 0.74 + 54)),
+      Math.min(255, Math.round(color[2] * 0.86 + 48)),
+    ];
+    // Logbook chrome for session containers: sparse binding rails, page tabs,
+    // and checkpoint marks make session state feel recorded without dense paper
+    // texture, glyphs, masks, timers, graph layout, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 4; x < w; x += 28) {
+      fillRectAlpha(pixels, w, x, top, Math.min(18, w - x), 1, binding, 30);
+      fillRectAlpha(pixels, w, x + 3, lower, Math.min(11, w - x - 3), 2, tab, 34);
+      fillRectAlpha(pixels, w, x + 16, mid, 2, 2, mark, 44);
+      if (x + 6 < w) fillRectAlpha(pixels, w, x + 6, Math.max(1, mid - 4), 1, Math.min(8, h - 2), binding, 26);
+    }
+    for (let x = 18; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, mid, Math.min(16, w - x), 1, binding, 22);
+      fillRectAlpha(pixels, w, x + 6, Math.max(1, top - 1), Math.min(12, w - x - 6), 1, tab, 20);
+    }
   } else if (effect === "ledger") {
     const rule = [
       Math.min(255, Math.round(color[0] * 0.48 + 112)),
@@ -1712,9 +1744,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.50 + 118)),
       Math.min(255, Math.round(color[2] * 0.62 + 98)),
     ];
-    // Ledger chrome for session containers: notebook binding ticks, page rules,
-    // and index tabs give session selectors a durable archive feel without
-    // dense paper textures. Sparse static marks stay cheap and compressible.
+    // Ledger remains available as an explicit session variant: notebook binding
+    // ticks, page rules, and index tabs keep a durable archive feel.
     const top = Math.max(1, Math.floor(h * 0.24));
     const mid = Math.max(1, Math.floor(h * 0.52));
     const lower = Math.min(h - 2, Math.floor(h * 0.76));
