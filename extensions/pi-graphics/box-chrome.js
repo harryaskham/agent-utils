@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "margin", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -80,7 +80,7 @@ export const BOX_TYPE_EFFECTS = {
   compaction: "archive",
   footer: "ticker",
   loader: "shuttle",
-  border: "bevel",
+  border: "frame",
   input: "compose",
   editor: "margin",
   selector: "sextant",
@@ -1179,6 +1179,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     }
     fillRectAlpha(pixels, w, 0, top, w, 1, ghost, 18);
     fillRectAlpha(pixels, w, 0, bottom, w, 1, beam, 20);
+  } else if (effect === "frame") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.58 + 96)),
+      Math.min(255, Math.round(color[1] * 0.62 + 84)),
+      Math.min(255, Math.round(color[2] * 0.68 + 76)),
+    ];
+    const miter = [
+      Math.min(255, Math.round(color[0] * 0.82 + 56)),
+      Math.min(255, Math.round(color[1] * 0.50 + 116)),
+      Math.min(255, Math.round(color[2] * 0.56 + 112)),
+    ];
+    const stop = [
+      Math.min(255, Math.round(color[0] * 0.28 + 64)),
+      Math.min(255, Math.round(color[1] * 0.66 + 66)),
+      Math.min(255, Math.round(color[2] * 0.44 + 132)),
+    ];
+    // Frame chrome for generic borders: sparse frame rails, miter pins, and
+    // shadow stops make structural boundaries legible without timers, dense
+    // texture, masks, glyph dependencies, graph layout, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.20));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.80));
+    fillRectAlpha(pixels, w, 0, top, w, 1, rail, 18);
+    fillRectAlpha(pixels, w, 0, bottom, w, 1, stop, 20);
+    for (let x = 4; x < w; x += 32) {
+      fillRectAlpha(pixels, w, x, top, Math.min(18, w - x), 1, rail, 34);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, top - 1), 2, 2, miter, 36);
+      fillRectAlpha(pixels, w, x + 7, bottom, Math.min(14, w - x - 7), 1, stop, 30);
+      if (x + 18 < w) fillRectAlpha(pixels, w, x + 18, Math.max(1, mid - 2), 1, 5, rail, 26);
+    }
+    for (const x of [2, Math.max(2, w - 20)]) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(16, w - x), 2, miter, 32);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, bottom + 1), Math.min(12, w - x - 5), 1, stop, 30);
+    }
   } else if (effect === "bevel") {
     const plane = [
       Math.min(255, Math.round(color[0] * 0.60 + 92)),
