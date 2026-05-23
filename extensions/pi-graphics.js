@@ -66,9 +66,11 @@ import {
 } from "./kitty-graphics.js";
 import {
   BOX_EFFECT_NAMES,
+  BOX_TYPE_EFFECTS,
   BOX_TYPE_THEME_TOKENS,
   createBoxChromeRuntime,
   installBoxChromeMonkeyPatch,
+  renderBoxStripPng,
 } from "./pi-graphics/box-chrome.js";
 import {
   buildWorkingIndicatorFrames,
@@ -1560,12 +1562,16 @@ export default function piGraphicsExtension(pi) {
     } catch {}
   }
 
+  function graphicsPreviewUnavailableLines(kind) {
+    return [
+      `Pi Graphics ${kind} preview`,
+      "Unicode placeholder placement is unavailable; enable kitty placeholder graphics to inspect PNG variants.",
+    ];
+  }
+
   function buildEditorCursorPreviewLines() {
     if (!ensureUnicodePlacement(state)) {
-      return [
-        "Pi Graphics cursor preview",
-        "Unicode placeholder placement is unavailable; enable kitty placeholder graphics to inspect cursor PNG variants.",
-      ];
+      return graphicsPreviewUnavailableLines("cursor");
     }
     const cell = cellMetrics();
     const variants = [
@@ -1618,6 +1624,54 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function buildBoxEffectPreviewLines() {
+    if (!ensureUnicodePlacement(state)) {
+      return graphicsPreviewUnavailableLines("box");
+    }
+    const cell = cellMetrics();
+    const samples = [
+      "assistant",
+      "tool",
+      "bash",
+      "thinking",
+      "settings",
+      "oauth",
+      "selector",
+      "editor",
+    ];
+    const lines = [
+      "Pi Graphics box preview",
+      "Representative per-surface chrome effects; this does not change piGraphics.boxEffect.",
+      "",
+    ];
+    samples.forEach((type) => {
+      const effect = BOX_TYPE_EFFECTS[type] || "glass";
+      const token = BOX_TYPE_THEME_TOKENS[type] || "accent";
+      const color = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
+      const rendered = renderBoxStripPng({
+        kind: "mid",
+        columns: 14,
+        color,
+        effect,
+        type,
+        rowIndex: 1,
+        ...cell,
+      });
+      const placement = buildPlacement(state, {
+        name: `box-effect-preview-${type}-${effect}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+        png: rendered.png,
+        columns: 14,
+        rows: 1,
+        width: 14,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+      });
+      emitGraphicsCommand(placement.transmit);
+      lines.push(`${type.padEnd(11)} ${String(effect).padEnd(11)} ${placement.lines[0] ?? ""}`);
+    });
+    lines.push("", "Use /gfx box-effect auto for live per-surface mappings; /gfx debug for visible placeholder IDs.");
+    return lines;
+  }
+
   async function showGfxSettingsWindow(ctx, settings, gfx, editor) {
     const effects = ["auto", ...BOX_EFFECT_NAMES];
     const rows = [
@@ -1648,6 +1702,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("", "Preview:");
         lines.push("  assistant=manuscript  tool=schematic  oauth=keyring");
         lines.push("  model=dial  settings=slider  thinking=lantern");
+        lines.push("  /gfx box preview shows per-surface chrome strips.");
         lines.push("  /gfx cursor preview shows cool/warm/hot editor cursor variants.");
         lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
         return lines.map((line) => renderLine(width, line));
@@ -1685,7 +1740,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|cursor preview|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1704,7 +1759,7 @@ export default function piGraphicsExtension(pi) {
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx cursor preview | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -1739,6 +1794,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "cursor-preview" || action === "preview" || (action === "cursor" && String(tokens[1] || "").toLowerCase() === "preview")) {
         ctx.ui.notify(buildEditorCursorPreviewLines().join("\n"), "info");
+        return;
+      }
+      if (action === "box-preview" || (action === "box" && String(tokens[1] || "").toLowerCase() === "preview")) {
+        ctx.ui.notify(buildBoxEffectPreviewLines().join("\n"), "info");
         return;
       }
       if (action === "preset") {

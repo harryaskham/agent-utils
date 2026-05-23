@@ -1301,6 +1301,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_DEBUG: gfx\.debug/);
   assert.match(source, /PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx\.debugPlaceholders/);
   assert.match(source, /BOX_EFFECT_NAMES/);
+  assert.match(source, /BOX_TYPE_EFFECTS/);
+  assert.match(source, /renderBoxStripPng/);
   assert.match(source, /registerShortcut\?\.\("ctrl\+t"/);
   assert.match(source, /\$\{theme\}:static`, theme, mode: "on", editorStyle: "static", boxChrome: true, boxMode: "unicode"/);
   assert.match(source, /\$\{theme\}:unicode/);
@@ -1339,6 +1341,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-cursor-preview-/);
   assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);
   assert.match(source, /\/gfx cursor preview shows cool\/warm\/hot editor cursor variants/);
+  assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
+  assert.match(source, /box-effect-preview-/);
+  assert.match(source, /action === "box-preview"/);
+  assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
