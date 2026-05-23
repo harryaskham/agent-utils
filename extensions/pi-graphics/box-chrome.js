@@ -66,12 +66,12 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
   thinking: "lantern",
-  tool: "schematic",
+  tool: "rig",
   bash: "terminal",
   user: "tapestry",
   custom: "atelier",
@@ -682,6 +682,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(12, w - x), 1, cursor, 24);
       fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(10, w - x - 4), 1, prompt, 22);
     }
+  } else if (effect === "rig") {
+    const harness = [
+      Math.min(255, Math.round(color[0] * 0.42 + 104)),
+      Math.min(255, Math.round(color[1] * 0.76 + 54)),
+      Math.min(255, Math.round(color[2] * 0.64 + 86)),
+    ];
+    const socket = [
+      Math.min(255, Math.round(color[0] * 0.72 + 74)),
+      Math.min(255, Math.round(color[1] * 0.48 + 118)),
+      Math.min(255, Math.round(color[2] * 0.54 + 112)),
+    ];
+    const bolt = [
+      Math.min(255, Math.round(color[0] * 0.30 + 88)),
+      Math.min(255, Math.round(color[1] * 0.66 + 70)),
+      Math.min(255, Math.round(color[2] * 0.88 + 46)),
+    ];
+    // Rig chrome for tool-call surfaces: sparse harness rails, output sockets,
+    // and execution bolts read as active tool machinery without live graphs,
+    // SVG widgets, masks, glyphs, timers, dense texture, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.30));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.74));
+    for (let x = 5; x < w; x += 34) {
+      fillRectAlpha(pixels, w, x, top, Math.min(18, w - x), 1, harness, 34);
+      fillRectAlpha(pixels, w, x + 4, bottom, Math.min(14, w - x - 4), 1, harness, 24);
+      fillRectAlpha(pixels, w, x + 2, mid - 1, 4, 3, socket, 38);
+      if (x + 19 < w) fillRectAlpha(pixels, w, x + 19, mid, 2, 2, bolt, 46);
+    }
+    for (let x = 24; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 4), 1, Math.min(8, h - 2), harness, 26);
+      fillRectAlpha(pixels, w, x + 4, top + 1, Math.min(10, w - x - 4), Math.max(1, bottom - top - 1), socket, 16);
+    }
   } else if (effect === "schematic") {
     const bus = [
       Math.min(255, Math.round(color[0] * 0.36 + 92)),
@@ -693,9 +725,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.46 + 112)),
       Math.min(255, Math.round(color[2] * 0.52 + 116)),
     ];
-    // Tool-call chrome: small circuit symbols and bus traces read as machinery
-    // around tool output, but remain static cached strips instead of live graph
-    // layout or per-call SVG/widget rendering.
+    // Schematic remains available as an explicit tool-call variant: circuit
+    // symbols and bus traces stay static instead of live graph/widget rendering.
     const yTop = Math.max(1, Math.floor(h * 0.34));
     const yBot = Math.min(h - 2, Math.floor(h * 0.68));
     for (let x = 5; x < w; x += 38) {
