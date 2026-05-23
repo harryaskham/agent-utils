@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -93,7 +93,7 @@ export const BOX_TYPE_EFFECTS = {
   theme: "constellation",
   thinkingSelector: "nebula",
   tree: "dendrite",
-  userSelector: "weave",
+  userSelector: "badge",
   agent: "orbit",
   mascot: "orbit",
   customTui: "rune",
@@ -341,6 +341,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.30)), w, 1, thread, 14);
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.68)), w, 1, under, 14);
+  } else if (effect === "badge") {
+    const plate = [
+      Math.min(255, Math.round(color[0] * 0.56 + 104)),
+      Math.min(255, Math.round(color[1] * 0.46 + 116)),
+      Math.min(255, Math.round(color[2] * 0.60 + 82)),
+    ];
+    const pin = [
+      Math.min(255, Math.round(color[0] * 0.32 + 70)),
+      Math.min(255, Math.round(color[1] * 0.68 + 66)),
+      Math.min(255, Math.round(color[2] * 0.82 + 62)),
+    ];
+    // Badge chrome for user selectors: small ID plates and pin dots make account
+    // chooser rows feel like graphical identity cards. Sparse fixed-step marks
+    // avoid noisy portraits while keeping cached PNG strips compact.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 5; x < w; x += 27) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 27) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(13, w - x), 2, plate, 38);
+      if (x + 3 < w) fillRectAlpha(pixels, w, x + 3, Math.max(1, y - 3), 2, 2, pin, 48);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, y, Math.min(8, w - x - 15), 1, pin, 24);
+    }
+    for (let x = 18; x < w; x += 54) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(14, w - x), 1, plate, 24);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(10, w - x - 4), 1, pin, 22);
+    }
   } else if (effect === "glyph") {
     const accent = [
       Math.min(255, Math.round(color[0] * 0.62 + 95)),
