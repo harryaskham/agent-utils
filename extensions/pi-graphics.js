@@ -315,6 +315,19 @@ export default function piGraphicsExtension(pi) {
     editorBackgroundPlacementKey = null;
   }
 
+  function clearEditorCursorPlacement() {
+    if (!editorCursorRelativePlacement) return false;
+    emitGraphicsCommand(buildDeleteCommand({
+      imageId: editorCursorRelativePlacement.imageId,
+      placementId: editorCursorRelativePlacement.placementId,
+      deleteMode: "p",
+      passthrough: state.config.passthrough,
+    }));
+    editorCursorRelativePlacement = null;
+    editorCursorAnchorSeq = 0;
+    return true;
+  }
+
   function cachedPlacementLine(key, buildLine) {
     if (placementLineCache.has(key)) return placementLineCache.get(key);
     const line = buildLine();
@@ -1864,7 +1877,8 @@ export default function piGraphicsExtension(pi) {
         lines.push("  assistant=manuscript  tool=schematic  oauth=keyring");
         lines.push("  model=dial  settings=slider  thinking=lantern");
         lines.push("  /gfx box preview shows per-surface chrome strips.");
-        lines.push("  /gfx cursor preview shows cool/warm/hot editor cursor variants.");
+        lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
+        lines.push("  /gfx cursor clear deletes stale live cursor placement only.");
         lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
         return lines.map((line) => renderLine(width, line));
       },
@@ -1901,7 +1915,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1920,7 +1934,7 @@ export default function piGraphicsExtension(pi) {
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -1955,6 +1969,11 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "cursor-preview" || action === "preview" || (action === "cursor" && String(tokens[1] || "").toLowerCase() === "preview")) {
         ctx.ui.notify(buildEditorCursorPreviewLines().join("\n"), "info");
+        return;
+      }
+      if (action === "cursor-clear" || (action === "cursor" && ["clear", "reset", "cleanup"].includes(String(tokens[1] || "").toLowerCase()))) {
+        const cleared = clearEditorCursorPlacement();
+        ctx.ui.notify(cleared ? "Pi Graphics cursor placement cleared; it will re-anchor on the next editor render." : "Pi Graphics cursor placement was already clear.", "info");
         return;
       }
       if (action === "box-preview" || (action === "box" && String(tokens[1] || "").toLowerCase() === "preview")) {

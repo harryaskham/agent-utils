@@ -413,9 +413,11 @@ displayed using kitty Unicode placeholder cells, so:
   transparent-anchor/relative-placement path as the live cursor, followed by
   cool/warm/hot cursor PNG variants plus a compact live-alignment diagnostic line
   for fresh anchor placement ids, centered offsets, placement-only stale deletion,
-  and reverse-video reset matching. This lets the heat glow, directional trail,
-  frame ticks, and anchor centering be inspected without typing at a precise
-  speed. `/gfx box-mode unicode` uses only placeholder-tied graphics for
+  and reverse-video reset matching. `/gfx cursor clear` deletes only the current
+  live visible cursor placement and resets anchor diagnostics, giving operators a
+  scoped recovery path if a terminal keeps stale cursor art after layout drift.
+  This lets the heat glow, directional trail, frame ticks, and anchor centering
+  be inspected without typing at a precise speed. `/gfx box-mode unicode` uses only placeholder-tied graphics for
   box side borders instead of relative placements.
 * Box wrapping is ANSI/OSC/APC/DCS-safe: placeholder insertion, unicode side
   borders, width truncation, and padding preserve terminal controls instead of

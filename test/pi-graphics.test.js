@@ -1312,6 +1312,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /let editorCursorHeat = 0/);
   assert.match(source, /const placementLineCache = new Map\(\)/);
   assert.match(source, /function cachedPlacementLine\(key, buildLine\)/);
+  assert.match(source, /function clearEditorCursorPlacement\(\)/);
+  assert.match(source, /editorCursorRelativePlacement = null;\n\s+editorCursorAnchorSeq = 0;\n\s+return true/);
   assert.match(source, /editor-workspace-tail-\$\{cols\}-heat-\$\{heatBucket\}/);
   assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /actual heat image is a larger relative placement centered on that anchor/);
@@ -1365,7 +1367,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function buildEditorCursorPreviewLines\(\)/);
   assert.match(source, /editor-cursor-preview-/);
   assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);
-  assert.match(source, /\/gfx cursor preview shows cool\/warm\/hot editor cursor variants/);
+  assert.match(source, /action === "cursor-clear"/);
+  assert.match(source, /\["clear", "reset", "cleanup"\]\.includes/);
+  assert.match(source, /Pi Graphics cursor placement cleared; it will re-anchor on the next editor render\./);
+  assert.match(source, /\/gfx cursor preview shows anchored cool\/warm\/hot variants/);
+  assert.match(source, /\/gfx cursor clear deletes stale live cursor placement only/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
   assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
