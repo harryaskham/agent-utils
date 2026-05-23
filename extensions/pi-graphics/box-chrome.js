@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -84,7 +84,7 @@ export const BOX_TYPE_EFFECTS = {
   input: "compose",
   editor: "margin",
   selector: "picker",
-  login: "portal",
+  login: "gate",
   model: "gauge",
   oauth: "token",
   session: "logbook",
@@ -2553,6 +2553,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 20; x < w; x += 60) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 2, Math.min(8, h - 2), ring, 24);
       fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(12, w - x - 5), 1, tooth, 26);
+    }
+  } else if (effect === "gate") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.54 + 100)),
+      Math.min(255, Math.round(color[1] * 0.66 + 74)),
+      Math.min(255, Math.round(color[2] * 0.62 + 94)),
+    ];
+    const block = [
+      Math.min(255, Math.round(color[0] * 0.76 + 66)),
+      Math.min(255, Math.round(color[1] * 0.52 + 112)),
+      Math.min(255, Math.round(color[2] * 0.70 + 74)),
+    ];
+    const check = [
+      Math.min(255, Math.round(color[0] * 0.30 + 78)),
+      Math.min(255, Math.round(color[1] * 0.72 + 56)),
+      Math.min(255, Math.round(color[2] * 0.50 + 118)),
+    ];
+    // Gate chrome for login panels: access rails, threshold blocks, and entry
+    // checks make authentication read as a controlled gate without logos,
+    // glyphs, sensitive token imagery, masks, animation, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 31) {
+      fillRectAlpha(pixels, w, x, top, Math.min(16, w - x), 1, rail, 34);
+      fillRectAlpha(pixels, w, x, top, 1, Math.min(8, h - top), rail, 30);
+      if (x + 14 < w) fillRectAlpha(pixels, w, x + 14, Math.max(1, top + 2), 2, Math.min(6, h - top - 2), block, 30);
+      fillRectAlpha(pixels, w, x + 3, bottom, Math.min(12, w - x - 3), 1, check, 30);
+      fillRectAlpha(pixels, w, x + 6, Math.max(1, mid - 1), Math.min(9, w - x - 6), 1, block, 28);
+    }
+    for (let x = 18; x < w; x += 62) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(20, w - x), 1, rail, 18);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(14, w - x - 8), 1, check, 20);
     }
   } else if (effect === "portal") {
     const frame = [
