@@ -348,7 +348,7 @@ displayed using kitty Unicode placeholder cells, so:
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `frost`, `holo`, `lattice`,
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
   `metronome`, `hourglass`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `palette`, `orbit`, `crest`,
-  `rune`, `panel`, `fold`, `lantern`, `choice`, `nebula`, `waveform`, `marquee`, `ribbon`, `ledger`, `aperture`, `dial`,
+  `rune`, `panel`, `fold`, `archive`, `lantern`, `choice`, `nebula`, `waveform`, `marquee`, `ribbon`, `ledger`, `aperture`, `dial`,
   `slider`, `caliper`, `mosaic`, `keyring`, `keystone`, `badge`, `compass`, `prompt`,
   and `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
   box strips. Thinking blocks are detected from assistant message content and get
@@ -356,7 +356,7 @@ displayed using kitty Unicode placeholder cells, so:
   custom-TUI surfaces get docked panel tabs and seams, tool surfaces get schematic bus traces and pads,
   bash surfaces get shell prompt rails, tree surfaces get branching dendrite strokes,
   branch surfaces get interlaced braid strands, loader surfaces get
-  static hourglass sand columns and timing ticks, compaction summaries get accordion fold creases,
+  static hourglass sand columns and timing ticks, compaction summaries get archive stack bands and binder tabs,
   agent surfaces get static orbit arcs and satellite pips, mascot surfaces get crest plates and chevrons, custom surfaces
   get sparse constellation nodes, theme surfaces get palette chip bars and calibration ticks, user surfaces get tactile woven thread strokes,
   user-selector surfaces get badge-like identity plates, login surfaces get
