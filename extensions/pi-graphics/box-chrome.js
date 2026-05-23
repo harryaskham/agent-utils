@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -99,7 +99,7 @@ export const BOX_TYPE_EFFECTS = {
   customTui: "panel",
   overlay: "frost",
   widget: "tile",
-  header: "marquee",
+  header: "masthead",
 };
 
 function withAlpha([r, g, b], a) {
@@ -1460,6 +1460,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 4), Math.min(11, w - x), 1, crest, 24);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(9, w - x - 3), 1, trough, 24);
     }
+  } else if (effect === "masthead") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.66 + 76)),
+      Math.min(255, Math.round(color[1] * 0.54 + 104)),
+      Math.min(255, Math.round(color[2] * 0.78 + 58)),
+    ];
+    const cap = [
+      Math.min(255, Math.round(color[0] * 0.34 + 150)),
+      Math.min(255, Math.round(color[1] * 0.64 + 86)),
+      Math.min(255, Math.round(color[2] * 0.52 + 132)),
+    ];
+    const locator = [
+      Math.min(255, Math.round(color[0] * 0.78 + 60)),
+      Math.min(255, Math.round(color[1] * 0.42 + 132)),
+      Math.min(255, Math.round(color[2] * 0.66 + 84)),
+    ];
+    // Masthead chrome for header surfaces: sparse title rails, cap blocks, and
+    // locator ticks make the top of the UI read as a framed session title while
+    // remaining deterministic, rectangle-only, and friendly to cached PNGs.
+    const top = Math.max(1, Math.floor(h * 0.20));
+    const mid = Math.max(1, Math.floor(h * 0.46));
+    const lower = Math.min(h - 2, Math.floor(h * 0.70));
+    for (let x = 3; x < w; x += 32) {
+      fillRectAlpha(pixels, w, x, top, Math.min(21, w - x), 1, rail, 32);
+      fillRectAlpha(pixels, w, x + 1, mid, Math.min(7, w - x - 1), 3, cap, 44);
+      fillRectAlpha(pixels, w, x + 11, Math.max(1, mid - 1), Math.min(10, w - x - 11), 1, locator, 28);
+      fillRectAlpha(pixels, w, x + 17, lower, Math.min(8, w - x - 17), 1, rail, 24);
+    }
+    for (let x = 18; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(7, h - 2), locator, 34);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, lower + 1), Math.min(18, w - x - 5), 1, cap, 18);
+    }
   } else if (effect === "marquee") {
     const bulb = [
       Math.min(255, Math.round(color[0] * 0.36 + 150)),
@@ -1471,9 +1503,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.48 + 95)),
       Math.min(255, Math.round(color[2] * 0.76 + 60)),
     ];
-    // Marquee chrome for headers: quiet title-bar bulbs and top rail ticks make
-    // the session masthead distinct from footer waveform telemetry. Static,
-    // fixed-stride rectangles keep the strip deterministic and PNG-friendly.
+    // Marquee remains available as an explicit header variant: quiet title-bar
+    // bulbs and top rail ticks keep a theatre-style masthead without timers.
     const top = Math.max(1, Math.floor(h * 0.18));
     const mid = Math.max(1, Math.floor(h * 0.48));
     fillRectAlpha(pixels, w, 0, top, w, 1, rail, 24);

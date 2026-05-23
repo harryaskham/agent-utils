@@ -48,7 +48,7 @@ test("box strip edges are directional", () => {
 });
 
 test("renderBoxStripPng effect variants produce distinct graphics", () => {
-  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "veil", "frost", "holo", "lattice", "contour", "manuscript", "tapestry", "weave", "badge", "glyph", "sextant", "compass", "prompt", "schematic", "blueprint", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "signal", "halo", "caret", "bevel", "chamfer", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "lantern", "choice", "nebula", "ticker", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "gauge", "dial", "slider", "caliper", "tile", "mosaic", "portal", "keyring", "keystone"];
+  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "veil", "frost", "holo", "lattice", "contour", "manuscript", "tapestry", "weave", "badge", "glyph", "sextant", "compass", "prompt", "schematic", "blueprint", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "signal", "halo", "caret", "bevel", "chamfer", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "lantern", "choice", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "gauge", "dial", "slider", "caliper", "tile", "mosaic", "portal", "keyring", "keystone"];
   const payloads = new Set(variants.map((effect) => renderBoxStripPng({
     kind: "mid",
     columns: 24,
