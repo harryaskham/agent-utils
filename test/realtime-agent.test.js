@@ -347,6 +347,49 @@ test("/rt-status full emits the same diagnostics without requiring a live realti
   assert.match(message, /mic capture: inactive/);
 });
 
+test("realtime backend resolution smoke tests do not require audio devices", async () => {
+  const previous = {
+    backend: process.env.PI_RT_AUDIO_BACKEND,
+    pulse: process.env.PULSE_SERVER,
+    record: process.env.PI_RT_RECORD_CMD,
+    playback: process.env.PI_RT_PLAYBACK_CMD,
+  };
+  delete process.env.PULSE_SERVER;
+  delete process.env.PI_RT_RECORD_CMD;
+  delete process.env.PI_RT_PLAYBACK_CMD;
+  try {
+    const cases = [
+      { backend: "pulse", label: /audioBackend: pulse · out:pulse\/in:pulse/, record: /record: parec /, playback: /playback: pacat / },
+      { backend: "coreaudio", label: /audioBackend: coreaudio · out:coreaudio\/in:avfoundation/, record: /record: ffmpeg .*avfoundation/, playback: /playback: ffplay / },
+      { backend: "audiotoolbox", label: /audioBackend: audiotoolbox · out:audiotoolbox\/in:avfoundation/, record: /record: ffmpeg .*avfoundation/, playback: /playback: ffmpeg .*audiotoolbox/ },
+      { backend: "sox", label: /audioBackend: sox · out:sox\/in:sox/, record: /record: rec /, playback: /playback: play / },
+      { backend: "ffplay", label: /audioBackend: ffplay · out:ffplay\/in:sox/, record: /record: rec /, playback: /playback: ffplay / },
+    ];
+    for (const c of cases) {
+      process.env.PI_RT_AUDIO_BACKEND = c.backend;
+      const { pi, commands, handlers, notifications, ctx } = makeHarness();
+      realtimeAgentExtension(pi);
+      handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+      await commands.get("rt-status").handler("full", ctx);
+
+      const message = notifications.at(-1)?.message || "";
+      assert.match(message, c.label, c.backend);
+      assert.match(message, c.record, c.backend);
+      assert.match(message, c.playback, c.backend);
+    }
+  } finally {
+    if (previous.backend === undefined) delete process.env.PI_RT_AUDIO_BACKEND;
+    else process.env.PI_RT_AUDIO_BACKEND = previous.backend;
+    if (previous.pulse === undefined) delete process.env.PULSE_SERVER;
+    else process.env.PULSE_SERVER = previous.pulse;
+    if (previous.record === undefined) delete process.env.PI_RT_RECORD_CMD;
+    else process.env.PI_RT_RECORD_CMD = previous.record;
+    if (previous.playback === undefined) delete process.env.PI_RT_PLAYBACK_CMD;
+    else process.env.PI_RT_PLAYBACK_CMD = previous.playback;
+  }
+});
+
 test("server VAD turn detection honors threshold, silence, and prefix env controls", async () => {
   const previous = {
     threshold: process.env.PI_RT_VAD_THRESHOLD,
