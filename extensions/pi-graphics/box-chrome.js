@@ -66,11 +66,11 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
-  thinking: "lantern",
+  thinking: "candle",
   tool: "rig",
   bash: "terminal",
   user: "tapestry",
@@ -1545,6 +1545,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(12, h - 2), tab, 30);
       fillRectAlpha(pixels, w, x + 4, lower, Math.min(14, w - x - 4), 1, stack, 22);
     }
+  } else if (effect === "candle") {
+    const flame = [
+      Math.min(255, Math.round(color[0] * 0.78 + 70)),
+      Math.min(255, Math.round(color[1] * 0.62 + 96)),
+      Math.min(255, Math.round(color[2] * 0.36 + 140)),
+    ];
+    const wick = [
+      Math.min(255, Math.round(color[0] * 0.30 + 70)),
+      Math.min(255, Math.round(color[1] * 0.48 + 76)),
+      Math.min(255, Math.round(color[2] * 0.86 + 42)),
+    ];
+    const glint = [
+      Math.min(255, Math.round(color[0] * 0.86 + 50)),
+      Math.min(255, Math.round(color[1] * 0.50 + 122)),
+      Math.min(255, Math.round(color[2] * 0.54 + 108)),
+    ];
+    // Candle chrome for thinking surfaces: sparse wick rails, flame panes, and
+    // thought glints imply quiet reasoning without timers, animation loops,
+    // glyphs, masks, graph layout, dense texture, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 6; x < w; x += 28) {
+      const y = Math.max(1, Math.min(h - 4, mid - 2 + (Math.floor(x / 28) % 3)));
+      fillRectAlpha(pixels, w, x, top, Math.min(9, w - x), 1, flame, 30);
+      fillRectAlpha(pixels, w, x + 2, y, Math.min(8, w - x - 2), 2, flame, 34);
+      fillRectAlpha(pixels, w, x + 6, Math.max(1, y - 3), 1, Math.min(7, h - 2), wick, 30);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, lower, 2, 2, glint, 42);
+    }
+    for (let x = 20; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 6), Math.min(14, w - x), 1, wick, 20);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(10, w - x - 5), 1, flame, 24);
+    }
   } else if (effect === "lantern") {
     const glow = [
       Math.min(255, Math.round(color[0] * 0.76 + 70)),
@@ -1556,9 +1589,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.46 + 74)),
       Math.min(255, Math.round(color[2] * 0.86 + 42)),
     ];
-    // Lantern chrome for thinking surfaces: quiet window slats and warm glows
-    // imply cognition happening behind translucent panels. It is fixed-stride,
-    // rectangle-only, and static, so thought updates reuse cached strip PNGs.
+    // Lantern remains available as an explicit thinking variant: quiet window
+    // slats and warm glows stay fixed-stride, rectangle-only, and static.
     const mid = Math.max(1, Math.floor(h * 0.50));
     for (let x = 6; x < w; x += 26) {
       const y = Math.max(1, Math.min(h - 4, mid - 3 + (Math.floor(x / 26) % 3)));
