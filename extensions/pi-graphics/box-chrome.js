@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -94,8 +94,8 @@ export const BOX_TYPE_EFFECTS = {
   thinkingSelector: "cloud",
   tree: "blueprint",
   userSelector: "weave",
-  agent: "signal",
-  mascot: "glyph",
+  agent: "orbit",
+  mascot: "orbit",
   customTui: "contour",
   overlay: "prism",
   widget: "lattice",
@@ -445,6 +445,33 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 18; x < w; x += 47) {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 47) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 1, line, 22);
+    }
+  } else if (effect === "orbit") {
+    const ring = [
+      Math.min(255, Math.round(color[0] * 0.46 + 100)),
+      Math.min(255, Math.round(color[1] * 0.62 + 85)),
+      Math.min(255, Math.round(color[2] * 0.86 + 65)),
+    ];
+    const satellite = [
+      Math.min(255, Math.round(color[0] * 0.78 + 70)),
+      Math.min(255, Math.round(color[1] * 0.50 + 105)),
+      Math.min(255, Math.round(color[2] * 0.55 + 105)),
+    ];
+    // Orbit chrome for agent/mascot surfaces: coarse arc segments and satellite
+    // pips imply personality and motion while remaining a static cached strip.
+    // No trigonometric per-pixel field: just a few fixed-stride rectangles.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 4; x < w; x += 26) {
+      const arcTop = Math.max(1, mid - 3 + ((x / 26) % 2));
+      const arcBot = Math.min(h - 2, mid + 3 - ((x / 26) % 2));
+      fillRectAlpha(pixels, w, x, arcTop, Math.min(12, w - x), 1, ring, 34);
+      fillRectAlpha(pixels, w, x + 4, arcBot, Math.min(12, w - x - 4), 1, ring, 28);
+      fillRectAlpha(pixels, w, x + 2, mid, 2, 2, satellite, 54);
+    }
+    for (let x = 16; x < w; x += 53) {
+      const y = Math.max(1, Math.min(h - 2, mid + ((x / 53) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, 3, 3, satellite, 48);
+      fillRectAlpha(pixels, w, x + 4, y, Math.min(7, w - x - 4), 1, ring, 24);
     }
   }
 }
