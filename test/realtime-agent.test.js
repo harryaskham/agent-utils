@@ -296,21 +296,37 @@ test("/rt-off clears realtime widget and footer statuses", async () => {
 });
 
 test("/rt-doctor surfaces provider, Pulse, command, and hint diagnostics", async () => {
-  const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
-  realtimeAgentExtension(pi);
-  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+  const previous = {
+    openai: process.env.OPENAI_API_KEY,
+    rt: process.env.PI_RT_API_KEY,
+  };
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.PI_RT_API_KEY;
+  try {
+    const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
-  await commands.get("rt-doctor").handler("", ctx);
+    await commands.get("rt-doctor").handler("", ctx);
 
-  const message = notifications.at(-1)?.message || "";
-  assert.match(message, /Realtime doctor/);
-  assert.match(message, /provider:/);
-  assert.match(message, /audioBackend: pulse/);
-  assert.match(message, /pulse: PULSE_SERVER=/);
-  assert.match(message, /commands:/);
-  assert.match(message, /hint:/);
-  assert.match(message, /Pulse is the default backend|Pulse-first setup active/);
-  assert.ok(widgets.has("realtime-status"));
+    const message = notifications.at(-1)?.message || "";
+    assert.match(message, /Realtime doctor/);
+    assert.match(message, /provider:/);
+    assert.match(message, /apiKey:<missing>/);
+    assert.match(message, /audioBackend: pulse/);
+    assert.match(message, /pulse: PULSE_SERVER=/);
+    assert.match(message, /commands:/);
+    assert.match(message, /micError:/);
+    assert.match(message, /hint:/);
+    assert.match(message, /auth: set OPENAI_API_KEY or PI_RT_API_KEY/);
+    assert.match(message, /Pulse is the default backend|Pulse-first setup active/);
+    assert.ok(widgets.has("realtime-status"));
+  } finally {
+    if (previous.openai === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previous.openai;
+    if (previous.rt === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = previous.rt;
+  }
 });
 
 test("/rt-status full emits the same diagnostics without requiring a live realtime connection", async () => {

@@ -822,6 +822,7 @@ class RealtimeSession {
     this.micMode = null;
     this.lastCtx = null;
     this.lastResponseError = null;
+    this.lastMicError = null;
     this.reasoningRejected = false;
     this.speedRejected = false;
     this.current = null;                     // active per-response state
@@ -1007,6 +1008,7 @@ class RealtimeSession {
     if (this.connecting) return this.connecting;
 
     this.connecting = this._connect(ctx).catch((e) => {
+      this.lastResponseError = e?.message || String(e);
       try { this.ws?.close(); } catch {}
       this.ws = null;
       this.connected = false;
@@ -1131,6 +1133,7 @@ class RealtimeSession {
     });
     ws.on("error", (e) => {
       const err = new Error(`Realtime WebSocket error: ${e.message || "unknown"}`);
+      this.lastResponseError = err.message;
       this.setPhase("error");
       this.notify(err.message, "error");
       this.failPending(err);
@@ -1942,6 +1945,7 @@ class RealtimeSession {
         }
         return;
       }
+      this.lastResponseError = msg;
       this.failPending(new Error(msg));
       return;
     }
@@ -2098,10 +2102,14 @@ class RealtimeSession {
     });
     proc.stderr.on("data", (d) => {
       const s = String(d).trim();
+      if (s) this.lastMicError = truncateDiagnostic(s);
       if (s && this.config.debug) this.notify(`mic: ${s}`, "warning");
     });
     proc.on("exit", (code, signal) => {
       if (this.mic === proc) {
+        if ((code || signal) && this.lastMicBytes <= 0 && !this.lastMicError) {
+          this.lastMicError = `record command exited before audio: ${code ?? "?"}${signal ? `/${signal}` : ""}`;
+        }
         this.mic = null;
         this.micMode = null;
         this.sendTurnDetectionUpdate();
@@ -2377,6 +2385,19 @@ function realtimePanelLines(session, config) {
   ];
 }
 
+function truncateDiagnostic(text, limit = 300) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  return s.length > limit ? `${s.slice(0, limit)}…` : s;
+}
+
+function isAuthFailure(text) {
+  return /(401|403|unauthori[sz]ed|invalid[_ -]?(api[_ -]?)?key|incorrect api key|authentication failed|permission denied)/i.test(String(text || ""));
+}
+
+function isMicPermissionFailure(text) {
+  return /(microphone|avfoundation|coreaudio|audio input|input device|record).*(permission|denied|not authorized|not authorised)|Operation not permitted|EACCES|Input\/output error/i.test(String(text || ""));
+}
+
 function diagnosticLines(session, config) {
   const provider = config.directAzure ? "azure" : "openai/proxy";
   const backend = process.env.PI_RT_AUDIO_BACKEND || "pulse";
@@ -2398,10 +2419,18 @@ function diagnosticLines(session, config) {
     `PULSE_SINK=${process.env.PULSE_SINK || "<default>"}`,
   ].join(" · ");
   const hints = [];
-  if (!apiKey) hints.push(config.directAzure ? "set PI_RT_AZURE_API_KEY" : "set OPENAI_API_KEY or PI_RT_API_KEY");
-  if (/\bparec\b/.test(record) && !commandAvailable("parec")) hints.push("install PulseAudio tools or set PI_RT_RECORD_CMD");
-  if (/\bpacat\b/.test(playback) && !commandAvailable("pacat")) hints.push("install PulseAudio tools or set PI_RT_PLAYBACK_CMD");
-  if (/ffmpeg|ffplay/.test(`${record}\n${playback}`) && !commandAvailable("ffmpeg") && !commandAvailable("ffplay")) hints.push("install ffmpeg for CoreAudio/ffplay backend");
+  const responseError = truncateDiagnostic(session.lastResponseError || "");
+  const micError = truncateDiagnostic(session.lastMicError || "");
+  const playbackError = truncateDiagnostic(config.lastPlaybackError || "");
+  if (!apiKey) hints.push(config.directAzure ? "auth: set PI_RT_AZURE_API_KEY or AZURE_OPENAI_API_KEY" : "auth: set OPENAI_API_KEY or PI_RT_API_KEY");
+  if (responseError && isAuthFailure(responseError)) hints.push("auth: realtime server rejected credentials; refresh the API key/token and retry /rt-doctor");
+  if (/\bparec\b/.test(record) && !commandAvailable("parec")) hints.push("audio input: install PulseAudio tools (macOS: brew install pulseaudio) or set PI_RT_RECORD_CMD");
+  if (/\bpacat\b/.test(playback) && !commandAvailable("pacat")) hints.push("audio output: install PulseAudio tools (macOS: brew install pulseaudio) or set PI_RT_PLAYBACK_CMD");
+  if (/ffmpeg/.test(record) && !commandAvailable("ffmpeg")) hints.push("audio input: install ffmpeg for CoreAudio/AVFoundation capture or set PI_RT_RECORD_CMD");
+  if (/ffplay/.test(playback) && !commandAvailable("ffplay")) hints.push("audio output: install ffmpeg/ffplay or set PI_RT_PLAYBACK_CMD");
+  if ((micError || playbackError) && isMicPermissionFailure(`${micError}\n${playbackError}`)) hints.push("macOS audio permission: grant microphone/accessibility permission to the terminal/Pi process, then restart Pi");
+  if (micError && /No such file|not found|command not found/i.test(micError)) hints.push("audio input: record command failed to start; check PI_RT_RECORD_CMD and PATH");
+  if (playbackError && /No such file|not found|command not found/i.test(playbackError)) hints.push("audio output: playback command failed to start; check PI_RT_PLAYBACK_CMD and PATH");
   if (backend === "pulse") hints.push(process.env.PULSE_SERVER
     ? "Pulse-first setup active; confirm phone sink/source with PULSE_SINK/PULSE_SOURCE if audio routes incorrectly"
     : "Pulse is the default backend; if using phone sink/source, set/confirm PULSE_SERVER/SINK/SOURCE, or override PI_RT_AUDIO_BACKEND for local devices");
@@ -2417,8 +2446,9 @@ function diagnosticLines(session, config) {
     `vad: threshold:${config.vadThreshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
     `state: ${JSON.stringify(session.state?.snapshot?.({ sttOnly: config.sttOnly, audioEnabled: config.audioEnabled }) || {})}`,
     `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length} · micRestart:${session.micRestartAttempts || 0}${session.micRestartTimer ? " pending" : ""}`,
+    `micError: ${micError || "<none>"}`,
     `reconnect: ${config.autoReconnect ? "on" : "off"} · attempts:${config.reconnectAttempts || 0}/${config.reconnectMaxAttempts || 0} · next:${config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0}ms · last:${config.lastDisconnectReason || "<none>"}`,
-    `lastResponseError: ${session.lastResponseError || "<none>"}`,
+    `lastResponseError: ${responseError || "<none>"}`,
     `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,
   ];
 }
@@ -2482,6 +2512,7 @@ export function createRealtimeControls({ pi, session, config }) {
         state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled, lastInputMode: session.lastTurnInputMode || null }),
         health: {
           lastResponseError: session.lastResponseError || null,
+          lastMicError: session.lastMicError || null,
           lastPlaybackError: config.lastPlaybackError || null,
           lastPlaybackExit: config.lastPlaybackExit || null,
           lastPlaybackStartedAt: config.lastPlaybackStartedAt || null,
