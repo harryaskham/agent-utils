@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -76,10 +76,10 @@ export const BOX_TYPE_EFFECTS = {
   user: "weave",
   custom: "sparkle",
   skill: "contour",
-  branch: "scanline",
-  compaction: "glass",
+  branch: "signal",
+  compaction: "signal",
   footer: "holo",
-  loader: "aurora",
+  loader: "signal",
   border: "glass",
   input: "prism",
   editor: "glass",
@@ -94,7 +94,7 @@ export const BOX_TYPE_EFFECTS = {
   thinkingSelector: "cloud",
   tree: "blueprint",
   userSelector: "weave",
-  agent: "aurora",
+  agent: "signal",
   mascot: "glyph",
   customTui: "contour",
   overlay: "prism",
@@ -367,6 +367,34 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 3, Math.floor(h * 0.62) - ((x / 47) % 3)));
       fillRectAlpha(pixels, w, x, y, 5, 1, rule, 44);
       fillRectAlpha(pixels, w, x + 2, y - 2, 1, 5, rule, 36);
+    }
+  } else if (effect === "signal") {
+    const pulse = [
+      Math.min(255, Math.round(color[0] * 0.48 + 100)),
+      Math.min(255, Math.round(color[1] * 0.80 + 50)),
+      Math.min(255, Math.round(color[2] * 0.55 + 90)),
+    ];
+    const echo = [
+      Math.min(255, Math.round(color[0] * 0.30 + 50)),
+      Math.min(255, Math.round(color[1] * 0.55 + 70)),
+      Math.min(255, Math.round(color[2] * 0.80 + 70)),
+    ];
+    // Signal chrome for status-like surfaces: beacon pips and echo rails imply
+    // live state without animation. Fixed strides keep it deterministic, cheap,
+    // and highly compressible while still reading as an active graphical layer.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 5; x < w; x += 21) {
+      const y = Math.max(1, Math.min(h - 2, mid + ((x / 7) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, 3, 2, pulse, 58);
+      fillRectAlpha(pixels, w, x + 4, y, Math.min(6, w - x - 4), 1, echo, 32);
+    }
+    for (let x = 0; x < w; x += 34) {
+      fillRectAlpha(pixels, w, x, Math.max(0, mid - 4), Math.min(13, w - x), 1, echo, 22);
+      fillRectAlpha(pixels, w, x + 3, Math.min(h - 1, mid + 4), Math.min(10, w - x - 3), 1, pulse, 24);
+    }
+    for (let x = 12; x < w; x += 55) {
+      const y = Math.max(1, Math.min(h - 3, 2 + ((x * 5) % Math.max(1, h - 5))));
+      fillRectAlpha(pixels, w, x, y, 1, 5, pulse, 38);
     }
   }
 }
