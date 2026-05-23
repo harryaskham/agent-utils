@@ -66,10 +66,10 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
-  assistant: "manuscript",
+  assistant: "folio",
   thinking: "lantern",
   tool: "rig",
   bash: "terminal",
@@ -377,6 +377,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x + 3, y + 1, Math.min(8, w - x - 3), 1, color, 36);
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.5)), w, 1, node, 18);
+  } else if (effect === "folio") {
+    const margin = [
+      Math.min(255, Math.round(color[0] * 0.52 + 108)),
+      Math.min(255, Math.round(color[1] * 0.66 + 78)),
+      Math.min(255, Math.round(color[2] * 0.72 + 66)),
+    ];
+    const tab = [
+      Math.min(255, Math.round(color[0] * 0.74 + 72)),
+      Math.min(255, Math.round(color[1] * 0.46 + 122)),
+      Math.min(255, Math.round(color[2] * 0.48 + 124)),
+    ];
+    const guide = [
+      Math.min(255, Math.round(color[0] * 0.32 + 90)),
+      Math.min(255, Math.round(color[1] * 0.70 + 62)),
+      Math.min(255, Math.round(color[2] * 0.84 + 46)),
+    ];
+    // Folio chrome for assistant prose: sparse page margins, annotation tabs,
+    // and reading guide marks frame responses without glyphs, masks, parchment
+    // texture, graph layout, timers, or repaint loops.
+    const upper = Math.max(1, Math.floor(h * 0.28));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.74));
+    fillRectAlpha(pixels, w, 0, upper, w, 1, margin, 14);
+    fillRectAlpha(pixels, w, 0, lower, w, 1, guide, 12);
+    for (let x = 5; x < w; x += 36) {
+      fillRectAlpha(pixels, w, x, Math.max(1, upper - 2), Math.min(15, w - x), 1, margin, 32);
+      fillRectAlpha(pixels, w, x + 4, lower + 1 < h ? lower + 1 : lower, Math.min(10, w - x - 4), 1, guide, 22);
+      if (x + 19 < w) fillRectAlpha(pixels, w, x + 19, Math.max(1, mid - 1), 4, 3, tab, 42);
+    }
+    for (let x = 18; x < w; x += 62) {
+      fillRectAlpha(pixels, w, x, Math.max(1, upper - 5), 2, Math.min(8, h - 2), guide, 26);
+      fillRectAlpha(pixels, w, x + 4, Math.max(1, upper - 3), Math.min(8, w - x - 4), 1, tab, 30);
+    }
   } else if (effect === "manuscript") {
     const rubric = [
       Math.min(255, Math.round(color[0] * 0.72 + 86)),
@@ -388,9 +421,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.68 + 64)),
       Math.min(255, Math.round(color[2] * 0.76 + 48)),
     ];
-    // Assistant chrome as illuminated manuscript margins: sparse rubric marks,
-    // guide rules, and tiny cap blocks make prose feel framed by real graphics
-    // while avoiding glyph rendering, masks, or dense parchment textures.
+    // Manuscript remains available as an explicit assistant variant: rubric
+    // marks, guide rules, and tiny cap blocks frame prose without dense texture.
     const upper = Math.max(1, Math.floor(h * 0.30));
     const lower = Math.min(h - 2, Math.floor(h * 0.70));
     fillRectAlpha(pixels, w, 0, upper, w, 1, ink, 14);
