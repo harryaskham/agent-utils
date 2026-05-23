@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -87,7 +87,7 @@ export const BOX_TYPE_EFFECTS = {
   login: "weave",
   model: "lattice",
   oauth: "weave",
-  session: "holo",
+  session: "ribbon",
   settings: "lattice",
   image: "glyph",
   theme: "constellation",
@@ -571,6 +571,34 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 14; x < w; x += 37) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 4), Math.min(11, w - x), 1, crest, 24);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(9, w - x - 3), 1, trough, 24);
+    }
+  } else if (effect === "ribbon") {
+    const silk = [
+      Math.min(255, Math.round(color[0] * 0.74 + 82)),
+      Math.min(255, Math.round(color[1] * 0.50 + 116)),
+      Math.min(255, Math.round(color[2] * 0.82 + 58)),
+    ];
+    const shadow = [
+      Math.min(255, Math.round(color[0] * 0.28 + 55)),
+      Math.min(255, Math.round(color[1] * 0.62 + 72)),
+      Math.min(255, Math.round(color[2] * 0.72 + 70)),
+    ];
+    // Ribbon chrome for session containers: interleaved satin strips give the
+    // persistent session frame a crafted, graphical edge. It uses only short
+    // fixed-stride rectangles, so cached PNG strips stay low entropy and cheap.
+    const upper = Math.max(1, Math.floor(h * 0.30));
+    const lower = Math.min(h - 2, Math.floor(h * 0.72));
+    for (let x = 4; x < w; x += 18) {
+      const flip = Math.floor(x / 18) % 2;
+      const aY = flip ? upper + 1 : lower - 1;
+      const bY = flip ? lower - 1 : upper + 1;
+      fillRectAlpha(pixels, w, x, aY, Math.min(12, w - x), 2, silk, 34);
+      fillRectAlpha(pixels, w, x + 5, bY, Math.min(12, w - x - 5), 1, shadow, 30);
+      if (x + 2 < w) fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, aY + (flip ? 2 : -2)), 2, 2, silk, 42);
+    }
+    for (let x = 12; x < w; x += 54) {
+      fillRectAlpha(pixels, w, x, upper, Math.min(18, w - x), 1, silk, 26);
+      fillRectAlpha(pixels, w, x + 7, lower, Math.min(16, w - x - 7), 1, shadow, 24);
     }
   }
 }

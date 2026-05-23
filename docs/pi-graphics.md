@@ -347,19 +347,19 @@ displayed using kitty Unicode placeholder cells, so:
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `holo`, `lattice`,
   `contour`, `weave`, `glyph`, `blueprint`, `signal`, `halo`, `constellation`,
-  `orbit`, `rune`, `fold`, `nebula`, and `waveform`) and caches both uploads and
-  relative placements so ordinary rerenders do not re-place identical box strips.
-  Thinking blocks are detected from assistant message content and get sparse nebula
-  mist lanes, assistant surfaces get calm topographic contour bands, skill/custom-TUI
-  surfaces get compact rune sigils, tool/bash/tree surfaces get sparse blueprint
-  drafting rules, branch/loader surfaces get beacon-like signal pips, compaction
-  summaries get accordion fold creases, agent/mascot surfaces get static orbit arcs
-  and satellite pips, custom/theme surfaces get sparse constellation nodes, user/login/
-  OAuth surfaces get tactile woven thread strokes, selector/image surfaces get sparse
-  graphical glyph marks, editor/border surfaces get soft focus halo rails, input/
-  overlay surfaces get a lightweight prism-facet glass treatment, header/footer surfaces
-  get static waveform rails, session surfaces get a sparse holographic laminate, and
-  model/settings/widget surfaces get a low-entropy structural lattice. If a box moves or resizes, stale relative
+  `orbit`, `rune`, `fold`, `nebula`, `waveform`, and `ribbon`) and caches both
+  uploads and relative placements so ordinary rerenders do not re-place identical
+  box strips. Thinking blocks are detected from assistant message content and get
+  sparse nebula mist lanes, assistant surfaces get calm topographic contour bands,
+  skill/custom-TUI surfaces get compact rune sigils, tool/bash/tree surfaces get
+  sparse blueprint drafting rules, branch/loader surfaces get beacon-like signal
+  pips, compaction summaries get accordion fold creases, agent/mascot surfaces get
+  static orbit arcs and satellite pips, custom/theme surfaces get sparse constellation
+  nodes, user/login/OAuth surfaces get tactile woven thread strokes, selector/image
+  surfaces get sparse graphical glyph marks, editor/border surfaces get soft focus
+  halo rails, input/overlay surfaces get a lightweight prism-facet glass treatment,
+  header/footer surfaces get static waveform rails, session surfaces get interleaved
+  ribbon strips, and model/settings/widget surfaces get a low-entropy structural lattice. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension
