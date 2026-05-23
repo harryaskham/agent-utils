@@ -345,7 +345,7 @@ displayed using kitty Unicode placeholder cells, so:
   historical ids. This avoids low-id and cross-process collisions with other
   kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
-  `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `frost`, `holo`, `lattice`,
+  `scanline`, `circuit`, `sparkle`, `cloud`, `facet`, `prism`, `veil`, `frost`, `holo`, `lattice`,
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `vine`, `dendrite`, `braid`,
   `metronome`, `hourglass`, `signal`, `halo`, `caret`, `bevel`, `chamfer`, `constellation`, `palette`, `orbit`, `crest`,
   `rune`, `panel`, `fold`, `archive`, `lantern`, `choice`, `nebula`, `waveform`, `marquee`, `ribbon`, `ledger`, `lens`, `aperture`, `gauge`, `dial`,
@@ -363,9 +363,9 @@ displayed using kitty Unicode placeholder cells, so:
   portal threshold frames and entry glints, OAuth provider selectors get keyring token-exchange marks,
   selector surfaces get sextant sight lines, index ticks, and navigation pins, image
   surfaces get lens focus brackets, glass glints, and crop-guide ticks, editor surfaces get slim
-  caret beams, border surfaces get bevel planes, clipped-corner highlights, and shadow seams, input surfaces get a
-  lightweight prism-facet glass treatment, overlay surfaces get frosted corner crystals and cold edge glints,
-  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse dashboard tiles, corner pins, and pane separators. `aperture` remains available as an explicit shutter variant, `chamfer` remains available as an explicit cut-corner border variant, `compass` remains available as an explicit directional-selector variant, `dendrite` remains available as an explicit branching-tree variant, `dial` remains available as an explicit instrument variant, `mosaic` remains available as an explicit assembled-tile variant, and `keystone` remains available as an explicit gateway variant. If a box moves or resizes, stale relative
+  caret beams, border surfaces get bevel planes, clipped-corner highlights, and shadow seams, input surfaces get
+  sparse angled facets, entry glints, and prompt guide cuts, overlay surfaces get frosted corner crystals and cold edge glints,
+  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse dashboard tiles, corner pins, and pane separators. `aperture` remains available as an explicit shutter variant, `chamfer` remains available as an explicit cut-corner border variant, `compass` remains available as an explicit directional-selector variant, `dendrite` remains available as an explicit branching-tree variant, `dial` remains available as an explicit instrument variant, `mosaic` remains available as an explicit assembled-tile variant, `prism` remains available as an explicit glass-facet variant, and `keystone` remains available as an explicit gateway variant. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension
