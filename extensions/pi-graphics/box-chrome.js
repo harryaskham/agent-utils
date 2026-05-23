@@ -66,14 +66,14 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
   thinking: "lantern",
   tool: "schematic",
   bash: "prompt",
-  user: "weave",
+  user: "tapestry",
   custom: "constellation",
   skill: "rune",
   branch: "braid",
@@ -397,6 +397,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = 1 + ((x * 3) % Math.max(1, h - 3));
       fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 2, x % 2 ? highlight : shadow, 30);
     }
+  } else if (effect === "tapestry") {
+    const band = [
+      Math.min(255, Math.round(color[0] * 0.60 + 92)),
+      Math.min(255, Math.round(color[1] * 0.46 + 110)),
+      Math.min(255, Math.round(color[2] * 0.58 + 92)),
+    ];
+    const selvage = [
+      Math.min(255, Math.round(color[0] * 0.32 + 74)),
+      Math.min(255, Math.round(color[1] * 0.62 + 74)),
+      Math.min(255, Math.round(color[2] * 0.46 + 116)),
+    ];
+    const knot = [
+      Math.min(255, Math.round(color[0] * 0.78 + 58)),
+      Math.min(255, Math.round(color[1] * 0.54 + 104)),
+      Math.min(255, Math.round(color[2] * 0.70 + 72)),
+    ];
+    // Tapestry chrome for user messages: sparse woven bands, selvage ticks, and
+    // message-thread knots feel hand-authored without dense cloth texture. Fixed
+    // strides keep the cached PNG strip low-entropy and deterministic.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 4; x < w; x += 28) {
+      const y = Math.max(1, Math.min(h - 2, mid + (Math.floor(x / 28) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(16, w - x), 1, band, 36);
+      fillRectAlpha(pixels, w, x + 3, Math.max(1, y - 3), Math.min(11, w - x - 3), 1, selvage, 24);
+      fillRectAlpha(pixels, w, x + 1, top, 1, Math.min(5, h - top), selvage, 28);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, Math.min(h - 2, bottom), 2, 2, knot, 40);
+    }
+    for (let x = 16; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(20, w - x), 1, band, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(16, w - x - 8), 1, selvage, 18);
+    }
   } else if (effect === "weave") {
     const thread = [
       Math.min(255, Math.round(color[0] * 0.55 + 115)),
@@ -408,9 +441,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.55 + 80)),
       Math.min(255, Math.round(color[2] * 0.45 + 70)),
     ];
-    // Woven user chrome: alternating short warp/weft strokes suggest a tactile
-    // message surface without dense texture. The two coarse passes are cheap,
-    // deterministic, and PNG-friendly compared with per-pixel dithering.
+    // Weave remains available as an explicit tactile variant: alternating short
+    // warp/weft strokes suggest a message surface without dense texture.
     for (let x = 2; x < w; x += 18) {
       const y = 2 + ((x / 2) % Math.max(1, h - 4));
       fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 1, thread, 42);
