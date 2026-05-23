@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "palette", "satellite", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -95,7 +95,7 @@ export const BOX_TYPE_EFFECTS = {
   tree: "vine",
   userSelector: "badge",
   agent: "satellite",
-  mascot: "crest",
+  mascot: "emblem",
   customTui: "panel",
   overlay: "frost",
   widget: "tile",
@@ -1098,6 +1098,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, y, 3, 3, satellite, 48);
       fillRectAlpha(pixels, w, x + 4, y, Math.min(7, w - x - 4), 1, ring, 24);
     }
+  } else if (effect === "emblem") {
+    const plate = [
+      Math.min(255, Math.round(color[0] * 0.62 + 90)),
+      Math.min(255, Math.round(color[1] * 0.50 + 110)),
+      Math.min(255, Math.round(color[2] * 0.56 + 106)),
+    ];
+    const ribbon = [
+      Math.min(255, Math.round(color[0] * 0.32 + 74)),
+      Math.min(255, Math.round(color[1] * 0.66 + 70)),
+      Math.min(255, Math.round(color[2] * 0.48 + 122)),
+    ];
+    const stud = [
+      Math.min(255, Math.round(color[0] * 0.78 + 56)),
+      Math.min(255, Math.round(color[1] * 0.46 + 122)),
+      Math.min(255, Math.round(color[2] * 0.72 + 72)),
+    ];
+    // Emblem chrome for mascot surfaces: character plates, ribbon cuts, and
+    // identity studs read as a mascot badge without glyphs, masks, sparkle
+    // noise, graph layout, timers, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.50));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 4; x < w; x += 30) {
+      const flip = Math.floor(x / 30) % 2;
+      const y = flip ? mid - 1 : top;
+      fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 2, plate, 40);
+      fillRectAlpha(pixels, w, x + 3, y + 2, Math.min(8, w - x - 3), 1, ribbon, 32);
+      fillRectAlpha(pixels, w, x + 5, bottom, Math.min(10, w - x - 5), 1, plate, 24);
+      if (x + 14 < w) fillRectAlpha(pixels, w, x + 14, Math.max(1, mid - 2), 2, 2, stud, 36);
+    }
+    for (let x = 16; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(18, w - x), 1, stud, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(14, w - x - 8), 1, ribbon, 18);
+    }
   } else if (effect === "crest") {
     const plate = [
       Math.min(255, Math.round(color[0] * 0.60 + 92)),
@@ -1109,9 +1143,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.32 + 150)),
       Math.min(255, Math.round(color[2] * 0.42 + 135)),
     ];
-    // Crest chrome for mascot surfaces: small heraldic plates and chevrons read
-    // as a character badge without text glyphs or sparkle/noise fields. Static
-    // fixed-stride rectangles keep mascot strips cached and low entropy.
+    // Crest remains available as an explicit mascot variant: small heraldic
+    // plates and chevrons read as a character badge without glyphs or noise.
     const top = Math.max(1, Math.floor(h * 0.22));
     const mid = Math.max(1, Math.floor(h * 0.50));
     const bottom = Math.min(h - 2, Math.floor(h * 0.78));
