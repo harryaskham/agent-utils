@@ -1625,6 +1625,7 @@ export default function piGraphicsExtension(pi) {
       `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
       `debug=${gfx.debug ? "on" : "off"} placeholders=${(gfx.debugPlaceholders ?? gfx.debug) ? "visible U" : "kitty"}`,
       `cell=${gfx.cell?.widthPx || 8}x${gfx.cell?.heightPx || "auto"} line=${gfx.cell?.lineHeightScale || 1.2}`,
+      `cursor anchorSeq=${editorCursorAnchorSeq} visiblePlacement=${editorCursorRelativePlacement?.placementId ?? "none"} offsets=-5,-2 staleDelete=p reset=0/27`,
       "Use /gfx debug to toggle; /gfx cursor preview to inspect heat variants.",
       "Use /gfx box-effect auto for per-surface chrome.",
     ];
@@ -1657,6 +1658,7 @@ export default function piGraphicsExtension(pi) {
     const lines = [
       "Pi Graphics cursor preview",
       "cool/warm/hot variants use the same 11x5 centered anchor-relative artwork as the live editor cursor.",
+      "live diagnostics: fresh anchor placement ids, offsets=-5,-2, staleDelete=p, reverse reset=0/27.",
       "",
     ];
     variants.forEach((variant) => {

@@ -1315,6 +1315,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-workspace-tail-\$\{cols\}-heat-\$\{heatBucket\}/);
   assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /actual heat image is a larger relative placement centered on that anchor/);
+  assert.match(source, /cursor anchorSeq=\$\{editorCursorAnchorSeq\} visiblePlacement=\$\{editorCursorRelativePlacement\?\.placementId \?\? "none"\} offsets=-5,-2 staleDelete=p reset=0\/27/);
+  assert.match(source, /live diagnostics: fresh anchor placement ids, offsets=-5,-2, staleDelete=p, reverse reset=0\/27\./);
   assert.match(source, /let editorCursorAnchorSeq = 0/);
   assert.match(source, /let editorCursorRelativePlacement = null/);
   assert.match(source, /editorCursorAnchorSeq = \(editorCursorAnchorSeq \+ 1\) % 0x800000/);

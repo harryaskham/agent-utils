@@ -409,9 +409,11 @@ displayed using kitty Unicode placeholder cells, so:
   paired rows with shorter cached strips so the expanded surface set stays
   scannable. It does not change `piGraphics.boxEffect`, so the mapped styles can
   be compared quickly.
-  `/gfx cursor preview` emits bounded cool/warm/hot cursor PNG variants so the heat
-  glow, directional trail, and frame ticks can be inspected without typing at a
-  precise speed. `/gfx box-mode unicode` uses only placeholder-tied graphics for
+  `/gfx cursor preview` emits bounded cool/warm/hot cursor PNG variants plus a
+  compact live-alignment diagnostic line for fresh anchor placement ids, centered
+  offsets, placement-only stale deletion, and reverse-video reset matching, so the
+  heat glow, directional trail, and frame ticks can be inspected without typing at
+  a precise speed. `/gfx box-mode unicode` uses only placeholder-tied graphics for
   box side borders instead of relative placements.
 * Box wrapping is ANSI/OSC/APC/DCS-safe: placeholder insertion, unicode side
   borders, width truncation, and padding preserve terminal controls instead of
