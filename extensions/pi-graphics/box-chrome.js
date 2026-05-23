@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -83,7 +83,7 @@ export const BOX_TYPE_EFFECTS = {
   border: "frame",
   input: "compose",
   editor: "margin",
-  selector: "sextant",
+  selector: "picker",
   login: "portal",
   model: "gauge",
   oauth: "keyring",
@@ -664,6 +664,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 6) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, 2, 2, accent, 48);
       fillRectAlpha(pixels, w, x + 2, y - 1, 1, 4, ghost, 30);
+    }
+  } else if (effect === "picker") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.56 + 102)),
+      Math.min(255, Math.round(color[1] * 0.60 + 88)),
+      Math.min(255, Math.round(color[2] * 0.66 + 82)),
+    ];
+    const bracket = [
+      Math.min(255, Math.round(color[0] * 0.80 + 58)),
+      Math.min(255, Math.round(color[1] * 0.48 + 118)),
+      Math.min(255, Math.round(color[2] * 0.54 + 114)),
+    ];
+    const pip = [
+      Math.min(255, Math.round(color[0] * 0.30 + 78)),
+      Math.min(255, Math.round(color[1] * 0.66 + 68)),
+      Math.min(255, Math.round(color[2] * 0.82 + 60)),
+    ];
+    // Picker chrome for generic selectors: option rails, selection brackets,
+    // and index pips make menu choice areas explicit without timers, glyphs,
+    // masks, graph layout, dense texture, animation loops, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 6; x < w; x += 29) {
+      const y = Math.max(1, Math.min(h - 2, mid + (Math.floor(x / 29) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(15, w - x), 1, rail, 34);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, y - 3), 2, Math.min(7, h - 2), bracket, 30);
+      fillRectAlpha(pixels, w, x + 11, bottom, 2, 2, pip, 38);
+      if (x + 18 < w) fillRectAlpha(pixels, w, x + 18, top, Math.min(8, w - x - 18), 1, bracket, 24);
+    }
+    for (let x = 18; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(18, w - x), 1, rail, 18);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(12, w - x - 8), 1, pip, 20);
     }
   } else if (effect === "sextant") {
     const sight = [
