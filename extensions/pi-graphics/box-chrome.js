@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -96,7 +96,7 @@ export const BOX_TYPE_EFFECTS = {
   userSelector: "tag",
   agent: "satellite",
   mascot: "emblem",
-  customTui: "panel",
+  customTui: "workbench",
   overlay: "scrim",
   widget: "tile",
   header: "masthead",
@@ -1342,6 +1342,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 15) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 1, stroke, 24);
     }
+  } else if (effect === "workbench") {
+    const dock = [
+      Math.min(255, Math.round(color[0] * 0.56 + 104)),
+      Math.min(255, Math.round(color[1] * 0.62 + 84)),
+      Math.min(255, Math.round(color[2] * 0.70 + 72)),
+    ];
+    const grip = [
+      Math.min(255, Math.round(color[0] * 0.30 + 134)),
+      Math.min(255, Math.round(color[1] * 0.52 + 110)),
+      Math.min(255, Math.round(color[2] * 0.82 + 54)),
+    ];
+    const socket = [
+      Math.min(255, Math.round(color[0] * 0.76 + 62)),
+      Math.min(255, Math.round(color[1] * 0.42 + 130)),
+      Math.min(255, Math.round(color[2] * 0.58 + 102)),
+    ];
+    // Workbench chrome for custom TUI surfaces: sparse dock rails, resize grips,
+    // and widget sockets make embedded tools feel hand-arranged without grids,
+    // glyphs, graph layout, timers, masks, dense texture, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.20));
+    const mid = Math.max(1, Math.floor(h * 0.50));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 3; x < w; x += 30) {
+      fillRectAlpha(pixels, w, x, top, Math.min(20, w - x), 1, dock, 32);
+      fillRectAlpha(pixels, w, x + 2, lower, Math.min(18, w - x - 2), 1, dock, 24);
+      fillRectAlpha(pixels, w, x + 5, mid - 1, 2, 4, grip, 36);
+      fillRectAlpha(pixels, w, x + 13, mid, 3, 2, socket, 44);
+    }
+    for (let x = 18; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(8, h - 2), socket, 30);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, lower + 1), Math.min(16, w - x - 5), 1, grip, 18);
+    }
   } else if (effect === "panel") {
     const rail = [
       Math.min(255, Math.round(color[0] * 0.50 + 115)),
@@ -1353,9 +1385,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.42 + 125)),
       Math.min(255, Math.round(color[2] * 0.58 + 105)),
     ];
-    // Panel chrome for custom TUI surfaces: dock tabs, panel seams, and compact
-    // tool-window rails distinguish embedded widgets from skill rune sigils.
-    // Sparse rect strokes keep the cached strip deterministic and cheap.
+    // Panel remains available as an explicit custom-TUI variant: dock tabs,
+    // panel seams, and compact rails stay deterministic and cheap.
     const top = Math.max(1, Math.floor(h * 0.18));
     const mid = Math.max(1, Math.floor(h * 0.50));
     const lower = Math.min(h - 2, Math.floor(h * 0.74));
