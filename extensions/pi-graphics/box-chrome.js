@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "aurora",
@@ -78,7 +78,7 @@ export const BOX_TYPE_EFFECTS = {
   skill: "aurora",
   branch: "scanline",
   compaction: "glass",
-  footer: "circuit",
+  footer: "holo",
   loader: "aurora",
   border: "glass",
   input: "prism",
@@ -87,7 +87,7 @@ export const BOX_TYPE_EFFECTS = {
   login: "aurora",
   model: "circuit",
   oauth: "aurora",
-  session: "scanline",
+  session: "holo",
   settings: "circuit",
   image: "aurora",
   theme: "sparkle",
@@ -99,7 +99,7 @@ export const BOX_TYPE_EFFECTS = {
   customTui: "aurora",
   overlay: "prism",
   widget: "circuit",
-  header: "aurora",
+  header: "holo",
 };
 
 function withAlpha([r, g, b], a) {
@@ -218,6 +218,34 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.18)), w, 1, secondary, 26);
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.72)), w, 1, color, 22);
+  } else if (effect === "holo") {
+    const cyan = [
+      Math.min(255, Math.round(color[0] * 0.45 + 105)),
+      Math.min(255, Math.round(color[1] * 0.55 + 120)),
+      Math.min(255, Math.round(color[2] * 0.35 + 165)),
+    ];
+    const violet = [
+      Math.min(255, Math.round(color[0] * 0.55 + 120)),
+      Math.min(255, Math.round(color[1] * 0.35 + 55)),
+      Math.min(255, Math.round(color[2] * 0.70 + 105)),
+    ];
+    // Holographic header/footer laminate: sparse full-width scan glints plus
+    // thin vertical diffraction slivers. It gives a richer UI-chrome read while
+    // staying rectangle-only and deterministic, so cached strip PNGs remain tiny.
+    for (let y = 1; y < h; y += 5) {
+      fillRectAlpha(pixels, w, 0, y, w, 1, y % 10 ? cyan : violet, 18 + (y % 3) * 4);
+    }
+    for (let x = 3; x < w; x += 16) {
+      const band = Math.floor(x / 16);
+      const tint = band % 2 ? violet : cyan;
+      const y0 = band % 3;
+      fillRectAlpha(pixels, w, x, y0, 1, Math.max(2, h - y0 * 2), tint, 38);
+      if (x + 4 < w) fillRectAlpha(pixels, w, x + 4, Math.max(0, h - 3 - y0), Math.min(7, w - x - 4), 1, tint, 48);
+    }
+    for (let x = 10; x < w; x += 37) {
+      const y = 2 + ((x * 5) % Math.max(1, h - 5));
+      fillRectAlpha(pixels, w, x, y, Math.min(13, w - x), 2, x % 2 ? violet : cyan, 32);
+    }
   }
 }
 
