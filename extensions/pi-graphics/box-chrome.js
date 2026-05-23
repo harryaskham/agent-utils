@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "studio", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "recipe", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "studio", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "recipe", "sigil", "rune", "workbench", "panel", "fold", "capsule", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -77,7 +77,7 @@ export const BOX_TYPE_EFFECTS = {
   custom: "studio",
   skill: "recipe",
   branch: "fork",
-  compaction: "archive",
+  compaction: "capsule",
   footer: "ticker",
   loader: "shuttle",
   border: "frame",
@@ -1849,6 +1849,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 14; x < w; x += 44) {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.68) - (Math.floor(x / 44) % 2)));
       fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 2, highlight, 38);
+    }
+  } else if (effect === "capsule") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.48 + 108)),
+      Math.min(255, Math.round(color[1] * 0.64 + 76)),
+      Math.min(255, Math.round(color[2] * 0.70 + 78)),
+    ];
+    const band = [
+      Math.min(255, Math.round(color[0] * 0.76 + 66)),
+      Math.min(255, Math.round(color[1] * 0.54 + 106)),
+      Math.min(255, Math.round(color[2] * 0.50 + 126)),
+    ];
+    const seal = [
+      Math.min(255, Math.round(color[0] * 0.32 + 78)),
+      Math.min(255, Math.round(color[1] * 0.72 + 58)),
+      Math.min(255, Math.round(color[2] * 0.52 + 116)),
+    ];
+    // Capsule chrome for compaction summaries: archive rails, compression bands,
+    // and sealed checkpoint ticks make condensed context feel safely packaged.
+    // Static fixed-stride rectangles avoid costly paper/noise textures.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 4; x < w; x += 29) {
+      fillRectAlpha(pixels, w, x, top, Math.min(15, w - x), 1, rail, 32);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, mid - 1), Math.min(12, w - x - 2), 2, band, 34);
+      fillRectAlpha(pixels, w, x + 5, lower, Math.min(10, w - x - 5), 1, rail, 26);
+      if (x + 14 < w) fillRectAlpha(pixels, w, x + 14, Math.max(1, mid - 3), 2, 3, seal, 34);
+    }
+    for (let x = 18; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(20, w - x), 1, seal, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, lower + 1), Math.min(14, w - x - 8), 1, band, 18);
     }
   } else if (effect === "archive") {
     const stack = [
