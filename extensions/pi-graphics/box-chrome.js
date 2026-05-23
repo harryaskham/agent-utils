@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "margin", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -82,7 +82,7 @@ export const BOX_TYPE_EFFECTS = {
   loader: "shuttle",
   border: "bevel",
   input: "compose",
-  editor: "caret",
+  editor: "margin",
   selector: "sextant",
   login: "portal",
   model: "gauge",
@@ -1120,6 +1120,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (const x of [2, Math.max(2, w - 15)]) {
       fillRectAlpha(pixels, w, x, Math.max(0, top - 1), Math.min(12, w - x), 2, inner, 46);
       fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, bottom), Math.min(8, w - x - 2), 1, outer, 34);
+    }
+  } else if (effect === "margin") {
+    const gutter = [
+      Math.min(255, Math.round(color[0] * 0.48 + 112)),
+      Math.min(255, Math.round(color[1] * 0.62 + 84)),
+      Math.min(255, Math.round(color[2] * 0.74 + 64)),
+    ];
+    const pin = [
+      Math.min(255, Math.round(color[0] * 0.78 + 64)),
+      Math.min(255, Math.round(color[1] * 0.48 + 118)),
+      Math.min(255, Math.round(color[2] * 0.56 + 106)),
+    ];
+    const guide = [
+      Math.min(255, Math.round(color[0] * 0.30 + 72)),
+      Math.min(255, Math.round(color[1] * 0.70 + 60)),
+      Math.min(255, Math.round(color[2] * 0.48 + 126)),
+    ];
+    // Margin chrome for editor surfaces: manuscript gutters, edit pins, and
+    // draft guide marks frame a stable writing area without blinking cursors,
+    // timers, dense textures, glyphs, masks, graph layout, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    fillRectAlpha(pixels, w, 0, top, w, 1, gutter, 16);
+    fillRectAlpha(pixels, w, 0, bottom, w, 1, guide, 18);
+    for (let x = 6; x < w; x += 31) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 31) % 3) - 1));
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(9, h - 2), gutter, 32);
+      fillRectAlpha(pixels, w, x + 3, y, Math.min(13, w - x - 3), 1, guide, 30);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, bottom, 2, 2, pin, 38);
+    }
+    for (let x = 20; x < w; x += 62) {
+      fillRectAlpha(pixels, w, x, top, Math.min(12, w - x), 1, pin, 24);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, bottom + 1), Math.min(10, w - x - 5), 1, gutter, 18);
     }
   } else if (effect === "caret") {
     const beam = [
