@@ -1638,10 +1638,18 @@ export default function piGraphicsExtension(pi) {
       "oauth",
       "selector",
       "editor",
+      "compaction",
+      "session",
+      "loader",
+      "customTui",
+      "theme",
+      "mascot",
+      "header",
+      "overlay",
     ];
     const lines = [
       "Pi Graphics box preview",
-      "Representative per-surface chrome effects; this does not change piGraphics.boxEffect.",
+      "Representative per-surface chrome effects, including recent dedicated mappings; this does not change piGraphics.boxEffect.",
       "",
     ];
     samples.forEach((type) => {
@@ -1666,7 +1674,7 @@ export default function piGraphicsExtension(pi) {
         zIndex: PI_GRAPHICS_Z.SURFACE,
       });
       emitGraphicsCommand(placement.transmit);
-      lines.push(`${type.padEnd(11)} ${String(effect).padEnd(11)} ${placement.lines[0] ?? ""}`);
+      lines.push(`${type.padEnd(12)} ${String(effect).padEnd(11)} ${placement.lines[0] ?? ""}`);
     });
     lines.push("", "Use /gfx box-effect auto for live per-surface mappings; /gfx debug for visible placeholder IDs.");
     return lines;

@@ -400,8 +400,10 @@ displayed using kitty Unicode placeholder cells, so:
   specific effect or `/gfx box-effect auto` can return to per-message-type effects.
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
   placeholder cells. `/gfx box preview` emits bounded representative per-surface
-  box strips (assistant/tool/bash/thinking/settings/oauth/selector/editor) without
-  changing `piGraphics.boxEffect`, so the mapped styles can be compared quickly.
+  box strips, including the dedicated assistant/tool/bash/thinking/settings/oauth/
+  selector/editor plus compaction/session/loader/custom-TUI/theme/mascot/header/
+  overlay mappings, without changing `piGraphics.boxEffect`, so the mapped styles
+  can be compared quickly.
   `/gfx cursor preview` emits bounded cool/warm/hot cursor PNG variants so the heat
   glow, directional trail, and frame ticks can be inspected without typing at a
   precise speed. `/gfx box-mode unicode` uses only placeholder-tied graphics for
