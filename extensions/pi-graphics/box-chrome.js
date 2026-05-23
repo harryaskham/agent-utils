@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "recipe", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -75,7 +75,7 @@ export const BOX_TYPE_EFFECTS = {
   bash: "terminal",
   user: "note",
   custom: "atelier",
-  skill: "sigil",
+  skill: "recipe",
   branch: "fork",
   compaction: "archive",
   footer: "ticker",
@@ -1644,6 +1644,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 2), Math.min(8, w - x), 1, edge, 30);
       fillRectAlpha(pixels, w, x + 3, mid, Math.min(8, w - x - 3), 1, plate, 28);
       fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, mid + 2), Math.min(8, w - x - 6), 1, edge, 24);
+    }
+  } else if (effect === "recipe") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.56 + 94)),
+      Math.min(255, Math.round(color[1] * 0.62 + 82)),
+      Math.min(255, Math.round(color[2] * 0.70 + 74)),
+    ];
+    const card = [
+      Math.min(255, Math.round(color[0] * 0.72 + 72)),
+      Math.min(255, Math.round(color[1] * 0.50 + 112)),
+      Math.min(255, Math.round(color[2] * 0.58 + 102)),
+    ];
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.34 + 80)),
+      Math.min(255, Math.round(color[1] * 0.72 + 58)),
+      Math.min(255, Math.round(color[2] * 0.48 + 122)),
+    ];
+    // Recipe chrome for skills: capability rails, ingredient cards, and
+    // activation ticks make skill surfaces read as composed instructions
+    // without glyphs, masks, dense textures, graph layout, timers, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.23));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 6; x < w; x += 34) {
+      fillRectAlpha(pixels, w, x, top, Math.min(17, w - x), 1, rail, 32);
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 2), Math.min(11, w - x), 2, card, 36);
+      fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, mid + 2), Math.min(7, w - x - 2), 1, rail, 24);
+      fillRectAlpha(pixels, w, x + 5, bottom, Math.min(10, w - x - 5), 1, tick, 30);
+      if (x + 12 < w) fillRectAlpha(pixels, w, x + 12, Math.max(1, top + 2), 2, 2, tick, 34);
+    }
+    for (let x = 20; x < w; x += 64) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(20, w - x), 1, rail, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(14, w - x - 8), 1, card, 18);
     }
   } else if (effect === "sigil") {
     const seal = [
