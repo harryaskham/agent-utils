@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -78,7 +78,7 @@ export const BOX_TYPE_EFFECTS = {
   skill: "sigil",
   branch: "helix",
   compaction: "archive",
-  footer: "waveform",
+  footer: "ticker",
   loader: "hourglass",
   border: "bevel",
   input: "facet",
@@ -1372,6 +1372,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, y, 2, 2, glint, 54);
       if (x + 4 < w) fillRectAlpha(pixels, w, x + 3, Math.max(1, y - 1), 1, 4, mist, 28);
     }
+  } else if (effect === "ticker") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.48 + 104)),
+      Math.min(255, Math.round(color[1] * 0.70 + 66)),
+      Math.min(255, Math.round(color[2] * 0.58 + 104)),
+    ];
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.76 + 58)),
+      Math.min(255, Math.round(color[1] * 0.50 + 112)),
+      Math.min(255, Math.round(color[2] * 0.70 + 74)),
+    ];
+    const edge = [
+      Math.min(255, Math.round(color[0] * 0.28 + 72)),
+      Math.min(255, Math.round(color[1] * 0.62 + 76)),
+      Math.min(255, Math.round(color[2] * 0.84 + 56)),
+    ];
+    // Ticker chrome for footer/status rails: sparse status rails, beat ticks,
+    // and terminal edge markers imply a live footer without timers, dense
+    // waveforms, glyphs, masks, graph layout, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.28));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 3; x < w; x += 24) {
+      fillRectAlpha(pixels, w, x, top, Math.min(15, w - x), 1, rail, 26);
+      fillRectAlpha(pixels, w, x + 3, bottom, Math.min(13, w - x - 3), 1, edge, 22);
+      fillRectAlpha(pixels, w, x + 7, Math.max(1, mid - 2), 1, 5, tick, 34);
+      if (x + 16 < w) fillRectAlpha(pixels, w, x + 16, mid, 2, 2, tick, 32);
+    }
+    for (let x = 15; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(18, w - x), 1, tick, 16);
+      fillRectAlpha(pixels, w, x + 7, Math.min(h - 2, bottom + 1), Math.min(15, w - x - 7), 1, rail, 18);
+    }
   } else if (effect === "waveform") {
     const crest = [
       Math.min(255, Math.round(color[0] * 0.50 + 105)),
@@ -1383,9 +1415,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.52 + 80)),
       Math.min(255, Math.round(color[2] * 0.86 + 70)),
     ];
-    // Waveform chrome for persistent header/footer rails: short static signal
-    // crests imply a live session status line without APNG or timers. The strip
-    // is sparse and fixed-stride, so it remains cheap and PNG-compressible.
+    // Waveform remains available as an explicit footer/status variant: static
+    // signal crests imply a live session status line without APNG or timers.
     const mid = Math.max(1, Math.floor(h * 0.52));
     for (let x = 2; x < w; x += 10) {
       const phase = Math.floor(x / 10) % 4;
