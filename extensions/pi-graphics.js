@@ -295,6 +295,7 @@ export default function piGraphicsExtension(pi) {
   // Track which images have already been uploaded so we never resend payload.
   const uploadedImages = new Set();
   const relativeUploaded = new Set();
+  const placementLineCache = new Map();
   let editorBackgroundPlacementKey = null;
   let editorCursorLastText = "";
   let editorCursorLastAt = 0;
@@ -308,7 +309,15 @@ export default function piGraphicsExtension(pi) {
   function resetGraphicsUploadCaches() {
     uploadedImages.clear();
     relativeUploaded.clear();
+    placementLineCache.clear();
     editorBackgroundPlacementKey = null;
+  }
+
+  function cachedPlacementLine(key, buildLine) {
+    if (placementLineCache.has(key)) return placementLineCache.get(key);
+    const line = buildLine();
+    placementLineCache.set(key, line);
+    return line;
   }
 
   function approximateVisibleCells(text) {
@@ -507,64 +516,70 @@ export default function piGraphicsExtension(pi) {
     const leadingCells = 0;
     const frames = editorStyle() === "animated" ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
+    const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
+    const borderAlpha = Math.max(0.32, Math.min(0.6, alpha));
+    const glowAlpha = Math.max(0.22, alpha * 0.62);
     if (frames <= 1) {
-      const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-      const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
-      const rendered = renderEditorBorderFramesPngs({
-        columns: visualCols,
-        edge,
-        ...cell,
-        frames: 1,
-        borderColor,
-        glowColor,
-        borderAlpha: Math.max(0.32, Math.min(0.6, alpha)),
-        glowAlpha: Math.max(0.22, alpha * 0.62),
+      const key = `editor-border-static-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+      const line = cachedPlacementLine(key, () => {
+        const rendered = renderEditorBorderFramesPngs({
+          columns: visualCols,
+          edge,
+          ...cell,
+          frames: 1,
+          borderColor,
+          glowColor,
+          borderAlpha,
+          glowAlpha,
+        });
+        const placement = buildPlacement(state, {
+          name: key,
+          png: rendered.pngs[0],
+          columns: rendered.columns,
+          rows: rendered.rows,
+          width: visualCols,
+          zIndex: PI_GRAPHICS_Z.SURFACE,
+        });
+        emitGraphicsCommand(placement.transmit);
+        return placement.lines[0] ?? "";
       });
-      const placement = buildPlacement(state, {
-        name: `editor-border-static-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-        png: rendered.pngs[0],
-        columns: rendered.columns,
-        rows: rendered.rows,
-        width: visualCols,
-        zIndex: PI_GRAPHICS_Z.SURFACE,
-      });
-      emitGraphicsCommand(placement.transmit);
-      const line = placement.lines[0] ?? "";
       return `${" ".repeat(leadingCells)}${line}${" ".repeat(Math.max(0, cols - leadingCells - visualCols))}`;
     }
     // Animated path: virtual Unicode placeholder anchor + non-virtual relative
     // animation placement. Per-edge image ids prevent the two edges from
     // sharing a frame counter or placement.
-    const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
-    const rendered = renderEditorBorderFramesPngs({
-      columns: visualCols,
-      edge,
-      ...cell,
-      frames,
-      borderColor,
-      glowColor,
-      borderAlpha: Math.max(0.32, Math.min(0.6, alpha)),
-      glowAlpha: Math.max(0.22, alpha * 0.62),
-    });
     const anchorKey = `editor-border-anchor-${edge}-${visualCols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-    const animKey = `editor-border-anim-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
+    const animKey = `editor-border-anim-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
     const anchorImageId = piGraphicsImageId(anchorKey);
     const animImageId = piGraphicsImageId(animKey);
     const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${visualCols}`);
     const animPlacementId = piGraphicsPlacementId(`editor-border-anim-placement-${edge}-${visualCols}`);
     ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
-    ensureRelativeAnimUploaded({
-      animImageId,
-      anchorImageId,
-      anchorPlacementId,
-      animPlacementId,
-      pngs: rendered.pngs,
-      delayMs,
-      columns: rendered.columns,
-      rows: rendered.rows,
-      frames,
-    });
+    const relativeAnimKey = `${animImageId}->${anchorImageId}/${anchorPlacementId}`;
+    if (!uploadedImages.has(animImageId) || !relativeUploaded.has(relativeAnimKey)) {
+      const rendered = renderEditorBorderFramesPngs({
+        columns: visualCols,
+        edge,
+        ...cell,
+        frames,
+        borderColor,
+        glowColor,
+        borderAlpha,
+        glowAlpha,
+      });
+      ensureRelativeAnimUploaded({
+        animImageId,
+        anchorImageId,
+        anchorPlacementId,
+        animPlacementId,
+        pngs: rendered.pngs,
+        delayMs,
+        columns: rendered.columns,
+        rows: rendered.rows,
+        frames,
+      });
+    }
     // Render the editor row as a single Unicode placeholder cell at column 0
     // followed by transparent spaces. The placeholder anchors the virtual
     // placement; the relative non-virtual animation placement follows it.
@@ -589,25 +604,31 @@ export default function piGraphicsExtension(pi) {
   function buildStatusIndicatorPrefix() {
     if (!ensureUnicodePlacement(state)) return "";
     const cell = cellMetrics();
-    const rendered = renderPromptEnclosure({
-      columns: 1,
-      variant: "glow",
-      alpha: Math.max(0.18, editorAlpha() * 0.38),
-      leftColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
-      rightColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
-      fadeEdges: false,
-      ...cell,
+    const alpha = Math.max(0.18, editorAlpha() * 0.38);
+    const leftColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
+    const rightColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const key = `status-indicator-${alpha.toFixed(3)}-${leftColor}-${rightColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    return cachedPlacementLine(key, () => {
+      const rendered = renderPromptEnclosure({
+        columns: 1,
+        variant: "glow",
+        alpha,
+        leftColor,
+        rightColor,
+        fadeEdges: false,
+        ...cell,
+      });
+      const placement = buildPlacement(state, {
+        name: key,
+        png: rendered.png,
+        columns: rendered.columns,
+        rows: rendered.rows,
+        width: 1,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+      });
+      emitGraphicsCommand(placement.transmit);
+      return placement.lines[0] ?? "";
     });
-    const placement = buildPlacement(state, {
-      name: `status-indicator-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-      png: rendered.png,
-      columns: rendered.columns,
-      rows: rendered.rows,
-      width: 1,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
-    });
-    emitGraphicsCommand(placement.transmit);
-    return placement.lines[0] ?? "";
   }
 
   function decorateStatusValue(value) {
@@ -647,25 +668,32 @@ export default function piGraphicsExtension(pi) {
     const safeHeat = Math.max(0, Math.min(1, Number(heat) || 0));
     const heatBucket = Math.max(0, Math.min(5, Math.round(safeHeat * 5)));
     const cell = cellMetrics();
-    const rendered = renderPromptEnclosure({
-      columns: cols,
-      variant: safeHeat > 0.35 ? "scanlines" : "glow",
-      alpha: Math.max(0.16, editorAlpha() * (0.30 + safeHeat * 0.34)),
-      leftColor: safeHeat > 0.62 ? "#ff9f5a" : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
-      rightColor: safeHeat > 0.35 ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead") : getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
-      fadeEdges: true,
-      ...cell,
+    const variant = safeHeat > 0.35 ? "scanlines" : "glow";
+    const alpha = Math.max(0.16, editorAlpha() * (0.30 + safeHeat * 0.34));
+    const leftColor = safeHeat > 0.62 ? "#ff9f5a" : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
+    const rightColor = safeHeat > 0.35 ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead") : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const key = `editor-workspace-tail-${cols}-heat-${heatBucket}-${variant}-${alpha.toFixed(3)}-${leftColor}-${rightColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    return cachedPlacementLine(key, () => {
+      const rendered = renderPromptEnclosure({
+        columns: cols,
+        variant,
+        alpha,
+        leftColor,
+        rightColor,
+        fadeEdges: true,
+        ...cell,
+      });
+      const placement = buildPlacement(state, {
+        name: key,
+        png: rendered.png,
+        columns: rendered.columns,
+        rows: rendered.rows,
+        width: cols,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+      });
+      emitGraphicsCommand(placement.transmit);
+      return placement.lines[0] ?? null;
     });
-    const placement = buildPlacement(state, {
-      name: `editor-workspace-tail-${cols}-heat-${heatBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-      png: rendered.png,
-      columns: rendered.columns,
-      rows: rendered.rows,
-      width: cols,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
-    });
-    emitGraphicsCommand(placement.transmit);
-    return placement.lines[0] ?? null;
   }
 
   function fillEditorTrailingWorkspace(line) {
@@ -740,21 +768,21 @@ export default function piGraphicsExtension(pi) {
     emitGraphicsCommand(anchor.transmit);
     const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
     const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
-    const rendered = renderEditorCursorVline({
-      alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
-      backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
-      coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-      glowColor,
-      columns: 11,
-      rows: 5,
-      heat,
-      glowRadiusCells: 0.9 + heat * 0.9,
-      trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
-      trailDirection,
-      ...cell,
-    });
     const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(imageId)) {
+      const rendered = renderEditorCursorVline({
+        alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
+        backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+        coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
+        glowColor,
+        columns: 11,
+        rows: 5,
+        heat,
+        glowRadiusCells: 0.9 + heat * 0.9,
+        trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
+        trailDirection,
+        ...cell,
+      });
       emitGraphicsCommand(serializeKittyGraphicsChunks({
         a: "t",
         f: 100,
@@ -779,10 +807,10 @@ export default function piGraphicsExtension(pi) {
       placementId,
       parentImageId: anchor.imageId,
       parentPlacementId: anchor.placementId,
-      hOffset: -Math.floor(rendered.columns / 2),
-      vOffset: -Math.floor(rendered.rows / 2),
-      columns: rendered.columns,
-      rows: rendered.rows,
+      hOffset: -5,
+      vOffset: -2,
+      columns: 11,
+      rows: 5,
       zIndex: PI_GRAPHICS_Z.SURFACE,
       passthrough: state.config.passthrough,
     });

@@ -2934,12 +2934,19 @@ export function createBoxChromeRuntime({
   const anchorsUploaded = new Set();
   const relativePlacements = new Set();
   const relativeByAnchorRow = new Map();
+  const unicodeCellLines = new Map();
+
+  function stripRenderRowBucket(rowIndex) {
+    const row = Math.trunc(Number(rowIndex) || 0);
+    return row >= 0 && row < 3 ? row : 3;
+  }
 
   function ensureStripUploaded({ kind, type, width, colorRgb, effect, rowIndex }) {
-    const stripKey = `box-strip-${type}-${kind}-${effect}-${rowIndex}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
+    const renderRowIndex = stripRenderRowBucket(rowIndex);
+    const stripKey = `box-strip-${type}-${kind}-${effect}-${renderRowIndex}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
     const imageId = piGraphicsImageId(stripKey);
     if (uploadedStrips.has(imageId)) return imageId;
-    const { png } = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex });
+    const { png } = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex: renderRowIndex });
     const upload = serializeKittyGraphicsChunks({
       a: "t",
       f: 100,
@@ -3035,17 +3042,24 @@ export function createBoxChromeRuntime({
 
   function applyUnicodeBoxRows({ type, instanceId, lines, colorRgb, width, effect }) {
     const makeCell = (side, rowIndex, kind) => {
-      const rendered = renderBoxStripPng({ kind, columns: 1, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex });
+      const renderRowIndex = stripRenderRowBucket(rowIndex);
+      const cellKey = `box-unicode-cell-${type}-${side}-${kind}-${effect}-${renderRowIndex}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}-${debugPlaceholders ? "debug" : "kitty"}`;
+      const cached = unicodeCellLines.get(cellKey);
+      if (cached) return cached;
+      const rendered = renderBoxStripPng({ kind, columns: 1, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex: renderRowIndex });
       const placement = buildPlacement(state, {
-        name: `box-unicode-cell-${type}-${side}-${kind}-${effect}-${instanceId}-${rowIndex}`,
+        name: `box-unicode-cell-${type}-${side}-${kind}-${effect}-${renderRowIndex}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`,
         png: rendered.png,
         columns: 1,
         rows: 1,
         width: 1,
         zIndex: BOX_Z_INDEX,
       });
-      if (debugPlaceholders) return `${placement.transmit}${debugPlaceholderCell({ imageId: placement.imageId, placementId: placement.placementId })}`;
-      return `${placement.transmit}${placement.lines[0] || ""}`;
+      const line = debugPlaceholders
+        ? `${placement.transmit}${debugPlaceholderCell({ imageId: placement.imageId, placementId: placement.placementId })}`
+        : `${placement.transmit}${placement.lines[0] || ""}`;
+      unicodeCellLines.set(cellKey, line);
+      return line;
     };
     return lines.map((line, i) => {
       if (hasKittyPlaceholder(line)) return line;
@@ -3097,6 +3111,7 @@ export function createBoxChromeRuntime({
     anchorsUploaded.clear();
     relativePlacements.clear();
     relativeByAnchorRow.clear();
+    unicodeCellLines.clear();
   }
 
   return { applyToRows, resetCaches };

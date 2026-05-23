@@ -1310,13 +1310,15 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
   assert.match(source, /let editorCursorHeat = 0/);
+  assert.match(source, /const placementLineCache = new Map\(\)/);
+  assert.match(source, /function cachedPlacementLine\(key, buildLine\)/);
   assert.match(source, /editor-workspace-tail-\$\{cols\}-heat-\$\{heatBucket\}/);
-  assert.match(source, /variant: safeHeat > 0\.35 \? "scanlines" : "glow"/);
+  assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /actual heat image is a larger relative placement centered on that anchor/);
   assert.match(source, /let editorCursorRelativePlacement = null/);
   assert.match(source, /buildDeleteCommand\(\{\n\s+imageId: editorCursorRelativePlacement\.imageId,\n\s+placementId: editorCursorRelativePlacement\.placementId,\n\s+deleteMode: "i"/);
-  assert.match(source, /hOffset: -Math\.floor\(rendered\.columns \/ 2\)/);
-  assert.match(source, /vOffset: -Math\.floor\(rendered\.rows \/ 2\)/);
+  assert.match(source, /hOffset: -5/);
+  assert.match(source, /vOffset: -2/);
   assert.match(source, /const anchorLine = anchor\.lines\[0\] \?\? null;\n\s+return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null;/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);

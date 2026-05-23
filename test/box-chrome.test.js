@@ -98,6 +98,20 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.doesNotMatch(resizeCmds, /a=d,d=p/, "d=p is cell-intersection deletion in the Kitty protocol, not placement-id deletion");
 });
 
+test("relative box chrome reuses no-icon strip uploads after first three rows", () => {
+  const emitted = [];
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const lines = Array.from({ length: 8 }, (_, i) => `row ${i}`);
+  runtime.applyToRows({ type: "assistant", instanceId: 10, lines, renderWidth: 20 });
+  const uploads = [...emitted.join("").matchAll(/a=t,f=100,t=d/g)];
+  assert.equal(uploads.length, 12, "8 anchors plus 4 strip images: rows 0-2 keep icons, rows >=3 share no-icon strip art");
+});
+
 test("box chrome caps oversized render widths before emitting kitty placements", () => {
   const emitted = [];
   const runtime = createBoxChromeRuntime({
@@ -236,6 +250,23 @@ test("unicode box mode keeps line count and uses placeholder-only side borders",
   assert.equal(out.length, lines.length, "unicode mode should not create one-line boxes between content rows");
   assert.ok(out.every((line) => line.includes("\u{10eeee}")), "unicode mode should anchor borders with placeholder text");
   assert.ok(emitted.every((cmd) => !/P=/.test(cmd)), "unicode mode should not create non-placeholder relative placements");
+});
+
+test("unicode box mode reuses cell images across component instances", () => {
+  const emitted = [];
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    boxEffect: "cloud",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const lines = ["alpha", "beta", "gamma"];
+  runtime.applyToRows({ type: "assistant", instanceId: 3, lines });
+  const beforeSecondInstance = emitted.length;
+  runtime.applyToRows({ type: "assistant", instanceId: 4, lines });
+  assert.deepEqual(emitted.slice(beforeSecondInstance), [], "identical unicode side cells should be keyed by pixels, not component instance id");
 });
 
 test("thinking assistant content uses dedicated thought chrome", () => {
