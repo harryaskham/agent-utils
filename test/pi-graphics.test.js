@@ -1326,6 +1326,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /zIndex: PI_GRAPHICS_Z\.BACKGROUND/);
   assert.match(source, /renderEditorCursorVline/);
   assert.match(source, /function buildSegmentedFooterLine/);
+  assert.match(source, /key: "model", token: "customMessageLabel", value: model, truncate: truncateFooterEnd, min: 16, max: 96, priority: "primary"/);
+  assert.match(source, /const shrinkOrder = \[0, 5, 3, 1, 2, 4\]/);
+  assert.match(source, /const modelSegment = segments\.find\(\(segment\) => segment\.key === "model"\)/);
+  assert.match(source, /if \(modelSegment\) modelSegment\.width \+= spare/);
   assert.match(source, /function installSegmentedFooter/);
   assert.match(source, /ctx\.ui\.setFooter\(factory, \{ piGraphics: false \}\)/);
   assert.match(source, /ensureFooterSegmentBackground/);

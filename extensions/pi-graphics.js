@@ -832,7 +832,7 @@ export default function piGraphicsExtension(pi) {
       { key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 24 },
       { key: "context", token: "thinkingXhigh", value: context, truncate: truncateFooterEnd, min: 5, max: 18 },
       { key: "compact", token: "borderAccent", value: `${compactFooterModeLabel()} (${footerState.compactions})`, truncate: truncateFooterEnd, min: 5, max: 16 },
-      { key: "model", token: "customMessageLabel", value: model, truncate: truncateFooterEnd, min: 8, max: 36 },
+      { key: "model", token: "customMessageLabel", value: model, truncate: truncateFooterEnd, min: 16, max: 96, priority: "primary" },
       { key: "thinking", token: "muted", value: pi?.getThinkingLevel?.() || "off", truncate: truncateFooterEnd, min: 3, max: 12 },
     ];
   }
@@ -847,7 +847,7 @@ export default function piGraphicsExtension(pi) {
       return { ...segment, width: Math.max(segment.min, preferred) };
     });
     let used = segments.reduce((sum, segment) => sum + segment.width, 0);
-    const shrinkOrder = [4, 0, 1, 3, 2, 5];
+    const shrinkOrder = [0, 5, 3, 1, 2, 4];
     while (used > budget) {
       let changed = false;
       for (const index of shrinkOrder) {
@@ -861,7 +861,12 @@ export default function piGraphicsExtension(pi) {
       }
       if (!changed) break;
     }
-    if (used < budget && segments.length) segments[0].width += budget - used;
+    if (used < budget && segments.length) {
+      const modelSegment = segments.find((segment) => segment.key === "model");
+      const spare = budget - used;
+      if (modelSegment) modelSegment.width += spare;
+      else segments[0].width += spare;
+    }
     return segments.map((segment) => {
       const innerWidth = Math.max(0, segment.width - 2);
       const text = segment.truncate(segment.value, innerWidth);
