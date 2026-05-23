@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -92,7 +92,7 @@ export const BOX_TYPE_EFFECTS = {
   image: "lens",
   theme: "swatch",
   thinkingSelector: "ballot",
-  tree: "vine",
+  tree: "grove",
   userSelector: "tag",
   agent: "satellite",
   mascot: "emblem",
@@ -895,6 +895,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 3, Math.floor(h * 0.62) - ((x / 47) % 3)));
       fillRectAlpha(pixels, w, x, y, 5, 1, rule, 44);
       fillRectAlpha(pixels, w, x + 2, y - 2, 1, 5, rule, 36);
+    }
+  } else if (effect === "grove") {
+    const trunk = [
+      Math.min(255, Math.round(color[0] * 0.46 + 92)),
+      Math.min(255, Math.round(color[1] * 0.74 + 62)),
+      Math.min(255, Math.round(color[2] * 0.52 + 108)),
+    ];
+    const fork = [
+      Math.min(255, Math.round(color[0] * 0.74 + 60)),
+      Math.min(255, Math.round(color[1] * 0.52 + 112)),
+      Math.min(255, Math.round(color[2] * 0.70 + 74)),
+    ];
+    const leaf = [
+      Math.min(255, Math.round(color[0] * 0.28 + 76)),
+      Math.min(255, Math.round(color[1] * 0.68 + 76)),
+      Math.min(255, Math.round(color[2] * 0.82 + 60)),
+    ];
+    // Grove chrome for tree selectors: sparse trunk rails, branch forks, and
+    // leaf nodes suggest hierarchy without graph layout, timers, glyphs, masks,
+    // dense texture, animation loops, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 6; x < w; x += 29) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 29) % 3) - 1));
+      fillRectAlpha(pixels, w, x, top, 1, Math.min(bottom - top + 1, h - top), trunk, 32);
+      fillRectAlpha(pixels, w, x + 2, y, Math.min(13, w - x - 2), 1, fork, 34);
+      fillRectAlpha(pixels, w, x + 8, Math.max(1, y - 2), 3, 2, leaf, 36);
+      if (x + 16 < w) fillRectAlpha(pixels, w, x + 16, Math.min(h - 2, y + 2), 2, 2, leaf, 30);
+    }
+    for (let x = 21; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 4), Math.min(15, w - x), 1, trunk, 20);
+      fillRectAlpha(pixels, w, x + 5, bottom, Math.min(8, w - x - 5), 1, fork, 22);
     }
   } else if (effect === "vine") {
     const stem = [
