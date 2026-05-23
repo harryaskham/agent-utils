@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -83,7 +83,7 @@ export const BOX_TYPE_EFFECTS = {
   border: "bevel",
   input: "prism",
   editor: "caret",
-  selector: "compass",
+  selector: "sextant",
   login: "portal",
   model: "gauge",
   oauth: "keyring",
@@ -439,6 +439,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, y, 2, 2, accent, 48);
       fillRectAlpha(pixels, w, x + 2, y - 1, 1, 4, ghost, 30);
     }
+  } else if (effect === "sextant") {
+    const sight = [
+      Math.min(255, Math.round(color[0] * 0.62 + 88)),
+      Math.min(255, Math.round(color[1] * 0.60 + 92)),
+      Math.min(255, Math.round(color[2] * 0.46 + 132)),
+    ];
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.30 + 76)),
+      Math.min(255, Math.round(color[1] * 0.58 + 82)),
+      Math.min(255, Math.round(color[2] * 0.84 + 56)),
+    ];
+    const pin = [
+      Math.min(255, Math.round(color[0] * 0.78 + 58)),
+      Math.min(255, Math.round(color[1] * 0.48 + 118)),
+      Math.min(255, Math.round(color[2] * 0.70 + 76)),
+    ];
+    // Sextant chrome for generic selectors: sight arcs, index ticks, and
+    // navigation pins make choice surfaces feel measured and navigable without
+    // glyphs, masks, graph layout, animation, or dense radial drawing.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 6; x < w; x += 30) {
+      const phase = Math.floor(x / 30) % 3;
+      const y = Math.max(1, Math.min(h - 2, mid + phase - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(15, w - x), 1, sight, 36);
+      fillRectAlpha(pixels, w, x + 3, Math.max(1, y - 3), Math.min(10, w - x - 3), 1, tick, 26);
+      if (x + 8 < w) fillRectAlpha(pixels, w, x + 8, top, 1, Math.min(6, h - top), tick, 32);
+      if (x + 16 < w) fillRectAlpha(pixels, w, x + 16, Math.min(h - 2, bottom - 1), 2, 2, pin, 38);
+    }
+    for (let x = 18; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(22, w - x), 1, sight, 16);
+      fillRectAlpha(pixels, w, x + 9, Math.min(h - 2, bottom + 1), Math.min(16, w - x - 9), 1, tick, 18);
+    }
   } else if (effect === "compass") {
     const needle = [
       Math.min(255, Math.round(color[0] * 0.70 + 72)),
@@ -450,9 +484,9 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.52 + 88)),
       Math.min(255, Math.round(color[2] * 0.82 + 58)),
     ];
-    // Compass chrome for selectors: ticks and tiny needles make choice surfaces
-    // feel navigable and directional. It stays sparse and deterministic, so menu
-    // rerenders reuse compact cached PNG strips without animated cursor work.
+    // Compass remains available as an explicit selector variant: ticks and tiny
+    // needles make choice surfaces feel directional while keeping compact cached
+    // PNG strips and no animated cursor work.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 6; x < w; x += 24) {
       const dir = Math.floor(x / 24) % 4;
