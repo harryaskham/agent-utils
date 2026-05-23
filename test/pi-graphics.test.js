@@ -1343,7 +1343,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\/gfx cursor preview shows cool\/warm\/hot editor cursor variants/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
-  assert.match(source, /"compaction",\n\s+"session",\n\s+"loader",\n\s+"customTui",\n\s+"theme",\n\s+"mascot",\n\s+"header",\n\s+"overlay"/);
+  assert.match(source, /"assistant",\n\s+"thinking",\n\s+"thinkingSelector"/);
+  assert.match(source, /"user",\n\s+"userSelector",\n\s+"custom",\n\s+"skill",\n\s+"branch",\n\s+"agent"/);
+  assert.match(source, /"oauth",\n\s+"login",\n\s+"selector",\n\s+"tree",\n\s+"image",\n\s+"widget",\n\s+"input"/);
+  assert.match(source, /"border",\n\s+"compaction",\n\s+"footer",\n\s+"header",\n\s+"session",\n\s+"loader",\n\s+"customTui",\n\s+"theme",\n\s+"mascot",\n\s+"overlay"/);
   assert.match(source, /including recent dedicated mappings/);
   assert.match(source, /action === "box-preview"/);
   assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
