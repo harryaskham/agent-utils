@@ -66,13 +66,13 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
   thinking: "lantern",
   tool: "schematic",
-  bash: "prompt",
+  bash: "terminal",
   user: "tapestry",
   custom: "atelier",
   skill: "sigil",
@@ -627,6 +627,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(4, h - 1), needle, 38);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(12, w - x - 3), 1, ring, 22);
     }
+  } else if (effect === "terminal") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.52 + 112)),
+      Math.min(255, Math.round(color[1] * 0.74 + 54)),
+      Math.min(255, Math.round(color[2] * 0.58 + 96)),
+    ];
+    const cursor = [
+      Math.min(255, Math.round(color[0] * 0.76 + 68)),
+      Math.min(255, Math.round(color[1] * 0.48 + 120)),
+      Math.min(255, Math.round(color[2] * 0.44 + 132)),
+    ];
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.30 + 88)),
+      Math.min(255, Math.round(color[1] * 0.68 + 68)),
+      Math.min(255, Math.round(color[2] * 0.86 + 46)),
+    ];
+    // Terminal chrome for bash panes: sparse command rails, cursor blocks, and
+    // shell ticks suggest command output without blinking, streaming animation,
+    // glyph dependencies, graph layout, dense texture, timers, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.28));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 4; x < w; x += 28) {
+      fillRectAlpha(pixels, w, x, top, Math.min(17, w - x), 1, rail, 32);
+      fillRectAlpha(pixels, w, x + 3, lower, Math.min(13, w - x - 3), 1, rail, 24);
+      fillRectAlpha(pixels, w, x + 14, mid - 1, 3, 4, cursor, 38);
+      fillRectAlpha(pixels, w, x + 21, mid, 2, 2, tick, 42);
+    }
+    for (let x = 18; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 3), 1, Math.min(8, h - 2), tick, 30);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, lower + 1), Math.min(14, w - x - 4), 1, cursor, 18);
+    }
   } else if (effect === "prompt") {
     const prompt = [
       Math.min(255, Math.round(color[0] * 0.50 + 120)),
@@ -638,9 +670,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.52 + 108)),
       Math.min(255, Math.round(color[2] * 0.42 + 134)),
     ];
-    // Prompt chrome for bash panes: shell rails and cursor blocks suggest a
-    // live terminal without blinking or streaming animation. Fixed sparse marks
-    // keep command-output chrome cheap and cacheable.
+    // Prompt remains available as an explicit bash/input variant: shell rails
+    // and cursor blocks stay static and cacheable.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 4; x < w; x += 21) {
       const y = Math.max(1, Math.min(h - 2, mid + (Math.floor(x / 21) % 3) - 1));
