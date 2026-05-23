@@ -399,8 +399,9 @@ displayed using kitty Unicode placeholder cells, so:
   `Ctrl+t` cycles presets across the static editor border, caco-compatible
   `unicode` mode, animated editor border, and every box-effect variant;
   `/gfx` with no arguments opens a Pi-native settings overlay with quick previews;
-  `/gfx status` prints the text summary. `/gfx box-effect <name>` can select a
-  specific effect or `/gfx box-effect auto` can return to per-message-type effects.
+  `/gfx status` prints the text summary, including the live cursor anchoring
+  diagnostic line. `/gfx box-effect <name>` can select a specific effect or
+  `/gfx box-effect auto` can return to per-message-type effects.
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
   placeholder cells. `/gfx box preview` emits bounded representative per-surface
   box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, so every mapped

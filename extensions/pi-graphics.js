@@ -1938,6 +1938,7 @@ export default function piGraphicsExtension(pi) {
           `  box mode:       ${gfx.boxMode || "relative"} (also: unicode)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
+          `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
           "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
