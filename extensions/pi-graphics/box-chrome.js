@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -94,7 +94,7 @@ export const BOX_TYPE_EFFECTS = {
   thinkingSelector: "ballot",
   tree: "grove",
   userSelector: "tag",
-  agent: "satellite",
+  agent: "beacon",
   mascot: "emblem",
   customTui: "workbench",
   overlay: "scrim",
@@ -1491,6 +1491,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 12; x < w; x += 41) {
       fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(9, h - 2), tick, 28);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, bottom + 2), Math.min(13, w - x - 3), 1, chipB, 24);
+    }
+  } else if (effect === "beacon") {
+    const beam = [
+      Math.min(255, Math.round(color[0] * 0.58 + 92)),
+      Math.min(255, Math.round(color[1] * 0.68 + 72)),
+      Math.min(255, Math.round(color[2] * 0.76 + 64)),
+    ];
+    const pip = [
+      Math.min(255, Math.round(color[0] * 0.80 + 58)),
+      Math.min(255, Math.round(color[1] * 0.50 + 114)),
+      Math.min(255, Math.round(color[2] * 0.58 + 102)),
+    ];
+    const railMark = [
+      Math.min(255, Math.round(color[0] * 0.30 + 78)),
+      Math.min(255, Math.round(color[1] * 0.70 + 60)),
+      Math.min(255, Math.round(color[2] * 0.52 + 116)),
+    ];
+    // Beacon chrome for agent announcements: status beams, presence pips, and
+    // identity rails convey agent activity without timers, dense textures,
+    // masks, glyph dependencies, graph layout, animation loops, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 30) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 30) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(16, w - x), 1, beam, 34);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, top), 2, Math.min(7, h - top), railMark, 28);
+      fillRectAlpha(pixels, w, x + 10, Math.max(1, y - 2), 2, 2, pip, 42);
+      if (x + 18 < w) fillRectAlpha(pixels, w, x + 18, bottom, Math.min(9, w - x - 18), 1, railMark, 26);
+    }
+    for (let x = 18; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(18, w - x), 1, beam, 18);
+      fillRectAlpha(pixels, w, x + 7, Math.min(h - 2, bottom + 1), Math.min(12, w - x - 7), 1, pip, 20);
     }
   } else if (effect === "satellite") {
     const rail = [
