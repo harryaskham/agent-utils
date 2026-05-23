@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -88,7 +88,7 @@ export const BOX_TYPE_EFFECTS = {
   model: "gauge",
   oauth: "keyring",
   session: "logbook",
-  settings: "slider",
+  settings: "console",
   image: "lens",
   theme: "swatch",
   thinkingSelector: "ballot",
@@ -1890,6 +1890,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 6), Math.min(16, w - x), 1, tick, 20);
       fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, mid + 5), Math.min(12, w - x - 6), 1, needle, 26);
     }
+  } else if (effect === "console") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.52 + 96)),
+      Math.min(255, Math.round(color[1] * 0.66 + 76)),
+      Math.min(255, Math.round(color[2] * 0.70 + 72)),
+    ];
+    const socket = [
+      Math.min(255, Math.round(color[0] * 0.30 + 126)),
+      Math.min(255, Math.round(color[1] * 0.56 + 106)),
+      Math.min(255, Math.round(color[2] * 0.84 + 52)),
+    ];
+    const pip = [
+      Math.min(255, Math.round(color[0] * 0.76 + 64)),
+      Math.min(255, Math.round(color[1] * 0.44 + 128)),
+      Math.min(255, Math.round(color[2] * 0.58 + 104)),
+    ];
+    // Console chrome for settings panels: sparse control rails, toggle sockets,
+    // and calibration pips read as configuration hardware without live widgets,
+    // timers, masks, graph layout, dense textures, glyphs, or repaint loops.
+    const upper = Math.max(1, Math.floor(h * 0.30));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.74));
+    for (let x = 4; x < w; x += 30) {
+      fillRectAlpha(pixels, w, x, upper, Math.min(20, w - x), 1, rail, 30);
+      fillRectAlpha(pixels, w, x + 4, lower, Math.min(17, w - x - 4), 1, rail, 22);
+      fillRectAlpha(pixels, w, x + 9, mid - 1, 5, 3, socket, 38);
+      fillRectAlpha(pixels, w, x + 17, mid, 2, 2, pip, 48);
+    }
+    for (let x = 18; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, upper - 3), 1, Math.min(8, h - 2), pip, 28);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, lower + 1), Math.min(13, w - x - 4), 1, socket, 18);
+    }
   } else if (effect === "slider") {
     const rail = [
       Math.min(255, Math.round(color[0] * 0.48 + 96)),
@@ -1901,9 +1933,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.46 + 116)),
       Math.min(255, Math.round(color[2] * 0.58 + 104)),
     ];
-    // Slider chrome for settings panels: sparse rails, stops, and small knobs
-    // make configuration feel adjustable while staying static cached PNG chrome
-    // rather than live input widgets or dense ruler textures.
+    // Slider remains available as an explicit settings variant: sparse rails,
+    // stops, and small knobs stay static and cheap.
     const upper = Math.max(1, Math.floor(h * 0.36));
     const lower = Math.min(h - 2, Math.floor(h * 0.68));
     for (let x = 4; x < w; x += 32) {
