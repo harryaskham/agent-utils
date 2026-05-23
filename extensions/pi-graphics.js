@@ -298,6 +298,7 @@ export default function piGraphicsExtension(pi) {
   let editorCursorWpm = 0;
   let editorCursorLastCol = null;
   let editorCursorTrailDirection = 1;
+  let editorCursorHeat = 0;
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
 
   function resetGraphicsUploadCaches() {
@@ -337,6 +338,7 @@ export default function piGraphicsExtension(pi) {
       editorCursorLastCol = safeCol;
     }
     const heat = Math.max(0, Math.min(1, editorCursorWpm / 140));
+    editorCursorHeat = heat;
     return { heat, wpm: editorCursorWpm, trailDirection: editorCursorTrailDirection };
   }
 
@@ -634,22 +636,24 @@ export default function piGraphicsExtension(pi) {
     };
   }
 
-  function buildEditorWorkspaceTail(width) {
+  function buildEditorWorkspaceTail(width, heat = editorCursorHeat) {
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(1, Math.min(256, Math.trunc(Number(width) || 0)));
     if (cols < 2) return null;
+    const safeHeat = Math.max(0, Math.min(1, Number(heat) || 0));
+    const heatBucket = Math.max(0, Math.min(5, Math.round(safeHeat * 5)));
     const cell = cellMetrics();
     const rendered = renderPromptEnclosure({
       columns: cols,
-      variant: "glow",
-      alpha: Math.max(0.16, editorAlpha() * 0.34),
-      leftColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
-      rightColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
+      variant: safeHeat > 0.35 ? "scanlines" : "glow",
+      alpha: Math.max(0.16, editorAlpha() * (0.30 + safeHeat * 0.34)),
+      leftColor: safeHeat > 0.62 ? "#ff9f5a" : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
+      rightColor: safeHeat > 0.35 ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead") : getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
       fadeEdges: true,
       ...cell,
     });
     const placement = buildPlacement(state, {
-      name: `editor-workspace-tail-${cols}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+      name: `editor-workspace-tail-${cols}-heat-${heatBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
       png: rendered.png,
       columns: rendered.columns,
       rows: rendered.rows,
@@ -664,7 +668,7 @@ export default function piGraphicsExtension(pi) {
     if (editorStyle() !== "unicode") return line;
     const match = String(line || "").match(/ +$/);
     if (!match || match[0].length < 2) return line;
-    const tail = buildEditorWorkspaceTail(match[0].length);
+    const tail = buildEditorWorkspaceTail(match[0].length, editorCursorHeat);
     if (!tail) return line;
     return `${String(line).slice(0, -match[0].length)}${tail}`;
   }

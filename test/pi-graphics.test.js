@@ -1307,6 +1307,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /boxes:\$\{effect\}/);
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
+  assert.match(source, /let editorCursorHeat = 0/);
+  assert.match(source, /editor-workspace-tail-\$\{cols\}-heat-\$\{heatBucket\}/);
+  assert.match(source, /variant: safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /actual heat image is a larger relative placement centered on that anchor/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);
@@ -1340,6 +1343,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
   assert.match(source, /decorateEditorContentLine\(line, width\)/);
+  assert.match(source, /buildEditorWorkspaceTail\(match\[0\]\.length, editorCursorHeat\)/);
   assert.match(source, /const visualCols = cols/);
   assert.match(source, /const leadingCells = 0/);
 });

@@ -433,9 +433,10 @@ displayed using kitty Unicode placeholder cells, so:
   frame itself visibly changes rather than only the colour. This is still
   cache-friendly and timer-free: the extension uploads only bucketed PNG variants
   and never attaches a row-wide background that drifts as the cursor moves.
-  Placeholder tails still occupy
-  trailing space cells as a caco-compatible fallback and as workspace fill after
-  the cursor.
+  Placeholder tails still occupy trailing space cells as a caco-compatible fallback
+  and as workspace fill after the cursor; those tails are now heat-bucketed too,
+  so fast typing warms the otherwise calm trailing workspace into a short scanline
+  wake, then cools naturally as the cursor heat decays.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative
