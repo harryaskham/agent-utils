@@ -1423,8 +1423,41 @@ export default function piGraphicsExtension(pi) {
     await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics preset ${nextIndex + 1}/${presets.length}: ${preset.name || "unnamed"}. Reloading...`);
   }
 
+  function themeProvenanceLines(ctx, settings) {
+    const themes = (() => { try { return ctx?.ui?.getAllThemes?.() || []; } catch { return []; } })();
+    const byName = new Map();
+    for (const theme of themes) {
+      const name = String(theme?.name || "unnamed");
+      const entry = { name, path: theme?.path || theme?.sourcePath || "<builtin>" };
+      const list = byName.get(name) || [];
+      list.push(entry);
+      byName.set(name, list);
+    }
+    const duplicates = [...byName.entries()].filter(([, entries]) => entries.length > 1);
+    const configured = settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "(default)";
+    const lines = [
+      "Pi Graphics theme provenance:",
+      `  configured theme: ${configured}`,
+      `  settings file:     ${agentSettingsPath()}`,
+      `  settings themes:   ${(settings.themes || []).join(", ") || "(none)"}`,
+      `  loaded themes:     ${themes.length}`,
+      `  duplicate names:   ${duplicates.length}`,
+    ];
+    for (const theme of themes) lines.push(`  - ${theme.name || "unnamed"}: ${theme.path || theme.sourcePath || "<builtin>"}`);
+    for (const [name, entries] of duplicates) {
+      lines.push(`  duplicate ${name}:`);
+      for (const entry of entries) lines.push(`    * ${entry.path}`);
+    }
+    if (duplicates.length === 0) {
+      lines.push("No duplicate theme names reported by the running Pi theme registry.");
+    } else {
+      lines.push("Remove redundant settings.json themes[] entries or stale copied theme files so the package-provided theme wins once.");
+    }
+    return lines;
+  }
+
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [next|presets|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [next|presets|themes|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1443,7 +1476,7 @@ export default function piGraphicsExtension(pi) {
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -1459,6 +1492,10 @@ export default function piGraphicsExtension(pi) {
       if (action === "presets") {
         const presets = getGfxPresets(settings, ctx);
         ctx.ui.notify(presets.map((p, i) => `${i + 1}. ${p.name || "unnamed"} — theme=${p.theme || settings.theme || "default"}, editor=${p.editorStyle || p.editor?.style || "static"}, box=${p.boxChrome ? "on" : "off"}, boxMode=${p.boxMode || "relative"}, effect=${p.boxEffect || "per-type"}, mode=${p.mode || "on"}`).join("\n"), "info");
+        return;
+      }
+      if (action === "themes" || action === "theme-provenance") {
+        ctx.ui.notify(themeProvenanceLines(ctx, settings).join("\n"), "info");
         return;
       }
       if (action === "preset") {

@@ -1272,6 +1272,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function installSegmentedFooter/);
   assert.match(source, /ctx\.ui\.setFooter\(factory, \{ piGraphics: false \}\)/);
   assert.match(source, /ensureFooterSegmentBackground/);
+  assert.match(source, /function themeProvenanceLines/);
+  assert.match(source, /getAllThemes\?\.\(\)/);
+  assert.match(source, /action === "themes"/);
   assert.match(source, /hOffset: 1/);
   assert.match(source, /function cursorStylingEnabled/);
   assert.match(source, /envBool\("PI_GRAPHICS_AUTO_EDITOR_CURSOR", true\)/);

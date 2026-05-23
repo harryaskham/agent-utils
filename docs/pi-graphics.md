@@ -21,12 +21,12 @@ The pieces:
 
 Install agent-utils as a Pi package per the repo README. Pi auto-discovers
 themes via the `pi.themes` entry in [`package.json`](../package.json) and
-extensions via `pi.extensions`. On extension startup, `pi-graphics` also syncs
-`kitty-graphics-nord.json` and `kitty-graphics.json` into the active user theme
-directories (`$PI_CODING_AGENT_DIR/themes`, `~/.pi/agent/themes`, and any
-`settings.json` `themes[]` entries) and reports `pi-theme-sync` status. This is
-intentional: if `/settings` is reading only user theme directories, the packaged
-theme still becomes selectable without a separate manual copy step.
+extensions via `pi.extensions`. The `pi-graphics` extension does **not** copy
+`kitty-graphics-nord.json` or `kitty-graphics.json` into user theme directories
+by default; leaving the bundled themes package-owned avoids package-plus-local
+duplicate theme-name warnings during Pi startup. Use `/gfx themes` to inspect
+the running theme registry and identify stale copied files or redundant
+`settings.json` `themes[]` entries if Pi reports duplicate theme exposure.
 
 To activate the theme:
 
@@ -458,6 +458,7 @@ And the discoverability slash commands include:
 * `/pi-graphics-ansi-scene [label]` — write the truecolor ANSI scene shader sampled from rendered pixels.
 * `/pi-graphics-ansi-takeover [label]` — write the raw truecolor terminal banner.
 * `/pi-graphics-conversation-frame [text]` — send a graphical conversation-frame transcript message.
+* `/gfx themes` — print the running Pi theme registry with paths grouped by name so duplicate `kitty-graphics` exposure can be traced without deleting collective/user theme assets.
 * `/pi-graphics-theme-delta` — print the reload sentinel and theme delta report.
 * `/pi-graphics-demo` — print a sample rule, border, glow panel, graphical TUI component frame, and animated APNG pulse into the active UI.
 
