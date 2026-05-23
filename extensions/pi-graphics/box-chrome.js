@@ -66,13 +66,13 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
   thinking: "cloud",
-  tool: "circuit",
-  bash: "scanline",
+  tool: "blueprint",
+  bash: "blueprint",
   user: "weave",
   custom: "sparkle",
   skill: "contour",
@@ -92,7 +92,7 @@ export const BOX_TYPE_EFFECTS = {
   image: "glyph",
   theme: "glyph",
   thinkingSelector: "cloud",
-  tree: "scanline",
+  tree: "blueprint",
   userSelector: "weave",
   agent: "aurora",
   mascot: "glyph",
@@ -341,6 +341,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 6) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, 2, 2, accent, 48);
       fillRectAlpha(pixels, w, x + 2, y - 1, 1, 4, ghost, 30);
+    }
+  } else if (effect === "blueprint") {
+    const rule = [
+      Math.min(255, Math.round(color[0] * 0.42 + 70)),
+      Math.min(255, Math.round(color[1] * 0.70 + 80)),
+      Math.min(255, Math.round(color[2] * 0.85 + 70)),
+    ];
+    const ink = [
+      Math.min(255, Math.round(color[0] * 0.25 + 45)),
+      Math.min(255, Math.round(color[1] * 0.55 + 60)),
+      Math.min(255, Math.round(color[2] * 0.95 + 45)),
+    ];
+    // Blueprint chrome for tools/bash/tree panes: sparse drafting rules,
+    // registration ticks, and little measurement notches imply a technical
+    // rendered panel without high-entropy noise or per-pixel grid fills.
+    for (let x = 0; x < w; x += 32) fillRectAlpha(pixels, w, x, 1, 1, Math.max(2, h - 2), rule, 26);
+    for (let y = 3; y < h; y += 6) fillRectAlpha(pixels, w, 0, y, w, 1, ink, 16);
+    for (let x = 7; x < w; x += 23) {
+      const y = 2 + ((x * 2) % Math.max(1, h - 4));
+      fillRectAlpha(pixels, w, x, y, Math.min(10, w - x), 1, rule, 50);
+      fillRectAlpha(pixels, w, x, Math.max(0, y - 2), 1, Math.min(5, h - Math.max(0, y - 2)), ink, 34);
+    }
+    for (let x = 15; x < w; x += 47) {
+      const y = Math.max(1, Math.min(h - 3, Math.floor(h * 0.62) - ((x / 47) % 3)));
+      fillRectAlpha(pixels, w, x, y, 5, 1, rule, 44);
+      fillRectAlpha(pixels, w, x + 2, y - 2, 1, 5, rule, 36);
     }
   }
 }
