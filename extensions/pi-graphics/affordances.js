@@ -142,7 +142,7 @@ function paintSurfaceVariant(pixels, widthPx, heightPx, {
  *   blends into surrounding text instead of butting up against margins.
  * @returns {{ png: Buffer, columns: number, rows: number, widthPx: number, heightPx: number }}
  */
-export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightScale, backgroundColor = NORDIC_DEEP_BOTTOM, coreColor = NORDIC_EDGE, glowColor = NORDIC_CYAN, alpha = 0.72, columns = 1, rows = 1, heat = 0, glowRadiusCells = 1 } = {}) {
+export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightScale, backgroundColor = NORDIC_DEEP_BOTTOM, coreColor = NORDIC_EDGE, glowColor = NORDIC_CYAN, alpha = 0.72, columns = 1, rows = 1, heat = 0, glowRadiusCells = 1, trailCells = 0, trailDirection = 1 } = {}) {
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const cols = clampPositive(columns, 1, "columns");
   const rowCount = clampPositive(rows, 1, "rows");
@@ -161,6 +161,25 @@ export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightS
   }
   if (cols === 1 && rowCount === 1) {
     fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(backgroundColor, Math.round(bgAlpha * 0.45)), withAlpha(glowColor, bgAlpha));
+  }
+
+  const direction = Number(trailDirection) < 0 ? -1 : 1;
+  const trailSpanCells = Math.max(0, Math.min(cols - 1, Number(trailCells) || 0));
+  if (safeHeat > 0.03 && trailSpanCells > 0) {
+    const behind = -direction;
+    const segments = Math.max(1, Math.ceil(trailSpanCells * 2));
+    const step = Math.max(2, Math.round(metrics.cellWidthPx * 0.52));
+    const segmentW = Math.max(2, Math.round(metrics.cellWidthPx * (0.72 + safeHeat * 0.35)));
+    const midH = Math.max(1, Math.round(metrics.cellHeightPx * (0.12 + safeHeat * 0.08)));
+    for (let i = 1; i <= segments; i += 1) {
+      const fade = 1 - (i - 1) / Math.max(1, segments);
+      const x = Math.round(cx + behind * i * step - segmentW / 2);
+      const y = Math.round(cy - midH / 2 + ((i % 2) - 0.5) * metrics.cellHeightPx * 0.12);
+      const alphaTrail = Math.round((34 + safeHeat * 96) * fade ** 1.35);
+      const alphaCore = Math.round((18 + safeHeat * 58) * fade ** 1.8);
+      if (alphaTrail > 0) fillRect(pixels, widthPx, x, y, segmentW, midH, withAlpha(glowColor, alphaTrail));
+      if (alphaCore > 0) fillRect(pixels, widthPx, x + Math.floor(segmentW * 0.18), y, Math.max(1, Math.floor(segmentW * 0.36)), 1, withAlpha(coreColor, alphaCore));
+    }
   }
 
   const coreW = Math.max(1, Math.min(3, Math.round(metrics.cellWidthPx * (0.20 + safeHeat * 0.10))));

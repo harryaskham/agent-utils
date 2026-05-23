@@ -423,10 +423,14 @@ displayed using kitty Unicode placeholder cells, so:
   relative kitty placement (roughly 6 columns by 3 rows) centered on that anchor.
   It keeps a bright vertical core in the middle cell while transparent glow extends
   into neighbouring rows. The glow colour/radius is bucketed from inferred recent
-  inter-character typing speed and decays after typing stops, without attaching a
-  row-wide background that drifts as the cursor moves. Placeholder tails still
-  occupy trailing space cells as a caco-compatible fallback and as workspace fill
-  after the cursor.
+  inter-character typing speed and decays after typing stops. Fast cursor motion
+  also selects a deterministic left/right heat-trail variant: forward typing leaves
+  a short afterimage behind the cursor, while backspacing or leftward movement flips
+  the trail to the other side. This is still cache-friendly and timer-free: the
+  extension uploads only bucketed PNG variants and never attaches a row-wide
+  background that drifts as the cursor moves. Placeholder tails still occupy
+  trailing space cells as a caco-compatible fallback and as workspace fill after
+  the cursor.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative

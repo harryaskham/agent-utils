@@ -296,6 +296,8 @@ export default function piGraphicsExtension(pi) {
   let editorCursorLastText = "";
   let editorCursorLastAt = 0;
   let editorCursorWpm = 0;
+  let editorCursorLastCol = null;
+  let editorCursorTrailDirection = 1;
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
 
   function resetGraphicsUploadCaches() {
@@ -308,27 +310,34 @@ export default function piGraphicsExtension(pi) {
     return String(text || "").replace(ZERO_WIDTH_CONTROL_RE, "").length;
   }
 
-  function updateEditorTypingHeat(plainText) {
+  function updateEditorTypingHeat(plainText, cursorCol = 0) {
     const now = Date.now();
+    const safeCol = Math.max(0, Math.trunc(Number(cursorCol) || 0));
     if (!editorCursorLastAt) {
       editorCursorLastAt = now;
       editorCursorLastText = plainText;
-      return { heat: 0, wpm: 0 };
+      editorCursorLastCol = safeCol;
+      return { heat: 0, wpm: 0, trailDirection: editorCursorTrailDirection };
     }
     const elapsed = Math.max(16, now - editorCursorLastAt);
     if (plainText !== editorCursorLastText) {
       const delta = Math.max(1, Math.abs(plainText.length - editorCursorLastText.length));
       const instantWpm = (delta / 5) / (elapsed / 60000);
       editorCursorWpm = Math.min(260, editorCursorWpm * 0.55 + instantWpm * 0.45);
+      if (editorCursorLastCol != null && safeCol !== editorCursorLastCol) {
+        editorCursorTrailDirection = safeCol > editorCursorLastCol ? 1 : -1;
+      }
       editorCursorLastText = plainText;
       editorCursorLastAt = now;
+      editorCursorLastCol = safeCol;
     } else {
       const idleMs = now - editorCursorLastAt;
       const decay = Math.max(0, 1 - idleMs / 1800);
       editorCursorWpm *= decay;
+      editorCursorLastCol = safeCol;
     }
     const heat = Math.max(0, Math.min(1, editorCursorWpm / 140));
-    return { heat, wpm: editorCursorWpm };
+    return { heat, wpm: editorCursorWpm, trailDirection: editorCursorTrailDirection };
   }
 
   function formatFooterTokens(n) {
@@ -703,7 +712,7 @@ export default function piGraphicsExtension(pi) {
     editorBackgroundPlacementKey = key;
   }
 
-  function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0 } = {}) {
+  function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
     if (!ensureUnicodePlacement(state)) return null;
     const cell = cellMetrics();
     const heatBucket = Math.max(0, Math.min(5, Math.round((Number(heat) || 0) * 5)));
@@ -721,6 +730,8 @@ export default function piGraphicsExtension(pi) {
       zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(anchor.transmit);
+    const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
+    const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
     const rendered = renderEditorCursorVline({
       alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
       backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
@@ -730,9 +741,11 @@ export default function piGraphicsExtension(pi) {
       rows: 3,
       heat,
       glowRadiusCells: 1.3 + heat * 1.5,
+      trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
+      trailDirection,
       ...cell,
     });
-    const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(imageId)) {
       emitGraphicsCommand(serializeKittyGraphicsChunks({
         a: "t",
@@ -760,7 +773,9 @@ export default function piGraphicsExtension(pi) {
     // The cursor anchor remains a single Unicode placeholder cell, while the
     // actual heat image is a larger relative placement centered on that anchor.
     // Heat is inferred from recent editor text deltas and naturally decays when
-    // typing stops; row-wide backgrounds are deliberately not cursor-anchored.
+    // typing stops; high heat adds a short deterministic afterimage behind the
+    // latest cursor motion without timers or repaint loops. Row-wide backgrounds
+    // are deliberately not cursor-anchored.
     return anchor.lines[0] ?? null;
   }
 
@@ -771,8 +786,8 @@ export default function piGraphicsExtension(pi) {
     if (!match) return line;
     const cursorCol = approximateVisibleCells(text.slice(0, match.index));
     const plainText = text.replace(match[0], "|").replace(ZERO_WIDTH_CONTROL_RE, "");
-    const { heat, wpm } = updateEditorTypingHeat(plainText);
-    const cursor = buildEditorCursorCell({ rowWidth, cursorCol, heat, wpm });
+    const { heat, wpm, trailDirection } = updateEditorTypingHeat(plainText, cursorCol);
+    const cursor = buildEditorCursorCell({ rowWidth, cursorCol, heat, wpm, trailDirection });
     if (!cursor) return line;
     return `${text.slice(0, match.index)}${cursor}${text.slice(match.index + match[0].length)}`;
   }

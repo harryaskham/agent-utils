@@ -363,6 +363,20 @@ test("renderEditorCursorVline can render a large heat glow around a centered cur
   assert.ok(upperGlow[3] > coolUpper[3], "typing heat should expand glow into neighboring rows");
 });
 
+test("renderEditorCursorVline adds directional heat trail behind cursor motion", () => {
+  const rightward = renderEditorCursorVline({ cellWidthPx: 8, cellHeightPx: 16, columns: 6, rows: 3, heat: 0.95, trailCells: 3, trailDirection: 1 });
+  const leftward = renderEditorCursorVline({ cellWidthPx: 8, cellHeightPx: 16, columns: 6, rows: 3, heat: 0.95, trailCells: 3, trailDirection: -1 });
+  const rightDecoded = decodePngRgba(rightward.png);
+  const leftDecoded = decodePngRgba(leftward.png);
+  const y = Math.floor(rightDecoded.height / 2);
+  const leftTrace = pixelAt(rightDecoded, 14, y);
+  const rightTrace = pixelAt(rightDecoded, 42, y);
+  const mirroredLeftTrace = pixelAt(leftDecoded, 14, y);
+  const mirroredRightTrace = pixelAt(leftDecoded, 42, y);
+  assert.ok(leftTrace[3] > rightTrace[3] + 18, "rightward motion should leave a hotter trail to the left of the core");
+  assert.ok(mirroredRightTrace[3] > mirroredLeftTrace[3] + 18, "leftward motion should leave a hotter trail to the right of the core");
+});
+
 test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () => {
   const result = renderPromptEnclosure({ columns: 8, phase: 0.25 });
   assert.equal(result.columns, 8);
@@ -1300,8 +1314,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function installHardwareCursorGuard\(tui\)/);
   assert.match(source, /applyHardwareCursorPolicy\(tui\)/);
   assert.match(source, /restoreHardwareCursorPolicy\(\)/);
-  assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0 \} = \{\}\)/);
+  assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 \} = \{\}\)/);
   assert.match(source, /editor-cursor-glow-relative/);
+  assert.match(source, /trailCells: heat > 0\.04/);
+  assert.match(source, /editorCursorTrailDirection = safeCol > editorCursorLastCol \? 1 : -1/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
