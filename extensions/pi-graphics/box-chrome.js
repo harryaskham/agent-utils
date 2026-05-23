@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -76,7 +76,7 @@ export const BOX_TYPE_EFFECTS = {
   user: "note",
   custom: "atelier",
   skill: "sigil",
-  branch: "helix",
+  branch: "fork",
   compaction: "archive",
   footer: "ticker",
   loader: "shuttle",
@@ -988,6 +988,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 2, mid + ((x / 50) % 2 ? 3 : -3)));
       fillRectAlpha(pixels, w, x, y, 2, 2, leaf, 48);
       fillRectAlpha(pixels, w, x + 2, y, Math.min(9, w - x - 2), 1, branch, 24);
+    }
+  } else if (effect === "fork") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.58 + 92)),
+      Math.min(255, Math.round(color[1] * 0.70 + 64)),
+      Math.min(255, Math.round(color[2] * 0.56 + 108)),
+    ];
+    const joint = [
+      Math.min(255, Math.round(color[0] * 0.78 + 58)),
+      Math.min(255, Math.round(color[1] * 0.50 + 116)),
+      Math.min(255, Math.round(color[2] * 0.66 + 82)),
+    ];
+    const stop = [
+      Math.min(255, Math.round(color[0] * 0.30 + 72)),
+      Math.min(255, Math.round(color[1] * 0.58 + 86)),
+      Math.min(255, Math.round(color[2] * 0.84 + 56)),
+    ];
+    // Fork chrome for branch/status summaries: commit rails, fork joints, and
+    // merge stops suggest version history without graph layout, timers, dense
+    // texture, masks, glyph dependencies, animation loops, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 28) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 28) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(15, w - x), 1, rail, 36);
+      fillRectAlpha(pixels, w, x + 4, Math.max(1, top), Math.min(10, w - x - 4), 1, stop, 24);
+      fillRectAlpha(pixels, w, x + 8, Math.max(1, y - 3), 1, Math.min(7, h - 2), rail, 28);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, bottom, 2, 2, joint, 38);
+    }
+    for (let x = 18; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(18, w - x), 1, rail, 18);
+      fillRectAlpha(pixels, w, x + 7, Math.min(h - 2, bottom + 1), Math.min(12, w - x - 7), 1, stop, 20);
     }
   } else if (effect === "helix") {
     const rail = [
