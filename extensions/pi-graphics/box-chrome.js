@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "nebula", "waveform", "marquee", "ribbon", "ledger", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "nebula", "waveform", "marquee", "ribbon", "ledger", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -91,7 +91,7 @@ export const BOX_TYPE_EFFECTS = {
   settings: "slider",
   image: "aperture",
   theme: "palette",
-  thinkingSelector: "lantern",
+  thinkingSelector: "choice",
   tree: "dendrite",
   userSelector: "badge",
   agent: "orbit",
@@ -965,6 +965,33 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 19; x < w; x += 52) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 6), Math.min(14, w - x), 1, shade, 22);
       fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(9, w - x - 4), 1, glow, 30);
+    }
+  } else if (effect === "choice") {
+    const focus = [
+      Math.min(255, Math.round(color[0] * 0.58 + 102)),
+      Math.min(255, Math.round(color[1] * 0.62 + 88)),
+      Math.min(255, Math.round(color[2] * 0.72 + 74)),
+    ];
+    const mark = [
+      Math.min(255, Math.round(color[0] * 0.36 + 150)),
+      Math.min(255, Math.round(color[1] * 0.44 + 132)),
+      Math.min(255, Math.round(color[2] * 0.62 + 90)),
+    ];
+    // Choice chrome for thinking selector surfaces: stepped focus rails and
+    // decision ticks distinguish selection UI from lantern thought blocks.
+    // Static sparse marks keep selector previews deterministic and cheap.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.50));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 5; x < w; x += 22) {
+      const step = Math.floor(x / 22) % 3;
+      fillRectAlpha(pixels, w, x, top + step, Math.min(10, w - x), 1, focus, 34);
+      fillRectAlpha(pixels, w, x + 3, mid, Math.min(8, w - x - 3), 1, mark, 32);
+      fillRectAlpha(pixels, w, x + 6, lower - step, Math.min(7, w - x - 6), 1, focus, 26);
+    }
+    for (let x = 16; x < w; x += 44) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(10, h - 2), mark, 28);
+      fillRectAlpha(pixels, w, x + 3, Math.max(1, top - 1), Math.min(12, w - x - 3), 1, focus, 20);
     }
   } else if (effect === "nebula") {
     const mist = [
