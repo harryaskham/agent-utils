@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "palette", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -74,7 +74,7 @@ export const BOX_TYPE_EFFECTS = {
   tool: "schematic",
   bash: "prompt",
   user: "tapestry",
-  custom: "constellation",
+  custom: "atelier",
   skill: "sigil",
   branch: "helix",
   compaction: "archive",
@@ -953,6 +953,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(14, w - x), 2, edge, 42);
       fillRectAlpha(pixels, w, x + 5, bottom, Math.min(10, w - x - 5), 1, cut, 34);
     }
+  } else if (effect === "atelier") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.56 + 96)),
+      Math.min(255, Math.round(color[1] * 0.58 + 96)),
+      Math.min(255, Math.round(color[2] * 0.70 + 74)),
+    ];
+    const tab = [
+      Math.min(255, Math.round(color[0] * 0.76 + 64)),
+      Math.min(255, Math.round(color[1] * 0.46 + 122)),
+      Math.min(255, Math.round(color[2] * 0.54 + 112)),
+    ];
+    const mark = [
+      Math.min(255, Math.round(color[0] * 0.30 + 76)),
+      Math.min(255, Math.round(color[1] * 0.70 + 62)),
+      Math.min(255, Math.round(color[2] * 0.52 + 112)),
+    ];
+    // Atelier chrome for custom messages: drafting tabs, maker marks, and guide
+    // rails make bespoke extension output feel hand-tooled without starfields,
+    // glyphs, masks, graph layout, timers, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 30) {
+      fillRectAlpha(pixels, w, x, top, Math.min(15, w - x), 1, rail, 30);
+      fillRectAlpha(pixels, w, x + 2, mid, Math.min(11, w - x - 2), 2, tab, 32);
+      fillRectAlpha(pixels, w, x + 6, bottom, Math.min(12, w - x - 6), 1, mark, 26);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, Math.max(1, mid - 3), 2, 3, mark, 36);
+    }
+    for (let x = 18; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(20, w - x), 1, tab, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(15, w - x - 8), 1, rail, 18);
+    }
   } else if (effect === "constellation") {
     const star = [
       Math.min(255, Math.round(color[0] * 0.72 + 90)),
@@ -964,9 +996,9 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.48 + 65)),
       Math.min(255, Math.round(color[2] * 0.88 + 70)),
     ];
-    // Constellation chrome for custom/theme surfaces: sparse nodes connected by
-    // short chart lines create a bespoke rendered feel without noisy starfields.
-    // Fixed spacing gives O(width / stride) work and small cached strip PNGs.
+    // Constellation remains available as an explicit custom/theme variant:
+    // sparse nodes connected by short chart lines create a bespoke rendered feel
+    // without noisy starfields. Fixed spacing keeps cached strip PNGs small.
     for (let x = 6; x < w; x += 31) {
       const y = 2 + ((x * 7) % Math.max(1, h - 5));
       fillRectAlpha(pixels, w, x, y, 2, 2, star, 62);
