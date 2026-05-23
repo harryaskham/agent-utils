@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -98,7 +98,7 @@ export const BOX_TYPE_EFFECTS = {
   mascot: "orbit",
   customTui: "rune",
   overlay: "prism",
-  widget: "lattice",
+  widget: "mosaic",
   header: "waveform",
 };
 
@@ -653,6 +653,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 2, Math.min(9, h - top), jaw, 42);
       fillRectAlpha(pixels, w, x, top, Math.min(14, w - x), 1, rule, 36);
       fillRectAlpha(pixels, w, x + 4, bottom, Math.min(10, w - x - 4), 1, jaw, 34);
+    }
+  } else if (effect === "mosaic") {
+    const tile = [
+      Math.min(255, Math.round(color[0] * 0.62 + 82)),
+      Math.min(255, Math.round(color[1] * 0.48 + 118)),
+      Math.min(255, Math.round(color[2] * 0.74 + 68)),
+    ];
+    const grout = [
+      Math.min(255, Math.round(color[0] * 0.26 + 62)),
+      Math.min(255, Math.round(color[1] * 0.58 + 76)),
+      Math.min(255, Math.round(color[2] * 0.92 + 44)),
+    ];
+    // Mosaic chrome for widgets: tiny offset tiles make status widgets feel
+    // assembled from graphical pieces without painting dense checkerboards.
+    // The staggered cells are sparse and fixed-stride for compact PNG strips.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 4; x < w; x += 16) {
+      const row = Math.floor(x / 16) % 3;
+      const y = Math.max(1, Math.min(h - 3, mid + row - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(8, w - x), 2, row === 1 ? tile : grout, 36);
+      if (x + 9 < w) fillRectAlpha(pixels, w, x + 9, Math.max(1, y - 2), Math.min(5, w - x - 9), 2, tile, 30);
+    }
+    for (let x = 12; x < w; x += 40) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(14, w - x), 1, tile, 24);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(12, w - x - 5), 1, grout, 22);
     }
   }
 }
