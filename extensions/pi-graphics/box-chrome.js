@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "palette", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "palette", "satellite", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -94,7 +94,7 @@ export const BOX_TYPE_EFFECTS = {
   thinkingSelector: "choice",
   tree: "vine",
   userSelector: "badge",
-  agent: "orbit",
+  agent: "satellite",
   mascot: "crest",
   customTui: "panel",
   overlay: "frost",
@@ -1040,6 +1040,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(9, h - 2), tick, 28);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, bottom + 2), Math.min(13, w - x - 3), 1, chipB, 24);
     }
+  } else if (effect === "satellite") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.50 + 96)),
+      Math.min(255, Math.round(color[1] * 0.66 + 78)),
+      Math.min(255, Math.round(color[2] * 0.80 + 60)),
+    ];
+    const pip = [
+      Math.min(255, Math.round(color[0] * 0.78 + 60)),
+      Math.min(255, Math.round(color[1] * 0.52 + 108)),
+      Math.min(255, Math.round(color[2] * 0.58 + 102)),
+    ];
+    const tag = [
+      Math.min(255, Math.round(color[0] * 0.30 + 76)),
+      Math.min(255, Math.round(color[1] * 0.70 + 60)),
+      Math.min(255, Math.round(color[2] * 0.50 + 118)),
+    ];
+    // Satellite chrome for agent announcements: orbital rails, telemetry pips,
+    // and signal tags suggest agent presence without animation, trig fields,
+    // glyphs, dense textures, masks, graph layout, or repaint loops.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 4; x < w; x += 32) {
+      const upper = Math.max(1, mid - 4 + (Math.floor(x / 32) % 2));
+      const lower = Math.min(h - 2, mid + 4 - (Math.floor(x / 32) % 2));
+      fillRectAlpha(pixels, w, x, upper, Math.min(16, w - x), 1, rail, 30);
+      fillRectAlpha(pixels, w, x + 5, lower, Math.min(14, w - x - 5), 1, rail, 24);
+      fillRectAlpha(pixels, w, x + 2, mid, 2, 2, pip, 46);
+      if (x + 17 < w) fillRectAlpha(pixels, w, x + 17, Math.max(1, mid - 1), 2, 3, tag, 34);
+    }
+    for (let x = 18; x < w; x += 64) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(20, w - x), 1, rail, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, mid + 5), Math.min(15, w - x - 8), 1, tag, 18);
+    }
   } else if (effect === "orbit") {
     const ring = [
       Math.min(255, Math.round(color[0] * 0.46 + 100)),
@@ -1051,9 +1083,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.50 + 105)),
       Math.min(255, Math.round(color[2] * 0.55 + 105)),
     ];
-    // Orbit chrome for agent/mascot surfaces: coarse arc segments and satellite
-    // pips imply personality and motion while remaining a static cached strip.
-    // No trigonometric per-pixel field: just a few fixed-stride rectangles.
+    // Orbit remains available as an explicit agent/mascot variant: coarse arc
+    // segments and satellite pips imply personality while staying static.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 4; x < w; x += 26) {
       const arcTop = Math.max(1, mid - 3 + ((x / 26) % 2));
