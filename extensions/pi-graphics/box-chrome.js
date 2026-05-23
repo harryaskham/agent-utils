@@ -66,16 +66,16 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour"]);
 
 export const BOX_TYPE_EFFECTS = {
-  assistant: "aurora",
+  assistant: "contour",
   thinking: "cloud",
   tool: "circuit",
   bash: "scanline",
   user: "glass",
   custom: "sparkle",
-  skill: "aurora",
+  skill: "contour",
   branch: "scanline",
   compaction: "glass",
   footer: "holo",
@@ -96,7 +96,7 @@ export const BOX_TYPE_EFFECTS = {
   userSelector: "glass",
   agent: "aurora",
   mascot: "sparkle",
-  customTui: "aurora",
+  customTui: "contour",
   overlay: "prism",
   widget: "lattice",
   header: "holo",
@@ -267,6 +267,30 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x + 3, y + 1, Math.min(8, w - x - 3), 1, color, 36);
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.5)), w, 1, node, 18);
+  } else if (effect === "contour") {
+    const shadow = [
+      Math.min(255, Math.round(color[0] * 0.35 + 70)),
+      Math.min(255, Math.round(color[1] * 0.55 + 70)),
+      Math.min(255, Math.round(color[2] * 0.85 + 35)),
+    ];
+    const highlight = [
+      Math.min(255, Math.round(color[0] * 0.70 + 90)),
+      Math.min(255, Math.round(color[1] * 0.75 + 80)),
+      Math.min(255, Math.round(color[2] * 0.45 + 120)),
+    ];
+    // Topographic message chrome: stepped isolines give assistant/extension
+    // boxes a calm rendered-surface feel. Segments are sparse and grid-aligned,
+    // so generation stays O(width / stride) and compresses well in PNG strips.
+    for (let x = 0; x < w; x += 8) {
+      const ridge = Math.max(1, Math.min(h - 2, Math.round(h * (0.52 + 0.28 * Math.sin(x / 24)))));
+      fillRectAlpha(pixels, w, x, ridge, Math.min(6, w - x), 1, highlight, 38);
+      if (ridge > 2) fillRectAlpha(pixels, w, x + 2, ridge - 3, Math.min(4, w - x - 2), 1, shadow, 26);
+      if (ridge + 3 < h) fillRectAlpha(pixels, w, x + 1, ridge + 3, Math.min(5, w - x - 1), 1, color, 24);
+    }
+    for (let x = 12; x < w; x += 41) {
+      const y = 1 + ((x * 3) % Math.max(1, h - 3));
+      fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 2, x % 2 ? highlight : shadow, 30);
+    }
   }
 }
 
