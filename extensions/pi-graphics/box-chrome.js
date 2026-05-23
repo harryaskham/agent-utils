@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -85,7 +85,7 @@ export const BOX_TYPE_EFFECTS = {
   editor: "caret",
   selector: "compass",
   login: "keystone",
-  model: "caliper",
+  model: "dial",
   oauth: "keystone",
   session: "ribbon",
   settings: "caliper",
@@ -933,6 +933,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 16; x < w; x += 48) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(4, h - 1), blade, 34);
       fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 4), Math.min(12, w - x - 4), 1, glint, 24);
+    }
+  } else if (effect === "dial") {
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.60 + 88)),
+      Math.min(255, Math.round(color[1] * 0.58 + 100)),
+      Math.min(255, Math.round(color[2] * 0.70 + 72)),
+    ];
+    const needle = [
+      Math.min(255, Math.round(color[0] * 0.32 + 102)),
+      Math.min(255, Math.round(color[1] * 0.74 + 54)),
+      Math.min(255, Math.round(color[2] * 0.42 + 126)),
+    ];
+    // Dial chrome for model selectors: radial tick fragments and tiny needles
+    // make model choice feel like adjusting an instrument, but avoid arcs,
+    // trigonometric drawing, masks, or stateful animation.
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    for (let x = 6; x < w; x += 28) {
+      const phase = Math.floor(x / 28) % 4;
+      const y = Math.max(1, Math.min(h - 2, mid + phase - 2));
+      fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 1, tick, 38);
+      fillRectAlpha(pixels, w, x + 4, Math.max(1, y - 3), 1, Math.min(7, h - y + 2), needle, 30);
+      if (x + 12 < w) fillRectAlpha(pixels, w, x + 12, Math.min(h - 2, y + 2), Math.min(6, w - x - 12), 1, needle, 28);
+    }
+    for (let x = 20; x < w; x += 56) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 6), Math.min(16, w - x), 1, tick, 20);
+      fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, mid + 5), Math.min(12, w - x - 6), 1, needle, 26);
     }
   } else if (effect === "caliper") {
     const rule = [
