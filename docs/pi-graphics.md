@@ -346,16 +346,16 @@ displayed using kitty Unicode placeholder cells, so:
   kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `holo`, `lattice`,
-  `contour`, `weave`, `glyph`, `blueprint`, `dendrite`, `signal`, `halo`,
-  `constellation`, `orbit`, `rune`, `fold`, `nebula`, `waveform`, `ribbon`,
+  `contour`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`, `signal`,
+  `halo`, `constellation`, `orbit`, `rune`, `fold`, `nebula`, `waveform`, `ribbon`,
   `aperture`, `caliper`, `mosaic`, and `keystone`) and caches both uploads and
   relative placements so ordinary rerenders do not re-place identical box strips.
   Thinking blocks are detected from assistant message content and get sparse nebula
   mist lanes, assistant surfaces get calm topographic contour bands, skill/custom-TUI
   surfaces get compact rune sigils, tool/bash surfaces get sparse blueprint drafting
-  rules, tree surfaces get branching dendrite strokes, branch/loader surfaces get
-  beacon-like signal pips, compaction summaries get accordion fold creases,
-  agent/mascot surfaces get static orbit arcs and satellite pips,
+  rules, tree surfaces get branching dendrite strokes, branch surfaces get interlaced
+  braid strands, loader surfaces get beacon-like signal pips, compaction summaries
+  get accordion fold creases, agent/mascot surfaces get static orbit arcs and satellite pips,
   custom/theme surfaces get sparse constellation nodes, user/user-selector surfaces
   get tactile woven thread strokes, login/OAuth surfaces get keystone gateway marks,
   selector surfaces get sparse graphical glyph marks, image surfaces get shutter-like
