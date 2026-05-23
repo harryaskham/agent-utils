@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "rune", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -95,7 +95,7 @@ export const BOX_TYPE_EFFECTS = {
   tree: "dendrite",
   userSelector: "badge",
   agent: "orbit",
-  mascot: "orbit",
+  mascot: "crest",
   customTui: "rune",
   overlay: "frost",
   widget: "mosaic",
@@ -806,6 +806,35 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 2, mid + ((x / 53) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, 3, 3, satellite, 48);
       fillRectAlpha(pixels, w, x + 4, y, Math.min(7, w - x - 4), 1, ring, 24);
+    }
+  } else if (effect === "crest") {
+    const plate = [
+      Math.min(255, Math.round(color[0] * 0.60 + 92)),
+      Math.min(255, Math.round(color[1] * 0.48 + 112)),
+      Math.min(255, Math.round(color[2] * 0.54 + 116)),
+    ];
+    const edge = [
+      Math.min(255, Math.round(color[0] * 0.28 + 170)),
+      Math.min(255, Math.round(color[1] * 0.32 + 150)),
+      Math.min(255, Math.round(color[2] * 0.42 + 135)),
+    ];
+    // Crest chrome for mascot surfaces: small heraldic plates and chevrons read
+    // as a character badge without text glyphs or sparkle/noise fields. Static
+    // fixed-stride rectangles keep mascot strips cached and low entropy.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.50));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 4; x < w; x += 28) {
+      const flip = Math.floor(x / 28) % 2;
+      const y = flip ? mid - 1 : top;
+      fillRectAlpha(pixels, w, x, y, Math.min(10, w - x), 2, plate, 44);
+      fillRectAlpha(pixels, w, x + 2, y + 2, Math.min(6, w - x - 2), 1, edge, 38);
+      fillRectAlpha(pixels, w, x + 4, bottom, Math.min(8, w - x - 4), 1, plate, 30);
+    }
+    for (let x = 15; x < w; x += 42) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 2), Math.min(8, w - x), 1, edge, 30);
+      fillRectAlpha(pixels, w, x + 3, mid, Math.min(8, w - x - 3), 1, plate, 28);
+      fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, mid + 2), Math.min(8, w - x - 6), 1, edge, 24);
     }
   } else if (effect === "rune") {
     const stroke = [

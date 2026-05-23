@@ -347,7 +347,7 @@ displayed using kitty Unicode placeholder cells, so:
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `frost`, `holo`, `lattice`,
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
-  `metronome`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `palette`, `orbit`,
+  `metronome`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `palette`, `orbit`, `crest`,
   `rune`, `fold`, `lantern`, `nebula`, `waveform`, `marquee`, `ribbon`, `aperture`, `dial`,
   `slider`, `caliper`, `mosaic`, `keyring`, `keystone`, `badge`, `compass`, `prompt`,
   and `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
@@ -357,7 +357,7 @@ displayed using kitty Unicode placeholder cells, so:
   bash surfaces get shell prompt rails, tree surfaces get branching dendrite strokes,
   branch surfaces get interlaced braid strands, loader surfaces get
   static metronome beat bars, compaction summaries get accordion fold creases,
-  agent/mascot surfaces get static orbit arcs and satellite pips, custom surfaces
+  agent surfaces get static orbit arcs and satellite pips, mascot surfaces get crest plates and chevrons, custom surfaces
   get sparse constellation nodes, theme surfaces get palette chip bars and calibration ticks, user surfaces get tactile woven thread strokes,
   user-selector surfaces get badge-like identity plates, login surfaces get
   keystone gateway marks, OAuth provider selectors get keyring token-exchange marks,
