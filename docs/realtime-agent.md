@@ -57,6 +57,62 @@ export PI_RT_PLAYBACK_CMD='...'        # custom raw pcm16 24k mono stdin
 
 Run `/rt-doctor` inside Pi to see the resolved backend, Pulse variables, commands, API key presence, and troubleshooting hints.
 
+## Quick-start configs
+
+Use these as copy/paste starting points, then run `/rt-doctor` before starting a call to confirm the resolved backend, devices, command availability, and API key status.
+
+### Pulse / phone routing
+
+This is Harry's normal path: Pi captures and plays raw 24 kHz mono PCM through Pulse, often with a phone or remote host as the actual microphone/speaker endpoint.
+
+```bash
+export OPENAI_API_KEY=...
+export PI_RT_AUDIO_BACKEND=pulse
+export PULSE_SERVER=sgu24:4713        # replace with your Pulse host
+export PULSE_SOURCE=source.bluetooth  # microphone/source; omit for Pulse default
+export PULSE_SINK=vsink_voice         # speaker/sink; omit for Pulse default
+```
+
+Start a full realtime conversation with server VAD:
+
+```text
+/rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=vsink_voice summary=true chime=false start=vad
+```
+
+Expected behavior: `/rt-doctor` should show `backend=pulse`, non-empty Pulse routing, and available `parec`/`pacat` commands. When `/rt ... start=vad` runs, the `rt-audio`/realtime widget should show a connected session, mic bytes should increase while you speak, and playback should go to the configured Pulse sink.
+
+### Local macOS CoreAudio / AudioToolbox test
+
+Use this when you want to test with the Mac's local microphone and speaker instead of Pulse routing:
+
+```bash
+export OPENAI_API_KEY=...
+export PI_RT_AUDIO_BACKEND=coreaudio
+unset PULSE_SERVER PULSE_SOURCE PULSE_SINK
+```
+
+```text
+/rt backend=coreaudio start=ptt
+```
+
+Expected behavior: `/rt-devices` lists local AVFoundation input devices, `/rt-doctor` reports a local backend and available local capture/playback helpers, and PTT records from the current default input until you commit with Enter/Space/Esc.
+
+### Local sox/ffplay fallback
+
+Use this on machines where `rec`/`play` or `ffmpeg`/`ffplay` are already installed and Pulse is not desired:
+
+```bash
+export OPENAI_API_KEY=...
+export PI_RT_AUDIO_BACKEND=sox       # capture/play through rec/play
+# or: export PI_RT_AUDIO_BACKEND=ffplay  # ffplay output with rec/sox capture fallback
+```
+
+```text
+/rt backend=sox stt=ptt
+```
+
+Expected behavior: STT mode keeps your current text model selected, records from the local default input, and queues the completed transcript back into Pi as a normal follow-up message. If `/rt-doctor` reports a missing `rec`, `play`, `ffmpeg`, or `ffplay` binary, install that backend's toolchain or switch back to `backend=pulse`.
+
 ## Recommended workflows
 
 ### Full realtime conversation with server VAD
