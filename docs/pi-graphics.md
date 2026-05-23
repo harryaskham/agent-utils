@@ -348,11 +348,11 @@ displayed using kitty Unicode placeholder cells, so:
   `scanline`, `circuit`, `sparkle`, `cloud`, `facet`, `prism`, `veil`, `frost`, `holo`, `lattice`,
   `contour`, `manuscript`, `tapestry`, `weave`, `glyph`, `blueprint`, `vine`, `dendrite`, `braid`,
   `metronome`, `hourglass`, `signal`, `halo`, `caret`, `bevel`, `chamfer`, `constellation`, `palette`, `orbit`, `crest`,
-  `rune`, `panel`, `fold`, `archive`, `lantern`, `choice`, `nebula`, `waveform`, `marquee`, `ribbon`, `ledger`, `lens`, `aperture`, `gauge`, `dial`,
+  `sigil`, `rune`, `panel`, `fold`, `archive`, `lantern`, `choice`, `nebula`, `waveform`, `marquee`, `ribbon`, `ledger`, `lens`, `aperture`, `gauge`, `dial`,
   `slider`, `caliper`, `tile`, `mosaic`, `portal`, `keyring`, `keystone`, `badge`, `sextant`, `compass`, `prompt`,
   and `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
   box strips. Thinking blocks are detected from assistant message content and get
-  warm lantern slats, thinking selector surfaces get stepped choice rails and decision ticks, assistant surfaces get illuminated manuscript margins, skill surfaces get compact rune sigils,
+  warm lantern slats, thinking selector surfaces get stepped choice rails and decision ticks, assistant surfaces get illuminated manuscript margins, skill surfaces get sigil seals, binding ticks, and invocation marks,
   custom-TUI surfaces get docked panel tabs and seams, tool surfaces get schematic bus traces and pads,
   bash surfaces get shell prompt rails, tree surfaces get vine stems, leaf pins, and route joints,
   branch surfaces get interlaced braid strands, loader surfaces get
@@ -365,7 +365,7 @@ displayed using kitty Unicode placeholder cells, so:
   surfaces get lens focus brackets, glass glints, and crop-guide ticks, editor surfaces get slim
   caret beams, border surfaces get bevel planes, clipped-corner highlights, and shadow seams, input surfaces get
   sparse angled facets, entry glints, and prompt guide cuts, overlay surfaces get frosted corner crystals and cold edge glints,
-  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse dashboard tiles, corner pins, and pane separators. `aperture` remains available as an explicit shutter variant, `chamfer` remains available as an explicit cut-corner border variant, `compass` remains available as an explicit directional-selector variant, `dendrite` remains available as an explicit branching-tree variant, `dial` remains available as an explicit instrument variant, `mosaic` remains available as an explicit assembled-tile variant, `prism` remains available as an explicit glass-facet variant, `weave` remains available as an explicit tactile-thread variant, and `keystone` remains available as an explicit gateway variant. If a box moves or resizes, stale relative
+  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse dashboard tiles, corner pins, and pane separators. `aperture` remains available as an explicit shutter variant, `chamfer` remains available as an explicit cut-corner border variant, `compass` remains available as an explicit directional-selector variant, `dendrite` remains available as an explicit branching-tree variant, `dial` remains available as an explicit instrument variant, `mosaic` remains available as an explicit assembled-tile variant, `prism` remains available as an explicit glass-facet variant, `rune` remains available as an explicit compact-rune variant, `weave` remains available as an explicit tactile-thread variant, and `keystone` remains available as an explicit gateway variant. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension

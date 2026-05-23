@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -75,7 +75,7 @@ export const BOX_TYPE_EFFECTS = {
   bash: "prompt",
   user: "tapestry",
   custom: "constellation",
-  skill: "rune",
+  skill: "sigil",
   branch: "braid",
   compaction: "archive",
   footer: "waveform",
@@ -1033,6 +1033,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x + 3, mid, Math.min(8, w - x - 3), 1, plate, 28);
       fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, mid + 2), Math.min(8, w - x - 6), 1, edge, 24);
     }
+  } else if (effect === "sigil") {
+    const seal = [
+      Math.min(255, Math.round(color[0] * 0.60 + 90)),
+      Math.min(255, Math.round(color[1] * 0.48 + 116)),
+      Math.min(255, Math.round(color[2] * 0.74 + 70)),
+    ];
+    const binding = [
+      Math.min(255, Math.round(color[0] * 0.34 + 78)),
+      Math.min(255, Math.round(color[1] * 0.70 + 62)),
+      Math.min(255, Math.round(color[2] * 0.46 + 126)),
+    ];
+    const mark = [
+      Math.min(255, Math.round(color[0] * 0.78 + 56)),
+      Math.min(255, Math.round(color[1] * 0.54 + 106)),
+      Math.min(255, Math.round(color[2] * 0.62 + 94)),
+    ];
+    // Sigil chrome for skills: rune-like seals, binding ticks, and invocation
+    // marks make capability surfaces feel authored while avoiding glyphs,
+    // masks, dense textures, graph layout, timers, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 6; x < w; x += 32) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 32) % 3) - 1));
+      fillRectAlpha(pixels, w, x, Math.max(1, y - 3), 1, Math.min(7, h - y + 3), seal, 42);
+      fillRectAlpha(pixels, w, x, y, Math.min(10, w - x), 1, seal, 38);
+      fillRectAlpha(pixels, w, x + 3, top, Math.min(8, w - x - 3), 1, binding, 24);
+      if (x + 9 < w) fillRectAlpha(pixels, w, x + 9, Math.min(h - 2, bottom), 2, 2, mark, 38);
+    }
+    for (let x = 18; x < w; x += 58) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(18, w - x), 1, mark, 16);
+      fillRectAlpha(pixels, w, x + 7, Math.min(h - 2, bottom + 1), Math.min(14, w - x - 7), 1, binding, 18);
+    }
   } else if (effect === "rune") {
     const stroke = [
       Math.min(255, Math.round(color[0] * 0.64 + 85)),
@@ -1044,9 +1077,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.70 + 65)),
       Math.min(255, Math.round(color[2] * 0.40 + 125)),
     ];
-    // Rune chrome for skill/custom-TUI surfaces: compact sigils make extension
-    // capability panels feel authored rather than generic. The motif is made
-    // from coarse rect strokes, avoiding text glyphs and high-entropy textures.
+    // Rune remains available as an explicit skill/custom-TUI variant: compact
+    // rect sigils feel authored while avoiding text glyphs and noisy textures.
     for (let x = 7; x < w; x += 30) {
       const y = 2 + ((x * 3) % Math.max(1, h - 5));
       fillRectAlpha(pixels, w, x, y, 1, Math.min(7, h - y), stroke, 46);
