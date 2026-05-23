@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -99,7 +99,7 @@ export const BOX_TYPE_EFFECTS = {
   customTui: "rune",
   overlay: "frost",
   widget: "mosaic",
-  header: "waveform",
+  header: "marquee",
 };
 
 function withAlpha([r, g, b], a) {
@@ -899,6 +899,33 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 14; x < w; x += 37) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 4), Math.min(11, w - x), 1, crest, 24);
       fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(9, w - x - 3), 1, trough, 24);
+    }
+  } else if (effect === "marquee") {
+    const bulb = [
+      Math.min(255, Math.round(color[0] * 0.36 + 150)),
+      Math.min(255, Math.round(color[1] * 0.58 + 125)),
+      Math.min(255, Math.round(color[2] * 0.56 + 135)),
+    ];
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.70 + 65)),
+      Math.min(255, Math.round(color[1] * 0.48 + 95)),
+      Math.min(255, Math.round(color[2] * 0.76 + 60)),
+    ];
+    // Marquee chrome for headers: quiet title-bar bulbs and top rail ticks make
+    // the session masthead distinct from footer waveform telemetry. Static,
+    // fixed-stride rectangles keep the strip deterministic and PNG-friendly.
+    const top = Math.max(1, Math.floor(h * 0.18));
+    const mid = Math.max(1, Math.floor(h * 0.48));
+    fillRectAlpha(pixels, w, 0, top, w, 1, rail, 24);
+    for (let x = 5; x < w; x += 18) {
+      const phase = Math.floor(x / 18) % 3;
+      const y = Math.max(1, Math.min(h - 3, top + phase));
+      fillRectAlpha(pixels, w, x, y, 2, 2, bulb, 58 - phase * 8);
+      fillRectAlpha(pixels, w, x + 3, top, Math.min(9, w - x - 3), 1, rail, 28);
+      if (phase === 0) fillRectAlpha(pixels, w, x + 1, mid, 1, Math.min(5, h - mid), bulb, 30);
+    }
+    for (let x = 12; x < w; x += 41) {
+      fillRectAlpha(pixels, w, x, Math.min(h - 2, mid + 3), Math.min(15, w - x), 1, rail, 24);
     }
   } else if (effect === "ribbon") {
     const silk = [
