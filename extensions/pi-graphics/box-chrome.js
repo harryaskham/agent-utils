@@ -66,11 +66,11 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
-  thinking: "cloud",
+  thinking: "nebula",
   tool: "blueprint",
   bash: "blueprint",
   user: "weave",
@@ -91,7 +91,7 @@ export const BOX_TYPE_EFFECTS = {
   settings: "lattice",
   image: "glyph",
   theme: "constellation",
-  thinkingSelector: "cloud",
+  thinkingSelector: "nebula",
   tree: "blueprint",
   userSelector: "weave",
   agent: "orbit",
@@ -521,6 +521,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 14; x < w; x += 44) {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.68) - (Math.floor(x / 44) % 2)));
       fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 2, highlight, 38);
+    }
+  } else if (effect === "nebula") {
+    const mist = [
+      Math.min(255, Math.round(color[0] * 0.50 + 90)),
+      Math.min(255, Math.round(color[1] * 0.38 + 95)),
+      Math.min(255, Math.round(color[2] * 0.92 + 40)),
+    ];
+    const glint = [
+      Math.min(255, Math.round(color[0] * 0.76 + 80)),
+      Math.min(255, Math.round(color[1] * 0.56 + 105)),
+      Math.min(255, Math.round(color[2] * 0.62 + 95)),
+    ];
+    // Nebula chrome for thinking surfaces: sparse mist lanes and tiny thought
+    // glints replace the old generic cloud with a calmer celestial layer. It is
+    // static, stride-based, and rectangle-only so thought rows stay cheap.
+    const mid = Math.max(1, Math.floor(h * 0.48));
+    for (let x = 3; x < w; x += 17) {
+      const y = Math.max(1, Math.min(h - 2, mid + (Math.floor(x / 17) % 5) - 2));
+      fillRectAlpha(pixels, w, x, y, Math.min(11, w - x), 1, mist, 34);
+      if (y + 2 < h) fillRectAlpha(pixels, w, x + 3, y + 2, Math.min(8, w - x - 3), 1, color, 22);
+    }
+    for (let x = 10; x < w; x += 39) {
+      const y = 2 + ((x * 5) % Math.max(1, h - 5));
+      fillRectAlpha(pixels, w, x, y, 2, 2, glint, 54);
+      if (x + 4 < w) fillRectAlpha(pixels, w, x + 3, Math.max(1, y - 1), 1, 4, mist, 28);
     }
   }
 }

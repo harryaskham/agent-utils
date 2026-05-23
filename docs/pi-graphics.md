@@ -347,14 +347,14 @@ displayed using kitty Unicode placeholder cells, so:
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `holo`, `lattice`,
   `contour`, `weave`, `glyph`, `blueprint`, `signal`, `halo`, `constellation`,
-  `orbit`, `rune`, and `fold`) and caches both uploads and relative placements so
-  ordinary rerenders do not re-place identical box strips. Thinking blocks are
-  detected from assistant message content and use the cloudy thought effect,
-  assistant surfaces get calm topographic contour bands, skill/custom-TUI surfaces
-  get compact rune sigils, tool/bash/tree surfaces get sparse blueprint drafting
-  rules, branch/loader surfaces get beacon-like signal pips, compaction summaries
-  get accordion fold creases, agent/mascot surfaces get static orbit arcs and
-  satellite pips, custom/theme surfaces get sparse constellation nodes, user/login/
+  `orbit`, `rune`, `fold`, and `nebula`) and caches both uploads and relative
+  placements so ordinary rerenders do not re-place identical box strips. Thinking
+  blocks are detected from assistant message content and get sparse nebula mist
+  lanes, assistant surfaces get calm topographic contour bands, skill/custom-TUI
+  surfaces get compact rune sigils, tool/bash/tree surfaces get sparse blueprint
+  drafting rules, branch/loader surfaces get beacon-like signal pips, compaction
+  summaries get accordion fold creases, agent/mascot surfaces get static orbit arcs
+  and satellite pips, custom/theme surfaces get sparse constellation nodes, user/login/
   OAuth surfaces get tactile woven thread strokes, selector/image surfaces get sparse
   graphical glyph marks, editor/border surfaces get soft focus halo rails, input/
   overlay surfaces get a lightweight prism-facet glass treatment, header/footer/
