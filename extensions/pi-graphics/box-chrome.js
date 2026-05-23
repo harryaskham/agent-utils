@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -82,7 +82,7 @@ export const BOX_TYPE_EFFECTS = {
   loader: "metronome",
   border: "chamfer",
   input: "prism",
-  editor: "halo",
+  editor: "caret",
   selector: "glyph",
   login: "keystone",
   model: "caliper",
@@ -526,6 +526,30 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(0, top - 1), Math.min(12, w - x), 2, inner, 46);
       fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, bottom), Math.min(8, w - x - 2), 1, outer, 34);
     }
+  } else if (effect === "caret") {
+    const beam = [
+      Math.min(255, Math.round(color[0] * 0.70 + 72)),
+      Math.min(255, Math.round(color[1] * 0.50 + 116)),
+      Math.min(255, Math.round(color[2] * 0.76 + 62)),
+    ];
+    const ghost = [
+      Math.min(255, Math.round(color[0] * 0.30 + 64)),
+      Math.min(255, Math.round(color[1] * 0.70 + 62)),
+      Math.min(255, Math.round(color[2] * 0.62 + 96)),
+    ];
+    // Caret chrome for editor surfaces: slim cursor beams and guide notches make
+    // edit fields feel active without blinking or repaint loops. Fixed sparse
+    // strokes preserve cached strip efficiency and avoid terminal glyph reliance.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 7; x < w; x += 26) {
+      const tall = Math.floor(x / 26) % 3 === 0;
+      const y = tall ? Math.max(1, top - 1) : top;
+      fillRectAlpha(pixels, w, x, y, 1, tall ? Math.min(9, h - y) : 5, tall ? beam : ghost, tall ? 48 : 34);
+      if (x + 3 < w) fillRectAlpha(pixels, w, x + 3, bottom, Math.min(11, w - x - 3), 1, beam, tall ? 30 : 22);
+    }
+    fillRectAlpha(pixels, w, 0, top, w, 1, ghost, 18);
+    fillRectAlpha(pixels, w, 0, bottom, w, 1, beam, 20);
   } else if (effect === "chamfer") {
     const edge = [
       Math.min(255, Math.round(color[0] * 0.66 + 78)),

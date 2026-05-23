@@ -347,11 +347,11 @@ displayed using kitty Unicode placeholder cells, so:
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `holo`, `lattice`,
   `contour`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`, `metronome`,
-  `signal`, `halo`, `chamfer`, `constellation`, `orbit`, `rune`, `fold`, `nebula`,
-  `waveform`, `ribbon`, `aperture`, `caliper`, `mosaic`, and `keystone`) and caches
-  both uploads and relative placements so ordinary rerenders do not re-place identical
-  box strips. Thinking blocks are detected from assistant message content and get
-  sparse nebula mist lanes, assistant surfaces get calm topographic contour bands,
+  `signal`, `halo`, `caret`, `chamfer`, `constellation`, `orbit`, `rune`, `fold`,
+  `nebula`, `waveform`, `ribbon`, `aperture`, `caliper`, `mosaic`, and `keystone`)
+  and caches both uploads and relative placements so ordinary rerenders do not re-place
+  identical box strips. Thinking blocks are detected from assistant message content and
+  get sparse nebula mist lanes, assistant surfaces get calm topographic contour bands,
   skill/custom-TUI surfaces get compact rune sigils, tool/bash surfaces get sparse
   blueprint drafting rules, tree surfaces get branching dendrite strokes, branch
   surfaces get interlaced braid strands, loader surfaces get static metronome beat
@@ -359,8 +359,8 @@ displayed using kitty Unicode placeholder cells, so:
   static orbit arcs and satellite pips, custom/theme surfaces get sparse constellation
   nodes, user/user-selector surfaces get tactile woven thread strokes, login/OAuth
   surfaces get keystone gateway marks, selector surfaces get sparse graphical glyph
-  marks, image surfaces get shutter-like aperture fragments, editor surfaces get soft
-  focus halo rails, border surfaces get beveled chamfer cuts, input surfaces get a
+  marks, image surfaces get shutter-like aperture fragments, editor surfaces get slim
+  caret beams, border surfaces get beveled chamfer cuts, input surfaces get a
   lightweight prism-facet glass treatment, overlay surfaces get gauzy veil folds,
   header/footer surfaces get static waveform rails, session surfaces get interleaved
   ribbon strips, model/settings surfaces get precise caliper ticks, and widget surfaces get sparse mosaic tiles. If a box moves or resizes, stale relative
