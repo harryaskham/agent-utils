@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -75,7 +75,7 @@ export const BOX_TYPE_EFFECTS = {
   bash: "blueprint",
   user: "weave",
   custom: "constellation",
-  skill: "contour",
+  skill: "rune",
   branch: "signal",
   compaction: "signal",
   footer: "holo",
@@ -96,7 +96,7 @@ export const BOX_TYPE_EFFECTS = {
   userSelector: "weave",
   agent: "orbit",
   mascot: "orbit",
-  customTui: "contour",
+  customTui: "rune",
   overlay: "prism",
   widget: "lattice",
   header: "holo",
@@ -472,6 +472,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 2, mid + ((x / 53) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, 3, 3, satellite, 48);
       fillRectAlpha(pixels, w, x + 4, y, Math.min(7, w - x - 4), 1, ring, 24);
+    }
+  } else if (effect === "rune") {
+    const stroke = [
+      Math.min(255, Math.round(color[0] * 0.64 + 85)),
+      Math.min(255, Math.round(color[1] * 0.50 + 110)),
+      Math.min(255, Math.round(color[2] * 0.78 + 65)),
+    ];
+    const ember = [
+      Math.min(255, Math.round(color[0] * 0.45 + 115)),
+      Math.min(255, Math.round(color[1] * 0.70 + 65)),
+      Math.min(255, Math.round(color[2] * 0.40 + 125)),
+    ];
+    // Rune chrome for skill/custom-TUI surfaces: compact sigils make extension
+    // capability panels feel authored rather than generic. The motif is made
+    // from coarse rect strokes, avoiding text glyphs and high-entropy textures.
+    for (let x = 7; x < w; x += 30) {
+      const y = 2 + ((x * 3) % Math.max(1, h - 5));
+      fillRectAlpha(pixels, w, x, y, 1, Math.min(7, h - y), stroke, 46);
+      fillRectAlpha(pixels, w, x, y, Math.min(7, w - x), 1, stroke, 42);
+      if (y + 4 < h) fillRectAlpha(pixels, w, x + 2, y + 4, Math.min(6, w - x - 2), 1, ember, 34);
+      if (x + 6 < w) fillRectAlpha(pixels, w, x + 6, Math.max(1, y - 2), 1, Math.min(5, h - Math.max(1, y - 2)), ember, 32);
+    }
+    for (let x = 20; x < w; x += 45) {
+      const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 15) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 1, stroke, 24);
     }
   }
 }
