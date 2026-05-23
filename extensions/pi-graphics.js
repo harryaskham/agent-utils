@@ -1716,6 +1716,20 @@ export default function piGraphicsExtension(pi) {
     return `cursor anchorSeq=${editorCursorAnchorSeq} visiblePlacement=${editorCursorRelativePlacement?.placementId ?? "none"} offsets=-5,-2 staleDelete=p reset=0/27`;
   }
 
+  function cursorDoctorLines() {
+    const visible = editorCursorRelativePlacement?.placementId ?? null;
+    return [
+      "Pi Graphics cursor doctor",
+      cursorAnchorDiagnosticLine(),
+      visible
+        ? "Visible placement is active: if it appears off-cell, use /gfx cursor preview to compare anchored centering or /gfx cursor clear to delete only the live cursor placement."
+        : "No live cursor placement is currently recorded; type in the editor to create one, or use /gfx cursor preview for an anchored visual sample.",
+      "Expected live centering: fresh transparent anchor placement each redraw, 11x5 visible art, offsets -5,-2, stale cleanup by placement id.",
+      "Use /gfx cursor status for this readout without guidance, /gfx cursor preview for a bounded visual sample, /gfx cursor clear for stale placement cleanup.",
+      "Reload is only needed after changing settings; doctor does not emit graphics or mutate settings/state.",
+    ];
+  }
+
   function debugPanelLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
     return [
@@ -1883,6 +1897,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("  /gfx box preview shows per-surface chrome strips.");
         lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
         lines.push("  /gfx cursor status prints diagnostics without rendering.");
+        lines.push("  /gfx cursor doctor explains status/preview/clear next steps.");
         lines.push("  /gfx cursor clear deletes stale live cursor placement only.");
         lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
         return lines.map((line) => renderLine(width, line));
@@ -1920,7 +1935,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|cursor status|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1940,7 +1955,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -1979,6 +1994,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "cursor-status" || (action === "cursor" && ["status", "diagnostics", "diag"].includes(String(tokens[1] || "").toLowerCase()))) {
         ctx.ui.notify(["Pi Graphics cursor status", cursorAnchorDiagnosticLine(), "No graphics were emitted or settings changed."].join("\n"), "info");
+        return;
+      }
+      if (action === "cursor-doctor" || (action === "cursor" && ["doctor", "help", "why"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(cursorDoctorLines().join("\n"), "info");
         return;
       }
       if (action === "cursor-clear" || (action === "cursor" && ["clear", "reset", "cleanup"].includes(String(tokens[1] || "").toLowerCase()))) {
