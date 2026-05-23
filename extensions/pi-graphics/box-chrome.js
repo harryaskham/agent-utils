@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -83,19 +83,19 @@ export const BOX_TYPE_EFFECTS = {
   border: "glass",
   input: "prism",
   editor: "glass",
-  selector: "sparkle",
+  selector: "glyph",
   login: "weave",
   model: "lattice",
   oauth: "weave",
   session: "holo",
   settings: "lattice",
-  image: "aurora",
-  theme: "sparkle",
+  image: "glyph",
+  theme: "glyph",
   thinkingSelector: "cloud",
   tree: "scanline",
   userSelector: "weave",
   agent: "aurora",
-  mascot: "sparkle",
+  mascot: "glyph",
   customTui: "contour",
   overlay: "prism",
   widget: "lattice",
@@ -316,6 +316,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.30)), w, 1, thread, 14);
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.68)), w, 1, under, 14);
+  } else if (effect === "glyph") {
+    const accent = [
+      Math.min(255, Math.round(color[0] * 0.62 + 95)),
+      Math.min(255, Math.round(color[1] * 0.62 + 95)),
+      Math.min(255, Math.round(color[2] * 0.38 + 145)),
+    ];
+    const ghost = [
+      Math.min(255, Math.round(color[0] * 0.30 + 75)),
+      Math.min(255, Math.round(color[1] * 0.45 + 65)),
+      Math.min(255, Math.round(color[2] * 0.70 + 75)),
+    ];
+    // Selector glyphs: sparse bracket/diamond marks make menus and chooser
+    // surfaces feel like graphical controls. The motif is built from tiny rects,
+    // so it remains cheap and compressible while reading as deliberate iconwork.
+    for (let x = 4; x < w; x += 28) {
+      const y = 2 + ((x / 4) % Math.max(1, h - 5));
+      fillRectAlpha(pixels, w, x, y, 5, 1, accent, 56);
+      fillRectAlpha(pixels, w, x, y, 1, 5, accent, 44);
+      fillRectAlpha(pixels, w, x + 6, y + 2, 3, 1, ghost, 38);
+      if (y + 4 < h) fillRectAlpha(pixels, w, x + 2, y + 4, 4, 1, ghost, 34);
+    }
+    for (let x = 18; x < w; x += 42) {
+      const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 6) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, 2, 2, accent, 48);
+      fillRectAlpha(pixels, w, x + 2, y - 1, 1, 4, ghost, 30);
+    }
   }
 }
 
