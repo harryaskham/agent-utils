@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -79,7 +79,7 @@ export const BOX_TYPE_EFFECTS = {
   branch: "braid",
   compaction: "fold",
   footer: "waveform",
-  loader: "metronome",
+  loader: "hourglass",
   border: "chamfer",
   input: "prism",
   editor: "caret",
@@ -619,6 +619,35 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 14; x < w; x += 45) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(10, w - x), 1, tick, 24);
       fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(10, w - x - 5), 1, rest, 22);
+    }
+  } else if (effect === "hourglass") {
+    const sand = [
+      Math.min(255, Math.round(color[0] * 0.72 + 76)),
+      Math.min(255, Math.round(color[1] * 0.64 + 86)),
+      Math.min(255, Math.round(color[2] * 0.36 + 142)),
+    ];
+    const glass = [
+      Math.min(255, Math.round(color[0] * 0.35 + 120)),
+      Math.min(255, Math.round(color[1] * 0.55 + 105)),
+      Math.min(255, Math.round(color[2] * 0.82 + 55)),
+    ];
+    // Hourglass chrome for loader surfaces: static sand columns, pinch marks,
+    // and timing ticks imply waiting without APNG/timers. Sparse fixed-stride
+    // geometry keeps loader strips deterministic and cheap to cache.
+    const top = Math.max(1, Math.floor(h * 0.20));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.80));
+    for (let x = 5; x < w; x += 24) {
+      const stem = Math.min(10, w - x);
+      fillRectAlpha(pixels, w, x, top, stem, 1, glass, 34);
+      fillRectAlpha(pixels, w, x + 2, top + 2, Math.max(1, stem - 4), 1, sand, 42);
+      fillRectAlpha(pixels, w, x + Math.floor(stem / 2), mid - 1, 1, 3, glass, 52);
+      fillRectAlpha(pixels, w, x + 2, bottom - 1, Math.max(1, stem - 4), 2, sand, 36);
+      fillRectAlpha(pixels, w, x, bottom + 1, stem, 1, glass, 28);
+    }
+    for (let x = 16; x < w; x += 49) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(12, w - x), 1, glass, 22);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(10, w - x - 4), 1, sand, 24);
     }
   } else if (effect === "signal") {
     const pulse = [
