@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "aperture", "caliper", "tile", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -98,7 +98,7 @@ export const BOX_TYPE_EFFECTS = {
   mascot: "crest",
   customTui: "panel",
   overlay: "frost",
-  widget: "mosaic",
+  widget: "tile",
   header: "marquee",
 };
 
@@ -1300,6 +1300,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, top, Math.min(14, w - x), 1, rule, 36);
       fillRectAlpha(pixels, w, x + 4, bottom, Math.min(10, w - x - 4), 1, jaw, 34);
     }
+  } else if (effect === "tile") {
+    const pane = [
+      Math.min(255, Math.round(color[0] * 0.54 + 96)),
+      Math.min(255, Math.round(color[1] * 0.64 + 78)),
+      Math.min(255, Math.round(color[2] * 0.58 + 104)),
+    ];
+    const pin = [
+      Math.min(255, Math.round(color[0] * 0.78 + 56)),
+      Math.min(255, Math.round(color[1] * 0.50 + 120)),
+      Math.min(255, Math.round(color[2] * 0.76 + 62)),
+    ];
+    const seam = [
+      Math.min(255, Math.round(color[0] * 0.30 + 70)),
+      Math.min(255, Math.round(color[1] * 0.70 + 58)),
+      Math.min(255, Math.round(color[2] * 0.46 + 128)),
+    ];
+    // Tile chrome for widgets: sparse dashboard panes, corner pins, and small
+    // separators make status widgets read like arranged UI tiles. The motif is
+    // fixed-stride and rectangle-only, not a dense checkerboard or live layout.
+    const top = Math.max(1, Math.floor(h * 0.25));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 5; x < w; x += 30) {
+      const wide = Math.min(16, w - x);
+      fillRectAlpha(pixels, w, x, top, wide, 1, pane, 26);
+      fillRectAlpha(pixels, w, x, mid, Math.min(12, wide), 2, pane, 30);
+      fillRectAlpha(pixels, w, x + 3, bottom, Math.min(14, w - x - 3), 1, seam, 22);
+      if (x + 1 < w) fillRectAlpha(pixels, w, x + 1, Math.max(1, top - 2), 2, 2, pin, 36);
+      if (x + 13 < w) fillRectAlpha(pixels, w, x + 13, Math.min(h - 2, mid + 3), 2, 2, pin, 32);
+    }
+    for (let x = 20; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(10, h - 2), seam, 24);
+      fillRectAlpha(pixels, w, x + 5, top, Math.min(20, w - x - 5), 1, pane, 16);
+    }
   } else if (effect === "mosaic") {
     const tile = [
       Math.min(255, Math.round(color[0] * 0.62 + 82)),
@@ -1311,8 +1345,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.58 + 76)),
       Math.min(255, Math.round(color[2] * 0.92 + 44)),
     ];
-    // Mosaic chrome for widgets: tiny offset tiles make status widgets feel
-    // assembled from graphical pieces without painting dense checkerboards.
+    // Mosaic remains available as an explicit variant: tiny offset tiles make
+    // widgets feel assembled from graphical pieces without dense checkerboards.
     // The staggered cells are sparse and fixed-stride for compact PNG strips.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 4; x < w; x += 16) {

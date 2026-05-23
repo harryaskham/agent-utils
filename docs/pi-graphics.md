@@ -349,7 +349,7 @@ displayed using kitty Unicode placeholder cells, so:
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
   `metronome`, `hourglass`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `palette`, `orbit`, `crest`,
   `rune`, `panel`, `fold`, `archive`, `lantern`, `choice`, `nebula`, `waveform`, `marquee`, `ribbon`, `ledger`, `aperture`, `gauge`, `dial`,
-  `slider`, `caliper`, `mosaic`, `keyring`, `keystone`, `badge`, `compass`, `prompt`,
+  `slider`, `caliper`, `tile`, `mosaic`, `keyring`, `keystone`, `badge`, `compass`, `prompt`,
   and `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
   box strips. Thinking blocks are detected from assistant message content and get
   warm lantern slats, thinking selector surfaces get stepped choice rails and decision ticks, assistant surfaces get illuminated manuscript margins, skill surfaces get compact rune sigils,
@@ -365,7 +365,7 @@ displayed using kitty Unicode placeholder cells, so:
   surfaces get shutter-like aperture fragments, editor surfaces get slim
   caret beams, border surfaces get beveled chamfer cuts, input surfaces get a
   lightweight prism-facet glass treatment, overlay surfaces get frosted corner crystals and cold edge glints,
-  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse mosaic tiles. `dial` remains available as an explicit instrument variant. If a box moves or resizes, stale relative
+  header surfaces get quiet marquee bulbs and title rails, footer surfaces keep static waveform rails, session surfaces get ledger binding ticks and index tabs, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get adjustable slider rails, and widget surfaces get sparse dashboard tiles, corner pins, and pane separators. `dial` remains available as an explicit instrument variant and `mosaic` remains available as an explicit assembled-tile variant. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension
