@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -91,7 +91,7 @@ export const BOX_TYPE_EFFECTS = {
   settings: "slider",
   image: "lens",
   theme: "swatch",
-  thinkingSelector: "choice",
+  thinkingSelector: "ballot",
   tree: "vine",
   userSelector: "tag",
   agent: "satellite",
@@ -1445,6 +1445,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 6), Math.min(14, w - x), 1, shade, 22);
       fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(9, w - x - 4), 1, glow, 30);
     }
+  } else if (effect === "ballot") {
+    const card = [
+      Math.min(255, Math.round(color[0] * 0.54 + 112)),
+      Math.min(255, Math.round(color[1] * 0.58 + 98)),
+      Math.min(255, Math.round(color[2] * 0.76 + 58)),
+    ];
+    const hole = [
+      Math.min(255, Math.round(color[0] * 0.28 + 116)),
+      Math.min(255, Math.round(color[1] * 0.42 + 126)),
+      Math.min(255, Math.round(color[2] * 0.86 + 44)),
+    ];
+    const rank = [
+      Math.min(255, Math.round(color[0] * 0.74 + 74)),
+      Math.min(255, Math.round(color[1] * 0.68 + 74)),
+      Math.min(255, Math.round(color[2] * 0.42 + 132)),
+    ];
+    // Ballot chrome for thinking selector surfaces: sparse voting cards,
+    // decision holes, and ranked ticks distinguish option picking from lantern
+    // thought blocks without glyphs, masks, graph layout, timers, or loops.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const lower = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 5; x < w; x += 27) {
+      fillRectAlpha(pixels, w, x, mid - 1, Math.min(13, w - x), 3, card, 36);
+      fillRectAlpha(pixels, w, x + 2, mid, 2, 2, hole, 50);
+      fillRectAlpha(pixels, w, x + 8, top, Math.min(9, w - x - 8), 1, rank, 30);
+      fillRectAlpha(pixels, w, x + 9, lower, Math.min(8, w - x - 9), 1, hole, 22);
+    }
+    for (let x = 19; x < w; x += 54) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(7, h - 2), rank, 30);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, lower + 1), Math.min(14, w - x - 4), 1, card, 18);
+    }
   } else if (effect === "choice") {
     const focus = [
       Math.min(255, Math.round(color[0] * 0.58 + 102)),
@@ -1456,9 +1488,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.44 + 132)),
       Math.min(255, Math.round(color[2] * 0.62 + 90)),
     ];
-    // Choice chrome for thinking selector surfaces: stepped focus rails and
-    // decision ticks distinguish selection UI from lantern thought blocks.
-    // Static sparse marks keep selector previews deterministic and cheap.
+    // Choice remains available as an explicit selector variant: stepped focus
+    // rails and decision ticks stay deterministic and cheap.
     const top = Math.max(1, Math.floor(h * 0.24));
     const mid = Math.max(1, Math.floor(h * 0.50));
     const lower = Math.min(h - 2, Math.floor(h * 0.76));
