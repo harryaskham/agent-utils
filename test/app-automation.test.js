@@ -708,15 +708,19 @@ test("ms-dev CDP refresh can ensure a dedicated apphost before extraction", asyn
       commands.push({ command, args });
       if (command !== "ssh") return { code: 1, stdout: "", stderr: "unexpected" };
       const remoteCommand = args[5] || "";
-      if (commands.length === 1) {
-        assert.match(remoteCommand, /EncodedCommand/);
+      if (/EncodedCommand/.test(remoteCommand)) {
         return { code: 0, stdout: JSON.stringify({ status: "ready", started: true, cdpReady: true, cdpPort: 9224, browser: "edge" }), stderr: "" };
       }
-      assert.match(remoteCommand, /EncodedCommand/);
-      return { code: 0, stdout: stdoutPayload, stderr: "" };
+      if (/ExecutionPolicy Bypass -File/.test(remoteCommand)) {
+        return { code: 0, stdout: stdoutPayload, stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
     },
   });
-  assert.equal(commands.length, 2);
+  assert.equal(commands.some((entry) => /EncodedCommand/.test(entry.args[5] || "")), true);
+  assert.equal(commands.some((entry) => /printf %s/.test(entry.args[5] || "")), true);
+  assert.equal(commands.some((entry) => /base64 -d/.test(entry.args[5] || "")), true);
+  assert.equal(commands.some((entry) => /ExecutionPolicy Bypass -File/.test(entry.args[5] || "")), true);
   assert.equal(summary.appHost.status, "ready");
   assert.equal(summary.status, "ok");
   assert.match(renderMsDevCdpRefresh(summary), /appHost status=ready started=true cdpReady=true browser=edge/);
@@ -1014,14 +1018,22 @@ test("ms-dev CDP refresh can run script inline without scp", async () => {
     exec: async (command, args) => {
       commands.push({ command, args });
       if (command === "ssh") {
-        return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [{ text: "Important mail", source: "Outlook Mail" }] } }] }), stderr: "" };
+        const remote = args.at(-1);
+        if (/ExecutionPolicy Bypass -File/.test(remote)) {
+          return { code: 0, stdout: JSON.stringify({ capturedAt: "2026-05-13T03:00:00Z", source: "ms-dev-chrome-cdp", results: [{ app: "outlook", action: "notifications.snapshot", status: "ok", result: { title: "Mail - Outlook", items: [{ text: "Important mail", source: "Outlook Mail" }] } }] }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
       }
       return { code: 1, stdout: "", stderr: "unexpected" };
     },
   });
-  assert.deepEqual(commands.map((entry) => entry.command), ["ssh"]);
-  assert.match(commands[0].args.at(-1), /ExecutionPolicy Bypass -EncodedCommand/);
-  assert.doesNotMatch(commands[0].args.at(-1), /-File/);
+  assert.equal(commands.some((entry) => entry.command === "scp"), false);
+  assert.equal(commands.every((entry) => entry.command === "ssh"), true);
+  assert.match(commands[0].args.at(-1), /: > '\/tmp\/agent-utils-msdev-cdp-refresh\.ps1\.b64'/);
+  assert.ok(commands.some((entry) => /printf %s/.test(entry.args.at(-1)) && /\.ps1\.b64'/.test(entry.args.at(-1))));
+  assert.ok(commands.some((entry) => /base64 -d/.test(entry.args.at(-1)) && /agent-utils-msdev-cdp-refresh\.ps1/.test(entry.args.at(-1))));
+  assert.match(commands.at(-1).args.at(-1), /ExecutionPolicy Bypass -File/);
+  assert.doesNotMatch(commands.at(-1).args.at(-1), /-EncodedCommand/);
   assert.equal(summary.status, "ok");
   assert.match(renderMsDevCdpRefresh(summary), /scriptTransfer=inline/);
   const manifest = JSON.parse(await readFile(path.join(root, "bridge", "latest-ms-dev-cdp-refresh.json"), "utf8"));

@@ -81,6 +81,27 @@ function powerShellEncodedCommand(script) {
   return Buffer.from(String(script), "utf16le").toString("base64");
 }
 
+function base64Script(script) {
+  return Buffer.from(String(script), "utf8").toString("base64");
+}
+
+function chunks(value, size = 3000) {
+  const text = String(value || "");
+  const out = [];
+  for (let offset = 0; offset < text.length; offset += size) out.push(text.slice(offset, offset + size));
+  return out;
+}
+
+function remoteScriptB64Path(remoteScriptPath = DEFAULT_MSDEV_REMOTE_SCRIPT) {
+  return `${remoteScriptPath}.b64`;
+}
+
+function remoteDirname(remoteScriptPath = DEFAULT_MSDEV_REMOTE_SCRIPT) {
+  const normalized = String(remoteScriptPath || DEFAULT_MSDEV_REMOTE_SCRIPT);
+  const idx = normalized.lastIndexOf("/");
+  return idx > 0 ? normalized.slice(0, idx) : "/tmp";
+}
+
 function classifyBridgeError(error) {
   const text = String(error || "").toLowerCase();
   if (!text) return null;
@@ -361,10 +382,39 @@ function Get-SlackDesktopObservation {
   if ($items.Count -gt 0) { return [pscustomobject]@{ title='Slack Desktop'; source='Slack Desktop'; authRequired=$false; itemCount=$items.Count; items=$items } }
   return $null
 }
+function Convert-SafeString($Value) {
+  return ([string]$Value).Replace('"', "'")
+}
+function Convert-SafeJsonValue($Value) {
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [string]) { return Convert-SafeString $Value }
+  if ($Value -is [bool] -or $Value -is [byte] -or $Value -is [int16] -or $Value -is [int] -or $Value -is [int64] -or $Value -is [single] -or $Value -is [double] -or $Value -is [decimal]) { return $Value }
+  if ($Value -is [System.Collections.IDictionary]) {
+    $obj = [ordered]@{}
+    foreach ($key in $Value.Keys) { $obj[[string]$key] = Convert-SafeJsonValue $Value[$key] }
+    return [pscustomobject]$obj
+  }
+  if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+    $arr = @()
+    foreach ($entry in @($Value)) { $arr += Convert-SafeJsonValue $entry }
+    return $arr
+  }
+  $props = @($Value.PSObject.Properties | Where-Object { $_.MemberType -match 'Property' })
+  if ($props.Count -gt 0) {
+    $obj = [ordered]@{}
+    foreach ($prop in $props) { $obj[$prop.Name] = Convert-SafeJsonValue $prop.Value }
+    return [pscustomobject]$obj
+  }
+  return Convert-SafeString $Value
+}
 $extractor = @'
-(() => {
+btoa(unescape(encodeURIComponent(JSON.stringify((() => {
   const compact = (value, max = 180) => {
-    const text = String(value || '').replace(/\\s+/g, ' ').trim();
+    const text = String(value || '')
+      .replace(/[\\u0000-\\u001f\\u007f-\\u009f]/g, ' ')
+      .replace(/["\\\\]/g, "'")
+      .replace(/\\s+/g, ' ')
+      .trim();
     if (!text) return null;
     return text.length > max ? text.slice(0, max - 3) + '...' : text;
   };
@@ -427,7 +477,7 @@ $extractor = @'
   }
   const authRequired = /sign in|signin|log in|login|password|authenticate/i.test(bodyText || title || '');
   return { title, url: sanitize(location.href), source, authRequired, itemCount: items.length, items };
-})()
+})()))))
 '@
 $results = @()
 $createdTargets = @()
@@ -452,14 +502,28 @@ foreach ($targetSpec in $Targets) {
     } elseif ($value.__cdpError) {
       $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; stage='runtime_evaluate'; url=$targetSpec.url; error=$value.__cdpError }
     } else {
-      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; result=$value }
+      $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='ok'; resultB64=[string]$value }
     }
   } catch {
     $results += [pscustomobject]@{ app=$targetSpec.app; action=$targetSpec.action; status='extract_failed'; stage='target_loop'; url=$targetSpec.url; error=($_.Exception.Message | Out-String).Trim() }
   }
 }
 $tabGc = Invoke-TabGc $createdTargets
-[pscustomobject]@{ capturedAt=(Get-Date).ToUniversalTime().ToString('o'); source='ms-dev-chrome-cdp'; cdpPort=$CdpPort; tabGc=$tabGc; results=$results } | ConvertTo-Json -Depth 80 -Compress
+# tabGc=$tabGc retained in manual JSON envelope below.
+$capturedAt = (Get-Date).ToUniversalTime().ToString('o')
+$tabGcJson = $tabGc | ConvertTo-Json -Depth 80 -Compress
+$resultParts = @()
+foreach ($r in @($results)) {
+  $propNames = @($r.PSObject.Properties.Name)
+  if ($r.status -eq 'ok' -and $propNames -contains 'resultB64') {
+    $resultParts += ('{"app":"' + [string]$r.app + '","action":"' + [string]$r.action + '","status":"ok","resultB64":"' + [string]$r.resultB64 + '"}')
+  } else {
+    $resultParts += ($r | ConvertTo-Json -Depth 80 -Compress)
+  }
+}
+$outputJson = '{"capturedAt":"' + $capturedAt + '","source":"ms-dev-chrome-cdp","cdpPort":' + $CdpPort + ',"tabGc":' + $tabGcJson + ',"results":[' + ($resultParts -join ',') + ']}'
+foreach ($code in (0..31 + 127..159)) { $outputJson = $outputJson.Replace([string][char]$code, ' ') }
+$outputJson
 `;
 }
 
@@ -700,7 +764,7 @@ async function writeLiveSnapshot({ root, target, liveResult, capturedAt }) {
 }
 
 function parseCdpJson(stdout = "") {
-  const trimmed = String(stdout || "").trim();
+  const trimmed = String(stdout || "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim();
   if (!trimmed) throw new Error("ms-dev CDP refresh produced no JSON output");
   const first = trimmed.indexOf("{");
   const last = trimmed.lastIndexOf("}");
@@ -830,7 +894,27 @@ export async function runMsDevCdpRefresh({
 
   let remoteCommand;
   if (config.scriptTransfer === "inline") {
-    remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${shellQuote(powerShellEncodedCommand(script))}`;
+    // Avoid PowerShell -EncodedCommand for the full extractor: Windows/WSL interop
+    // rejects very long argv payloads with "Invalid argument" before PowerShell
+    // starts.  Keep the no-scp property of inline mode, but stream the script in
+    // bounded base64 chunks through SSH, decode it on ms-dev, then run it as a
+    // normal -File script.
+    const b64Path = remoteScriptB64Path(config.remoteScriptPath);
+    const prepare = await exec("ssh", [...sshArgs, config.sshTarget, `mkdir -p ${shellQuote(remoteDirname(config.remoteScriptPath))} && : > ${shellQuote(b64Path)}`], { timeout: timeoutMs });
+    if (prepare.code !== 0) {
+      return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(prepare, "inline script prepare failed"), appHost });
+    }
+    for (const chunk of chunks(base64Script(script))) {
+      const append = await exec("ssh", [...sshArgs, config.sshTarget, `printf %s ${shellQuote(chunk)} >> ${shellQuote(b64Path)}`], { timeout: timeoutMs });
+      if (append.code !== 0) {
+        return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(append, "inline script append failed"), appHost });
+      }
+    }
+    const decode = await exec("ssh", [...sshArgs, config.sshTarget, `base64 -d ${shellQuote(b64Path)} > ${shellQuote(config.remoteScriptPath)} && rm -f ${shellQuote(b64Path)}`], { timeout: timeoutMs });
+    if (decode.code !== 0) {
+      return writeBridgeFailureManifest({ bridgeDir, status: "copy_failed", config, targets, error: execFailureText(decode, "inline script decode failed"), appHost });
+    }
+    remoteCommand = `${shellQuote(config.pwshPath)} -NoProfile -ExecutionPolicy Bypass -File ${shellQuote(config.remoteScriptPath)}`;
   } else {
     const copy = await exec("scp", [...sshArgs, localScriptPath, `${config.sshTarget}:${config.remoteScriptPath}`], { timeout: timeoutMs });
     if (copy.code !== 0) {
@@ -852,6 +936,10 @@ export async function runMsDevCdpRefresh({
   const snapshots = [];
   const failed = [];
   for (const liveResult of payload.results || []) {
+    if (liveResult?.resultB64 && !liveResult.result) {
+      try { liveResult.result = JSON.parse(Buffer.from(String(liveResult.resultB64), "base64").toString("utf8")); } catch (error) { liveResult.status = "extract_failed"; liveResult.stage = liveResult.stage || "result_b64_parse"; liveResult.error = compact(error.message, 500); }
+      delete liveResult.resultB64;
+    }
     const target = byKey.get(`${liveResult.app}:${liveResult.action}`);
     if (!target) continue;
     if (liveResult.status !== "ok") {
