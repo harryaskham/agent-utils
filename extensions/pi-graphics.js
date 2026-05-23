@@ -2009,9 +2009,9 @@ export default function piGraphicsExtension(pi) {
   pi.registerTool({
     name: `${TOOL_PREFIX}_clear`,
     label: "Pi Graphics: Clear",
-    description: "Delete every kitty image owned by this extension. Scoped: never deletes images owned by others, never issues a global clear.",
+    description: "Delete every kitty image owned by this extension. Scoped: never deletes images owned by others, never issues a global clear. hostedBand is supplemental for real/relative reserved-z placements; Unicode virtual placements still require scoped image-id deletes.",
     parameters: Type.Object({
-      hostedBand: Type.Optional(Type.Boolean({ description: "Also clear the reserved Pi graphics z-index band for caco-hosted stale-view cleanup." })),
+      hostedBand: Type.Optional(Type.Boolean({ description: "Also clear the reserved Pi graphics z-index band for caco-hosted stale-view cleanup of real/relative placements; does not replace scoped image-id cleanup for Unicode virtual placements." })),
     }),
     async execute(_toolCallId, params = {}, _signal, _onUpdate, ctx) {
       const scoped = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });

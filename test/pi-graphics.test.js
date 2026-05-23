@@ -1441,6 +1441,7 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /\$\{TOOL_PREFIX\}_render_message_border/);
   assert.match(source, /pi_graphics_clear/);
   assert.match(source, /PI_GRAPHICS_RESERVED_Z_INDICES/);
+  assert.match(source, /hostedBand is supplemental for real\/relative reserved-z placements; Unicode virtual placements still require scoped image-id deletes/);
   assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES \}\)/);
   assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds \}\)/);
   assert.match(source, /BorderedLoader/);

@@ -328,11 +328,15 @@ displayed using kitty Unicode placeholder cells, so:
   scoped image ownership work.
 * Caco-hosted cleanup has a reserved Pi graphics z-index band in
   `extensions/pi-graphics/z-index.js`: `-1073741827..-1073741823` (the explicit
-  set exported as `PI_GRAPHICS_RESERVED_Z_INDICES`). Pi-owned kitty placements use
-  this band so a host view switch/blur can issue kitty delete-by-z-index commands
-  for those values instead of a global clear or a caco↔Pi image registry. The
-  `pi_graphics_clear` tool still defaults to per-image scoped deletes; pass
-  `hostedBand: true` when a host needs to scrub stale reserved-band placements.
+  set exported as `PI_GRAPHICS_RESERVED_Z_INDICES`). Pi-owned real and relative
+  kitty placements use this band so a host view switch/blur can issue kitty
+  delete-by-z-index commands for those values instead of a global clear or a
+  caco↔Pi image registry. Kitty's protocol does **not** apply `d=z`/`d=Z`
+  deletion to Unicode virtual placements (`U=1`): virtual placeholder graphics
+  must still be cleaned up by deleting their owning image ids. The
+  `pi_graphics_clear` tool therefore defaults to per-image scoped deletes; pass
+  `hostedBand: true` only when a host also needs to scrub stale real/relative
+  reserved-band placements.
 * Pi graphics image ids deliberately use the kitty protocol's full 32-bit
   namespace: Unicode placeholders encode the low 24 bits as foreground
   truecolor and the most-significant byte as the third row/column diacritic.
@@ -467,6 +471,9 @@ The default agent-facing tool surface is intentionally small:
 * `pi_graphics_clear` — release every kitty image owned by the extension. It
   also accepts `hostedBand: true` for caco-hosted cleanup, which additionally
   emits delete-by-z-index commands for the reserved Pi graphics z-index band.
+  The hosted-band sweep is supplemental: Kitty z-index deletion affects real /
+  relative placements, not Unicode virtual placements, so the scoped per-image
+  delete remains the authoritative cleanup for placeholder graphics.
 
 Low-level drawing primitives stay client-side by default because their schemas
 and raw kitty payloads are noisy in the agent context. Operators who explicitly

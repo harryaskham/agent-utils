@@ -1,9 +1,11 @@
 // Reserved kitty graphics z-index values for Pi-owned graphics.
 //
-// Cacophony-hosted Pi sessions can clear stale Pi graphics on view switch/blur
-// by issuing kitty delete-by-z-index commands for this small explicit set,
-// instead of using a global delete-all or maintaining a Pi<->caco image
-// registry. Keep these values dedicated to Pi graphics surfaces.
+// Cacophony-hosted Pi sessions can clear stale real/relative Pi graphics on
+// view switch/blur by issuing kitty delete-by-z-index commands for this small
+// explicit set, instead of using a global delete-all or maintaining a Pi<->caco
+// image registry. Kitty z-index deletes do not affect Unicode virtual
+// placements (U=1), so scoped per-image deletes remain the authoritative cleanup
+// for placeholder graphics. Keep these values dedicated to Pi graphics surfaces.
 
 export const PI_GRAPHICS_Z = Object.freeze({
   BOX_CHROME: -1073741823,
