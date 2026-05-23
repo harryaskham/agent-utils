@@ -66,12 +66,12 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
   thinking: "nebula",
-  tool: "blueprint",
+  tool: "schematic",
   bash: "prompt",
   user: "weave",
   custom: "constellation",
@@ -441,6 +441,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 15; x < w; x += 49) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(12, w - x), 1, cursor, 24);
       fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 5), Math.min(10, w - x - 4), 1, prompt, 22);
+    }
+  } else if (effect === "schematic") {
+    const bus = [
+      Math.min(255, Math.round(color[0] * 0.36 + 92)),
+      Math.min(255, Math.round(color[1] * 0.76 + 56)),
+      Math.min(255, Math.round(color[2] * 0.58 + 104)),
+    ];
+    const pad = [
+      Math.min(255, Math.round(color[0] * 0.70 + 78)),
+      Math.min(255, Math.round(color[1] * 0.46 + 112)),
+      Math.min(255, Math.round(color[2] * 0.52 + 116)),
+    ];
+    // Tool-call chrome: small circuit symbols and bus traces read as machinery
+    // around tool output, but remain static cached strips instead of live graph
+    // layout or per-call SVG/widget rendering.
+    const yTop = Math.max(1, Math.floor(h * 0.34));
+    const yBot = Math.min(h - 2, Math.floor(h * 0.68));
+    for (let x = 5; x < w; x += 38) {
+      fillRectAlpha(pixels, w, x, yTop, Math.min(16, w - x), 1, bus, 34);
+      fillRectAlpha(pixels, w, x + 4, yBot, Math.min(12, w - x - 4), 1, bus, 24);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, yTop - 2), 2, 5, pad, 34);
+      if (x + 17 < w) fillRectAlpha(pixels, w, x + 17, Math.max(1, yBot - 3), 3, 3, pad, 42);
+    }
+    for (let x = 24; x < w; x += 57) {
+      fillRectAlpha(pixels, w, x, Math.max(1, yTop - 4), 1, Math.min(8, h - 2), bus, 26);
+      fillRectAlpha(pixels, w, x + 3, yTop + 1, Math.min(9, w - x - 3), Math.max(1, yBot - yTop - 1), pad, 18);
     }
   } else if (effect === "blueprint") {
     const rule = [
