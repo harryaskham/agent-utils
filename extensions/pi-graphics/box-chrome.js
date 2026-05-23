@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -93,7 +93,7 @@ export const BOX_TYPE_EFFECTS = {
   theme: "swatch",
   thinkingSelector: "choice",
   tree: "vine",
-  userSelector: "badge",
+  userSelector: "tag",
   agent: "satellite",
   mascot: "emblem",
   customTui: "panel",
@@ -454,6 +454,38 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.30)), w, 1, thread, 14);
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.68)), w, 1, under, 14);
+  } else if (effect === "tag") {
+    const tab = [
+      Math.min(255, Math.round(color[0] * 0.62 + 92)),
+      Math.min(255, Math.round(color[1] * 0.50 + 112)),
+      Math.min(255, Math.round(color[2] * 0.66 + 76)),
+    ];
+    const punch = [
+      Math.min(255, Math.round(color[0] * 0.26 + 96)),
+      Math.min(255, Math.round(color[1] * 0.66 + 72)),
+      Math.min(255, Math.round(color[2] * 0.86 + 50)),
+    ];
+    const stitch = [
+      Math.min(255, Math.round(color[0] * 0.78 + 58)),
+      Math.min(255, Math.round(color[1] * 0.38 + 136)),
+      Math.min(255, Math.round(color[2] * 0.52 + 112)),
+    ];
+    // Tag chrome for user selectors: sparse label tabs, punched tag holes, and
+    // selection stitch ticks make account chooser rows feel like selectable name
+    // tags without portraits, glyphs, masks, timers, or high-entropy texture.
+    const top = Math.max(1, Math.floor(h * 0.26));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 4; x < w; x += 30) {
+      fillRectAlpha(pixels, w, x, mid - 1, Math.min(16, w - x), 3, tab, 38);
+      fillRectAlpha(pixels, w, x + 2, mid, 2, 2, punch, 54);
+      fillRectAlpha(pixels, w, x + 8, top, Math.min(11, w - x - 8), 1, stitch, 28);
+      fillRectAlpha(pixels, w, x + 10, bottom, Math.min(9, w - x - 10), 1, punch, 24);
+    }
+    for (let x = 21; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(7, h - 2), stitch, 32);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, bottom + 1), Math.min(15, w - x - 4), 1, tab, 18);
+    }
   } else if (effect === "badge") {
     const plate = [
       Math.min(255, Math.round(color[0] * 0.56 + 104)),
@@ -465,9 +497,8 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.68 + 66)),
       Math.min(255, Math.round(color[2] * 0.82 + 62)),
     ];
-    // Badge chrome for user selectors: small ID plates and pin dots make account
-    // chooser rows feel like graphical identity cards. Sparse fixed-step marks
-    // avoid noisy portraits while keeping cached PNG strips compact.
+    // Badge remains available as an explicit identity-card variant: small ID
+    // plates and pin dots avoid noisy portraits while keeping PNG strips compact.
     const mid = Math.max(1, Math.floor(h * 0.5));
     for (let x = 5; x < w; x += 27) {
       const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 27) % 3) - 1));
