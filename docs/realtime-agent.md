@@ -333,6 +333,32 @@ export PI_RT_VAD_PREFIX_PADDING_MS=300  # audio kept before detected speech
 
 Raise the threshold if background noise triggers false starts. Lower it if quiet speech is missed. Increase silence duration if turns are cut off too quickly. Threshold can also be adjusted at runtime with `/rt thresh <0..1>` or env-style `/rt thresh=0.85`; the change is applied to new/current server VAD configuration without restarting Pi.
 
+Practical presets:
+
+| Scenario | Suggested config | When to use it |
+| --- | --- | --- |
+| Quiet room / close mic | `threshold=0.55 silence=800 prefix=250` | Faster turn-taking when speech is clear and false starts are rare. |
+| Default / mixed room | `threshold=0.7 silence=1100 prefix=300` | Balanced default for normal desk/phone routing. |
+| Noisy room / speakers leaking into mic | `threshold=0.85 silence=1400 prefix=400 chime=false` | Avoids background noise and playback leakage causing accidental commits; expect slower turn-end detection. |
+| Very soft speaker | `threshold=0.45 silence=1300 prefix=500` | Helps quiet speech get detected while keeping a longer silence window to avoid cutting the user off. |
+| Unreliable VAD | `start=ptt` or `stt=ptt` | Use push-to-talk when server VAD is repeatedly over-eager, under-eager, or the room is too noisy. |
+
+Examples:
+
+```text
+/rt backend=pulse start=vad thresh=0.55 silence=800 prefix=250
+/rt backend=pulse start=vad thresh=0.85 silence=1400 prefix=400 chime=false
+/rt backend=pulse start=ptt
+/rt stt=ptt trans=gpt-realtime-whisper
+```
+
+Troubleshooting quick checks:
+
+- If Pi commits before you finish a sentence, increase `silence` first; if background noise starts turns while nobody speaks, increase `threshold`.
+- If quiet speech never starts a turn, lower `threshold` and confirm `/rt-doctor` shows mic bytes increasing while you speak.
+- If playback from speakers triggers new mic turns, prefer headphones/Pulse echo control, raise `threshold`, set a longer `silence`, or use `ptt`.
+- If a turn appears stuck in transcription, run `/rt-cancel` to discard pending audio, then check `/rt-status full` or `/rt-doctor` for `micBytes`, `pendingTranscript`, and the resolved VAD values.
+
 `/rt-doctor` shows the resolved values so you can confirm what Pi is using.
 
 ## Local realtime extension development
