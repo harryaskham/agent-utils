@@ -418,12 +418,15 @@ displayed using kitty Unicode placeholder cells, so:
   before it for terminal input plumbing. When this graphics cursor styling is
   active, the extension asks Pi's TUI to hide the hardware cursor so the terminal
   blink does not fight the styled placeholder; disabling graphics cursor/editor
-  styling restores the previous hardware-cursor setting. The cursor glyph is a
-  dedicated one-cell vertical heat line with a bright white core and bounded side
-  glow, not the horizontal prompt-rule renderer, so the editor can keep graphical
-  cursor chrome without attaching a row-wide background that drifts as the cursor
-  moves. Placeholder tails still occupy trailing space cells as a caco-compatible
-  fallback and as workspace fill after the cursor.
+  styling restores the previous hardware-cursor setting. The cursor anchor remains
+  a single Unicode placeholder cell, but the visible cursor art is a larger
+  relative kitty placement (roughly 6 columns by 3 rows) centered on that anchor.
+  It keeps a bright vertical core in the middle cell while transparent glow extends
+  into neighbouring rows. The glow colour/radius is bucketed from inferred recent
+  inter-character typing speed and decays after typing stops, without attaching a
+  row-wide background that drifts as the cursor moves. Placeholder tails still
+  occupy trailing space cells as a caco-compatible fallback and as workspace fill
+  after the cursor.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative

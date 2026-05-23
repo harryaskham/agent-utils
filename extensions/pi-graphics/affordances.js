@@ -142,31 +142,45 @@ function paintSurfaceVariant(pixels, widthPx, heightPx, {
  *   blends into surrounding text instead of butting up against margins.
  * @returns {{ png: Buffer, columns: number, rows: number, widthPx: number, heightPx: number }}
  */
-export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightScale, backgroundColor = NORDIC_DEEP_BOTTOM, coreColor = NORDIC_EDGE, glowColor = NORDIC_CYAN, alpha = 0.72 } = {}) {
+export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightScale, backgroundColor = NORDIC_DEEP_BOTTOM, coreColor = NORDIC_EDGE, glowColor = NORDIC_CYAN, alpha = 0.72, columns = 1, rows = 1, heat = 0, glowRadiusCells = 1 } = {}) {
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
-  const widthPx = metrics.cellWidthPx;
-  const heightPx = metrics.cellHeightPx;
+  const cols = clampPositive(columns, 1, "columns");
+  const rowCount = clampPositive(rows, 1, "rows");
+  const widthPx = metrics.cellWidthPx * cols;
+  const heightPx = metrics.cellHeightPx * rowCount;
   const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
-  const bgAlpha = Math.round(normalizeAlpha(alpha, 0.72) * 42);
-  fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(backgroundColor, Math.round(bgAlpha * 0.45)), withAlpha(glowColor, bgAlpha));
+  const safeHeat = Math.max(0, Math.min(1, Number(heat) || 0));
+  const bgAlpha = Math.round(normalizeAlpha(alpha, 0.72) * (18 + 30 * safeHeat));
+  const centerCell = Math.floor(cols / 2);
+  const cx = Math.floor((centerCell + 0.5) * metrics.cellWidthPx);
+  const cy = Math.floor(heightPx / 2);
+  const radius = Math.max(metrics.cellWidthPx, metrics.cellWidthPx * Math.max(0.4, Number(glowRadiusCells) || 1) * (1.1 + safeHeat * 1.8));
+  addRadialGlow(pixels, widthPx, cx, cy, radius, withAlpha(glowColor, Math.round(bgAlpha * (1.1 + safeHeat))), 0.88);
+  if (safeHeat > 0.05) {
+    addRadialGlow(pixels, widthPx, cx, cy, radius * 0.62, withAlpha(coreColor, Math.round(36 + safeHeat * 72)), 0.78);
+  }
+  if (cols === 1 && rowCount === 1) {
+    fillHorizontalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(backgroundColor, Math.round(bgAlpha * 0.45)), withAlpha(glowColor, bgAlpha));
+  }
 
-  const cx = Math.floor(widthPx / 2);
-  const coreW = Math.max(1, Math.min(2, Math.round(widthPx * 0.22)));
+  const coreW = Math.max(1, Math.min(3, Math.round(metrics.cellWidthPx * (0.20 + safeHeat * 0.10))));
   const coreX = Math.max(0, cx - Math.floor(coreW / 2));
-  for (let dx = -2; dx <= 2; dx += 1) {
+  const coreTop = Math.max(0, Math.floor(cy - metrics.cellHeightPx * (0.62 + safeHeat * 0.18)));
+  const coreH = Math.min(heightPx - coreTop, Math.ceil(metrics.cellHeightPx * (1.24 + safeHeat * 0.36)));
+  for (let dx = -Math.ceil(metrics.cellWidthPx * 0.55); dx <= Math.ceil(metrics.cellWidthPx * 0.55); dx += 1) {
     const x = cx + dx;
     if (x < 0 || x >= widthPx) continue;
-    const distance = Math.abs(dx);
-    const glowA = distance === 0 ? 0 : Math.max(0, 72 - distance * 24);
-    if (glowA > 0) fillRect(pixels, widthPx, x, 1, 1, Math.max(1, heightPx - 2), withAlpha(glowColor, glowA));
+    const distance = Math.abs(dx) / Math.max(1, metrics.cellWidthPx * 0.55);
+    const glowA = Math.max(0, Math.round((70 + safeHeat * 90) * (1 - distance) ** 1.8));
+    if (glowA > 0) fillRect(pixels, widthPx, x, coreTop, 1, coreH, withAlpha(glowColor, glowA));
   }
-  fillRect(pixels, widthPx, coreX, 0, coreW, heightPx, withAlpha(coreColor, 236));
-  fillRect(pixels, widthPx, Math.min(widthPx - 1, coreX + coreW), 1, 1, Math.max(1, heightPx - 2), withAlpha(glowColor, 96));
-  fillRect(pixels, widthPx, Math.max(0, coreX - 1), 1, 1, Math.max(1, heightPx - 2), withAlpha(coreColor, 86));
+  fillRect(pixels, widthPx, coreX, coreTop, coreW, coreH, withAlpha(coreColor, Math.round(224 + safeHeat * 31)));
+  fillRect(pixels, widthPx, Math.min(widthPx - 1, coreX + coreW), coreTop + 1, 1, Math.max(1, coreH - 2), withAlpha(glowColor, Math.round(96 + safeHeat * 90)));
+  fillRect(pixels, widthPx, Math.max(0, coreX - 1), coreTop + 1, 1, Math.max(1, coreH - 2), withAlpha(coreColor, Math.round(82 + safeHeat * 72)));
   return {
     png: encodeRgbaPng(pixels, widthPx, heightPx),
-    columns: 1,
-    rows: 1,
+    columns: cols,
+    rows: rowCount,
     widthPx,
     heightPx,
     cellWidthPx: metrics.cellWidthPx,

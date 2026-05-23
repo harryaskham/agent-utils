@@ -293,6 +293,9 @@ export default function piGraphicsExtension(pi) {
   const uploadedImages = new Set();
   const relativeUploaded = new Set();
   let editorBackgroundPlacementKey = null;
+  let editorCursorLastText = "";
+  let editorCursorLastAt = 0;
+  let editorCursorWpm = 0;
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
 
   function resetGraphicsUploadCaches() {
@@ -303,6 +306,29 @@ export default function piGraphicsExtension(pi) {
 
   function approximateVisibleCells(text) {
     return String(text || "").replace(ZERO_WIDTH_CONTROL_RE, "").length;
+  }
+
+  function updateEditorTypingHeat(plainText) {
+    const now = Date.now();
+    if (!editorCursorLastAt) {
+      editorCursorLastAt = now;
+      editorCursorLastText = plainText;
+      return { heat: 0, wpm: 0 };
+    }
+    const elapsed = Math.max(16, now - editorCursorLastAt);
+    if (plainText !== editorCursorLastText) {
+      const delta = Math.max(1, Math.abs(plainText.length - editorCursorLastText.length));
+      const instantWpm = (delta / 5) / (elapsed / 60000);
+      editorCursorWpm = Math.min(260, editorCursorWpm * 0.55 + instantWpm * 0.45);
+      editorCursorLastText = plainText;
+      editorCursorLastAt = now;
+    } else {
+      const idleMs = now - editorCursorLastAt;
+      const decay = Math.max(0, 1 - idleMs / 1800);
+      editorCursorWpm *= decay;
+    }
+    const heat = Math.max(0, Math.min(1, editorCursorWpm / 140));
+    return { heat, wpm: editorCursorWpm };
   }
 
   function formatFooterTokens(n) {
@@ -677,29 +703,65 @@ export default function piGraphicsExtension(pi) {
     editorBackgroundPlacementKey = key;
   }
 
-  function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0 } = {}) {
+  function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0 } = {}) {
     if (!ensureUnicodePlacement(state)) return null;
     const cell = cellMetrics();
-    const rendered = renderEditorCursorVline({
-      alpha: Math.max(0.32, editorAlpha() * 0.72),
-      backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
-      coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-      glowColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
-      ...cell,
-    });
-    const placement = buildPlacement(state, {
-      name: `editor-cursor-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-      png: rendered.png,
-      columns: rendered.columns,
-      rows: rendered.rows,
+    const heatBucket = Math.max(0, Math.min(5, Math.round((Number(heat) || 0) * 5)));
+    const glowColor = heatBucket >= 4
+      ? "#ff9f5a"
+      : heatBucket >= 2
+        ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
+        : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const anchor = buildPlacement(state, {
+      name: `editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+      png: Buffer.from(transparentPixelPngBase64(), "base64"),
+      columns: 1,
+      rows: 1,
       width: 1,
       zIndex: PI_GRAPHICS_Z.SURFACE,
     });
-    emitGraphicsCommand(placement.transmit);
-    // Do not attach a row-wide background to the cursor placement. It moves as
-    // the cursor moves, which makes the editor backing drift horizontally while
-    // typing. The stable editor rail widgets provide non-shifting chrome.
-    return placement.lines[0] ?? null;
+    emitGraphicsCommand(anchor.transmit);
+    const rendered = renderEditorCursorVline({
+      alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
+      backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+      coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
+      glowColor,
+      columns: 6,
+      rows: 3,
+      heat,
+      glowRadiusCells: 1.3 + heat * 1.5,
+      ...cell,
+    });
+    const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(imageId)) {
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: imageId,
+        q: 2,
+      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(imageId);
+      uploadedImages.add(imageId);
+    }
+    const placementId = piGraphicsPlacementId("editor-cursor-glow-relative");
+    emitGraphicsCommand(buildRelativePlacementCommand({
+      imageId,
+      placementId,
+      parentImageId: anchor.imageId,
+      parentPlacementId: anchor.placementId,
+      hOffset: -3,
+      vOffset: -1,
+      columns: rendered.columns,
+      rows: rendered.rows,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
+      passthrough: state.config.passthrough,
+    }));
+    // The cursor anchor remains a single Unicode placeholder cell, while the
+    // actual heat image is a larger relative placement centered on that anchor.
+    // Heat is inferred from recent editor text deltas and naturally decays when
+    // typing stops; row-wide backgrounds are deliberately not cursor-anchored.
+    return anchor.lines[0] ?? null;
   }
 
   function replaceEditorCursorChrome(line, rowWidth = 1) {
@@ -708,7 +770,9 @@ export default function piGraphicsExtension(pi) {
     const match = /\x1b\[7m[^\x1b]*\x1b\[0m/.exec(text);
     if (!match) return line;
     const cursorCol = approximateVisibleCells(text.slice(0, match.index));
-    const cursor = buildEditorCursorCell({ rowWidth, cursorCol });
+    const plainText = text.replace(match[0], "|").replace(ZERO_WIDTH_CONTROL_RE, "");
+    const { heat, wpm } = updateEditorTypingHeat(plainText);
+    const cursor = buildEditorCursorCell({ rowWidth, cursorCol, heat, wpm });
     if (!cursor) return line;
     return `${text.slice(0, match.index)}${cursor}${text.slice(match.index + match[0].length)}`;
   }

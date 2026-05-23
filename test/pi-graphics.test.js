@@ -326,7 +326,7 @@ test("setPixel composites alpha over existing color", () => {
   assert.ok(pixels[0] > 0x60 && pixels[0] < 0xa0);
 });
 
-test("renderEditorCursorVline stays one cell wide with vertical heat core", () => {
+test("renderEditorCursorVline defaults to one cell with vertical heat core", () => {
   const result = renderEditorCursorVline({ cellWidthPx: 9, lineHeightScale: 1.2 });
   assert.equal(result.columns, 1);
   assert.equal(result.rows, 1);
@@ -345,6 +345,22 @@ test("renderEditorCursorVline stays one cell wide with vertical heat core", () =
   assert.ok(leftEdge[3] < 80 && rightEdge[3] < 100, "side glow must stay bounded inside the cell");
   assert.ok(topCenter[3] > 220, "vertical cursor should run through the cell, not render as a middle horizontal bar");
   assert.ok(channelDistance(upper, lower) < 35, "vertical core should be visually consistent along the cursor height");
+});
+
+test("renderEditorCursorVline can render a large heat glow around a centered cursor", () => {
+  const cool = renderEditorCursorVline({ cellWidthPx: 8, cellHeightPx: 16, columns: 6, rows: 3, heat: 0.05 });
+  const hot = renderEditorCursorVline({ cellWidthPx: 8, cellHeightPx: 16, columns: 6, rows: 3, heat: 1, glowRadiusCells: 2.8 });
+  assert.equal(hot.columns, 6);
+  assert.equal(hot.rows, 3);
+  assert.equal(hot.widthPx, 48);
+  assert.equal(hot.heightPx, 48);
+  const hotDecoded = decodePngRgba(hot.png);
+  const coolDecoded = decodePngRgba(cool.png);
+  const core = pixelAt(hotDecoded, Math.floor((3 + 0.5) * 8), 24);
+  const upperGlow = pixelAt(hotDecoded, Math.floor((3 + 0.5) * 8), 8);
+  const coolUpper = pixelAt(coolDecoded, Math.floor((3 + 0.5) * 8), 8);
+  assert.ok(core[3] > 220, "large cursor still has a hot centered core");
+  assert.ok(upperGlow[3] > coolUpper[3], "typing heat should expand glow into neighboring rows");
 });
 
 test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () => {
@@ -1263,7 +1279,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /boxes:\$\{effect\}/);
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
-  assert.match(source, /Do not attach a row-wide background to the cursor placement/);
+  assert.match(source, /actual heat image is a larger relative placement centered on that anchor/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);
   assert.match(source, /const safeCursorCol = Math\.max\(0, Math\.min\(safeRowWidth - 1/);
@@ -1284,7 +1300,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function installHardwareCursorGuard\(tui\)/);
   assert.match(source, /applyHardwareCursorPolicy\(tui\)/);
   assert.match(source, /restoreHardwareCursorPolicy\(\)/);
-  assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0 \} = \{\}\)/);
+  assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0 \} = \{\}\)/);
+  assert.match(source, /editor-cursor-glow-relative/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
