@@ -48,7 +48,7 @@ test("box strip edges are directional", () => {
 });
 
 test("renderBoxStripPng effect variants produce distinct graphics", () => {
-  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour"];
+  const variants = ["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave"];
   const payloads = new Set(variants.map((effect) => renderBoxStripPng({
     kind: "mid",
     columns: 24,

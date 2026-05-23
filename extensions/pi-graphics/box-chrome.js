@@ -66,14 +66,14 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
   thinking: "cloud",
   tool: "circuit",
   bash: "scanline",
-  user: "glass",
+  user: "weave",
   custom: "sparkle",
   skill: "contour",
   branch: "scanline",
@@ -84,16 +84,16 @@ export const BOX_TYPE_EFFECTS = {
   input: "prism",
   editor: "glass",
   selector: "sparkle",
-  login: "aurora",
+  login: "weave",
   model: "lattice",
-  oauth: "aurora",
+  oauth: "weave",
   session: "holo",
   settings: "lattice",
   image: "aurora",
   theme: "sparkle",
   thinkingSelector: "cloud",
   tree: "scanline",
-  userSelector: "glass",
+  userSelector: "weave",
   agent: "aurora",
   mascot: "sparkle",
   customTui: "contour",
@@ -291,6 +291,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = 1 + ((x * 3) % Math.max(1, h - 3));
       fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 2, x % 2 ? highlight : shadow, 30);
     }
+  } else if (effect === "weave") {
+    const thread = [
+      Math.min(255, Math.round(color[0] * 0.55 + 115)),
+      Math.min(255, Math.round(color[1] * 0.45 + 90)),
+      Math.min(255, Math.round(color[2] * 0.55 + 95)),
+    ];
+    const under = [
+      Math.min(255, Math.round(color[0] * 0.35 + 55)),
+      Math.min(255, Math.round(color[1] * 0.55 + 80)),
+      Math.min(255, Math.round(color[2] * 0.45 + 70)),
+    ];
+    // Woven user chrome: alternating short warp/weft strokes suggest a tactile
+    // message surface without dense texture. The two coarse passes are cheap,
+    // deterministic, and PNG-friendly compared with per-pixel dithering.
+    for (let x = 2; x < w; x += 18) {
+      const y = 2 + ((x / 2) % Math.max(1, h - 4));
+      fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 1, thread, 42);
+      if (y + 3 < h) fillRectAlpha(pixels, w, x + 4, y + 3, Math.min(9, w - x - 4), 1, under, 28);
+    }
+    for (let x = 9; x < w; x += 18) {
+      const y0 = (Math.floor(x / 18) % 2) + 1;
+      fillRectAlpha(pixels, w, x, y0, 1, Math.max(3, h - y0 * 2), x % 3 ? under : thread, 34);
+    }
+    fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.30)), w, 1, thread, 14);
+    fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.68)), w, 1, under, 14);
   }
 }
 
