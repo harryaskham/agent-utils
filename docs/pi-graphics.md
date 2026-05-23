@@ -345,10 +345,11 @@ displayed using kitty Unicode placeholder cells, so:
   historical ids. This avoids low-id and cross-process collisions with other
   kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
-  `scanline`, `circuit`, `sparkle`, and `cloud`) and caches both uploads and
-  relative placements so ordinary rerenders do not re-place identical box
+  `scanline`, `circuit`, `sparkle`, `cloud`, and `prism`) and caches both uploads
+  and relative placements so ordinary rerenders do not re-place identical box
   strips. Thinking blocks are detected from assistant message content and use
-  the cloudy thought effect. If a box moves or resizes, stale relative
+  the cloudy thought effect, while input/overlay surfaces get a lightweight
+  prism-facet glass treatment. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage
   includes transcript messages, tool/bash output, skill/custom messages,
   branch/compaction summaries, footer, dynamic borders, loaders, extension

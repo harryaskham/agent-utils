@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "aurora",
@@ -81,7 +81,7 @@ export const BOX_TYPE_EFFECTS = {
   footer: "circuit",
   loader: "aurora",
   border: "glass",
-  input: "glass",
+  input: "prism",
   editor: "glass",
   selector: "sparkle",
   login: "aurora",
@@ -97,7 +97,7 @@ export const BOX_TYPE_EFFECTS = {
   agent: "aurora",
   mascot: "sparkle",
   customTui: "aurora",
-  overlay: "sparkle",
+  overlay: "prism",
   widget: "circuit",
   header: "aurora",
 };
@@ -198,6 +198,26 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(0, Math.min(h - 1, Math.round((h - 1) * wave)));
       fillRectAlpha(pixels, w, x, y, 1, Math.min(2, h - y), color, 36);
     }
+  } else if (effect === "prism") {
+    const secondary = [
+      Math.min(255, Math.round(color[0] * 0.45 + 120)),
+      Math.min(255, Math.round(color[1] * 0.35 + 80)),
+      Math.min(255, Math.round(color[2] * 0.60 + 120)),
+    ];
+    // Cheap crystalline facets: a handful of deterministic diagonal bands with
+    // alternating theme/secondary tint. O(width * small-band-height), not a full
+    // pixel shader, so it stays cheap while reading as more dimensional glass.
+    for (let x = -h; x < w; x += 14) {
+      const band = Math.floor((x + h) / 14);
+      const tint = band % 2 ? secondary : color;
+      for (let dx = 0; dx < 7; dx += 1) {
+        const xx = x + dx;
+        const yy = Math.max(0, Math.min(h - 1, Math.floor((dx * 0.7 + band * 3) % Math.max(1, h))));
+        fillRectAlpha(pixels, w, xx, yy, 1, Math.min(4, h - yy), tint, 42 - dx * 3);
+      }
+    }
+    fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.18)), w, 1, secondary, 26);
+    fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.72)), w, 1, color, 22);
   }
 }
 
