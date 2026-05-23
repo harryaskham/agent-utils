@@ -1644,42 +1644,10 @@ export default function piGraphicsExtension(pi) {
       return graphicsPreviewUnavailableLines("box");
     }
     const cell = cellMetrics();
-    const samples = [
-      "assistant",
-      "thinking",
-      "thinkingSelector",
-      "tool",
-      "bash",
-      "user",
-      "userSelector",
-      "custom",
-      "skill",
-      "branch",
-      "agent",
-      "settings",
-      "model",
-      "oauth",
-      "login",
-      "selector",
-      "tree",
-      "image",
-      "widget",
-      "input",
-      "editor",
-      "border",
-      "compaction",
-      "footer",
-      "header",
-      "session",
-      "loader",
-      "customTui",
-      "theme",
-      "mascot",
-      "overlay",
-    ];
+    const samples = Object.keys(BOX_TYPE_EFFECTS);
     const lines = [
       "Pi Graphics box preview",
-      "Representative per-surface chrome effects in compact paired rows; this does not change piGraphics.boxEffect.",
+      "Registry-derived per-surface chrome effects in compact paired rows; this does not change piGraphics.boxEffect.",
       "",
     ];
     const previewColumns = 10;

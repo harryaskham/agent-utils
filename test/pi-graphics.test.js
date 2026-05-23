@@ -1350,10 +1350,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\/gfx cursor preview shows cool\/warm\/hot editor cursor variants/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
-  assert.match(source, /"assistant",\n\s+"thinking",\n\s+"thinkingSelector"/);
-  assert.match(source, /"user",\n\s+"userSelector",\n\s+"custom",\n\s+"skill",\n\s+"branch",\n\s+"agent"/);
-  assert.match(source, /"oauth",\n\s+"login",\n\s+"selector",\n\s+"tree",\n\s+"image",\n\s+"widget",\n\s+"input"/);
-  assert.match(source, /"border",\n\s+"compaction",\n\s+"footer",\n\s+"header",\n\s+"session",\n\s+"loader",\n\s+"customTui",\n\s+"theme",\n\s+"mascot",\n\s+"overlay"/);
+  assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
+  assert.match(source, /Registry-derived per-surface chrome effects in compact paired rows/);
+  assert.doesNotMatch(source, /const samples = \[\n\s+"assistant"/);
   assert.match(source, /compact paired rows/);
   assert.match(source, /const previewColumns = 10/);
   assert.match(source, /for \(let i = 0; i < previews\.length; i \+= 2\)/);

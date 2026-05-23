@@ -399,13 +399,11 @@ displayed using kitty Unicode placeholder cells, so:
   specific effect or `/gfx box-effect auto` can return to per-message-type effects.
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
   placeholder cells. `/gfx box preview` emits bounded representative per-surface
-  box strips across the current mapped surfaces: assistant, thinking, thinking
-  selector, tool, bash, user/user-selector, custom, skill, branch, agent,
-  settings, model, oauth, login, selector, tree, image, widget, input, editor,
-  border, compaction, footer, header, session, loader, custom-TUI, theme,
-  mascot, and overlay. The preview uses compact paired rows with shorter cached
-  strips so the expanded surface set stays scannable. It does not change
-  `piGraphics.boxEffect`, so the mapped styles can be compared quickly.
+  box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, so every mapped
+  surface appears automatically as new chrome families are added. The preview
+  uses compact paired rows with shorter cached strips so the expanded surface set
+  stays scannable. It does not change `piGraphics.boxEffect`, so the mapped
+  styles can be compared quickly.
   `/gfx cursor preview` emits bounded cool/warm/hot cursor PNG variants so the heat
   glow, directional trail, and frame ticks can be inspected without typing at a
   precise speed. `/gfx box-mode unicode` uses only placeholder-tied graphics for
