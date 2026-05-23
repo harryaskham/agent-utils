@@ -66,10 +66,10 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript"]);
 
 export const BOX_TYPE_EFFECTS = {
-  assistant: "contour",
+  assistant: "manuscript",
   thinking: "nebula",
   tool: "schematic",
   bash: "prompt",
@@ -292,6 +292,33 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x + 3, y + 1, Math.min(8, w - x - 3), 1, color, 36);
     }
     fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.5)), w, 1, node, 18);
+  } else if (effect === "manuscript") {
+    const rubric = [
+      Math.min(255, Math.round(color[0] * 0.72 + 86)),
+      Math.min(255, Math.round(color[1] * 0.44 + 96)),
+      Math.min(255, Math.round(color[2] * 0.34 + 114)),
+    ];
+    const ink = [
+      Math.min(255, Math.round(color[0] * 0.38 + 82)),
+      Math.min(255, Math.round(color[1] * 0.68 + 64)),
+      Math.min(255, Math.round(color[2] * 0.76 + 48)),
+    ];
+    // Assistant chrome as illuminated manuscript margins: sparse rubric marks,
+    // guide rules, and tiny cap blocks make prose feel framed by real graphics
+    // while avoiding glyph rendering, masks, or dense parchment textures.
+    const upper = Math.max(1, Math.floor(h * 0.30));
+    const lower = Math.min(h - 2, Math.floor(h * 0.70));
+    fillRectAlpha(pixels, w, 0, upper, w, 1, ink, 14);
+    fillRectAlpha(pixels, w, 0, lower, w, 1, rubric, 12);
+    for (let x = 5; x < w; x += 34) {
+      fillRectAlpha(pixels, w, x, Math.max(1, upper - 2), Math.min(12, w - x), 1, rubric, 32);
+      fillRectAlpha(pixels, w, x + 3, lower + 1 < h ? lower + 1 : lower, Math.min(9, w - x - 3), 1, ink, 24);
+      if (x + 18 < w) fillRectAlpha(pixels, w, x + 18, Math.max(1, upper + 2), 3, 3, rubric, 44);
+    }
+    for (let x = 17; x < w; x += 61) {
+      fillRectAlpha(pixels, w, x, Math.max(1, upper - 5), 2, Math.min(8, h - 2), ink, 28);
+      fillRectAlpha(pixels, w, x + 3, Math.max(1, upper - 3), 5, 1, rubric, 34);
+    }
   } else if (effect === "contour") {
     const shadow = [
       Math.min(255, Math.round(color[0] * 0.35 + 70)),

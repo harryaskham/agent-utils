@@ -346,13 +346,13 @@ displayed using kitty Unicode placeholder cells, so:
   kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
   `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `holo`, `lattice`,
-  `contour`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`, `metronome`,
-  `signal`, `halo`, `caret`, `chamfer`, `constellation`, `orbit`, `rune`, `fold`,
-  `nebula`, `waveform`, `ribbon`, `aperture`, `caliper`, `mosaic`, `keystone`,
-  `badge`, `compass`, `prompt`, and `schematic`) and caches both uploads and
-  relative placements so ordinary rerenders do not re-place identical box strips.
+  `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
+  `metronome`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `orbit`,
+  `rune`, `fold`, `nebula`, `waveform`, `ribbon`, `aperture`, `caliper`, `mosaic`,
+  `keystone`, `badge`, `compass`, `prompt`, and `schematic`) and caches both uploads
+  and relative placements so ordinary rerenders do not re-place identical box strips.
   Thinking blocks are detected from assistant message content and get sparse nebula
-  mist lanes, assistant surfaces get calm topographic contour bands, skill/custom-TUI
+  mist lanes, assistant surfaces get illuminated manuscript margins, skill/custom-TUI
   surfaces get compact rune sigils, tool surfaces get schematic bus traces and pads,
   bash surfaces get shell prompt rails, tree surfaces get branching dendrite strokes,
   branch surfaces get interlaced braid strands, loader surfaces get
