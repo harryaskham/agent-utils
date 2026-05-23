@@ -66,14 +66,14 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "bevel", "chamfer", "caret", "tag", "badge", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
   thinking: "candle",
   tool: "rig",
   bash: "terminal",
-  user: "tapestry",
+  user: "note",
   custom: "atelier",
   skill: "sigil",
   branch: "helix",
@@ -459,6 +459,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 12; x < w; x += 41) {
       const y = 1 + ((x * 3) % Math.max(1, h - 3));
       fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 2, x % 2 ? highlight : shadow, 30);
+    }
+  } else if (effect === "note") {
+    const margin = [
+      Math.min(255, Math.round(color[0] * 0.52 + 112)),
+      Math.min(255, Math.round(color[1] * 0.58 + 92)),
+      Math.min(255, Math.round(color[2] * 0.66 + 78)),
+    ];
+    const fold = [
+      Math.min(255, Math.round(color[0] * 0.82 + 54)),
+      Math.min(255, Math.round(color[1] * 0.52 + 112)),
+      Math.min(255, Math.round(color[2] * 0.48 + 124)),
+    ];
+    const mark = [
+      Math.min(255, Math.round(color[0] * 0.34 + 84)),
+      Math.min(255, Math.round(color[1] * 0.72 + 62)),
+      Math.min(255, Math.round(color[2] * 0.42 + 134)),
+    ];
+    // Note chrome for user messages: sparse note margins, folded corner tabs,
+    // and input emphasis marks make authored prompts feel pinned to the page
+    // while keeping cached strip PNGs deterministic and low-entropy.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.54));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 30) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 30) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(14, w - x), 1, margin, 32);
+      fillRectAlpha(pixels, w, x + 3, top, Math.min(9, w - x - 3), 2, fold, 28);
+      fillRectAlpha(pixels, w, x + 1, Math.max(1, y - 4), 1, Math.min(9, h - 2), mark, 26);
+      if (x + 16 < w) fillRectAlpha(pixels, w, x + 16, bottom, 3, 1, mark, 38);
+    }
+    for (let x = 18; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 2, 2, fold, 36);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, bottom + 1), Math.min(12, w - x - 5), 1, margin, 20);
     }
   } else if (effect === "tapestry") {
     const band = [
