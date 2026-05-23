@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -96,7 +96,7 @@ export const BOX_TYPE_EFFECTS = {
   userSelector: "badge",
   agent: "orbit",
   mascot: "crest",
-  customTui: "rune",
+  customTui: "panel",
   overlay: "frost",
   widget: "mosaic",
   header: "marquee",
@@ -860,6 +860,33 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 20; x < w; x += 45) {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 15) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, Math.min(9, w - x), 1, stroke, 24);
+    }
+  } else if (effect === "panel") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.50 + 115)),
+      Math.min(255, Math.round(color[1] * 0.58 + 98)),
+      Math.min(255, Math.round(color[2] * 0.78 + 62)),
+    ];
+    const tab = [
+      Math.min(255, Math.round(color[0] * 0.72 + 75)),
+      Math.min(255, Math.round(color[1] * 0.42 + 125)),
+      Math.min(255, Math.round(color[2] * 0.58 + 105)),
+    ];
+    // Panel chrome for custom TUI surfaces: dock tabs, panel seams, and compact
+    // tool-window rails distinguish embedded widgets from skill rune sigils.
+    // Sparse rect strokes keep the cached strip deterministic and cheap.
+    const top = Math.max(1, Math.floor(h * 0.18));
+    const mid = Math.max(1, Math.floor(h * 0.50));
+    const lower = Math.min(h - 2, Math.floor(h * 0.74));
+    for (let x = 3; x < w; x += 24) {
+      const width = Math.min(13, w - x);
+      fillRectAlpha(pixels, w, x, top, width, 2, tab, 38);
+      fillRectAlpha(pixels, w, x, lower, width, 1, rail, 26);
+      if (x + 4 < w) fillRectAlpha(pixels, w, x + 4, top + 3, 1, Math.min(8, h - top - 3), rail, 30);
+    }
+    for (let x = 12; x < w; x += 39) {
+      fillRectAlpha(pixels, w, x, mid, Math.min(15, w - x), 1, rail, 30);
+      fillRectAlpha(pixels, w, x + 5, Math.max(1, mid - 3), Math.min(8, w - x - 5), 1, tab, 24);
     }
   } else if (effect === "fold") {
     const crease = [
