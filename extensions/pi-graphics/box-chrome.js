@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -92,7 +92,7 @@ export const BOX_TYPE_EFFECTS = {
   image: "aperture",
   theme: "constellation",
   thinkingSelector: "nebula",
-  tree: "blueprint",
+  tree: "dendrite",
   userSelector: "weave",
   agent: "orbit",
   mascot: "orbit",
@@ -367,6 +367,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = Math.max(1, Math.min(h - 3, Math.floor(h * 0.62) - ((x / 47) % 3)));
       fillRectAlpha(pixels, w, x, y, 5, 1, rule, 44);
       fillRectAlpha(pixels, w, x + 2, y - 2, 1, 5, rule, 36);
+    }
+  } else if (effect === "dendrite") {
+    const branch = [
+      Math.min(255, Math.round(color[0] * 0.48 + 84)),
+      Math.min(255, Math.round(color[1] * 0.76 + 58)),
+      Math.min(255, Math.round(color[2] * 0.58 + 104)),
+    ];
+    const leaf = [
+      Math.min(255, Math.round(color[0] * 0.30 + 76)),
+      Math.min(255, Math.round(color[1] * 0.62 + 88)),
+      Math.min(255, Math.round(color[2] * 0.82 + 62)),
+    ];
+    // Dendrite chrome for tree/file panes: small branching strokes suggest a
+    // navigable hierarchy while staying static and sparse. It avoids full grid
+    // fills and font glyphs, keeping cached tree strips cheap to compress.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 6; x < w; x += 25) {
+      const y = Math.max(1, Math.min(h - 3, mid + (Math.floor(x / 25) % 3) - 1));
+      fillRectAlpha(pixels, w, x, Math.max(1, y - 3), 1, Math.min(7, h - 1), branch, 42);
+      fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 1, branch, 38);
+      if (x + 7 < w) fillRectAlpha(pixels, w, x + 7, Math.max(1, y - 2), Math.min(7, w - x - 7), 1, leaf, 34);
+    }
+    for (let x = 18; x < w; x += 50) {
+      const y = Math.max(1, Math.min(h - 2, mid + ((x / 50) % 2 ? 3 : -3)));
+      fillRectAlpha(pixels, w, x, y, 2, 2, leaf, 48);
+      fillRectAlpha(pixels, w, x + 2, y, Math.min(9, w - x - 2), 1, branch, 24);
     }
   } else if (effect === "signal") {
     const pulse = [
