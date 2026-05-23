@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -89,7 +89,7 @@ export const BOX_TYPE_EFFECTS = {
   oauth: "weave",
   session: "ribbon",
   settings: "lattice",
-  image: "glyph",
+  image: "aperture",
   theme: "constellation",
   thinkingSelector: "nebula",
   tree: "blueprint",
@@ -599,6 +599,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 12; x < w; x += 54) {
       fillRectAlpha(pixels, w, x, upper, Math.min(18, w - x), 1, silk, 26);
       fillRectAlpha(pixels, w, x + 7, lower, Math.min(16, w - x - 7), 1, shadow, 24);
+    }
+  } else if (effect === "aperture") {
+    const blade = [
+      Math.min(255, Math.round(color[0] * 0.38 + 92)),
+      Math.min(255, Math.round(color[1] * 0.64 + 70)),
+      Math.min(255, Math.round(color[2] * 0.82 + 54)),
+    ];
+    const glint = [
+      Math.min(255, Math.round(color[0] * 0.82 + 64)),
+      Math.min(255, Math.round(color[1] * 0.58 + 96)),
+      Math.min(255, Math.round(color[2] * 0.50 + 128)),
+    ];
+    // Aperture chrome for image panels: shutter-blade fragments and focus ticks
+    // make rendered images feel physically framed by the graphics layer. The
+    // motif is static, sparse, and rectangle-only, avoiding costly masks.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 5; x < w; x += 24) {
+      const step = Math.floor(x / 24) % 3;
+      const y = Math.max(1, Math.min(h - 2, mid + step - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(14, w - x), 2, blade, 36);
+      fillRectAlpha(pixels, w, x + 4, Math.max(1, y - 3), Math.min(10, w - x - 4), 1, glint, 30);
+      if (x + 13 < w) fillRectAlpha(pixels, w, x + 13, Math.min(h - 2, y + 3), 2, 2, glint, 46);
+    }
+    for (let x = 16; x < w; x += 48) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(4, h - 1), blade, 34);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 4), Math.min(12, w - x - 4), 1, glint, 24);
     }
   }
 }
