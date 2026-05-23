@@ -174,6 +174,36 @@ test("unicode box mode truncates and pads ANSI-styled rows without corrupting co
   assert.doesNotMatch(out[0], /\x1b\[[^m]*$/, "unicode truncation must not split ANSI controls");
 });
 
+test("relative box chrome leaves textual border rows unwrapped", () => {
+  const emitted = [];
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const border = "────────────────";
+  const out = runtime.applyToRows({ type: "selector", instanceId: 80, lines: [border, " choice", border], renderWidth: 16 });
+  assert.equal(out[0], border, "top textual border should not get a second graphical strip in the same row");
+  assert.equal(out[2], border, "bottom textual border should not get a second graphical strip in the same row");
+  assert.notEqual(out[1], " choice", "content row still gets side chrome");
+  assert.ok(emitted.length > 0, "content row should still emit graphics");
+});
+
+test("debug placeholder mode renders visible U cells with unique SGR ids", () => {
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    debugPlaceholders: true,
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 81, lines: ["alpha", "beta"], renderWidth: 10 });
+  assert.match(out[0], /\x1b\[38;2;\d+;\d+;\d+m\x1b\[58;2;\d+;\d+;\d+mU/);
+  assert.doesNotMatch(out[0], /\u{10eeee}/u, "debug mode should make the placeholder visibly inspectable");
+  assert.notEqual(out[0].match(/\x1b\[58;2;[^m]+m/)?.[0], out[1].match(/\x1b\[58;2;[^m]+m/)?.[0], "rows should expose distinct placement colors");
+});
+
 test("box chrome does not double-wrap rows that already contain kitty placeholders", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };

@@ -396,9 +396,12 @@ displayed using kitty Unicode placeholder cells, so:
   explicitly disabled with `piGraphics.boxChrome: false` or `/gfx box off`.
   `Ctrl+t` cycles presets across the static editor border, caco-compatible
   `unicode` mode, animated editor border, and every box-effect variant;
-  `/gfx box-effect <name>` can select a specific effect or `/gfx box-effect auto`
-  can return to per-message-type effects. `/gfx box-mode unicode` uses only
-  placeholder-tied graphics for box side borders instead of relative placements.
+  `/gfx` with no arguments opens a Pi-native settings overlay with quick previews;
+  `/gfx status` prints the text summary. `/gfx box-effect <name>` can select a
+  specific effect or `/gfx box-effect auto` can return to per-message-type effects.
+  `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
+  placeholder cells, and `/gfx box-mode unicode` uses only placeholder-tied graphics
+  for box side borders instead of relative placements.
 * Box wrapping is ANSI/OSC/APC/DCS-safe: placeholder insertion, unicode side
   borders, width truncation, and padding preserve terminal controls instead of
   slicing inside color/style escapes, Pi IME cursor markers, or tmux/kitty
@@ -415,17 +418,18 @@ displayed using kitty Unicode placeholder cells, so:
   before it for terminal input plumbing. When this graphics cursor styling is
   active, the extension asks Pi's TUI to hide the hardware cursor so the terminal
   blink does not fight the styled placeholder; disabling graphics cursor/editor
-  styling restores the previous hardware-cursor setting. The cursor placeholder also anchors a
-  low-z-index relative row background that spans the rendered editor width and
-  shifts left by the measured cursor column. The cursor glyph is a dedicated
-  one-cell vertical heat line with a bright white core and bounded side glow,
-  not the horizontal prompt-rule renderer, so the editor can keep graphical
-  glass behind typed text without replacing the text cells themselves. Placeholder
-  tails still occupy trailing space cells as a caco-compatible fallback and as
-  workspace fill after the cursor.
+  styling restores the previous hardware-cursor setting. The cursor glyph is a
+  dedicated one-cell vertical heat line with a bright white core and bounded side
+  glow, not the horizontal prompt-rule renderer, so the editor can keep graphical
+  cursor chrome without attaching a row-wide background that drifts as the cursor
+  moves. Placeholder tails still occupy trailing space cells as a caco-compatible
+  fallback and as workspace fill after the cursor.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
-  the source text to avoid stacked one-line boxes between content rows.
+  the source text to avoid stacked one-line boxes between content rows. Relative
+  box mode now leaves textual border rows unwrapped and avoids full-row solid fills,
+  so it does not paint top and bottom strokes into the same border line or obscure
+  text with a low-z background sheet.
 * The built-in footer can be replaced with a compact one-line segmented footer
   (`PI_GRAPHICS_AUTO_FOOTER`, default on with graphics). It preserves the useful
   cwd/branch/context/compaction/model/thinking layout while inserting stable

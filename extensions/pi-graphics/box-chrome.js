@@ -139,19 +139,10 @@ function paintTopStrip(pixels, w, h, color) {
 }
 
 function paintMidStrip(pixels, w, h, color, cellW) {
-  // Translucent fill across the full row, plus pillar strokes at the
-  // leftmost and rightmost ~half-cell.
-  const fillAlpha = 36;
-  for (let y = 0; y < h; y += 1) {
-    for (let x = 0; x < w; x += 1) {
-      const off = (y * w + x) * 4;
-      pixels[off] = color[0];
-      pixels[off + 1] = color[1];
-      pixels[off + 2] = color[2];
-      pixels[off + 3] = fillAlpha;
-    }
-  }
-  const pillarW = Math.max(1, Math.floor(cellW * 0.4));
+  // Pillar strokes at the leftmost and rightmost ~half-cell. Avoid a full-row
+  // translucent fill: many Pi components already paint their own cell
+  // backgrounds, and a wide negative-z fill reads as an unwanted solid box.
+  const pillarW = Math.max(1, Math.floor(cellW * 0.45));
   for (let y = 0; y < h; y += 1) {
     for (let x = 0; x < pillarW; x += 1) {
       const offL = (y * w + x) * 4;
@@ -1236,6 +1227,7 @@ export function createBoxChromeRuntime({
   resolveTheme,
   boxEffect,
   boxMode = "relative",
+  debugPlaceholders = false,
 } = {}) {
   state.ownedImageIds ||= new Set();
   state.transmittedImageIds ||= new Set();
@@ -1318,20 +1310,26 @@ export function createBoxChromeRuntime({
     relativeByAnchorRow.set(anchorRowKey, { stripImageId, relPlacementId });
   }
 
+  function debugPlaceholderCell({ imageId, placementId, label = "U" }) {
+    return `${placeholderSgr({ imageId, placementId })}${label}${ESC}[39;59m`;
+  }
+
   function wrapRowText({ lineText, anchorImageId, anchorPlacementId }) {
     const sgr = placeholderSgr({ imageId: anchorImageId, placementId: anchorPlacementId });
-    const cell = buildKittyUnicodePlaceholderCell({
-      imageId: anchorImageId,
-      placementId: anchorPlacementId,
-      row: 0,
-      column: 0,
-      includeColumn: true,
-    });
+    const cell = debugPlaceholders
+      ? debugPlaceholderCell({ imageId: anchorImageId, placementId: anchorPlacementId })
+      : `${sgr}${buildKittyUnicodePlaceholderCell({
+        imageId: anchorImageId,
+        placementId: anchorPlacementId,
+        row: 0,
+        column: 0,
+        includeColumn: true,
+      })}${ESC}[39;59m`;
     // Insert the placeholder after leading terminal controls without corrupting
     // ANSI/OSC sequences. If the line starts with visible text, remove the last
     // visible cell ANSI-safely so the visible width remains stable while the
     // readable prefix is preserved.
-    return prefixPlaceholderCell(String(lineText || ""), `${sgr}${cell}${ESC}[39;59m`);
+    return prefixPlaceholderCell(String(lineText || ""), cell);
   }
 
   function componentLooksLikeThinking(component) {
@@ -1351,6 +1349,7 @@ export function createBoxChromeRuntime({
         width: 1,
         zIndex: BOX_Z_INDEX,
       });
+      if (debugPlaceholders) return `${placement.transmit}${debugPlaceholderCell({ imageId: placement.imageId, placementId: placement.placementId })}`;
       return `${placement.transmit}${placement.lines[0] || ""}`;
     };
     return lines.map((line, i) => {
@@ -1388,8 +1387,8 @@ export function createBoxChromeRuntime({
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
     if (boxMode === "unicode") return applyUnicodeBoxRows({ type: effectiveType, instanceId, lines, colorRgb, width, effect });
     const wrapped = lines.map((line, i) => {
-      if (hasKittyPlaceholder(line)) return line;
-      const kind = lines.length === 1 ? "mid" : i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
+      if (hasKittyPlaceholder(line) || isLikelyBorderLine(line)) return line;
+      const kind = "mid";
       const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });
       const { anchorImageId, anchorPlacementId } = ensureAnchor({ instanceId, rowIndex: i });
       ensureRelativeStrip({ stripImageId: stripId, anchorImageId, anchorPlacementId, instanceId, rowIndex: i, width });
@@ -1410,6 +1409,11 @@ export function createBoxChromeRuntime({
 
 function hasKittyPlaceholder(text) {
   return String(text || "").includes("\u{10eeee}");
+}
+
+function isLikelyBorderLine(text) {
+  const stripped = stripTerminalControls(text).trim();
+  return stripped.length >= 3 && /^[─━═╭╮╰╯╔╗╚╝┌┐└┘┬┴┼·✧\-\s]+$/.test(stripped) && /[─━═\-]/.test(stripped);
 }
 
 const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))|(?:\x1b[_P][\s\S]*?\x1b\\)/g;

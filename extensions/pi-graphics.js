@@ -147,6 +147,8 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx.exposeRenderTools != null ? String(gfx.exposeRenderTools) : undefined,
     PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
     PI_GRAPHICS_BOX_MODE: gfx.boxMode != null ? String(gfx.boxMode) : "unicode",
+    PI_GRAPHICS_DEBUG: gfx.debug != null ? String(gfx.debug) : undefined,
+    PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx.debugPlaceholders != null ? String(gfx.debugPlaceholders) : undefined,
   };
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
@@ -694,12 +696,9 @@ export default function piGraphicsExtension(pi) {
       zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(placement.transmit);
-    ensureEditorRowBackground({
-      parentImageId: placement.imageId,
-      parentPlacementId: placement.placementId,
-      rowWidth,
-      cursorCol,
-    });
+    // Do not attach a row-wide background to the cursor placement. It moves as
+    // the cursor moves, which makes the editor backing drift horizontally while
+    // typing. The stable editor rail widgets provide non-shifting chrome.
     return placement.lines[0] ?? null;
   }
 
@@ -1247,6 +1246,7 @@ export default function piGraphicsExtension(pi) {
       cellHeightPx: cellMetrics().cellHeightPx,
       boxEffect: gfxEnv().PI_GRAPHICS_BOX_EFFECT,
       boxMode: String(gfxEnv().PI_GRAPHICS_BOX_MODE || "relative").toLowerCase() === "unicode" ? "unicode" : "relative",
+      debugPlaceholders: envBool("PI_GRAPHICS_DEBUG_PLACEHOLDERS", envBool("PI_GRAPHICS_DEBUG", false)),
       resolveTheme({ type } = {}) {
         const token = (type && BOX_TYPE_THEME_TOKENS[type]) || "accent";
         const colorRgb = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
@@ -1305,6 +1305,7 @@ export default function piGraphicsExtension(pi) {
       ctx.ui?.setWorkingMessage?.(buildWorkingMessage({ stage: "working" }, ctx.ui.theme || activeThemeRef));
     } catch {}
     installBoxChromeOnce(ctx);
+    setDebugPanel(ctx, settings);
   });
 
   pi.on("model_select", async (event, ctx) => {
@@ -1456,8 +1457,92 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function debugPanelLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
+    const gfx = settings.piGraphics || {};
+    return [
+      "Pi Graphics debug",
+      `mode=${gfx.mode ?? "on"} theme=${settings.theme || gfx.theme || "(default)"}`,
+      `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
+      `debug=${gfx.debug ? "on" : "off"} placeholders=${(gfx.debugPlaceholders ?? gfx.debug) ? "visible U" : "kitty"}`,
+      `cell=${gfx.cell?.widthPx || 8}x${gfx.cell?.heightPx || "auto"} line=${gfx.cell?.lineHeightScale || 1.2}`,
+      "Use /gfx debug to toggle; /gfx box-effect auto for per-surface chrome.",
+    ];
+  }
+
+  function setDebugPanel(ctx, settings = readJsonIfExists(agentSettingsPath()) || {}) {
+    const gfx = settings.piGraphics || {};
+    try {
+      ctx?.ui?.setWidget?.("pi-graphics-debug", gfx.debug ? debugPanelLines(settings) : undefined, { placement: "belowEditor" });
+    } catch {}
+  }
+
+  async function showGfxSettingsWindow(ctx, settings, gfx, editor) {
+    const effects = ["auto", ...BOX_EFFECT_NAMES];
+    const rows = [
+      { key: "mode", label: "Mode", values: ["on", "off", "debug"], get: () => gfx.mode || "on", set: (v) => { gfx.mode = v; } },
+      { key: "boxChrome", label: "Box chrome", values: ["on", "off"], get: () => gfx.boxChrome === false ? "off" : "on", set: (v) => { gfx.boxChrome = v === "on"; } },
+      { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "relative", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
+      { key: "boxEffect", label: "Box effect", values: effects, get: () => gfx.boxEffect || "auto", set: (v) => { if (v === "auto") delete gfx.boxEffect; else gfx.boxEffect = v; gfx.boxChrome = true; } },
+      { key: "editor", label: "Editor", values: ["static", "unicode", "animated"], get: () => editor.style || "static", set: (v) => { editor.style = v; } },
+      { key: "debug", label: "Debug panel", values: ["off", "on"], get: () => gfx.debug ? "on" : "off", set: (v) => { gfx.debug = v === "on"; gfx.debugPlaceholders = gfx.debug; } },
+      { key: "placeholders", label: "Debug placeholders", values: ["off", "on"], get: () => gfx.debugPlaceholders ? "on" : "off", set: (v) => { gfx.debugPlaceholders = v === "on"; } },
+    ];
+    let selected = 0;
+    const renderLine = (width, text) => String(text).slice(0, Math.max(1, width));
+    const componentFactory = (_tui, theme, keybindings, done) => ({
+      invalidate() {},
+      render(width = 80) {
+        const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+        const lines = [
+          fg("accent", "Pi Graphics settings"),
+          fg("muted", "↑/↓ select  ←/→ change  Enter save+reload  d debug  q/Esc close"),
+          "",
+        ];
+        rows.forEach((row, index) => {
+          const marker = index === selected ? "→" : " ";
+          const value = row.get();
+          lines.push(`${marker} ${row.label.padEnd(20)} ${value}`);
+        });
+        lines.push("", "Preview:");
+        lines.push("  assistant=manuscript  tool=schematic  oauth=keyring");
+        lines.push("  model=dial  settings=slider  thinking=lantern");
+        lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
+        return lines.map((line) => renderLine(width, line));
+      },
+      handleInput(data) {
+        const key = String(data || "");
+        const matches = (name) => { try { return keybindings?.matches?.(data, name); } catch { return false; } };
+        const move = (delta) => { selected = Math.max(0, Math.min(rows.length - 1, selected + delta)); };
+        const change = (delta) => {
+          const row = rows[selected];
+          const values = row.values;
+          const current = row.get();
+          const index = Math.max(0, values.indexOf(current));
+          row.set(values[(index + delta + values.length) % values.length]);
+        };
+        if (matches("tui.select.up") || key === "\x1b[A" || key === "k") move(-1);
+        else if (matches("tui.select.down") || key === "\x1b[B" || key === "j") move(1);
+        else if (matches("tui.select.left") || key === "\x1b[D" || key === "h") change(-1);
+        else if (matches("tui.select.right") || key === "\x1b[C" || key === "l" || key === " ") change(1);
+        else if (key.toLowerCase() === "d") { gfx.debug = !gfx.debug; gfx.debugPlaceholders = gfx.debug; }
+        else if (matches("tui.select.confirm") || key === "\r" || key === "\n") done("save");
+        else if (matches("tui.select.cancel") || key === "\x1b" || key.toLowerCase() === "q") done("close");
+        try { _tui?.requestRender?.(); } catch {}
+      },
+    });
+    const result = typeof ctx?.ui?.custom === "function"
+      ? await ctx.ui.custom(componentFactory, { overlay: true, overlayOptions: { width: "70%", minWidth: 54, maxHeight: "80%", anchor: "center", margin: 1 } })
+      : "notify";
+    if (result === "save") {
+      await applyGfxSettingsAndReload(ctx, settings, "Saved Pi Graphics settings. Reloading runtime to apply...");
+    } else if (result === "notify") {
+      ctx.ui.notify("This Pi runtime does not expose custom overlay UI; use /gfx status, /gfx box-effect auto, or /gfx debug.", "warning");
+    }
+    setDebugPanel(ctx, settings);
+  }
+
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [next|presets|themes|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1485,8 +1570,19 @@ export default function piGraphicsExtension(pi) {
         ];
         ctx.ui.notify(lines.join("\n"), "info");
       };
-      if (tokens.length === 0) { describe(); return; }
+      if (tokens.length === 0) { await showGfxSettingsWindow(ctx, settings, gfx, editor); return; }
       const action = String(tokens[0] || "").toLowerCase();
+      if (action === "status" || action === "show" || action === "info") { describe(); return; }
+      if (action === "debug") {
+        gfx.debug = !gfx.debug;
+        gfx.debugPlaceholders = gfx.debug;
+        settingsEnv = settingsEnvFromPiGraphics(settings);
+        try { saveSettings(settings); } catch (error) { ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error"); return; }
+        setDebugPanel(ctx, settings);
+        applyGfxSettingsLive(ctx, settings);
+        ctx.ui.notify(`Pi Graphics debug ${gfx.debug ? "on" : "off"}. Placeholder diagnostics ${gfx.debugPlaceholders ? "visible" : "hidden"}.`, "info");
+        return;
+      }
       if (action === "next" || action === "cycle") { await cycleGfxPreset(ctx, 1); return; }
       if (action === "prev" || action === "previous") { await cycleGfxPreset(ctx, -1); return; }
       if (action === "presets") {

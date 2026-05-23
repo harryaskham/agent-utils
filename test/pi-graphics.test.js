@@ -1254,6 +1254,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === false \? "0" : "1"/);
   assert.match(source, /PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx\.exposeRenderTools/);
   assert.match(source, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode != null \? String\(gfx\.boxMode\) : "unicode"/);
+  assert.match(source, /PI_GRAPHICS_DEBUG: gfx\.debug/);
+  assert.match(source, /PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx\.debugPlaceholders/);
   assert.match(source, /BOX_EFFECT_NAMES/);
   assert.match(source, /registerShortcut\?\.\("ctrl\+t"/);
   assert.match(source, /\$\{theme\}:static`, theme, mode: "on", editorStyle: "static", boxChrome: true, boxMode: "unicode"/);
@@ -1261,6 +1263,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /boxes:\$\{effect\}/);
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
+  assert.match(source, /Do not attach a row-wide background to the cursor placement/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);
   assert.match(source, /const safeCursorCol = Math\.max\(0, Math\.min\(safeRowWidth - 1/);
