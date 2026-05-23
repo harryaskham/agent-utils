@@ -345,7 +345,7 @@ displayed using kitty Unicode placeholder cells, so:
   historical ids. This avoids low-id and cross-process collisions with other
   kitty graphics consumers in the same tty.
 * Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
-  `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `holo`, `lattice`,
+  `scanline`, `circuit`, `sparkle`, `cloud`, `prism`, `veil`, `frost`, `holo`, `lattice`,
   `contour`, `manuscript`, `weave`, `glyph`, `blueprint`, `dendrite`, `braid`,
   `metronome`, `signal`, `halo`, `caret`, `chamfer`, `constellation`, `orbit`,
   `rune`, `fold`, `lantern`, `nebula`, `waveform`, `ribbon`, `aperture`, `dial`,
@@ -364,7 +364,7 @@ displayed using kitty Unicode placeholder cells, so:
   selector surfaces get directional compass ticks, image
   surfaces get shutter-like aperture fragments, editor surfaces get slim
   caret beams, border surfaces get beveled chamfer cuts, input surfaces get a
-  lightweight prism-facet glass treatment, overlay surfaces get gauzy veil folds,
+  lightweight prism-facet glass treatment, overlay surfaces get frosted corner crystals and cold edge glints,
   header/footer surfaces get static waveform rails, session surfaces get interleaved
   ribbon strips, model surfaces get instrument dial ticks, settings surfaces get adjustable slider rails, and widget surfaces get sparse mosaic tiles. If a box moves or resizes, stale relative
   placements are explicitly deleted before the replacement is placed. Coverage

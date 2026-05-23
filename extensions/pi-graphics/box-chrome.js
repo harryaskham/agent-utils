@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -97,7 +97,7 @@ export const BOX_TYPE_EFFECTS = {
   agent: "orbit",
   mascot: "orbit",
   customTui: "rune",
-  overlay: "veil",
+  overlay: "frost",
   widget: "mosaic",
   header: "waveform",
 };
@@ -234,6 +234,35 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(9, h - 1), sheer, 34);
       fillRectAlpha(pixels, w, x + 2, Math.max(1, mid - 3), Math.min(12, w - x - 2), 1, hem, 22);
     }
+  } else if (effect === "frost") {
+    const ice = [
+      Math.min(255, Math.round(color[0] * 0.42 + 130)),
+      Math.min(255, Math.round(color[1] * 0.62 + 108)),
+      Math.min(255, Math.round(color[2] * 0.76 + 82)),
+    ];
+    const white = [
+      Math.min(255, Math.round(color[0] * 0.22 + 190)),
+      Math.min(255, Math.round(color[1] * 0.22 + 205)),
+      Math.min(255, Math.round(color[2] * 0.30 + 205)),
+    ];
+    // Frost overlay chrome: small static corner crystals and cold edge glints.
+    // It avoids random snow/noise fields and keeps PNG entropy low while giving
+    // modal overlays a colder, more glassy visual identity than the gauzy veil.
+    const corner = Math.max(3, Math.min(10, Math.floor(h * 0.55)));
+    for (const x0 of [1, Math.max(1, w - corner - 1)]) {
+      const dir = x0 < w / 2 ? 1 : -1;
+      for (let i = 0; i < corner; i += 2) {
+        fillRectAlpha(pixels, w, x0 + dir * i, 1 + i, Math.max(1, corner - i), 1, ice, 64 - i * 4);
+        fillRectAlpha(pixels, w, x0 + dir * i, Math.max(1, h - 2 - i), Math.max(1, corner - i), 1, white, 48 - i * 3);
+      }
+    }
+    for (let x = 5; x < w; x += 29) {
+      const y = 2 + ((x * 3) % Math.max(1, h - 5));
+      fillRectAlpha(pixels, w, x, y, Math.min(11, w - x), 1, ice, 36);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, y - 2), 1, Math.min(5, h - y), white, 32);
+    }
+    fillRectAlpha(pixels, w, 0, Math.max(0, Math.floor(h * 0.18)), w, 1, white, 18);
+    fillRectAlpha(pixels, w, 0, Math.min(h - 1, Math.floor(h * 0.82)), w, 1, ice, 22);
   } else if (effect === "holo") {
     const cyan = [
       Math.min(255, Math.round(color[0] * 0.45 + 105)),
