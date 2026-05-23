@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "crest", "rune", "panel", "fold", "archive", "nebula", "waveform", "marquee", "ribbon", "ledger", "lens", "aperture", "caliper", "tile", "mosaic", "keystone", "dendrite", "braid", "metronome", "hourglass", "veil", "frost", "bevel", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -80,7 +80,7 @@ export const BOX_TYPE_EFFECTS = {
   compaction: "archive",
   footer: "waveform",
   loader: "hourglass",
-  border: "chamfer",
+  border: "bevel",
   input: "prism",
   editor: "caret",
   selector: "compass",
@@ -727,6 +727,40 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     }
     fillRectAlpha(pixels, w, 0, top, w, 1, ghost, 18);
     fillRectAlpha(pixels, w, 0, bottom, w, 1, beam, 20);
+  } else if (effect === "bevel") {
+    const plane = [
+      Math.min(255, Math.round(color[0] * 0.60 + 92)),
+      Math.min(255, Math.round(color[1] * 0.64 + 82)),
+      Math.min(255, Math.round(color[2] * 0.68 + 74)),
+    ];
+    const shine = [
+      Math.min(255, Math.round(color[0] * 0.82 + 58)),
+      Math.min(255, Math.round(color[1] * 0.50 + 118)),
+      Math.min(255, Math.round(color[2] * 0.58 + 108)),
+    ];
+    const shadow = [
+      Math.min(255, Math.round(color[0] * 0.28 + 58)),
+      Math.min(255, Math.round(color[1] * 0.62 + 66)),
+      Math.min(255, Math.round(color[2] * 0.42 + 128)),
+    ];
+    // Bevel chrome for generic borders: sparse bevel planes, clipped-corner
+    // highlights, and shadow seams make frames read as raised UI edges. It uses
+    // only fixed rectangle strokes, no masks, gradients, glyphs, or animation.
+    const top = Math.max(1, Math.floor(h * 0.18));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.82));
+    fillRectAlpha(pixels, w, 0, top, w, 1, plane, 18);
+    fillRectAlpha(pixels, w, 0, bottom, w, 1, shadow, 20);
+    for (let x = 4; x < w; x += 30) {
+      fillRectAlpha(pixels, w, x, top, Math.min(17, w - x), 1, shine, 36);
+      fillRectAlpha(pixels, w, x + 4, Math.max(1, top + 3), Math.min(12, w - x - 4), 1, plane, 24);
+      fillRectAlpha(pixels, w, x + 7, bottom, Math.min(15, w - x - 7), 1, shadow, 32);
+      if (x + 1 < w) fillRectAlpha(pixels, w, x + 1, Math.max(1, mid - 2), 2, 4, plane, 28);
+    }
+    for (const x of [2, Math.max(2, w - 20)]) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(16, w - x), 2, shine, 38);
+      fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, bottom + 1), Math.min(12, w - x - 5), 1, shadow, 34);
+    }
   } else if (effect === "chamfer") {
     const edge = [
       Math.min(255, Math.round(color[0] * 0.66 + 78)),
@@ -738,9 +772,9 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       Math.min(255, Math.round(color[1] * 0.72 + 54)),
       Math.min(255, Math.round(color[2] * 0.48 + 126)),
     ];
-    // Chamfer chrome for structural borders: beveled cut marks make frames feel
-    // like rendered UI plates, not ASCII boxes. Sparse corner/edge ticks avoid
-    // dense fills while staying deterministic and PNG-friendly.
+    // Chamfer remains available as an explicit variant: beveled cut marks make
+    // frames feel like rendered UI plates. Sparse corner/edge ticks avoid dense
+    // fills while staying deterministic and PNG-friendly.
     const top = Math.max(1, Math.floor(h * 0.20));
     const bottom = Math.min(h - 2, Math.floor(h * 0.80));
     fillRectAlpha(pixels, w, 0, top, w, 1, edge, 24);
