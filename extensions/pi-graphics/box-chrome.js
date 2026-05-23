@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -98,7 +98,7 @@ export const BOX_TYPE_EFFECTS = {
   mascot: "emblem",
   customTui: "workbench",
   overlay: "scrim",
-  widget: "tile",
+  widget: "dashboard",
   header: "masthead",
 };
 
@@ -2402,6 +2402,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 2, Math.min(9, h - top), jaw, 42);
       fillRectAlpha(pixels, w, x, top, Math.min(14, w - x), 1, rule, 36);
       fillRectAlpha(pixels, w, x + 4, bottom, Math.min(10, w - x - 4), 1, jaw, 34);
+    }
+  } else if (effect === "dashboard") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.56 + 96)),
+      Math.min(255, Math.round(color[1] * 0.66 + 74)),
+      Math.min(255, Math.round(color[2] * 0.60 + 100)),
+    ];
+    const status = [
+      Math.min(255, Math.round(color[0] * 0.78 + 56)),
+      Math.min(255, Math.round(color[1] * 0.50 + 120)),
+      Math.min(255, Math.round(color[2] * 0.72 + 68)),
+    ];
+    const corner = [
+      Math.min(255, Math.round(color[0] * 0.30 + 72)),
+      Math.min(255, Math.round(color[1] * 0.70 + 58)),
+      Math.min(255, Math.round(color[2] * 0.48 + 124)),
+    ];
+    // Dashboard chrome for widgets: pane rails, status tiles, and corner
+    // indicators make small UI widgets read as live dashboards without timers,
+    // dense textures, masks, glyphs, graph layout, animation loops, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.24));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.76));
+    for (let x = 5; x < w; x += 31) {
+      fillRectAlpha(pixels, w, x, top, Math.min(17, w - x), 1, rail, 28);
+      fillRectAlpha(pixels, w, x + 1, mid, Math.min(12, w - x - 1), 2, status, 32);
+      fillRectAlpha(pixels, w, x + 4, bottom, Math.min(14, w - x - 4), 1, corner, 24);
+      if (x + 2 < w) fillRectAlpha(pixels, w, x + 2, Math.max(1, top - 2), 2, 2, corner, 38);
+      if (x + 16 < w) fillRectAlpha(pixels, w, x + 16, Math.max(1, mid - 2), 2, 2, status, 34);
+    }
+    for (let x = 20; x < w; x += 62) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 1, Math.min(10, h - 2), corner, 24);
+      fillRectAlpha(pixels, w, x + 5, top, Math.min(18, w - x - 5), 1, rail, 18);
     }
   } else if (effect === "tile") {
     const pane = [
