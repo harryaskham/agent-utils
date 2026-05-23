@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "recipe", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "studio", "atelier", "constellation", "swatch", "palette", "beacon", "satellite", "orbit", "emblem", "crest", "recipe", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "dashboard", "tile", "mosaic", "gate", "portal", "keystone", "grove", "vine", "dendrite", "fork", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "token", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -74,7 +74,7 @@ export const BOX_TYPE_EFFECTS = {
   tool: "rig",
   bash: "terminal",
   user: "note",
-  custom: "atelier",
+  custom: "studio",
   skill: "recipe",
   branch: "fork",
   compaction: "archive",
@@ -1372,6 +1372,39 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (const x of [2, Math.max(2, w - 18)]) {
       fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(14, w - x), 2, edge, 42);
       fillRectAlpha(pixels, w, x + 5, bottom, Math.min(10, w - x - 5), 1, cut, 34);
+    }
+  } else if (effect === "studio") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.54 + 98)),
+      Math.min(255, Math.round(color[1] * 0.62 + 84)),
+      Math.min(255, Math.round(color[2] * 0.66 + 82)),
+    ];
+    const canvas = [
+      Math.min(255, Math.round(color[0] * 0.76 + 66)),
+      Math.min(255, Math.round(color[1] * 0.50 + 114)),
+      Math.min(255, Math.round(color[2] * 0.56 + 108)),
+    ];
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.32 + 78)),
+      Math.min(255, Math.round(color[1] * 0.72 + 58)),
+      Math.min(255, Math.round(color[2] * 0.50 + 118)),
+    ];
+    // Studio chrome for generic custom surfaces: work rails, canvas cards, and
+    // registration ticks make extension output feel composed without starfields,
+    // glyphs, masks, graph layout, timers, animation, or repaint loops.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 33) {
+      fillRectAlpha(pixels, w, x, top, Math.min(16, w - x), 1, rail, 30);
+      fillRectAlpha(pixels, w, x + 2, Math.max(1, mid - 2), Math.min(12, w - x - 2), 2, canvas, 34);
+      fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, mid + 2), Math.min(9, w - x - 4), 1, rail, 24);
+      fillRectAlpha(pixels, w, x + 6, bottom, Math.min(11, w - x - 6), 1, tick, 28);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 15, Math.max(1, top + 2), 2, 2, tick, 34);
+    }
+    for (let x = 20; x < w; x += 60) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(20, w - x), 1, canvas, 16);
+      fillRectAlpha(pixels, w, x + 8, Math.min(h - 2, bottom + 1), Math.min(15, w - x - 8), 1, rail, 18);
     }
   } else if (effect === "atelier") {
     const rail = [
