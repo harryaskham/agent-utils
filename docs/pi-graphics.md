@@ -432,9 +432,12 @@ displayed using kitty Unicode placeholder cells, so:
   styling restores the previous hardware-cursor setting. The cursor anchor remains
   a single Unicode placeholder cell, but the visible cursor art is a larger
   relative kitty placement (roughly 11 columns by 5 rows) centered on that anchor.
-  The relative placement is emitted inline with the placeholder row and the prior
-  cursor placement is deleted before the next one is attached, preventing stale
-  cursor ghosts when the editor moves. It keeps a bright vertical core in the
+  Each redraw gives the transparent anchor a fresh placement id before attaching
+  the visible image, so kitty cannot resolve the cursor against an older same-id
+  anchor elsewhere in the TUI. The relative placement is emitted inline with the
+  placeholder row and the prior visible cursor placement is deleted by placement
+  id before the next one is attached, preventing stale cursor ghosts when the
+  editor moves. It keeps a bright vertical core in the
   middle cell while transparent glow has enough transparent padding to avoid
   clipping at the image edges. The glow colour/radius is bucketed from inferred recent
   inter-character typing speed and decays after typing stops. Fast cursor motion

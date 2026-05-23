@@ -54,6 +54,7 @@ import {
 import {
   buildAnimationLoopCommand,
   buildKittyUnicodePlaceholderCell,
+  buildKittyUnicodePlaceholderLines,
   buildPngCursorAnimationUpload,
   buildRelativePlacementCommand,
   bufferToBase64,
@@ -303,6 +304,7 @@ export default function piGraphicsExtension(pi) {
   let editorCursorLastCol = null;
   let editorCursorTrailDirection = 1;
   let editorCursorHeat = 0;
+  let editorCursorAnchorSeq = 0;
   let editorCursorRelativePlacement = null;
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
 
@@ -757,15 +759,30 @@ export default function piGraphicsExtension(pi) {
       : heatBucket >= 2
         ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
         : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const anchor = buildPlacement(state, {
-      name: `editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-      png: Buffer.from(transparentPixelPngBase64(), "base64"),
-      columns: 1,
-      rows: 1,
-      width: 1,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
-    });
-    emitGraphicsCommand(anchor.transmit);
+    const anchorImageId = piGraphicsImageId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(anchorImageId)) {
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: anchorImageId,
+        q: 2,
+      }, transparentPixelPngBase64(), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(anchorImageId);
+      uploadedImages.add(anchorImageId);
+    }
+    editorCursorAnchorSeq = (editorCursorAnchorSeq + 1) % 0x800000;
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}-${editorCursorAnchorSeq}`);
+    emitGraphicsCommand(serializeKittyGraphicsCommand({
+      a: "p",
+      i: anchorImageId,
+      p: anchorPlacementId,
+      U: 1,
+      c: 1,
+      r: 1,
+      z: PI_GRAPHICS_Z.SURFACE,
+      q: 2,
+    }, "", { passthrough: state.config.passthrough }));
     const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
     const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
     const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
@@ -798,25 +815,29 @@ export default function piGraphicsExtension(pi) {
       emitGraphicsCommand(buildDeleteCommand({
         imageId: editorCursorRelativePlacement.imageId,
         placementId: editorCursorRelativePlacement.placementId,
-        deleteMode: "i",
+        deleteMode: "p",
         passthrough: state.config.passthrough,
       }));
     }
+    const cursorColumns = 11;
+    const cursorRows = 5;
     const relativePlacement = buildRelativePlacementCommand({
       imageId,
       placementId,
-      parentImageId: anchor.imageId,
-      parentPlacementId: anchor.placementId,
-      hOffset: -5,
-      vOffset: -2,
-      columns: 11,
-      rows: 5,
+      parentImageId: anchorImageId,
+      parentPlacementId: anchorPlacementId,
+      hOffset: -Math.floor(cursorColumns / 2),
+      vOffset: -Math.floor(cursorRows / 2),
+      columns: cursorColumns,
+      rows: cursorRows,
       zIndex: PI_GRAPHICS_Z.SURFACE,
       passthrough: state.config.passthrough,
     });
     editorCursorRelativePlacement = { imageId, placementId };
     // The cursor anchor remains a single Unicode placeholder cell, while the
     // actual heat image is a larger relative placement centered on that anchor.
+    // Each render gets a fresh transparent parent placement id so kitty cannot
+    // attach the visible cursor to an older same-id anchor elsewhere in the TUI.
     // The relative placement command is emitted inline after the placeholder,
     // not before the TUI renders it, so kitty can resolve the parent position
     // before applying the negative half-width/half-height offsets.
@@ -824,14 +845,20 @@ export default function piGraphicsExtension(pi) {
     // typing stops; high heat adds a short deterministic afterimage behind the
     // latest cursor motion without timers or repaint loops. Row-wide backgrounds
     // are deliberately not cursor-anchored.
-    const anchorLine = anchor.lines[0] ?? null;
+    const anchorLine = buildKittyUnicodePlaceholderLines({
+      imageId: anchorImageId,
+      placementId: anchorPlacementId,
+      columns: 1,
+      rows: 1,
+      width: 1,
+    })[0] ?? null;
     return anchorLine ? `${anchorLine}${relativePlacement}` : null;
   }
 
   function replaceEditorCursorChrome(line, rowWidth = 1) {
     const text = String(line || "");
     if (!text.includes("\x1b[7m")) return line;
-    const match = /\x1b\[7m[^\x1b]*\x1b\[0m/.exec(text);
+    const match = /\x1b\[7m[^\x1b]*\x1b\[(?:0|27)m/.exec(text);
     if (!match) return line;
     const cursorCol = approximateVisibleCells(text.slice(0, match.index));
     const plainText = text.replace(match[0], "|").replace(ZERO_WIDTH_CONTROL_RE, "");
