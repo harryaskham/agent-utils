@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -84,9 +84,9 @@ export const BOX_TYPE_EFFECTS = {
   input: "prism",
   editor: "halo",
   selector: "glyph",
-  login: "weave",
+  login: "keystone",
   model: "caliper",
-  oauth: "weave",
+  oauth: "keystone",
   session: "ribbon",
   settings: "caliper",
   image: "aperture",
@@ -678,6 +678,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 12; x < w; x += 40) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), Math.min(14, w - x), 1, tile, 24);
       fillRectAlpha(pixels, w, x + 5, Math.min(h - 2, mid + 5), Math.min(12, w - x - 5), 1, grout, 22);
+    }
+  } else if (effect === "keystone") {
+    const arch = [
+      Math.min(255, Math.round(color[0] * 0.44 + 106)),
+      Math.min(255, Math.round(color[1] * 0.66 + 72)),
+      Math.min(255, Math.round(color[2] * 0.70 + 76)),
+    ];
+    const seal = [
+      Math.min(255, Math.round(color[0] * 0.78 + 68)),
+      Math.min(255, Math.round(color[1] * 0.46 + 122)),
+      Math.min(255, Math.round(color[2] * 0.50 + 118)),
+    ];
+    // Keystone chrome for login/OAuth panels: sparse arch stones and small
+    // seal pips make authentication feel like a deliberate gateway. It stays
+    // static and low-entropy: short fixed-step rectangles, no glyph dependence.
+    const mid = Math.max(1, Math.floor(h * 0.5));
+    for (let x = 5; x < w; x += 22) {
+      const lift = Math.floor(x / 22) % 4;
+      const y = Math.max(1, Math.min(h - 3, mid - 2 + (lift === 0 ? -1 : lift === 3 ? 1 : 0)));
+      fillRectAlpha(pixels, w, x, y, Math.min(11, w - x), 2, arch, 34);
+      if (lift === 1 || lift === 2) fillRectAlpha(pixels, w, x + 4, Math.min(h - 2, y + 3), Math.min(6, w - x - 4), 1, seal, 34);
+    }
+    for (let x = 14; x < w; x += 44) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 5), 2, Math.min(4, h - 1), seal, 44);
+      fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(12, w - x - 3), 1, arch, 24);
     }
   }
 }
