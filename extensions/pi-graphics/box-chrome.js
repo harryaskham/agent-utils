@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -88,7 +88,7 @@ export const BOX_TYPE_EFFECTS = {
   model: "dial",
   oauth: "keystone",
   session: "ribbon",
-  settings: "caliper",
+  settings: "slider",
   image: "aperture",
   theme: "constellation",
   thinkingSelector: "lantern",
@@ -959,6 +959,32 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 20; x < w; x += 56) {
       fillRectAlpha(pixels, w, x, Math.max(1, mid - 6), Math.min(16, w - x), 1, tick, 20);
       fillRectAlpha(pixels, w, x + 6, Math.min(h - 2, mid + 5), Math.min(12, w - x - 6), 1, needle, 26);
+    }
+  } else if (effect === "slider") {
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.48 + 96)),
+      Math.min(255, Math.round(color[1] * 0.70 + 66)),
+      Math.min(255, Math.round(color[2] * 0.62 + 92)),
+    ];
+    const knob = [
+      Math.min(255, Math.round(color[0] * 0.76 + 62)),
+      Math.min(255, Math.round(color[1] * 0.46 + 116)),
+      Math.min(255, Math.round(color[2] * 0.58 + 104)),
+    ];
+    // Slider chrome for settings panels: sparse rails, stops, and small knobs
+    // make configuration feel adjustable while staying static cached PNG chrome
+    // rather than live input widgets or dense ruler textures.
+    const upper = Math.max(1, Math.floor(h * 0.36));
+    const lower = Math.min(h - 2, Math.floor(h * 0.68));
+    for (let x = 4; x < w; x += 32) {
+      fillRectAlpha(pixels, w, x, upper, Math.min(20, w - x), 1, rail, 30);
+      fillRectAlpha(pixels, w, x + 5, lower, Math.min(17, w - x - 5), 1, rail, 24);
+      const knobY = Math.floor(x / 32) % 2 ? upper - 2 : lower - 2;
+      fillRectAlpha(pixels, w, x + 10, Math.max(1, knobY), 4, 4, knob, 42);
+    }
+    for (let x = 18; x < w; x += 64) {
+      fillRectAlpha(pixels, w, x, Math.max(1, upper - 4), 1, Math.min(8, h - 2), knob, 26);
+      fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, lower + 2), Math.min(12, w - x - 3), 1, rail, 24);
     }
   } else if (effect === "caliper") {
     const rule = [
