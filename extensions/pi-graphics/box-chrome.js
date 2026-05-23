@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -74,7 +74,7 @@ export const BOX_TYPE_EFFECTS = {
   tool: "blueprint",
   bash: "blueprint",
   user: "weave",
-  custom: "sparkle",
+  custom: "constellation",
   skill: "contour",
   branch: "signal",
   compaction: "signal",
@@ -90,7 +90,7 @@ export const BOX_TYPE_EFFECTS = {
   session: "holo",
   settings: "lattice",
   image: "glyph",
-  theme: "glyph",
+  theme: "constellation",
   thinkingSelector: "cloud",
   tree: "blueprint",
   userSelector: "weave",
@@ -421,6 +421,30 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (const x of [2, Math.max(2, w - 15)]) {
       fillRectAlpha(pixels, w, x, Math.max(0, top - 1), Math.min(12, w - x), 2, inner, 46);
       fillRectAlpha(pixels, w, x + 2, Math.min(h - 2, bottom), Math.min(8, w - x - 2), 1, outer, 34);
+    }
+  } else if (effect === "constellation") {
+    const star = [
+      Math.min(255, Math.round(color[0] * 0.72 + 90)),
+      Math.min(255, Math.round(color[1] * 0.65 + 95)),
+      Math.min(255, Math.round(color[2] * 0.70 + 80)),
+    ];
+    const line = [
+      Math.min(255, Math.round(color[0] * 0.32 + 55)),
+      Math.min(255, Math.round(color[1] * 0.48 + 65)),
+      Math.min(255, Math.round(color[2] * 0.88 + 70)),
+    ];
+    // Constellation chrome for custom/theme surfaces: sparse nodes connected by
+    // short chart lines create a bespoke rendered feel without noisy starfields.
+    // Fixed spacing gives O(width / stride) work and small cached strip PNGs.
+    for (let x = 6; x < w; x += 31) {
+      const y = 2 + ((x * 7) % Math.max(1, h - 5));
+      fillRectAlpha(pixels, w, x, y, 2, 2, star, 62);
+      if (x + 9 < w) fillRectAlpha(pixels, w, x + 2, y + (y < h / 2 ? 1 : -1), 8, 1, line, 32);
+      if (x + 15 < w) fillRectAlpha(pixels, w, x + 11, Math.max(1, Math.min(h - 2, y + ((x / 31) % 2 ? 3 : -3))), 2, 2, star, 42);
+    }
+    for (let x = 18; x < w; x += 47) {
+      const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 47) % 3) - 1));
+      fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 1, line, 22);
     }
   }
 }
