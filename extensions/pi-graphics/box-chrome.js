@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "palette", "orbit", "rune", "fold", "nebula", "waveform", "marquee", "ribbon", "aperture", "caliper", "mosaic", "keystone", "dendrite", "braid", "metronome", "veil", "frost", "chamfer", "caret", "badge", "compass", "prompt", "schematic", "manuscript", "lantern", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "manuscript",
@@ -90,7 +90,7 @@ export const BOX_TYPE_EFFECTS = {
   session: "ribbon",
   settings: "slider",
   image: "aperture",
-  theme: "constellation",
+  theme: "palette",
   thinkingSelector: "lantern",
   tree: "dendrite",
   userSelector: "badge",
@@ -748,6 +748,37 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 18; x < w; x += 47) {
       const y = Math.max(1, Math.min(h - 2, Math.floor(h * 0.5) + ((x / 47) % 3) - 1));
       fillRectAlpha(pixels, w, x, y, Math.min(12, w - x), 1, line, 22);
+    }
+  } else if (effect === "palette") {
+    const chipA = [
+      Math.min(255, Math.round(color[0] * 0.70 + 80)),
+      Math.min(255, Math.round(color[1] * 0.42 + 120)),
+      Math.min(255, Math.round(color[2] * 0.52 + 110)),
+    ];
+    const chipB = [
+      Math.min(255, Math.round(color[0] * 0.34 + 130)),
+      Math.min(255, Math.round(color[1] * 0.70 + 72)),
+      Math.min(255, Math.round(color[2] * 0.78 + 58)),
+    ];
+    const tick = [
+      Math.min(255, Math.round(color[0] * 0.28 + 180)),
+      Math.min(255, Math.round(color[1] * 0.28 + 180)),
+      Math.min(255, Math.round(color[2] * 0.38 + 160)),
+    ];
+    // Palette chrome for theme selectors/swatches: small deterministic color
+    // chips and calibration ticks read as theme tooling without relying on
+    // glyphs or high-entropy gradients. Fixed stride keeps PNGs compact.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.72));
+    for (let x = 4; x < w; x += 18) {
+      const phase = Math.floor(x / 18) % 3;
+      const chip = phase === 0 ? color : phase === 1 ? chipA : chipB;
+      fillRectAlpha(pixels, w, x, top + phase, Math.min(9, w - x), 3, chip, 48);
+      fillRectAlpha(pixels, w, x + 2, bottom, Math.min(7, w - x - 2), 1, tick, 34);
+    }
+    for (let x = 12; x < w; x += 41) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), 1, Math.min(9, h - 2), tick, 28);
+      fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, bottom + 2), Math.min(13, w - x - 3), 1, chipB, 24);
     }
   } else if (effect === "orbit") {
     const ring = [
