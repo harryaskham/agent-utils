@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "prism", "holo", "lattice", "contour", "weave", "glyph", "blueprint", "signal", "halo", "constellation", "orbit", "rune", "fold", "nebula", "waveform"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "contour",
@@ -78,7 +78,7 @@ export const BOX_TYPE_EFFECTS = {
   skill: "rune",
   branch: "signal",
   compaction: "fold",
-  footer: "holo",
+  footer: "waveform",
   loader: "signal",
   border: "halo",
   input: "prism",
@@ -99,7 +99,7 @@ export const BOX_TYPE_EFFECTS = {
   customTui: "rune",
   overlay: "prism",
   widget: "lattice",
-  header: "holo",
+  header: "waveform",
 };
 
 function withAlpha([r, g, b], a) {
@@ -546,6 +546,31 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
       const y = 2 + ((x * 5) % Math.max(1, h - 5));
       fillRectAlpha(pixels, w, x, y, 2, 2, glint, 54);
       if (x + 4 < w) fillRectAlpha(pixels, w, x + 3, Math.max(1, y - 1), 1, 4, mist, 28);
+    }
+  } else if (effect === "waveform") {
+    const crest = [
+      Math.min(255, Math.round(color[0] * 0.50 + 105)),
+      Math.min(255, Math.round(color[1] * 0.72 + 65)),
+      Math.min(255, Math.round(color[2] * 0.60 + 110)),
+    ];
+    const trough = [
+      Math.min(255, Math.round(color[0] * 0.30 + 55)),
+      Math.min(255, Math.round(color[1] * 0.52 + 80)),
+      Math.min(255, Math.round(color[2] * 0.86 + 70)),
+    ];
+    // Waveform chrome for persistent header/footer rails: short static signal
+    // crests imply a live session status line without APNG or timers. The strip
+    // is sparse and fixed-stride, so it remains cheap and PNG-compressible.
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    for (let x = 2; x < w; x += 10) {
+      const phase = Math.floor(x / 10) % 4;
+      const y = Math.max(1, Math.min(h - 2, mid + (phase === 0 ? -3 : phase === 1 ? -1 : phase === 2 ? 2 : 0)));
+      fillRectAlpha(pixels, w, x, y, Math.min(7, w - x), 1, phase < 2 ? crest : trough, 38);
+      if (phase === 0 || phase === 2) fillRectAlpha(pixels, w, x + 2, Math.min(h - 1, y + 1), 1, 3, crest, 28);
+    }
+    for (let x = 14; x < w; x += 37) {
+      fillRectAlpha(pixels, w, x, Math.max(1, mid - 4), Math.min(11, w - x), 1, crest, 24);
+      fillRectAlpha(pixels, w, x + 3, Math.min(h - 2, mid + 4), Math.min(9, w - x - 3), 1, trough, 24);
     }
   }
 }
