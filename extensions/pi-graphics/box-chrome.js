@@ -66,7 +66,7 @@ export const BOX_TYPE_THEME_TOKENS = {
   header: "borderAccent",
 };
 
-export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
+export const BOX_EFFECT_NAMES = Object.freeze(["glass", "aurora", "scanline", "circuit", "sparkle", "cloud", "compose", "facet", "prism", "holo", "lattice", "contour", "folio", "manuscript", "note", "tapestry", "weave", "glyph", "blueprint", "signal", "halo", "atelier", "constellation", "swatch", "palette", "satellite", "orbit", "emblem", "crest", "sigil", "rune", "workbench", "panel", "fold", "archive", "nebula", "ticker", "waveform", "masthead", "marquee", "ribbon", "logbook", "ledger", "crop", "lens", "aperture", "console", "caliper", "tile", "mosaic", "portal", "keystone", "grove", "vine", "dendrite", "helix", "braid", "metronome", "shuttle", "hourglass", "veil", "scrim", "frost", "frame", "bevel", "chamfer", "margin", "caret", "tag", "badge", "picker", "sextant", "compass", "terminal", "prompt", "rig", "schematic", "candle", "lantern", "ballot", "choice", "gauge", "dial", "slider", "keyring"]);
 
 export const BOX_TYPE_EFFECTS = {
   assistant: "folio",
@@ -89,7 +89,7 @@ export const BOX_TYPE_EFFECTS = {
   oauth: "keyring",
   session: "logbook",
   settings: "console",
-  image: "lens",
+  image: "crop",
   theme: "swatch",
   thinkingSelector: "ballot",
   tree: "grove",
@@ -2084,6 +2084,42 @@ function paintEffect(pixels, w, h, color, effect = "glass") {
     for (let x = 15; x < w; x += 47) {
       fillRectAlpha(pixels, w, x, mid, Math.min(16, w - x), 1, rule, 24);
       fillRectAlpha(pixels, w, x + 6, Math.max(1, top - 1), Math.min(9, w - x - 6), 1, tab, 22);
+    }
+  } else if (effect === "crop") {
+    const corner = [
+      Math.min(255, Math.round(color[0] * 0.60 + 92)),
+      Math.min(255, Math.round(color[1] * 0.62 + 88)),
+      Math.min(255, Math.round(color[2] * 0.70 + 74)),
+    ];
+    const rail = [
+      Math.min(255, Math.round(color[0] * 0.78 + 58)),
+      Math.min(255, Math.round(color[1] * 0.52 + 112)),
+      Math.min(255, Math.round(color[2] * 0.46 + 132)),
+    ];
+    const stop = [
+      Math.min(255, Math.round(color[0] * 0.30 + 78)),
+      Math.min(255, Math.round(color[1] * 0.72 + 56)),
+      Math.min(255, Math.round(color[2] * 0.54 + 110)),
+    ];
+    // Crop chrome for image choosers: sparse crop corners, focus rails, and
+    // thumbnail stops make image picking feel framed without timers, masks,
+    // glyphs, dense texture, graph layout, animation loops, or repaint churn.
+    const top = Math.max(1, Math.floor(h * 0.22));
+    const mid = Math.max(1, Math.floor(h * 0.52));
+    const bottom = Math.min(h - 2, Math.floor(h * 0.78));
+    for (let x = 5; x < w; x += 31) {
+      fillRectAlpha(pixels, w, x, top, Math.min(11, w - x), 1, corner, 34);
+      fillRectAlpha(pixels, w, x, top, 1, Math.min(5, h - top), corner, 30);
+      fillRectAlpha(pixels, w, x + 5, mid, Math.min(14, w - x - 5), 1, rail, 28);
+      if (x + 17 < w) {
+        fillRectAlpha(pixels, w, x + 17, bottom, Math.min(10, w - x - 17), 1, corner, 30);
+        fillRectAlpha(pixels, w, x + 25, Math.max(1, bottom - 4), 1, 5, corner, 26);
+      }
+      if (x + 12 < w) fillRectAlpha(pixels, w, x + 12, Math.max(1, mid - 2), 2, 2, stop, 36);
+    }
+    for (let x = 18; x < w; x += 62) {
+      fillRectAlpha(pixels, w, x, Math.max(1, top - 1), Math.min(18, w - x), 1, rail, 18);
+      fillRectAlpha(pixels, w, x + 7, Math.min(h - 2, bottom + 1), Math.min(14, w - x - 7), 1, stop, 20);
     }
   } else if (effect === "lens") {
     const glass = [
