@@ -84,6 +84,12 @@ Example settings:
       "heartbeat": false
     },
     "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 },
+    "editor": {
+      "style": "unicode",
+      "cursorStyle": "glow",
+      "trailingWorkspace": false,
+      "rowBackground": false
+    },
     "cell": { "widthPx": 8, "lineHeightScale": 1.2 }
   }
 }
@@ -452,37 +458,35 @@ displayed using kitty Unicode placeholder cells, so:
   selector dialogs from exceeding pi-tui's hard terminal-width guard.
 * Editor border chrome spans the full editor/terminal width instead of being
   capped and center-aligned, so fullscreen terminals keep a visible full-width
-  input frame. In `unicode` editor mode, trailing empty workspace cells after the
-  cursor are filled with Unicode-placeholder glow cells so typed characters
-  naturally replace the graphics. The focused editor cursor itself is also
-  replaced in every editor graphics style with a one-cell glassy Unicode-placeholder
-  cursor, while Pi's zero-width hardware/IME cursor marker is preserved immediately
-  before it for terminal input plumbing. When this graphics cursor styling is
-  active, the extension asks Pi's TUI to hide the hardware cursor so the terminal
-  blink does not fight the styled placeholder; disabling graphics cursor/editor
-  styling restores the previous hardware-cursor setting. The cursor anchor remains
-  a single Unicode placeholder cell, but the visible cursor art is a larger
-  relative kitty placement (roughly 11 columns by 5 rows) centered on that anchor.
-  Each redraw gives the transparent anchor a fresh placement id before attaching
-  the visible image, so kitty cannot resolve the cursor against an older same-id
-  anchor elsewhere in the TUI. The relative placement is emitted inline with the
-  placeholder row and the prior visible cursor placement is deleted by placement
-  id before the next one is attached, preventing stale cursor ghosts when the
-  editor moves. It keeps a bright vertical core in the
-  middle cell while transparent glow has enough transparent padding to avoid
-  clipping at the image edges. The glow colour/radius is bucketed from inferred recent
-  inter-character typing speed and decays after typing stops. Fast cursor motion
-  also selects a deterministic left/right heat-trail variant: forward typing leaves
-  a short afterimage behind the cursor, while backspacing or leftward movement flips
-  the trail to the other side. At medium and high heat, the cursor silhouette gains
-  small graphical bracket ticks and ember caps around the vertical core, so the
-  frame itself visibly changes rather than only the colour. This cursor path is
-  still cache-friendly and timer-free: the extension uploads only bucketed PNG
-  variants and never attaches a row-wide background that drifts as the cursor moves.
-  Placeholder tails still occupy trailing space cells as a caco-compatible fallback
-  and as workspace fill after the cursor; those tails are now heat-bucketed too,
-  so fast typing warms the otherwise calm trailing workspace into a short scanline
-  wake, then cools naturally as the cursor heat decays.
+  input frame. The focused editor cursor is configurable with
+  `piGraphics.editor.cursorStyle` (or `PI_GRAPHICS_EDITOR_CURSOR_STYLE`): `glow`
+  is the default speed-responsive relative Kitty glow, `cell` is the conservative
+  one-cell placeholder cursor, and `off` disables the graphics cursor while the
+  broader editor surface stays enabled. When graphics cursor styling is active,
+  the extension asks Pi's TUI to hide the hardware cursor so the terminal blink
+  does not fight the styled placeholder; disabling graphics cursor/editor styling
+  restores the previous hardware-cursor setting. In `glow` mode, the cursor
+  anchor remains a single Unicode placeholder cell at the text cursor, while the
+  visible cursor art is a larger relative Kitty placement (roughly 11 columns by
+  5 rows) centered on that fresh anchor. Each redraw gives the transparent anchor
+  a fresh placement id before attaching the visible image, so Kitty cannot
+  resolve the cursor against an older same-id anchor elsewhere in the TUI. The
+  prior visible cursor placement is deleted by placement id before the next one
+  is attached, preventing stale cursor ghosts when the editor moves. It keeps a
+  bright vertical core in the middle cell while transparent glow has enough
+  padding to avoid clipping at the image edges. The glow colour/radius is
+  bucketed from inferred recent inter-character typing speed and decays after
+  typing stops. Fast cursor motion also selects a deterministic left/right
+  heat-trail variant: forward typing leaves a short afterimage behind the cursor,
+  while backspacing or leftward movement flips the trail to the other side. At
+  medium and high heat, the cursor silhouette gains small graphical bracket ticks
+  and ember caps around the vertical core, so the frame itself visibly changes
+  rather than only the colour. Optional editor fill effects are separate settings:
+  `piGraphics.editor.trailingWorkspace` / `PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE`
+  fills empty cells after the cursor, and `piGraphics.editor.rowBackground` /
+  `PI_GRAPHICS_EDITOR_ROW_BACKGROUND` enables the row-wide background. Both are
+  off by default because they can visually compete with live typing in narrow or
+  frequently redrawn editors.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative
@@ -494,7 +498,9 @@ displayed using kitty Unicode placeholder cells, so:
   cwd/branch/context/compaction/model/thinking layout while inserting stable
   Unicode-placeholder divider anchors; each divider anchors a low-z relative
   background behind its segment so the footer remains caco/tmux-compatible and
-  width-bounded.
+  width-bounded. Managed Cacophony checkout paths collapse to `~/<project>` so
+  the footer does not waste columns on `.cacophony/agents/.../checkout` and then
+  ellipsize fields even when the visible information would fit.
 * The `⠼ Working...` indicator receives themed Pi graphics flair via custom
   working-indicator frames while preserving Pi's normal loader lifecycle.
 

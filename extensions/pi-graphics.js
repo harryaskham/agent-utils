@@ -148,6 +148,9 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_FRAMES: editor.frames != null ? String(editor.frames) : undefined,
     PI_GRAPHICS_EDITOR_DELAY_MS: editor.delayMs != null ? String(editor.delayMs) : undefined,
     PI_GRAPHICS_EDITOR_STYLE: editor.style != null ? String(editor.style) : undefined,
+    PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor.cursorStyle ?? editor.cursorMode ?? editor.cursorEffect ?? editor.cursor?.style ?? editor.cursor?.mode,
+    PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor.trailingWorkspace ?? editor.workspaceFill ?? features.editorTrailingWorkspace,
+    PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor.rowBackground ?? features.editorRowBackground,
     PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === false ? "0" : "1",
     PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx.exposeRenderTools != null ? String(gfx.exposeRenderTools) : undefined,
     PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
@@ -212,6 +215,21 @@ export default function piGraphicsExtension(pi) {
     if (raw === "animated") return "animated";
     if (raw === "unicode" || raw === "placeholder" || raw === "caco") return "unicode";
     return "static";
+  }
+
+  function editorCursorStyle() {
+    const raw = String(gfxEnv().PI_GRAPHICS_EDITOR_CURSOR_STYLE || "glow").trim().toLowerCase();
+    if (["cell", "simple", "single", "single-cell"].includes(raw)) return "cell";
+    if (["off", "none", "false", "0"].includes(raw)) return "off";
+    return "glow";
+  }
+
+  function editorTrailingWorkspaceEnabled() {
+    return envBool("PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE", false);
+  }
+
+  function editorRowBackgroundEnabled() {
+    return envBool("PI_GRAPHICS_EDITOR_ROW_BACKGROUND", false);
   }
 
   function editorAnimationFrames() {
@@ -328,7 +346,7 @@ export default function piGraphicsExtension(pi) {
     emitGraphicsCommand(buildDeleteCommand({
       imageId: editorCursorRelativePlacement.imageId,
       placementId: editorCursorRelativePlacement.placementId,
-      deleteMode: "i",
+      deleteMode: "p",
       passthrough: state.config.passthrough,
     }));
     editorCursorRelativePlacement = null;
@@ -398,9 +416,11 @@ export default function piGraphicsExtension(pi) {
 
   function prettyFooterCwd(cwd) {
     const home = process.env.HOME;
-    const value = cwd || process.cwd();
+    const value = String(cwd || process.cwd());
+    const managed = value.match(/\.cacophony\/agents\/([^/]+)\/[^/]+\/checkout$/);
+    if (managed) return `~/${managed[1]}`;
     if (home && value === home) return "~";
-    if (home && value?.startsWith?.(`${home}/`)) return `~/${value.slice(home.length + 1)}`;
+    if (home && value.startsWith(`${home}/`)) return `~/${value.slice(home.length + 1)}`;
     return value;
   }
 
@@ -734,14 +754,16 @@ export default function piGraphicsExtension(pi) {
   }
 
   function fillEditorTrailingWorkspace(line) {
-    // Do not fill editable whitespace with placeholder graphics. It competes
-    // with the live editor cursor, makes the editor look full of Unicode glyphs,
-    // and creates confusing static gradients when Pi redraws partial input rows.
-    return line;
+    if (!editorTrailingWorkspaceEnabled() || editorStyle() !== "unicode") return line;
+    const match = String(line || "").match(/ +$/);
+    if (!match || match[0].length < 2) return line;
+    const tail = buildEditorWorkspaceTail(match[0].length, editorCursorHeat);
+    if (!tail) return line;
+    return `${String(line).slice(0, -match[0].length)}${tail}`;
   }
 
   function ensureEditorRowBackground({ parentImageId, parentPlacementId, rowWidth, cursorCol }) {
-    if (!ensureUnicodePlacement(state) || rowWidth < 2) return;
+    if (!editorRowBackgroundEnabled() || !ensureUnicodePlacement(state) || rowWidth < 2) return;
     const safeRowWidth = Math.max(1, Math.min(512, Math.trunc(Number(rowWidth) || 1) - 2));
     const safeCursorCol = Math.max(0, Math.min(safeRowWidth - 1, Math.trunc(Number(cursorCol) || 0)));
     const cell = cellMetrics();
@@ -784,7 +806,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
-    if (!ensureUnicodePlacement(state)) return null;
+    if (!ensureUnicodePlacement(state) || editorCursorStyle() === "off") return null;
     const cell = cellMetrics();
     const heatBucket = Math.max(0, Math.min(5, Math.round((Number(heat) || 0) * 5)));
     const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
@@ -794,33 +816,118 @@ export default function piGraphicsExtension(pi) {
       : heatBucket >= 2
         ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
         : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const key = `editor-cursor-cell-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-    return cachedPlacementLine(key, () => {
+    if (editorCursorStyle() === "cell") {
+      const key = `editor-cursor-cell-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+      return cachedPlacementLine(key, () => {
+        const rendered = renderEditorCursorVline({
+          alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
+          backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+          coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
+          glowColor,
+          columns: 1,
+          rows: 1,
+          heat,
+          glowRadiusCells: 0.35,
+          trailCells: 0,
+          trailDirection,
+          ...cell,
+        });
+        const placement = buildPlacement(state, {
+          name: key,
+          png: rendered.png,
+          columns: rendered.columns,
+          rows: rendered.rows,
+          width: 1,
+          zIndex: PI_GRAPHICS_Z.SURFACE,
+        });
+        emitGraphicsCommand(placement.transmit);
+        editorCursorRelativePlacement = null;
+        return placement.lines[0] ?? null;
+      });
+    }
+
+    const anchorImageId = piGraphicsImageId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(anchorImageId)) {
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: anchorImageId,
+        q: 2,
+      }, transparentPixelPngBase64(), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(anchorImageId);
+      uploadedImages.add(anchorImageId);
+    }
+    editorCursorAnchorSeq = (editorCursorAnchorSeq + 1) % 0x800000;
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}-${editorCursorAnchorSeq}`);
+    emitGraphicsCommand(serializeKittyGraphicsCommand({
+      a: "p",
+      i: anchorImageId,
+      p: anchorPlacementId,
+      U: 1,
+      c: 1,
+      r: 1,
+      z: PI_GRAPHICS_Z.SURFACE,
+      q: 2,
+    }, "", { passthrough: state.config.passthrough }));
+
+    const cursorColumns = 11;
+    const cursorRows = 5;
+    const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!uploadedImages.has(imageId)) {
       const rendered = renderEditorCursorVline({
         alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
         backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
         coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
         glowColor,
-        columns: 1,
-        rows: 1,
+        columns: cursorColumns,
+        rows: cursorRows,
         heat,
-        glowRadiusCells: 0.35,
-        trailCells: 0,
+        glowRadiusCells: 0.9 + heat * 0.9,
+        trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
         trailDirection,
         ...cell,
       });
-      const placement = buildPlacement(state, {
-        name: key,
-        png: rendered.png,
-        columns: rendered.columns,
-        rows: rendered.rows,
-        width: 1,
-        zIndex: PI_GRAPHICS_Z.SURFACE,
-      });
-      emitGraphicsCommand(placement.transmit);
-      editorCursorRelativePlacement = null;
-      return placement.lines[0] ?? null;
+      emitGraphicsCommand(serializeKittyGraphicsChunks({
+        a: "t",
+        f: 100,
+        t: "d",
+        i: imageId,
+        q: 2,
+      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
+      state.ownedImageIds.add(imageId);
+      uploadedImages.add(imageId);
+    }
+    const placementId = piGraphicsPlacementId(`editor-cursor-glow-relative-${editorCursorAnchorSeq}`);
+    if (editorCursorRelativePlacement) {
+      emitGraphicsCommand(buildDeleteCommand({
+        imageId: editorCursorRelativePlacement.imageId,
+        placementId: editorCursorRelativePlacement.placementId,
+        deleteMode: "p",
+        passthrough: state.config.passthrough,
+      }));
+    }
+    const relativePlacement = buildRelativePlacementCommand({
+      imageId,
+      placementId,
+      parentImageId: anchorImageId,
+      parentPlacementId: anchorPlacementId,
+      hOffset: -Math.floor(cursorColumns / 2),
+      vOffset: -Math.floor(cursorRows / 2),
+      columns: cursorColumns,
+      rows: cursorRows,
+      zIndex: PI_GRAPHICS_Z.SURFACE,
+      passthrough: state.config.passthrough,
     });
+    editorCursorRelativePlacement = { imageId, placementId };
+    const anchorLine = buildKittyUnicodePlaceholderLines({
+      imageId: anchorImageId,
+      placementId: anchorPlacementId,
+      columns: 1,
+      rows: 1,
+      width: 1,
+    })[0] ?? null;
+    return anchorLine ? `${anchorLine}${relativePlacement}` : null;
   }
 
   function buildAnchoredEditorCursorPreviewLine({ label, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
@@ -933,8 +1040,8 @@ export default function piGraphicsExtension(pi) {
       ? `${footerState.provider ? `${footerState.provider}/` : ""}${footerState.model}`
       : "model n/a";
     return [
-      { key: "cwd", token: "muted", value: prettyFooterCwd(ctx?.cwd || process.cwd()), truncate: truncateFooterStart, min: 4, max: 34 },
-      { key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 24 },
+      { key: "cwd", token: "muted", value: prettyFooterCwd(ctx?.cwd || process.cwd()), truncate: truncateFooterStart, min: 4, max: 48 },
+      { key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 96 },
       { key: "context", token: "thinkingXhigh", value: context, truncate: truncateFooterEnd, min: 5, max: 18 },
       { key: "compact", token: "borderAccent", value: `${compactFooterModeLabel()} (${footerState.compactions})`, truncate: truncateFooterEnd, min: 5, max: 16 },
       { key: "model", token: "customMessageLabel", value: model, truncate: truncateFooterEnd, min: 16, max: 96, priority: "primary" },
@@ -1668,7 +1775,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function cursorAnchorDiagnosticLine() {
-    return `cursor mode=single-cell placeholder cached variants; relativeGlow=preview-only staleDelete=i reset=0/27`;
+    return `cursor mode=${editorCursorStyle()} configurable; glow=anchored relative speed-responsive; workspaceFill=${editorTrailingWorkspaceEnabled() ? "on" : "off"}; rowBg=${editorRowBackgroundEnabled() ? "on" : "off"}`;
   }
 
   function cursorDoctorLines() {
@@ -1679,7 +1786,7 @@ export default function piGraphicsExtension(pi) {
       visible
         ? "Visible placement is active: if it appears off-cell, use /gfx cursor preview to compare anchored centering or /gfx cursor clear to delete only the live cursor placement."
         : "No live cursor placement is currently recorded; type in the editor to create one, or use /gfx cursor preview for an anchored visual sample.",
-      "Expected live cursor: single-cell placeholder art at the text cursor; larger relative glow is preview-only.",
+      "Expected live cursor: configurable single-cell or speed-responsive anchored glow at the text cursor.",
       "Use /gfx cursor status for this readout without guidance, /gfx cursor preview for a bounded visual sample, /gfx cursor clear for stale placement cleanup.",
       "Reload is only needed after changing settings; doctor does not emit graphics or mutate settings/state.",
     ];
