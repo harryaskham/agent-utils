@@ -458,16 +458,27 @@ export default function piGraphicsExtension(pi) {
     const chars = Array.from(String(text ?? ""));
     if (chars.length <= width) return chars.join("");
     if (width <= 0) return "";
-    if (width === 1) return "…";
-    return `…${chars.slice(chars.length - width + 1).join("")}`;
+    return chars.slice(chars.length - width).join("");
   }
 
   function truncateFooterEnd(text, width) {
     const chars = Array.from(String(text ?? ""));
     if (chars.length <= width) return chars.join("");
     if (width <= 0) return "";
-    if (width === 1) return "…";
-    return `${chars.slice(0, width - 1).join("")}…`;
+    return chars.slice(0, width).join("");
+  }
+
+  function compactFooterModelName(model) {
+    let value = String(model || "").trim();
+    value = value.replace(/-1m-internal$/i, "");
+    value = value.replace(/^gpt-/i, "");
+    value = value.replace(/^claude-/i, "");
+    value = value.replace(/^opus-4-7$/i, "opus-4.7");
+    return value;
+  }
+
+  function noEllipsisFooterText(text, _width) {
+    return String(text ?? "");
   }
 
   function compactFooterModeLabel() {
@@ -1067,15 +1078,16 @@ export default function piGraphicsExtension(pi) {
       ? `${formatFooterPct(footerState.contextPct)}/${formatFooterTokens(footerState.contextMax)}`
       : "context n/a";
     const provider = compactFooterProvider(footerState.provider);
-    const model = footerState.model
-      ? `${provider ? `${provider}/` : ""}${footerState.model}`
+    const modelName = compactFooterModelName(footerState.model);
+    const model = modelName
+      ? `${provider ? `${provider}/` : ""}${modelName}`
       : "model n/a";
     return [
       { key: "cwd", token: "muted", value: prettyFooterCwd(ctx?.cwd || process.cwd()), truncate: truncateFooterStart, min: 4, max: 48 },
       { key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 96 },
       { key: "context", token: "thinkingXhigh", value: context, truncate: truncateFooterEnd, min: 5, max: 18 },
       { key: "compact", token: "borderAccent", value: `${compactFooterModeLabel()} (${footerState.compactions})`, truncate: truncateFooterEnd, min: 5, max: 16 },
-      { key: "model", token: "customMessageLabel", value: model, truncate: truncateFooterEnd, min: 16, max: 96, priority: "primary" },
+      { key: "model", token: "customMessageLabel", value: model, truncate: noEllipsisFooterText, min: Math.max(8, approximateVisibleCells(model)), max: 96, priority: "primary" },
       { key: "thinking", token: "muted", value: pi?.getThinkingLevel?.() || "off", truncate: truncateFooterEnd, min: 3, max: 12 },
     ];
   }
@@ -1088,7 +1100,7 @@ export default function piGraphicsExtension(pi) {
     let budget = terminalWidth - dividerBudget;
     if (budget < rawSegments.length) return null;
     const segments = rawSegments.map((segment) => {
-      const preferred = Math.min(segment.max, approximateVisibleCells(segment.value) + 2);
+      const preferred = Math.min(segment.max, approximateVisibleCells(segment.value));
       return { ...segment, width: Math.max(segment.min, preferred) };
     });
     let used = segments.reduce((sum, segment) => sum + segment.width, 0);
@@ -1206,9 +1218,7 @@ export default function piGraphicsExtension(pi) {
       }
       line += fg(segment.token, segment.text);
     });
-    const visible = approximateVisibleCells(line);
-    const target = Math.max(1, Math.trunc(Number(width) || 1));
-    return visible > target ? truncateFooterEnd(line.replace(ZERO_WIDTH_CONTROL_RE, ""), target) : line;
+    return line;
   }
 
   function installSegmentedFooter(ctx, pi, event) {

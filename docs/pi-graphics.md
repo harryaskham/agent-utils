@@ -511,10 +511,14 @@ displayed using kitty Unicode placeholder cells, so:
   segment so the footer remains caco/tmux-compatible and width-bounded. Long
   paths compact generically by collapsing earlier directories to initials while
   keeping the final directory, e.g. `~/c/a/m/checkout`, rather than special-casing
-  any one checkout layout. Footer provider names are shortened before model
-  layout (`github-copilot` → `ghcp`, `openai` → `oai`, `anthropic` → `ant`,
-  `litellm-openai` → `loai`, `litellm-anthropic` → `lant`, `openrouter` →
-  `oprt`, and `azure-*` → `az`) so the model id gets more visible space.
+  any one checkout layout. Footer segments avoid ellipsis glyphs; when a non-model
+  segment must shrink it is hard-clipped, and the model segment is reserved at its
+  compacted width so the actual model text remains visible. Footer provider names
+  are shortened before model layout (`github-copilot` → `ghcp`, `openai` → `oai`,
+  `anthropic` → `ant`, `litellm-openai` → `loai`, `litellm-anthropic` → `lant`,
+  `openrouter` → `oprt`, and `azure-*` → `az`) and common model prefixes/suffixes
+  are removed (`gpt-*` → `*`, `claude-*` → `*`, `-1m-internal` dropped), so
+  examples render as `ghcp/5.5`, `lant/opus-4.7`, or `lant/sonnet-4-6`.
 * The `⠼ Working...` indicator receives themed Pi graphics flair via custom
   working-indicator frames while preserving Pi's normal loader lifecycle.
 
