@@ -964,6 +964,11 @@ export default function piGraphicsExtension(pi) {
       passthrough: state.config.passthrough,
     });
     editorCursorRelativePlacement = { imageId, placementId };
+    // Emit the child relative placement before the anchor placeholder text is
+    // rendered. Box chrome already follows this ordering; appending the a=p
+    // command after the placeholder row can make plain Kitty display the child
+    // as if its top-left belongs to the anchor cell, ignoring H/V visually.
+    emitGraphicsCommand(relativePlacement);
     const anchorLine = buildKittyUnicodePlaceholderLines({
       imageId: anchorImageId,
       placementId: anchorPlacementId,
@@ -971,7 +976,7 @@ export default function piGraphicsExtension(pi) {
       rows: 1,
       width: 1,
     })[0] ?? null;
-    return anchorLine ? `${anchorLine}${relativePlacement}` : null;
+    return anchorLine;
   }
 
   function buildAnchoredEditorCursorPreviewLine({ label, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
@@ -1055,7 +1060,7 @@ export default function piGraphicsExtension(pi) {
       rows: 1,
       width: 1,
     })[0] ?? "";
-    return `${String(label || "anchored").padEnd(12)} ${anchorLine}${relativePlacement}`;
+    return `${relativePlacement}${String(label || "anchored").padEnd(12)} ${anchorLine}`;
   }
 
   function replaceEditorCursorChrome(line, rowWidth = 1) {
