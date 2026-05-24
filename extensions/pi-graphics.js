@@ -420,7 +420,7 @@ export default function piGraphicsExtension(pi) {
     return chars[0] || Array.from(String(segment || ""))[0] || "";
   }
 
-  function compactFooterPath(path, threshold = 32) {
+  function compactFooterPath(path, threshold = 0) {
     const text = String(path || "");
     if (approximateVisibleCells(text) <= threshold) return text;
     const prefix = text.startsWith("~/") ? "~/" : text.startsWith("/") ? "/" : "";
@@ -1103,7 +1103,7 @@ export default function piGraphicsExtension(pi) {
 
   const FOOTER_DIVIDER_WIDTH = 3;
 
-  function fitFooterSegments(rawSegments, width) {
+  function fitFooterSegments(rawSegments, width, { absorbSpare = true } = {}) {
     const terminalWidth = Math.max(1, Math.trunc(Number(width) || 1));
     const dividerBudget = Math.max(0, rawSegments.length - 1) * FOOTER_DIVIDER_WIDTH;
     let budget = terminalWidth - dividerBudget;
@@ -1127,7 +1127,7 @@ export default function piGraphicsExtension(pi) {
       }
       if (!changed) break;
     }
-    if (used < budget && segments.length) {
+    if (absorbSpare && used < budget && segments.length) {
       const modelSegment = segments.find((segment) => segment.key === "model");
       const spare = budget - used;
       if (modelSegment) modelSegment.width += spare;
@@ -1139,6 +1139,12 @@ export default function piGraphicsExtension(pi) {
       const padded = `${text}${" ".repeat(Math.max(0, innerWidth - approximateVisibleCells(text)))}`;
       return { ...segment, text: padded };
     });
+  }
+
+  function footerSegmentsWidth(segments) {
+    if (!Array.isArray(segments) || segments.length === 0) return 0;
+    return segments.reduce((sum, segment) => sum + approximateVisibleCells(segment.text), 0)
+      + Math.max(0, segments.length - 1) * FOOTER_DIVIDER_WIDTH;
   }
 
   function ensureFooterSegmentBackground({ anchor, segmentKey, index, width, token }) {
@@ -1209,23 +1215,36 @@ export default function piGraphicsExtension(pi) {
 
   function buildSegmentedFooterLine(ctx, footerData, width, pi, theme = activeThemeRef) {
     const rawSegments = footerSegmentValues(ctx, footerData, pi);
-    const fitted = fitFooterSegments(rawSegments, width);
-    if (!fitted) return truncateFooterEnd(" pi graphics ", Math.max(1, Math.trunc(Number(width) || 1)));
+    const target = Math.max(1, Math.trunc(Number(width) || 1));
     const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
-    let line = "";
-    fitted.forEach((segment, index) => {
-      if (index > 0) {
-        const divider = buildFooterDividerCell(segment.key, index, segment.token);
-        if (divider && typeof divider === "object") {
-          ensureFooterSegmentBackground({ anchor: divider, segmentKey: segment.key, index, width: approximateVisibleCells(segment.text), token: segment.token });
-          line += divider.cell;
-        } else {
-          line += divider;
+    const renderSegments = (segments, indexOffset = 0) => {
+      let line = "";
+      segments.forEach((segment, index) => {
+        if (index > 0) {
+          const divider = buildFooterDividerCell(segment.key, index + indexOffset, segment.token);
+          if (divider && typeof divider === "object") {
+            ensureFooterSegmentBackground({ anchor: divider, segmentKey: segment.key, index: index + indexOffset, width: approximateVisibleCells(segment.text), token: segment.token });
+            line += divider.cell;
+          } else {
+            line += divider;
+          }
         }
-      }
-      line += fg(segment.token, segment.text);
-    });
-    return line;
+        line += fg(segment.token, segment.text);
+      });
+      return line;
+    };
+
+    const left = fitFooterSegments(rawSegments.slice(0, 4), target, { absorbSpare: false });
+    const right = fitFooterSegments(rawSegments.slice(4), target, { absorbSpare: false });
+    const leftWidth = footerSegmentsWidth(left);
+    const rightWidth = footerSegmentsWidth(right);
+    if (left && right && leftWidth + 1 + rightWidth <= target) {
+      return `${renderSegments(left)}${" ".repeat(target - leftWidth - rightWidth)}${renderSegments(right, left.length)}`;
+    }
+
+    const fitted = fitFooterSegments(rawSegments, target);
+    if (!fitted) return truncateFooterEnd(" pi graphics ", target);
+    return renderSegments(fitted);
   }
 
   function installSegmentedFooter(ctx, pi, event) {

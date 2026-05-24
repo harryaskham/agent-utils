@@ -509,7 +509,10 @@ displayed using kitty Unicode placeholder cells, so:
   divider. The divider uses a dedicated 3×1 PNG renderer with transparent edge
   padding, a centered thin vertical bar, and mild glow to either side so Kitty
   resampling does not clip the glow at the cell boundary. Each divider anchors a low-z relative background behind the following
-  segment so the footer remains caco/tmux-compatible and width-bounded. Long
+  segment so the footer remains caco/tmux-compatible and width-bounded. In wide
+  terminals the footer lays out cwd/branch/context/compaction as a left group and
+  keeps model plus thinking level together as a right-aligned group, leaving open
+  space between the groups rather than inserting a divider after compaction. Long
   paths compact generically by collapsing earlier directories to initials while
   keeping the final directory, e.g. `~/c/a/m/checkout`, rather than special-casing
   any one checkout layout. Footer segments avoid ellipsis glyphs; when a non-model
