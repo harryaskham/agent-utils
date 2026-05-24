@@ -403,7 +403,8 @@ displayed using kitty Unicode placeholder cells, so:
   `unicode` mode, animated editor border, and every box-effect variant;
   `/gfx` with no arguments opens a Pi-native settings overlay with quick previews;
   `/gfx status` prints the text summary, including the live cursor anchoring
-  diagnostic line. `/gfx box-effect <name>` can select a specific effect or
+  diagnostic line and the default-on box chrome state unless `piGraphics.boxChrome`
+  is explicitly `false`. `/gfx box-effect <name>` can select a specific effect or
   `/gfx box-effect auto` can return to per-message-type effects.
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
   placeholder cells. `/gfx box status` prints box mode, forced-vs-per-type effect

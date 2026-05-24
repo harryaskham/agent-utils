@@ -2013,7 +2013,7 @@ export default function piGraphicsExtension(pi) {
           `  mode:           ${gfx.mode ?? "on"}`,
           `  theme:          ${settings.theme || gfx.theme || "(default)"}`,
           `  editor.style:   ${editor.style ?? "static"} (also: unicode|animated)`,
-          `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
+          `  box chrome:     ${gfx.boxChrome === false ? "off" : "on"}`,
           `  box mode:       ${gfx.boxMode || "relative"} (also: unicode)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
           `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary|effects|tokens|doctor|preview)`,

@@ -1416,6 +1416,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-doctor"/);
   assert.match(source, /\["doctor", "help", "why"\]\.includes/);
   assert.match(source, /boxChromeDoctorLines\(settings\)\.join\("\\n"\)/);
+  assert.match(source, /`  box chrome:     \$\{gfx\.boxChrome === false \? "off" : "on"\}`/);
+  assert.doesNotMatch(source, /`  box chrome:     \$\{gfx\.boxChrome === true \? "on" : "off"\}`/);
   assert.match(source, /`  box registry:   \$\{boxChromeRegistryCountLine\(\)\} \(\/gfx box status\|summary\|effects\|tokens\|doctor\|preview\)`/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
