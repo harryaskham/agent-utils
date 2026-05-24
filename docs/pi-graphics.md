@@ -407,6 +407,8 @@ displayed using kitty Unicode placeholder cells, so:
   state, mapped surface count, unique effect count, and the registry mapping without
   emitting preview graphics or changing settings. `/gfx box summary` is the compact
   no-render view: it groups mapped surfaces by effect for quick registry audits.
+  `/gfx box doctor` explains which of status, summary, preview, `box-effect auto`,
+  and relative/unicode mode to use next without rendering or mutating settings.
   `/gfx box preview` emits bounded representative per-surface
   box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, so every mapped
   surface appears automatically as new chrome families are added. The preview

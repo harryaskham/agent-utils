@@ -1399,6 +1399,13 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-summary"/);
   assert.match(source, /\["summary", "groups", "grouped"\]\.includes/);
   assert.match(source, /boxChromeSummaryLines\(\)\.join\("\\n"\)/);
+  assert.match(source, /function boxChromeDoctorLines\(settings = readJsonIfExists\(agentSettingsPath\(\)\) \|\| \{\}\)/);
+  assert.match(source, /Pi Graphics box doctor/);
+  assert.match(source, /Use \/gfx box-effect auto to restore per-surface mappings after forcing one effect\./);
+  assert.match(source, /Use \/gfx box-mode relative for kitty side chrome/);
+  assert.match(source, /action === "box-doctor"/);
+  assert.match(source, /\["doctor", "help", "why"\]\.includes/);
+  assert.match(source, /boxChromeDoctorLines\(settings\)\.join\("\\n"\)/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
   assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
@@ -1412,6 +1419,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-preview"/);
   assert.match(source, /\/gfx box status shows mappings without rendering/);
   assert.match(source, /\/gfx box summary groups mapped surfaces by effect/);
+  assert.match(source, /\/gfx box doctor explains box status\/summary\/preview next steps/);
   assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);

@@ -1855,6 +1855,24 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function boxChromeDoctorLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
+    const gfx = settings.piGraphics || {};
+    const groups = boxChromeEffectGroups();
+    const surfaceCount = groups.reduce((sum, group) => sum + group.types.length, 0);
+    const forced = gfx.boxEffect ? `forced to ${gfx.boxEffect}` : "per-surface auto mappings";
+    return [
+      "Pi Graphics box doctor",
+      `Current: box=${gfx.boxChrome === false ? "off" : "on"}, mode=${gfx.boxMode || "relative"}, effect=${forced}.`,
+      `Registry: ${surfaceCount} mapped surfaces grouped by ${groups.length} effects.`,
+      "Use /gfx box status for the full surface → effect mapping.",
+      "Use /gfx box summary for a compact effect → surfaces audit.",
+      "Use /gfx box preview for bounded visual strips; it renders graphics but does not change piGraphics.boxEffect.",
+      "Use /gfx box-effect auto to restore per-surface mappings after forcing one effect.",
+      "Use /gfx box-mode relative for kitty side chrome, or /gfx box-mode unicode for placeholder-only side borders.",
+      "No graphics were emitted or settings changed.",
+    ];
+  }
+
   function buildBoxEffectPreviewLines() {
     if (!ensureUnicodePlacement(state)) {
       return graphicsPreviewUnavailableLines("box");
@@ -1935,6 +1953,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("  model=dial  settings=slider  thinking=lantern");
         lines.push("  /gfx box status shows mappings without rendering.");
         lines.push("  /gfx box summary groups mapped surfaces by effect.");
+        lines.push("  /gfx box doctor explains box status/summary/preview next steps.");
         lines.push("  /gfx box preview shows per-surface chrome strips.");
         lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
         lines.push("  /gfx cursor status prints diagnostics without rendering.");
@@ -1976,7 +1995,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box summary|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box summary|box doctor|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1996,7 +2015,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box summary | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box summary | /gfx box doctor | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -2052,6 +2071,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "box-summary" || (action === "box" && ["summary", "groups", "grouped"].includes(String(tokens[1] || "").toLowerCase()))) {
         ctx.ui.notify(boxChromeSummaryLines().join("\n"), "info");
+        return;
+      }
+      if (action === "box-doctor" || (action === "box" && ["doctor", "help", "why"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(boxChromeDoctorLines(settings).join("\n"), "info");
         return;
       }
       if (action === "box-preview" || (action === "box" && String(tokens[1] || "").toLowerCase() === "preview")) {
