@@ -183,9 +183,12 @@ rendered. The extension complements those flat colors with graphical affordances
   component chrome: left activity rails, title strips, status chips, content
   skeleton rows, bottom pulse waveforms, scanlines, tone palettes, and stable
   layout cache keys that deliberately exclude animation phase.
-* **Animated APNG pulses** — multiple TUI component phases packaged into one
-  kitty-compatible animated PNG, so a continuously glowing/pulsing component
-  can be uploaded once instead of re-sending a stream of static frames.
+* **Animated-looking pulse assets** — multiple TUI component phases can still be
+  packaged into APNG files for offline/contact-sheet inspection, but live Pi/tmux
+  sessions should not rely on terminal-driven APNG playback. In practice the
+  reliable live path is Kitty's explicit current-frame control (`a=a,c=<frame>`)
+  driven by the extension; native `s=3` loops and APNG playback are treated as
+  diagnostic/experimental until they are proven to repaint in the target terminal.
 * **Rendered terminal scenes** — `pi_graphics_render_terminal_scene` draws a
   full pixel-level terminal surface (cell grid, deep-Nordic vertical gradient,
   aurora radial glows, status chips, scanlines, and bottom waveform) as PNG or
@@ -469,9 +472,9 @@ displayed using kitty Unicode placeholder cells, so:
   a short afterimage behind the cursor, while backspacing or leftward movement flips
   the trail to the other side. At medium and high heat, the cursor silhouette gains
   small graphical bracket ticks and ember caps around the vertical core, so the
-  frame itself visibly changes rather than only the colour. This is still
-  cache-friendly and timer-free: the extension uploads only bucketed PNG variants
-  and never attaches a row-wide background that drifts as the cursor moves.
+  frame itself visibly changes rather than only the colour. This cursor path is
+  still cache-friendly and timer-free: the extension uploads only bucketed PNG
+  variants and never attaches a row-wide background that drifts as the cursor moves.
   Placeholder tails still occupy trailing space cells as a caco-compatible fallback
   and as workspace fill after the cursor; those tails are now heat-bucketed too,
   so fast typing warms the otherwise calm trailing workspace into a short scanline

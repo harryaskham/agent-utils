@@ -4,7 +4,9 @@ import test from "node:test";
 
 import {
   KITTY_UNICODE_PLACEHOLDER,
+  buildAnimationFrameCommand,
   buildAnimationLoopCommand,
+  buildAnimationStopCommand,
   buildKittyUnicodePlaceholderCell,
   buildKittyUnicodePlaceholderLines,
   buildPngCursorAnimationUpload,
@@ -192,6 +194,12 @@ test("animation loop command uses terminal-managed infinite playback", () => {
   const serialized = buildAnimationLoopCommand({ imageId: 77, passthrough: "none" });
   assert.equal(serialized, `${ESC}_Ga=a,i=77,s=3,v=1,q=2${ESC}\\`);
   assert.doesNotMatch(serialized, /c=/);
+});
+
+test("manual animation controls select frames and stop native loops", () => {
+  assert.equal(buildAnimationFrameCommand({ imageId: 77, frame: 3, passthrough: "none" }), `${ESC}_Ga=a,i=77,c=3,q=2${ESC}\\`);
+  assert.equal(buildAnimationFrameCommand({ imageId: 77, frame: 0, passthrough: "none" }), `${ESC}_Ga=a,i=77,c=1,q=2${ESC}\\`);
+  assert.equal(buildAnimationStopCommand({ imageId: 77, passthrough: "none" }), `${ESC}_Ga=a,i=77,s=1,q=2${ESC}\\`);
 });
 
 test("Unicode placeholder lines encode image id, placement id, rows, and scrollable cells", () => {

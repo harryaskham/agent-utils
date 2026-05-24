@@ -326,6 +326,42 @@ export function buildAnimationLoopCommand({
   }, "", { passthrough, env });
 }
 
+export function buildAnimationFrameCommand({
+  imageId,
+  frame,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  if (!Number.isFinite(Number(imageId)) || Number(imageId) <= 0) {
+    throw new Error("buildAnimationFrameCommand requires a positive imageId");
+  }
+  const currentFrame = Math.max(1, Math.trunc(Number(frame) || 1));
+  return serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    c: currentFrame,
+    q: quiet,
+  }, "", { passthrough, env });
+}
+
+export function buildAnimationStopCommand({
+  imageId,
+  quiet = 2,
+  passthrough = "auto",
+  env = process.env,
+} = {}) {
+  if (!Number.isFinite(Number(imageId)) || Number(imageId) <= 0) {
+    throw new Error("buildAnimationStopCommand requires a positive imageId");
+  }
+  return serializeKittyGraphicsCommand({
+    a: "a",
+    i: imageId,
+    s: 1,
+    q: quiet,
+  }, "", { passthrough, env });
+}
+
 export function buildPngCursorPlacementCommand({
   imageId,
   placementId,

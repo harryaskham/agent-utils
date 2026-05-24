@@ -52,7 +52,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import {
-  buildAnimationLoopCommand,
+  buildAnimationFrameCommand,
+  buildAnimationStopCommand,
   buildKittyUnicodePlaceholderCell,
   buildKittyUnicodePlaceholderLines,
   buildPngCursorAnimationUpload,
@@ -297,6 +298,7 @@ export default function piGraphicsExtension(pi) {
   const uploadedImages = new Set();
   const relativeUploaded = new Set();
   const placementLineCache = new Map();
+  const animationTimers = new Map();
   let editorBackgroundPlacementKey = null;
   let editorCursorLastText = "";
   let editorCursorLastAt = 0;
@@ -308,7 +310,13 @@ export default function piGraphicsExtension(pi) {
   let editorCursorRelativePlacement = null;
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
 
+  function stopManualAnimationLoops() {
+    for (const timer of animationTimers.values()) clearInterval(timer);
+    animationTimers.clear();
+  }
+
   function resetGraphicsUploadCaches() {
+    stopManualAnimationLoops();
     uploadedImages.clear();
     relativeUploaded.clear();
     placementLineCache.clear();
@@ -320,7 +328,7 @@ export default function piGraphicsExtension(pi) {
     emitGraphicsCommand(buildDeleteCommand({
       imageId: editorCursorRelativePlacement.imageId,
       placementId: editorCursorRelativePlacement.placementId,
-      deleteMode: "p",
+      deleteMode: "i",
       passthrough: state.config.passthrough,
     }));
     editorCursorRelativePlacement = null;
@@ -483,9 +491,25 @@ export default function piGraphicsExtension(pi) {
     uploadedImages.add(anchorImageId);
   }
 
+  function ensureManualAnimationLoop({ imageId, frames, delayMs }) {
+    const frameCount = Math.max(1, Math.trunc(Number(frames) || 1));
+    if (frameCount <= 1 || animationTimers.has(imageId)) return;
+    let frame = 1;
+    const intervalMs = Math.max(50, Math.trunc(Number(delayMs) || 100));
+    const tick = () => {
+      frame = frame >= frameCount ? 1 : frame + 1;
+      emitGraphicsCommand(buildAnimationFrameCommand({
+        imageId,
+        frame,
+        passthrough: state.config.passthrough,
+      }));
+    };
+    animationTimers.set(imageId, setInterval(tick, intervalMs));
+  }
+
   function ensureRelativeAnimUploaded({ animImageId, anchorImageId, anchorPlacementId, animPlacementId, pngs, delayMs, columns, rows, frames }) {
     const key = `${animImageId}->${anchorImageId}/${anchorPlacementId}`;
-    if (relativeUploaded.has(key)) return;
+    const alreadyPlaced = relativeUploaded.has(key);
     // Upload animation frames to the non-virtual animated image id.
     if (!uploadedImages.has(animImageId)) {
       const upload = buildPngCursorAnimationUpload({
@@ -498,27 +522,25 @@ export default function piGraphicsExtension(pi) {
       state.ownedImageIds.add(animImageId);
       uploadedImages.add(animImageId);
     }
-    // Create a relative non-virtual placement attached to the anchor.
-    const rel = buildRelativePlacementCommand({
-      imageId: animImageId,
-      placementId: animPlacementId,
-      parentImageId: anchorImageId,
-      parentPlacementId: anchorPlacementId,
-      columns,
-      rows,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
-      passthrough: state.config.passthrough,
-    });
-    // Now that the non-virtual relative placement exists, let the terminal run
-    // the animation loop natively. The earlier U=1 virtual placement path did
-    // not repaint on s=3/v=1, but relative placements are ordinary placements
-    // whose position is inherited from the virtual anchor.
-    const start = buildAnimationLoopCommand({
-      imageId: animImageId,
-      passthrough: state.config.passthrough,
-    });
-    emitGraphicsCommand(`${rel}${start}`);
-    relativeUploaded.add(key);
+    if (!alreadyPlaced) {
+      // Create a relative non-virtual placement attached to the anchor.
+      const rel = buildRelativePlacementCommand({
+        imageId: animImageId,
+        placementId: animPlacementId,
+        parentImageId: anchorImageId,
+        parentPlacementId: anchorPlacementId,
+        columns,
+        rows,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+        passthrough: state.config.passthrough,
+      });
+      // In practice, terminal-driven APNG/native frame loops have not repainted
+      // reliably in Pi/tmux sessions. Use the protocol's client-driven current
+      // frame control instead; this is the path Harry confirmed actually moves.
+      emitGraphicsCommand(`${rel}${buildAnimationStopCommand({ imageId: animImageId, passthrough: state.config.passthrough })}`);
+      relativeUploaded.add(key);
+    }
+    ensureManualAnimationLoop({ imageId: animImageId, frames, delayMs });
   }
 
   function buildEditorBorderRow(width, edge) {
@@ -712,12 +734,10 @@ export default function piGraphicsExtension(pi) {
   }
 
   function fillEditorTrailingWorkspace(line) {
-    if (editorStyle() !== "unicode") return line;
-    const match = String(line || "").match(/ +$/);
-    if (!match || match[0].length < 2) return line;
-    const tail = buildEditorWorkspaceTail(match[0].length, editorCursorHeat);
-    if (!tail) return line;
-    return `${String(line).slice(0, -match[0].length)}${tail}`;
+    // Do not fill editable whitespace with placeholder graphics. It competes
+    // with the live editor cursor, makes the editor look full of Unicode glyphs,
+    // and creates confusing static gradients when Pi redraws partial input rows.
+    return line;
   }
 
   function ensureEditorRowBackground({ parentImageId, parentPlacementId, rowWidth, cursorCol }) {
@@ -767,105 +787,40 @@ export default function piGraphicsExtension(pi) {
     if (!ensureUnicodePlacement(state)) return null;
     const cell = cellMetrics();
     const heatBucket = Math.max(0, Math.min(5, Math.round((Number(heat) || 0) * 5)));
+    const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
+    const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
     const glowColor = heatBucket >= 4
       ? "#ff9f5a"
       : heatBucket >= 2
         ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
         : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const anchorImageId = piGraphicsImageId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(anchorImageId)) {
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: anchorImageId,
-        q: 2,
-      }, transparentPixelPngBase64(), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(anchorImageId);
-      uploadedImages.add(anchorImageId);
-    }
-    editorCursorAnchorSeq = (editorCursorAnchorSeq + 1) % 0x800000;
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}-${editorCursorAnchorSeq}`);
-    emitGraphicsCommand(serializeKittyGraphicsCommand({
-      a: "p",
-      i: anchorImageId,
-      p: anchorPlacementId,
-      U: 1,
-      c: 1,
-      r: 1,
-      z: PI_GRAPHICS_Z.SURFACE,
-      q: 2,
-    }, "", { passthrough: state.config.passthrough }));
-    const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
-    const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
-    const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(imageId)) {
+    const key = `editor-cursor-cell-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    return cachedPlacementLine(key, () => {
       const rendered = renderEditorCursorVline({
         alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
         backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
         coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
         glowColor,
-        columns: 11,
-        rows: 5,
+        columns: 1,
+        rows: 1,
         heat,
-        glowRadiusCells: 0.9 + heat * 0.9,
-        trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
+        glowRadiusCells: 0.35,
+        trailCells: 0,
         trailDirection,
         ...cell,
       });
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: imageId,
-        q: 2,
-      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(imageId);
-      uploadedImages.add(imageId);
-    }
-    const placementId = piGraphicsPlacementId("editor-cursor-glow-relative");
-    if (editorCursorRelativePlacement) {
-      emitGraphicsCommand(buildDeleteCommand({
-        imageId: editorCursorRelativePlacement.imageId,
-        placementId: editorCursorRelativePlacement.placementId,
-        deleteMode: "p",
-        passthrough: state.config.passthrough,
-      }));
-    }
-    const cursorColumns = 11;
-    const cursorRows = 5;
-    const relativePlacement = buildRelativePlacementCommand({
-      imageId,
-      placementId,
-      parentImageId: anchorImageId,
-      parentPlacementId: anchorPlacementId,
-      hOffset: -Math.floor(cursorColumns / 2),
-      vOffset: -Math.floor(cursorRows / 2),
-      columns: cursorColumns,
-      rows: cursorRows,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
-      passthrough: state.config.passthrough,
+      const placement = buildPlacement(state, {
+        name: key,
+        png: rendered.png,
+        columns: rendered.columns,
+        rows: rendered.rows,
+        width: 1,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+      });
+      emitGraphicsCommand(placement.transmit);
+      editorCursorRelativePlacement = null;
+      return placement.lines[0] ?? null;
     });
-    editorCursorRelativePlacement = { imageId, placementId };
-    // The cursor anchor remains a single Unicode placeholder cell, while the
-    // actual heat image is a larger relative placement centered on that anchor.
-    // Each render gets a fresh transparent parent placement id so kitty cannot
-    // attach the visible cursor to an older same-id anchor elsewhere in the TUI.
-    // The relative placement command is emitted inline after the placeholder,
-    // not before the TUI renders it, so kitty can resolve the parent position
-    // before applying the negative half-width/half-height offsets.
-    // Heat is inferred from recent editor text deltas and naturally decays when
-    // typing stops; high heat adds a short deterministic afterimage behind the
-    // latest cursor motion without timers or repaint loops. Row-wide backgrounds
-    // are deliberately not cursor-anchored.
-    const anchorLine = buildKittyUnicodePlaceholderLines({
-      imageId: anchorImageId,
-      placementId: anchorPlacementId,
-      columns: 1,
-      rows: 1,
-      width: 1,
-    })[0] ?? null;
-    return anchorLine ? `${anchorLine}${relativePlacement}` : null;
   }
 
   function buildAnchoredEditorCursorPreviewLine({ label, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
@@ -1713,7 +1668,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function cursorAnchorDiagnosticLine() {
-    return `cursor anchorSeq=${editorCursorAnchorSeq} visiblePlacement=${editorCursorRelativePlacement?.placementId ?? "none"} offsets=-5,-2 staleDelete=p reset=0/27`;
+    return `cursor mode=single-cell placeholder cached variants; relativeGlow=preview-only staleDelete=i reset=0/27`;
   }
 
   function cursorDoctorLines() {
@@ -1724,7 +1679,7 @@ export default function piGraphicsExtension(pi) {
       visible
         ? "Visible placement is active: if it appears off-cell, use /gfx cursor preview to compare anchored centering or /gfx cursor clear to delete only the live cursor placement."
         : "No live cursor placement is currently recorded; type in the editor to create one, or use /gfx cursor preview for an anchored visual sample.",
-      "Expected live centering: fresh transparent anchor placement each redraw, 11x5 visible art, offsets -5,-2, stale cleanup by placement id.",
+      "Expected live cursor: single-cell placeholder art at the text cursor; larger relative glow is preview-only.",
       "Use /gfx cursor status for this readout without guidance, /gfx cursor preview for a bounded visual sample, /gfx cursor clear for stale placement cleanup.",
       "Reload is only needed after changing settings; doctor does not emit graphics or mutate settings/state.",
     ];
