@@ -1855,6 +1855,20 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function boxChromeAuditLines() {
+    return [
+      "Pi Graphics box audit index",
+      `Registry: ${boxChromeRegistryCountLine()}`,
+      "/gfx box status  — no-render full surface → effect mapping and current mode.",
+      "/gfx box summary — no-render compact effect → surfaces grouping.",
+      "/gfx box effects — no-render selectable effects, mapped vs explicit variants.",
+      "/gfx box tokens  — no-render theme-token color groups by surface.",
+      "/gfx box doctor  — no-render guidance for status, modes, and recovery.",
+      "/gfx box preview — bounded rendered strips; emits graphics but does not change settings.",
+      "No graphics were emitted or settings changed.",
+    ];
+  }
+
   function boxChromeDoctorLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
     const forced = gfx.boxEffect ? `forced to ${gfx.boxEffect}` : "per-surface auto mappings";
@@ -1953,6 +1967,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("", "Preview:");
         lines.push("  assistant=folio  tool=rig  oauth=token");
         lines.push("  model=gauge  settings=console  thinking=candle");
+        lines.push("  /gfx box audit indexes every box inspection command.");
         lines.push("  /gfx box status shows mappings without rendering.");
         lines.push("  /gfx box summary groups mapped surfaces by effect.");
         lines.push("  /gfx box effects lists mapped and explicit variants.");
@@ -1999,7 +2014,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box summary|box effects|box tokens|box doctor|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box audit|box status|box summary|box effects|box tokens|box doctor|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -2020,7 +2035,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box audit | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
@@ -2068,6 +2083,10 @@ export default function piGraphicsExtension(pi) {
       if (action === "cursor-clear" || (action === "cursor" && ["clear", "reset", "cleanup"].includes(String(tokens[1] || "").toLowerCase()))) {
         const cleared = clearEditorCursorPlacement();
         ctx.ui.notify(cleared ? "Pi Graphics cursor placement cleared; it will re-anchor on the next editor render." : "Pi Graphics cursor placement was already clear.", "info");
+        return;
+      }
+      if (action === "box-audit" || (action === "box" && ["audit", "audits", "index", "commands"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(boxChromeAuditLines().join("\n"), "info");
         return;
       }
       if (action === "box-status" || (action === "box" && ["status", "mappings", "map"].includes(String(tokens[1] || "").toLowerCase()))) {

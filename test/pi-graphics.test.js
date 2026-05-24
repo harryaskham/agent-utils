@@ -1391,10 +1391,17 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /Pi Graphics box theme tokens/);
   assert.match(source, /theme token → surfaces:/);
   assert.match(source, /Use \/gfx box summary for a compact effect-grouped audit\./);
+  assert.match(source, /function boxChromeAuditLines\(\)/);
+  assert.match(source, /Pi Graphics box audit index/);
+  assert.match(source, /\/gfx box status  — no-render full surface → effect mapping and current mode\./);
+  assert.match(source, /\/gfx box preview — bounded rendered strips; emits graphics but does not change settings\./);
   assert.match(source, /function boxChromeStatusLines\(settings = readJsonIfExists\(agentSettingsPath\(\)\) \|\| \{\}\)/);
   assert.match(source, /Pi Graphics box status/);
   assert.match(source, /surface → effect:/);
   assert.match(source, /No graphics were emitted or settings changed\./);
+  assert.match(source, /action === "box-audit"/);
+  assert.match(source, /\["audit", "audits", "index", "commands"\]\.includes/);
+  assert.match(source, /boxChromeAuditLines\(\)\.join\("\\n"\)/);
   assert.match(source, /action === "box-status"/);
   assert.match(source, /\["status", "mappings", "map"\]\.includes/);
   assert.match(source, /boxChromeStatusLines\(settings\)\.join\("\\n"\)/);
@@ -1424,6 +1431,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /`  box effect:     \$\{gfx\.boxEffect \|\| "per-type"\} \(also: \$\{BOX_EFFECT_NAMES\.join/);
   assert.doesNotMatch(source, /unknown box effect: \$\{value\} \(use \$\{BOX_EFFECT_NAMES\.join/);
   assert.match(source, /`  box registry:   \$\{boxChromeRegistryCountLine\(\)\} \(\/gfx box status\|summary\|effects\|tokens\|doctor\|preview\)`/);
+  assert.match(source, /\/gfx box audit indexes every box inspection command/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
   assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
@@ -1443,6 +1451,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /model=gauge  settings=console  thinking=candle/);
   assert.doesNotMatch(source, /assistant=manuscript  tool=schematic  oauth=keyring/);
   assert.doesNotMatch(source, /model=dial  settings=slider  thinking=lantern/);
+  assert.match(source, /\/gfx box audit indexes every box inspection command/);
   assert.match(source, /\/gfx box status shows mappings without rendering/);
   assert.match(source, /\/gfx box summary groups mapped surfaces by effect/);
   assert.match(source, /\/gfx box effects lists mapped and explicit variants/);

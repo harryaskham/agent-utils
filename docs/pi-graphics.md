@@ -413,7 +413,8 @@ displayed using kitty Unicode placeholder cells, so:
   state, mapped surface count, unique effect count, and the registry mapping without
   emitting preview graphics or changing settings. Ordinary `/gfx status` includes
   mapped surface, unique-effect, and theme-token counts with a pointer to the full
-  box audit ladder: `/gfx box status`, `summary`, `effects`, `tokens`, `doctor`, and `preview`.
+  box audit ladder. `/gfx box audit` is a no-render command index for `/gfx box status`,
+  `summary`, `effects`, `tokens`, `doctor`, and `preview`.
   `/gfx box summary` is the compact
   no-render view: it groups mapped surfaces by effect for quick registry audits.
   `/gfx box effects` lists all selectable effects and splits currently mapped
