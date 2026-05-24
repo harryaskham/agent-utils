@@ -232,6 +232,35 @@ export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightS
   };
 }
 
+export function renderFooterDividerPng({ columns = 3, barColor = DEFAULT_GRADIENT_LEFT, glowColor = DEFAULT_GRADIENT_RIGHT, alpha = 0.72, cellWidthPx, cellHeightPx, lineHeightScale } = {}) {
+  const cols = clampPositive(columns, 3, "columns");
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const widthPx = cols * metrics.cellWidthPx;
+  const heightPx = metrics.cellHeightPx;
+  const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+  const cx = Math.floor(widthPx / 2);
+  const cy = heightPx / 2;
+  const safeAlpha = Math.max(0, Math.min(1, Number(alpha) || 0));
+  const glowRadius = Math.max(2, Math.min(widthPx * 0.42, metrics.cellWidthPx * 1.05));
+  addRadialGlow(pixels, widthPx, cx, cy, glowRadius, [...parseColor(glowColor).slice(0, 3), Math.round(126 * safeAlpha)], 0.72);
+  const barW = Math.max(1, Math.round(metrics.cellWidthPx * 0.18));
+  const barH = Math.max(2, Math.round(metrics.cellHeightPx * 0.68));
+  const barX = cx - Math.floor(barW / 2);
+  const barY = Math.floor((heightPx - barH) / 2);
+  fillRect(pixels, widthPx, barX - 1, barY + 1, barW + 2, Math.max(1, barH - 2), [...parseColor(glowColor).slice(0, 3), Math.round(70 * safeAlpha)]);
+  fillRect(pixels, widthPx, barX, barY, barW, barH, [...parseColor(barColor).slice(0, 3), Math.round(218 * safeAlpha)]);
+  return {
+    png: encodeRgbaPng(pixels, widthPx, heightPx),
+    columns: cols,
+    rows: 1,
+    widthPx,
+    heightPx,
+    cellWidthPx: metrics.cellWidthPx,
+    cellHeightPx: metrics.cellHeightPx,
+    lineHeightScale: metrics.lineHeightScale,
+  };
+}
+
 export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, phase = 0, cellWidthPx, cellHeightPx, lineHeightScale, variant = "rule", alpha = 0.7 } = {}) {
   const cols = clampPositive(columns, 1, "columns");
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });

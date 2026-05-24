@@ -26,6 +26,7 @@ import {
   renderGlowPanelFrames,
   renderEditorBorderFrame,
   renderEditorCursorVline,
+  renderFooterDividerPng,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -389,6 +390,19 @@ test("renderEditorCursorVline adds heat frame brackets at high typing heat", () 
   assert.ok(leftBracket[3] > coolLeft[3] + 60, "hot cursor should add a visible left bracket tick");
   assert.ok(rightBracket[3] > 120, "hot cursor should add a visible right bracket tick");
   assert.ok(emberCap[3] > 80, "hot cursor should add an ember cap above the core");
+});
+
+test("renderFooterDividerPng keeps glow padded away from divider edges", () => {
+  const result = renderFooterDividerPng({ columns: 3, barColor: "#88c0d0", glowColor: "#b48ead", cellWidthPx: 8, cellHeightPx: 16 });
+  assert.equal(result.columns, 3);
+  const decoded = decodePngRgba(result.png);
+  const midY = Math.floor(decoded.height / 2);
+  const center = pixelAt(decoded, Math.floor(decoded.width / 2), midY);
+  const leftEdge = pixelAt(decoded, 0, midY);
+  const rightEdge = pixelAt(decoded, decoded.width - 1, midY);
+  assert.ok(center[3] > 120, "center bar should be visibly opaque");
+  assert.ok(leftEdge[3] < 8, "left edge should stay transparent enough to avoid clipped glow");
+  assert.ok(rightEdge[3] < 8, "right edge should stay transparent enough to avoid clipped glow");
 });
 
 test("renderPromptEnclosure produces a visibly glowing one-cell footprint", () => {
@@ -1359,6 +1373,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /replace\(\/-1m-internal\$\/i, ""\)/);
   assert.match(source, /function noEllipsisFooterText/);
   assert.match(source, /const FOOTER_DIVIDER_WIDTH = 3/);
+  assert.match(source, /renderFooterDividerPng/);
   assert.match(source, /function buildFooterDividerCell/);
   assert.match(source, /columns: FOOTER_DIVIDER_WIDTH/);
   assert.match(source, /width: FOOTER_DIVIDER_WIDTH/);

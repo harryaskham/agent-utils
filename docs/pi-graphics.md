@@ -506,8 +506,9 @@ displayed using kitty Unicode placeholder cells, so:
   (`PI_GRAPHICS_AUTO_FOOTER`, default on with graphics). It preserves the useful
   cwd/branch/context/compaction/model/thinking layout while inserting stable
   three-cell Unicode-placeholder divider images with no literal spaces around the
-  divider, giving the 3×1 PNG room for a centered thin bar plus glow on both
-  sides. Each divider anchors a low-z relative background behind the following
+  divider. The divider uses a dedicated 3×1 PNG renderer with transparent edge
+  padding, a centered thin vertical bar, and mild glow to either side so Kitty
+  resampling does not clip the glow at the cell boundary. Each divider anchors a low-z relative background behind the following
   segment so the footer remains caco/tmux-compatible and width-bounded. Long
   paths compact generically by collapsing earlier directories to initials while
   keeping the final directory, e.g. `~/c/a/m/checkout`, rather than special-casing

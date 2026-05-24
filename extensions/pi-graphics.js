@@ -90,6 +90,7 @@ import {
   renderEditorBorderFramesPngs,
   renderEditorRailApng,
   renderEditorCursorVline,
+  renderFooterDividerPng,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -1187,13 +1188,11 @@ export default function piGraphicsExtension(pi) {
     if (!ensureUnicodePlacement(state)) return "│";
     const cell = cellMetrics();
     const color = getThemeColorHex(activeThemeRef, token, "#88c0d0");
-    const rendered = renderPromptEnclosure({
+    const rendered = renderFooterDividerPng({
       columns: FOOTER_DIVIDER_WIDTH,
-      variant: "glow",
+      barColor: color,
+      glowColor: getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead"),
       alpha: Math.max(0.36, editorAlpha() * 0.72),
-      leftColor: color,
-      rightColor: getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead"),
-      fadeEdges: true,
       ...cell,
     });
     const placement = buildPlacement(state, {
