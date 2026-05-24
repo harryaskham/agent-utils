@@ -1378,6 +1378,13 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);
   assert.match(source, /function cursorDoctorLines\(\)/);
   assert.match(source, /Expected live cursor: configurable single-cell or speed-responsive anchored glow at the text cursor/);
+  assert.match(source, /function cursorAuditLines\(\)/);
+  assert.match(source, /Pi Graphics cursor audit index/);
+  assert.match(source, /\/gfx cursor status — no-render live cursor diagnostics; no state changes\./);
+  assert.match(source, /\/gfx cursor preview — bounded rendered anchored sample; emits graphics but does not change live cursor state\./);
+  assert.match(source, /action === "cursor-audit"/);
+  assert.match(source, /\["audit", "audits", "index", "commands"\]\.includes/);
+  assert.match(source, /cursorAuditLines\(\)\.join\("\\n"\)/);
   assert.match(source, /action === "cursor-status"/);
   assert.match(source, /\["status", "diagnostics", "diag"\]\.includes/);
   assert.match(source, /No graphics were emitted or settings changed\./);
@@ -1387,6 +1394,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "cursor-clear"/);
   assert.match(source, /\["clear", "reset", "cleanup"\]\.includes/);
   assert.match(source, /Pi Graphics cursor placement cleared; it will re-anchor on the next editor render\./);
+  assert.match(source, /\/gfx cursor audit indexes cursor diagnostics\/recovery/);
   assert.match(source, /\/gfx cursor preview shows anchored cool\/warm\/hot variants/);
   assert.match(source, /\/gfx cursor status prints diagnostics without rendering/);
   assert.match(source, /\/gfx cursor doctor explains status\/preview\/clear next steps/);

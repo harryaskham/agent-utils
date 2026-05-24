@@ -1792,6 +1792,19 @@ export default function piGraphicsExtension(pi) {
     ];
   }
 
+  function cursorAuditLines() {
+    return [
+      "Pi Graphics cursor audit index",
+      cursorAnchorDiagnosticLine(),
+      "/gfx cursor status — no-render live cursor diagnostics; no state changes.",
+      "/gfx cursor doctor — no-render guidance for status, preview, clear, and reload decisions.",
+      "/gfx cursor preview — bounded rendered anchored sample; emits graphics but does not change live cursor state.",
+      "/gfx cursor clear  — scoped recovery; deletes only the current live cursor placement and resets cursor diagnostics.",
+      "/gfx debug         — toggles debug panel and visible placeholder diagnostics.",
+      "No graphics were emitted or settings changed.",
+    ];
+  }
+
   function debugPanelLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
     return [
@@ -2081,6 +2094,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("  /gfx box tokens groups surfaces by theme color token.");
         lines.push("  /gfx box doctor explains box status/summary/preview next steps.");
         lines.push("  /gfx box preview shows per-surface chrome strips.");
+        lines.push("  /gfx cursor audit indexes cursor diagnostics/recovery.");
         lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
         lines.push("  /gfx cursor status prints diagnostics without rendering.");
         lines.push("  /gfx cursor doctor explains status/preview/clear next steps.");
@@ -2121,7 +2135,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box audit|box status|box summary|box effects|box tokens|box doctor|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box audit|box status|box summary|box effects|box tokens|box doctor|box preview|cursor audit|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -2142,7 +2156,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box audit | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box audit | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor audit | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
@@ -2173,6 +2187,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "themes" || action === "theme-provenance") {
         ctx.ui.notify(themeProvenanceLines(ctx, settings).join("\n"), "info");
+        return;
+      }
+      if (action === "cursor-audit" || (action === "cursor" && ["audit", "audits", "index", "commands"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(cursorAuditLines().join("\n"), "info");
         return;
       }
       if (action === "cursor-preview" || action === "preview" || (action === "cursor" && String(tokens[1] || "").toLowerCase() === "preview")) {

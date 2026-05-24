@@ -442,7 +442,8 @@ displayed using kitty Unicode placeholder cells, so:
   for fresh anchor placement ids, centered offsets, placement-only stale deletion,
   and reverse-video reset matching. `/gfx cursor status` prints the same live
   cursor diagnostics without emitting preview graphics or changing settings/state.
-  `/gfx cursor doctor` is also read-only and explains how to interpret the cursor
+  `/gfx cursor audit` is a no-render command index for cursor status, doctor,
+  preview, clear, and debug diagnostics. `/gfx cursor doctor` is also read-only and explains how to interpret the cursor
   diagnostic plus when to use status, preview, clear, or reload. `/gfx cursor clear`
   deletes only the current live visible cursor placement and resets anchor
   diagnostics, giving operators a scoped recovery path if a terminal keeps stale
