@@ -346,7 +346,7 @@ export default function piGraphicsExtension(pi) {
     emitGraphicsCommand(buildDeleteCommand({
       imageId: editorCursorRelativePlacement.imageId,
       placementId: editorCursorRelativePlacement.placementId,
-      deleteMode: "p",
+      deleteMode: "i",
       passthrough: state.config.passthrough,
     }));
     editorCursorRelativePlacement = null;
@@ -903,7 +903,7 @@ export default function piGraphicsExtension(pi) {
       emitGraphicsCommand(buildDeleteCommand({
         imageId: editorCursorRelativePlacement.imageId,
         placementId: editorCursorRelativePlacement.placementId,
-        deleteMode: "p",
+        deleteMode: "i",
         passthrough: state.config.passthrough,
       }));
     }

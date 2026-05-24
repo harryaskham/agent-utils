@@ -1327,7 +1327,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /columns: 1,\n\s+rows: 1,/);
   assert.match(source, /cursorColumns = 11/);
   assert.match(source, /trailCells: heat > 0\.04/);
-  assert.match(source, /buildDeleteCommand\(\{\n\s+imageId: editorCursorRelativePlacement\.imageId,\n\s+placementId: editorCursorRelativePlacement\.placementId,\n\s+deleteMode: "p"/);
+  assert.match(source, /buildDeleteCommand\(\{\n\s+imageId: editorCursorRelativePlacement\.imageId,\n\s+placementId: editorCursorRelativePlacement\.placementId,\n\s+deleteMode: "i"/);
+  assert.doesNotMatch(source, /deleteMode: "p"/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /editorRowBackgroundEnabled\(\)/);
   assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);

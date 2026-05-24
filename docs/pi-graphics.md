@@ -1,5 +1,7 @@
 # Pi graphics theme + extension
 
+See also [`kitty-graphics-protocol-audit.md`](kitty-graphics-protocol-audit.md) for the 2026-05-24 Kitty protocol audit findings and remaining follow-up.
+
 This package ships a **Pi theme** plus a **Pi extension** that together let
 agents draw freeform, kitty-graphics-backed UI affordances inside a
 Pi-coding-agent session.
@@ -440,7 +442,7 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx cursor preview` emits a bounded anchor-relative sample that uses the same
   transparent-anchor/relative-placement path as the live cursor, followed by
   cool/warm/hot cursor PNG variants plus a compact live-alignment diagnostic line
-  for fresh anchor placement ids, centered offsets, placement-only stale deletion,
+  for fresh anchor placement ids, centered offsets, image+placement-id stale deletion,
   and reverse-video reset matching. `/gfx cursor status` prints the same live
   cursor diagnostics without emitting preview graphics or changing settings/state.
   `/gfx cursor audit` is a no-render command index for cursor status, doctor,
@@ -473,8 +475,9 @@ displayed using kitty Unicode placeholder cells, so:
   5 rows) centered on that fresh anchor. Each redraw gives the transparent anchor
   a fresh placement id before attaching the visible image, so Kitty cannot
   resolve the cursor against an older same-id anchor elsewhere in the TUI. The
-  prior visible cursor placement is deleted by placement id before the next one
-  is attached, preventing stale cursor ghosts when the editor moves. It keeps a
+  prior visible cursor placement is deleted with Kitty's image-id delete mode plus
+  the placement id before the next one is attached, preventing stale cursor ghosts
+  when the editor moves. It keeps a
   bright vertical core in the middle cell while transparent glow has enough
   padding to avoid clipping at the image edges. The glow colour/radius is
   bucketed from inferred recent inter-character typing speed and decays after
