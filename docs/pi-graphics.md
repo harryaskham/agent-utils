@@ -405,7 +405,9 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
   placeholder cells. `/gfx box status` prints box mode, forced-vs-per-type effect
   state, mapped surface count, unique effect count, and the registry mapping without
-  emitting preview graphics or changing settings. `/gfx box preview` emits bounded representative per-surface
+  emitting preview graphics or changing settings. `/gfx box summary` is the compact
+  no-render view: it groups mapped surfaces by effect for quick registry audits.
+  `/gfx box preview` emits bounded representative per-surface
   box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, so every mapped
   surface appears automatically as new chrome families are added. The preview
   includes a generated mapped-surface and unique-effect count, then uses compact

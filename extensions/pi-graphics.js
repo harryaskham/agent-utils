@@ -1816,6 +1816,29 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function boxChromeEffectGroups() {
+    const groups = new Map();
+    for (const [type, effectName] of Object.entries(BOX_TYPE_EFFECTS)) {
+      const effect = effectName || "glass";
+      if (!groups.has(effect)) groups.set(effect, []);
+      groups.get(effect).push(type);
+    }
+    return [...groups.entries()].map(([effect, types]) => ({ effect, types }));
+  }
+
+  function boxChromeSummaryLines() {
+    const groups = boxChromeEffectGroups();
+    const surfaceCount = groups.reduce((sum, group) => sum + group.types.length, 0);
+    const lines = [
+      "Pi Graphics box summary",
+      `${surfaceCount} mapped surfaces grouped by ${groups.length} effects.`,
+      "effect → surfaces:",
+    ];
+    for (const { effect, types } of groups) lines.push(`  ${effect.padEnd(12)} ${types.join(", ")}`);
+    lines.push("No graphics were emitted or settings changed.");
+    return lines;
+  }
+
   function boxChromeStatusLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
     const mappings = Object.entries(BOX_TYPE_EFFECTS);
@@ -1827,6 +1850,7 @@ export default function piGraphicsExtension(pi) {
       "surface → effect:",
     ];
     for (const [type, effect] of mappings) lines.push(`  ${type.padEnd(16)} ${effect || "glass"}`);
+    lines.push("Use /gfx box summary for a compact effect-grouped audit.");
     lines.push("No graphics were emitted or settings changed.");
     return lines;
   }
@@ -1910,6 +1934,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("  assistant=manuscript  tool=schematic  oauth=keyring");
         lines.push("  model=dial  settings=slider  thinking=lantern");
         lines.push("  /gfx box status shows mappings without rendering.");
+        lines.push("  /gfx box summary groups mapped surfaces by effect.");
         lines.push("  /gfx box preview shows per-surface chrome strips.");
         lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
         lines.push("  /gfx cursor status prints diagnostics without rendering.");
@@ -1951,7 +1976,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box summary|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1971,7 +1996,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box summary | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -2023,6 +2048,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "box-status" || (action === "box" && ["status", "mappings", "map"].includes(String(tokens[1] || "").toLowerCase()))) {
         ctx.ui.notify(boxChromeStatusLines(settings).join("\n"), "info");
+        return;
+      }
+      if (action === "box-summary" || (action === "box" && ["summary", "groups", "grouped"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(boxChromeSummaryLines().join("\n"), "info");
         return;
       }
       if (action === "box-preview" || (action === "box" && String(tokens[1] || "").toLowerCase() === "preview")) {
