@@ -1447,6 +1447,14 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-doctor"/);
   assert.match(source, /\["doctor", "help", "why"\]\.includes/);
   assert.match(source, /boxChromeDoctorLines\(settings\)\.join\("\\n"\)/);
+  assert.match(source, /`  cursor style:   \$\{editor\.cursorStyle \?\? "glow"\} \(also: cell\|off\)`/);
+  assert.match(source, /`  trailing fill:  \$\{editor\.trailingWorkspace \? "on" : "off"\}`/);
+  assert.match(source, /`  row background: \$\{editor\.rowBackground \? "on" : "off"\}`/);
+  assert.match(source, /\/gfx cursor-style glow\|cell\|off/);
+  assert.match(source, /\/gfx trailing-workspace on\|off \| \/gfx row-background on\|off/);
+  assert.match(source, /key === "cursor-style" \|\| key === "cursorstyle" \|\| key === "cursor"/);
+  assert.match(source, /key === "trailing-workspace" \|\| key === "workspace-fill" \|\| key === "trailing"/);
+  assert.match(source, /key === "row-background" \|\| key === "rowbg" \|\| key === "row-backgrounds"/);
   assert.match(source, /`  box chrome:     \$\{gfx\.boxChrome === true \? "on" : "off"\}`/);
   assert.match(source, /`  box mode:       \$\{gfx\.boxMode \|\| "unicode"\} \(also: relative\)`/);
   assert.doesNotMatch(source, /`  box chrome:     \$\{gfx\.boxChrome === false \? "off" : "on"\}`/);
@@ -1474,6 +1482,12 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-preview"/);
   assert.match(source, /assistant=folio  tool=rig  oauth=token/);
   assert.match(source, /model=gauge  settings=console  thinking=candle/);
+  assert.match(source, /key: "cursorStyle", label: "Cursor style", values: \["glow", "cell", "off"\]/);
+  assert.match(source, /key: "trailingWorkspace", label: "Trailing workspace", values: \["off", "on"\]/);
+  assert.match(source, /key: "rowBackground", label: "Row background", values: \["off", "on"\]/);
+  assert.match(source, /__piGraphicsNoWrap: true,\n\s+piGraphics: false/);
+  assert.match(source, /overlay: true, piGraphics: false/);
+  assert.match(source, /This overlay opts out of Pi graphics wrapping to avoid Kitty escape flicker\/scroll/);
   assert.doesNotMatch(source, /assistant=manuscript  tool=schematic  oauth=keyring/);
   assert.doesNotMatch(source, /model=dial  settings=slider  thinking=lantern/);
   assert.match(source, /\/gfx box audit indexes every box inspection command/);

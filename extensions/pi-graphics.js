@@ -2065,12 +2065,17 @@ export default function piGraphicsExtension(pi) {
       { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "unicode", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
       { key: "boxEffect", label: "Box effect", values: effects, get: () => gfx.boxEffect || "auto", set: (v) => { if (v === "auto") delete gfx.boxEffect; else gfx.boxEffect = v; gfx.boxChrome = true; } },
       { key: "editor", label: "Editor", values: ["static", "unicode", "animated"], get: () => editor.style || "static", set: (v) => { editor.style = v; } },
+      { key: "cursorStyle", label: "Cursor style", values: ["glow", "cell", "off"], get: () => editor.cursorStyle || "glow", set: (v) => { editor.cursorStyle = v; } },
+      { key: "trailingWorkspace", label: "Trailing workspace", values: ["off", "on"], get: () => editor.trailingWorkspace ? "on" : "off", set: (v) => { editor.trailingWorkspace = v === "on"; } },
+      { key: "rowBackground", label: "Row background", values: ["off", "on"], get: () => editor.rowBackground ? "on" : "off", set: (v) => { editor.rowBackground = v === "on"; } },
       { key: "debug", label: "Debug panel", values: ["off", "on"], get: () => gfx.debug ? "on" : "off", set: (v) => { gfx.debug = v === "on"; gfx.debugPlaceholders = gfx.debug; } },
       { key: "placeholders", label: "Debug placeholders", values: ["off", "on"], get: () => gfx.debugPlaceholders ? "on" : "off", set: (v) => { gfx.debugPlaceholders = v === "on"; } },
     ];
     let selected = 0;
     const renderLine = (width, text) => String(text).slice(0, Math.max(1, width));
     const componentFactory = (_tui, theme, keybindings, done) => ({
+      __piGraphicsNoWrap: true,
+      piGraphics: false,
       invalidate() {},
       render(width = 80) {
         const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
@@ -2099,6 +2104,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("  /gfx cursor status prints diagnostics without rendering.");
         lines.push("  /gfx cursor doctor explains status/preview/clear next steps.");
         lines.push("  /gfx cursor clear deletes stale live cursor placement only.");
+        lines.push("  This overlay opts out of Pi graphics wrapping to avoid Kitty escape flicker/scroll.");
         lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
         return lines.map((line) => renderLine(width, line));
       },
@@ -2124,7 +2130,7 @@ export default function piGraphicsExtension(pi) {
       },
     });
     const result = typeof ctx?.ui?.custom === "function"
-      ? await ctx.ui.custom(componentFactory, { overlay: true, overlayOptions: { width: "70%", minWidth: 54, maxHeight: "80%", anchor: "center", margin: 1 } })
+      ? await ctx.ui.custom(componentFactory, { overlay: true, piGraphics: false, overlayOptions: { width: "70%", minWidth: 54, maxHeight: "80%", anchor: "center", margin: 1 } })
       : "notify";
     if (result === "save") {
       await applyGfxSettingsAndReload(ctx, settings, "Saved Pi Graphics settings. Reloading runtime to apply...");
@@ -2149,6 +2155,9 @@ export default function piGraphicsExtension(pi) {
           `  mode:           ${gfx.mode ?? "on"}`,
           `  theme:          ${settings.theme || gfx.theme || "(default)"}`,
           `  editor.style:   ${editor.style ?? "static"} (also: unicode|animated)`,
+          `  cursor style:   ${editor.cursorStyle ?? "glow"} (also: cell|off)`,
+          `  trailing fill:  ${editor.trailingWorkspace ? "on" : "off"}`,
+          `  row background: ${editor.rowBackground ? "on" : "off"}`,
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
           `  box mode:       ${gfx.boxMode || "unicode"} (also: relative)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (use /gfx box effects for selectable names)`,
@@ -2158,6 +2167,8 @@ export default function piGraphicsExtension(pi) {
           "",
           "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box audit | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor audit | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
+          "       /gfx cursor-style glow|cell|off",
+          "       /gfx trailing-workspace on|off | /gfx row-background on|off",
           "       /gfx box on|off",
           "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
           "       /gfx mode on|off|debug",
@@ -2256,6 +2267,17 @@ export default function piGraphicsExtension(pi) {
         if (key === "editor") {
           if (value === "static" || value === "animated" || value === "unicode") { editor.style = value; changed = true; }
           else ctx.ui.notify(`unknown editor style: ${value} (use static|unicode|animated)`, "warning");
+        } else if (key === "cursor-style" || key === "cursorstyle" || key === "cursor") {
+          if (["glow", "cell", "off"].includes(value)) { editor.cursorStyle = value; changed = true; }
+          else ctx.ui.notify(`unknown cursor style: ${value} (use glow|cell|off)`, "warning");
+        } else if (key === "trailing-workspace" || key === "workspace-fill" || key === "trailing") {
+          if (/^(on|true|1)$/.test(value)) { editor.trailingWorkspace = true; changed = true; }
+          else if (/^(off|false|0)$/.test(value)) { editor.trailingWorkspace = false; changed = true; }
+          else ctx.ui.notify(`unknown trailing workspace value: ${value} (use on|off)`, "warning");
+        } else if (key === "row-background" || key === "rowbg" || key === "row-backgrounds") {
+          if (/^(on|true|1)$/.test(value)) { editor.rowBackground = true; changed = true; }
+          else if (/^(off|false|0)$/.test(value)) { editor.rowBackground = false; changed = true; }
+          else ctx.ui.notify(`unknown row background value: ${value} (use on|off)`, "warning");
         } else if (key === "box" || key === "box-chrome" || key === "boxchrome") {
           if (/^(on|true|1)$/.test(value)) { gfx.boxChrome = true; changed = true; }
           else if (/^(off|false|0)$/.test(value)) { gfx.boxChrome = false; changed = true; }

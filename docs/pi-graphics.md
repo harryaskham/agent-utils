@@ -410,7 +410,9 @@ displayed using kitty Unicode placeholder cells, so:
   specifically want to inspect the effect set. `Ctrl+t` cycles presets across the
   static editor border, caco-compatible `unicode` mode, animated editor border,
   and every box-effect variant; `/gfx` with no arguments opens a Pi-native settings
-  overlay with quick previews; `/gfx status` prints the text summary, including
+  overlay with quick previews and cursor controls. The overlay explicitly opts
+  out of Pi graphics wrapping so it stays text/ANSI-only and does not emit
+  additional Kitty placement escapes while the modal is open; `/gfx status` prints the text summary, including
   the live cursor anchoring diagnostic line and the opt-in box chrome state (`on`
   only when `piGraphics.boxChrome` is explicitly `true`); its box-effect line and
   unknown-effect warnings stay compact and point to `/gfx box effects` for the full
@@ -491,7 +493,9 @@ displayed using kitty Unicode placeholder cells, so:
   fills empty cells after the cursor, and `piGraphics.editor.rowBackground` /
   `PI_GRAPHICS_EDITOR_ROW_BACKGROUND` enables the row-wide background. Both are
   off by default because they can visually compete with live typing in narrow or
-  frequently redrawn editors.
+  frequently redrawn editors. These are visible in the `/gfx` settings overlay and
+  can also be changed directly with `/gfx cursor-style glow|cell|off`,
+  `/gfx trailing-workspace on|off`, and `/gfx row-background on|off`.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative
