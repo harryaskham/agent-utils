@@ -1956,6 +1956,8 @@ export default function piGraphicsExtension(pi) {
       return { type, effect, token, line: placement.lines[0] ?? "" };
     });
     const formatPreview = ({ type, effect, token, line }) => `${type.padEnd(16)} ${String(effect).padEnd(10)} ${String(token).padEnd(15)} ${line}`;
+    const previewHeader = `${"surface".padEnd(16)} ${"effect".padEnd(10)} ${"theme token".padEnd(15)} strip`;
+    lines.push(`${previewHeader}  ${previewHeader}`);
     for (let i = 0; i < previews.length; i += 2) {
       const left = formatPreview(previews[i]);
       const right = previews[i + 1] ? formatPreview(previews[i + 1]) : "";
