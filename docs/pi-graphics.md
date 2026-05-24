@@ -403,15 +403,16 @@ displayed using kitty Unicode placeholder cells, so:
   changes on runtimes without `ctx.reload` force-refresh the wrapper runtime or
   tear it down when graphics/box chrome is disabled, so mode changes do not leave
   stale chrome active.
-* Box chrome is enabled by default in caco-compatible `unicode` mode unless
-  explicitly disabled with `piGraphics.boxChrome: false` or `/gfx box off`.
-  `Ctrl+t` cycles presets across the static editor border, caco-compatible
-  `unicode` mode, animated editor border, and every box-effect variant;
-  `/gfx` with no arguments opens a Pi-native settings overlay with quick previews;
-  `/gfx status` prints the text summary, including the live cursor anchoring
-  diagnostic line and the default-on box chrome state unless `piGraphics.boxChrome`
-  is explicitly `false`; its box-effect line and unknown-effect warnings stay
-  compact and point to `/gfx box effects` for the full selectable list.
+* Box chrome is opt-in because live box placements can be visually janky in some
+  terminals; enable it with `piGraphics.boxChrome: true` or `/gfx box on` when you
+  specifically want to inspect the effect set. `Ctrl+t` cycles presets across the
+  static editor border, caco-compatible `unicode` mode, animated editor border,
+  and every box-effect variant; `/gfx` with no arguments opens a Pi-native settings
+  overlay with quick previews; `/gfx status` prints the text summary, including
+  the live cursor anchoring diagnostic line and the opt-in box chrome state (`on`
+  only when `piGraphics.boxChrome` is explicitly `true`); its box-effect line and
+  unknown-effect warnings stay compact and point to `/gfx box effects` for the full
+  selectable list.
   `/gfx box-effect <name>` can select a specific effect or
   `/gfx box-effect auto` can return to per-message-type effects.
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`

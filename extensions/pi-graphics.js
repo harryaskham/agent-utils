@@ -151,7 +151,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor.cursorStyle ?? editor.cursorMode ?? editor.cursorEffect ?? editor.cursor?.style ?? editor.cursor?.mode,
     PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor.trailingWorkspace ?? editor.workspaceFill ?? features.editorTrailingWorkspace,
     PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor.rowBackground ?? features.editorRowBackground,
-    PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === false ? "0" : "1",
+    PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === true ? "1" : "0",
     PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx.exposeRenderTools != null ? String(gfx.exposeRenderTools) : undefined,
     PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
     PI_GRAPHICS_BOX_MODE: gfx.boxMode != null ? String(gfx.boxMode) : "unicode",
@@ -1810,7 +1810,7 @@ export default function piGraphicsExtension(pi) {
     return [
       "Pi Graphics debug",
       `mode=${gfx.mode ?? "on"} theme=${settings.theme || gfx.theme || "(default)"}`,
-      `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
+      `box=${gfx.boxChrome === true ? "on" : "off"} mode=${gfx.boxMode || "unicode"} effect=${gfx.boxEffect || "per-type"}`,
       `debug=${gfx.debug ? "on" : "off"} placeholders=${(gfx.debugPlaceholders ?? gfx.debug) ? "visible U" : "kitty"}`,
       `cell=${gfx.cell?.widthPx || 8}x${gfx.cell?.heightPx || "auto"} line=${gfx.cell?.lineHeightScale || 1.2}`,
       cursorAnchorDiagnosticLine(),
@@ -1965,7 +1965,7 @@ export default function piGraphicsExtension(pi) {
     const mappings = Object.entries(BOX_TYPE_EFFECTS);
     const lines = [
       "Pi Graphics box status",
-      `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
+      `box=${gfx.boxChrome === true ? "on" : "off"} mode=${gfx.boxMode || "unicode"} effect=${gfx.boxEffect || "per-type"}`,
       boxChromeRegistryCountLine(),
       "surface → effect:",
     ];
@@ -1994,7 +1994,7 @@ export default function piGraphicsExtension(pi) {
     const forced = gfx.boxEffect ? `forced to ${gfx.boxEffect}` : "per-surface auto mappings";
     return [
       "Pi Graphics box doctor",
-      `Current: box=${gfx.boxChrome === false ? "off" : "on"}, mode=${gfx.boxMode || "relative"}, effect=${forced}.`,
+      `Current: box=${gfx.boxChrome === true ? "on" : "off"}, mode=${gfx.boxMode || "unicode"}, effect=${forced}.`,
       `Registry: ${boxChromeRegistryCountLine()}`,
       "Use /gfx box status for the full surface → effect mapping.",
       "Use /gfx box summary for a compact effect → surfaces audit.",
@@ -2061,8 +2061,8 @@ export default function piGraphicsExtension(pi) {
     const effects = ["auto", ...BOX_EFFECT_NAMES];
     const rows = [
       { key: "mode", label: "Mode", values: ["on", "off", "debug"], get: () => gfx.mode || "on", set: (v) => { gfx.mode = v; } },
-      { key: "boxChrome", label: "Box chrome", values: ["on", "off"], get: () => gfx.boxChrome === false ? "off" : "on", set: (v) => { gfx.boxChrome = v === "on"; } },
-      { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "relative", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
+      { key: "boxChrome", label: "Box chrome", values: ["on", "off"], get: () => gfx.boxChrome === true ? "on" : "off", set: (v) => { gfx.boxChrome = v === "on"; } },
+      { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "unicode", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
       { key: "boxEffect", label: "Box effect", values: effects, get: () => gfx.boxEffect || "auto", set: (v) => { if (v === "auto") delete gfx.boxEffect; else gfx.boxEffect = v; gfx.boxChrome = true; } },
       { key: "editor", label: "Editor", values: ["static", "unicode", "animated"], get: () => editor.style || "static", set: (v) => { editor.style = v; } },
       { key: "debug", label: "Debug panel", values: ["off", "on"], get: () => gfx.debug ? "on" : "off", set: (v) => { gfx.debug = v === "on"; gfx.debugPlaceholders = gfx.debug; } },
@@ -2149,8 +2149,8 @@ export default function piGraphicsExtension(pi) {
           `  mode:           ${gfx.mode ?? "on"}`,
           `  theme:          ${settings.theme || gfx.theme || "(default)"}`,
           `  editor.style:   ${editor.style ?? "static"} (also: unicode|animated)`,
-          `  box chrome:     ${gfx.boxChrome === false ? "off" : "on"}`,
-          `  box mode:       ${gfx.boxMode || "relative"} (also: unicode)`,
+          `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
+          `  box mode:       ${gfx.boxMode || "unicode"} (also: relative)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (use /gfx box effects for selectable names)`,
           `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary|effects|tokens|doctor|preview)`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,

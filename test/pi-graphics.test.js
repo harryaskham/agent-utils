@@ -1298,7 +1298,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor\.trailingWorkspace/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor\.rowBackground/);
   assert.match(source, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
-  assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === false \? "0" : "1"/);
+  assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === true \? "1" : "0"/);
   assert.match(source, /PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx\.exposeRenderTools/);
   assert.match(source, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode != null \? String\(gfx\.boxMode\) : "unicode"/);
   assert.match(source, /PI_GRAPHICS_DEBUG: gfx\.debug/);
@@ -1446,8 +1446,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-doctor"/);
   assert.match(source, /\["doctor", "help", "why"\]\.includes/);
   assert.match(source, /boxChromeDoctorLines\(settings\)\.join\("\\n"\)/);
-  assert.match(source, /`  box chrome:     \$\{gfx\.boxChrome === false \? "off" : "on"\}`/);
-  assert.doesNotMatch(source, /`  box chrome:     \$\{gfx\.boxChrome === true \? "on" : "off"\}`/);
+  assert.match(source, /`  box chrome:     \$\{gfx\.boxChrome === true \? "on" : "off"\}`/);
+  assert.match(source, /`  box mode:       \$\{gfx\.boxMode \|\| "unicode"\} \(also: relative\)`/);
+  assert.doesNotMatch(source, /`  box chrome:     \$\{gfx\.boxChrome === false \? "off" : "on"\}`/);
   assert.match(source, /`  box effect:     \$\{gfx\.boxEffect \|\| "per-type"\} \(use \/gfx box effects for selectable names\)`/);
   assert.match(source, /\/gfx box-effect <name\|auto>  \(\/gfx box effects lists names\)/);
   assert.match(source, /unknown box effect: \$\{value\} \(use \/gfx box effects for names, or \/gfx box-effect auto\)/);
