@@ -915,12 +915,8 @@ export default function piGraphicsExtension(pi) {
 
     const cursorColumns = 11;
     const cursorRows = 5;
-    // Kitty relative placements for the multi-cell glow are anchored to the
-    // cursor placeholder but render with a practical +3/+1 cell visual bias in
-    // live Pi/tmux. Compensate so the glow art starts at the intended cursor-
-    // relative origin instead of drifting down/right from the text cursor.
-    const cursorHOffset = -Math.floor(cursorColumns / 2) - 3;
-    const cursorVOffset = -Math.floor(cursorRows / 2) - 1;
+    const cursorHOffset = -Math.floor(cursorColumns / 2);
+    const cursorVOffset = -Math.floor(cursorRows / 2);
     const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(imageId)) {
       const rendered = renderEditorCursorVline({
@@ -1038,8 +1034,8 @@ export default function piGraphicsExtension(pi) {
     }
     const cursorColumns = 11;
     const cursorRows = 5;
-    const cursorHOffset = -Math.floor(cursorColumns / 2) - 3;
-    const cursorVOffset = -Math.floor(cursorRows / 2) - 1;
+    const cursorHOffset = -Math.floor(cursorColumns / 2);
+    const cursorVOffset = -Math.floor(cursorRows / 2);
     const relativePlacement = buildRelativePlacementCommand({
       imageId,
       placementId: piGraphicsPlacementId(`editor-cursor-preview-relative-placement-${heatBucket}-${trailBucket}-${directionBucket}`),

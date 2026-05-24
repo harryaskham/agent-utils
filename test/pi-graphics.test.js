@@ -1340,8 +1340,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/);
   assert.match(source, /columns: 1,\n\s+rows: 1,/);
   assert.match(source, /cursorColumns = 11/);
-  assert.match(source, /const cursorHOffset = -Math\.floor\(cursorColumns \/ 2\) - 3/);
-  assert.match(source, /const cursorVOffset = -Math\.floor\(cursorRows \/ 2\) - 1/);
+  assert.match(source, /const cursorHOffset = -Math\.floor\(cursorColumns \/ 2\)/);
+  assert.match(source, /const cursorVOffset = -Math\.floor\(cursorRows \/ 2\)/);
   assert.match(source, /hOffset: cursorHOffset/);
   assert.match(source, /vOffset: cursorVOffset/);
   assert.match(source, /trailCells: heat > 0\.04/);
