@@ -3055,19 +3055,31 @@ export function createBoxChromeRuntime({
         width: 1,
         zIndex: BOX_Z_INDEX,
       });
-      const line = debugPlaceholders
-        ? `${placement.transmit}${debugPlaceholderCell({ imageId: placement.imageId, placementId: placement.placementId })}`
-        : `${placement.transmit}${placement.lines[0] || ""}`;
-      unicodeCellLines.set(cellKey, line);
-      return line;
+      const cell = debugPlaceholders
+        ? debugPlaceholderCell({ imageId: placement.imageId, placementId: placement.placementId })
+        : placement.lines[0] || "";
+      const entry = { transmit: placement.transmit, cell, line: `${placement.transmit}${cell}` };
+      unicodeCellLines.set(cellKey, entry);
+      return entry;
+    };
+    const makeFullBorderRow = (rowIndex, verticalKind) => {
+      const leftKind = verticalKind === "bot" ? "bot-left" : "top-left";
+      const midKind = verticalKind === "bot" ? "bot" : "top";
+      const rightKind = verticalKind === "bot" ? "bot-right" : "top-right";
+      const left = makeCell("left", rowIndex, leftKind);
+      const mid = makeCell("mid", rowIndex, midKind);
+      const right = makeCell("right", rowIndex, rightKind);
+      const inner = mid.cell.repeat(Math.max(0, width - 2));
+      return `${left.transmit}${mid.transmit}${right.transmit}${left.cell}${inner}${right.cell}`;
     };
     return lines.map((line, i) => {
       if (hasKittyPlaceholder(line)) return line;
       const verticalKind = lines.length === 1 ? "mid" : i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
+      if (isLikelyBorderLine(line) && verticalKind !== "mid") return makeFullBorderRow(i, verticalKind);
       const leftKind = verticalKind === "top" ? "top-left" : verticalKind === "bot" ? "bot-left" : "left";
       const rightKind = verticalKind === "top" ? "top-right" : verticalKind === "bot" ? "bot-right" : "right";
-      const left = makeCell("left", i, leftKind);
-      const right = makeCell("right", i, rightKind);
+      const left = makeCell("left", i, leftKind).line;
+      const right = makeCell("right", i, rightKind).line;
       const plainWidth = Math.max(0, width - 2);
       const trimmed = truncateAnsiToVisibleWidth(String(line || ""), plainWidth);
       const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));

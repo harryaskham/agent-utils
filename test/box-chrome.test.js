@@ -219,6 +219,25 @@ test("debug placeholder mode renders visible U cells with unique SGR ids", () =>
   assert.notEqual(out[0].match(/\x1b\[58;2;[^m]+m/)?.[0], out[1].match(/\x1b\[58;2;[^m]+m/)?.[0], "rows should expose distinct placement colors");
 });
 
+test("unicode box mode replaces border-only rows with full placeholder rows", () => {
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    debugPlaceholders: true,
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 82, lines: ["────────", " Test ", "────────"], renderWidth: 10 });
+  const visible = (line) => line
+    .replace(/\x1b_G[\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b\[[0-9;]*m/g, "");
+  assert.equal(visible(out[0]), "U".repeat(8), "top border row should be all placeholders in debug mode");
+  assert.equal(visible(out[2]), "U".repeat(8), "bottom border row should be all placeholders in debug mode");
+  assert.equal((visible(out[1]).match(/U/g) || []).length, 2, "content rows should keep only side placeholders");
+  assert.doesNotMatch(visible(out[0]), /─/, "textual border glyphs should not remain on placeholder border rows");
+});
+
 test("box chrome does not double-wrap rows that already contain kitty placeholders", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };
