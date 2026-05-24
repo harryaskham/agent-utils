@@ -1393,6 +1393,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function boxChromeEffectsLines\(\)/);
   assert.match(source, /Pi Graphics box effects/);
   assert.match(source, /explicit variants:/);
+  assert.match(source, /function boxChromeThemeTokenGroups\(\)/);
+  assert.match(source, /function boxChromeTokensLines\(\)/);
+  assert.match(source, /Pi Graphics box theme tokens/);
+  assert.match(source, /theme token → surfaces:/);
   assert.match(source, /Use \/gfx box summary for a compact effect-grouped audit\./);
   assert.match(source, /function boxChromeStatusLines\(settings = readJsonIfExists\(agentSettingsPath\(\)\) \|\| \{\}\)/);
   assert.match(source, /Pi Graphics box status/);
@@ -1407,9 +1411,13 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-effects"/);
   assert.match(source, /\["effects", "variants", "effect-list"\]\.includes/);
   assert.match(source, /boxChromeEffectsLines\(\)\.join\("\\n"\)/);
+  assert.match(source, /action === "box-tokens"/);
+  assert.match(source, /\["tokens", "theme-tokens", "colors", "palette"\]\.includes/);
+  assert.match(source, /boxChromeTokensLines\(\)\.join\("\\n"\)/);
   assert.match(source, /function boxChromeDoctorLines\(settings = readJsonIfExists\(agentSettingsPath\(\)\) \|\| \{\}\)/);
   assert.match(source, /Pi Graphics box doctor/);
   assert.match(source, /Use \/gfx box effects to list mapped effects and explicit selectable variants\./);
+  assert.match(source, /Use \/gfx box tokens to audit theme-token color groups without rendering\./);
   assert.match(source, /Use \/gfx box-effect auto to restore per-surface mappings after forcing one effect\./);
   assert.match(source, /Use \/gfx box-mode relative for kitty side chrome/);
   assert.match(source, /action === "box-doctor"/);
@@ -1430,6 +1438,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\/gfx box status shows mappings without rendering/);
   assert.match(source, /\/gfx box summary groups mapped surfaces by effect/);
   assert.match(source, /\/gfx box effects lists mapped and explicit variants/);
+  assert.match(source, /\/gfx box tokens groups surfaces by theme color token/);
   assert.match(source, /\/gfx box doctor explains box status\/summary\/preview next steps/);
   assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
   assert.match(source, /function replaceEditorCursorChrome/);

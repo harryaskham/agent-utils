@@ -1858,6 +1858,32 @@ export default function piGraphicsExtension(pi) {
     ];
   }
 
+  function boxChromeThemeTokenGroups() {
+    const groups = new Map();
+    for (const type of Object.keys(BOX_TYPE_EFFECTS)) {
+      const token = BOX_TYPE_THEME_TOKENS[type] || "accent";
+      if (!groups.has(token)) groups.set(token, []);
+      groups.get(token).push(type);
+    }
+    return [...groups.entries()].map(([token, types]) => ({ token, types }));
+  }
+
+  function boxChromeTokensLines() {
+    const groups = boxChromeThemeTokenGroups();
+    const surfaceCount = groups.reduce((sum, group) => sum + group.types.length, 0);
+    const tokenNames = groups.map((group) => group.token);
+    const lines = [
+      "Pi Graphics box theme tokens",
+      `${surfaceCount} mapped surfaces grouped by ${groups.length} theme tokens.`,
+      `tokens: ${tokenNames.join(", ") || "none"}`,
+      "theme token → surfaces:",
+    ];
+    for (const { token, types } of groups) lines.push(`  ${token.padEnd(12)} ${types.join(", ")}`);
+    lines.push("Use /gfx box preview to inspect rendered color application.");
+    lines.push("No graphics were emitted or settings changed.");
+    return lines;
+  }
+
   function boxChromeStatusLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
     const mappings = Object.entries(BOX_TYPE_EFFECTS);
@@ -1883,6 +1909,7 @@ export default function piGraphicsExtension(pi) {
       "Use /gfx box status for the full surface → effect mapping.",
       "Use /gfx box summary for a compact effect → surfaces audit.",
       "Use /gfx box effects to list mapped effects and explicit selectable variants.",
+      "Use /gfx box tokens to audit theme-token color groups without rendering.",
       "Use /gfx box preview for bounded visual strips; it renders graphics but does not change piGraphics.boxEffect.",
       "Use /gfx box-effect auto to restore per-surface mappings after forcing one effect.",
       "Use /gfx box-mode relative for kitty side chrome, or /gfx box-mode unicode for placeholder-only side borders.",
@@ -1971,6 +1998,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("  /gfx box status shows mappings without rendering.");
         lines.push("  /gfx box summary groups mapped surfaces by effect.");
         lines.push("  /gfx box effects lists mapped and explicit variants.");
+        lines.push("  /gfx box tokens groups surfaces by theme color token.");
         lines.push("  /gfx box doctor explains box status/summary/preview next steps.");
         lines.push("  /gfx box preview shows per-surface chrome strips.");
         lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
@@ -2013,7 +2041,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box summary|box effects|box doctor|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box summary|box effects|box tokens|box doctor|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -2034,7 +2062,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box summary | /gfx box effects | /gfx box doctor | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -2094,6 +2122,10 @@ export default function piGraphicsExtension(pi) {
       }
       if (action === "box-effects" || (action === "box" && ["effects", "variants", "effect-list"].includes(String(tokens[1] || "").toLowerCase()))) {
         ctx.ui.notify(boxChromeEffectsLines().join("\n"), "info");
+        return;
+      }
+      if (action === "box-tokens" || (action === "box" && ["tokens", "theme-tokens", "colors", "palette"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(boxChromeTokensLines().join("\n"), "info");
         return;
       }
       if (action === "box-doctor" || (action === "box" && ["doctor", "help", "why"].includes(String(tokens[1] || "").toLowerCase()))) {

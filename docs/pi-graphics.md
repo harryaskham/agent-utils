@@ -410,7 +410,9 @@ displayed using kitty Unicode placeholder cells, so:
   commands. `/gfx box summary` is the compact
   no-render view: it groups mapped surfaces by effect for quick registry audits.
   `/gfx box effects` lists all selectable effects and splits currently mapped
-  effects from explicit variants that remain available by name. `/gfx box doctor` explains which of status, summary, preview, `box-effect auto`,
+  effects from explicit variants that remain available by name. `/gfx box tokens`
+  groups mapped surfaces by `BOX_TYPE_THEME_TOKENS` color token without rendering.
+  `/gfx box doctor` explains which of status, summary, preview, `box-effect auto`,
   and relative/unicode mode to use next without rendering or mutating settings.
   `/gfx box preview` emits bounded representative per-surface
   box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, so every mapped
