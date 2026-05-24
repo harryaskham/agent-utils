@@ -2061,7 +2061,7 @@ export default function piGraphicsExtension(pi) {
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
           `  box mode:       ${gfx.boxMode || "relative"} (also: unicode)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
-          `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary)`,
+          `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary|effects|tokens|doctor|preview)`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
