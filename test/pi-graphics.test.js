@@ -1390,6 +1390,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function boxChromeSummaryLines\(\)/);
   assert.match(source, /Pi Graphics box summary/);
   assert.match(source, /effect → surfaces:/);
+  assert.match(source, /function boxChromeEffectsLines\(\)/);
+  assert.match(source, /Pi Graphics box effects/);
+  assert.match(source, /explicit variants:/);
   assert.match(source, /Use \/gfx box summary for a compact effect-grouped audit\./);
   assert.match(source, /function boxChromeStatusLines\(settings = readJsonIfExists\(agentSettingsPath\(\)\) \|\| \{\}\)/);
   assert.match(source, /Pi Graphics box status/);
@@ -1401,8 +1404,12 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-summary"/);
   assert.match(source, /\["summary", "groups", "grouped"\]\.includes/);
   assert.match(source, /boxChromeSummaryLines\(\)\.join\("\\n"\)/);
+  assert.match(source, /action === "box-effects"/);
+  assert.match(source, /\["effects", "variants", "effect-list"\]\.includes/);
+  assert.match(source, /boxChromeEffectsLines\(\)\.join\("\\n"\)/);
   assert.match(source, /function boxChromeDoctorLines\(settings = readJsonIfExists\(agentSettingsPath\(\)\) \|\| \{\}\)/);
   assert.match(source, /Pi Graphics box doctor/);
+  assert.match(source, /Use \/gfx box effects to list mapped effects and explicit selectable variants\./);
   assert.match(source, /Use \/gfx box-effect auto to restore per-surface mappings after forcing one effect\./);
   assert.match(source, /Use \/gfx box-mode relative for kitty side chrome/);
   assert.match(source, /action === "box-doctor"/);
@@ -1422,6 +1429,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-preview"/);
   assert.match(source, /\/gfx box status shows mappings without rendering/);
   assert.match(source, /\/gfx box summary groups mapped surfaces by effect/);
+  assert.match(source, /\/gfx box effects lists mapped and explicit variants/);
   assert.match(source, /\/gfx box doctor explains box status\/summary\/preview next steps/);
   assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
   assert.match(source, /function replaceEditorCursorChrome/);
