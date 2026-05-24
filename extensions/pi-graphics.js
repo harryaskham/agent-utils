@@ -2122,7 +2122,7 @@ export default function piGraphicsExtension(pi) {
         } else if (key === "box-effect" || key === "boxeffect" || key === "effect") {
           if (BOX_EFFECT_NAMES.includes(value)) { gfx.boxEffect = value; gfx.boxChrome = true; changed = true; }
           else if (value === "auto" || value === "per-type" || value === "default") { delete gfx.boxEffect; changed = true; }
-          else ctx.ui.notify(`unknown box effect: ${value} (use ${BOX_EFFECT_NAMES.join("|")} or auto)`, "warning");
+          else ctx.ui.notify(`unknown box effect: ${value} (use /gfx box effects for names, or /gfx box-effect auto)`, "warning");
         } else if (key === "mode") {
           if (/^(on|off|debug)$/.test(value)) { gfx.mode = value; changed = true; }
           else ctx.ui.notify(`unknown mode: ${value} (use on|off|debug)`, "warning");

@@ -1420,7 +1420,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /`  box chrome:     \$\{gfx\.boxChrome === true \? "on" : "off"\}`/);
   assert.match(source, /`  box effect:     \$\{gfx\.boxEffect \|\| "per-type"\} \(use \/gfx box effects for selectable names\)`/);
   assert.match(source, /\/gfx box-effect <name\|auto>  \(\/gfx box effects lists names\)/);
+  assert.match(source, /unknown box effect: \$\{value\} \(use \/gfx box effects for names, or \/gfx box-effect auto\)/);
   assert.doesNotMatch(source, /`  box effect:     \$\{gfx\.boxEffect \|\| "per-type"\} \(also: \$\{BOX_EFFECT_NAMES\.join/);
+  assert.doesNotMatch(source, /unknown box effect: \$\{value\} \(use \$\{BOX_EFFECT_NAMES\.join/);
   assert.match(source, /`  box registry:   \$\{boxChromeRegistryCountLine\(\)\} \(\/gfx box status\|summary\|effects\|tokens\|doctor\|preview\)`/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
