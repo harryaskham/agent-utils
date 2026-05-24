@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Quick smoke test for kitty graphics animation.
-// Usage: node scripts/test-kitty-animation.mjs
+// Usage: node scripts/kitty-animation-smoke.mjs
 // Emits a 40x1-cell image with frames moving left-to-right. By default it uses
 // explicit a=a,c=<frame> advancement, because APNG/native s=3 loops have not
 // reliably repainted in Pi/tmux sessions. Set KITTY_ANIMATION_MODE=native to

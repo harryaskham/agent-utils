@@ -557,6 +557,8 @@ And the discoverability slash commands include:
 * `/pi-graphics-theme-delta` — print the reload sentinel and theme delta report.
 * `/pi-graphics-demo` — print a sample rule, border, glow panel, graphical TUI component frame, and animated APNG pulse into the active UI.
 
+Interactive terminal animation smoke is intentionally outside default `node --test` discovery; run it explicitly with `npm run pi-graphics:animation-smoke` when you want raw Kitty animation output in the terminal.
+
 ## Example
 
 ```

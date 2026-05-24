@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -287,6 +287,13 @@ test("kitty multiviewer registers discoverable image commands, controls, and a c
   assert.match(source, /name: "kitty_image_preview_cycle"/);
   assert.match(source, /function startCycle/);
   assert.match(source, /function stopCycle/);
+});
+
+test("interactive kitty animation smoke stays out of default node test discovery", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(packageJson.scripts["pi-graphics:animation-smoke"], "node scripts/kitty-animation-smoke.mjs");
+  await access(new URL("../scripts/kitty-animation-smoke.mjs", import.meta.url));
+  await assert.rejects(access(new URL("../scripts/test-kitty-animation.mjs", import.meta.url)), /ENOENT/);
 });
 
 test("kitty multiviewer scopes delete commands to images it owns", async () => {
