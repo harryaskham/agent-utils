@@ -1827,9 +1827,10 @@ export default function piGraphicsExtension(pi) {
   }
 
   function boxChromeRegistryCountLine() {
-    const groups = boxChromeEffectGroups();
-    const surfaceCount = groups.reduce((sum, group) => sum + group.types.length, 0);
-    return `${surfaceCount} mapped surfaces; ${groups.length} unique effects represented.`;
+    const effectGroups = boxChromeEffectGroups();
+    const tokenGroups = boxChromeThemeTokenGroups();
+    const surfaceCount = effectGroups.reduce((sum, group) => sum + group.types.length, 0);
+    return `${surfaceCount} mapped surfaces; ${effectGroups.length} unique effects; ${tokenGroups.length} theme tokens represented.`;
   }
 
   function boxChromeSummaryLines() {

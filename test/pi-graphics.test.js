@@ -1386,7 +1386,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\/gfx cursor clear deletes stale live cursor placement only/);
   assert.match(source, /function boxChromeEffectGroups\(\)/);
   assert.match(source, /function boxChromeRegistryCountLine\(\)/);
-  assert.match(source, /return `\$\{surfaceCount\} mapped surfaces; \$\{groups\.length\} unique effects represented\.`/);
+  assert.match(source, /const tokenGroups = boxChromeThemeTokenGroups\(\)/);
+  assert.match(source, /return `\$\{surfaceCount\} mapped surfaces; \$\{effectGroups\.length\} unique effects; \$\{tokenGroups\.length\} theme tokens represented\.`/);
   assert.match(source, /function boxChromeSummaryLines\(\)/);
   assert.match(source, /Pi Graphics box summary/);
   assert.match(source, /effect → surfaces:/);
