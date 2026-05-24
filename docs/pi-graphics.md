@@ -505,11 +505,16 @@ displayed using kitty Unicode placeholder cells, so:
 * The built-in footer can be replaced with a compact one-line segmented footer
   (`PI_GRAPHICS_AUTO_FOOTER`, default on with graphics). It preserves the useful
   cwd/branch/context/compaction/model/thinking layout while inserting stable
-  Unicode-placeholder divider anchors; each divider anchors a low-z relative
-  background behind its segment so the footer remains caco/tmux-compatible and
-  width-bounded. Managed Cacophony checkout paths collapse to `~/<project>` so
-  the footer does not waste columns on `.cacophony/agents/.../checkout` and then
-  ellipsize fields even when the visible information would fit.
+  three-cell Unicode-placeholder divider images with no literal spaces around the
+  divider, giving the 3×1 PNG room for a centered thin bar plus glow on both
+  sides. Each divider anchors a low-z relative background behind the following
+  segment so the footer remains caco/tmux-compatible and width-bounded. Long
+  paths compact generically by collapsing earlier directories to initials while
+  keeping the final directory, e.g. `~/c/a/m/checkout`, rather than special-casing
+  any one checkout layout. Footer provider names are shortened before model
+  layout (`github-copilot` → `ghcp`, `openai` → `oai`, `anthropic` → `ant`,
+  `litellm-openai` → `loai`, `litellm-anthropic` → `lant`, `openrouter` →
+  `oprt`, and `azure-*` → `az`) so the model id gets more visible space.
 * The `⠼ Working...` indicator receives themed Pi graphics flair via custom
   working-indicator frames while preserving Pi's normal loader lifecycle.
 

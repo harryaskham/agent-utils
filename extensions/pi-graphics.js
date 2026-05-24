@@ -414,14 +414,44 @@ export default function piGraphicsExtension(pi) {
     return `${value.toFixed(1).replace(/\.0$/, "")}%`;
   }
 
+  function compactPathSegment(segment) {
+    const chars = Array.from(String(segment || "").replace(/^\.+/, ""));
+    return chars[0] || Array.from(String(segment || ""))[0] || "";
+  }
+
+  function compactFooterPath(path, threshold = 32) {
+    const text = String(path || "");
+    if (approximateVisibleCells(text) <= threshold) return text;
+    const prefix = text.startsWith("~/") ? "~/" : text.startsWith("/") ? "/" : "";
+    const body = prefix ? text.slice(prefix.length) : text;
+    const parts = body.split("/").filter(Boolean);
+    if (parts.length <= 1) return text;
+    return `${prefix}${[...parts.slice(0, -1).map(compactPathSegment), parts.at(-1)].join("/")}`;
+  }
+
   function prettyFooterCwd(cwd) {
     const home = process.env.HOME;
     const value = String(cwd || process.cwd());
-    const managed = value.match(/\.cacophony\/agents\/([^/]+)\/[^/]+\/checkout$/);
-    if (managed) return `~/${managed[1]}`;
-    if (home && value === home) return "~";
-    if (home && value.startsWith(`${home}/`)) return `~/${value.slice(home.length + 1)}`;
-    return value;
+    const display = home && value === home
+      ? "~"
+      : home && value.startsWith(`${home}/`)
+        ? `~/${value.slice(home.length + 1)}`
+        : value;
+    return compactFooterPath(display);
+  }
+
+  function compactFooterProvider(provider) {
+    const raw = String(provider || "").trim();
+    const key = raw.toLowerCase().replace(/[_./]+/g, "-");
+    if (!key) return "";
+    if (key === "github-copilot") return "ghcp";
+    if (key === "openai") return "oai";
+    if (key === "anthropic") return "ant";
+    if (key === "litellm-openai") return "loai";
+    if (key === "litellm-anthropic") return "lant";
+    if (key === "openrouter") return "oprt";
+    if (key.startsWith("azure-")) return "az";
+    return raw;
   }
 
   function truncateFooterStart(text, width) {
@@ -1036,8 +1066,9 @@ export default function piGraphicsExtension(pi) {
     const context = footerState.contextMax > 0
       ? `${formatFooterPct(footerState.contextPct)}/${formatFooterTokens(footerState.contextMax)}`
       : "context n/a";
+    const provider = compactFooterProvider(footerState.provider);
     const model = footerState.model
-      ? `${footerState.provider ? `${footerState.provider}/` : ""}${footerState.model}`
+      ? `${provider ? `${provider}/` : ""}${footerState.model}`
       : "model n/a";
     return [
       { key: "cwd", token: "muted", value: prettyFooterCwd(ctx?.cwd || process.cwd()), truncate: truncateFooterStart, min: 4, max: 48 },
@@ -1049,10 +1080,12 @@ export default function piGraphicsExtension(pi) {
     ];
   }
 
+  const FOOTER_DIVIDER_WIDTH = 3;
+
   function fitFooterSegments(rawSegments, width) {
     const terminalWidth = Math.max(1, Math.trunc(Number(width) || 1));
-    const anchorCount = rawSegments.length + 1;
-    let budget = terminalWidth - anchorCount;
+    const dividerBudget = Math.max(0, rawSegments.length - 1) * FOOTER_DIVIDER_WIDTH;
+    let budget = terminalWidth - dividerBudget;
     if (budget < rawSegments.length) return null;
     const segments = rawSegments.map((segment) => {
       const preferred = Math.min(segment.max, approximateVisibleCells(segment.value) + 2);
@@ -1080,9 +1113,9 @@ export default function piGraphicsExtension(pi) {
       else segments[0].width += spare;
     }
     return segments.map((segment) => {
-      const innerWidth = Math.max(0, segment.width - 2);
+      const innerWidth = Math.max(0, segment.width);
       const text = segment.truncate(segment.value, innerWidth);
-      const padded = ` ${text}${" ".repeat(Math.max(0, innerWidth - approximateVisibleCells(text)))} `;
+      const padded = `${text}${" ".repeat(Math.max(0, innerWidth - approximateVisibleCells(text)))}`;
       return { ...segment, text: padded };
     });
   }
@@ -1120,7 +1153,7 @@ export default function piGraphicsExtension(pi) {
         placementId,
         parentImageId: anchor.imageId,
         parentPlacementId: anchor.placementId,
-        hOffset: 1,
+        hOffset: FOOTER_DIVIDER_WIDTH,
         columns: textWidth,
         rows: 1,
         zIndex: PI_GRAPHICS_Z.BACKGROUND,
@@ -1130,25 +1163,25 @@ export default function piGraphicsExtension(pi) {
     }
   }
 
-  function buildFooterAnchorCell(segmentKey, index, token = "borderAccent") {
+  function buildFooterDividerCell(segmentKey, index, token = "borderAccent") {
     if (!ensureUnicodePlacement(state)) return "│";
     const cell = cellMetrics();
     const color = getThemeColorHex(activeThemeRef, token, "#88c0d0");
     const rendered = renderPromptEnclosure({
-      columns: 1,
+      columns: FOOTER_DIVIDER_WIDTH,
       variant: "glow",
-      alpha: Math.max(0.32, editorAlpha() * 0.64),
+      alpha: Math.max(0.36, editorAlpha() * 0.72),
       leftColor: color,
       rightColor: getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead"),
-      fadeEdges: false,
+      fadeEdges: true,
       ...cell,
     });
     const placement = buildPlacement(state, {
-      name: `footer-anchor-${segmentKey}-${index}-${color}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+      name: `footer-divider-${segmentKey}-${index}-${color}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
       png: rendered.png,
-      columns: 1,
+      columns: FOOTER_DIVIDER_WIDTH,
       rows: 1,
-      width: 1,
+      width: FOOTER_DIVIDER_WIDTH,
       zIndex: PI_GRAPHICS_Z.SURFACE,
     });
     emitGraphicsCommand(placement.transmit);
@@ -1162,17 +1195,17 @@ export default function piGraphicsExtension(pi) {
     const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
     let line = "";
     fitted.forEach((segment, index) => {
-      const anchor = buildFooterAnchorCell(segment.key, index, segment.token);
-      if (anchor && typeof anchor === "object") {
-        ensureFooterSegmentBackground({ anchor, segmentKey: segment.key, index, width: approximateVisibleCells(segment.text), token: segment.token });
-        line += anchor.cell;
-      } else {
-        line += anchor;
+      if (index > 0) {
+        const divider = buildFooterDividerCell(segment.key, index, segment.token);
+        if (divider && typeof divider === "object") {
+          ensureFooterSegmentBackground({ anchor: divider, segmentKey: segment.key, index, width: approximateVisibleCells(segment.text), token: segment.token });
+          line += divider.cell;
+        } else {
+          line += divider;
+        }
       }
       line += fg(segment.token, segment.text);
     });
-    const endAnchor = buildFooterAnchorCell("end", fitted.length, "borderAccent");
-    line += typeof endAnchor === "object" ? endAnchor.cell : endAnchor;
     const visible = approximateVisibleCells(line);
     const target = Math.max(1, Math.trunc(Number(width) || 1));
     return visible > target ? truncateFooterEnd(line.replace(ZERO_WIDTH_CONTROL_RE, ""), target) : line;
