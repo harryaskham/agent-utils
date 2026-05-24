@@ -415,7 +415,8 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx box doctor` explains which of status, summary, preview, `box-effect auto`,
   and relative/unicode mode to use next without rendering or mutating settings.
   `/gfx box preview` emits bounded representative per-surface
-  box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, so every mapped
+  box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, labeling each
+  row with surface, effect, and theme token, so every mapped
   surface appears automatically as new chrome families are added. The preview
   includes a generated mapped-surface and unique-effect count, then uses compact
   paired rows with shorter cached strips so the expanded surface set stays

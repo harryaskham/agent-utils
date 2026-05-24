@@ -1433,6 +1433,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /const samples = \[\n\s+"assistant"/);
   assert.match(source, /compact paired rows/);
   assert.match(source, /const previewColumns = 10/);
+  assert.match(source, /return \{ type, effect, token, line: placement\.lines\[0\] \?\? "" \}/);
+  assert.match(source, /String\(token\)\.padEnd\(15\)/);
   assert.match(source, /for \(let i = 0; i < previews\.length; i \+= 2\)/);
   assert.match(source, /action === "box-preview"/);
   assert.match(source, /\/gfx box status shows mappings without rendering/);

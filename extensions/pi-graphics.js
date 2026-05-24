@@ -1953,9 +1953,9 @@ export default function piGraphicsExtension(pi) {
         zIndex: PI_GRAPHICS_Z.SURFACE,
       });
       emitGraphicsCommand(placement.transmit);
-      return { type, effect, line: placement.lines[0] ?? "" };
+      return { type, effect, token, line: placement.lines[0] ?? "" };
     });
-    const formatPreview = ({ type, effect, line }) => `${type.padEnd(16)} ${String(effect).padEnd(10)} ${line}`;
+    const formatPreview = ({ type, effect, token, line }) => `${type.padEnd(16)} ${String(effect).padEnd(10)} ${String(token).padEnd(15)} ${line}`;
     for (let i = 0; i < previews.length; i += 2) {
       const left = formatPreview(previews[i]);
       const right = previews[i + 1] ? formatPreview(previews[i + 1]) : "";
