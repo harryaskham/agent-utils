@@ -1951,8 +1951,8 @@ export default function piGraphicsExtension(pi) {
           lines.push(`${marker} ${row.label.padEnd(20)} ${value}`);
         });
         lines.push("", "Preview:");
-        lines.push("  assistant=manuscript  tool=schematic  oauth=keyring");
-        lines.push("  model=dial  settings=slider  thinking=lantern");
+        lines.push("  assistant=folio  tool=rig  oauth=token");
+        lines.push("  model=gauge  settings=console  thinking=candle");
         lines.push("  /gfx box status shows mappings without rendering.");
         lines.push("  /gfx box summary groups mapped surfaces by effect.");
         lines.push("  /gfx box effects lists mapped and explicit variants.");

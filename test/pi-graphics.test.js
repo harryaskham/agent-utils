@@ -1434,6 +1434,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /lines\.push\(`\$\{previewHeader\}  \$\{previewHeader\}`\)/);
   assert.match(source, /for \(let i = 0; i < previews\.length; i \+= 2\)/);
   assert.match(source, /action === "box-preview"/);
+  assert.match(source, /assistant=folio  tool=rig  oauth=token/);
+  assert.match(source, /model=gauge  settings=console  thinking=candle/);
+  assert.doesNotMatch(source, /assistant=manuscript  tool=schematic  oauth=keyring/);
+  assert.doesNotMatch(source, /model=dial  settings=slider  thinking=lantern/);
   assert.match(source, /\/gfx box status shows mappings without rendering/);
   assert.match(source, /\/gfx box summary groups mapped surfaces by effect/);
   assert.match(source, /\/gfx box effects lists mapped and explicit variants/);
