@@ -1826,12 +1826,17 @@ export default function piGraphicsExtension(pi) {
     return [...groups.entries()].map(([effect, types]) => ({ effect, types }));
   }
 
-  function boxChromeSummaryLines() {
+  function boxChromeRegistryCountLine() {
     const groups = boxChromeEffectGroups();
     const surfaceCount = groups.reduce((sum, group) => sum + group.types.length, 0);
+    return `${surfaceCount} mapped surfaces; ${groups.length} unique effects represented.`;
+  }
+
+  function boxChromeSummaryLines() {
+    const groups = boxChromeEffectGroups();
     const lines = [
       "Pi Graphics box summary",
-      `${surfaceCount} mapped surfaces grouped by ${groups.length} effects.`,
+      boxChromeRegistryCountLine(),
       "effect → surfaces:",
     ];
     for (const { effect, types } of groups) lines.push(`  ${effect.padEnd(12)} ${types.join(", ")}`);
@@ -1842,11 +1847,10 @@ export default function piGraphicsExtension(pi) {
   function boxChromeStatusLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
     const mappings = Object.entries(BOX_TYPE_EFFECTS);
-    const representedEffects = new Set(mappings.map(([, effect]) => effect || "glass"));
     const lines = [
       "Pi Graphics box status",
       `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
-      `${mappings.length} mapped surfaces; ${representedEffects.size} unique effects represented.`,
+      boxChromeRegistryCountLine(),
       "surface → effect:",
     ];
     for (const [type, effect] of mappings) lines.push(`  ${type.padEnd(16)} ${effect || "glass"}`);
@@ -1857,13 +1861,11 @@ export default function piGraphicsExtension(pi) {
 
   function boxChromeDoctorLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
     const gfx = settings.piGraphics || {};
-    const groups = boxChromeEffectGroups();
-    const surfaceCount = groups.reduce((sum, group) => sum + group.types.length, 0);
     const forced = gfx.boxEffect ? `forced to ${gfx.boxEffect}` : "per-surface auto mappings";
     return [
       "Pi Graphics box doctor",
       `Current: box=${gfx.boxChrome === false ? "off" : "on"}, mode=${gfx.boxMode || "relative"}, effect=${forced}.`,
-      `Registry: ${surfaceCount} mapped surfaces grouped by ${groups.length} effects.`,
+      `Registry: ${boxChromeRegistryCountLine()}`,
       "Use /gfx box status for the full surface → effect mapping.",
       "Use /gfx box summary for a compact effect → surfaces audit.",
       "Use /gfx box preview for bounded visual strips; it renders graphics but does not change piGraphics.boxEffect.",
@@ -2012,6 +2014,7 @@ export default function piGraphicsExtension(pi) {
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
           `  box mode:       ${gfx.boxMode || "relative"} (also: unicode)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
+          `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary)`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",

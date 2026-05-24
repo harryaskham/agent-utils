@@ -405,7 +405,9 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
   placeholder cells. `/gfx box status` prints box mode, forced-vs-per-type effect
   state, mapped surface count, unique effect count, and the registry mapping without
-  emitting preview graphics or changing settings. `/gfx box summary` is the compact
+  emitting preview graphics or changing settings. Ordinary `/gfx status` includes
+  mapped surface and unique-effect counts with a pointer to the no-render audit
+  commands. `/gfx box summary` is the compact
   no-render view: it groups mapped surfaces by effect for quick registry audits.
   `/gfx box doctor` explains which of status, summary, preview, `box-effect auto`,
   and relative/unicode mode to use next without rendering or mutating settings.

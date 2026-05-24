@@ -1385,6 +1385,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\/gfx cursor doctor explains status\/preview\/clear next steps/);
   assert.match(source, /\/gfx cursor clear deletes stale live cursor placement only/);
   assert.match(source, /function boxChromeEffectGroups\(\)/);
+  assert.match(source, /function boxChromeRegistryCountLine\(\)/);
+  assert.match(source, /return `\$\{surfaceCount\} mapped surfaces; \$\{groups\.length\} unique effects represented\.`/);
   assert.match(source, /function boxChromeSummaryLines\(\)/);
   assert.match(source, /Pi Graphics box summary/);
   assert.match(source, /effect → surfaces:/);
@@ -1406,6 +1408,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "box-doctor"/);
   assert.match(source, /\["doctor", "help", "why"\]\.includes/);
   assert.match(source, /boxChromeDoctorLines\(settings\)\.join\("\\n"\)/);
+  assert.match(source, /`  box registry:   \$\{boxChromeRegistryCountLine\(\)\} \(\/gfx box status\|summary\)`/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
   assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
