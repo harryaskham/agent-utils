@@ -2015,7 +2015,7 @@ export default function piGraphicsExtension(pi) {
           `  editor.style:   ${editor.style ?? "static"} (also: unicode|animated)`,
           `  box chrome:     ${gfx.boxChrome === false ? "off" : "on"}`,
           `  box mode:       ${gfx.boxMode || "relative"} (also: unicode)`,
-          `  box effect:     ${gfx.boxEffect || "per-type"} (also: ${BOX_EFFECT_NAMES.join("|")})`,
+          `  box effect:     ${gfx.boxEffect || "per-type"} (use /gfx box effects for selectable names)`,
           `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary|effects|tokens|doctor|preview)`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
@@ -2023,7 +2023,7 @@ export default function piGraphicsExtension(pi) {
           "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
-          `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
+          "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
           "       /gfx mode on|off|debug",
           "Ctrl+t cycles presets when keybindings free it from app.thinking.toggle.",
         ];
