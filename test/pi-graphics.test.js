@@ -1384,6 +1384,13 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\/gfx cursor status prints diagnostics without rendering/);
   assert.match(source, /\/gfx cursor doctor explains status\/preview\/clear next steps/);
   assert.match(source, /\/gfx cursor clear deletes stale live cursor placement only/);
+  assert.match(source, /function boxChromeStatusLines\(settings = readJsonIfExists\(agentSettingsPath\(\)\) \|\| \{\}\)/);
+  assert.match(source, /Pi Graphics box status/);
+  assert.match(source, /surface → effect:/);
+  assert.match(source, /No graphics were emitted or settings changed\./);
+  assert.match(source, /action === "box-status"/);
+  assert.match(source, /\["status", "mappings", "map"\]\.includes/);
+  assert.match(source, /boxChromeStatusLines\(settings\)\.join\("\\n"\)/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
   assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
@@ -1395,6 +1402,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const previewColumns = 10/);
   assert.match(source, /for \(let i = 0; i < previews\.length; i \+= 2\)/);
   assert.match(source, /action === "box-preview"/);
+  assert.match(source, /\/gfx box status shows mappings without rendering/);
   assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);

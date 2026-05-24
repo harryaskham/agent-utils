@@ -1816,6 +1816,21 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function boxChromeStatusLines(settings = readJsonIfExists(agentSettingsPath()) || {}) {
+    const gfx = settings.piGraphics || {};
+    const mappings = Object.entries(BOX_TYPE_EFFECTS);
+    const representedEffects = new Set(mappings.map(([, effect]) => effect || "glass"));
+    const lines = [
+      "Pi Graphics box status",
+      `box=${gfx.boxChrome === false ? "off" : "on"} mode=${gfx.boxMode || "relative"} effect=${gfx.boxEffect || "per-type"}`,
+      `${mappings.length} mapped surfaces; ${representedEffects.size} unique effects represented.`,
+      "surface → effect:",
+    ];
+    for (const [type, effect] of mappings) lines.push(`  ${type.padEnd(16)} ${effect || "glass"}`);
+    lines.push("No graphics were emitted or settings changed.");
+    return lines;
+  }
+
   function buildBoxEffectPreviewLines() {
     if (!ensureUnicodePlacement(state)) {
       return graphicsPreviewUnavailableLines("box");
@@ -1894,6 +1909,7 @@ export default function piGraphicsExtension(pi) {
         lines.push("", "Preview:");
         lines.push("  assistant=manuscript  tool=schematic  oauth=keyring");
         lines.push("  model=dial  settings=slider  thinking=lantern");
+        lines.push("  /gfx box status shows mappings without rendering.");
         lines.push("  /gfx box preview shows per-surface chrome strips.");
         lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
         lines.push("  /gfx cursor status prints diagnostics without rendering.");
@@ -1935,7 +1951,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   pi.registerCommand?.("gfx", {
-    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
+    description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box status|box preview|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|animated|box on|off|box-effect <name>|mode on|off|debug]",
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
@@ -1955,7 +1971,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box status | /gfx box preview | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|animated",
           "       /gfx box on|off",
           `       /gfx box-effect ${BOX_EFFECT_NAMES.join("|")}`,
@@ -2003,6 +2019,10 @@ export default function piGraphicsExtension(pi) {
       if (action === "cursor-clear" || (action === "cursor" && ["clear", "reset", "cleanup"].includes(String(tokens[1] || "").toLowerCase()))) {
         const cleared = clearEditorCursorPlacement();
         ctx.ui.notify(cleared ? "Pi Graphics cursor placement cleared; it will re-anchor on the next editor render." : "Pi Graphics cursor placement was already clear.", "info");
+        return;
+      }
+      if (action === "box-status" || (action === "box" && ["status", "mappings", "map"].includes(String(tokens[1] || "").toLowerCase()))) {
+        ctx.ui.notify(boxChromeStatusLines(settings).join("\n"), "info");
         return;
       }
       if (action === "box-preview" || (action === "box" && String(tokens[1] || "").toLowerCase() === "preview")) {
