@@ -783,15 +783,20 @@ test("realtime connection auto-reconnects after unexpected close but not after /
 });
 
 test("/rt status full and doctor subcommands expose diagnostics", async () => {
-  const { pi, commands, handlers, notifications, ctx } = makeHarness();
+  const { pi, commands, handlers, notifications, ctx } = makeHarness({ initialModel: { provider: "openai-realtime", id: "gpt-realtime-2", contextWindow: 128000 } });
+  ctx.settingsManager = { getCompactionSettings: () => ({ enabled: true, reserveTokens: 16384, keepRecentTokens: 40000 }) };
+  ctx.agent = { state: { messages: [{ role: "user", content: [{ type: "text", text: "hello realtime" }] }] } };
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   await commands.get("rt").handler("status full", ctx);
   assert.match(notifications.at(-1).message, /Realtime doctor/);
+  assert.match(notifications.at(-1).message, /context: window:128,000 · compactAt:111,616 \(87\.2%\)/);
+  assert.match(notifications.at(-1).message, /full:\d+ \(0\.0%\) · summary:\d+ \(0\.\d%\)/);
 
   await commands.get("rt").handler("doctor", ctx);
   assert.match(notifications.at(-1).message, /Realtime doctor/);
+  assert.match(notifications.at(-1).message, /reserve:16,384 · keep:40,000/);
 });
 
 test("session_before_compact uses local simple summary without leaving realtime", async () => {

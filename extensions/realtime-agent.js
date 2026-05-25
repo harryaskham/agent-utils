@@ -2453,6 +2453,42 @@ function micCaptureSummary(session) {
   return `${mode} active · ${bytes} bytes${bytes === 0 ? " · waiting for audio" : ""}`;
 }
 
+function realtimeContextDiagnostics(session, config) {
+  const ctx = session.lastCtx || {};
+  const model = isRealtimeModel(ctx.model) ? ctx.model : null;
+  const contextWindow = Number(model?.contextWindow || REALTIME_CONTEXT_WINDOW_TOKENS);
+  const settings = ctx.settingsManager?.getCompactionSettings?.();
+  const reserveTokens = Number(settings?.reserveTokens ?? 16_384);
+  const thresholdTokens = Math.max(0, contextWindow - reserveTokens);
+  const messages = ctx.agent?.state?.messages || ctx.sessionManager?.buildSessionContext?.()?.messages || null;
+  const context = messages
+    ? { systemPrompt: ctx.agent?.systemPrompt || ctx.systemPrompt || "", messages, tools: ctx.tools || [] }
+    : null;
+  const fullTokens = context ? estimateRealtimeContextTokens(context) : null;
+  const summaryTokens = context ? estimateRealtimeSummaryContextTokens(context) : null;
+  const pct = (tokens) => tokens == null || !contextWindow ? "n/a" : `${((tokens / contextWindow) * 100).toFixed(1)}%`;
+  const thresholdPct = contextWindow ? `${((thresholdTokens / contextWindow) * 100).toFixed(1)}%` : "n/a";
+  return {
+    contextWindow,
+    reserveTokens,
+    keepRecentTokens: settings?.keepRecentTokens ?? null,
+    thresholdTokens,
+    thresholdPct,
+    fullTokens,
+    fullPct: pct(fullTokens),
+    summaryTokens,
+    summaryPct: pct(summaryTokens),
+  };
+}
+
+function realtimeContextDiagnosticLine(session, config) {
+  const d = realtimeContextDiagnostics(session, config);
+  const observed = d.fullTokens == null
+    ? "estimate:n/a"
+    : `full:${d.fullTokens.toLocaleString()} (${d.fullPct}) · summary:${d.summaryTokens.toLocaleString()} (${d.summaryPct})`;
+  return `context: window:${d.contextWindow.toLocaleString()} · compactAt:${d.thresholdTokens.toLocaleString()} (${d.thresholdPct}) · reserve:${d.reserveTokens.toLocaleString()}${d.keepRecentTokens != null ? ` · keep:${Number(d.keepRecentTokens).toLocaleString()}` : ""} · ${observed}`;
+}
+
 function statusLines(session, config, { full = false } = {}) {
   const conn = session.connected ? "●" : (session.connecting ? "◐" : "○");
   const mic = session.mic ? `mic:${session.micMode || "on"}` : "mic:off";
@@ -2479,6 +2515,7 @@ function statusLines(session, config, { full = false } = {}) {
   return [
     ...compact,
     `baseUrl: ${normalizeBaseUrl(config.baseUrl)}`,
+    realtimeContextDiagnosticLine(session, config),
     `azureEndpoint: ${config.azureEndpoint || "<unset>"}`,
     `azureDeployment: ${config.azureDeployment || config.model}`,
     `record: ${config.recordCommand || defaultRecordCommand()}`,
