@@ -13,6 +13,7 @@
   "files": [
     ".claude-plugin",
     "extensions",
+    "android",
     "prompts",
     "scripts",
     "themes",
@@ -52,7 +53,8 @@
       "./extensions/effort.js",
       "./extensions/true-defaults.js",
       "./extensions/tendril-share.js",
-      "./extensions/app-automation.js"
+      "./extensions/app-automation.js",
+      "./extensions/android.js"
     ],
     "prompts": [
       "./prompts"
