@@ -794,7 +794,7 @@ test("/rt status full and doctor subcommands expose diagnostics", async () => {
   assert.match(notifications.at(-1).message, /Realtime doctor/);
 });
 
-test("session_before_compact disables realtime and restores text model", async () => {
+test("session_before_compact uses local simple summary without leaving realtime", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_API_KEY = "test-key";
   FakeWebSocket.instances = [];
@@ -808,12 +808,33 @@ test("session_before_compact disables realtime and restores text model", async (
   try {
     await commands.get("rt").handler("start nolisten", ctx);
     assert.equal(ctx.model.provider, "openai-realtime");
-    const result = await handlers.get("session_before_compact")?.({ preparation: {}, branchEntries: [] }, ctx);
-    assert.deepEqual(result, { cancel: true });
-    assert.equal(ctx.model.provider, "litellm-openai");
-    assert.equal(setModelCalls.at(-1), previousModel);
+    const result = await handlers.get("session_before_compact")?.({
+      preparation: {
+        firstKeptEntryId: "keep-1",
+        tokensBefore: 12345,
+        previousSummary: "old compact facts",
+        messagesToSummarize: [
+          { role: "user", content: [{ type: "text", text: "please wire realtime compaction" }] },
+          { role: "assistant", content: [{ type: "text", text: "I will keep realtime active." }] },
+        ],
+        turnPrefixMessages: [],
+        fileOps: { read: new Set(["extensions/realtime-agent.js"]), edited: new Set(["docs/realtime-agent.md"]) },
+      },
+      branchEntries: [],
+    }, ctx);
+    assert.equal(ctx.model.provider, "openai-realtime");
+    assert.equal(setModelCalls.length, 1);
+    assert.equal(setModelCalls.at(-1).provider, "openai-realtime");
+    assert.equal(setModelCalls.at(-1).id, "gpt-realtime-2");
     assert.equal(providers.has("openai-realtime"), true);
-    assert.match(notifications.at(-1)?.message || "", /restored the text model/);
+    assert.equal(result.cancel, undefined);
+    assert.equal(result.compaction.firstKeptEntryId, "keep-1");
+    assert.equal(result.compaction.tokensBefore, 12345);
+    assert.match(result.compaction.summary, /local\/simple checkpoint/);
+    assert.match(result.compaction.summary, /old compact facts/);
+    assert.match(result.compaction.summary, /please wire realtime compaction/);
+    assert.deepEqual(result.compaction.details, { readFiles: ["extensions/realtime-agent.js"], modifiedFiles: ["docs/realtime-agent.md"] });
+    assert.match(notifications.at(-1)?.message || "", /realtime stays active/);
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
     else process.env.PI_RT_API_KEY = previousApiKey;

@@ -267,8 +267,20 @@ function messageToSummaryLine(msg) {
     const out = truncateToolOutput(messageTextContent(msg.content), 500);
     return `toolResult ${msg.toolCallId || "<unknown>"}${msg.isError ? " error" : ""}: ${out}`;
   }
+  if (msg.role === "bashExecution") {
+    const command = truncateToolOutput(msg.command || "", 240);
+    const output = truncateToolOutput(msg.output || "", 500);
+    return `bash: ${command}${output ? ` => ${output}` : ""}`;
+  }
   const text = messageTextContent(msg.content).trim();
+  const toolCalls = Array.isArray(msg.content)
+    ? msg.content
+        .filter((c) => c?.type === "toolCall")
+        .map((c) => `${c.name || "tool"}(${truncateToolOutput(JSON.stringify(c.arguments || {}), 240)})`)
+    : [];
+  if (text && toolCalls.length) return `${msg.role}: ${truncateToolOutput(text, SUMMARY_FALLBACK_TEXT_CAP)}; toolCalls: ${toolCalls.join("; ")}`;
   if (text) return `${msg.role}: ${truncateToolOutput(text, SUMMARY_FALLBACK_TEXT_CAP)}`;
+  if (toolCalls.length) return `${msg.role} toolCalls: ${toolCalls.join("; ")}`;
   return `${msg.role}: <non-text or empty message>`;
 }
 
@@ -320,6 +332,69 @@ function buildRealtimeSummaryText(messages = []) {
     "",
     ...lines,
   ].join("\n"));
+}
+
+function realtimeSimpleCompactionFileDetails(fileOps = {}) {
+  const readFiles = Array.from(fileOps.read || fileOps.readFiles || []).map(String).filter(Boolean).sort();
+  const modifiedFiles = Array.from(fileOps.edited || fileOps.modified || fileOps.modifiedFiles || []).map(String).filter(Boolean).sort();
+  return { readFiles, modifiedFiles };
+}
+
+function buildRealtimeSimpleCompaction(preparation = {}, customInstructions) {
+  const messages = [
+    ...(preparation.messagesToSummarize || []),
+    ...(preparation.turnPrefixMessages || []),
+  ];
+  const lines = messages.slice(-SUMMARY_FALLBACK_MESSAGE_CAP).map(messageToSummaryLine).filter(Boolean);
+  const roleCounts = messages.reduce((acc, msg) => {
+    const role = msg?.role || "unknown";
+    acc[role] = (acc[role] || 0) + 1;
+    return acc;
+  }, {});
+  const details = realtimeSimpleCompactionFileDetails(preparation.fileOps);
+  const previous = String(preparation.previousSummary || "").trim();
+  const summary = [
+    "## Goal",
+    "Realtime mode stayed active during compaction. This is a deterministic local/simple checkpoint generated without calling the selected realtime model.",
+    customInstructions ? `\nAdditional compaction instructions: ${customInstructions}` : "",
+    previous ? `\nPrevious summary preserved:\n${truncateToolOutput(previous, 6000)}` : "",
+    "",
+    "## Constraints & Preferences",
+    "- Preserve realtime voice/model state during compaction; do not restore the text model just to compact.",
+    "- Keep the recent Pi session entries from `firstKeptEntryId` onward; this summary only replaces older context.",
+    "",
+    "## Progress",
+    "### Done",
+    `- [x] Local realtime simple compaction summarized ${messages.length} older message(s).`,
+    `- [x] Role counts: ${Object.entries(roleCounts).map(([role, count]) => `${role}:${count}`).join(", ") || "none"}.`,
+    "",
+    "### In Progress",
+    "- [ ] Continue from the retained recent messages after this compaction entry.",
+    "",
+    "### Blocked",
+    "- None recorded by the local simple compacter.",
+    "",
+    "## Key Decisions",
+    "- **Realtime-safe compaction**: Use an extension-provided local summary so Pi does not send compaction traffic to `gpt-realtime-2` and does not leave realtime mode.",
+    "",
+    "## Next Steps",
+    "1. Continue the realtime session from the retained recent context.",
+    "2. If important context is missing, inspect retained messages and previous summaries in the session history.",
+    "",
+    "## Critical Context",
+    `- Included latest older-message excerpts: ${lines.length}/${messages.length}.`,
+    ...lines.map((line) => `- ${line}`),
+    details.readFiles.length ? `\n<read-files>\n${details.readFiles.join("\n")}\n</read-files>` : "",
+    details.modifiedFiles.length ? `\n<modified-files>\n${details.modifiedFiles.join("\n")}\n</modified-files>` : "",
+  ].filter((line) => line !== "").join("\n");
+  return {
+    compaction: {
+      summary: capRealtimeSummaryText(summary),
+      firstKeptEntryId: preparation.firstKeptEntryId,
+      tokensBefore: preparation.tokensBefore,
+      details,
+    },
+  };
 }
 
 function splitCurrentTurn(messages = []) {
@@ -2794,11 +2869,29 @@ export default function realtimeAgentExtension(pi) {
     await session.close(false).catch(() => {});
   });
 
-  pi.on("session_before_compact", async (_event, ctx) => {
+  pi.on("session_before_compact", async (event, ctx) => {
     if (!isRealtimeModel(ctx?.model) && !session.current && !session.connected) return undefined;
-    await controls.disable(ctx, { restoreModel: true }).catch(() => {});
-    ctx?.ui?.notify?.("Realtime paused and restored the text model before compaction. Retry /compact if this was a manual compact; auto-compaction will retry on the text model.", "warning");
-    return { cancel: true };
+    const result = buildRealtimeSimpleCompaction(event?.preparation || {}, event?.customInstructions);
+    session.forwardedMessageCount = 0;
+    session.systemPromptApplied = null;
+    session.toolsAppliedKey = null;
+    session.audioModeApplied = null;
+    session.callIdsEmittedByModel.clear();
+    session.realtimeCallIdByOriginal.clear();
+    ctx?.ui?.notify?.("Realtime compaction used local simple mode; realtime stays active and the text model was not restored.", "info");
+    return result;
+  });
+
+  pi.on("session_compact", async (_event, ctx) => {
+    if (!isRealtimeModel(ctx?.model) && !session.current && !session.connected) return undefined;
+    // Compaction rewrites Pi's message array; reset the realtime history cursor
+    // so the next turn forwards the compact summary and retained messages rather
+    // than slicing from the pre-compaction message count.
+    session.forwardedMessageCount = 0;
+    session.systemPromptApplied = null;
+    session.toolsAppliedKey = null;
+    session.audioModeApplied = null;
+    return undefined;
   });
 
   pi.on("model_select", (event, ctx) => {
