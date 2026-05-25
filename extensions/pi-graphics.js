@@ -964,6 +964,10 @@ export default function piGraphicsExtension(pi) {
       passthrough: state.config.passthrough,
     });
     editorCursorRelativePlacement = { imageId, placementId };
+    // Keep raw Kitty APC out of the editor's rendered text. Inline APC escapes
+    // confuse Pi's TUI width/diffing path and can duplicate/wrap the input line;
+    // the command still carries H=-5,V=-2 and is emitted side-channel.
+    emitGraphicsCommand(relativePlacement);
     const anchorLine = buildKittyUnicodePlaceholderLines({
       imageId: anchorImageId,
       placementId: anchorPlacementId,
@@ -971,12 +975,7 @@ export default function piGraphicsExtension(pi) {
       rows: 1,
       width: 1,
     })[0] ?? null;
-    // Emit the child relative placement inline after the anchor placeholder so
-    // Kitty has already seen the physical Unicode placeholder position before
-    // resolving H/V. Emitting the relative placement out-of-band during render
-    // races the TUI frame write and can make the 11x5 cursor glow appear with
-    // its top-left on the cursor instead of centered at H=-5,V=-2.
-    return anchorLine ? `${anchorLine}${relativePlacement}` : null;
+    return anchorLine;
   }
 
   function buildAnchoredEditorCursorPreviewLine({ label, heat = 0, wpm = 0, trailDirection = 1 } = {}) {

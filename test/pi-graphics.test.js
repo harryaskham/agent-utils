@@ -1344,11 +1344,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const cursorVOffset = -Math\.floor\(cursorRows \/ 2\)/);
   assert.match(source, /hOffset: cursorHOffset/);
   assert.match(source, /vOffset: cursorVOffset/);
-  assert.match(source, /return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null/);
-  assert.match(source, /Kitty has already seen the physical Unicode placeholder position before/);
+  assert.match(source, /emitGraphicsCommand\(relativePlacement\);\n\s+const anchorLine = buildKittyUnicodePlaceholderLines/);
+  assert.match(source, /Keep raw Kitty APC out of the editor's rendered text/);
   assert.match(source, /H=-5,V=-2/);
   assert.match(source, /return `\$\{String\(label \|\| "anchored"\)\.padEnd\(12\)\} \$\{anchorLine\}\$\{relativePlacement\}`/);
-  assert.doesNotMatch(source, /emitGraphicsCommand\(relativePlacement\);/);
+  assert.doesNotMatch(source, /return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null/);
   assert.match(source, /trailCells: heat > 0\.04/);
   assert.match(source, /buildDeleteCommand\(\{\n\s+imageId: editorCursorRelativePlacement\.imageId,\n\s+placementId: editorCursorRelativePlacement\.placementId,\n\s+deleteMode: "i"/);
   assert.doesNotMatch(source, /deleteMode: "p"/);
