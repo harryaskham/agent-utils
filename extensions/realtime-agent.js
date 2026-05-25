@@ -2516,6 +2516,8 @@ export function createRealtimeControls({ pi, session, config }) {
         sttOnly: !!config.sttOnly,
         voice: config.voice,
         transcriptionModel: config.transcriptionModel,
+        baseUrl: config.baseUrl,
+        realtimeUrl: realtimeUrl(config.baseUrl, config.model),
         audioBackend: process.env.PI_RT_AUDIO_BACKEND || "pulse",
         pulse: {
           server: process.env.PULSE_SERVER || null,
@@ -2574,6 +2576,14 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setChime(enabled, ctx) {
       config.chimeEnabled = !!enabled;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setBaseUrl(baseUrl, ctx) {
+      const next = normalizeBaseUrl(String(baseUrl || "").trim());
+      if (!next) throw new Error("Realtime baseUrl cannot be empty");
+      config.baseUrl = next;
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2871,6 +2881,9 @@ export default function realtimeAgentExtension(pi) {
 
   function normalizeRealtimeToolParams(params = {}) {
     const out = { ...params };
+    if (out.base_url !== undefined && out.baseUrl === undefined) out.baseUrl = out.base_url;
+    if (out.openai_base_url !== undefined && out.baseUrl === undefined) out.baseUrl = out.openai_base_url;
+    if (out.rt_base_url !== undefined && out.baseUrl === undefined) out.baseUrl = out.rt_base_url;
     if (out.server !== undefined && out.pulseServer === undefined) out.pulseServer = out.server;
     if (out.source !== undefined && out.pulseSource === undefined) out.pulseSource = out.source;
     if (out.sink !== undefined && out.pulseSink === undefined) out.pulseSink = out.sink;
@@ -2909,6 +2922,7 @@ export default function realtimeAgentExtension(pi) {
     if (params.pulseServer !== undefined || params.pulseSource !== undefined || params.pulseSink !== undefined) {
       controls.setPulseRouting({ server: params.pulseServer, source: params.pulseSource, sink: params.pulseSink }, ctx);
     }
+    if (params.baseUrl) controls.setBaseUrl(params.baseUrl, ctx);
     if (params.voice) controls.setVoice(params.voice, ctx);
     if (params.trans || params.transcription || params.transcriptionModel) controls.setTranscriptionModel(params.trans || params.transcription || params.transcriptionModel, ctx);
     if (params.speed !== undefined) controls.setSpeed(params.speed, ctx);
@@ -2963,6 +2977,7 @@ export default function realtimeAgentExtension(pi) {
       server: v.server ?? v.pulse_server ?? v.pulseserver,
       source: v.source ?? v.pulse_source ?? v.pulsesource,
       sink: v.sink ?? v.pulse_sink ?? v.pulsesink,
+      baseUrl: v.base_url ?? v.baseurl ?? v.openai_base_url ?? v.openaibaseurl ?? v.rt_base_url ?? v.rtbaseurl,
       voice: v.voice,
       trans: v.trans ?? v.transcription ?? v.transcription_model ?? v.transcriptionmodel,
       speed: v.speed,
@@ -3146,6 +3161,7 @@ export default function realtimeAgentExtension(pi) {
         pulseServer: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SERVER for new Pulse record/playback processes. Empty string unsets." })),
         pulseSource: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SOURCE for new Pulse record processes. Empty string unsets." })),
         pulseSink: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SINK for new Pulse playback processes. Empty string unsets." })),
+        baseUrl: ToolSchema.optional(ToolSchema.string({ description: "Runtime realtime/OpenAI base URL. Use http://... for plaintext LiteLLM proxies so realtime uses ws:// instead of wss://." })),
         voice: ToolSchema.optional(ToolSchema.string({ description: "Realtime output voice." })),
         reasoning: ToolSchema.optional(ToolSchema.string({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
         summary: ToolSchema.optional(ToolSchema.boolean({ description: "Use compact summary context instead of replaying full conversation history. Default false." })),

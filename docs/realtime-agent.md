@@ -236,7 +236,7 @@ Unified `/rt` controls:
 /rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high
 /rt summary [true|false]       use compact summary context instead of full history (default false)
 /rt chime [true|false]         enable/disable VAD state chimes (default true)
-/rt backend=pulse source=...    env-style key/value form; supports server/source/sink/start/mic/stt/audio/widget/status/voice/trans/speed/reasoning/summary/chime/fork
+/rt backend=pulse source=...    env-style key/value form; supports base_url/server/source/sink/start/mic/stt/audio/widget/status/voice/trans/speed/reasoning/summary/chime/fork
 /rt help                       show the unified command usage
 ```
 

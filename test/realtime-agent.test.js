@@ -1020,10 +1020,12 @@ test("/rt env-style args configure Pulse routing, summary mode, and tool exposes
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   try {
-    await commands.get("rt").handler('backend=pulse source="source bluetooth" sink=vsink summary=true trans=gpt-whisper-realtime speed=1.25 thresh=0.85 chime=false', ctx);
+    await commands.get("rt").handler('backend=pulse base_url=http://helsinki.miku-owl.ts.net:4000 source="source bluetooth" sink=vsink summary=true trans=gpt-whisper-realtime speed=1.25 thresh=0.85 chime=false', ctx);
     assert.equal(process.env.PI_RT_AUDIO_BACKEND, "pulse");
     assert.equal(process.env.PULSE_SOURCE, "source bluetooth");
     assert.equal(process.env.PULSE_SINK, "vsink");
+    assert.equal(pi.realtime.snapshot().baseUrl, "http://helsinki.miku-owl.ts.net:4000");
+    assert.match(pi.realtime.snapshot().realtimeUrl, /^ws:\/\/helsinki\.miku-owl\.ts\.net:4000\/v1\/realtime/);
     assert.equal(pi.realtime.snapshot().summaryContext, true);
     assert.equal(pi.realtime.snapshot().transcriptionModel, "gpt-whisper-realtime");
     assert.equal(pi.realtime.snapshot().speed, 1.25);
@@ -1031,7 +1033,9 @@ test("/rt env-style args configure Pulse routing, summary mode, and tool exposes
     assert.equal(process.env.PI_RT_VAD_THRESHOLD, "0.85");
     assert.equal(pi.realtime.snapshot().chimeEnabled, false);
 
-    await tools.get("realtime_agent_control").execute("tool-1", { pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, trans: "gpt-realtime-whisper", speed: 0.75, thresh: 0.6, chime: true, status: "full" }, null, null, ctx);
+    await tools.get("realtime_agent_control").execute("tool-1", { baseUrl: "https://api.openai.com/v1", pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, trans: "gpt-realtime-whisper", speed: 0.75, thresh: 0.6, chime: true, status: "full" }, null, null, ctx);
+    assert.equal(pi.realtime.snapshot().baseUrl, "https://api.openai.com");
+    assert.match(pi.realtime.snapshot().realtimeUrl, /^wss:\/\/api\.openai\.com\/v1\/realtime/);
     assert.equal(process.env.PULSE_SERVER, "sgu24:4713");
     assert.equal(process.env.PULSE_SOURCE, "source.bluetooth");
     assert.equal(pi.realtime.snapshot().summaryContext, false);
