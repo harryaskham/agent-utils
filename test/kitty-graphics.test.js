@@ -273,6 +273,9 @@ test("kitty image preview applies the half-viewport cap to inline and side-panel
   assert.match(source, /lines\.length < widgetRowLimit/);
   assert.match(source, /viewportPanelLimit = previewViewportRowLimit\(terminalHeight\) \?\? terminalHeight/);
   assert.match(source, /Math\.min\(terminalHeight - bottomVisibleRows, viewportPanelLimit\)/);
+  assert.match(source, /function limitLinesToTerminalRows/);
+  assert.match(source, /const clampToViewport = \(lines\) => limitLinesToTerminalRows\(lines, terminalHeight\)/);
+  assert.match(source, /return clampToViewport\(combined\)/);
   assert.match(source, /sideOverlayMaxHeight/);
 });
 

@@ -524,6 +524,12 @@ function renderChildren(children, width) {
   return lines;
 }
 
+function limitLinesToTerminalRows(lines, terminalRows) {
+  const rowLimit = Math.max(1, Math.trunc(Number(terminalRows) || 1));
+  const input = Array.isArray(lines) ? lines : [];
+  return input.length <= rowLimit ? input : input.slice(input.length - rowLimit);
+}
+
 function renderSidePanelImageLines(state, rows, layout) {
   const current = state.items[state.index];
   const blank = " ".repeat(layout.totalWidth);
@@ -564,6 +570,7 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
   }
   const terminalWidth = Math.max(1, Math.trunc(width || tui?.terminal?.columns || 1));
   const terminalHeight = Math.max(1, Math.trunc(tui?.terminal?.rows || 1));
+  const clampToViewport = (lines) => limitLinesToTerminalRows(lines, terminalHeight);
   const children = Array.isArray(tui.children) ? tui.children : [];
   const editorBoundary = findEditorBoundaryIndex(tui);
   const bottomLines = renderChildren(children.slice(editorBoundary), terminalWidth);
@@ -591,7 +598,7 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
   };
 
   calculateVisiblePanel();
-  if (visiblePanelRows === 0) return combined;
+  if (visiblePanelRows === 0) return clampToViewport(combined);
 
   const refinedLayout = buildSidePanelLayout(state, terminalWidth, visiblePanelRows);
   if (refinedLayout.totalWidth >= 1 && refinedLayout.imageRows >= 1 && (
@@ -600,7 +607,7 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
     layout = refinedLayout;
     topLines = renderChildren(children.slice(0, editorBoundary), layout.mainWidth);
     calculateVisiblePanel();
-    if (visiblePanelRows === 0) return combined;
+    if (visiblePanelRows === 0) return clampToViewport(combined);
   }
 
   const moveToPanel = `\x1b[${layout.mainWidth + 1}G`;
@@ -610,7 +617,7 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
     const lineIndex = panelStart + index;
     combined[lineIndex] = `${topLines[lineIndex]}${moveToPanel}${panelLines[index] ?? blankPanel}`;
   }
-  return combined;
+  return clampToViewport(combined);
 }
 
 function installSidePanelLayout(tui, state, panel) {
