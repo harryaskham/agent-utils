@@ -388,9 +388,9 @@ export function buildPngCursorPlacementCommand({
 // parent placement (`parentImageId`/`parentPlacementId`) with optional H/V cell
 // offsets. Used to attach a non-virtual animated image to a virtual Unicode
 // placeholder anchor so the animation follows the anchor as the TUI moves it.
-// Per the Kitty protocol, relative placements never move the cursor regardless
-// of C, so do not emit C here; keeping the command minimal avoids terminals or
-// passthrough layers misclassifying the placement as cursor-positioned.
+// Relative placements are expected not to move the cursor per protocol, but in
+// live Pi/tmux sessions omitting C can still leave the TUI cursor/scroll state
+// disturbed. Keep C=1 as a defensive no-cursor-movement guard.
 export function buildRelativePlacementCommand({
   imageId,
   placementId,
@@ -414,6 +414,7 @@ export function buildRelativePlacementCommand({
     c: columns,
     r: rows,
     z: zIndex,
+    C: 1,
     q: quiet,
   };
   if (Number.isFinite(Number(hOffset)) && Number(hOffset) !== 0) control.H = Math.trunc(Number(hOffset));

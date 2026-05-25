@@ -210,8 +210,8 @@ test("relative placement command emits parent ids and cell offsets", () => {
     zIndex: -10,
     passthrough: "none",
   });
-  assert.equal(serialized, `${ESC}_Ga=p,i=77,p=78,P=79,Q=80,c=11,r=5,z=-10,q=2,H=-5,V=-2${ESC}\\`);
-  assert.doesNotMatch(serialized, /(?:^|,)C=/, "relative placements must not emit cursor movement controls");
+  assert.equal(serialized, `${ESC}_Ga=p,i=77,p=78,P=79,Q=80,c=11,r=5,z=-10,C=1,q=2,H=-5,V=-2${ESC}\\`);
+  assert.match(serialized, /(?:^|,)C=1(?:,|$)/, "relative placements keep a defensive no-cursor-movement guard");
 });
 
 test("manual animation controls select frames and stop native loops", () => {
