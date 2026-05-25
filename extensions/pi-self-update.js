@@ -435,6 +435,12 @@ export default async function piSelfUpdateExtension(pi) {
   let blockingUpdatePromise = null;
   if (shouldAutoUpdateOnStartup({ env: process.env, settings: readAgentSettings() })) {
     blockingUpdatePromise = runAutoUpdateBlocking();
+    // This extension factory is async, so awaiting here really does hold Pi's
+    // package load until `pi update --extensions` has completed. Without this,
+    // Pi can continue startup, run its own package-update check, and show the
+    // "Package Updates Available" banner while our background update is still
+    // pending or before it has started installing the refreshed package.
+    await blockingUpdatePromise.catch(() => null);
   }
 
   async function maybeReloadAfterStartupUpdate(ctx) {

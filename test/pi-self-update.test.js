@@ -10,7 +10,7 @@ async function loadExtension(pi) {
   await piSelfUpdateExtension(pi);
 }
 
-function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } } = {}) {
+function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" }, execWait } = {}) {
   const commands = new Map();
   const tools = new Map();
   const notifications = [];
@@ -30,6 +30,7 @@ function makeHarness({ execResult = { code: 0, stdout: "updated", stderr: "" } }
     async exec(command, args, options) {
       execCount += 1;
       lastExec = { command, args, options };
+      if (execWait) await execWait;
       return { command, args, options, ...execResult };
     },
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
@@ -302,6 +303,29 @@ test("startup auto-update defaults off without env or settings opt-in", async ()
     else process.env.PI_OFFLINE = prevOffline;
     if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevDir;
+  }
+});
+
+test("startup auto-update blocks extension load until pi update completes", async () => {
+  const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
+  process.env.PI_AUTO_UPDATE_ON_STARTUP = "1";
+  let release;
+  const execWait = new Promise((resolve) => { release = resolve; });
+  try {
+    const h = makeHarness({ execResult: { code: 0, stdout: "Already up to date", stderr: "" }, execWait });
+    let loaded = false;
+    const loading = piSelfUpdateExtension(h.pi).then(() => { loaded = true; });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h.execCount, 1, "startup update should begin during extension load");
+    assert.equal(loaded, false, "extension load must wait for startup update so Pi's package banner sees fresh state");
+    assert.equal(h.commands.size, 0, "commands should register only after the blocking update completes");
+    release();
+    await loading;
+    assert.equal(loaded, true);
+    assert.ok(h.commands.has("update"));
+  } finally {
+    if (previous === undefined) delete process.env.PI_AUTO_UPDATE_ON_STARTUP;
+    else process.env.PI_AUTO_UPDATE_ON_STARTUP = previous;
   }
 });
 
