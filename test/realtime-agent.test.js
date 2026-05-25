@@ -801,7 +801,7 @@ test("session_before_compact uses local simple summary without leaving realtime"
   const previousModel = { provider: "litellm-openai", id: "gpt-5.5" };
   const realtimeModel = { provider: "openai-realtime", id: "gpt-realtime-2", api: "openai-realtime" };
   const models = new Map([["openai-realtime/gpt-realtime-2", realtimeModel], ["litellm-openai/gpt-5.5", previousModel]]);
-  const { pi, commands, handlers, providers, setModelCalls, ctx, notifications } = makeHarness({ models, initialModel: previousModel });
+  const { pi, commands, handlers, providers, setModelCalls, ctx, notifications, sentMessages } = makeHarness({ models, initialModel: previousModel });
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
@@ -835,6 +835,13 @@ test("session_before_compact uses local simple summary without leaving realtime"
     assert.match(result.compaction.summary, /please wire realtime compaction/);
     assert.deepEqual(result.compaction.details, { readFiles: ["extensions/realtime-agent.js"], modifiedFiles: ["docs/realtime-agent.md"] });
     assert.match(notifications.at(-1)?.message || "", /realtime stays active/);
+
+    FakeWebSocket.instances.at(-1).emit("message", JSON.stringify({ type: "input_audio_buffer.committed" }));
+    assert.equal(sentMessages.length, 0, "audio turn should wait until compaction has been appended");
+    await handlers.get("session_compact")?.({ compactionEntry: { id: "cmp-1" }, fromExtension: true }, ctx);
+    assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0].message.customType, "realtime-agent");
+    assert.equal(sentMessages[0].options.triggerTurn, true);
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
     else process.env.PI_RT_API_KEY = previousApiKey;

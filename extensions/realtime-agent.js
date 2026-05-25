@@ -915,6 +915,10 @@ class RealtimeSession {
     this.micRestartTimer = null;
     this.micRestartAttempts = 0;
     this.pendingAudioTurnPending = false;
+    this.compacting = false;
+    this.compactionStartedAt = 0;
+    this.audioTurnDeferredForCompaction = false;
+    this.compactionFallbackTimer = null;
     this.lastMicBytes = 0;
     this.micMuteUntilTs = 0;
     this.lastTurnInputMode = null;           // null|audio|transcript|text
@@ -1396,7 +1400,34 @@ class RealtimeSession {
       .slice(-20);
   }
 
+  beginCompactionWindow() {
+    this.compacting = true;
+    this.compactionStartedAt = Date.now();
+    if (this.compactionFallbackTimer) clearTimeout(this.compactionFallbackTimer);
+    this.compactionFallbackTimer = setTimeout(() => {
+      if (this.compacting) this.finishCompactionWindow();
+    }, 30_000);
+    this.compactionFallbackTimer.unref?.();
+  }
+
+  finishCompactionWindow() {
+    this.compacting = false;
+    this.compactionStartedAt = 0;
+    if (this.compactionFallbackTimer) clearTimeout(this.compactionFallbackTimer);
+    this.compactionFallbackTimer = null;
+    if (this.audioTurnDeferredForCompaction) {
+      this.audioTurnDeferredForCompaction = false;
+      this.triggerCommittedAudioTurn();
+    }
+  }
+
   triggerCommittedAudioTurn() {
+    if (this.compacting) {
+      this.audioTurnDeferredForCompaction = true;
+      this.lastTurnInputMode = "audio";
+      this.updateStatus();
+      return;
+    }
     if (this.pendingAudioTurnPending) return;
     this.pendingAudioTurnPending = true;
     this.lastTurnInputMode = "audio";
@@ -1820,7 +1851,7 @@ class RealtimeSession {
       this.setPhase("recording");
       // Optional: barge-in also aborts Pi's in-flight agent loop (text +
       // tool chain). Defaults on; disable with PI_RT_BARGE_IN_ABORTS_AGENT=0.
-      if (envBool("PI_RT_BARGE_IN_ABORTS_AGENT", true)) {
+      if (!this.compacting && envBool("PI_RT_BARGE_IN_ABORTS_AGENT", true)) {
         try { this.lastCtx?.agent?.abort?.(); } catch {}
       }
       this.updateStatus();
@@ -2250,6 +2281,7 @@ class RealtimeSession {
     }
     this.connected = false;
     this.pendingAudioTurnPending = false;
+    this.finishCompactionWindow();
     this.setPhase("idle");
     this.systemPromptApplied = null;
     this.toolsAppliedKey = null;
@@ -2872,6 +2904,7 @@ export default function realtimeAgentExtension(pi) {
   pi.on("session_before_compact", async (event, ctx) => {
     if (!isRealtimeModel(ctx?.model) && !session.current && !session.connected) return undefined;
     const result = buildRealtimeSimpleCompaction(event?.preparation || {}, event?.customInstructions);
+    session.beginCompactionWindow();
     session.forwardedMessageCount = 0;
     session.systemPromptApplied = null;
     session.toolsAppliedKey = null;
@@ -2891,6 +2924,7 @@ export default function realtimeAgentExtension(pi) {
     session.systemPromptApplied = null;
     session.toolsAppliedKey = null;
     session.audioModeApplied = null;
+    session.finishCompactionWindow();
     return undefined;
   });
 
