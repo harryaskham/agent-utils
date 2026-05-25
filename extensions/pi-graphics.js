@@ -1427,6 +1427,37 @@ export default function piGraphicsExtension(pi) {
     return `generic-${genericGraphicsInstanceCounter}`;
   }
 
+  function boxChromeComponentMap() {
+    return {
+      assistant: AssistantMessageComponent,
+      tool: ToolExecutionComponent,
+      bash: BashExecutionComponent,
+      user: UserMessageComponent,
+      custom: CustomMessageComponent,
+      skill: SkillInvocationMessageComponent,
+      branch: BranchSummaryMessageComponent,
+      compaction: CompactionSummaryMessageComponent,
+      footer: FooterComponent,
+      loader: BorderedLoader,
+      border: DynamicBorder,
+      input: ExtensionInputComponent,
+      editor: ExtensionEditorComponent,
+      selector: ExtensionSelectorComponent,
+      login: LoginDialogComponent,
+      model: ModelSelectorComponent,
+      oauth: OAuthSelectorComponent,
+      session: SessionSelectorComponent,
+      settings: SettingsSelectorComponent,
+      image: ShowImagesSelectorComponent,
+      theme: ThemeSelectorComponent,
+      thinkingSelector: ThinkingSelectorComponent,
+      tree: TreeSelectorComponent,
+      userSelector: UserMessageSelectorComponent,
+      agent: ArminComponent,
+      mascot: DaxnutsComponent,
+    };
+  }
+
   function shouldSkipGraphicsWrap(value) {
     return !!(value && (value.__piGraphicsNoWrap || value.piGraphics === false || value.piGraphics?.enabled === false));
   }
@@ -1621,6 +1652,12 @@ export default function piGraphicsExtension(pi) {
   function teardownBoxChrome(ctx) {
     restoreUiGraphicsSurfaces(ctx);
     try { restoreBuiltInBoxChrome?.(); } catch {}
+    // Extension reloads can leave process-global Pi component prototypes patched
+    // while this fresh extension instance has no restore callback yet. Install a
+    // null-runtime owner and immediately restore it so boxChrome:false really
+    // removes Unicode placeholder edge cells instead of merely disabling new
+    // runtime state.
+    try { installBoxChromeMonkeyPatch({ components: boxChromeComponentMap(), runtime: null })?.restore?.(); } catch {}
     restoreBuiltInBoxChrome = null;
     boxChromeRuntime = null;
     boxChromeInstalled = false;
@@ -1650,34 +1687,7 @@ export default function piGraphicsExtension(pi) {
     });
     boxChromeRuntime = runtime;
     const patch = installBoxChromeMonkeyPatch({
-      components: {
-        assistant: AssistantMessageComponent,
-        tool: ToolExecutionComponent,
-        bash: BashExecutionComponent,
-        user: UserMessageComponent,
-        custom: CustomMessageComponent,
-        skill: SkillInvocationMessageComponent,
-        branch: BranchSummaryMessageComponent,
-        compaction: CompactionSummaryMessageComponent,
-        footer: FooterComponent,
-        loader: BorderedLoader,
-        border: DynamicBorder,
-        input: ExtensionInputComponent,
-        editor: ExtensionEditorComponent,
-        selector: ExtensionSelectorComponent,
-        login: LoginDialogComponent,
-        model: ModelSelectorComponent,
-        oauth: OAuthSelectorComponent,
-        session: SessionSelectorComponent,
-        settings: SettingsSelectorComponent,
-        image: ShowImagesSelectorComponent,
-        theme: ThemeSelectorComponent,
-        thinkingSelector: ThinkingSelectorComponent,
-        tree: TreeSelectorComponent,
-        userSelector: UserMessageSelectorComponent,
-        agent: ArminComponent,
-        mascot: DaxnutsComponent,
-      },
+      components: boxChromeComponentMap(),
       runtime,
     });
     restoreBuiltInBoxChrome = typeof patch?.restore === "function" ? patch.restore : null;

@@ -335,3 +335,23 @@ test("installBoxChromeMonkeyPatch is idempotent, updates runtime, and restores s
   installB.restore();
   assert.deepEqual(new Fake().render(20), ["alpha", "beta"], "current restore should put original render back");
 });
+
+test("null-runtime box chrome install can scrub stale global prototype wrappers", () => {
+  class Fake {
+    render() { return ["alpha", "beta"]; }
+  }
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    resolveTheme: () => ({ colorRgb: [180, 150, 230] }),
+  });
+  installBoxChromeMonkeyPatch({ components: { assistant: Fake }, runtime });
+  assert.ok(new Fake().render(20)[0].includes("\u{10eeee}"), "precondition: stale runtime emits placeholder borders");
+
+  const scrub = installBoxChromeMonkeyPatch({ components: { assistant: Fake }, runtime: null });
+  assert.deepEqual(new Fake().render(20), ["alpha", "beta"], "null runtime should immediately stop placeholder edge emission");
+  scrub.restore();
+  assert.deepEqual(new Fake().render(20), ["alpha", "beta"], "null-runtime restore should remove stale wrapper completely");
+});
