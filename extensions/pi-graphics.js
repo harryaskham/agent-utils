@@ -258,6 +258,12 @@ export default function piGraphicsExtension(pi) {
     try { writeGraphicsCommand(command); } catch {}
   }
 
+  function deferGraphicsCommand(command) {
+    if (!command) return;
+    const timer = setTimeout(() => emitGraphicsCommand(command), 0);
+    if (typeof timer.unref === "function") timer.unref();
+  }
+
   function cursorStylingEnabled() {
     return !modeIsOff(gfxEnv().PI_GRAPHICS_MODE)
       && envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)
@@ -965,9 +971,12 @@ export default function piGraphicsExtension(pi) {
     });
     editorCursorRelativePlacement = { imageId, placementId };
     // Keep raw Kitty APC out of the editor's rendered text. Inline APC escapes
-    // confuse Pi's TUI width/diffing path and can duplicate/wrap the input line;
-    // the command still carries H=-5,V=-2 and is emitted side-channel.
-    emitGraphicsCommand(relativePlacement);
+    // confuse Pi's TUI width/diffing path and can duplicate/wrap the input line.
+    // Also defer the side-channel write until after the current TUI render turn:
+    // Kitty only knows the virtual parent's physical cell after the transparent
+    // placeholder has been written, so immediate side-channel placement can make
+    // H=-5,V=-2 appear ignored and leave the 11x5 image top-left on the cursor.
+    deferGraphicsCommand(relativePlacement);
     const anchorLine = buildKittyUnicodePlaceholderLines({
       imageId: anchorImageId,
       placementId: anchorPlacementId,
