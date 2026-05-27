@@ -500,7 +500,10 @@ displayed using kitty Unicode placeholder cells, so:
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative
-  box mode now leaves textual border rows unwrapped and avoids full-row solid fills,
+  box mode anchors each full-row strip directly at its one-cell Unicode placeholder
+  origin and intentionally emits no `H`/`V` offset, avoiding the cell-vs-pixel
+  offset class that affected the centered cursor glow. Relative box mode now
+  leaves textual border rows unwrapped and avoids full-row solid fills,
   so it does not paint top and bottom strokes into the same border line or obscure
   text with a low-z background sheet.
 * The built-in footer can be replaced with a compact one-line segmented footer
