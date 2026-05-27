@@ -821,14 +821,15 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   }
 }
 
-export function renderEditorBorderFrame({ columns, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
+export function renderEditorBorderFrame({ columns, rows = 1, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
   const cols = clampPositive(columns, 2, "columns");
+  const rs = Math.max(1, Math.min(16, Math.trunc(Number(rows) || 1)));
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;
-  const heightPx = metrics.cellHeightPx;
+  const heightPx = rs * metrics.cellHeightPx;
   const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
   paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase });
-  return { pixels, widthPx, heightPx, columns: cols, rows: 1, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
+  return { pixels, widthPx, heightPx, columns: cols, rows: rs, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
 }
 
 export function renderEditorBorderFramesPngs({ frames = 24, ...options } = {}) {
@@ -844,7 +845,7 @@ export function renderEditorBorderApng({ frames = 24, delayMs = 120, plays = 0, 
   const rendered = Array.from({ length: count }, (_, index) => renderEditorBorderFrame({ ...options, phase: (Number(options.phase) || 0) + index / count }));
   const first = rendered[0];
   const png = encodeRgbaApng(rendered.map((frame) => frame.pixels), first.widthPx, first.heightPx, { delayMs, plays });
-  return { png, columns: first.columns, rows: 1, widthPx: first.widthPx, heightPx: first.heightPx, cellWidthPx: first.cellWidthPx, cellHeightPx: first.cellHeightPx, lineHeightScale: first.lineHeightScale, frames: count, delayMs, animationMs: delayMs * count };
+  return { png, columns: first.columns, rows: first.rows, widthPx: first.widthPx, heightPx: first.heightPx, cellWidthPx: first.cellWidthPx, cellHeightPx: first.cellHeightPx, lineHeightScale: first.lineHeightScale, frames: count, delayMs, animationMs: delayMs * count };
 }
 
 export const DEFAULTS = Object.freeze({

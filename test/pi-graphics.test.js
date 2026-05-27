@@ -436,6 +436,17 @@ test("editor border frame stays glassy instead of fade-to-solid", () => {
   assert.ok(stats.bright / stats.total < 0.6, "bright pixels should not dominate the cell into a chunky duplicate frame");
 });
 
+test("editor border frame supports taller contiguous rail rectangles", () => {
+  const top = renderEditorBorderFrame({ columns: 16, rows: 3, edge: "top", cellWidthPx: 4, cellHeightPx: 10 });
+  assert.equal(top.columns, 16);
+  assert.equal(top.rows, 3);
+  assert.equal(top.heightPx, 30);
+  const centerX = Math.floor(top.widthPx / 2);
+  const outerAlpha = top.pixels[(0 * top.widthPx + centerX) * 4 + 3];
+  const railAlpha = top.pixels[((top.heightPx - 1) * top.widthPx + centerX) * 4 + 3];
+  assert.ok(railAlpha > outerAlpha, "tall top edge should fade outward while anchoring at the editor rail");
+});
+
 test("renderPromptEnclosure variants emit distinct translucent surfaces", () => {
   const base = renderPromptEnclosure({ columns: 12, variant: "rule" });
   const variants = ["gradient", "scanlines", "grid", "dots", "glow"];
@@ -1319,6 +1330,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
   assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT: editor\.topBorderHeight/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT: editor\.bottomBorderHeight/);
   assert.match(source, /PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor\.cursorStyle/);
   assert.match(source, /PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor\.trailingWorkspace/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor\.rowBackground/);
@@ -1357,7 +1370,14 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function editorRailHeat\(\)/);
   assert.match(source, /\(editorCursorHeat - 0\.5\) \/ 1\.0/);
   assert.match(source, /mixHexColor\(baseBorderColor, "#ffffff", railHeat\)/);
-  assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}-\$\{variant\}-rail-\$\{railHeatBucket\}/);
+  assert.match(source, /function editorBorderHeight\(edge\)/);
+  assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
+  assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-rail-\$\{railHeatBucket\}/);
+  assert.match(source, /rows: height/);
+  assert.match(source, /function buildEditorBorderWidgetRows\(width, edge\)/);
+  assert.match(source, /rows\.slice\(0, -1\).*rows\.slice\(1\)/s);
+  assert.match(source, /function buildEditorRelativeBorderRow\(width, edge\)/);
+  assert.match(source, /const vOffset = edge === "top" \? -\(height - 1\) : 0/);
   assert.match(source, /const placementLineCache = new Map\(\)/);
   assert.match(source, /function cachedPlacementLine\(key, buildLine\)/);
   assert.match(source, /function clearEditorCursorPlacement\(\)/);
@@ -1592,8 +1612,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
   assert.match(source, /decorateEditorContentLine\(line, width\)/);
   assert.match(source, /editorTrailingWorkspaceEnabled\(\)/);
-  assert.match(source, /const visualCols = cols/);
-  assert.match(source, /const leadingCells = 0/);
+  assert.match(source, /visualCols: cols/);
+  assert.match(source, /return `\$\{chrome\}\$\{" "\.repeat\(Math\.max\(0, cols - visualCols\)\)\}`/);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {

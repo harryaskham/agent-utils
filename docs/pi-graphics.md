@@ -88,6 +88,8 @@ Example settings:
     "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 },
     "editor": {
       "style": "unicode",
+      "topBorderHeight": 1,
+      "bottomBorderHeight": 1,
       "cursorStyle": "glow",
       "trailingWorkspace": false,
       "rowBackground": false
@@ -466,7 +468,16 @@ displayed using kitty Unicode placeholder cells, so:
   selector dialogs from exceeding pi-tui's hard terminal-width guard.
 * Editor border chrome spans the full editor/terminal width instead of being
   capped and center-aligned, so fullscreen terminals keep a visible full-width
-  input frame. The focused editor cursor is configurable with
+  input frame. The top and bottom border heights are independently configurable
+  with `piGraphics.editor.topBorderHeight` / `PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT`
+  and `piGraphics.editor.bottomBorderHeight` / `PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT`.
+  Height `1` preserves the default in-flow Unicode rail replacement. In Unicode
+  editor mode, heights above `1` add same-ID placeholder widget rows above or
+  below the editor so the terminal sees one contiguous `width × height` rectangle
+  for the single border image. In `relative`/`animated` editor modes, the extra
+  height is drawn as a relative placement without reflowing text; top borders are
+  offset upward by `height - 1`, while bottom borders grow downward from the rail.
+  The focused editor cursor is configurable with
   `piGraphics.editor.cursorStyle` (or `PI_GRAPHICS_EDITOR_CURSOR_STYLE`): `glow`
   is the default speed-responsive direct Unicode-placeholder cursor plus a best-effort
   large relative halo, `cell` is the conservative one-cell placeholder cursor,
@@ -503,8 +514,10 @@ displayed using kitty Unicode placeholder cells, so:
   `PI_GRAPHICS_EDITOR_ROW_BACKGROUND` enables the row-wide background. Both are
   off by default because they can visually compete with live typing in narrow or
   frequently redrawn editors. These are visible in the `/gfx` settings overlay and
-  can also be changed directly with `/gfx cursor-style glow|cell|off`,
-  `/gfx trailing-workspace on|off`, and `/gfx row-background on|off`.
+  can also be changed directly with `/gfx border-height <1-16>`,
+  `/gfx top-border-height <1-16>`, `/gfx bottom-border-height <1-16>`,
+  `/gfx cursor-style glow|cell|off`, `/gfx trailing-workspace on|off`, and
+  `/gfx row-background on|off`.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative
