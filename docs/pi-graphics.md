@@ -478,8 +478,8 @@ displayed using kitty Unicode placeholder cells, so:
   placement path as trailing workspace fill for the actual cursor cell: a one-cell
   PNG placeholder replaces the reverse-video cursor cell exactly in the editor
   text flow. It then attempts the intended larger 11×5 relative halo against that
-  same visible placement with `H=-5,V=-2`, drawn below the cursor cell so a bad
-  relative placement cannot hide the proven cursor. The direct glow keeps a bright
+  same visible placement with `H=-5,V=-2`, drawn at an under-text z-index that is
+  still above non-default editor cell backgrounds. The direct glow keeps a bright
   vertical core in the cursor cell while the relative halo, when Kitty/tmux honors
   it, expands beyond the cell bounds. The glow colour/radius is
   smoothly interpolated toward a heat target inferred from recent

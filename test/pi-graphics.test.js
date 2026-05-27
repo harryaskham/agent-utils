@@ -1385,7 +1385,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const cursorVOffset = -Math\.floor\(cursorRows \/ 2\)/);
   assert.match(source, /hOffset: cursorHOffset/);
   assert.match(source, /vOffset: cursorVOffset/);
-  assert.match(source, /zIndex: PI_GRAPHICS_Z\.BACKGROUND/);
+  assert.match(source, /zIndex: PI_GRAPHICS_Z\.BOX_CHROME/);
+  assert.match(source, /disappeared as soon as typing repainted the editor row/);
   assert.match(source, /function deferGraphicsCommand\(command\)/);
   assert.match(source, /deferGraphicsCommand\(relativePlacement\);\n\s+const anchorLine = buildKittyUnicodePlaceholderLines/);
   assert.match(source, /return `\$\{String\(label \|\| "anchored"\)\.padEnd\(12\)\} \$\{anchorLine\}\$\{relativePlacement\}`/);

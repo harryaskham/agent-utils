@@ -1079,7 +1079,10 @@ export default function piGraphicsExtension(pi) {
       vOffset: cursorVOffset,
       columns: cursorColumns,
       rows: cursorRows,
-      zIndex: PI_GRAPHICS_Z.BACKGROUND,
+      // Keep the halo under text but above non-default editor cell backgrounds.
+      // BACKGROUND/DEEP_BACKGROUND are below Kitty's non-default-background
+      // threshold and disappeared as soon as typing repainted the editor row.
+      zIndex: PI_GRAPHICS_Z.BOX_CHROME,
       passthrough: state.config.passthrough,
     });
     editorCursorRelativePlacement = { imageId, placementId };
