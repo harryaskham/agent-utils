@@ -485,15 +485,19 @@ displayed using kitty Unicode placeholder cells, so:
   when the editor moves. It keeps a
   bright vertical core in the middle cell while transparent glow has enough
   padding to avoid clipping at the image edges. The glow colour/radius is
-  bucketed from inferred recent inter-character typing speed and decays after
-  typing stops. Fast cursor motion also selects a deterministic left/right
-  heat-trail variant: forward typing leaves a short afterimage behind the cursor,
-  while backspacing or leftward movement flips the trail to the other side. At
-  medium and high heat, the cursor silhouette gains small graphical bracket ticks
-  and ember caps around the vertical core, so the frame itself visibly changes
-  rather than only the colour. Optional editor fill effects are separate settings:
-  `piGraphics.editor.trailingWorkspace` / `PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE`
-  fills empty cells after the cursor, and `piGraphics.editor.rowBackground` /
+  smoothly interpolated toward a heat target inferred from recent
+  inter-character typing speed; after typing stops Pi schedules lightweight
+  editor redraws so the glow and trailing workspace fade out instead of freezing
+  at the last keypress intensity. Fast cursor motion also selects a deterministic
+  left/right heat-trail variant: forward typing leaves a short afterimage behind
+  the cursor, while backspacing or leftward movement flips the trail to the other
+  side. At medium and high heat, the cursor silhouette gains small graphical
+  bracket ticks and ember caps around the vertical core, so the frame itself
+  visibly changes rather than only the colour. Optional editor fill effects are
+  separate settings: `piGraphics.editor.trailingWorkspace` /
+  `PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE` fills empty cells after the cursor with
+  the same animated heat envelope and a right-only opacity falloff like the
+  editor top/bottom border chrome, and `piGraphics.editor.rowBackground` /
   `PI_GRAPHICS_EDITOR_ROW_BACKGROUND` enables the row-wide background. Both are
   off by default because they can visually compete with live typing in narrow or
   frequently redrawn editors. These are visible in the `/gfx` settings overlay and

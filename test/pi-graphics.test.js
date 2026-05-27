@@ -452,6 +452,17 @@ test("renderPromptEnclosure variants emit distinct translucent surfaces", () => 
   }
 });
 
+test("renderPromptEnclosure surface variants can fade only toward the right", () => {
+  const result = renderPromptEnclosure({ columns: 14, variant: "glow", alpha: 0.65, fadeEdges: true, fadeStart: false, fadeEnd: true });
+  const decoded = decodePngRgba(result.png);
+  const midY = Math.floor(decoded.height / 2);
+  const left = pixelAt(decoded, 1, midY);
+  const center = pixelAt(decoded, Math.floor(decoded.width / 2), midY);
+  const right = pixelAt(decoded, decoded.width - 2, midY);
+  assert.ok(left[3] > right[3] * 2, "workspace tail should remain strong at the cursor-side edge");
+  assert.ok(center[3] > right[3] * 2, "workspace tail should fade out at the far right edge");
+});
+
 test("renderPromptEnclosure honors configurable cell metrics and 120 percent line height", () => {
   const metrics = resolveCellMetrics({ cellWidthPx: 9, lineHeightScale: 1.2 });
   assert.equal(metrics.cellWidthPx, 9);
@@ -1333,6 +1344,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /setWorkingIndicator/);
   assert.match(source, /fillEditorTrailingWorkspace/);
   assert.match(source, /let editorCursorHeat = 0/);
+  assert.match(source, /let editorCursorHeatTarget = 0/);
+  assert.match(source, /function stepEditorHeat\(now = Date\.now\(\)\)/);
+  assert.match(source, /function requestEditorHeatFrame\(\)/);
+  assert.match(source, /editorRenderTui\?\.requestRender\?\.\(true\)/);
   assert.match(source, /const placementLineCache = new Map\(\)/);
   assert.match(source, /function cachedPlacementLine\(key, buildLine\)/);
   assert.match(source, /function clearEditorCursorPlacement\(\)/);
@@ -1341,6 +1356,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editorTrailingWorkspaceEnabled\(\)/);
   assert.match(source, /buildEditorWorkspaceTail\(match\[0\]\.length, editorCursorHeat\)/);
   assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
+  assert.match(source, /fadeStart: false,\n\s+fadeEnd: true/);
   assert.match(source, /function editorCursorStyle\(\)/);
   assert.match(source, /const key = `editor-cursor-cell-\$\{heatBucket\}-\$\{trailBucket\}-\$\{directionBucket\}/);
   assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/);

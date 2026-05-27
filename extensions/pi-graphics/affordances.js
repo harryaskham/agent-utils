@@ -261,7 +261,21 @@ export function renderFooterDividerPng({ columns = 3, barColor = DEFAULT_GRADIEN
   };
 }
 
-export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, phase = 0, cellWidthPx, cellHeightPx, lineHeightScale, variant = "rule", alpha = 0.7 } = {}) {
+function applyHorizontalEdgeFade(pixels, widthPx, heightPx, { fadeLeft = true, fadeRight = true, edgePx = Math.min(widthPx / 4, CELL_PX_W * 3) } = {}) {
+  const safeEdge = Math.max(1, Math.min(Math.floor(edgePx), Math.floor(widthPx / 2) || 1));
+  for (let y = 0; y < heightPx; y += 1) {
+    for (let x = 0; x < widthPx; x += 1) {
+      let factor = 1;
+      if (fadeLeft && x < safeEdge) factor = Math.min(factor, x / safeEdge);
+      if (fadeRight && x >= widthPx - safeEdge) factor = Math.min(factor, (widthPx - 1 - x) / safeEdge);
+      if (factor >= 1) continue;
+      const off = (y * widthPx + x) * 4 + 3;
+      pixels[off] = Math.max(0, Math.min(255, Math.round(pixels[off] * Math.max(0, factor))));
+    }
+  }
+}
+
+export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LEFT, rightColor = DEFAULT_GRADIENT_RIGHT, fadeEdges = true, fadeStart = fadeEdges, fadeEnd = fadeEdges, phase = 0, cellWidthPx, cellHeightPx, lineHeightScale, variant = "rule", alpha = 0.7 } = {}) {
   const cols = clampPositive(columns, 1, "columns");
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;
@@ -277,6 +291,7 @@ export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LE
       alpha,
       phase,
     });
+    if (fadeStart || fadeEnd) applyHorizontalEdgeFade(pixels, widthPx, heightPx, { fadeLeft: !!fadeStart, fadeRight: !!fadeEnd });
     return {
       png: encodeRgbaPng(pixels, widthPx, heightPx),
       columns: cols,
@@ -299,7 +314,7 @@ export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LE
   addRadialGlow(pixels, widthPx, widthPx * (0.18 + pulse * 0.08), heightPx / 2, widthPx * 0.36, withAlpha(leftColor, 90 + pulse * 80), 0.7);
   addRadialGlow(pixels, widthPx, widthPx * (0.82 - pulse * 0.08), heightPx / 2, widthPx * 0.36, withAlpha(rightColor, 90 + pulse * 80), 0.7);
 
-  if (fadeEdges) {
+  if (fadeStart || fadeEnd) {
     const edgePx = Math.min(widthPx / 4, CELL_PX_W * 3);
     fillHorizontalGradient(
       pixels,
@@ -308,7 +323,7 @@ export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LE
       stripeY,
       edgePx,
       stripeH,
-      withAlpha(leftColor, 0),
+      withAlpha(leftColor, fadeStart ? 0 : 180 + pulse * 55),
       withAlpha(leftColor, 180 + pulse * 55),
     );
     fillHorizontalGradient(
@@ -329,7 +344,7 @@ export function renderPromptEnclosure({ columns, leftColor = DEFAULT_GRADIENT_LE
       edgePx,
       stripeH,
       withAlpha(rightColor, 180 + pulse * 55),
-      withAlpha(rightColor, 0),
+      withAlpha(rightColor, fadeEnd ? 0 : 180 + pulse * 55),
     );
   } else {
     fillHorizontalGradient(pixels, widthPx, 0, stripeY, widthPx, stripeH, withAlpha(leftColor, 220), withAlpha(rightColor, 220));

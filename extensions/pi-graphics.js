@@ -331,6 +331,10 @@ export default function piGraphicsExtension(pi) {
   let editorCursorLastCol = null;
   let editorCursorTrailDirection = 1;
   let editorCursorHeat = 0;
+  let editorCursorHeatTarget = 0;
+  let editorCursorHeatTickAt = 0;
+  let editorHeatRenderTimer = null;
+  let editorRenderTui = null;
   let editorCursorAnchorSeq = 0;
   let editorCursorRelativePlacement = null;
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
@@ -347,10 +351,44 @@ export default function piGraphicsExtension(pi) {
 
   function resetGraphicsUploadCaches() {
     stopManualAnimationLoops();
+    if (editorHeatRenderTimer) clearTimeout(editorHeatRenderTimer);
+    editorHeatRenderTimer = null;
     uploadedImages.clear();
     relativeUploaded.clear();
     placementLineCache.clear();
     editorBackgroundPlacementKey = null;
+  }
+
+  function requestEditorHeatFrame() {
+    if (editorHeatRenderTimer || !editorRenderTui) return;
+    if (editorCursorHeat <= 0.01 && editorCursorHeatTarget <= 0.01) return;
+    editorHeatRenderTimer = setTimeout(() => {
+      editorHeatRenderTimer = null;
+      try { editorRenderTui?.requestRender?.(true); } catch {}
+      if (editorCursorHeat > 0.01 || editorCursorHeatTarget > 0.01) requestEditorHeatFrame();
+    }, editorAnimationDelayMs());
+    editorHeatRenderTimer.unref?.();
+  }
+
+  function stepEditorHeat(now = Date.now()) {
+    const last = editorCursorHeatTickAt || now;
+    const dt = Math.max(0, Math.min(250, now - last));
+    editorCursorHeatTickAt = now;
+    if (dt <= 0) return editorCursorHeat;
+    const idleMs = editorCursorLastAt ? now - editorCursorLastAt : 0;
+    if (idleMs > 90) {
+      editorCursorHeatTarget *= Math.exp(-dt / 900);
+      editorCursorWpm *= Math.exp(-dt / 1100);
+    }
+    const tau = editorCursorHeatTarget > editorCursorHeat ? 150 : 520;
+    const blend = 1 - Math.exp(-dt / tau);
+    editorCursorHeat += (editorCursorHeatTarget - editorCursorHeat) * blend;
+    if (editorCursorHeat < 0.01 && editorCursorHeatTarget < 0.01) {
+      editorCursorHeat = 0;
+      editorCursorHeatTarget = 0;
+      editorCursorWpm = 0;
+    }
+    return editorCursorHeat;
   }
 
   function clearEditorCursorPlacement() {
@@ -380,32 +418,32 @@ export default function piGraphicsExtension(pi) {
   function updateEditorTypingHeat(plainText, cursorCol = 0) {
     const now = Date.now();
     const safeCol = Math.max(0, Math.trunc(Number(cursorCol) || 0));
+    stepEditorHeat(now);
     if (!editorCursorLastAt) {
       editorCursorLastAt = now;
       editorCursorLastText = plainText;
       editorCursorLastCol = safeCol;
-      return { heat: 0, wpm: 0, trailDirection: editorCursorTrailDirection };
+      return { heat: editorCursorHeat, wpm: editorCursorWpm, trailDirection: editorCursorTrailDirection };
     }
     const elapsed = Math.max(16, now - editorCursorLastAt);
     if (plainText !== editorCursorLastText) {
       const delta = Math.max(1, Math.abs(plainText.length - editorCursorLastText.length));
-      const instantWpm = (delta / 5) / (elapsed / 60000);
+      const instantWpm = Math.min(320, (delta / 5) / (elapsed / 60000));
       editorCursorWpm = Math.min(260, editorCursorWpm * 0.55 + instantWpm * 0.45);
+      editorCursorHeatTarget = Math.max(editorCursorHeatTarget * 0.72, Math.max(0.08, Math.min(1, editorCursorWpm / 140)));
       if (editorCursorLastCol != null && safeCol !== editorCursorLastCol) {
         editorCursorTrailDirection = safeCol > editorCursorLastCol ? 1 : -1;
       }
       editorCursorLastText = plainText;
       editorCursorLastAt = now;
       editorCursorLastCol = safeCol;
+      requestEditorHeatFrame();
     } else {
-      const idleMs = now - editorCursorLastAt;
-      const decay = Math.max(0, 1 - idleMs / 1800);
-      editorCursorWpm *= decay;
       editorCursorLastCol = safeCol;
+      if (editorCursorHeat > 0.01 || editorCursorHeatTarget > 0.01) requestEditorHeatFrame();
     }
-    const heat = Math.max(0, Math.min(1, editorCursorWpm / 140));
-    editorCursorHeat = heat;
-    return { heat, wpm: editorCursorWpm, trailDirection: editorCursorTrailDirection };
+    stepEditorHeat(now);
+    return { heat: editorCursorHeat, wpm: editorCursorWpm, trailDirection: editorCursorTrailDirection };
   }
 
   function formatFooterTokens(n) {
@@ -782,10 +820,10 @@ export default function piGraphicsExtension(pi) {
     const cols = Math.max(1, Math.min(256, Math.trunc(Number(width) || 0)));
     if (cols < 2) return null;
     const safeHeat = Math.max(0, Math.min(1, Number(heat) || 0));
-    const heatBucket = Math.max(0, Math.min(5, Math.round(safeHeat * 5)));
+    const heatBucket = Math.max(0, Math.min(12, Math.round(safeHeat * 12)));
     const cell = cellMetrics();
     const variant = safeHeat > 0.35 ? "scanlines" : "glow";
-    const alpha = Math.max(0.16, editorAlpha() * (0.30 + safeHeat * 0.34));
+    const alpha = Math.max(0.04, editorAlpha() * (0.08 + safeHeat * 0.56));
     const leftColor = safeHeat > 0.62 ? "#ff9f5a" : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
     const rightColor = safeHeat > 0.35 ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead") : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const key = `editor-workspace-tail-${cols}-heat-${heatBucket}-${variant}-${alpha.toFixed(3)}-${leftColor}-${rightColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
@@ -797,6 +835,8 @@ export default function piGraphicsExtension(pi) {
         leftColor,
         rightColor,
         fadeEdges: true,
+        fadeStart: false,
+        fadeEnd: true,
         ...cell,
       });
       const placement = buildPlacement(state, {
@@ -867,12 +907,12 @@ export default function piGraphicsExtension(pi) {
   function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
     if (!ensureUnicodePlacement(state) || editorCursorStyle() === "off") return null;
     const cell = cellMetrics();
-    const heatBucket = Math.max(0, Math.min(5, Math.round((Number(heat) || 0) * 5)));
+    const heatBucket = Math.max(0, Math.min(12, Math.round((Number(heat) || 0) * 12)));
     const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
     const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
-    const glowColor = heatBucket >= 4
+    const glowColor = heatBucket >= 9
       ? "#ff9f5a"
-      : heatBucket >= 2
+      : heatBucket >= 4
         ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
         : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     if (editorCursorStyle() === "cell") {
@@ -938,7 +978,7 @@ export default function piGraphicsExtension(pi) {
     const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(imageId)) {
       const rendered = renderEditorCursorVline({
-        alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
+        alpha: Math.max(0.08, editorAlpha() * (0.18 + heat * 0.92)),
         backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
         coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
         glowColor,
@@ -1363,6 +1403,7 @@ export default function piGraphicsExtension(pi) {
       }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+      editorRenderTui = tui || editorRenderTui;
       writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
       applyHardwareCursorPolicy(tui);
       return new KittyEditor(tui, theme, keybindings);
