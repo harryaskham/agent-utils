@@ -193,6 +193,11 @@ export default function piGraphicsExtension(pi) {
     });
   }
 
+  function relativeCellOffsetPx(cells, axis, cell = cellMetrics()) {
+    const count = Math.trunc(Number(cells) || 0);
+    return count * (axis === "y" ? cell.cellHeightPx : cell.cellWidthPx);
+  }
+
   function editorVariant() {
     const env = gfxEnv();
     const raw = String(env.PI_GRAPHICS_EDITOR_VARIANT || "").trim().toLowerCase();
@@ -844,7 +849,7 @@ export default function piGraphicsExtension(pi) {
       placementId: bgPlacementId,
       parentImageId,
       parentPlacementId,
-      hOffset: -safeCursorCol,
+      hOffset: relativeCellOffsetPx(-safeCursorCol, "x", cell),
       columns: safeRowWidth,
       rows: 1,
       zIndex: PI_GRAPHICS_Z.BACKGROUND,
@@ -921,8 +926,14 @@ export default function piGraphicsExtension(pi) {
 
     const cursorColumns = 11;
     const cursorRows = 5;
-    const cursorHOffset = -Math.floor(cursorColumns / 2);
-    const cursorVOffset = -Math.floor(cursorRows / 2);
+    const cursorHOffsetCells = -Math.floor(cursorColumns / 2);
+    const cursorVOffsetCells = -Math.floor(cursorRows / 2);
+    // Kitty relative placement H/V are pixel offsets from the parent placement's
+    // top-left, not terminal-cell counts. The transparent Unicode placeholder
+    // gives us a known one-cell parent at the cursor; convert the desired cell
+    // centering offsets into pixels so the 11x5 glow's middle cell lands on it.
+    const cursorHOffset = relativeCellOffsetPx(cursorHOffsetCells, "x", cell);
+    const cursorVOffset = relativeCellOffsetPx(cursorVOffsetCells, "y", cell);
     const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(imageId)) {
       const rendered = renderEditorCursorVline({
@@ -975,7 +986,8 @@ export default function piGraphicsExtension(pi) {
     // Also defer the side-channel write until after the current TUI render turn:
     // Kitty only knows the virtual parent's physical cell after the transparent
     // placeholder has been written, so immediate side-channel placement can make
-    // H=-5,V=-2 appear ignored and leave the 11x5 image top-left on the cursor.
+    // the centered pixel offsets appear ignored and leave the 11x5 image top-left
+    // on the cursor.
     deferGraphicsCommand(relativePlacement);
     const anchorLine = buildKittyUnicodePlaceholderLines({
       imageId: anchorImageId,
@@ -1047,8 +1059,8 @@ export default function piGraphicsExtension(pi) {
     }
     const cursorColumns = 11;
     const cursorRows = 5;
-    const cursorHOffset = -Math.floor(cursorColumns / 2);
-    const cursorVOffset = -Math.floor(cursorRows / 2);
+    const cursorHOffset = relativeCellOffsetPx(-Math.floor(cursorColumns / 2), "x", cell);
+    const cursorVOffset = relativeCellOffsetPx(-Math.floor(cursorRows / 2), "y", cell);
     const relativePlacement = buildRelativePlacementCommand({
       imageId,
       placementId: piGraphicsPlacementId(`editor-cursor-preview-relative-placement-${heatBucket}-${trailBucket}-${directionBucket}`),
@@ -1189,7 +1201,7 @@ export default function piGraphicsExtension(pi) {
         placementId,
         parentImageId: anchor.imageId,
         parentPlacementId: anchor.placementId,
-        hOffset: FOOTER_DIVIDER_WIDTH,
+        hOffset: relativeCellOffsetPx(FOOTER_DIVIDER_WIDTH, "x", cell),
         columns: textWidth,
         rows: 1,
         zIndex: PI_GRAPHICS_Z.BACKGROUND,

@@ -197,7 +197,7 @@ test("animation loop command uses terminal-managed infinite playback", () => {
   assert.doesNotMatch(serialized, /c=/);
 });
 
-test("relative placement command emits parent ids and cell offsets", () => {
+test("relative placement command emits parent ids and pixel offsets", () => {
   const serialized = buildRelativePlacementCommand({
     imageId: 77,
     placementId: 78,

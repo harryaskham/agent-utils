@@ -444,7 +444,7 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx cursor preview` emits a bounded anchor-relative sample that uses the same
   transparent-anchor/relative-placement path as the live cursor, followed by
   cool/warm/hot cursor PNG variants plus a compact live-alignment diagnostic line
-  for fresh anchor placement ids, centered offsets, image+placement-id stale deletion,
+  for fresh anchor placement ids, centered pixel offsets, image+placement-id stale deletion,
   and reverse-video reset matching. `/gfx cursor status` prints the same live
   cursor diagnostics without emitting preview graphics or changing settings/state.
   `/gfx cursor audit` is a no-render command index for cursor status, doctor,
@@ -474,7 +474,8 @@ displayed using kitty Unicode placeholder cells, so:
   restores the previous hardware-cursor setting. In `glow` mode, the cursor
   anchor remains a single Unicode placeholder cell at the text cursor, while the
   visible cursor art is a larger relative Kitty placement (roughly 11 columns by
-  5 rows) centered on that fresh anchor. Each redraw gives the transparent anchor
+  5 rows) centered on that fresh anchor by converting the desired cell offsets to
+  Kitty H/V pixel offsets. Each redraw gives the transparent anchor
   a fresh placement id before attaching the visible image, so Kitty cannot
   resolve the cursor against an older same-id anchor elsewhere in the TUI. The
   prior visible cursor placement is deleted with Kitty's image-id delete mode plus

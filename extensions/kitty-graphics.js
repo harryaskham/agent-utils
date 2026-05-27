@@ -385,7 +385,7 @@ export function buildPngCursorPlacementCommand({
 }
 
 // Relative placement: position image `imageId`/`placementId` relative to the
-// parent placement (`parentImageId`/`parentPlacementId`) with optional H/V cell
+// parent placement (`parentImageId`/`parentPlacementId`) with optional H/V pixel
 // offsets. Used to attach a non-virtual animated image to a virtual Unicode
 // placeholder anchor so the animation follows the anchor as the TUI moves it.
 // Relative placements are expected not to move the cursor per protocol, but in
