@@ -303,6 +303,7 @@ test("thinking assistant content uses dedicated thought chrome", () => {
   runtime.applyToRows({ type: "assistant", instanceId: 9, component, lines: [" thinking line", " still thinking"] });
   assert.ok(emitted.some((c) => /a=t,f=100,t=d/.test(c)), "thought chrome should upload strips");
   assert.ok([...state.ownedImageIds].length >= 2, "thought chrome should own strip and anchor images");
+  assert.deepEqual(runtime.ownedImageIds(), state.boxChromeImageIds, "runtime should expose only tracked box chrome image ids for targeted cleanup");
 });
 
 test("installBoxChromeMonkeyPatch is idempotent, updates runtime, and restores safely", () => {

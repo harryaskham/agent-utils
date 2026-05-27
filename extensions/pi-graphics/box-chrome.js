@@ -2925,6 +2925,7 @@ export function createBoxChromeRuntime({
   debugPlaceholders = false,
 } = {}) {
   state.ownedImageIds ||= new Set();
+  state.boxChromeImageIds ||= new Set();
   state.transmittedImageIds ||= new Set();
   state.placementByImage ||= new Map();
   state.config ||= { passthrough };
@@ -2935,6 +2936,12 @@ export function createBoxChromeRuntime({
   const relativePlacements = new Set();
   const relativeByAnchorRow = new Map();
   const unicodeCellLines = new Map();
+
+  function trackBoxChromeImageId(imageId) {
+    state.ownedImageIds.add(imageId);
+    state.boxChromeImageIds.add(imageId);
+    return imageId;
+  }
 
   function stripRenderRowBucket(rowIndex) {
     const row = Math.trunc(Number(rowIndex) || 0);
@@ -2955,7 +2962,7 @@ export function createBoxChromeRuntime({
       q: 2,
     }, bufferToBase64(png), { passthrough });
     emitGraphicsCommand(upload);
-    state.ownedImageIds.add(imageId);
+    trackBoxChromeImageId(imageId);
     uploadedStrips.add(imageId);
     return imageId;
   }
@@ -2983,7 +2990,7 @@ export function createBoxChromeRuntime({
       q: 2,
     }, "", { passthrough });
     emitGraphicsCommand(`${upload}${place}`);
-    state.ownedImageIds.add(anchorImageId);
+    trackBoxChromeImageId(anchorImageId);
     anchorsUploaded.add(anchorImageId);
     return { anchorImageId, anchorPlacementId: placementId };
   }
@@ -3058,6 +3065,7 @@ export function createBoxChromeRuntime({
       const cell = debugPlaceholders
         ? debugPlaceholderCell({ imageId: placement.imageId, placementId: placement.placementId })
         : placement.lines[0] || "";
+      trackBoxChromeImageId(placement.imageId);
       const entry = { transmit: placement.transmit, cell, line: `${placement.transmit}${cell}` };
       unicodeCellLines.set(cellKey, entry);
       return entry;
@@ -3118,15 +3126,20 @@ export function createBoxChromeRuntime({
     return wrapped;
   }
 
+  function ownedImageIds() {
+    return new Set(state.boxChromeImageIds || []);
+  }
+
   function resetCaches() {
     uploadedStrips.clear();
     anchorsUploaded.clear();
     relativePlacements.clear();
     relativeByAnchorRow.clear();
     unicodeCellLines.clear();
+    state.boxChromeImageIds?.clear?.();
   }
 
-  return { applyToRows, resetCaches };
+  return { applyToRows, resetCaches, ownedImageIds };
 }
 
 function hasKittyPlaceholder(text) {

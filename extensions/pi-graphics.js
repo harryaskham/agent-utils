@@ -1661,8 +1661,22 @@ export default function piGraphicsExtension(pi) {
     delete ui.__piGraphicsSurfacesPatched;
   }
 
+  function clearBoxChromeImages(ctx) {
+    const owned = boxChromeRuntime?.ownedImageIds?.() || state.boxChromeImageIds || new Set();
+    const scoped = buildScopedDeleteCommand({ ownedImageIds: owned });
+    const hosted = buildDeleteByZIndexBandCommand({ zIndices: [PI_GRAPHICS_Z.BOX_CHROME] });
+    const command = `${scoped}${hosted}`;
+    if (command) {
+      try { resolveGraphicsWriter(ctx)?.(command); } catch {}
+    }
+    for (const id of owned) state.ownedImageIds?.delete?.(id);
+    state.boxChromeImageIds?.clear?.();
+  }
+
   function teardownBoxChrome(ctx) {
     restoreUiGraphicsSurfaces(ctx);
+    clearBoxChromeImages(ctx);
+    try { boxChromeRuntime?.resetCaches?.(); } catch {}
     try { restoreBuiltInBoxChrome?.(); } catch {}
     // Extension reloads can leave process-global Pi component prototypes patched
     // while this fresh extension instance has no restore callback yet. Install a
@@ -1816,10 +1830,16 @@ export default function piGraphicsExtension(pi) {
     try { ctx?.ui?.requestRender?.(true); } catch {}
   }
 
+  function settingsDisableBoxChrome(settings) {
+    const nextEnv = settingsEnvFromPiGraphics(settings);
+    return modeIsOff(nextEnv.PI_GRAPHICS_MODE) || FALSE_RE.test(String(nextEnv.PI_GRAPHICS_AUTO_BOX_CHROME || "0"));
+  }
+
   async function applyGfxSettingsAndReload(ctx, settings, message = "Saved Pi Graphics settings. Reloading runtime to apply...") {
     try { saveSettings(settings); }
     catch (error) { ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error"); return false; }
     if (typeof ctx.reload === "function") {
+      if (settingsDisableBoxChrome(settings)) applyGfxSettingsLive(ctx, settings);
       ctx.ui.notify(message, "info");
       try { await ctx.reload(); } catch {}
     } else {

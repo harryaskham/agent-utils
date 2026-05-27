@@ -1318,6 +1318,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_DEBUG: gfx\.debug/);
   assert.match(source, /PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx\.debugPlaceholders/);
   assert.match(source, /function boxChromeComponentMap\(\)/);
+  assert.match(source, /function clearBoxChromeImages\(ctx\)/);
+  assert.match(source, /boxChromeRuntime\?\.ownedImageIds\?\.\(\) \|\| state\.boxChromeImageIds/);
+  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: \[PI_GRAPHICS_Z\.BOX_CHROME\] \}\)/);
+  assert.match(source, /settingsDisableBoxChrome\(settings\)/);
   assert.match(source, /installBoxChromeMonkeyPatch\(\{ components: boxChromeComponentMap\(\), runtime: null \}\)\?\.restore\?\.\(\)/);
   assert.match(source, /BOX_EFFECT_NAMES/);
   assert.match(source, /BOX_TYPE_EFFECTS/);
