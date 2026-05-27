@@ -414,11 +414,14 @@ export function buildRelativePlacementCommand({
     c: columns,
     r: rows,
     z: zIndex,
-    C: 1,
-    q: quiet,
   };
   if (Number.isFinite(Number(hOffset)) && Number(hOffset) !== 0) control.H = Math.trunc(Number(hOffset));
   if (Number.isFinite(Number(vOffset)) && Number(vOffset) !== 0) control.V = Math.trunc(Number(vOffset));
+  // Keep H/V before generic guards. Control keys are specified as unordered,
+  // but live Kitty/tmux cursor debugging showed the safest path is to emit the
+  // semantic relative-position keys before quiet/cursor guard flags.
+  control.C = 1;
+  control.q = quiet;
   return serializeKittyGraphicsCommand(control, "", { passthrough, env });
 }
 

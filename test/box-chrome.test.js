@@ -81,7 +81,7 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.ok(placementIds.some((id) => id > 0x1000000), "relative placements should use the full 32-bit protocol range");
   const emittedText = emitted.join("");
   assert.match(emittedText, /(?:^|,)c=20(?:,|;)/, "relative chrome should use render width, not just content width");
-  assert.doesNotMatch(emittedText, /(?:^|,)H=-?\d+|(?:^|,)V=-?\d+/, "box strips are anchored at the placeholder origin and must not pass cell counts as H/V pixel offsets");
+  assert.doesNotMatch(emittedText, /(?:^|,)H=-?\d+|(?:^|,)V=-?\d+/, "box strips are anchored at the placeholder origin and must not emit unnecessary H/V offsets");
   // Second pass with same instanceId/lines should reuse cached uploads (no new a=t).
   const emittedBeforeSecond = emitted.length;
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines, renderWidth: 20 });
