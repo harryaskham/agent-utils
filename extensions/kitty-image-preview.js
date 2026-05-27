@@ -816,6 +816,11 @@ function flashDeleteWidget(ctx, state, deleteCommand) {
   }, 100);
 }
 
+function keepTimerFromHoldingProcess(timer) {
+  if (typeof timer?.unref === "function") timer.unref();
+  return timer;
+}
+
 function stopAnimation(state) {
   if (state.animationTimer) clearInterval(state.animationTimer);
   state.animationTimer = undefined;
@@ -838,12 +843,15 @@ function advanceIndex(state, direction = 1) {
 function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true } = {}) {
   stopCycle(state);
   state.cycle = { running: true, intervalMs, direction, loop };
-  state.cycleTimer = setInterval(() => {
+  state.cycleTimer = keepTimerFromHoldingProcess(setInterval(() => {
     if (!state.visible || state.items.length === 0) {
       stopCycle(state);
       syncWidget(ctx, state);
       return;
     }
+    const cycle = state.cycle;
+    if (cycle.inFlight) return;
+    cycle.inFlight = true;
     const next = state.index + direction;
     if (next < 0 || next >= state.items.length) {
       if (!loop) {
@@ -855,22 +863,29 @@ function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true 
     } else {
       state.index = next;
     }
-    prepareCurrentImage(state, ctx, { forceReload: true }).catch((error) => {
-      stopCycle(state);
-      ctx?.ui?.notify?.(`kitty image cycle stopped: ${error.message}`, "warning");
-    });
-  }, Math.max(50, intervalMs));
+    prepareCurrentImage(state, ctx, { forceReload: true })
+      .catch((error) => {
+        stopCycle(state);
+        ctx?.ui?.notify?.(`kitty image cycle stopped: ${error.message}`, "warning");
+      })
+      .finally(() => {
+        if (state.cycle === cycle && cycle.running) cycle.inFlight = false;
+      });
+  }, Math.max(50, intervalMs)));
 }
 
 function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
   stopAnimation(state);
   state.animation = { running: true, intervalMs, loop };
-  state.animationTimer = setInterval(() => {
+  state.animationTimer = keepTimerFromHoldingProcess(setInterval(() => {
     if (!state.visible || state.items.length === 0) {
       stopAnimation(state);
       syncWidget(ctx, state);
       return;
     }
+    const animation = state.animation;
+    if (animation.inFlight) return;
+    animation.inFlight = true;
     const next = state.index + 1;
     if (next >= state.items.length) {
       if (!loop) {
@@ -882,11 +897,15 @@ function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
     } else {
       state.index = next;
     }
-    prepareCurrentImage(state, ctx, { forceReload: true }).catch((error) => {
-      stopAnimation(state);
-      ctx?.ui?.notify?.(`kitty image animation stopped: ${error.message}`, "warning");
-    });
-  }, Math.max(50, intervalMs));
+    prepareCurrentImage(state, ctx, { forceReload: true })
+      .catch((error) => {
+        stopAnimation(state);
+        ctx?.ui?.notify?.(`kitty image animation stopped: ${error.message}`, "warning");
+      })
+      .finally(() => {
+        if (state.animation === animation && animation.running) animation.inFlight = false;
+      });
+  }, Math.max(50, intervalMs)));
 }
 
 function buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders = false) {
@@ -1425,10 +1444,10 @@ async function captureAnyStreamFrame(pi, ctx, state, stream) {
 
 function scheduleNextStreamFrame(pi, ctx, state, stream) {
   if (!stream?.running) return;
-  stream.timer = setTimeout(async () => {
+  stream.timer = keepTimerFromHoldingProcess(setTimeout(async () => {
     await captureAnyStreamFrame(pi, ctx, state, stream);
     scheduleNextStreamFrame(pi, ctx, state, stream);
-  }, stream.intervalMs);
+  }, stream.intervalMs));
 }
 
 async function stopStream(state, { cleanup = false } = {}) {

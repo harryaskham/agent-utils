@@ -308,6 +308,13 @@ test("kitty multiviewer registers discoverable image commands, controls, and a c
   assert.match(source, /name: "kitty_image_preview_cycle"/);
   assert.match(source, /function startCycle/);
   assert.match(source, /function stopCycle/);
+  assert.match(source, /function keepTimerFromHoldingProcess/);
+  assert.match(source, /const animation = state\.animation/);
+  assert.match(source, /animation\.inFlight/);
+  assert.match(source, /const cycle = state\.cycle/);
+  assert.match(source, /cycle\.inFlight/);
+  assert.match(source, /keepTimerFromHoldingProcess\(setInterval/);
+  assert.match(source, /keepTimerFromHoldingProcess\(setTimeout/);
 });
 
 test("interactive kitty animation smoke stays out of default node test discovery", async () => {

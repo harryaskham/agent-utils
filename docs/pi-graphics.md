@@ -197,6 +197,8 @@ rendered. The extension complements those flat colors with graphical affordances
   reliable live path is Kitty's explicit current-frame control (`a=a,c=<frame>`)
   driven by the extension; native `s=3` loops and APNG playback are treated as
   diagnostic/experimental until they are proven to repaint in the target terminal.
+  Manual live animation timers are unref'd, stopped on graphics reset/session end,
+  and self-stop if the side-channel graphics writer fails.
 * **Rendered terminal scenes** — `pi_graphics_render_terminal_scene` draws a
   full pixel-level terminal surface (cell grid, deep-Nordic vertical gradient,
   aurora radial glows, status chips, scanlines, and bottom waveform) as PNG or

@@ -345,6 +345,11 @@ export default function piGraphicsExtension(pi) {
     animationTimers.clear();
   }
 
+  function keepTimerFromHoldingProcess(timer) {
+    if (typeof timer?.unref === "function") timer.unref();
+    return timer;
+  }
+
   function resetGraphicsUploadCaches() {
     stopManualAnimationLoops();
     uploadedImages.clear();
@@ -570,14 +575,20 @@ export default function piGraphicsExtension(pi) {
     let frame = 1;
     const intervalMs = Math.max(50, Math.trunc(Number(delayMs) || 100));
     const tick = () => {
-      frame = frame >= frameCount ? 1 : frame + 1;
-      emitGraphicsCommand(buildAnimationFrameCommand({
-        imageId,
-        frame,
-        passthrough: state.config.passthrough,
-      }));
+      try {
+        frame = frame >= frameCount ? 1 : frame + 1;
+        emitGraphicsCommand(buildAnimationFrameCommand({
+          imageId,
+          frame,
+          passthrough: state.config.passthrough,
+        }));
+      } catch {
+        const timer = animationTimers.get(imageId);
+        if (timer) clearInterval(timer);
+        animationTimers.delete(imageId);
+      }
     };
-    animationTimers.set(imageId, setInterval(tick, intervalMs));
+    animationTimers.set(imageId, keepTimerFromHoldingProcess(setInterval(tick, intervalMs)));
   }
 
   function ensureRelativeAnimUploaded({ animImageId, anchorImageId, anchorPlacementId, animPlacementId, pngs, delayMs, columns, rows, frames }) {

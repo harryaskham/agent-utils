@@ -1373,6 +1373,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /zIndex: PI_GRAPHICS_Z\.BACKGROUND/);
   assert.match(source, /renderEditorCursorVline/);
   assert.match(source, /function ensureManualAnimationLoop\(\{ imageId, frames, delayMs \}\)/);
+  assert.match(source, /function keepTimerFromHoldingProcess\(timer\)/);
+  assert.match(source, /animationTimers\.set\(imageId, keepTimerFromHoldingProcess\(setInterval/);
+  assert.match(source, /animationTimers\.delete\(imageId\)/);
   assert.match(source, /buildAnimationFrameCommand\(\{/);
   assert.match(source, /terminal-driven APNG\/native frame loops have not repainted/);
   assert.match(source, /buildAnimationStopCommand\(\{ imageId: animImageId/);
