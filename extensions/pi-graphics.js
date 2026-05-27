@@ -958,14 +958,9 @@ export default function piGraphicsExtension(pi) {
         ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
         : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const cursorStyle = editorCursorStyle();
-    if (cursorStyle === "cell" || cursorStyle === "glow") {
-      // The trailing workspace path proves Unicode placeholders land exactly in
-      // the editor text flow. Use the same direct Unicode placement for the live
-      // cursor instead of the fragile relative-child path: it is better for the
-      // default glow to be centered in the actual cursor cell than for an 11x5
-      // relative image to drift or disappear in live Kitty/tmux.
+    if (cursorStyle === "cell") {
       clearEditorCursorPlacement();
-      const key = `editor-cursor-${cursorStyle}-direct-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+      const key = `editor-cursor-cell-direct-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
       return cachedPlacementLine(key, () => {
         const rendered = renderEditorCursorVline({
           alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
@@ -975,7 +970,7 @@ export default function piGraphicsExtension(pi) {
           columns: 1,
           rows: 1,
           heat,
-          glowRadiusCells: cursorStyle === "glow" ? 0.72 + heat * 0.35 : 0.35,
+          glowRadiusCells: 0.35,
           trailCells: 0,
           trailDirection,
           ...cell,
@@ -994,20 +989,37 @@ export default function piGraphicsExtension(pi) {
       });
     }
 
-    const anchorImageId = piGraphicsImageId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    // Glow mode draws the proven direct Unicode cursor cell first, then attempts
+    // the larger 11x5 relative halo against that same visible cursor placement.
+    // If the relative path drifts or fails in live Kitty/tmux, the cursor cell
+    // itself still lands exactly like trailing workspace placeholders.
+    const anchorImageId = piGraphicsImageId(`editor-cursor-glow-direct-anchor-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(anchorImageId)) {
+      const rendered = renderEditorCursorVline({
+        alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
+        backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+        coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
+        glowColor,
+        columns: 1,
+        rows: 1,
+        heat,
+        glowRadiusCells: 0.72 + heat * 0.35,
+        trailCells: 0,
+        trailDirection,
+        ...cell,
+      });
       emitGraphicsCommand(serializeKittyGraphicsChunks({
         a: "t",
         f: 100,
         t: "d",
         i: anchorImageId,
         q: 2,
-      }, transparentPixelPngBase64(), { passthrough: state.config.passthrough }));
+      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
       state.ownedImageIds.add(anchorImageId);
       uploadedImages.add(anchorImageId);
     }
     editorCursorAnchorSeq = (editorCursorAnchorSeq + 1) % 0x800000;
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}-${editorCursorAnchorSeq}`);
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-glow-direct-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}-${editorCursorAnchorSeq}`);
     emitGraphicsCommand(serializeKittyGraphicsCommand({
       a: "p",
       i: anchorImageId,
@@ -1067,17 +1079,17 @@ export default function piGraphicsExtension(pi) {
       vOffset: cursorVOffset,
       columns: cursorColumns,
       rows: cursorRows,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
+      zIndex: PI_GRAPHICS_Z.BACKGROUND,
       passthrough: state.config.passthrough,
     });
     editorCursorRelativePlacement = { imageId, placementId };
     // Keep raw Kitty APC out of the editor's rendered text. Inline APC escapes
     // confuse Pi's TUI width/diffing path and can duplicate/wrap the input line.
     // Also defer the side-channel write until after the current TUI render turn:
-    // Kitty only knows the virtual parent's physical cell after the transparent
-    // placeholder has been written, so immediate side-channel placement can make
-    // the centered cell offsets appear ignored and leave the 11x5 image top-left
-    // on the cursor.
+    // Kitty only knows the virtual parent's physical cell after the direct
+    // cursor placeholder has been written, so immediate side-channel placement
+    // can make the centered cell offsets appear ignored and leave the 11x5 image
+    // top-left on the cursor.
     deferGraphicsCommand(relativePlacement);
     const anchorLine = buildKittyUnicodePlaceholderLines({
       imageId: anchorImageId,

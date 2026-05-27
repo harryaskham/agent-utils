@@ -468,20 +468,20 @@ displayed using kitty Unicode placeholder cells, so:
   capped and center-aligned, so fullscreen terminals keep a visible full-width
   input frame. The focused editor cursor is configurable with
   `piGraphics.editor.cursorStyle` (or `PI_GRAPHICS_EDITOR_CURSOR_STYLE`): `glow`
-  is the default speed-responsive direct Unicode-placeholder cursor, `cell` is
-  the conservative one-cell placeholder cursor, and `off` disables the graphics
-  cursor while the broader editor surface stays enabled. When graphics cursor
-  styling is active, the extension asks Pi's TUI to hide the hardware cursor so
-  the terminal blink does not fight the styled placeholder; disabling graphics
-  cursor/editor styling restores the previous hardware-cursor setting. In live
-  `glow` mode, Pi now uses the same direct Unicode placement path as trailing
-  workspace fill: the visible cursor art is a one-cell PNG placeholder replacing
-  the reverse-video cursor cell exactly in the editor text flow. The older 11×5
-  relative glow remains available in cursor preview diagnostics, but it is not
-  used for the live default because repeated live Kitty/tmux attempts either
-  anchored its top-left at the cursor or made it disappear. The direct glow keeps
-  a bright vertical core in the cursor cell while transparent glow has enough
-  padding to avoid clipping at the image edges. The glow colour/radius is
+  is the default speed-responsive direct Unicode-placeholder cursor plus a best-effort
+  large relative halo, `cell` is the conservative one-cell placeholder cursor,
+  and `off` disables the graphics cursor while the broader editor surface stays
+  enabled. When graphics cursor styling is active, the extension asks Pi's TUI
+  to hide the hardware cursor so the terminal blink does not fight the styled
+  placeholder; disabling graphics cursor/editor styling restores the previous
+  hardware-cursor setting. In live `glow` mode, Pi uses the same direct Unicode
+  placement path as trailing workspace fill for the actual cursor cell: a one-cell
+  PNG placeholder replaces the reverse-video cursor cell exactly in the editor
+  text flow. It then attempts the intended larger 11×5 relative halo against that
+  same visible placement with `H=-5,V=-2`, drawn below the cursor cell so a bad
+  relative placement cannot hide the proven cursor. The direct glow keeps a bright
+  vertical core in the cursor cell while the relative halo, when Kitty/tmux honors
+  it, expands beyond the cell bounds. The glow colour/radius is
   smoothly interpolated toward a heat target inferred from recent
   inter-character typing speed; after typing stops Pi schedules lightweight
   editor redraws so the glow and trailing workspace fade out instead of freezing
