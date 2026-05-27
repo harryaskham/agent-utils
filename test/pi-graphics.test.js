@@ -1409,7 +1409,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /litellm-openai"\) return "loai"/);
   assert.match(source, /litellm-anthropic"\) return "lant"/);
   assert.match(source, /key\.startsWith\("azure-"\)\) return "az"/);
-  assert.match(source, /function compactFooterModelName\(model\)/);
+  assert.match(source, /function compactFooterModelName\(model, provider = footerState\.provider\)/);
+  assert.match(source, /providerKey !== "github-copilot" \|\| !\/\^gpt-5/);
+  assert.match(source, /compactFooterModelName\(footerState\.model, footerState\.provider\)/);
   assert.match(source, /replace\(\/\^gpt-\/i, ""\)/);
   assert.match(source, /replace\(\/\^claude-\/i, ""\)/);
   assert.match(source, /replace\(\/-1m-internal\$\/i, ""\)/);

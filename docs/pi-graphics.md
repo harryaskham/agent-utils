@@ -533,8 +533,9 @@ displayed using kitty Unicode placeholder cells, so:
   are shortened before model layout (`github-copilot` → `ghcp`, `openai` → `oai`,
   `anthropic` → `ant`, `litellm-openai` → `loai`, `litellm-anthropic` → `lant`,
   `openrouter` → `oprt`, and `azure-*` → `az`) and common model prefixes/suffixes
-  are removed (`gpt-*` → `*`, `claude-*` → `*`, `-1m-internal` dropped), so
-  examples render as `ghcp/5.5`, `lant/opus-4.7`, or `lant/sonnet-4-6`.
+  are removed (`claude-*` → `*`, `-1m-internal` dropped, non-Copilot `gpt-*` →
+  `*`). Copilot GPT-5 models keep their `gpt-` prefix for clarity, so examples
+  render as `ghcp/gpt-5.5`, `lant/opus-4.7`, or `lant/sonnet-4-6`.
 * The `⠼ Working...` indicator receives themed Pi graphics flair via custom
   working-indicator frames while preserving Pi's normal loader lifecycle.
 

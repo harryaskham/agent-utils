@@ -553,10 +553,13 @@ export default function piGraphicsExtension(pi) {
     return chars.slice(0, width).join("");
   }
 
-  function compactFooterModelName(model) {
+  function compactFooterModelName(model, provider = footerState.provider) {
     let value = String(model || "").trim();
+    const providerKey = String(provider || "").toLowerCase().replace(/[_./]+/g, "-");
     value = value.replace(/-1m-internal$/i, "");
-    value = value.replace(/^gpt-/i, "");
+    if (providerKey !== "github-copilot" || !/^gpt-5(?:\.|-|$)/i.test(value)) {
+      value = value.replace(/^gpt-/i, "");
+    }
     value = value.replace(/^claude-/i, "");
     value = value.replace(/^opus-4-7$/i, "opus-4.7");
     return value;
@@ -1195,7 +1198,7 @@ export default function piGraphicsExtension(pi) {
       ? `${formatFooterPct(footerState.contextPct)}/${formatFooterTokens(footerState.contextMax)}`
       : "context n/a";
     const provider = compactFooterProvider(footerState.provider);
-    const modelName = compactFooterModelName(footerState.model);
+    const modelName = compactFooterModelName(footerState.model, footerState.provider);
     const model = modelName
       ? `${provider ? `${provider}/` : ""}${modelName}`
       : "model n/a";
