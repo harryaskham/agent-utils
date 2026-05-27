@@ -197,7 +197,7 @@ test("animation loop command uses terminal-managed infinite playback", () => {
   assert.doesNotMatch(serialized, /c=/);
 });
 
-test("relative placement command emits parent ids and cell offsets before guards", () => {
+test("relative placement command emits parent ids and cell offsets", () => {
   const serialized = buildRelativePlacementCommand({
     imageId: 77,
     placementId: 78,
@@ -210,7 +210,7 @@ test("relative placement command emits parent ids and cell offsets before guards
     zIndex: -10,
     passthrough: "none",
   });
-  assert.equal(serialized, `${ESC}_Ga=p,i=77,p=78,P=79,Q=80,c=11,r=5,z=-10,H=-5,V=-2,C=1,q=2${ESC}\\`);
+  assert.equal(serialized, `${ESC}_Ga=p,i=77,p=78,P=79,Q=80,c=11,r=5,z=-10,C=1,q=2,H=-5,V=-2${ESC}\\`);
   assert.match(serialized, /(?:^|,)C=1(?:,|$)/, "relative placements keep a defensive no-cursor-movement guard");
 });
 

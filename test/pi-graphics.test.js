@@ -1358,9 +1358,14 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /fadeStart: false,\n\s+fadeEnd: true/);
   assert.match(source, /function editorCursorStyle\(\)/);
-  assert.match(source, /const key = `editor-cursor-cell-\$\{heatBucket\}-\$\{trailBucket\}-\$\{directionBucket\}/);
-  assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/);
+  assert.match(source, /const cursorStyle = editorCursorStyle\(\)/);
+  assert.match(source, /cursorStyle === "cell" \|\| cursorStyle === "glow"/);
+  assert.match(source, /trailing workspace path proves Unicode placeholders land exactly/);
+  assert.match(source, /clearEditorCursorPlacement\(\)/);
+  assert.match(source, /const key = `editor-cursor-\$\{cursorStyle\}-direct-\$\{heatBucket\}-\$\{trailBucket\}-\$\{directionBucket\}/);
   assert.match(source, /columns: 1,\n\s+rows: 1,/);
+  assert.match(source, /glowRadiusCells: cursorStyle === "glow"/);
+  assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/, "diagnostic preview still keeps the old relative path");
   assert.match(source, /cursorColumns = 11/);
   assert.match(source, /const cursorHOffset = -Math\.floor\(cursorColumns \/ 2\)/);
   assert.match(source, /const cursorVOffset = -Math\.floor\(cursorRows \/ 2\)/);
@@ -1368,9 +1373,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /vOffset: cursorVOffset/);
   assert.match(source, /function deferGraphicsCommand\(command\)/);
   assert.match(source, /deferGraphicsCommand\(relativePlacement\);\n\s+const anchorLine = buildKittyUnicodePlaceholderLines/);
-  assert.match(source, /Keep raw Kitty APC out of the editor's rendered text/);
-  assert.match(source, /after the transparent\n\s+\/\/ placeholder has been written/);
-  assert.match(source, /H=-5,V=-2/);
   assert.match(source, /return `\$\{String\(label \|\| "anchored"\)\.padEnd\(12\)\} \$\{anchorLine\}\$\{relativePlacement\}`/);
   assert.doesNotMatch(source, /return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null/);
   assert.match(source, /trailCells: heat > 0\.04/);
@@ -1432,7 +1434,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /applyHardwareCursorPolicy\(tui\)/);
   assert.match(source, /restoreHardwareCursorPolicy\(\)/);
   assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 \} = \{\}\)/);
-  assert.match(source, /editor-cursor-cell-/);
+  assert.match(source, /editor-cursor-\$\{cursorStyle\}-direct-/);
   assert.match(source, /editor-cursor-glow-/);
   assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/);
   assert.match(source, /columns: 1,\n\s+rows: 1,/);

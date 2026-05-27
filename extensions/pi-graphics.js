@@ -915,8 +915,15 @@ export default function piGraphicsExtension(pi) {
       : heatBucket >= 4
         ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
         : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    if (editorCursorStyle() === "cell") {
-      const key = `editor-cursor-cell-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    const cursorStyle = editorCursorStyle();
+    if (cursorStyle === "cell" || cursorStyle === "glow") {
+      // The trailing workspace path proves Unicode placeholders land exactly in
+      // the editor text flow. Use the same direct Unicode placement for the live
+      // cursor instead of the fragile relative-child path: it is better for the
+      // default glow to be centered in the actual cursor cell than for an 11x5
+      // relative image to drift or disappear in live Kitty/tmux.
+      clearEditorCursorPlacement();
+      const key = `editor-cursor-${cursorStyle}-direct-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
       return cachedPlacementLine(key, () => {
         const rendered = renderEditorCursorVline({
           alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
@@ -926,7 +933,7 @@ export default function piGraphicsExtension(pi) {
           columns: 1,
           rows: 1,
           heat,
-          glowRadiusCells: 0.35,
+          glowRadiusCells: cursorStyle === "glow" ? 0.72 + heat * 0.35 : 0.35,
           trailCells: 0,
           trailDirection,
           ...cell,
