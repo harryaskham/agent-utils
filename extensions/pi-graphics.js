@@ -193,6 +193,19 @@ export default function piGraphicsExtension(pi) {
     });
   }
 
+  function editorWorkspaceCellMetrics() {
+    const env = gfxEnv();
+    // The trailing workspace is rendered into the editor text row itself, not a
+    // separate widget. Keep its PNG height tied to the configured line-height
+    // scale (1.2 by default for Ghostty/Pi) so the placeholder image occupies
+    // the same visual row height as the editor top/bottom border graphics.
+    return resolveCellMetrics({
+      cellWidthPx: env.PI_GRAPHICS_CELL_WIDTH_PX,
+      cellHeightPx: env.PI_GRAPHICS_CELL_HEIGHT_PX,
+      lineHeightScale: env.PI_GRAPHICS_LINE_HEIGHT_SCALE ?? 1.2,
+    });
+  }
+
   function editorVariant() {
     const env = gfxEnv();
     const raw = String(env.PI_GRAPHICS_EDITOR_VARIANT || "").trim().toLowerCase();
@@ -490,6 +503,28 @@ export default function piGraphicsExtension(pi) {
     return compactFooterPath(display);
   }
 
+  function mixRgbChannel(a, b, t) {
+    return Math.round(a + (b - a) * Math.max(0, Math.min(1, t)));
+  }
+
+  function mixHexColor(fromHex, toHex, t) {
+    const parse = (hex, fallback) => {
+      const text = String(hex || "").replace(/^#/, "");
+      if (!/^[0-9a-f]{6}$/i.test(text)) return fallback;
+      return [parseInt(text.slice(0, 2), 16), parseInt(text.slice(2, 4), 16), parseInt(text.slice(4, 6), 16)];
+    };
+    const from = parse(fromHex, [136, 192, 208]);
+    const to = parse(toHex, [255, 255, 255]);
+    return `#${from.map((c, i) => mixRgbChannel(c, to[i], t).toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  function editorRailHeat() {
+    // Rails should stay calm until typing heat is clearly visible, then catch
+    // up over a wider 50%..150% band so heat appears to spread outward rather
+    // than flashing the whole editor frame immediately.
+    return Math.max(0, Math.min(1, (editorCursorHeat - 0.5) / 1.0));
+  }
+
   function compactFooterProvider(provider) {
     const raw = String(provider || "").trim();
     const key = raw.toLowerCase().replace(/[_./]+/g, "-");
@@ -670,12 +705,16 @@ export default function piGraphicsExtension(pi) {
     const leadingCells = 0;
     const frames = editorStyle() === "animated" ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
-    const borderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const glowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
-    const borderAlpha = Math.max(0.32, Math.min(0.6, alpha));
-    const glowAlpha = Math.max(0.22, alpha * 0.62);
+    const railHeat = editorRailHeat();
+    const railHeatBucket = Math.max(0, Math.min(12, Math.round(railHeat * 12)));
+    const baseBorderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const baseGlowColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
+    const borderColor = mixHexColor(baseBorderColor, "#ffffff", railHeat);
+    const glowColor = mixHexColor(baseGlowColor, railHeat > 0.65 ? "#ffffff" : "#ff9f5a", railHeat);
+    const borderAlpha = Math.max(0.32, Math.min(0.78, alpha + railHeat * 0.22));
+    const glowAlpha = Math.max(0.22, Math.min(0.72, alpha * 0.62 + railHeat * 0.34));
     if (frames <= 1) {
-      const key = `editor-border-static-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+      const key = `editor-border-static-${edge}-${visualCols}-${variant}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
       const line = cachedPlacementLine(key, () => {
         const rendered = renderEditorBorderFramesPngs({
           columns: visualCols,
@@ -704,7 +743,7 @@ export default function piGraphicsExtension(pi) {
     // animation placement. Per-edge image ids prevent the two edges from
     // sharing a frame counter or placement.
     const anchorKey = `editor-border-anchor-${edge}-${visualCols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-    const animKey = `editor-border-anim-${edge}-${visualCols}-${variant}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
+    const animKey = `editor-border-anim-${edge}-${visualCols}-${variant}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}-${frames}`;
     const anchorImageId = piGraphicsImageId(anchorKey);
     const animImageId = piGraphicsImageId(animKey);
     const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${visualCols}`);
@@ -821,12 +860,12 @@ export default function piGraphicsExtension(pi) {
     if (cols < 2) return null;
     const safeHeat = Math.max(0, Math.min(1, Number(heat) || 0));
     const heatBucket = Math.max(0, Math.min(12, Math.round(safeHeat * 12)));
-    const cell = cellMetrics();
+    const cell = editorWorkspaceCellMetrics();
     const variant = safeHeat > 0.35 ? "scanlines" : "glow";
     const alpha = Math.max(0.04, editorAlpha() * (0.08 + safeHeat * 0.56));
     const leftColor = safeHeat > 0.62 ? "#ff9f5a" : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
     const rightColor = safeHeat > 0.35 ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead") : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const key = `editor-workspace-tail-${cols}-heat-${heatBucket}-${variant}-${alpha.toFixed(3)}-${leftColor}-${rightColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    const key = `editor-workspace-tail-${cols}-heat-${heatBucket}-${variant}-${alpha.toFixed(3)}-${leftColor}-${rightColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
     return cachedPlacementLine(key, () => {
       const rendered = renderPromptEnclosure({
         columns: cols,

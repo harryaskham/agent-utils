@@ -494,7 +494,12 @@ displayed using kitty Unicode placeholder cells, so:
   separate settings: `piGraphics.editor.trailingWorkspace` /
   `PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE` fills empty cells after the cursor with
   the same animated heat envelope and a right-only opacity falloff like the
-  editor top/bottom border chrome, and `piGraphics.editor.rowBackground` /
+  editor top/bottom border chrome. Once heat passes the midpoint, the editor
+  top/bottom rails also warm toward white-hot colours over a wider 50%→150%
+  spread, making the heat appear to propagate from the cursor into the frame.
+  The trailing workspace PNG uses the configured editor cell line-height scale
+  (default `1.2`, or `piGraphics.cell.lineHeightScale`) so Ghostty rows align
+  with the top/bottom editor border graphics. `piGraphics.editor.rowBackground` /
   `PI_GRAPHICS_EDITOR_ROW_BACKGROUND` enables the row-wide background. Both are
   off by default because they can visually compete with live typing in narrow or
   frequently redrawn editors. These are visible in the `/gfx` settings overlay and
