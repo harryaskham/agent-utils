@@ -15,7 +15,8 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 function makeHarness({ idle = true } = {}) {
-  const visionModel = { provider: "litellm-anthropic", id: "claude-opus-4-7", input: ["text", "image"] };
+  const visionModel = { provider: "github-copilot", id: "claude-opus-4.7", input: ["text", "image"] };
+  const fallbackVisionModel = { provider: "litellm-anthropic", id: "claude-opus-4-7", input: ["text", "image"] };
   const commands = new Map();
   const notifications = [];
   const execCalls = [];
@@ -27,8 +28,12 @@ function makeHarness({ idle = true } = {}) {
     isIdle: () => idle,
     ui: { notify: (message, level = "info") => notifications.push({ message, level }) },
     modelRegistry: {
-      find(provider, id) { return provider === visionModel.provider && id === visionModel.id ? visionModel : undefined; },
-      async getApiKeyAndHeaders(model) { return { ok: true, apiKey: `key-for-${model.id}`, headers: { "x-test": "1" } }; },
+      find(provider, id) {
+        if (provider === visionModel.provider && id === visionModel.id) return visionModel;
+        if (provider === fallbackVisionModel.provider && id === fallbackVisionModel.id) return fallbackVisionModel;
+        return undefined;
+      },
+      async getApiKeyAndHeaders(model) { return { ok: true, apiKey: `key-for-${model.provider}-${model.id}`, headers: { "x-test": "1" } }; },
     },
   };
   const pi = {
@@ -173,14 +178,15 @@ test("/tendril describe captures, describes, and sends text context", async () =
     await commands.get("tendril").handler("describe window 4 focus on errors", ctx);
 
     assert.equal(completeCalls.length, 1);
-    assert.equal(completeCalls[0].model.id, "claude-opus-4-7");
-    assert.equal(completeCalls[0].options.apiKey, "key-for-claude-opus-4-7");
+    assert.equal(completeCalls[0].model.provider, "github-copilot");
+    assert.equal(completeCalls[0].model.id, "claude-opus-4.7");
+    assert.equal(completeCalls[0].options.apiKey, "key-for-github-copilot-claude-opus-4.7");
     assert.match(completeCalls[0].request.messages[0].content[0].text, /focus on errors/);
     assert.equal(completeCalls[0].request.messages[0].content[1].type, "image");
     assert.equal(completeCalls[0].request.messages[0].content[1].data, ONE_PIXEL_PNG.toString("base64"));
     assert.equal(userMessages.length, 1);
     assert.equal(typeof userMessages[0].content, "string");
-    assert.match(userMessages[0].content, /screenshot description from litellm-anthropic\/claude-opus-4-7/);
+    assert.match(userMessages[0].content, /screenshot description from github-copilot\/claude-opus-4\.7/);
     assert.match(userMessages[0].content, /A browser window with a dashboard is visible/);
     assert.match(notifications.at(-1).message, /Sent Tendril window 4 description/);
   } finally {

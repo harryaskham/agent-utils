@@ -11,7 +11,14 @@ import { buildTendrilCommand, tendrilCommandSummary } from "./tendril-command.js
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
-const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
+const DEFAULT_DESCRIBE_MODEL = "github-copilot/claude-opus-4.7";
+const FALLBACK_DESCRIBE_MODELS = Object.freeze([
+  DEFAULT_DESCRIBE_MODEL,
+  "github-copilot/claude-opus-4.7-1m-internal",
+  "github-copilot/claude-opus-4-7",
+  "github-copilot/claude-opus-4-7-1m-internal",
+  "litellm-anthropic/claude-opus-4-7",
+]);
 const IMAGE_DESCRIPTION_PROMPT = "Describe the screenshot objectively for another AI assistant that cannot see it directly. Include visible apps/windows, text, UI state, errors, and any actionable context. Do not speculate beyond the image.";
 const DEFAULT_STREAM_INTERVAL_MS = 30_000;
 const MIN_STREAM_INTERVAL_MS = 10_000;
@@ -165,15 +172,26 @@ function parseModelSpec(spec) {
   return { provider: String(spec).slice(0, slash), modelId: String(spec).slice(slash + 1) };
 }
 
+function modelSupportsImage(model) {
+  return !Array.isArray(model?.input) || model.input.includes("image");
+}
+
 function resolveVisionModel(ctx) {
-  const modelSpec = process.env.TENDRIL_SHARE_DESCRIBE_MODEL || DEFAULT_DESCRIBE_MODEL;
-  const parsed = parseModelSpec(modelSpec);
-  const model = parsed ? ctx.modelRegistry?.find?.(parsed.provider, parsed.modelId) : ctx.model;
-  if (!model) throw new Error(`Vision model ${modelSpec} is not registered. Set TENDRIL_SHARE_DESCRIBE_MODEL=provider/model.`);
-  if (Array.isArray(model.input) && !model.input.includes("image")) {
-    throw new Error(`Model ${model.provider}/${model.id} does not advertise image input support.`);
+  const configured = process.env.TENDRIL_SHARE_DESCRIBE_MODEL;
+  const specs = configured ? [configured] : FALLBACK_DESCRIBE_MODELS;
+  const missing = [];
+  const textOnly = [];
+  for (const modelSpec of specs) {
+    const parsed = parseModelSpec(modelSpec);
+    const model = parsed ? ctx.modelRegistry?.find?.(parsed.provider, parsed.modelId) : ctx.model;
+    if (!model) { missing.push(modelSpec); continue; }
+    if (!modelSupportsImage(model)) { textOnly.push(`${model.provider}/${model.id}`); continue; }
+    return model;
   }
-  return model;
+  if (configured) {
+    throw new Error(`Vision model ${configured} is not registered or does not advertise image input support. Set TENDRIL_SHARE_DESCRIBE_MODEL=provider/model.`);
+  }
+  throw new Error(`No default Tendril vision model is registered. Tried: ${specs.join(", ")}.${textOnly.length ? ` Text-only matches: ${textOnly.join(", ")}.` : ""}${missing.length ? ` Missing: ${missing.join(", ")}.` : ""}`);
 }
 
 async function resolveTendrilTarget(pi, { kind, target }, signal) {
