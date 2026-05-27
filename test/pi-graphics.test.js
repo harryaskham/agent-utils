@@ -1338,6 +1338,12 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /BOX_TYPE_EFFECTS/);
   assert.match(source, /renderBoxStripPng/);
   assert.match(source, /registerShortcut\?\.\("ctrl\+t"/);
+  assert.match(source, /description: "Cycle Pi Graphics themes only"/);
+  assert.match(source, /handler: async \(ctx\) => cycleGfxTheme\(ctx, 1\)/);
+  assert.match(source, /function getGfxThemeCycle\(settings, ctx\)/);
+  assert.match(source, /function cycleGfxTheme\(ctx, direction = 1\)/);
+  assert.match(source, /settings\.theme = theme;\n\s+gfx\.theme = theme;/);
+  assert.doesNotMatch(source, /handler: async \(ctx\) => cycleGfxPreset\(ctx, 1\)/);
   assert.match(source, /\$\{theme\}:static`, theme, mode: "on", editorStyle: "static", boxChrome: true, boxMode: "unicode"/);
   assert.match(source, /\$\{theme\}:unicode/);
   assert.match(source, /boxes:\$\{effect\}/);

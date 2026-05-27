@@ -1893,6 +1893,24 @@ export default function piGraphicsExtension(pi) {
     return defaultGfxPresets(settings, ctx);
   }
 
+  function getGfxThemeCycle(settings, ctx) {
+    const currentTheme = String(settings.piGraphics?.theme || settings.theme || "kitty-graphics-nord");
+    const configured = settings.piGraphics?.themeCycle;
+    const names = Array.isArray(configured) && configured.length > 0
+      ? configured.map((name) => String(name || "").trim()).filter(Boolean)
+      : [currentTheme, "kitty-graphics-nord", "kitty-graphics", "dark", "light"];
+    const available = (() => {
+      try { return new Set((ctx?.ui?.getAllThemes?.() || []).map((theme) => theme?.name || theme).filter(Boolean)); } catch { return null; }
+    })();
+    const unique = [];
+    for (const name of names) {
+      if (!name || unique.includes(name)) continue;
+      if (available && !available.has(name)) continue;
+      unique.push(name);
+    }
+    return unique.length ? unique : [currentTheme];
+  }
+
   function applyGfxPreset(settings, preset) {
     const gfx = (settings.piGraphics = settings.piGraphics || {});
     const editor = (gfx.editor = gfx.editor || {});
@@ -1962,6 +1980,22 @@ export default function piGraphicsExtension(pi) {
     const preset = presets[nextIndex];
     applyGfxPreset(settings, preset);
     await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics preset ${nextIndex + 1}/${presets.length}: ${preset.name || "unnamed"}. Reloading...`);
+  }
+
+  async function cycleGfxTheme(ctx, direction = 1) {
+    const settings = readJsonIfExists(agentSettingsPath()) || {};
+    const gfx = (settings.piGraphics = settings.piGraphics || {});
+    const themes = getGfxThemeCycle(settings, ctx);
+    if (!themes.length) { ctx.ui.notify("No Pi Graphics themes configured.", "warning"); return; }
+    const currentTheme = String(gfx.theme || settings.theme || themes[0]);
+    const foundIndex = themes.indexOf(currentTheme);
+    const currentIndex = foundIndex >= 0 ? foundIndex : -1;
+    const nextIndex = ((currentIndex + direction) % themes.length + themes.length) % themes.length;
+    const theme = themes[nextIndex];
+    settings.theme = theme;
+    gfx.theme = theme;
+    delete gfx.activePresetIndex;
+    await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics theme ${nextIndex + 1}/${themes.length}: ${theme}. Reloading...`);
   }
 
   function themeProvenanceLines(ctx, settings) {
@@ -2395,7 +2429,7 @@ export default function piGraphicsExtension(pi) {
           "       /gfx box on|off",
           "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
           "       /gfx mode on|off|debug",
-          "Ctrl+t cycles presets when keybindings free it from app.thinking.toggle.",
+          "Ctrl+t cycles themes only when keybindings free it from app.thinking.toggle.",
         ];
         ctx.ui.notify(lines.join("\n"), "info");
       };
@@ -2527,8 +2561,8 @@ export default function piGraphicsExtension(pi) {
   });
 
   pi.registerShortcut?.("ctrl+t", {
-    description: "Cycle Pi Graphics visual presets",
-    handler: async (ctx) => cycleGfxPreset(ctx, 1),
+    description: "Cycle Pi Graphics themes only",
+    handler: async (ctx) => cycleGfxTheme(ctx, 1),
   });
 
   pi.on("session_end", async (_event, ctx) => {

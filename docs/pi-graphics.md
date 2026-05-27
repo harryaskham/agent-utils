@@ -409,10 +409,10 @@ displayed using kitty Unicode placeholder cells, so:
   stale chrome active.
 * Box chrome is opt-in because live box placements can be visually janky in some
   terminals; enable it with `piGraphics.boxChrome: true` or `/gfx box on` when you
-  specifically want to inspect the effect set. `Ctrl+t` cycles presets across the
-  static editor border, caco-compatible `unicode` mode, animated editor border,
-  and every box-effect variant; `/gfx` with no arguments opens a Pi-native settings
-  overlay with quick previews and cursor controls. The overlay explicitly opts
+  specifically want to inspect the effect set. `Ctrl+t` cycles only the active
+  theme and leaves editor style, cursor style, trailing workspace, and box chrome
+  choices unchanged; `/gfx` with no arguments opens a Pi-native settings overlay
+  with quick previews and cursor controls. The overlay explicitly opts
   out of Pi graphics wrapping so it stays text/ANSI-only and does not emit
   additional Kitty placement escapes while the modal is open; `/gfx status` prints the text summary, including
   the live cursor anchoring diagnostic line and the opt-in box chrome state (`on`
