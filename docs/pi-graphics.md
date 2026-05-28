@@ -482,7 +482,16 @@ displayed using kitty Unicode placeholder cells, so:
   Height `1` preserves the default in-flow Unicode rail replacement. In Unicode
   editor mode, heights above `1` add same-ID placeholder widget rows above or
   below the editor so the terminal sees one contiguous `width × height` rectangle
-  for the single border image. In `relative`/`animated` editor modes, the extra
+  for the single border image. `joinedUnicode` is the single-anchor variant for
+  multi-row Unicode borders: top borders reserve `height - 1` rows in the
+  above-editor widget and draw one full-width `width × height` PNG from a single
+  placeholder at widget cell 0,0 while the editor rail row is blank; bottom
+  borders put the single placeholder on the editor rail and reserve empty rows in
+  the below-editor widget. This avoids relative placements and avoids filling the
+  whole reserved widget with placeholder cells, leaving text cells usable around
+  the singleton anchor. Its render key includes the same rail heat buckets as
+  `unicode`, so typing-speed heat redraws are at parity with the existing Unicode
+  border effects. In `relative`/`animated` editor modes, the extra
   height is drawn as a relative placement without reflowing text; top borders are
   offset upward by `height - 1`, while bottom borders grow downward from the rail.
   The focused editor cursor is configurable with

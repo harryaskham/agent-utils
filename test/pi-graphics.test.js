@@ -1374,8 +1374,16 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
   assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-rail-\$\{railHeatBucket\}/);
   assert.match(source, /rows: height/);
+  assert.match(source, /function buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
+  assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-rail-\$\{railHeatBucket\}/);
+  assert.match(source, /columns: 1,\n\s+rows: 1,\n\s+width: visualCols/);
+  assert.match(source, /edge === "top" && height > 1\) return \[emptyEditorBorderRow\(width\)\]/);
   assert.match(source, /function buildEditorBorderWidgetRows\(width, edge\)/);
   assert.match(source, /rows\.slice\(0, -1\).*rows\.slice\(1\)/s);
+  assert.match(source, /editorStyle\(\) === "joinedUnicode"/);
+  assert.match(source, /values: \["static", "unicode", "joinedUnicode", "relative", "animated"\]/);
+  assert.match(source, /editor static\|unicode\|joinedUnicode\|relative\|animated/);
+  assert.match(source, /unknown editor style: \$\{value\} \(use static\|unicode\|joinedUnicode\|relative\|animated\)/);
   assert.match(source, /function buildEditorRelativeBorderRow\(width, edge\)/);
   assert.match(source, /const vOffset = edge === "top" \? -\(height - 1\) : 0/);
   assert.match(source, /const placementLineCache = new Map\(\)/);
