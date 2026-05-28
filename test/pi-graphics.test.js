@@ -461,6 +461,16 @@ test("editor border thinking context applies scrolling thought-bubble masks", ()
   assert.notEqual(leftLobe, midGap, "cosine-squared thought mask should vary alpha across the rail");
 });
 
+test("editor border typing impulse draws a cursor-local bell pulse", () => {
+  const base = renderEditorBorderFrame({ columns: 40, rows: 3, edge: "bottom", cellWidthPx: 4, cellHeightPx: 8 });
+  const impulse = renderEditorBorderFrame({ columns: 40, rows: 3, edge: "bottom", cellWidthPx: 4, cellHeightPx: 8, impulseX: 20 * 4, impulseStrength: 0.9 });
+  assert.notEqual(Buffer.from(impulse.pixels).toString("base64"), Buffer.from(base.pixels).toString("base64"));
+  const decoded = { width: impulse.widthPx, height: impulse.heightPx, pixels: impulse.pixels };
+  const peak = pixelAt(decoded, 20 * 4, 2)[3];
+  const far = pixelAt(decoded, 4, 2)[3];
+  assert.ok(peak > far + 12, "impulse should be strongest near the cursor column");
+});
+
 test("editor border frame supports taller contiguous rail rectangles", () => {
   const top = renderEditorBorderFrame({ columns: 16, rows: 3, edge: "top", cellWidthPx: 4, cellHeightPx: 10 });
   assert.equal(top.columns, 16);
@@ -1400,13 +1410,18 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function setEditorContextMode\(mode = "idle"\)/);
   assert.match(source, /function requestEditorContextFrame\(\)/);
   assert.match(source, /function valueLooksLikeThinking\(value\)/);
+  assert.match(source, /let editorCursorImpulseCol = null/);
+  assert.match(source, /editorCursorImpulseCol = safeCol/);
+  assert.match(source, /impulseStrength = Math\.max\(0, Math\.min\(1, Math\.exp\(-impulseAge \/ 360\)/);
   assert.match(source, /mixHexColor\(baseBorderColor, contextMode === "thinking" \? "#d8dee9" : "#ffffff", railHeat\)/);
   assert.match(source, /function editorBorderHeight\(edge\)/);
   assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
   assert.match(source, /function editorBorderStyle\(\)/);
   assert.match(source, /EDITOR_BORDER_STYLES = \["gradient", "glass", "chrome", "geometric"\]/);
   assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}-\$\{contextMode\}/);
+  assert.match(source, /impulse-\$\{impulseCol \?\? "none"\}-\$\{impulseBucket\}/);
   assert.match(source, /context: contextMode/);
+  assert.match(source, /impulseX: impulseCol == null \? null : \(impulseCol \+ 0\.5\) \* cell\.cellWidthPx/);
   assert.match(source, /rows: height/);
   assert.match(source, /function buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
   assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}-\$\{contextMode\}/);

@@ -507,9 +507,12 @@ displayed using kitty Unicode placeholder cells, so:
   same editor border renderer enters a contextual thinking mode: top rails use a
   cosine-squared thought-bubble mask,
   bottom rails use the inverted companion mask, and a bounded timer scrolls small
-  bubble ticks through the cached render key until the message/turn ends. This
+  bubble ticks through the cached render key until the message/turn ends. During
+  typing, the border render spec also tracks the cursor column and decaying heat
+  to draw a cursor-local bell-curve energy impulse into the rail PNG. This
   composes with `gradient`/`glass`/`chrome`/`geometric` border drawing and every
-  placement mode because only the rendered PNG phase/context inputs change. In
+  placement mode because only the rendered PNG phase/context/impulse inputs
+  change. In
   `relative`/`animated` editor modes, the extra height is drawn as a relative
   placement without reflowing text; top borders are offset upward by `height - 1`,
   while bottom borders grow downward from the rail.

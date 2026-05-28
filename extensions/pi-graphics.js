@@ -383,6 +383,8 @@ export default function piGraphicsExtension(pi) {
   let editorCursorWpm = 0;
   let editorCursorLastCol = null;
   let editorCursorTrailDirection = 1;
+  let editorCursorImpulseCol = null;
+  let editorCursorImpulseAt = 0;
   let editorCursorHeat = 0;
   let editorCursorHeatTarget = 0;
   let editorCursorHeatTickAt = 0;
@@ -524,6 +526,8 @@ export default function piGraphicsExtension(pi) {
       if (editorCursorLastCol != null && safeCol !== editorCursorLastCol) {
         editorCursorTrailDirection = safeCol > editorCursorLastCol ? 1 : -1;
       }
+      editorCursorImpulseCol = safeCol;
+      editorCursorImpulseAt = now;
       editorCursorLastText = plainText;
       editorCursorLastAt = now;
       editorCursorLastCol = safeCol;
@@ -785,7 +789,11 @@ export default function piGraphicsExtension(pi) {
     const alpha = editorAlpha();
     const contextMode = editorContextMode === "thinking" ? "thinking" : "idle";
     const contextPhase = contextMode === "thinking" ? (editorContextTick % 48) / 48 : 0;
-    const railHeat = Math.max(editorRailHeat(), contextMode === "thinking" ? 0.42 : 0);
+    const impulseAge = editorCursorImpulseAt ? Math.max(0, Date.now() - editorCursorImpulseAt) : Infinity;
+    const impulseStrength = Math.max(0, Math.min(1, Math.exp(-impulseAge / 360) * Math.max(editorCursorHeat, editorCursorHeatTarget, 0)));
+    const impulseBucket = Math.max(0, Math.min(12, Math.round(impulseStrength * 12)));
+    const impulseCol = editorCursorImpulseCol == null ? null : Math.max(0, Math.min(cols - 1, Math.trunc(Number(editorCursorImpulseCol) || 0)));
+    const railHeat = Math.max(editorRailHeat(), contextMode === "thinking" ? 0.42 : 0, impulseStrength * 0.55);
     const railHeatBucket = Math.max(0, Math.min(12, Math.round(railHeat * 12)));
     const baseBorderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const baseGlowColor = contextMode === "thinking"
@@ -798,14 +806,14 @@ export default function piGraphicsExtension(pi) {
     const height = edge === "symmetric" ? 1 : editorBorderHeight(edge);
     const frames = editorStyle() === "animated" ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
-    return { cols, visualCols: cols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs };
+    return { cols, visualCols: cols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs };
   }
 
   function buildEditorBorderPlaceholderLines(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
-    const key = `editor-border-static-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
+    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
+    const key = `editor-border-static-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-impulse-${impulseCol ?? "none"}-${impulseBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
     return cachedPlacementLine(key, () => {
       const rendered = renderEditorBorderFramesPngs({
         columns: visualCols,
@@ -820,6 +828,8 @@ export default function piGraphicsExtension(pi) {
         phase: contextPhase,
         style: borderStyle,
         context: contextMode,
+        impulseX: impulseCol == null ? null : (impulseCol + 0.5) * cell.cellWidthPx,
+        impulseStrength,
       });
       const placement = buildPlacement(state, {
         name: key,
@@ -837,9 +847,9 @@ export default function piGraphicsExtension(pi) {
   function buildEditorRelativeBorderRow(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { cols, visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs } = spec;
+    const { cols, visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs } = spec;
     const anchorKey = `editor-border-anchor-${edge}-${visualCols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-    const imageKey = `editor-border-relative-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}-${frames}`;
+    const imageKey = `editor-border-relative-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-impulse-${impulseCol ?? "none"}-${impulseBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}-${frames}`;
     const anchorImageId = piGraphicsImageId(anchorKey);
     const imageId = piGraphicsImageId(imageKey);
     const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${visualCols}`);
@@ -861,6 +871,8 @@ export default function piGraphicsExtension(pi) {
         phase: contextPhase,
         style: borderStyle,
         context: contextMode,
+        impulseX: impulseCol == null ? null : (impulseCol + 0.5) * cell.cellWidthPx,
+        impulseStrength,
       });
       if (frames > 1) {
         ensureRelativeAnimUploaded({
@@ -924,8 +936,8 @@ export default function piGraphicsExtension(pi) {
   function buildJoinedUnicodeEditorBorderLine(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
-    const key = `editor-border-joined-unicode-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
+    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
+    const key = `editor-border-joined-unicode-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-impulse-${impulseCol ?? "none"}-${impulseBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
     return cachedPlacementLine(key, () => {
       const rendered = renderEditorBorderFramesPngs({
         columns: visualCols,
@@ -940,6 +952,8 @@ export default function piGraphicsExtension(pi) {
         phase: contextPhase,
         style: borderStyle,
         context: contextMode,
+        impulseX: impulseCol == null ? null : (impulseCol + 0.5) * cell.cellWidthPx,
+        impulseStrength,
       });
       const imageId = piGraphicsImageId(key);
       const placementId = piGraphicsPlaceholderPlacementId(`editor-border-joined-unicode-placement-${edge}-${visualCols}x${height}-${railHeatBucket}`);

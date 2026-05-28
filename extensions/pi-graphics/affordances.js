@@ -736,6 +736,38 @@ function applyThoughtSeparatorMask(pixels, widthPx, heightPx, { edge = "symmetri
   }
 }
 
+function applyTypingImpulse(pixels, widthPx, heightPx, {
+  edge = "symmetric",
+  impulseX = null,
+  impulseStrength = 0,
+  color = NORDIC_CYAN,
+} = {}) {
+  const strength = Math.max(0, Math.min(1, Number(impulseStrength) || 0));
+  if (strength <= 0) return;
+  const centerX = Math.max(0, Math.min(widthPx - 1, Number(impulseX) || 0));
+  const accent = parseColor(color);
+  const sigma = Math.max(8, widthPx * 0.045);
+  const verticalReach = Math.max(3, Math.round(heightPx * 0.72));
+  const anchorY = edge === "top" ? heightPx - 1 : edge === "bottom" ? 0 : Math.floor(heightPx / 2);
+  const direction = edge === "bottom" ? 1 : -1;
+  for (let x = 0; x < widthPx; x += 1) {
+    const dx = x - centerX;
+    const bell = Math.exp(-(dx * dx) / (2 * sigma * sigma)) * strength;
+    if (bell < 0.01) continue;
+    for (let step = 0; step <= verticalReach; step += 1) {
+      const y = Math.max(0, Math.min(heightPx - 1, anchorY + direction * step));
+      const rise = 1 - step / Math.max(1, verticalReach + 1);
+      const power = bell * rise * rise;
+      if (power <= 0.005) continue;
+      const off = (y * widthPx + x) * 4;
+      pixels[off] = Math.min(255, Math.round(pixels[off] * (1 - power * 0.45) + accent[0] * power * 0.70));
+      pixels[off + 1] = Math.min(255, Math.round(pixels[off + 1] * (1 - power * 0.45) + accent[1] * power * 0.70));
+      pixels[off + 2] = Math.min(255, Math.round(pixels[off + 2] * (1 - power * 0.45) + accent[2] * power * 0.70));
+      pixels[off + 3] = Math.min(255, Math.round(pixels[off + 3] + (255 - pixels[off + 3]) * power * 0.36));
+    }
+  }
+}
+
 function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   edge = "symmetric",
   borderColor = NORDIC_CYAN,
@@ -745,6 +777,8 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   phase = 0,
   style = "gradient",
   context = "idle",
+  impulseX = null,
+  impulseStrength = 0,
 } = {}) {
   const pulse = pulseFactor(phase);
   const borderA = Math.round(normalizeAlpha(borderAlpha, 0.55) * 255);
@@ -846,6 +880,7 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   if (String(context || "idle").toLowerCase() === "thinking") {
     applyThoughtSeparatorMask(pixels, widthPx, heightPx, { edge, phase, color: glowColor });
   }
+  applyTypingImpulse(pixels, widthPx, heightPx, { edge, impulseX, impulseStrength, color: borderColor });
   if (styleName === "glass") {
     const bandY = edge === "bottom" ? Math.max(1, Math.round(heightPx * 0.18)) : Math.max(0, Math.round(heightPx * 0.58));
     const bandH = Math.max(1, Math.round(heightPx * 0.12));
@@ -897,14 +932,14 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   }
 }
 
-export function renderEditorBorderFrame({ columns, rows = 1, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0, style = "gradient", context = "idle" } = {}) {
+export function renderEditorBorderFrame({ columns, rows = 1, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0, style = "gradient", context = "idle", impulseX = null, impulseStrength = 0 } = {}) {
   const cols = clampPositive(columns, 2, "columns");
   const rs = Math.max(1, Math.min(16, Math.trunc(Number(rows) || 1)));
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;
   const heightPx = rs * metrics.cellHeightPx;
   const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
-  paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase, style, context });
+  paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase, style, context, impulseX, impulseStrength });
   return { pixels, widthPx, heightPx, columns: cols, rows: rs, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
 }
 
