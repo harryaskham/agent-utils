@@ -476,7 +476,15 @@ displayed using kitty Unicode placeholder cells, so:
   selector dialogs from exceeding pi-tui's hard terminal-width guard.
 * Editor border chrome spans the full editor/terminal width instead of being
   capped and center-aligned, so fullscreen terminals keep a visible full-width
-  input frame. The top and bottom border heights are independently configurable
+  input frame. Editor placement/layout is controlled by `piGraphics.editor.style`
+  (`static`, `unicode`, `joinedUnicode`, `relative`, or `animated`), while the
+  independent `piGraphics.editor.borderStyle` / `PI_GRAPHICS_EDITOR_BORDER_STYLE`
+  controls what is drawn into the reserved space. `gradient` is the existing
+  glow-gradient look; `glass`, `chrome`, and `geometric` add different translucent
+  separators and theme-colored responsive accents. All border styles include the
+  same typing-speed rail heat in their cache keys and rendering inputs, so they
+  compose with every placement mode.
+  The top and bottom border heights are independently configurable
   with `piGraphics.editor.topBorderHeight` / `PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT`
   and `piGraphics.editor.bottomBorderHeight` / `PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT`.
   Height `1` preserves the default in-flow Unicode rail replacement. In Unicode

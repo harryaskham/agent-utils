@@ -436,6 +436,15 @@ test("editor border frame stays glassy instead of fade-to-solid", () => {
   assert.ok(stats.bright / stats.total < 0.6, "bright pixels should not dominate the cell into a chunky duplicate frame");
 });
 
+test("editor border frame supports independent visual styles", () => {
+  const gradient = renderEditorBorderFrame({ columns: 40, rows: 2, edge: "top", style: "gradient", phase: 0.2 });
+  const glass = renderEditorBorderFrame({ columns: 40, rows: 2, edge: "top", style: "glass", phase: 0.2 });
+  const chrome = renderEditorBorderFrame({ columns: 40, rows: 2, edge: "top", style: "chrome", phase: 0.2 });
+  const geometric = renderEditorBorderFrame({ columns: 40, rows: 2, edge: "top", style: "geometric", phase: 0.2 });
+  const payloads = new Set([gradient, glass, chrome, geometric].map((frame) => Buffer.from(frame.pixels).toString("base64")));
+  assert.equal(payloads.size, 4);
+});
+
 test("editor border frame supports taller contiguous rail rectangles", () => {
   const top = renderEditorBorderFrame({ columns: 16, rows: 3, edge: "top", cellWidthPx: 4, cellHeightPx: 10 });
   assert.equal(top.columns, 16);
@@ -1329,6 +1338,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_CELL_HEIGHT_PX: gfx\.cell\?\.heightPx/);
   assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
   assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_BORDER_STYLE: editor\.borderStyle/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
   assert.match(source, /PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT: editor\.topBorderHeight/);
   assert.match(source, /PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT: editor\.bottomBorderHeight/);
@@ -1372,16 +1382,22 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /mixHexColor\(baseBorderColor, "#ffffff", railHeat\)/);
   assert.match(source, /function editorBorderHeight\(edge\)/);
   assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
-  assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-rail-\$\{railHeatBucket\}/);
+  assert.match(source, /function editorBorderStyle\(\)/);
+  assert.match(source, /EDITOR_BORDER_STYLES = \["gradient", "glass", "chrome", "geometric"\]/);
+  assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}/);
   assert.match(source, /rows: height/);
   assert.match(source, /function buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
-  assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-rail-\$\{railHeatBucket\}/);
+  assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}/);
   assert.match(source, /columns: 1,\n\s+rows: 1,\n\s+width: visualCols/);
   assert.match(source, /edge === "top" && height > 1\) return \[emptyEditorBorderRow\(width\)\]/);
   assert.match(source, /function buildEditorBorderWidgetRows\(width, edge\)/);
   assert.match(source, /rows\.slice\(0, -1\).*rows\.slice\(1\)/s);
   assert.match(source, /editorStyle\(\) === "joinedUnicode"/);
   assert.match(source, /values: \["static", "unicode", "joinedUnicode", "relative", "animated"\]/);
+  assert.match(source, /values: \["gradient", "glass", "chrome", "geometric"\]/);
+  assert.match(source, /border style:\s+\$\{editor\.borderStyle \?\? "gradient"\}/);
+  assert.match(source, /border-style gradient\|glass\|chrome\|geometric/);
+  assert.match(source, /unknown editor border style: \$\{value\} \(use gradient\|glass\|chrome\|geometric\)/);
   assert.match(source, /editor static\|unicode\|joinedUnicode\|relative\|animated/);
   assert.match(source, /unknown editor style: \$\{value\} \(use static\|unicode\|joinedUnicode\|relative\|animated\)/);
   assert.match(source, /function buildEditorRelativeBorderRow\(width, edge\)/);

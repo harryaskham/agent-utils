@@ -144,6 +144,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_CELL_HEIGHT_PX: gfx.cell?.heightPx != null ? String(gfx.cell.heightPx) : undefined,
     PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx.cell?.lineHeightScale != null ? String(gfx.cell.lineHeightScale) : undefined,
     PI_GRAPHICS_EDITOR_VARIANT: editor.variant != null ? String(editor.variant) : undefined,
+    PI_GRAPHICS_EDITOR_BORDER_STYLE: editor.borderStyle ?? editor.graphicStyle ?? editor.drawingStyle ?? editor.chromeStyle,
     PI_GRAPHICS_EDITOR_ALPHA: editor.alpha != null ? String(editor.alpha) : undefined,
     PI_GRAPHICS_EDITOR_FRAMES: editor.frames != null ? String(editor.frames) : undefined,
     PI_GRAPHICS_EDITOR_DELAY_MS: editor.delayMs != null ? String(editor.delayMs) : undefined,
@@ -207,10 +208,18 @@ export default function piGraphicsExtension(pi) {
     });
   }
 
+  const EDITOR_BORDER_STYLES = ["gradient", "glass", "chrome", "geometric"];
+
   function editorVariant() {
     const env = gfxEnv();
     const raw = String(env.PI_GRAPHICS_EDITOR_VARIANT || "").trim().toLowerCase();
     return EDITOR_VARIANTS.includes(raw) ? raw : "gradient";
+  }
+
+  function editorBorderStyle() {
+    const env = gfxEnv();
+    const raw = String(env.PI_GRAPHICS_EDITOR_BORDER_STYLE || env.PI_GRAPHICS_EDITOR_GRAPHIC_STYLE || "").trim().toLowerCase();
+    return EDITOR_BORDER_STYLES.includes(raw) ? raw : "gradient";
   }
 
   function editorAlpha() {
@@ -719,6 +728,7 @@ export default function piGraphicsExtension(pi) {
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
     const cell = cellMetrics();
     const variant = editorVariant();
+    const borderStyle = editorBorderStyle();
     const alpha = editorAlpha();
     const railHeat = editorRailHeat();
     const railHeatBucket = Math.max(0, Math.min(12, Math.round(railHeat * 12)));
@@ -731,14 +741,14 @@ export default function piGraphicsExtension(pi) {
     const height = edge === "symmetric" ? 1 : editorBorderHeight(edge);
     const frames = editorStyle() === "animated" ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
-    return { cols, visualCols: cols, cell, variant, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs };
+    return { cols, visualCols: cols, cell, variant, borderStyle, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs };
   }
 
   function buildEditorBorderPlaceholderLines(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { visualCols, cell, variant, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
-    const key = `editor-border-static-${edge}-${visualCols}x${height}-${variant}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
+    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
+    const key = `editor-border-static-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
     return cachedPlacementLine(key, () => {
       const rendered = renderEditorBorderFramesPngs({
         columns: visualCols,
@@ -750,6 +760,7 @@ export default function piGraphicsExtension(pi) {
         glowColor,
         borderAlpha,
         glowAlpha,
+        style: borderStyle,
       });
       const placement = buildPlacement(state, {
         name: key,
@@ -767,9 +778,9 @@ export default function piGraphicsExtension(pi) {
   function buildEditorRelativeBorderRow(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { cols, visualCols, cell, variant, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs } = spec;
+    const { cols, visualCols, cell, variant, borderStyle, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs } = spec;
     const anchorKey = `editor-border-anchor-${edge}-${visualCols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-    const imageKey = `editor-border-relative-${edge}-${visualCols}x${height}-${variant}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}-${frames}`;
+    const imageKey = `editor-border-relative-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}-${frames}`;
     const anchorImageId = piGraphicsImageId(anchorKey);
     const imageId = piGraphicsImageId(imageKey);
     const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${visualCols}`);
@@ -788,6 +799,7 @@ export default function piGraphicsExtension(pi) {
         glowColor,
         borderAlpha,
         glowAlpha,
+        style: borderStyle,
       });
       if (frames > 1) {
         ensureRelativeAnimUploaded({
@@ -851,8 +863,8 @@ export default function piGraphicsExtension(pi) {
   function buildJoinedUnicodeEditorBorderLine(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { visualCols, cell, variant, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
-    const key = `editor-border-joined-unicode-${edge}-${visualCols}x${height}-${variant}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
+    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, borderColor, glowColor, borderAlpha, glowAlpha, height } = spec;
+    const key = `editor-border-joined-unicode-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
     return cachedPlacementLine(key, () => {
       const rendered = renderEditorBorderFramesPngs({
         columns: visualCols,
@@ -864,6 +876,7 @@ export default function piGraphicsExtension(pi) {
         glowColor,
         borderAlpha,
         glowAlpha,
+        style: borderStyle,
       });
       const imageId = piGraphicsImageId(key);
       const placementId = piGraphicsPlaceholderPlacementId(`editor-border-joined-unicode-placement-${edge}-${visualCols}x${height}-${railHeatBucket}`);
@@ -2444,6 +2457,7 @@ export default function piGraphicsExtension(pi) {
       { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "unicode", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
       { key: "boxEffect", label: "Box effect", values: effects, get: () => gfx.boxEffect || "auto", set: (v) => { if (v === "auto") delete gfx.boxEffect; else gfx.boxEffect = v; gfx.boxChrome = true; } },
       { key: "editor", label: "Editor", values: ["static", "unicode", "joinedUnicode", "relative", "animated"], get: () => editor.style || "static", set: (v) => { editor.style = v; } },
+      { key: "borderStyle", label: "Border style", values: ["gradient", "glass", "chrome", "geometric"], get: () => editor.borderStyle || "gradient", set: (v) => { editor.borderStyle = v; } },
       { key: "topBorderHeight", label: "Top border height", values: ["1", "2", "3", "4", "5", "6"], get: () => String(editor.topBorderHeight ?? editor.borderHeight ?? 1), set: (v) => { editor.topBorderHeight = Number(v); } },
       { key: "bottomBorderHeight", label: "Bottom border height", values: ["1", "2", "3", "4", "5", "6"], get: () => String(editor.bottomBorderHeight ?? editor.borderHeight ?? 1), set: (v) => { editor.bottomBorderHeight = Number(v); } },
       { key: "cursorStyle", label: "Cursor style", values: ["glow", "cell", "off"], get: () => editor.cursorStyle || "glow", set: (v) => { editor.cursorStyle = v; } },
@@ -2536,6 +2550,7 @@ export default function piGraphicsExtension(pi) {
           `  mode:           ${gfx.mode ?? "on"}`,
           `  theme:          ${settings.theme || gfx.theme || "(default)"}`,
           `  editor.style:   ${editor.style ?? "static"} (also: unicode|joinedUnicode|relative|animated)`,
+          `  border style:   ${editor.borderStyle ?? "gradient"} (also: glass|chrome|geometric)`,
           `  border height:  top=${editor.topBorderHeight ?? editor.borderHeight ?? 1} bottom=${editor.bottomBorderHeight ?? editor.borderHeight ?? 1}`,
           `  cursor style:   ${editor.cursorStyle ?? "glow"} (also: cell|off)`,
           `  trailing fill:  ${editor.trailingWorkspace ? "on" : "off"}`,
@@ -2549,6 +2564,7 @@ export default function piGraphicsExtension(pi) {
           "",
           "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box audit | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor audit | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|joinedUnicode|relative|animated",
+          "       /gfx border-style gradient|glass|chrome|geometric",
           "       /gfx border-height <1-16> | /gfx top-border-height <1-16> | /gfx bottom-border-height <1-16>",
           "       /gfx cursor-style glow|cell|off",
           "       /gfx trailing-workspace on|off | /gfx row-background on|off",
@@ -2650,6 +2666,9 @@ export default function piGraphicsExtension(pi) {
         if (key === "editor") {
           if (["static", "animated", "unicode", "joinedunicode", "joined-unicode", "joined_unicode", "joined", "relative"].includes(value)) { editor.style = value === "joinedunicode" || value === "joined-unicode" || value === "joined_unicode" || value === "joined" ? "joinedUnicode" : value; changed = true; }
           else ctx.ui.notify(`unknown editor style: ${value} (use static|unicode|joinedUnicode|relative|animated)`, "warning");
+        } else if (key === "border-style" || key === "borderstyle" || key === "editor-border-style" || key === "editor-graphic-style") {
+          if (["gradient", "glass", "chrome", "geometric"].includes(value)) { editor.borderStyle = value; changed = true; }
+          else ctx.ui.notify(`unknown editor border style: ${value} (use gradient|glass|chrome|geometric)`, "warning");
         } else if (key === "border-height" || key === "borderheight" || key === "editor-border-height") {
           const height = Number(value);
           if (Number.isFinite(height) && height >= 1 && height <= 16) { editor.topBorderHeight = Math.trunc(height); editor.bottomBorderHeight = Math.trunc(height); changed = true; }

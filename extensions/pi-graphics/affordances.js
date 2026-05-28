@@ -698,6 +698,7 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   glowColor = NORDIC_VIOLET,
   glowAlpha = 0.34,
   phase = 0,
+  style = "gradient",
 } = {}) {
   const pulse = pulseFactor(phase);
   const borderA = Math.round(normalizeAlpha(borderAlpha, 0.55) * 255);
@@ -787,6 +788,32 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
     addRadialGlow(pixels, widthPx, widthPx * (0.2 + pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
     addRadialGlow(pixels, widthPx, widthPx * (0.8 - pulse * 0.1), anchorY, widthPx * 0.45, withAlpha(glowColor, glowA), 0.9);
   }
+
+  const styleName = String(style || "gradient").toLowerCase();
+  const separatorYs = edge === "top" ? [heightPx - 1] : edge === "bottom" ? [0] : [Math.floor(heightPx / 2)];
+  const separatorRgb = styleName === "chrome" ? specularRgb : borderRgb;
+  if (styleName !== "gradient") {
+    for (const y of separatorYs) {
+      fillRect(pixels, widthPx, 0, y, widthPx, 1, [separatorRgb[0], separatorRgb[1], separatorRgb[2], Math.min(255, Math.round(borderA * (styleName === "geometric" ? 0.82 : 0.58)))]);
+    }
+  }
+  if (styleName === "glass") {
+    const bandY = edge === "bottom" ? Math.max(1, Math.round(heightPx * 0.18)) : Math.max(0, Math.round(heightPx * 0.58));
+    const bandH = Math.max(1, Math.round(heightPx * 0.12));
+    fillRect(pixels, widthPx, 0, Math.min(heightPx - 1, bandY), widthPx, bandH, [specularRgb[0], specularRgb[1], specularRgb[2], Math.round(borderA * (0.16 + pulse * 0.10))]);
+    addRadialGlow(pixels, widthPx, widthPx * (0.52 + Math.sin(phase * Math.PI * 2) * 0.08), separatorYs[0], widthPx * 0.32, withAlpha(borderColor, Math.round(glowA * 0.58)), 0.55);
+  } else if (styleName === "chrome") {
+    const chromeY = edge === "bottom" ? Math.max(1, Math.round(heightPx * 0.28)) : Math.max(0, Math.round(heightPx * 0.68));
+    fillRect(pixels, widthPx, 0, Math.min(heightPx - 1, chromeY), widthPx, 1, [specularRgb[0], specularRgb[1], specularRgb[2], Math.round(borderA * 0.42)]);
+    fillRect(pixels, widthPx, 0, Math.min(heightPx - 1, chromeY + 2), widthPx, 1, [shadowRgb[0], shadowRgb[1], shadowRgb[2], Math.round(borderA * 0.34)]);
+  } else if (styleName === "geometric") {
+    const step = Math.max(10, Math.round(widthPx / 18));
+    const tickH = Math.max(2, Math.round(heightPx * (0.18 + pulse * 0.08)));
+    for (let x = Math.round(step * 0.5); x < widthPx; x += step) {
+      const y = edge === "bottom" ? 0 : Math.max(0, heightPx - tickH);
+      fillRect(pixels, widthPx, x, y, Math.max(2, Math.round(step * 0.16)), tickH, [borderRgb[0], borderRgb[1], borderRgb[2], Math.round(borderA * 0.62)]);
+    }
+  }
   // Hard guarantee: alpha goes to zero at the cell edges so the glyph reads as
   // a freestanding band with no abutting cutoff. We rescale alpha within an
   // edge fade band; the bright center stays opaque. The horizontal taper makes
@@ -821,14 +848,14 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   }
 }
 
-export function renderEditorBorderFrame({ columns, rows = 1, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0 } = {}) {
+export function renderEditorBorderFrame({ columns, rows = 1, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0, style = "gradient" } = {}) {
   const cols = clampPositive(columns, 2, "columns");
   const rs = Math.max(1, Math.min(16, Math.trunc(Number(rows) || 1)));
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;
   const heightPx = rs * metrics.cellHeightPx;
   const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
-  paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase });
+  paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase, style });
   return { pixels, widthPx, heightPx, columns: cols, rows: rs, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
 }
 
