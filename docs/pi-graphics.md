@@ -410,7 +410,10 @@ displayed using kitty Unicode placeholder cells, so:
   restores prototypes only when Pi graphics still owns that runtime. Live `/gfx`
   changes on runtimes without `ctx.reload` force-refresh the wrapper runtime or
   tear it down when graphics/box chrome is disabled, so mode changes do not leave
-  stale chrome active.
+  stale chrome active. Relative box mode assigns the first, middle, and last
+  rendered rows to top/mid/bottom strip art for one coherent component-sized box,
+  and textual border rows are covered by that same strip sequence rather than
+  being skipped as isolated rows.
 * Box chrome is opt-in because live box placements can be visually janky in some
   terminals; enable it with `piGraphics.boxChrome: true` or `/gfx box on` when you
   specifically want to inspect the effect set. Use `kitty-graphics-nord-transparent`

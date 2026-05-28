@@ -8,6 +8,7 @@ import {
   installBoxChromeMonkeyPatch,
   renderBoxStripPng,
 } from "../extensions/pi-graphics/box-chrome.js";
+import { piGraphicsImageId } from "../extensions/pi-graphics/id-space.js";
 
 test("renderBoxStripPng produces non-empty PNG for top/mid/bot kinds", () => {
   for (const kind of ["top", "mid", "bot"]) {
@@ -81,6 +82,10 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   assert.ok(placementIds.some((id) => id > 0x1000000), "relative placements should use the full 32-bit protocol range");
   const emittedText = emitted.join("");
   assert.match(emittedText, /(?:^|,)c=20(?:,|;)/, "relative chrome should use render width, not just content width");
+  for (const [kind, row] of [["top", 0], ["mid", 1], ["bot", 2]]) {
+    const expectedStripId = piGraphicsImageId(`box-strip-assistant-${kind}-folio-${row}-20-136,192,208-8x16`);
+    assert.match(emittedText, new RegExp(`(?:^|,)i=${expectedStripId}(?:,|;)`), `relative chrome should upload a coherent ${kind} strip for row ${row}`);
+  }
   assert.doesNotMatch(emittedText, /(?:^|,)H=-?\d+|(?:^|,)V=-?\d+/, "box strips are anchored at the placeholder origin and must not emit unnecessary H/V offsets");
   // Second pass with same instanceId/lines should reuse cached uploads (no new a=t).
   const emittedBeforeSecond = emitted.length;
@@ -111,7 +116,7 @@ test("relative box chrome reuses no-icon strip uploads after first three rows", 
   const lines = Array.from({ length: 8 }, (_, i) => `row ${i}`);
   runtime.applyToRows({ type: "assistant", instanceId: 10, lines, renderWidth: 20 });
   const uploads = [...emitted.join("").matchAll(/a=t,f=100,t=d/g)];
-  assert.equal(uploads.length, 12, "8 anchors plus 4 strip images: rows 0-2 keep icons, rows >=3 share no-icon strip art");
+  assert.equal(uploads.length, 13, "8 anchors plus 5 strip images: top, first two mids, shared later mid, and bottom form one coherent box");
 });
 
 test("box chrome caps oversized render widths before emitting kitty placements", () => {
@@ -208,7 +213,7 @@ test("unicode box mode truncates and pads ANSI-styled rows without corrupting co
   assert.doesNotMatch(out[0], /\x1b\[[^m]*$/, "unicode truncation must not split ANSI controls");
 });
 
-test("relative box chrome leaves textual border rows unwrapped", () => {
+test("relative box chrome wraps textual border rows as part of the same coherent box", () => {
   const emitted = [];
   const runtime = createBoxChromeRuntime({
     emitGraphicsCommand: (c) => emitted.push(c),
@@ -218,10 +223,14 @@ test("relative box chrome leaves textual border rows unwrapped", () => {
   });
   const border = "────────────────";
   const out = runtime.applyToRows({ type: "selector", instanceId: 80, lines: [border, " choice", border], renderWidth: 16 });
-  assert.equal(out[0], border, "top textual border should not get a second graphical strip in the same row");
-  assert.equal(out[2], border, "bottom textual border should not get a second graphical strip in the same row");
+  assert.notEqual(out[0], border, "top textual border should receive top chrome instead of being skipped");
+  assert.notEqual(out[2], border, "bottom textual border should receive bottom chrome instead of being skipped");
   assert.notEqual(out[1], " choice", "content row still gets side chrome");
-  assert.ok(emitted.length > 0, "content row should still emit graphics");
+  const emittedText = emitted.join("");
+  const topId = piGraphicsImageId("box-strip-selector-top-picker-0-16-136,192,208-8x16");
+  const botId = piGraphicsImageId("box-strip-selector-bot-picker-2-16-136,192,208-8x16");
+  assert.match(emittedText, new RegExp(`(?:^|,)i=${topId}(?:,|;)`), "top border row should use top strip art");
+  assert.match(emittedText, new RegExp(`(?:^|,)i=${botId}(?:,|;)`), "bottom border row should use bottom strip art");
 });
 
 test("debug placeholder mode renders visible U cells with unique SGR ids", () => {

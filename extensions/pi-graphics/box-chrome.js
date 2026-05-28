@@ -3047,6 +3047,13 @@ export function createBoxChromeRuntime({
     } catch { return false; }
   }
 
+  function boxRowKind(rowIndex, rowCount) {
+    if (rowCount <= 1) return "mid";
+    if (rowIndex === 0) return "top";
+    if (rowIndex === rowCount - 1) return "bot";
+    return "mid";
+  }
+
   function applyUnicodeBoxRows({ type, instanceId, lines, colorRgb, width, effect }) {
     const makeCell = (side, rowIndex, kind) => {
       const renderRowIndex = stripRenderRowBucket(rowIndex);
@@ -3082,7 +3089,7 @@ export function createBoxChromeRuntime({
     };
     return lines.map((line, i) => {
       if (hasKittyPlaceholder(line)) return line;
-      const verticalKind = lines.length === 1 ? "mid" : i === 0 ? "top" : i === lines.length - 1 ? "bot" : "mid";
+      const verticalKind = boxRowKind(i, lines.length);
       if (isLikelyBorderLine(line) && verticalKind !== "mid") return makeFullBorderRow(i, verticalKind);
       const leftKind = verticalKind === "top" ? "top-left" : verticalKind === "bot" ? "bot-left" : "left";
       const rightKind = verticalKind === "top" ? "top-right" : verticalKind === "bot" ? "bot-right" : "right";
@@ -3118,8 +3125,8 @@ export function createBoxChromeRuntime({
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
     if (boxMode === "unicode") return applyUnicodeBoxRows({ type: effectiveType, instanceId, lines, colorRgb, width, effect });
     const wrapped = lines.map((line, i) => {
-      if (hasKittyPlaceholder(line) || isLikelyBorderLine(line)) return line;
-      const kind = "mid";
+      if (hasKittyPlaceholder(line)) return line;
+      const kind = boxRowKind(i, lines.length);
       const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });
       const { anchorImageId, anchorPlacementId } = ensureAnchor({ instanceId, rowIndex: i });
       ensureRelativeStrip({ stripImageId: stripId, anchorImageId, anchorPlacementId, instanceId, rowIndex: i, width });
