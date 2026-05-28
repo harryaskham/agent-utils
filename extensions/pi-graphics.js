@@ -75,6 +75,7 @@ import {
   installBoxChromeMonkeyPatch,
   renderBoxStripPng,
 } from "./pi-graphics/box-chrome.js";
+import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
 import {
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
@@ -165,6 +166,21 @@ export function settingsEnvFromPiGraphics(settings = {}) {
 }
 
 export default function piGraphicsExtension(pi) {
+  const chatContainerPrototype = Object.getPrototypeOf(AssistantMessageComponent.prototype);
+  installCompactChatSpacingPatch({
+    basePrototype: chatContainerPrototype,
+    chatBubbleConstructors: [
+      AssistantMessageComponent,
+      BashExecutionComponent,
+      BranchSummaryMessageComponent,
+      CompactionSummaryMessageComponent,
+      CustomMessageComponent,
+      SkillInvocationMessageComponent,
+      ToolExecutionComponent,
+      UserMessageComponent,
+    ],
+  });
+
   const settings = readJsonIfExists(agentSettingsPath()) || {};
   let settingsEnv = settingsEnvFromPiGraphics(settings);
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
