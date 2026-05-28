@@ -61,6 +61,7 @@
     ],
     "themes": [
       "./themes/kitty-graphics-nord.json",
+      "./themes/kitty-graphics-nord-transparent.json",
       "./themes/kitty-graphics.json"
     ]
   }

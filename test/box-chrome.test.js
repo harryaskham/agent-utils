@@ -141,6 +141,23 @@ test("unicode box mode leaves render-width slack for padded containers", () => {
   assert.doesNotMatch(out[0], /x{10}/, "unicode wrapper must not preserve full content plus side borders when renderWidth includes container padding");
 });
 
+test("unicode box mode clamps overwide content to render width hint", () => {
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 112, lines: ["x".repeat(80)], renderWidth: 20 });
+  const visible = out[0]
+    .replace(/\x1b_G[\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(visible, /x{18}/, "content should be truncated to the render-width hint with two side placeholders");
+  assert.doesNotMatch(visible, /x{19}/, "unicode row must not exceed the render-width hint and wrap the right placeholder");
+  assert.equal((visible.match(/\u{10eeee}/gu) || []).length, 2, "unicode row should keep only two side placeholders");
+});
+
 test("box chrome preserves ANSI controls while reclaiming one visible cell", () => {
   const emitted = [];
   const state = { ownedImageIds: new Set() };

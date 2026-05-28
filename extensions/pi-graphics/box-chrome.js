@@ -3108,9 +3108,11 @@ export function createBoxChromeRuntime({
     // Unicode mode is text-cell replacement, not an independent overlay, so keep
     // two cells of render-width slack while still honoring genuinely wider content.
     const renderWidthHint = Number.isFinite(requestedWidth) && requestedWidth > 0
-      ? (boxMode === "unicode" ? Math.max(0, requestedWidth - 2) : requestedWidth)
+      ? (boxMode === "unicode" && requestedWidth > contentWidth ? Math.max(0, requestedWidth - 2) : requestedWidth)
       : 0;
-    const unclampedWidth = Math.max(contentWidth, renderWidthHint);
+    const unclampedWidth = boxMode === "unicode" && renderWidthHint > 0
+      ? Math.min(contentWidth || renderWidthHint, renderWidthHint)
+      : Math.max(contentWidth, renderWidthHint);
     const width = Math.min(MAX_BOX_CHROME_COLUMNS, unclampedWidth);
     if (width <= 2) return lines;
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");

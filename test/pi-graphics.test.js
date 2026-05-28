@@ -1889,6 +1889,7 @@ test("package.json advertises the pi-graphics extension and theme through pi.* e
   assert.ok(Array.isArray(pkg.pi.themes), "pi.themes must be an array");
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics.json"), "pi.themes must include the kitty-graphics theme");
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics-nord.json"), "pi.themes must include the calm Nord kitty graphics theme");
+  assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics-nord-transparent.json"), "pi.themes must include the transparent Nord kitty graphics theme");
   assert.ok(Array.isArray(pkg.files) && pkg.files.includes("themes"), "package.json files[] must ship themes/");
   assert.equal(pkg.scripts?.["pi-graphics:tmux-smoke"], "node scripts/test-pi-graphics-tmux-smoke.mjs");
 });
@@ -1933,17 +1934,39 @@ test("themes/kitty-graphics.json is visibly different from the default text them
   assert.equal(theme.export.glowAurora, "#ff4dff");
 });
 
-test("themes/kitty-graphics-nord.json is calm but still visibly displaced from built-in dark", async () => {
+test("themes/kitty-graphics-nord.json uses only canonical Nord colors", async () => {
   const themePath = fileURLToPath(new URL("../themes/kitty-graphics-nord.json", import.meta.url));
   const theme = JSON.parse(await readFile(themePath, "utf8"));
   assert.equal(theme.name, "kitty-graphics-nord");
+  const nord = [
+    "#2e3440", "#3b4252", "#434c5e", "#4c566a",
+    "#d8dee9", "#e5e9f0", "#eceff4", "#8fbcbb",
+    "#88c0d0", "#81a1c1", "#5e81ac", "#bf616a",
+    "#d08770", "#ebcb8b", "#a3be8c", "#b48ead",
+  ];
+  assert.deepEqual(Object.values(theme.vars).map((value) => String(value).toLowerCase()).sort(), [...nord].sort());
+  for (const [token, value] of Object.entries(theme.colors)) {
+    assert.ok(value in theme.vars, `${token} should reference one of the 16 Nord vars`);
+  }
   const resolve = (token) => parseColor(theme.vars[theme.colors[token]] ?? theme.colors[token]);
-  assert.ok(channelDistance(resolve("accent"), parseColor("#8abeb7")) > 70, "Nord accent should not be mistaken for built-in dark accent");
-  assert.ok(channelDistance(resolve("userMessageBg"), parseColor("#343541")) > 65, "user message panel should visibly move away from stock dark");
-  assert.ok(channelDistance(resolve("customMessageBg"), resolve("userMessageBg")) > 55, "custom/assistant chrome should be distinct from user panels");
-  assert.ok(contrastRatio(resolve("text"), resolve("userMessageBg")) > 9, "calm Nord text should still pop against rendered panel colors");
-  assert.equal(theme.export.glowCyan, "#9eeaff");
-  assert.equal(theme.export.glowAurora, "#caa6ff");
+  assert.ok(contrastRatio(resolve("text"), resolve("userMessageBg")) > 8, "calm Nord text should still pop against rendered panel colors");
+  assert.equal(theme.export.glowCyan, "#88c0d0");
+  assert.equal(theme.export.glowAurora, "#b48ead");
+});
+
+test("themes/kitty-graphics-nord-transparent.json removes box backgrounds", async () => {
+  const themePath = fileURLToPath(new URL("../themes/kitty-graphics-nord-transparent.json", import.meta.url));
+  const theme = JSON.parse(await readFile(themePath, "utf8"));
+  assert.equal(theme.name, "kitty-graphics-nord-transparent");
+  for (const token of ["selectedBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg"]) {
+    assert.equal(theme.colors[token], "", `${token} should use the terminal default background`);
+  }
+  for (const [token, value] of Object.entries(theme.colors)) {
+    if (value === "") continue;
+    assert.ok(value in theme.vars, `${token} should reference one of the 16 Nord vars`);
+  }
+  assert.equal(theme.colors.text, "nord6");
+  assert.equal(theme.colors.borderAccent, "nord7");
 });
 
 test("kitty graphics theme has large measured deltas from the built-in dark palette", async () => {

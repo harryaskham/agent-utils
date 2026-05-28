@@ -10,7 +10,8 @@ The pieces:
 
 | File | Role |
 |------|------|
-| `themes/kitty-graphics-nord.json` | Calm default Nord color theme: ordinary Pi remains usable while retaining frost/aurora glow tokens. |
+| `themes/kitty-graphics-nord.json` | Calm default theme that restricts Pi foregrounds and box backgrounds to the canonical 16 Nord colors. |
+| `themes/kitty-graphics-nord-transparent.json` | Same Nord foreground palette, but all Pi box/message/tool/selection backgrounds use the terminal default for a blank canvas behind Unicode or relative box chrome. |
 | `themes/kitty-graphics.json` | Maximal cyberpunk/neon color theme registered through `pi.themes` in `package.json`. |
 | `extensions/pi-graphics.js` | Pi extension entry point (registers tools + slash commands). |
 | `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars, and glow panels. |
@@ -24,8 +25,8 @@ The pieces:
 Install agent-utils as a Pi package per the repo README. Pi auto-discovers
 themes via the `pi.themes` entry in [`package.json`](../package.json) and
 extensions via `pi.extensions`. The `pi-graphics` extension does **not** copy
-`kitty-graphics-nord.json` or `kitty-graphics.json` into user theme directories
-by default; leaving the bundled themes package-owned avoids package-plus-local
+`kitty-graphics-nord.json`, `kitty-graphics-nord-transparent.json`, or
+`kitty-graphics.json` into user theme directories by default; leaving the bundled themes package-owned avoids package-plus-local
 duplicate theme-name warnings during Pi startup. Use `/gfx themes` to inspect
 the running theme registry and identify stale copied files or redundant
 `settings.json` `themes[]` entries if Pi reports duplicate theme exposure.
@@ -34,9 +35,10 @@ To activate the theme:
 
 ```bash
 pi /settings   # then choose "kitty-graphics-nord" for the calm default
+# choose "kitty-graphics-nord-transparent" for a no-background box canvas
 # or choose "kitty-graphics" for the neon/cyberpunk palette
 # or, equivalently, in settings.json:
-# { "theme": "kitty-graphics-nord" }
+# { "theme": "kitty-graphics-nord-transparent" }
 ```
 
 The companion extension (`./extensions/pi-graphics.js`) is loaded
@@ -411,7 +413,13 @@ displayed using kitty Unicode placeholder cells, so:
   stale chrome active.
 * Box chrome is opt-in because live box placements can be visually janky in some
   terminals; enable it with `piGraphics.boxChrome: true` or `/gfx box on` when you
-  specifically want to inspect the effect set. `Ctrl+t` cycles only the active
+  specifically want to inspect the effect set. Use `kitty-graphics-nord-transparent`
+  when Unicode or relative box chrome should be drawn on a blank terminal canvas;
+  the normal `kitty-graphics-nord` theme keeps ordinary Pi box backgrounds but
+  limits them to the canonical Nord palette. Unicode box mode clamps rendered rows
+  to Pi's width hint before adding side placeholders, preventing the first/right
+  placeholder from wrapping onto a separate terminal line in padded containers.
+  `Ctrl+t` cycles only the active
   theme and leaves editor style, cursor style, trailing workspace, and box chrome
   choices unchanged; `/gfx` with no arguments opens a Pi-native settings overlay
   with quick previews and cursor controls. The overlay explicitly opts
