@@ -502,9 +502,17 @@ displayed using kitty Unicode placeholder cells, so:
   whole reserved widget with placeholder cells, leaving text cells usable around
   the singleton anchor. Its render key includes the same rail heat buckets as
   `unicode`, so typing-speed heat redraws are at parity with the existing Unicode
-  border effects. In `relative`/`animated` editor modes, the extra
-  height is drawn as a relative placement without reflowing text; top borders are
-  offset upward by `height - 1`, while bottom borders grow downward from the rail.
+  border effects. When Pi reports assistant thinking/reasoning through its
+  working-message UI surface or an active structured hidden-thinking state, the
+  same editor border renderer enters a contextual thinking mode: top rails use a
+  cosine-squared thought-bubble mask,
+  bottom rails use the inverted companion mask, and a bounded timer scrolls small
+  bubble ticks through the cached render key until the message/turn ends. This
+  composes with `gradient`/`glass`/`chrome`/`geometric` border drawing and every
+  placement mode because only the rendered PNG phase/context inputs change. In
+  `relative`/`animated` editor modes, the extra height is drawn as a relative
+  placement without reflowing text; top borders are offset upward by `height - 1`,
+  while bottom borders grow downward from the rail.
   The focused editor cursor is configurable with
   `piGraphics.editor.cursorStyle` (or `PI_GRAPHICS_EDITOR_CURSOR_STYLE`): `glow`
   is the default speed-responsive direct Unicode-placeholder cursor plus a best-effort

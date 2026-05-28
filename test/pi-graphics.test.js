@@ -445,6 +445,22 @@ test("editor border frame supports independent visual styles", () => {
   assert.equal(payloads.size, 4);
 });
 
+test("editor border thinking context applies scrolling thought-bubble masks", () => {
+  const idle = renderEditorBorderFrame({ columns: 48, rows: 3, edge: "top", style: "glass", phase: 0.2, context: "idle" });
+  const thinkingA = renderEditorBorderFrame({ columns: 48, rows: 3, edge: "top", style: "glass", phase: 0.2, context: "thinking" });
+  const thinkingB = renderEditorBorderFrame({ columns: 48, rows: 3, edge: "top", style: "glass", phase: 0.45, context: "thinking" });
+  const idleKey = Buffer.from(idle.pixels).toString("base64");
+  const thinkingAKey = Buffer.from(thinkingA.pixels).toString("base64");
+  const thinkingBKey = Buffer.from(thinkingB.pixels).toString("base64");
+  assert.notEqual(thinkingAKey, idleKey, "thinking context should visibly alter the separator mask");
+  assert.notEqual(thinkingBKey, thinkingAKey, "thinking phase should scroll/tick the editor rail mask");
+  const decoded = { width: thinkingA.widthPx, height: thinkingA.heightPx, pixels: thinkingA.pixels };
+  const railY = decoded.height - 1;
+  const leftLobe = pixelAt(decoded, Math.floor(decoded.width * 0.20), railY)[3];
+  const midGap = pixelAt(decoded, Math.floor(decoded.width * 0.38), railY)[3];
+  assert.notEqual(leftLobe, midGap, "cosine-squared thought mask should vary alpha across the rail");
+});
+
 test("editor border frame supports taller contiguous rail rectangles", () => {
   const top = renderEditorBorderFrame({ columns: 16, rows: 3, edge: "top", cellWidthPx: 4, cellHeightPx: 10 });
   assert.equal(top.columns, 16);
@@ -1381,15 +1397,19 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editorRenderTui\?\.requestRender\?\.\(true\)/);
   assert.match(source, /function editorRailHeat\(\)/);
   assert.match(source, /\(editorCursorHeat - 0\.5\) \/ 1\.0/);
-  assert.match(source, /mixHexColor\(baseBorderColor, "#ffffff", railHeat\)/);
+  assert.match(source, /function setEditorContextMode\(mode = "idle"\)/);
+  assert.match(source, /function requestEditorContextFrame\(\)/);
+  assert.match(source, /function valueLooksLikeThinking\(value\)/);
+  assert.match(source, /mixHexColor\(baseBorderColor, contextMode === "thinking" \? "#d8dee9" : "#ffffff", railHeat\)/);
   assert.match(source, /function editorBorderHeight\(edge\)/);
   assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
   assert.match(source, /function editorBorderStyle\(\)/);
   assert.match(source, /EDITOR_BORDER_STYLES = \["gradient", "glass", "chrome", "geometric"\]/);
-  assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}/);
+  assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}-\$\{contextMode\}/);
+  assert.match(source, /context: contextMode/);
   assert.match(source, /rows: height/);
   assert.match(source, /function buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
-  assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}/);
+  assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}-\$\{contextMode\}/);
   assert.match(source, /columns: 1,\n\s+rows: 1,\n\s+width: visualCols/);
   assert.match(source, /edge === "top" && height > 1\) return \[emptyEditorBorderRow\(width\)\]/);
   assert.match(source, /function buildEditorBorderWidgetRows\(width, edge\)/);

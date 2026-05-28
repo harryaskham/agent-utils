@@ -691,6 +691,51 @@ export function renderEditorRailApng({ frames = 24, delayMs = 120, plays = 0, ..
   return { png, columns: first.columns, rows: first.rows, widthPx: first.widthPx, heightPx: first.heightPx, cellWidthPx: first.cellWidthPx, cellHeightPx: first.cellHeightPx, lineHeightScale: first.lineHeightScale, frames: count, delayMs, animationMs: delayMs * count };
 }
 
+function thoughtBubbleMask(x, widthPx, phase = 0, edge = "symmetric") {
+  const w = Math.max(1, Number(widthPx) || 1);
+  const p = ((Number(phase) || 0) % 1 + 1) % 1;
+  const t = Math.max(0, Math.min(1, x / Math.max(1, w - 1)));
+  const lobes = 2.5;
+  const cos2 = Math.cos((t * lobes + p) * Math.PI * 2) ** 2;
+  const bubble = 0.22 + cos2 * 0.78;
+  const inverse = 1 - cos2 * 0.66;
+  return edge === "bottom" ? inverse : bubble;
+}
+
+function applyThoughtSeparatorMask(pixels, widthPx, heightPx, { edge = "symmetric", phase = 0, color = NORDIC_VIOLET } = {}) {
+  const rows = edge === "top"
+    ? [heightPx - 1, heightPx - 2]
+    : edge === "bottom"
+      ? [0, 1]
+      : [Math.floor(heightPx / 2), Math.max(0, Math.floor(heightPx / 2) - 1), Math.min(heightPx - 1, Math.floor(heightPx / 2) + 1)];
+  const accent = parseColor(color);
+  const scroll = (((Number(phase) || 0) % 1 + 1) % 1) * Math.PI * 2;
+  const uniqueRows = [...new Set(rows.filter((y) => y >= 0 && y < heightPx))];
+  for (const y of uniqueRows) {
+    for (let x = 0; x < widthPx; x += 1) {
+      const mask = thoughtBubbleMask(x, widthPx, phase, edge);
+      const off = (y * widthPx + x) * 4;
+      pixels[off] = Math.min(255, Math.round(pixels[off] * (0.72 + mask * 0.28) + accent[0] * (1 - mask) * 0.18));
+      pixels[off + 1] = Math.min(255, Math.round(pixels[off + 1] * (0.72 + mask * 0.28) + accent[1] * (1 - mask) * 0.18));
+      pixels[off + 2] = Math.min(255, Math.round(pixels[off + 2] * (0.72 + mask * 0.28) + accent[2] * (1 - mask) * 0.18));
+      pixels[off + 3] = Math.max(0, Math.min(255, Math.round(pixels[off + 3] * mask)));
+    }
+  }
+  const bubbleSpacing = Math.max(14, Math.round(widthPx / 10));
+  const radius = Math.max(1, Math.round(heightPx * 0.055));
+  for (let i = -1; i <= Math.ceil(widthPx / bubbleSpacing) + 1; i += 1) {
+    const center = (i * bubbleSpacing + (phase * bubbleSpacing * 2)) % Math.max(1, widthPx + bubbleSpacing);
+    const x = Math.round(center - bubbleSpacing / 2);
+    if (x < -radius || x >= widthPx + radius) continue;
+    const y = edge === "bottom"
+      ? Math.min(heightPx - 1, radius + (i % 2 === 0 ? 0 : 1))
+      : edge === "top"
+        ? Math.max(0, heightPx - 1 - radius - (i % 2 === 0 ? 0 : 1))
+        : Math.max(0, Math.min(heightPx - 1, Math.floor(heightPx / 2) + Math.round(Math.sin(scroll + i) * Math.max(1, radius))));
+    fillRect(pixels, widthPx, x, y, Math.min(widthPx - x, radius * 2 + 1), Math.min(heightPx - y, radius + 1), [accent[0], accent[1], accent[2], 68]);
+  }
+}
+
 function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   edge = "symmetric",
   borderColor = NORDIC_CYAN,
@@ -699,6 +744,7 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   glowAlpha = 0.34,
   phase = 0,
   style = "gradient",
+  context = "idle",
 } = {}) {
   const pulse = pulseFactor(phase);
   const borderA = Math.round(normalizeAlpha(borderAlpha, 0.55) * 255);
@@ -797,6 +843,9 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
       fillRect(pixels, widthPx, 0, y, widthPx, 1, [separatorRgb[0], separatorRgb[1], separatorRgb[2], Math.min(255, Math.round(borderA * (styleName === "geometric" ? 0.82 : 0.58)))]);
     }
   }
+  if (String(context || "idle").toLowerCase() === "thinking") {
+    applyThoughtSeparatorMask(pixels, widthPx, heightPx, { edge, phase, color: glowColor });
+  }
   if (styleName === "glass") {
     const bandY = edge === "bottom" ? Math.max(1, Math.round(heightPx * 0.18)) : Math.max(0, Math.round(heightPx * 0.58));
     const bandH = Math.max(1, Math.round(heightPx * 0.12));
@@ -848,14 +897,14 @@ function paintEditorBorderFrame(pixels, widthPx, heightPx, {
   }
 }
 
-export function renderEditorBorderFrame({ columns, rows = 1, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0, style = "gradient" } = {}) {
+export function renderEditorBorderFrame({ columns, rows = 1, edge = "symmetric", borderColor, borderAlpha = 0.55, glowColor, glowAlpha = 0.34, cellWidthPx, cellHeightPx, lineHeightScale, phase = 0, style = "gradient", context = "idle" } = {}) {
   const cols = clampPositive(columns, 2, "columns");
   const rs = Math.max(1, Math.min(16, Math.trunc(Number(rows) || 1)));
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const widthPx = cols * metrics.cellWidthPx;
   const heightPx = rs * metrics.cellHeightPx;
   const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
-  paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase, style });
+  paintEditorBorderFrame(pixels, widthPx, heightPx, { edge, borderColor, borderAlpha, glowColor, glowAlpha, phase, style, context });
   return { pixels, widthPx, heightPx, columns: cols, rows: rs, cellWidthPx: metrics.cellWidthPx, cellHeightPx: metrics.cellHeightPx, lineHeightScale: metrics.lineHeightScale };
 }
 
