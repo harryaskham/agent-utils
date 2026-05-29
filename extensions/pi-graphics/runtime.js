@@ -5,6 +5,8 @@
 // here lets tests cover renderer + protocol composition without taking a
 // dependency on Pi internals.
 
+import { createHash } from "node:crypto";
+
 import {
   buildKittyUnicodePlaceholderLines,
   buildPngVirtualPlacementAnimation,
@@ -22,6 +24,7 @@ export function makeState() {
     ownedImageIds: new Set(),
     transmittedImageIds: new Set(),
     placementByImage: new Map(),
+    uploadedContentByImage: new Map(),
     config: {
       passthrough: "auto",
       placementMode: "auto",
@@ -38,9 +41,26 @@ function placementIdForName(name) {
   return piGraphicsPlaceholderPlacementId(`placement.${name}`);
 }
 
+function contentHash(buffers = []) {
+  const hash = createHash("sha256");
+  for (const buffer of buffers) hash.update(buffer ?? Buffer.alloc(0));
+  return hash.digest("hex");
+}
+
+function imageAlreadyUploaded(state, imageId, hash) {
+  return state.transmittedImageIds.has(imageId) && state.uploadedContentByImage?.get?.(imageId) === hash;
+}
+
+function markImageUploaded(state, imageId, hash) {
+  state.transmittedImageIds.add(imageId);
+  state.uploadedContentByImage?.set?.(imageId, hash);
+}
+
 export function buildPlacement(state, { name, png, columns, rows, width, caption, zIndex } = {}) {
+  state.uploadedContentByImage ||= new Map();
   const imageId = trackOwned(state, piGraphicsImageId(name));
-  const alreadyTransmitted = state.transmittedImageIds.has(imageId);
+  const hash = contentHash([png]);
+  const alreadyTransmitted = imageAlreadyUploaded(state, imageId, hash);
   const placementId = state.placementByImage.get(imageId) ?? placementIdForName(name);
   if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
   const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementCommand({
@@ -52,7 +72,7 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     zIndex,
     passthrough: state.config.passthrough,
   });
-  if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
+  if (!alreadyTransmitted) markImageUploaded(state, imageId, hash);
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
     placementId,
@@ -65,8 +85,10 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
 }
 
 export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, rows, width, caption, zIndex, autoLoop = true } = {}) {
+  state.uploadedContentByImage ||= new Map();
   const imageId = trackOwned(state, piGraphicsImageId(name));
-  const alreadyTransmitted = state.transmittedImageIds.has(imageId);
+  const hash = contentHash(pngs);
+  const alreadyTransmitted = imageAlreadyUploaded(state, imageId, hash);
   const placementId = state.placementByImage.get(imageId) ?? placementIdForName(name);
   if (!alreadyTransmitted) state.placementByImage.set(imageId, placementId);
   const transmit = alreadyTransmitted ? "" : buildPngVirtualPlacementAnimation({
@@ -80,7 +102,7 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     passthrough: state.config.passthrough,
     autoLoop,
   });
-  if (!alreadyTransmitted) state.transmittedImageIds.add(imageId);
+  if (!alreadyTransmitted) markImageUploaded(state, imageId, hash);
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
     placementId,
@@ -96,6 +118,7 @@ export function resetPlacementTracking(state) {
   state?.ownedImageIds?.clear?.();
   state?.transmittedImageIds?.clear?.();
   state?.placementByImage?.clear?.();
+  state?.uploadedContentByImage?.clear?.();
 }
 
 export function ensureUnicodePlacement(state) {

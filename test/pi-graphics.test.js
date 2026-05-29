@@ -1952,6 +1952,20 @@ test("renderToText concatenates the transmit sequence with placeholder lines", (
   assert.ok(text.includes(placement.lines[0]));
 });
 
+test("buildPlacement re-uploads when stable id content hash changes", () => {
+  const state = makeState();
+  state.config.passthrough = "none";
+  const firstPng = renderPromptEnclosure({ columns: 4, variant: "glow" }).png;
+  const secondPng = renderPromptEnclosure({ columns: 4, variant: "scanlines" }).png;
+  const first = buildPlacement(state, { name: "content-hash-rule", png: firstPng, columns: 4, rows: 1 });
+  const second = buildPlacement(state, { name: "content-hash-rule", png: secondPng, columns: 4, rows: 1 });
+
+  assert.equal(second.imageId, first.imageId);
+  assert.equal(second.placementId, first.placementId);
+  assert.equal(second.transmitted, true);
+  assert.match(second.transmit, /a=T/);
+});
+
 test("buildPlacement reuses stable image and placement ids without re-uploading on redraw", () => {
   const state = makeState();
   state.config.passthrough = "none";
