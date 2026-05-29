@@ -528,13 +528,13 @@
           <article class="tool-card" data-tool-card>
             <div class="tool-card__header">
               <h3>Tendril share Pi extension</h3>
-              <code>tendril_bridge_doctor, /tendril list, /tendril window &lt;id-or-name&gt;, /tendril display &lt;id-or-name&gt;, /tendril describe window &lt;id-or-name&gt;, /tendril stream window &lt;id-or-name&gt;</code>
+              <code>tendril_settings, tendril_bridge_doctor, tendril_list, tendril_capture, tendril_describe, tendril_stream, /tendril list, /tendril window &lt;id-or-name&gt;, /tendril display &lt;id-or-name&gt;, /tendril describe window &lt;id-or-name&gt;, /tendril stream window &lt;id-or-name&gt;</code>
             </div>
-            <p>Let the user inspect Tendril bridge settings, list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.</p>
+            <p>Let the user or model inspect Tendril bridge settings, list Tendril targets, capture window/display screenshots as model-visible PNG content, request model-facing screenshot descriptions, send VLM-generated screenshot descriptions to the active model from slash commands, or start a low-rate screenshot stream.</p>
             <dl>
               <div>
                 <dt>Audience</dt>
-                <dd>Pi users sharing local, remote, or WSL-tunnelled visual context with image-capable models</dd>
+                <dd>Pi users and models sharing local, remote, or WSL-tunnelled visual context with image-capable models</dd>
               </div>
               <div>
                 <dt>Source of truth</dt>
@@ -544,6 +544,7 @@
             <details>
               <summary>Common actions</summary>
               <ul>
+              <li><code>report configured Tendril settings to the model</code></li>
               <li><code>diagnose configured Tendril command, remote target, and WSL tunnel</code></li>
               <li><code>probe target discovery through the configured bridge</code></li>
               <li><code>list windows and displays</code></li>

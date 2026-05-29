@@ -240,10 +240,11 @@
         },
         {
           "name": "Tendril share Pi extension",
-          "command": "tendril_bridge_doctor, /tendril list, /tendril window <id-or-name>, /tendril display <id-or-name>, /tendril describe window <id-or-name>, /tendril stream window <id-or-name>",
-          "audience": "Pi users sharing local, remote, or WSL-tunnelled visual context with image-capable models",
-          "purpose": "Let the user inspect Tendril bridge settings, list Tendril targets, send captured window/display screenshots to image-capable models, send VLM-generated screenshot descriptions to the active model, or start a low-rate screenshot stream.",
+          "command": "tendril_settings, tendril_bridge_doctor, tendril_list, tendril_capture, tendril_describe, tendril_stream, /tendril list, /tendril window <id-or-name>, /tendril display <id-or-name>, /tendril describe window <id-or-name>, /tendril stream window <id-or-name>",
+          "audience": "Pi users and models sharing local, remote, or WSL-tunnelled visual context with image-capable models",
+          "purpose": "Let the user or model inspect Tendril bridge settings, list Tendril targets, capture window/display screenshots as model-visible PNG content, request model-facing screenshot descriptions, send VLM-generated screenshot descriptions to the active model from slash commands, or start a low-rate screenshot stream.",
           "commonActions": [
+            "report configured Tendril settings to the model",
             "diagnose configured Tendril command, remote target, and WSL tunnel",
             "probe target discovery through the configured bridge",
             "list windows and displays",

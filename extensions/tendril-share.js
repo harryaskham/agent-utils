@@ -356,6 +356,30 @@ function streamStatusText(stream) {
   return `Tendril stream active: ${stream.kind} ${stream.target.id} (${stream.target.label || stream.target.id}), every ${Math.round(stream.intervalMs / 1000)}s, frames sent ${stream.frame}, last frame ${last}.`;
 }
 
+function textResult(text, data = undefined) {
+  return { content: [{ type: "text", text }], ...(data === undefined ? {} : { data }) };
+}
+
+function normalizeKind(kind = "window") {
+  const value = String(kind || "window").toLowerCase();
+  if (value === "screen") return "display";
+  if (value === "window" || value === "display") return value;
+  throw new Error(`Unsupported Tendril target kind: ${kind}. Use window, display, or screen.`);
+}
+
+function toolContext(signal) {
+  return {
+    cwd: process.cwd(),
+    signal,
+    isIdle: () => false,
+    ui: { notify() {} },
+  };
+}
+
+function tendrilImageContent({ data, mimeType = PNG_MIME }) {
+  return { type: "image", data, mimeType };
+}
+
 export function createTendrilShareState() {
   return { stream: null };
 }
@@ -442,6 +466,143 @@ async function handleTendrilCommand(pi, args, ctx, state, forcedAction) {
 export default function tendrilShareExtension(pi) {
   const state = createTendrilShareState();
   pi.on?.("session_shutdown", () => stopStream(state));
+
+  pi.registerTool?.({
+    name: "tendril_settings",
+    label: "Tendril Settings",
+    description: "Report the configured Tendril command, remote bridge, and WSL tunnel settings used by tendril_* tools.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    async execute() {
+      const summary = tendrilCommandSummary();
+      return textResult(
+        `tendril command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel} argsPrefix=${summary.argsPrefix.join(" ") || "none"}`,
+        { summary },
+      );
+    },
+  });
+
+  pi.registerTool?.({
+    name: "tendril_list",
+    label: "Tendril List Targets",
+    description: "List Tendril windows and displays available through the configured Tendril bridge.",
+    parameters: {
+      type: "object",
+      properties: {
+        timeoutMs: { type: "number", description: "List timeout in milliseconds. Defaults to 30000." },
+      },
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, params = {}, signal) {
+      const envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: params.timeoutMs || DEFAULT_TIMEOUT_MS });
+      return textResult(listTargetsText(envelope), envelope.data || envelope);
+    },
+  });
+
+  pi.registerTool?.({
+    name: "tendril_capture",
+    label: "Tendril Capture Screenshot",
+    description: "Capture a Tendril window/display screenshot and return PNG image content to the model.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["window", "display", "screen"], description: "Target kind. screen is an alias for display. Defaults to window." },
+        target: { type: "string", description: "Tendril target id or unique case-insensitive name/title/app substring." },
+        prompt: { type: "string", description: "Optional focus prompt included in the tool result text." },
+        maxWidth: { type: "number", description: "Optional maximum screenshot width passed to Tendril." },
+        maxHeight: { type: "number", description: "Optional maximum screenshot height passed to Tendril." },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, params = {}, signal) {
+      const kind = normalizeKind(params.kind || "window");
+      const ctx = toolContext(signal);
+      const captured = await capturePngTarget(pi, ctx, {
+        kind,
+        target: params.target,
+        maxWidth: params.maxWidth,
+        maxHeight: params.maxHeight,
+      }, signal);
+      const focus = params.prompt ? `\nFocus: ${params.prompt}` : "";
+      return {
+        content: [
+          { type: "text", text: `Captured Tendril ${kind} ${captured.target.id}${captured.target.label ? ` (${captured.target.label})` : ""}: ${captured.outputPath}${focus}` },
+          tendrilImageContent({ data: captured.data }),
+        ],
+        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope },
+      };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "tendril_describe",
+    label: "Tendril Describe Screenshot",
+    description: "Capture a Tendril window/display and return the screenshot plus an objective-description prompt for the calling model to inspect directly.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["window", "display", "screen"], description: "Target kind. screen is an alias for display. Defaults to window." },
+        target: { type: "string", description: "Tendril target id or unique case-insensitive name/title/app substring." },
+        prompt: { type: "string", description: "Optional description focus." },
+        maxWidth: { type: "number", description: "Optional maximum screenshot width passed to Tendril." },
+        maxHeight: { type: "number", description: "Optional maximum screenshot height passed to Tendril." },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, params = {}, signal) {
+      const kind = normalizeKind(params.kind || "window");
+      const ctx = toolContext(signal);
+      const captured = await capturePngTarget(pi, ctx, {
+        kind,
+        target: params.target,
+        maxWidth: params.maxWidth,
+        maxHeight: params.maxHeight,
+      }, signal);
+      const focus = params.prompt ? `\nUser focus: ${params.prompt}` : "";
+      return {
+        content: [
+          { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}\n\nTarget: Tendril ${kind} ${captured.target.id}${focus}\nSaved screenshot: ${captured.outputPath}` },
+          tendrilImageContent({ data: captured.data }),
+        ],
+        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope },
+      };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "tendril_stream",
+    label: "Tendril Stream Control",
+    description: "Start, inspect, or stop the low-resolution Tendril screenshot stream. Started streams queue follow-up screenshot messages for the model.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["start", "status", "stop", "off"], description: "Stream action. Defaults to status when target is omitted, otherwise start." },
+        kind: { type: "string", enum: ["window", "display", "screen"], description: "Target kind for start. screen is an alias for display. Defaults to window." },
+        target: { type: "string", description: "Tendril target id or unique case-insensitive name/title/app substring for start." },
+        intervalSeconds: { type: "number", description: "Stream interval in seconds. Defaults to 30; minimum 10." },
+        prompt: { type: "string", description: "Optional prompt attached to each queued stream frame." },
+      },
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, params = {}, signal) {
+      const action = String(params.action || (params.target ? "start" : "status")).toLowerCase();
+      if (action === "status") return textResult(streamStatusText(state.stream), { stream: state.stream ? { ...state.stream, timer: undefined } : null });
+      if (action === "stop" || action === "off") {
+        const stopped = stopStream(state);
+        return textResult(stopped ? `Stopped Tendril stream for ${stopped.kind} ${stopped.target.id}.` : "No active Tendril stream.", { stopped: !!stopped });
+      }
+      if (action !== "start") throw new Error(`Unsupported Tendril stream action: ${params.action}`);
+      if (!params.target) throw new Error("tendril_stream action=start requires target.");
+      const stream = await startStream(pi, toolContext(undefined), state, {
+        kind: normalizeKind(params.kind || "window"),
+        target: params.target,
+        intervalSeconds: params.intervalSeconds,
+        prompt: params.prompt,
+      });
+      return textResult(streamStatusText(stream), { stream: { ...stream, timer: undefined } });
+    },
+  });
 
   pi.registerTool?.({
     name: "tendril_bridge_doctor",

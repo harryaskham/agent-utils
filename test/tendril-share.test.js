@@ -18,6 +18,7 @@ function makeHarness({ idle = true } = {}) {
   const visionModel = { provider: "github-copilot", id: "claude-opus-4.7", input: ["text", "image"] };
   const fallbackVisionModel = { provider: "litellm-anthropic", id: "claude-opus-4-7", input: ["text", "image"] };
   const commands = new Map();
+  const tools = new Map();
   const notifications = [];
   const execCalls = [];
   const userMessages = [];
@@ -38,6 +39,7 @@ function makeHarness({ idle = true } = {}) {
   };
   const pi = {
     registerCommand(name, definition) { commands.set(name, definition); },
+    registerTool(tool) { tools.set(tool.name, tool); },
     async exec(command, args) {
       execCalls.push({ command, args });
       if (args[0] === "list") {
@@ -66,7 +68,7 @@ function makeHarness({ idle = true } = {}) {
     sendMessage(message) { customMessages.push(message); },
     on() {},
   };
-  return { pi, commands, notifications, execCalls, userMessages, customMessages, ctx };
+  return { pi, commands, tools, notifications, execCalls, userMessages, customMessages, ctx };
 }
 
 test("/tendril list formats Tendril targets", async () => {
@@ -79,6 +81,89 @@ test("/tendril list formats Tendril targets", async () => {
   assert.match(notifications.at(-1).message, /Tendril targets:/);
   assert.match(notifications.at(-1).message, /display 1/);
   assert.match(notifications.at(-1).message, /window 4/);
+});
+
+test("tendril tool registry exposes command-tree operations", async () => {
+  const { pi, tools } = makeHarness();
+  tendrilShareExtension(pi);
+
+  for (const name of ["tendril_settings", "tendril_list", "tendril_capture", "tendril_describe", "tendril_stream", "tendril_bridge_doctor"]) {
+    assert.ok(tools.has(name), `${name} should be registered`);
+  }
+
+  const settings = await tools.get("tendril_settings").execute("call-1", {}, new AbortController().signal);
+  assert.match(settings.content[0].text, /tendril command=tendril/);
+});
+
+test("tendril_list and tendril_capture tools return targets and PNG content", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, tools, execCalls } = makeHarness();
+    tendrilShareExtension(pi);
+
+    const list = await tools.get("tendril_list").execute("call-1", {}, new AbortController().signal);
+    assert.match(list.content[0].text, /window 4/);
+
+    const capture = await tools.get("tendril_capture").execute("call-2", { kind: "window", target: "browser", prompt: "inspect" }, new AbortController().signal);
+    assert.match(capture.content[0].text, /Captured Tendril window 4/);
+    assert.equal(capture.content[1].type, "image");
+    assert.equal(capture.content[1].mimeType, "image/png");
+    assert.equal(capture.content[1].data, ONE_PIXEL_PNG.toString("base64"));
+    const captureCall = execCalls.find((call) => call.args[0] === "capture");
+    assert.ok(captureCall.args.includes("--window"));
+    assert.ok(captureCall.args.includes("4"));
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("tendril_describe tool returns objective prompt plus image content", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, tools } = makeHarness();
+    tendrilShareExtension(pi);
+
+    const result = await tools.get("tendril_describe").execute("call-1", { kind: "display", target: "1", prompt: "errors" }, new AbortController().signal);
+    assert.match(result.content[0].text, /Describe the screenshot objectively/);
+    assert.match(result.content[0].text, /User focus: errors/);
+    assert.equal(result.content[1].type, "image");
+    assert.equal(result.content[1].data, ONE_PIXEL_PNG.toString("base64"));
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("tendril_stream tool starts, reports, and stops queued frame streaming", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, tools, userMessages } = makeHarness();
+    tendrilShareExtension(pi);
+
+    const started = await tools.get("tendril_stream").execute("call-1", { action: "start", kind: "window", target: "browser", intervalSeconds: 10, prompt: "watch" }, new AbortController().signal);
+    assert.match(started.content[0].text, /Tendril stream active/);
+    assert.equal(userMessages.length, 1);
+    assert.equal(userMessages[0].content[0].text, "watch");
+    assert.deepEqual(userMessages[0].options, { deliverAs: "followUp" });
+
+    const status = await tools.get("tendril_stream").execute("call-2", { action: "status" }, new AbortController().signal);
+    assert.match(status.content[0].text, /frames sent 1/);
+    const stopped = await tools.get("tendril_stream").execute("call-3", { action: "stop" }, new AbortController().signal);
+    assert.match(stopped.content[0].text, /Stopped Tendril stream/);
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
 });
 
 test("tendril bridge doctor reports bridge settings and probes targets", async () => {
