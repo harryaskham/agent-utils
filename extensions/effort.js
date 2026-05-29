@@ -111,7 +111,6 @@ function modelRequiresAdaptiveThinkingFormat(model) {
   if (["adaptive", "anthropic-adaptive", "output-config", "output_config"].includes(format)) return true;
   if (model?.adaptiveThinking === true || model?.adaptive_thinking === true || model?.requiresAdaptiveThinking === true) return true;
   if (compat.adaptiveThinking === true || compat.adaptive_thinking === true || compat.requiresAdaptiveThinking === true) return true;
-  if (modelSupportedEfforts(model)?.length) return true;
   return false;
 }
 

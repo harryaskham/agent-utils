@@ -140,13 +140,20 @@ test("github-copilot Opus 4.8 avoids unsupported low effort even without refresh
   assert.equal(payload.output_config.effort, "medium");
 });
 
-test("models requiring adaptive thinking rewrite medium without /effort adaptive", () => {
+test("supported output_config efforts alone do not require adaptive thinking", () => {
   const payload = patchAdaptiveThinkingPayload(
     { thinking: { type: "enabled", budget_tokens: 1024 } },
     { model: { provider: "github-copilot", id: "claude-opus-4.8", reasoning: true }, level: "medium" },
   );
-  assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
-  assert.equal(payload.output_config.effort, "medium");
+  assert.deepEqual(payload, { thinking: { type: "enabled", budget_tokens: 1024 } });
+});
+
+test("fast-suffixed models do not require adaptive thinking", () => {
+  const payload = patchAdaptiveThinkingPayload(
+    { thinking: { type: "enabled", budget_tokens: 1024 } },
+    { model: { provider: "github-copilot", id: "claude-opus-4.8-fast", reasoning: true }, level: "medium" },
+  );
+  assert.deepEqual(payload, { thinking: { type: "enabled", budget_tokens: 1024 } });
 });
 
 test("model compat can require adaptive thinking for arbitrary ids", () => {
