@@ -11,7 +11,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]);
 
 function normalizeString(value) {
   const text = String(value ?? "").trim();
@@ -133,7 +133,7 @@ async function applyRuntimeDefaults(pi, ctx, defaults) {
   } else if (defaults.provider && defaults.model) {
     result.modelMissing = true;
   }
-  if (defaults.thinkingLevel && typeof pi.setThinkingLevel === "function") {
+  if (defaults.thinkingLevel && defaults.thinkingLevel !== "adaptive" && typeof pi.setThinkingLevel === "function") {
     pi.setThinkingLevel(defaults.thinkingLevel);
     result.thinkingApplied = true;
   }

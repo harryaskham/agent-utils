@@ -54,6 +54,12 @@ test("extractTrueDefaults supports namespaced and legacy key shapes", () => {
     model: "claude-sonnet-4-5",
     thinkingLevel: "medium",
   });
+
+  assert.deepEqual(extractTrueDefaults({ agentUtils: { trueDefaults: { thinkingLevel: "adaptive" } } }), {
+    provider: undefined,
+    model: undefined,
+    thinkingLevel: "adaptive",
+  });
 });
 
 test("restoreTrueDefaultSettings copies true defaults onto built-in defaults without changing trueDefault keys", () => {
@@ -100,6 +106,28 @@ test("extension reapplies settings and runtime defaults on session_start", async
     assert.equal(h.readSettings().defaultThinkingLevel, "high");
     assert.deepEqual(h.setModelCalls, [{ provider: "litellm-openai", id: "gpt-5.5" }]);
     assert.deepEqual(h.thinkingCalls, ["high"]);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    h.cleanup();
+  }
+});
+
+test("adaptive true default is persisted but not passed to core setThinkingLevel", async () => {
+  const h = makeHarness({
+    settings: {
+      defaultThinkingLevel: "medium",
+      agentUtils: { trueDefaults: { thinkingLevel: "adaptive" } },
+    },
+  });
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = h.dir;
+  try {
+    trueDefaultsExtension(h.pi);
+    await h.handlers.get("session_start")({ reason: "startup" }, h.ctx);
+
+    assert.equal(h.readSettings().defaultThinkingLevel, "adaptive");
+    assert.deepEqual(h.thinkingCalls, []);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

@@ -5,6 +5,10 @@
 // the common case where the user wants to adjust reasoning effort without
 // opening the settings UI.
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
 export const EFFORT_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]);
 export const EFFORT_USAGE = "Usage: /effort [status|off|minimal|low|medium|high|xhigh|adaptive]";
 
@@ -29,6 +33,36 @@ function firstToken(args) {
 
 function notify(ctx, message, level = "info") {
   ctx?.ui?.notify?.(message, level);
+}
+
+function expandHome(path) {
+  const text = String(path || "");
+  if (text === "~") return homedir();
+  if (text.startsWith("~/")) return join(homedir(), text.slice(2));
+  return text;
+}
+
+function readSettings() {
+  const dir = expandHome(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"));
+  try {
+    const path = join(dir, "settings.json");
+    if (!existsSync(path)) return {};
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function configuredDefaultEffort(settings = readSettings()) {
+  const agentUtils = settings.agentUtils || {};
+  const scoped = agentUtils.trueDefaults || agentUtils.piTrueDefaults || settings.trueDefaults || {};
+  return normalizeEffortLevel(
+    scoped.thinkingLevel ?? scoped.defaultThinkingLevel ?? scoped.effort ?? scoped.trueDefaultEffort ??
+      agentUtils.trueDefaultThinkingLevel ?? agentUtils.trueDefaultEffort ??
+      settings.trueDefaultThinkingLevel ?? settings.trueDefaultEffort ??
+      settings.defaultThinkingLevel,
+  );
 }
 
 function getThinkingLevel(pi, ctx) {
@@ -159,7 +193,11 @@ function findFastCounterpart(ctx, model, force) {
 }
 
 export default function effortExtension(pi) {
-  let adaptiveMode = false;
+  let adaptiveMode = configuredDefaultEffort() === "adaptive";
+
+  pi.on?.("session_start", () => {
+    adaptiveMode = configuredDefaultEffort() === "adaptive";
+  });
 
   pi.on?.("before_provider_request", (event, ctx) => patchAdaptiveThinkingPayload(event.payload, {
     model: ctx?.model,

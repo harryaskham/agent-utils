@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import effortExtension, {
   EFFORT_LEVELS,
   formatEffortStatus,
   normalizeEffortLevel,
+  configuredDefaultEffort,
   patchAdaptiveThinkingPayload,
   supportsAdaptiveThinkingModel,
 } from "../extensions/effort.js";
@@ -53,6 +57,12 @@ test("effort helpers validate and render supported thinking levels", () => {
   assert.equal(supportsAdaptiveThinkingModel({ id: "gpt-5.5" }), false);
 });
 
+test("configuredDefaultEffort reads adaptive from true-default settings", () => {
+  assert.equal(configuredDefaultEffort({ agentUtils: { trueDefaults: { thinkingLevel: "adaptive" } } }), "adaptive");
+  assert.equal(configuredDefaultEffort({ trueDefaultEffort: "ADAPTIVE" }), "adaptive");
+  assert.equal(configuredDefaultEffort({ defaultThinkingLevel: "adaptive" }), "adaptive");
+});
+
 test("/effort with no args reports current level and accepted values", async () => {
   const { commands, notifications, ctx } = makeHarness({ initialLevel: "low" });
   await commands.get("effort").handler("", ctx);
@@ -95,6 +105,24 @@ test("/effort rejects unsupported levels without changing state", async () => {
   assert.equal(harness.thinkingLevel, "medium");
   assert.equal(harness.notifications.at(-1).level, "warning");
   assert.match(harness.notifications.at(-1).message, /Unsupported effort level: turbo/);
+});
+
+test("adaptive true default enables adaptive payload rewrite on session start", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-utils-effort-default-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  try {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ agentUtils: { trueDefaults: { thinkingLevel: "adaptive" } } }));
+    process.env.PI_CODING_AGENT_DIR = dir;
+    const harness = makeHarness({ initialLevel: "medium" });
+    await harness.handlers.get("session_start")?.({}, harness.ctx);
+    const payload = harness.handlers.get("before_provider_request")({ payload: { thinking: { type: "enabled", budget_tokens: 2048 } } }, harness.ctx);
+    assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+    assert.equal(payload.output_config.effort, "medium");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("/effort adaptive enables adaptive payload rewrite without clamping through Pi core", async () => {
