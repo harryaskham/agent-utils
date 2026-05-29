@@ -1516,6 +1516,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /animationTimers\.set\(imageId, keepTimerFromHoldingProcess\(setInterval/);
   assert.match(source, /animationTimers\.delete\(imageId\)/);
   assert.match(source, /buildAnimationFrameCommand\(\{/);
+  assert.match(source, /function buildManualAnimatedPlacement\(options\)/);
+  assert.match(source, /buildAnimatedPlacement\(state, \{ \.\.\.options, autoLoop: false \}\)/);
+  assert.match(source, /ensureManualAnimationLoop\(\{ imageId: placement\.imageId, frames: placement\.frames/);
+  assert.doesNotMatch(source, /autoLoop: true/);
+  assert.match(source, /if \(editorAnimationEnabled\(\)\) return/);
   assert.match(source, /terminal-driven APNG\/native frame loops have not repainted/);
   assert.match(source, /buildAnimationStopCommand\(\{ imageId: animImageId/);
   assert.match(source, /function buildSegmentedFooterLine/);

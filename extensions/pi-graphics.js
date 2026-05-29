@@ -486,6 +486,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function requestEditorContextFrame() {
+    if (editorAnimationEnabled()) return;
     if (editorContextTimer || !editorRenderTui || editorContextMode !== "thinking") return;
     editorContextTimer = setTimeout(() => {
       editorContextTimer = null;
@@ -798,6 +799,13 @@ export default function piGraphicsExtension(pi) {
     animationTimers.set(imageId, keepTimerFromHoldingProcess(setInterval(tick, intervalMs)));
   }
 
+  function buildManualAnimatedPlacement(options) {
+    const placement = buildAnimatedPlacement(state, { ...options, autoLoop: false });
+    if (placement?.transmitted) emitGraphicsCommand(placement.transmit);
+    ensureManualAnimationLoop({ imageId: placement.imageId, frames: placement.frames, delayMs: Array.isArray(options.delaysMs) ? options.delaysMs[0] : options.delaysMs });
+    return placement;
+  }
+
   function ensureRelativeAnimUploaded({ animImageId, anchorImageId, anchorPlacementId, animPlacementId, pngs, delayMs, columns, rows, frames, hOffset = 0, vOffset = 0 }) {
     const key = `${animImageId}->${anchorImageId}/${anchorPlacementId}@${hOffset},${vOffset}`;
     const alreadyPlaced = relativeUploaded.has(key);
@@ -886,7 +894,7 @@ export default function piGraphicsExtension(pi) {
         impulseX: impulseCol == null ? null : (impulseCol + 0.5) * cell.cellWidthPx,
         impulseStrength,
       });
-      const placement = frames > 1 ? buildAnimatedPlacement(state, {
+      const placement = frames > 1 ? buildManualAnimatedPlacement({
         name: key,
         pngs: rendered.pngs,
         delaysMs: Array.from({ length: frames }, () => delayMs),
@@ -894,7 +902,6 @@ export default function piGraphicsExtension(pi) {
         rows: rendered.rows,
         width: visualCols,
         zIndex: PI_GRAPHICS_Z.SURFACE,
-        autoLoop: true,
       }) : buildPlacement(state, {
         name: key,
         png: rendered.pngs[0],
@@ -903,7 +910,7 @@ export default function piGraphicsExtension(pi) {
         width: visualCols,
         zIndex: PI_GRAPHICS_Z.SURFACE,
       });
-      emitGraphicsCommand(placement.transmit);
+      if (frames <= 1) emitGraphicsCommand(placement.transmit);
       return placement.lines;
     });
   }
@@ -1031,7 +1038,7 @@ export default function piGraphicsExtension(pi) {
           rows: rendered.rows,
           zIndex: PI_GRAPHICS_Z.SURFACE,
           passthrough: state.config.passthrough,
-          autoLoop: true,
+          autoLoop: false,
         }) : `${serializeKittyGraphicsChunks({
           a: "t",
           f: 100,
@@ -1051,6 +1058,7 @@ export default function piGraphicsExtension(pi) {
         emitGraphicsCommand(transmit);
         state.ownedImageIds.add(imageId);
         uploadedImages.add(imageId);
+        if (frames > 1) ensureManualAnimationLoop({ imageId, frames, delayMs });
       }
       const line = buildKittyUnicodePlaceholderLines({
         imageId,
@@ -2095,7 +2103,7 @@ export default function piGraphicsExtension(pi) {
     const unicodeMode = boxRailUnicodeMode();
     const key = `box-rail-${type}-${edge}-${cols}x${height}-${style}-${boxRailMode()}-${unicodeMode}-${frames}-${color}-${glow}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
     if (boxRailMode() === "unicode" && unicodeMode === "fill") {
-      const placement = frames > 1 ? buildAnimatedPlacement(state, {
+      const placement = frames > 1 ? buildManualAnimatedPlacement({
         name: key,
         pngs: rendered.pngs,
         delaysMs: Array.from({ length: frames }, () => delayMs),
@@ -2103,8 +2111,8 @@ export default function piGraphicsExtension(pi) {
         rows: rendered.rows,
         width: cols,
         zIndex: PI_GRAPHICS_Z.SURFACE,
-        autoLoop: true,
       }) : buildPlacement(state, { name: key, png: rendered.pngs[0], columns: rendered.columns, rows: rendered.rows, width: cols, zIndex: PI_GRAPHICS_Z.SURFACE });
+      if (frames <= 1) emitGraphicsCommand(placement.transmit);
       return placement.lines;
     }
     const imageId = piGraphicsImageId(key);
@@ -2119,11 +2127,12 @@ export default function piGraphicsExtension(pi) {
         rows: rendered.rows,
         zIndex: PI_GRAPHICS_Z.SURFACE,
         passthrough: state.config.passthrough,
-        autoLoop: true,
+        autoLoop: false,
       }) : serializeKittyGraphicsChunks({ a: "T", f: 100, t: "d", i: imageId, p: placementId, U: 1, c: rendered.columns, r: rendered.rows, z: PI_GRAPHICS_Z.SURFACE, q: 2 }, bufferToBase64(rendered.pngs[0]), { passthrough: state.config.passthrough });
       emitGraphicsCommand(transmit);
       state.ownedImageIds.add(imageId);
       uploadedImages.add(imageId);
+      if (frames > 1) ensureManualAnimationLoop({ imageId, frames, delayMs });
     }
     const line = buildKittyUnicodePlaceholderLines({ imageId, placementId, columns: 1, rows: 1, width: cols })[0] ?? "";
     return [line, ...Array.from({ length: Math.max(0, height - 1) }, () => emptyEditorBorderRow(cols))];

@@ -523,7 +523,12 @@ displayed using kitty Unicode placeholder cells, so:
   `unicode`, so typing-speed heat redraws are at parity with the existing Unicode
   border effects. Because animation is now separate from placement, Unicode
   `fill`, Unicode `topLeft`, and relative placement can all be paired with
-  animation. When Pi reports assistant thinking/reasoning through its
+  animation. Animated editor and box-rail placements upload their PNG frame set
+  once and then advance frames with Kitty `a=a,c=<frame>` commands from a small
+  unref'd timer; they deliberately avoid re-rendering Unicode placeholder rows on
+  each animation tick. Thinking-mode animation also uses the pre-rendered frame
+  set when editor animation is enabled, instead of scheduling repeated full TUI
+  redraws. When Pi reports assistant thinking/reasoning through its
   working-message UI surface or an active structured hidden-thinking state, the
   same editor border renderer enters a contextual thinking mode: top rails use a
   cosine-squared thought-bubble mask,
