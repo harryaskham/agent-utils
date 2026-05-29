@@ -19,12 +19,14 @@ import {
 } from "../extensions/app-automation/catalog.js";
 import {
   aggregateSnapshotLinkSummaries,
+  applySnapshotCleanup,
   collectSnapshotLinks,
   digestSnapshotArtifacts,
   listSnapshotArtifacts,
   readSnapshotArtifact,
   planSnapshotCleanup,
   renderArtifactList,
+  renderSnapshotCleanupApply,
   renderSnapshotCleanupPlan,
   renderSnapshotDigest,
   renderSnapshotLinks,
@@ -617,6 +619,17 @@ test("snapshot artifact helpers list and read bounded readable files", async () 
   assert.equal(artifact.content, "# Sl");
   assert.equal(artifact.truncated, true);
   await assert.rejects(() => readSnapshotArtifact({ root, file: "../outside.md" }), /inside/);
+  const cleanupDir = path.join(root, "snapshots", "cleanup-app");
+  await mkdir(cleanupDir, { recursive: true });
+  await writeFile(path.join(cleanupDir, "old-a.md"), "old a", "utf8");
+  await writeFile(path.join(cleanupDir, "old-b.json"), "{}", "utf8");
+  await writeFile(path.join(cleanupDir, "latest-run.json"), "{}", "utf8");
+  const appliedCleanup = await applySnapshotCleanup({ root, app: "cleanup-app", keepLatest: 0 });
+  assert.equal(appliedCleanup.deletedCount, 2);
+  assert.equal(appliedCleanup.failedCount, 0);
+  assert.match(renderSnapshotCleanupApply(appliedCleanup), /deleted=2 failed=0 candidates=2 protected=1/);
+  await assert.rejects(() => readSnapshotArtifact({ root, file: appliedCleanup.deleted[0].relativePath }), /ENOENT/);
+  assert.equal((await readSnapshotArtifact({ root, file: "snapshots/cleanup-app/latest-run.json" })).relativePath, "snapshots/cleanup-app/latest-run.json");
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1578,6 +1591,9 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /renderSnapshotLinks/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_staleness`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_cleanup_plan`/);
+  assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_cleanup_apply`/);
+  assert.match(source, /confirmed=true/);
+  assert.match(source, /applySnapshotCleanup/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshot_read`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_status`/);
   assert.match(source, /setInterval/);

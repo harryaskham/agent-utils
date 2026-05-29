@@ -6,11 +6,13 @@ import { Type } from "@sinclair/typebox";
 
 import {
   aggregateSnapshotLinkSummaries,
+  applySnapshotCleanup,
   collectSnapshotLinks,
   digestSnapshotArtifacts,
   listSnapshotArtifacts,
   readSnapshotArtifact,
   renderArtifactList,
+  renderSnapshotCleanupApply,
   renderSnapshotCleanupPlan,
   renderSnapshotDigest,
   renderSnapshotLinks,
@@ -1192,8 +1194,29 @@ export default function appAutomationExtension(pi) {
     }),
     async execute(_toolCallId, params) {
       const root = stateRoot();
-      const plan = await planSnapshotCleanup({ root, app: params.app, keepLatest: params.keepLatest || 20 });
+      const plan = await planSnapshotCleanup({ root, app: params.app, keepLatest: params.keepLatest ?? 20 });
       return textResult(renderSnapshotCleanupPlan(plan), { cleanup: plan, dryRun: true });
+    },
+  });
+
+  pi.registerTool({
+    name: `${TOOL_PREFIX}_snapshots_cleanup_apply`,
+    label: "App Automation Snapshots Cleanup Apply",
+    description: "Delete old readable app automation snapshot artifacts selected by the cleanup planner. Requires confirmed=true.",
+    promptSnippet: "Use this only after inspecting app_automation_snapshots_cleanup_plan; it deletes old snapshot artifacts but preserves latest-run.json and auth-required.json.",
+    parameters: Type.Object({
+      app: Type.Optional(Type.String({ description: "Optional app id, for example slack, outlook, teams, or canvas. Omit to scan all apps." })),
+      keepLatest: Type.Optional(Type.Number({ description: "Readable artifacts to keep before deleting older candidates. Defaults to 20." })),
+      confirmed: Type.Optional(Type.Boolean({ description: "Required true to delete files after reviewing the cleanup plan." })),
+    }),
+    async execute(_toolCallId, params) {
+      const root = stateRoot();
+      const plan = await planSnapshotCleanup({ root, app: params.app, keepLatest: params.keepLatest ?? 20 });
+      if (params.confirmed !== true) {
+        return textResult(`${renderSnapshotCleanupPlan(plan)}\n\nDry run only. Re-run with confirmed=true to delete ${plan.candidateCount} candidate artifact(s).`, { cleanup: plan, dryRun: true, requiresConfirmation: true });
+      }
+      const result = await applySnapshotCleanup({ root, app: params.app, keepLatest: params.keepLatest ?? 20 });
+      return textResult(renderSnapshotCleanupApply(result), { cleanup: result, dryRun: false });
     },
   });
 

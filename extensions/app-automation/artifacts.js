@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { displayPath } from "./display-path.js";
@@ -688,7 +688,8 @@ export async function planSnapshotCleanup({ root, app, keepLatest = 20, protect 
   const listed = await listSnapshotArtifacts({ root, app, limit: 10_000 });
   const protectedNames = new Set(protect);
   const deletable = listed.artifacts.filter((artifact) => !protectedNames.has(path.basename(artifact.relativePath)));
-  const keep = Math.max(0, Number(keepLatest) || 20);
+  const parsedKeep = Number(keepLatest);
+  const keep = Math.max(0, Number.isFinite(parsedKeep) ? parsedKeep : 20);
   const candidates = deletable.slice(keep);
   const protectedArtifacts = listed.artifacts.filter((artifact) => protectedNames.has(path.basename(artifact.relativePath)));
   return {
@@ -711,5 +712,33 @@ export function renderSnapshotCleanupPlan(plan) {
   ];
   lines.push(...plan.candidates.slice(0, 20).map((artifact) => `- ${artifact.relativePath} (${artifact.size} bytes, ${artifact.modifiedAt})`));
   if (plan.candidates.length > 20) lines.push(`... ${plan.candidates.length - 20} more candidates`);
+  return lines.join("\n");
+}
+
+export async function applySnapshotCleanup({ root, app, keepLatest = 20 } = {}) {
+  const plan = await planSnapshotCleanup({ root, app, keepLatest });
+  const deleted = [];
+  const failed = [];
+  for (const artifact of plan.candidates) {
+    try {
+      const fullPath = assertInside(root, artifact.relativePath);
+      const info = await stat(fullPath);
+      if (!info.isFile()) throw new Error("candidate is not a file");
+      await unlink(fullPath);
+      deleted.push({ relativePath: artifact.relativePath, size: artifact.size, modifiedAt: artifact.modifiedAt });
+    } catch (error) {
+      failed.push({ relativePath: artifact.relativePath, error: error?.message || String(error) });
+    }
+  }
+  return { ...plan, deleted, failed, deletedCount: deleted.length, failedCount: failed.length };
+}
+
+export function renderSnapshotCleanupApply(result) {
+  const lines = [
+    `${result.app || "all apps"}: deleted=${result.deletedCount} failed=${result.failedCount} candidates=${result.candidateCount} protected=${result.protectedCount}`,
+  ];
+  lines.push(...result.deleted.slice(0, 20).map((artifact) => `- deleted ${artifact.relativePath}`));
+  if (result.deleted.length > 20) lines.push(`... ${result.deleted.length - 20} more deleted`);
+  lines.push(...result.failed.slice(0, 20).map((artifact) => `- failed ${artifact.relativePath}: ${artifact.error}`));
   return lines.join("\n");
 }
