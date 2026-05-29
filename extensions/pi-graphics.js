@@ -1728,6 +1728,8 @@ export default function piGraphicsExtension(pi) {
     const bottomNeedsWidget = (editorStyle() === "joinedUnicode" || !editorBorderUsesRelativePlacement()) && editorBorderHeight("bottom") > 1;
     const factory = (edge) => (tui, theme) => ({
       __piGraphicsNoWrap: true,
+      __piGraphicsFullWidthWidget: true,
+      __kittyImagePreviewFullWidthWidget: true,
       piGraphics: false,
       render(width) {
         writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });

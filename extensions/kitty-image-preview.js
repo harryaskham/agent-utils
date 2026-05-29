@@ -524,6 +524,24 @@ function renderChildren(children, width) {
   return lines;
 }
 
+function wantsFullWidthWithSidePanel(component) {
+  return Boolean(component?.__piGraphicsFullWidthWidget || component?.__kittyImagePreviewFullWidthWidget);
+}
+
+function renderChildrenForSidePanel(children, mainWidth, fullWidth) {
+  const lines = [];
+  const fullWidthLines = [];
+  for (const child of children) {
+    const childFullWidth = wantsFullWidthWithSidePanel(child);
+    const childLines = child.render(childFullWidth ? fullWidth : mainWidth);
+    for (const line of childLines) {
+      lines.push(line);
+      fullWidthLines.push(childFullWidth);
+    }
+  }
+  return { lines, fullWidthLines };
+}
+
 function limitLinesToTerminalRows(lines, terminalRows) {
   const rowLimit = Math.max(1, Math.trunc(Number(terminalRows) || 1));
   const input = Array.isArray(lines) ? lines : [];
@@ -581,14 +599,18 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
 
   let layout = buildSidePanelLayout(state, terminalWidth, panelRows);
   if (layout.totalWidth < 1 || layout.imageRows < 1) return originalRender.call(tui, width);
-  let topLines = renderChildren(children.slice(0, editorBoundary), layout.mainWidth);
+  const topChildren = children.slice(0, editorBoundary);
+  let topRendered = renderChildrenForSidePanel(topChildren, layout.mainWidth, terminalWidth);
+  let topLines = topRendered.lines;
+  let topFullWidthLines = topRendered.fullWidthLines;
   let combined = [];
   let visiblePanelRows = 0;
   let panelStart = 0;
 
   const calculateVisiblePanel = () => {
+    const panelBlank = " ".repeat(layout.totalWidth);
     combined = [
-      ...topLines.map((line) => `${line}\x1b[${layout.mainWidth + 1}G${" ".repeat(layout.totalWidth)}`),
+      ...topLines.map((line, index) => topFullWidthLines[index] ? line : `${line}\x1b[${layout.mainWidth + 1}G${panelBlank}`),
       ...bottomLines,
     ];
     const viewportTop = Math.max(0, combined.length - terminalHeight);
@@ -605,7 +627,9 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
     refinedLayout.mainWidth !== layout.mainWidth || refinedLayout.imageRows !== layout.imageRows
   )) {
     layout = refinedLayout;
-    topLines = renderChildren(children.slice(0, editorBoundary), layout.mainWidth);
+    topRendered = renderChildrenForSidePanel(topChildren, layout.mainWidth, terminalWidth);
+    topLines = topRendered.lines;
+    topFullWidthLines = topRendered.fullWidthLines;
     calculateVisiblePanel();
     if (visiblePanelRows === 0) return clampToViewport(combined);
   }
@@ -615,6 +639,7 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
   const panelLines = renderSidePanelImageLines(state, visiblePanelRows, layout);
   for (let index = 0; index < visiblePanelRows; index += 1) {
     const lineIndex = panelStart + index;
+    if (topFullWidthLines[lineIndex]) continue;
     combined[lineIndex] = `${topLines[lineIndex]}${moveToPanel}${panelLines[index] ?? blankPanel}`;
   }
   return clampToViewport(combined);

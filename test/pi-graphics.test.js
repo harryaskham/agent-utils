@@ -1806,6 +1806,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /options\.piGraphics === false \|\| options\.piGraphics\?\.enabled === false/);
   assert.match(source, /shouldSkipGraphicsOptions\(options\) \? componentOrFactory : wrapRenderableFactory/);
   assert.match(source, /__piGraphicsNoWrap: true/);
+  assert.match(source, /__piGraphicsFullWidthWidget: true/);
+  assert.match(source, /__kittyImagePreviewFullWidthWidget: true/);
   assert.match(source, /piGraphics: false/);
   assert.doesNotMatch(source, /buildScopedDeleteCommand\(\{ imageIds: state\.ownedImageIds \}\)/);
   assert.doesNotMatch(source, /pi_graphics_live_probe/);

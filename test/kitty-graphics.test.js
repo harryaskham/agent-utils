@@ -286,6 +286,10 @@ test("kitty image preview advertises a fixed right-side panel with tmux inline f
   assert.match(source, /PREVIEW_PLACEMENTS = \[AUTO_PLACEMENT, \.\.\.WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT\]/);
   assert.match(source, /SIDE_PANEL_MAX_WIDTH_RATIO = 0\.5/);
   assert.match(source, /function renderTuiWithSidePanel/);
+  assert.match(source, /function renderChildrenForSidePanel/);
+  assert.match(source, /__piGraphicsFullWidthWidget/);
+  assert.match(source, /topFullWidthLines\[index\] \? line/);
+  assert.match(source, /if \(topFullWidthLines\[lineIndex\]\) continue/);
   assert.match(source, /function shouldUseInlineRightPlacement/);
   assert.match(source, /function resolvePlacement/);
   assert.match(source, /rightOverlay is inline inside tmux passthrough/);

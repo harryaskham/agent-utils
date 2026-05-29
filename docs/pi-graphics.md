@@ -498,9 +498,13 @@ displayed using kitty Unicode placeholder cells, so:
   above-editor widget and draw one full-width `width × height` PNG from a single
   placeholder at widget cell 0,0 while the editor rail row is blank; bottom
   borders put the single placeholder on the editor rail and reserve empty rows in
-  the below-editor widget. This avoids relative placements and avoids filling the
-  whole reserved widget with placeholder cells, leaving text cells usable around
-  the singleton anchor. Its render key includes the same rail heat buckets as
+  the below-editor widget. These editor graphics widgets mark themselves as
+  full-width surfaces so right-side preview panels do not shrink the render
+  width; if an image preview overlaps the right half of the terminal, the editor
+  chrome still renders at 100% terminal width and wins those rows. This avoids
+  relative placements and avoids filling the whole reserved widget with
+  placeholder cells, leaving text cells usable around the singleton anchor. Its
+  render key includes the same rail heat buckets as
   `unicode`, so typing-speed heat redraws are at parity with the existing Unicode
   border effects. When Pi reports assistant thinking/reasoning through its
   working-message UI surface or an active structured hidden-thinking state, the
