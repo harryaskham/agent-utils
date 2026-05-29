@@ -107,9 +107,10 @@ test("tendril describe model configuration reads env, settings, and default", as
 });
 
 test("tendril tool registry exposes command-tree operations", async () => {
-  const { pi, tools } = makeHarness();
+  const { pi, commands, tools } = makeHarness();
   tendrilShareExtension(pi);
 
+  assert.ok(commands.has("tendril-settings"), "tendril-settings shortcut should be registered");
   for (const name of ["tendril_settings", "tendril_list", "tendril_capture", "tendril_describe", "tendril_stream", "tendril_bridge_doctor"]) {
     assert.ok(tools.has(name), `${name} should be registered`);
   }
@@ -117,6 +118,16 @@ test("tendril tool registry exposes command-tree operations", async () => {
   const settings = await tools.get("tendril_settings").execute("call-1", {}, new AbortController().signal);
   assert.match(settings.content[0].text, /tendril command=tendril/);
   assert.match(settings.content[0].text, /describeModel=github-copilot\/claude-opus-4\.8 source=(default|settings\.json)/);
+  assert.match(settings.content[0].text, /preview=on source=/);
+});
+
+test("/tendril settings reports fallback settings when overlay UI is unavailable", async () => {
+  const { pi, commands, notifications, ctx } = makeHarness();
+  tendrilShareExtension(pi);
+
+  await commands.get("tendril").handler("settings", ctx);
+
+  assert.match(notifications.at(-1).message, /Tendril settings: describeModel=/);
 });
 
 test("tendril_list and tendril_capture tools return targets and PNG content", async () => {

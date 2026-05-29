@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +41,7 @@ const USAGE = `Usage:
 /tendril stream window <id-or-name> [seconds]      low-res periodic screenshot sharing, default 30s
 /tendril stream display <id-or-name> [seconds]
 /tendril stream status|stop                        inspect or stop active stream
+/tendril settings                                  open interactive Tendril settings overlay
 Flags: --path-only omits image content; --no-list omits default tendril list context
 /tendril help                                      show this help`;
 
@@ -225,6 +226,12 @@ function readAgentSettings(env = process.env) {
   }
 }
 
+function saveAgentSettings(settings, env = process.env) {
+  const settingsPath = agentSettingsPath(env);
+  mkdirSync(path.dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, `${JSON.stringify(settings || {}, null, 2)}\n`, "utf8");
+}
+
 function configuredDescribeModelFromSettings(settings = {}) {
   const candidates = [
     settings?.tendril?.describeModel,
@@ -242,6 +249,16 @@ function describeModelConfig(env = process.env) {
   const settingsValue = configuredDescribeModelFromSettings(settings);
   if (settingsValue) return { spec: settingsValue, source: "settings.json" };
   return { spec: DEFAULT_DESCRIBE_MODEL, source: "default" };
+}
+
+function previewConfig(env = process.env) {
+  const raw = String(env.TENDRIL_SHARE_PREVIEW || "").trim().toLowerCase();
+  if (["0", "false", "no", "off"].includes(raw)) return { enabled: false, source: "TENDRIL_SHARE_PREVIEW" };
+  if (["1", "true", "yes", "on"].includes(raw)) return { enabled: true, source: "TENDRIL_SHARE_PREVIEW" };
+  const settings = readAgentSettings(env);
+  const value = settings?.tendril?.preview ?? settings?.tendrilShare?.preview ?? settings?.agentUtils?.tendril?.preview;
+  if (value !== undefined) return { enabled: Boolean(value), source: "settings.json" };
+  return { enabled: true, source: "default" };
 }
 
 function resolveVisionModel(ctx) {
@@ -296,7 +313,7 @@ function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, desc
 }
 
 async function previewInKitty(pngBase64, outputPath) {
-  if (process.env.TENDRIL_SHARE_PREVIEW === "0" || !process.stdout?.isTTY) return;
+  if (!previewConfig().enabled || !process.stdout?.isTTY) return;
   try {
     const columns = clampInteger(process.env.TENDRIL_SHARE_PREVIEW_COLUMNS, 64, 8, 200);
     const dims = await readPngDimensions(outputPath).catch(() => ({ width: 1280, height: 720 }));
@@ -523,6 +540,87 @@ function stopStream(state) {
   return stream;
 }
 
+function setSettingByPath(root, dottedPath, value) {
+  const parts = String(dottedPath).split(".").filter(Boolean);
+  let node = root;
+  for (const part of parts.slice(0, -1)) node = (node[part] ||= {});
+  node[parts.at(-1)] = value;
+}
+
+async function showTendrilSettingsWindow(ctx) {
+  const settings = readAgentSettings();
+  const modelChoices = [DEFAULT_DESCRIBE_MODEL, "github-copilot/claude-opus-4.7", "litellm-anthropic/claude-opus-4-7"];
+  const rows = [
+    {
+      label: "Describe model",
+      description: "Image-capable model used by /tendril describe.",
+      values: modelChoices,
+      get: () => configuredDescribeModelFromSettings(settings) || DEFAULT_DESCRIBE_MODEL,
+      set: (value) => setSettingByPath(settings, "tendril.describeModel", value),
+    },
+    {
+      label: "Kitty preview",
+      description: "Show captured screenshots in the terminal preview when stdout is a TTY.",
+      values: ["on", "off"],
+      get: () => {
+        const value = settings?.tendril?.preview ?? settings?.tendrilShare?.preview ?? settings?.agentUtils?.tendril?.preview;
+        return value === false ? "off" : "on";
+      },
+      set: (value) => setSettingByPath(settings, "tendril.preview", value === "on"),
+    },
+  ];
+  let selected = 0;
+  const renderLine = (width, text = "") => String(text).slice(0, Math.max(0, width));
+  const componentFactory = (_tui, _theme, keybindings, done) => ({
+    piGraphics: false,
+    __piGraphicsNoWrap: true,
+    render(width = 72) {
+      const lines = [
+        "Tendril settings",
+        "Use ↑/↓ or j/k to select, ←/→/space to change, Enter to save, Esc/q to close.",
+        "",
+      ];
+      rows.forEach((row, index) => {
+        const marker = index === selected ? "›" : " ";
+        lines.push(`${marker} ${row.label}: ${row.get()}`);
+        if (index === selected) lines.push(`    ${row.description}`);
+      });
+      lines.push("", `settings: ${agentSettingsPath()}`);
+      return lines.map((line) => renderLine(width, line));
+    },
+    handleInput(data) {
+      const key = String(data || "");
+      const matches = (name) => { try { return keybindings?.matches?.(data, name); } catch { return false; } };
+      const move = (delta) => { selected = Math.max(0, Math.min(rows.length - 1, selected + delta)); };
+      const change = (delta) => {
+        const row = rows[selected];
+        const values = row.values;
+        const current = row.get();
+        const index = Math.max(0, values.indexOf(current));
+        row.set(values[(index + delta + values.length) % values.length]);
+      };
+      if (matches("tui.select.up") || key === "\x1b[A" || key === "k") move(-1);
+      else if (matches("tui.select.down") || key === "\x1b[B" || key === "j") move(1);
+      else if (matches("tui.select.left") || key === "\x1b[D" || key === "h") change(-1);
+      else if (matches("tui.select.right") || key === "\x1b[C" || key === "l" || key === " ") change(1);
+      else if (matches("tui.select.confirm") || key === "\r" || key === "\n") done("save");
+      else if (matches("tui.select.cancel") || key === "\x1b" || key.toLowerCase() === "q") done("close");
+      try { _tui?.requestRender?.(); } catch {}
+    },
+  });
+  const result = typeof ctx?.ui?.custom === "function"
+    ? await ctx.ui.custom(componentFactory, { overlay: true, piGraphics: false, overlayOptions: { width: "68%", minWidth: 56, maxHeight: "70%", anchor: "center", margin: 1 } })
+    : "notify";
+  if (result === "save") {
+    saveAgentSettings(settings);
+    ctx.ui?.notify?.(`Saved Tendril settings to ${agentSettingsPath()}.`, "info");
+  } else if (result === "notify") {
+    const describeModel = describeModelConfig();
+    const preview = previewConfig();
+    ctx.ui?.notify?.(`Tendril settings: describeModel=${describeModel.spec} (${describeModel.source}), preview=${preview.enabled ? "on" : "off"} (${preview.source}). Edit ${agentSettingsPath()} or set TENDRIL_SHARE_DESCRIBE_MODEL.`, "info");
+  }
+}
+
 async function handleTendrilCommand(pi, args, ctx, state, forcedAction) {
   const parsed = parseCaptureArgs(args, forcedAction);
   try {
@@ -533,6 +631,10 @@ async function handleTendrilCommand(pi, args, ctx, state, forcedAction) {
     if (parsed.action === "list") {
       const envelope = await runTendrilJson(pi, ["list", "--json"], { signal: ctx.signal, timeout: DEFAULT_TIMEOUT_MS });
       ctx.ui.notify(listTargetsText(envelope), "info");
+      return;
+    }
+    if (parsed.action === "settings") {
+      await showTendrilSettingsWindow(ctx);
       return;
     }
     if (parsed.action === "capture") {
@@ -577,9 +679,10 @@ export default function tendrilShareExtension(pi) {
     async execute() {
       const summary = tendrilCommandSummary();
       const describeModel = describeModelConfig();
+      const preview = previewConfig();
       return textResult(
-        `tendril command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel} argsPrefix=${summary.argsPrefix.join(" ") || "none"}\ndescribeModel=${describeModel.spec} source=${describeModel.source}`,
-        { summary, describeModel },
+        `tendril command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel} argsPrefix=${summary.argsPrefix.join(" ") || "none"}\ndescribeModel=${describeModel.spec} source=${describeModel.source}\npreview=${preview.enabled ? "on" : "off"} source=${preview.source}`,
+        { summary, describeModel, preview },
       );
     },
   });
@@ -764,6 +867,11 @@ export default function tendrilShareExtension(pi) {
     description: "Capture a Tendril window/display, describe it with a vision model, and send text context to the model.",
     handler: async (args, ctx) => handleTendrilCommand(pi, args, ctx, state, "describe"),
   });
+
+  pi.registerCommand("tendril-settings", {
+    description: "Open the interactive Tendril settings overlay.",
+    handler: async (_args, ctx) => showTendrilSettingsWindow(ctx),
+  });
 }
 
 export const __tendrilShareTest = {
@@ -779,4 +887,6 @@ export const __tendrilShareTest = {
   classifyTendrilBridgeProbe,
   configuredDescribeModelFromSettings,
   describeModelConfig,
+  previewConfig,
+  showTendrilSettingsWindow,
 };
