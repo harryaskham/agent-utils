@@ -2,7 +2,7 @@
 
 `app-automation` is the first slice of a Pi-native surface for driving web apps that do not have usable APIs for agents. The goal is to give agents blessed, deterministic app actions before they fall back to raw Playwright or Tendril commands.
 
-Parent work: `bd-ee8e57`. The delivered scaffold now includes the core config-loader, deterministic runner, Playwright bridge, blessed Slack/canvas/Outlook/Teams actions, periodic refreshers, and snapshot inspection tools. Future work should be filed as targeted hardening beads rather than extending the initial epic.
+Parent work: `bd-515e29` (successor/duplicate lineage includes `bd-ee8e57`). The delivered scaffold now includes the core config-loader, deterministic runner, Playwright bridge, blessed Slack/canvas/Outlook/Teams actions, periodic refreshers, snapshot inspection tools, work briefings, ms-dev CDP refresh, and confirmed cleanup workflows. Future work should be filed as targeted hardening beads rather than extending the initial epic.
 
 ## Why this shape
 
