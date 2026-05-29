@@ -9,7 +9,7 @@ import effortExtension, {
   supportsAdaptiveThinkingModel,
 } from "../extensions/effort.js";
 
-function makeHarness({ initialLevel = "medium", clamp, model = { provider: "github-copilot", id: "claude-opus-4.6", thinkingLevelMap: { xhigh: "max" } } } = {}) {
+function makeHarness({ initialLevel = "medium", clamp, model = { provider: "github-copilot", id: "arbitrary-adaptive-model", reasoning: true, thinkingLevelMap: { xhigh: "max" } } } = {}) {
   let thinkingLevel = initialLevel;
   const commands = new Map();
   const handlers = new Map();
@@ -40,8 +40,8 @@ test("effort helpers validate and render supported thinking levels", () => {
   assert.match(formatEffortStatus({ current: "low", supportsThinking: false }), /Current effort: low/);
   assert.match(formatEffortStatus({ current: "low", supportsThinking: false }), /effective effort is off/);
   assert.match(formatEffortStatus({ current: "low" }), /off, minimal, low, medium, high, xhigh, adaptive/);
-  assert.equal(supportsAdaptiveThinkingModel({ id: "claude-opus-4.6" }), true);
-  assert.equal(supportsAdaptiveThinkingModel({ id: "claude-sonnet-4-7" }), true);
+  assert.equal(supportsAdaptiveThinkingModel({ id: "arbitrary-id", reasoning: true }), true);
+  assert.equal(supportsAdaptiveThinkingModel({ id: "claude-opus-4.6", reasoning: false }), false);
   assert.equal(supportsAdaptiveThinkingModel({ id: "gpt-5.5" }), false);
 });
 
@@ -98,10 +98,10 @@ test("/effort adaptive enables adaptive payload rewrite without clamping through
   assert.equal(payload.output_config.effort, "medium");
 });
 
-test("adaptive payload rewrite converts legacy enabled thinking for Opus 4.6", () => {
+test("adaptive payload rewrite uses model settings instead of id filters", () => {
   const payload = patchAdaptiveThinkingPayload(
     { thinking: { type: "enabled", budget_tokens: 1024, display: "full" } },
-    { model: { id: "claude-opus-4.6", thinkingLevelMap: { xhigh: "max" } }, level: "xhigh" },
+    { model: { id: "custom-anything", reasoning: true, thinkingLevelMap: { xhigh: "max" } }, level: "xhigh", adaptive: true },
   );
   assert.deepEqual(payload.thinking, { type: "adaptive", display: "full" });
   assert.equal(payload.output_config.effort, "max");
@@ -119,8 +119,8 @@ test("/fast toggles adaptive low-effort payloads for supported models", async ()
 });
 
 test("/fast rejects unsupported models", async () => {
-  const harness = makeHarness({ model: { provider: "github-copilot", id: "gpt-5.5" } });
+  const harness = makeHarness({ model: { provider: "github-copilot", id: "gpt-5.5", reasoning: false } });
   await harness.commands.get("fast").handler("on", harness.ctx);
   assert.equal(harness.notifications.at(-1).level, "warning");
-  assert.match(harness.notifications.at(-1).message, /only available for adaptive-thinking models/);
+  assert.match(harness.notifications.at(-1).message, /only available for reasoning-capable models/);
 });
