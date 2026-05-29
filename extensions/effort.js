@@ -67,7 +67,8 @@ function normalizeEffortValue(value) {
 function modelSupportedEfforts(model) {
   const modelId = String(model?.id || "").toLowerCase();
   const provider = String(model?.provider || "").toLowerCase();
-  if (provider === "github-copilot" && modelId === "claude-opus-4.8") return ["medium"];
+  const baseModelId = modelId.endsWith("-fast") ? modelId.slice(0, -5) : modelId;
+  if (provider === "github-copilot" && baseModelId === "claude-opus-4.8") return ["medium"];
 
   const candidates = [
     model?.supportedOutputConfigEfforts,
@@ -125,40 +126,54 @@ function effortForLevel(level, model) {
   return undefined;
 }
 
-export function patchAdaptiveThinkingPayload(payload, { model, level, adaptive = false, fast = false } = {}) {
+export function patchAdaptiveThinkingPayload(payload, { model, level, adaptive = false } = {}) {
   if (!payload || typeof payload !== "object" || !supportsAdaptiveThinkingModel(model)) return payload;
   const next = { ...payload };
   const thinking = next.thinking && typeof next.thinking === "object" ? next.thinking : null;
-  const wantsAdaptive = adaptive || fast || (thinking?.type === "enabled" && modelRequiresAdaptiveThinkingFormat(model));
+  const wantsAdaptive = adaptive || (thinking?.type === "enabled" && modelRequiresAdaptiveThinkingFormat(model));
   if (!wantsAdaptive) return payload;
   const display = thinking?.display ?? "summarized";
   next.thinking = { type: "adaptive", ...(display !== undefined ? { display } : {}) };
-  const effort = fast ? effortForLevel("low", model) : effortForLevel(level || "medium", model);
+  const effort = effortForLevel(level || "medium", model);
   if (effort) next.output_config = { ...(next.output_config || {}), effort };
   return next;
 }
 
+function currentModel(ctx, pi) {
+  return ctx?.model ?? pi?.model ?? null;
+}
+
+function fastCounterpartId(id, force) {
+  const modelId = String(id || "").trim();
+  if (!modelId) return undefined;
+  const isFast = modelId.endsWith("-fast");
+  if (force === true) return isFast ? modelId : `${modelId}-fast`;
+  if (force === false) return isFast ? modelId.slice(0, -5) : modelId;
+  return isFast ? modelId.slice(0, -5) : `${modelId}-fast`;
+}
+
+function findFastCounterpart(ctx, model, force) {
+  const provider = model?.provider;
+  const targetId = fastCounterpartId(model?.id, force);
+  if (!provider || !targetId) return null;
+  return ctx?.modelRegistry?.find?.(provider, targetId) || null;
+}
+
 export default function effortExtension(pi) {
   let adaptiveMode = false;
-  let fastMode = false;
 
   pi.on?.("before_provider_request", (event, ctx) => patchAdaptiveThinkingPayload(event.payload, {
     model: ctx?.model,
     level: getThinkingLevel(pi, ctx),
     adaptive: adaptiveMode,
-    fast: fastMode,
   }));
-
-  pi.on?.("model_select", (_event, ctx) => {
-    if (fastMode && !supportsAdaptiveThinkingModel(ctx?.model)) fastMode = false;
-  });
 
   pi.registerCommand?.("effort", {
     description: "Show or set model thinking effort. Usage: /effort [off|minimal|low|medium|high|xhigh|adaptive]",
     handler: async (args, ctx) => {
       const token = firstToken(args);
       if (!token || token === "status" || token === "help") {
-        const current = adaptiveMode ? `adaptive${fastMode ? "+fast" : ""}` : getThinkingLevel(pi, ctx);
+        const current = adaptiveMode ? "adaptive" : getThinkingLevel(pi, ctx);
         notify(ctx, formatEffortStatus({
           current,
           supportsThinking: supportsThinking(pi, ctx),
@@ -174,7 +189,7 @@ export default function effortExtension(pi) {
 
       if (requested === "adaptive") {
         adaptiveMode = true;
-        notify(ctx, `Effort: adaptive${fastMode ? " + fast" : ""}. Reasoning-capable models will use thinking.type=adaptive with output_config.effort according to model settings.`, "info");
+        notify(ctx, "Effort: adaptive. Reasoning-capable models will use thinking.type=adaptive with output_config.effort according to model settings.", "info");
         return;
       }
 
@@ -192,18 +207,30 @@ export default function effortExtension(pi) {
   });
 
   pi.registerCommand?.("fast", {
-    description: "Toggle fast adaptive thinking mode for models that support output_config.effort.",
+    description: "Toggle between the current model and its -fast counterpart when both are configured.",
     handler: async (args, ctx) => {
       const token = firstToken(args);
-      const supported = supportsAdaptiveThinkingModel(ctx?.model ?? pi?.model);
-      if (!supported && token !== "off") {
-        notify(ctx, "Fast mode is only available for reasoning-capable models according to model settings.", "warning");
+      const force = token === "on" ? true : token === "off" ? false : token ? undefined : null;
+      if (token && force === undefined) {
+        notify(ctx, "Unsupported fast mode argument. Use /fast, /fast on, or /fast off.", "warning");
         return;
       }
-      const next = token === "on" ? true : token === "off" ? false : !fastMode;
-      fastMode = next;
-      if (fastMode) adaptiveMode = true;
-      notify(ctx, `Fast mode ${fastMode ? "on" : "off"}${fastMode ? " (adaptive thinking effort=low)" : ""}.`, "info");
+      const model = currentModel(ctx, pi);
+      const target = findFastCounterpart(ctx, model, force ?? undefined);
+      if (!target) {
+        notify(ctx, `Fast mode unavailable: no ${fastCounterpartId(model?.id, force ?? undefined) || "-fast"} counterpart is configured for the current model.`, "warning");
+        return;
+      }
+      if (typeof pi.setModel !== "function") {
+        notify(ctx, "This Pi runtime does not expose model switching controls; update Pi or use /model.", "error");
+        return;
+      }
+      const ok = await pi.setModel(target);
+      if (!ok) {
+        notify(ctx, `Fast mode switch failed: could not select ${target.provider}/${target.id}.`, "error");
+        return;
+      }
+      notify(ctx, `Fast mode ${target.id.endsWith("-fast") ? "on" : "off"}: selected ${target.provider}/${target.id}.`, "info");
     },
   });
 }

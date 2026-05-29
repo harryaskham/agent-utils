@@ -9,23 +9,31 @@ import effortExtension, {
   supportsAdaptiveThinkingModel,
 } from "../extensions/effort.js";
 
-function makeHarness({ initialLevel = "medium", clamp, model = { provider: "github-copilot", id: "arbitrary-adaptive-model", reasoning: true, thinkingLevelMap: { xhigh: "max" } } } = {}) {
+function makeHarness({ initialLevel = "medium", clamp, model = { provider: "github-copilot", id: "arbitrary-adaptive-model", reasoning: true, thinkingLevelMap: { xhigh: "max" } }, models = [] } = {}) {
   let thinkingLevel = initialLevel;
   const commands = new Map();
   const handlers = new Map();
   const notifications = [];
+  const registryModels = [model, ...models];
+  const ctx = {
+    model,
+    modelRegistry: {
+      find(provider, id) {
+        return registryModels.find((candidate) => candidate.provider === provider && candidate.id === id) || null;
+      },
+    },
+    ui: {
+      notify(message, level) { notifications.push({ message, level }); },
+    },
+  };
   const pi = {
+    get model() { return ctx.model; },
     registerCommand(name, definition) { commands.set(name, definition); },
     on(name, handler) { handlers.set(name, handler); },
     getThinkingLevel() { return thinkingLevel; },
     setThinkingLevel(level) { thinkingLevel = clamp ? clamp(level) : level; },
     supportsThinking() { return true; },
-  };
-  const ctx = {
-    model,
-    ui: {
-      notify(message, level) { notifications.push({ message, level }); },
-    },
+    async setModel(next) { ctx.model = next; return true; },
   };
   effortExtension(pi);
   return { commands, handlers, notifications, ctx, get thinkingLevel() { return thinkingLevel; } };
@@ -116,12 +124,12 @@ test("adaptive payload rewrite clamps to model-declared output_config.effort val
   assert.equal(payload.output_config.effort, "medium");
 });
 
-test("fast adaptive payloads respect model-declared effort support", () => {
+test("fast flag does not alter adaptive thinking payloads", () => {
   const payload = patchAdaptiveThinkingPayload(
     { thinking: { type: "enabled", budget_tokens: 1024 } },
-    { model: { id: "claude-opus-4.8", reasoning: true, output_config: { efforts: ["medium"] } }, level: "high", fast: true },
+    { model: { id: "plain-reasoning-model", reasoning: true }, level: "high", fast: true },
   );
-  assert.equal(payload.output_config.effort, "medium");
+  assert.equal(payload.output_config, undefined);
 });
 
 test("github-copilot Opus 4.8 avoids unsupported low effort even without refreshed model metadata", () => {
@@ -150,20 +158,26 @@ test("model compat can require adaptive thinking for arbitrary ids", () => {
   assert.equal(payload.output_config.effort, "high");
 });
 
-test("/fast toggles adaptive low-effort payloads for supported models", async () => {
-  const harness = makeHarness({ initialLevel: "high" });
+test("/fast toggles only between model ids with and without -fast suffix", async () => {
+  const base = { provider: "github-copilot", id: "claude-opus-4.8", reasoning: true };
+  const fast = { provider: "github-copilot", id: "claude-opus-4.8-fast", reasoning: true };
+  const harness = makeHarness({ initialLevel: "high", model: base, models: [fast] });
   await harness.commands.get("fast").handler("", harness.ctx);
-  assert.match(harness.notifications.at(-1).message, /Fast mode on/);
+  assert.equal(harness.ctx.model, fast);
+  assert.equal(harness.thinkingLevel, "high");
+  assert.match(harness.notifications.at(-1).message, /Fast mode on: selected github-copilot\/claude-opus-4\.8-fast/);
+
   const payload = harness.handlers.get("before_provider_request")({ payload: { thinking: { type: "enabled", budget_tokens: 2048 } } }, harness.ctx);
-  assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
-  assert.equal(payload.output_config.effort, "low");
+  assert.notEqual(payload.output_config?.effort, "low");
+
   await harness.commands.get("fast").handler("off", harness.ctx);
-  assert.match(harness.notifications.at(-1).message, /Fast mode off/);
+  assert.equal(harness.ctx.model, base);
+  assert.match(harness.notifications.at(-1).message, /Fast mode off: selected github-copilot\/claude-opus-4\.8/);
 });
 
-test("/fast rejects unsupported models", async () => {
+test("/fast reports missing -fast counterpart instead of changing effort", async () => {
   const harness = makeHarness({ model: { provider: "github-copilot", id: "gpt-5.5", reasoning: false } });
   await harness.commands.get("fast").handler("on", harness.ctx);
   assert.equal(harness.notifications.at(-1).level, "warning");
-  assert.match(harness.notifications.at(-1).message, /only available for reasoning-capable models/);
+  assert.match(harness.notifications.at(-1).message, /no gpt-5\.5-fast counterpart/);
 });
