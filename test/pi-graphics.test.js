@@ -1407,6 +1407,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\$\{theme\}:unicode/);
   assert.match(source, /boxes:\$\{effect\}/);
   assert.match(source, /setWorkingIndicator/);
+  assert.match(source, /function runningInsideTmux\(\)/);
+  assert.match(source, /Boolean\(gfxEnv\(\)\.TMUX\)/);
+  assert.match(source, /function tmuxLiveEditorGraphicsEnabled\(\)/);
+  assert.match(source, /PI_GRAPHICS_TMUX_LIVE_EDITOR/);
+  assert.match(source, /function editorDynamicHeatEnabled\(\)/);
   assert.match(source, /fillEditorTrailingWorkspace/);
   assert.match(source, /let editorCursorHeat = 0/);
   assert.match(source, /let editorCursorHeatTarget = 0/);
@@ -1416,6 +1421,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editorRenderTui\?\.requestRender\?\.\(force \? true : undefined\)/);
   assert.match(source, /function requestEditorHeatFrame\(\)/);
   assert.match(source, /requestEditorDecorativeRender\(\)/);
+  assert.match(source, /if \(!editorDynamicHeatEnabled\(\)\) return/);
+  assert.match(source, /if \(!tmuxLiveEditorGraphicsEnabled\(\) \|\| editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
   assert.match(source, /function editorRailHeat\(\)/);
   assert.match(source, /\(editorCursorHeat - 0\.5\) \/ 1\.0/);
   assert.match(source, /function setEditorContextMode\(mode = "idle"\)/);
@@ -1423,12 +1430,14 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function editorContextRedrawEnabled\(\)/);
   assert.match(source, /PI_GRAPHICS_EDITOR_CONTEXT_REDRAW/);
   assert.match(source, /pre-rendered Kitty frames are advanced by\n\s+\/\/ ensureManualAnimationLoop via a=a,c=<frame>/);
-  assert.match(source, /if \(editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
+  assert.match(source, /if \(!tmuxLiveEditorGraphicsEnabled\(\) \|\| editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
   assert.match(source, /function valueLooksLikeThinking\(value\)/);
   assert.match(source, /let editorCursorImpulseCol = null/);
   assert.match(source, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE/);
   assert.match(source, /function editorTypingImpulseEnabled\(\)/);
+  assert.match(source, /if \(!editorDynamicHeatEnabled\(\)\) return \{ heat: 0, wpm: 0, trailDirection: editorCursorTrailDirection \}/);
   assert.match(source, /if \(editorTypingImpulseEnabled\(\)\) \{\n\s+editorCursorImpulseCol = safeCol/);
+  assert.match(source, /const impulseEnabled = dynamicHeat && editorTypingImpulseEnabled\(\)/);
   assert.match(source, /const impulseStrength = impulseEnabled \? Math\.max\(0, Math\.min\(1, Math\.exp\(-impulseAge \/ 360\)/);
   assert.match(source, /mixHexColor\(baseBorderColor, contextMode === "thinking" \? "#d8dee9" : "#ffffff", railHeat\)/);
   assert.match(source, /function editorBorderHeight\(edge\)/);
@@ -1496,6 +1505,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-workspace-tail-\$\{cols\}-heat-\$\{heatBucket\}/);
   assert.match(source, /\$\{cell\.cellWidthPx\}x\$\{cell\.cellHeightPx\}@\$\{cell\.lineHeightScale\}/);
   assert.match(source, /editorTrailingWorkspaceEnabled\(\)/);
+  assert.match(source, /return tmuxLiveEditorGraphicsEnabled\(\) && envBool\("PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE", false\)/);
+  assert.match(source, /return tmuxLiveEditorGraphicsEnabled\(\) && envBool\("PI_GRAPHICS_EDITOR_ROW_BACKGROUND", false\)/);
   assert.match(source, /buildEditorWorkspaceTail\(match\[0\]\.length, editorCursorHeat\)/);
   assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /fadeStart: false,\n\s+fadeEnd: true/);
@@ -1539,7 +1550,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /buildAnimatedPlacement\(state, \{ \.\.\.options, autoLoop: false \}\)/);
   assert.match(source, /ensureManualAnimationLoop\(\{ imageId: placement\.imageId, frames: placement\.frames/);
   assert.doesNotMatch(source, /autoLoop: true/);
-  assert.match(source, /if \(editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
+  assert.match(source, /if \(!tmuxLiveEditorGraphicsEnabled\(\) \|\| editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
   assert.match(source, /terminal-driven APNG\/native frame loops have not repainted/);
   assert.match(source, /buildAnimationStopCommand\(\{ imageId: animImageId/);
   assert.match(source, /function buildSegmentedFooterLine/);
@@ -1740,6 +1751,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\\x1b\\\[\(\?:0\|27\)m/);
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
   assert.match(source, /decorateEditorContentLine\(line, width\)/);
+  assert.match(source, /if \(!tmuxLiveEditorGraphicsEnabled\(\)\) return line/);
   assert.match(source, /editorTrailingWorkspaceEnabled\(\)/);
   assert.match(source, /visualCols: cols/);
   assert.match(source, /return `\$\{chrome\}\$\{" "\.repeat\(Math\.max\(0, cols - visualCols\)\)\}`/);

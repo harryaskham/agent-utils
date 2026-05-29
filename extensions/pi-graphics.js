@@ -311,12 +311,24 @@ export default function piGraphicsExtension(pi) {
     return "glow";
   }
 
+  function runningInsideTmux() {
+    return Boolean(gfxEnv().TMUX);
+  }
+
+  function tmuxLiveEditorGraphicsEnabled() {
+    return !runningInsideTmux() || envBool("PI_GRAPHICS_TMUX_LIVE_EDITOR", false);
+  }
+
+  function editorDynamicHeatEnabled() {
+    return tmuxLiveEditorGraphicsEnabled();
+  }
+
   function editorTrailingWorkspaceEnabled() {
-    return envBool("PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE", false);
+    return tmuxLiveEditorGraphicsEnabled() && envBool("PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE", false);
   }
 
   function editorRowBackgroundEnabled() {
-    return envBool("PI_GRAPHICS_EDITOR_ROW_BACKGROUND", false);
+    return tmuxLiveEditorGraphicsEnabled() && envBool("PI_GRAPHICS_EDITOR_ROW_BACKGROUND", false);
   }
 
   function editorAnimationFrames() {
@@ -499,6 +511,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function requestEditorHeatFrame() {
+    if (!editorDynamicHeatEnabled()) return;
     if (editorHeatRenderTimer || !editorRenderTui) return;
     if (editorCursorHeat <= 0.01 && editorCursorHeatTarget <= 0.01) return;
     editorHeatRenderTimer = setTimeout(() => {
@@ -517,8 +530,10 @@ export default function piGraphicsExtension(pi) {
     // Avoid full TUI redraws for purely decorative thinking-context ticks. When
     // editor animation is enabled, pre-rendered Kitty frames are advanced by
     // ensureManualAnimationLoop via a=a,c=<frame>; when it is disabled, the
-    // contextual mask remains static until real editor state changes.
-    if (editorAnimationEnabled() || !editorContextRedrawEnabled()) return;
+    // contextual mask remains static until real editor state changes unless the
+    // diagnostic redraw path is explicitly enabled. In tmux, keep this off by
+    // default because repeated editor redraws can trigger full-screen flicker.
+    if (!tmuxLiveEditorGraphicsEnabled() || editorAnimationEnabled() || !editorContextRedrawEnabled()) return;
     if (editorContextTimer || !editorRenderTui || editorContextMode !== "thinking") return;
     editorContextTimer = setTimeout(() => {
       editorContextTimer = null;
@@ -596,6 +611,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function updateEditorTypingHeat(plainText, cursorCol = 0) {
+    if (!editorDynamicHeatEnabled()) return { heat: 0, wpm: 0, trailDirection: editorCursorTrailDirection };
     const now = Date.now();
     const safeCol = Math.max(0, Math.trunc(Number(cursorCol) || 0));
     stepEditorHeat(now);
@@ -888,13 +904,14 @@ export default function piGraphicsExtension(pi) {
     const borderStyle = editorBorderStyle();
     const alpha = editorAlpha();
     const contextMode = editorContextMode === "thinking" ? "thinking" : "idle";
-    const contextPhase = contextMode === "thinking" ? (editorContextTick % 48) / 48 : 0;
-    const impulseEnabled = editorTypingImpulseEnabled();
+    const dynamicHeat = editorDynamicHeatEnabled();
+    const contextPhase = contextMode === "thinking" && dynamicHeat ? (editorContextTick % 48) / 48 : 0;
+    const impulseEnabled = dynamicHeat && editorTypingImpulseEnabled();
     const impulseAge = impulseEnabled && editorCursorImpulseAt ? Math.max(0, Date.now() - editorCursorImpulseAt) : Infinity;
     const impulseStrength = impulseEnabled ? Math.max(0, Math.min(1, Math.exp(-impulseAge / 360) * Math.max(editorCursorHeat, editorCursorHeatTarget, 0))) : 0;
     const impulseBucket = Math.max(0, Math.min(12, Math.round(impulseStrength * 12)));
-    const impulseCol = editorCursorImpulseCol == null ? null : Math.max(0, Math.min(cols - 1, Math.trunc(Number(editorCursorImpulseCol) || 0)));
-    const railHeat = Math.max(editorRailHeat(), contextMode === "thinking" ? 0.42 : 0, impulseStrength * 0.55);
+    const impulseCol = dynamicHeat && editorCursorImpulseCol == null ? null : dynamicHeat ? Math.max(0, Math.min(cols - 1, Math.trunc(Number(editorCursorImpulseCol) || 0))) : null;
+    const railHeat = Math.max(dynamicHeat ? editorRailHeat() : 0, contextMode === "thinking" ? 0.42 : 0, impulseStrength * 0.55);
     const railHeatBucket = Math.max(0, Math.min(12, Math.round(railHeat * 12)));
     const baseBorderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const baseGlowColor = contextMode === "thinking"
@@ -1540,6 +1557,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function replaceEditorCursorChrome(line, rowWidth = 1) {
+    if (!tmuxLiveEditorGraphicsEnabled()) return line;
     const text = String(line || "");
     if (!text.includes("\x1b[7m")) return line;
     const match = /\x1b\[7m[^\x1b]*\x1b\[(?:0|27)m/.exec(text);
@@ -1553,6 +1571,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function decorateEditorContentLine(line, rowWidth) {
+    if (!tmuxLiveEditorGraphicsEnabled()) return line;
     return fillEditorTrailingWorkspace(replaceEditorCursorChrome(line, rowWidth));
   }
 

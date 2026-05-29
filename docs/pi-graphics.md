@@ -498,8 +498,13 @@ displayed using kitty Unicode placeholder cells, so:
   what is drawn into the reserved space. `gradient` is the existing
   glow-gradient look; `glass`, `chrome`, and `geometric` add different translucent
   separators and theme-colored responsive accents. All border styles include the
-  same typing-speed rail heat in their cache keys and rendering inputs, so they
-  compose with every placement mode.
+  same typing-speed rail heat in their cache keys and rendering inputs outside
+  tmux, so they compose with every placement mode. Inside tmux, live editor heat
+  and in-editor Unicode cursor/trailing/background placeholders default off
+  (`PI_GRAPHICS_TMUX_LIVE_EDITOR=1` opts back in) because changing placeholder
+  text on every keypress can make tmux invalidate and repaint the whole screen.
+  Static editor rails, box rails/chrome, and frame-command animations still remain
+  enabled.
   The top and bottom border heights are independently configurable
   with `piGraphics.editor.topBorderHeight` / `PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT`
   and `piGraphics.editor.bottomBorderHeight` / `PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT`.
@@ -564,7 +569,10 @@ displayed using kitty Unicode placeholder cells, so:
   smoothly interpolated toward a heat target inferred from recent
   inter-character typing speed; after typing stops Pi schedules lightweight
   editor redraws so the glow and trailing workspace fade out instead of freezing
-  at the last keypress intensity. Fast cursor motion also selects a deterministic
+  at the last keypress intensity. This live in-editor path is disabled by default
+  when `TMUX` is set to avoid full-screen tmux redraw/flicker on every keypress;
+  set `PI_GRAPHICS_TMUX_LIVE_EDITOR=1` to opt back into the dynamic cursor,
+  trailing workspace, row background, and heat-redraw behavior inside tmux. Fast cursor motion also selects a deterministic
   left/right heat-trail variant: forward typing leaves a short afterimage behind
   the cursor, while backspacing or leftward movement flips the trail to the other
   side. At medium and high heat, the cursor silhouette gains small graphical
