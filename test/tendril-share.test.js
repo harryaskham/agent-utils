@@ -108,9 +108,14 @@ test("tendril_list and tendril_capture tools return targets and PNG content", as
 
     const capture = await tools.get("tendril_capture").execute("call-2", { kind: "window", target: "browser", prompt: "inspect" }, new AbortController().signal);
     assert.match(capture.content[0].text, /Captured Tendril window 4/);
+    assert.match(capture.content[0].text, /Tendril targets:/);
     assert.equal(capture.content[1].type, "image");
     assert.equal(capture.content[1].mimeType, "image/png");
     assert.equal(capture.content[1].data, ONE_PIXEL_PNG.toString("base64"));
+    const pathOnly = await tools.get("tendril_capture").execute("call-3", { kind: "window", target: "4", pathOnly: true, includeList: false }, new AbortController().signal);
+    assert.equal(pathOnly.content.length, 1);
+    assert.match(pathOnly.content[0].text, /Image content omitted because pathOnly=true/);
+    assert.doesNotMatch(pathOnly.content[0].text, /Tendril targets:/);
     const captureCall = execCalls.find((call) => call.args[0] === "capture");
     assert.ok(captureCall.args.includes("--window"));
     assert.ok(captureCall.args.includes("4"));
@@ -132,6 +137,7 @@ test("tendril_describe tool returns objective prompt plus image content", async 
     const result = await tools.get("tendril_describe").execute("call-1", { kind: "display", target: "1", prompt: "errors" }, new AbortController().signal);
     assert.match(result.content[0].text, /Describe the screenshot objectively/);
     assert.match(result.content[0].text, /User focus: errors/);
+    assert.match(result.content[0].text, /Tendril targets:/);
     assert.equal(result.content[1].type, "image");
     assert.equal(result.content[1].data, ONE_PIXEL_PNG.toString("base64"));
   } finally {
@@ -152,7 +158,10 @@ test("tendril_stream tool starts, reports, and stops queued frame streaming", as
     const started = await tools.get("tendril_stream").execute("call-1", { action: "start", kind: "window", target: "browser", intervalSeconds: 10, prompt: "watch" }, new AbortController().signal);
     assert.match(started.content[0].text, /Tendril stream active/);
     assert.equal(userMessages.length, 1);
-    assert.equal(userMessages[0].content[0].text, "watch");
+    assert.match(userMessages[0].content[0].text, /^watch\n/);
+    assert.match(userMessages[0].content[0].text, /Saved screenshot:/);
+    assert.match(userMessages[0].content[0].text, /Tendril targets:/);
+    assert.equal(userMessages[0].content[1].type, "image");
     assert.deepEqual(userMessages[0].options, { deliverAs: "followUp" });
 
     const status = await tools.get("tendril_stream").execute("call-2", { action: "status" }, new AbortController().signal);
@@ -230,7 +239,10 @@ test("/tendril window captures and sends image content to the model", async () =
     assert.ok(captureCall.args.includes("--window"));
     assert.ok(captureCall.args.includes("4"));
     assert.equal(userMessages.length, 1);
-    assert.equal(userMessages[0].content[0].text, "what is visible?");
+    assert.match(userMessages[0].content[0].text, /^what is visible\?/);
+    assert.match(userMessages[0].content[0].text, /Saved screenshot:/);
+    assert.match(userMessages[0].content[0].text, /Tendril targets:/);
+    assert.match(userMessages[0].content[0].text, /window 4 \[capture\] Browser/);
     assert.equal(userMessages[0].content[1].type, "image");
     assert.equal(userMessages[0].content[1].mimeType, "image/png");
     assert.equal(userMessages[0].content[1].data, ONE_PIXEL_PNG.toString("base64"));
@@ -273,6 +285,7 @@ test("/tendril describe captures, describes, and sends text context", async () =
     assert.equal(typeof userMessages[0].content, "string");
     assert.match(userMessages[0].content, /screenshot description from github-copilot\/claude-opus-4\.7/);
     assert.match(userMessages[0].content, /A browser window with a dashboard is visible/);
+    assert.match(userMessages[0].content, /Tendril targets:/);
     assert.match(notifications.at(-1).message, /Sent Tendril window 4 description/);
   } finally {
     setTendrilShareCompleteForTest();
@@ -321,7 +334,8 @@ test("/tendril resolves unique target name matches and records capture history",
     const captureCall = execCalls.find((call) => call.args[0] === "capture");
     assert.ok(captureCall.args.includes("--window"));
     assert.ok(captureCall.args.includes("4"));
-    assert.equal(userMessages[0].content[0].text, "inspect tab");
+    assert.match(userMessages[0].content[0].text, /^inspect tab\n/);
+    assert.match(userMessages[0].content[0].text, /Tendril targets:/);
     assert.equal(customMessages.length, 1);
     assert.equal(customMessages[0].customType, "tendril-share");
     assert.match(customMessages[0].content, /Browser/);
@@ -348,7 +362,9 @@ test("/tendril stream sends low-resolution frames and can be stopped", async () 
     assert.ok(captureCall.args.includes("--max-height"));
     assert.ok(captureCall.args.includes("360"));
     assert.equal(userMessages.length, 1);
-    assert.equal(userMessages[0].content[0].text, "watch the page");
+    assert.match(userMessages[0].content[0].text, /^watch the page\n/);
+    assert.match(userMessages[0].content[0].text, /Tendril targets:/);
+    assert.equal(userMessages[0].content[1].type, "image");
     assert.match(notifications.at(-1).message, /every 10s/);
 
     await commands.get("tendril").handler("stream status", ctx);
@@ -375,6 +391,8 @@ test("/tendril display queues follow-up image message when agent is busy", async
     assert.equal(userMessages.length, 1);
     assert.deepEqual(userMessages[0].options, { deliverAs: "followUp" });
     assert.match(userMessages[0].content[0].text, /Tendril display screenshot/);
+    assert.match(userMessages[0].content[0].text, /Tendril targets:/);
+    assert.equal(userMessages[0].content[1].type, "image");
   } finally {
     if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
     else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
@@ -390,14 +408,18 @@ test("tendril share helpers parse commands and JSON envelopes", () => {
     id: "2",
     intervalSeconds: undefined,
     prompt: "inspect",
+    pathOnly: false,
+    includeList: true,
   });
-  assert.deepEqual(__tendrilShareTest.parseCaptureArgs("describe window 4 errors"), {
+  assert.deepEqual(__tendrilShareTest.parseCaptureArgs("describe window 4 errors --no-list"), {
     action: "describe",
     kind: "window",
     target: "4",
     id: "4",
     intervalSeconds: undefined,
     prompt: "errors",
+    pathOnly: false,
+    includeList: false,
   });
   assert.deepEqual(__tendrilShareTest.parseCaptureArgs("display 1", "describe"), {
     action: "describe",
@@ -406,14 +428,18 @@ test("tendril share helpers parse commands and JSON envelopes", () => {
     id: "1",
     intervalSeconds: undefined,
     prompt: "",
+    pathOnly: false,
+    includeList: true,
   });
-  assert.deepEqual(__tendrilShareTest.parseCaptureArgs("stream window browser 45 watch"), {
+  assert.deepEqual(__tendrilShareTest.parseCaptureArgs("stream window browser 45 --path-only watch"), {
     action: "stream",
     kind: "window",
     target: "browser",
     id: "browser",
     intervalSeconds: 45,
     prompt: "watch",
+    pathOnly: true,
+    includeList: true,
   });
   assert.equal(__tendrilShareTest.parseJsonEnvelope("log\n{\"status\":\"ok\"}\n").status, "ok");
   assert.match(__tendrilShareTest.listTargetsText({ data: { targets: [] } }), /none/);

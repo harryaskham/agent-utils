@@ -530,7 +530,7 @@
               <h3>Tendril share Pi extension</h3>
               <code>tendril_settings, tendril_bridge_doctor, tendril_list, tendril_capture, tendril_describe, tendril_stream, /tendril list, /tendril window &lt;id-or-name&gt;, /tendril display &lt;id-or-name&gt;, /tendril describe window &lt;id-or-name&gt;, /tendril stream window &lt;id-or-name&gt;</code>
             </div>
-            <p>Let the user or model inspect Tendril bridge settings, list Tendril targets, capture window/display screenshots as model-visible PNG content, request model-facing screenshot descriptions, send VLM-generated screenshot descriptions to the active model from slash commands, or start a low-rate screenshot stream.</p>
+            <p>Let the user or model inspect Tendril bridge settings, list Tendril targets, capture window/display screenshots as model-visible PNG content with target-list context by default, request model-facing screenshot descriptions, send VLM-generated screenshot descriptions to the active model from slash commands, or start a low-rate screenshot stream.</p>
             <dl>
               <div>
                 <dt>Audience</dt>
@@ -550,6 +550,8 @@
               <li><code>list windows and displays</code></li>
               <li><code>capture a window for the model</code></li>
               <li><code>capture a display for the model</code></li>
+              <li><code>include current tendril list output by default, with includeList=false or --no-list opt-outs</code></li>
+              <li><code>use pathOnly=true or --path-only to omit image content when only a saved path is needed</code></li>
               <li><code>describe a screenshot with a vision model</code></li>
               <li><code>look up targets by id or name</code></li>
               <li><code>stream low-resolution screenshots periodically</code></li>

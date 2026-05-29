@@ -36,6 +36,7 @@ const USAGE = `Usage:
 /tendril stream window <id-or-name> [seconds]      low-res periodic screenshot sharing, default 30s
 /tendril stream display <id-or-name> [seconds]
 /tendril stream status|stop                        inspect or stop active stream
+Flags: --path-only omits image content; --no-list omits default tendril list context
 /tendril help                                      show this help`;
 
 let completeForDescribe = null;
@@ -136,8 +137,36 @@ function listTargetsText(envelope) {
   return ["Tendril targets:", ...targets.map((target) => `- ${formatTarget(target)}`)].join("\n");
 }
 
+function parseShareFlags(tokens) {
+  const flags = { pathOnly: false, includeList: true };
+  const remaining = [];
+  for (const token of tokens) {
+    const normalized = String(token || "").trim().toLowerCase();
+    if (["--path-only", "--pathonly", "pathonly", "pathonly=true", "path-only=true", "image=false", "includeimage=false"].includes(normalized)) {
+      flags.pathOnly = true;
+      continue;
+    }
+    if (["--image", "image=true", "includeimage=true", "pathonly=false", "path-only=false"].includes(normalized)) {
+      flags.pathOnly = false;
+      continue;
+    }
+    if (["--no-list", "--nolist", "includelist=false", "include-list=false", "list=false"].includes(normalized)) {
+      flags.includeList = false;
+      continue;
+    }
+    if (["--include-list", "--list", "includelist=true", "include-list=true", "list=true"].includes(normalized)) {
+      flags.includeList = true;
+      continue;
+    }
+    remaining.push(token);
+  }
+  return { tokens: remaining, flags };
+}
+
 function parseCaptureArgs(args, forcedAction) {
-  const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
+  const parsed = parseShareFlags(String(args || "").trim().split(/\s+/).filter(Boolean));
+  const tokens = parsed.tokens;
+  const flags = parsed.flags;
   let subcommand = (tokens.shift() || "help").toLowerCase();
   let action = forcedAction || "capture";
   if (subcommand === "describe") {
@@ -146,7 +175,7 @@ function parseCaptureArgs(args, forcedAction) {
   } else if (subcommand === "stream") {
     action = "stream";
     const maybeControl = (tokens[0] || "").toLowerCase();
-    if (["stop", "off", "status"].includes(maybeControl)) return { action: `stream-${tokens.shift().toLowerCase()}` };
+    if (["stop", "off", "status"].includes(maybeControl)) return { action: `stream-${tokens.shift().toLowerCase()}`, ...flags };
     subcommand = (tokens.shift() || "").toLowerCase();
   }
   if (subcommand === "window" || subcommand === "display" || subcommand === "screen") {
@@ -160,9 +189,10 @@ function parseCaptureArgs(args, forcedAction) {
       id: target,
       intervalSeconds,
       prompt: tokens.join(" "),
+      ...flags,
     };
   }
-  return { action: subcommand || action };
+  return { action: subcommand || action, ...flags };
 }
 
 function parseModelSpec(spec) {
@@ -247,6 +277,22 @@ async function previewInKitty(pngBase64, outputPath) {
   }
 }
 
+async function tendrilListContextText(pi, signal) {
+  try {
+    const envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: DEFAULT_TIMEOUT_MS });
+    return listTargetsText(envelope);
+  } catch (error) {
+    return `Tendril targets unavailable: ${error.message || String(error)}`;
+  }
+}
+
+async function buildShareMessageText(pi, signal, { baseText, captured, includeList = true, pathOnly = false }) {
+  const lines = [baseText, `Saved screenshot: ${captured.outputPath}`];
+  if (pathOnly) lines.push("Image content omitted because pathOnly=true.");
+  if (includeList !== false) lines.push("", await tendrilListContextText(pi, signal));
+  return lines.join("\n");
+}
+
 async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight }, signal) {
   const resolved = await resolveTendrilTarget(pi, { kind, target }, signal);
   const dir = getCaptureDir(ctx);
@@ -267,19 +313,26 @@ async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight }, 
   return { outputPath, envelope, data, target: resolved };
 }
 
-async function captureTarget(pi, ctx, { kind, target, id, prompt }, signal) {
+async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = true, pathOnly = false }, signal) {
   const captured = await capturePngTarget(pi, ctx, { kind, target: target || id }, signal);
   const defaultPrompt = `Please inspect this Tendril ${kind} screenshot (${captured.target.id}).`;
-  const text = prompt?.trim() || defaultPrompt;
-  const content = [
-    { type: "text", text },
-    { type: "image", data: captured.data, mimeType: PNG_MIME },
-  ];
+  const text = await buildShareMessageText(pi, signal, {
+    baseText: prompt?.trim() || defaultPrompt,
+    captured,
+    includeList,
+    pathOnly,
+  });
+  const content = pathOnly
+    ? text
+    : [
+      { type: "text", text },
+      { type: "image", data: captured.data, mimeType: PNG_MIME },
+    ];
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(content, options);
   await previewInKitty(captured.data, captured.outputPath);
-  emitCaptureHistory(pi, { action: "screenshot", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options });
-  return { ...captured, queued: !!options };
+  emitCaptureHistory(pi, { action: pathOnly ? "screenshot path" : "screenshot", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options });
+  return { ...captured, queued: !!options, pathOnly, includeList };
 }
 
 async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
@@ -317,16 +370,17 @@ async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
   return { text, model: `${model.provider}/${model.id}`, usage: response.usage, stopReason: response.stopReason };
 }
 
-async function describeTarget(pi, ctx, { kind, target, id, prompt }, signal) {
+async function describeTarget(pi, ctx, { kind, target, id, prompt, includeList = true }, signal) {
   const captured = await capturePngTarget(pi, ctx, { kind, target: target || id }, signal);
   const description = await describeImageData(ctx, { kind, id: captured.target.id, prompt, data: captured.data }, signal);
   const focus = prompt?.trim() ? `\n\nUser focus: ${prompt.trim()}` : "";
-  const message = `Tendril ${kind} ${captured.target.id} screenshot description from ${description.model}:${focus}\n\n${description.text}`;
+  const base = `Tendril ${kind} ${captured.target.id} screenshot description from ${description.model}:${focus}\n\n${description.text}`;
+  const message = await buildShareMessageText(pi, signal, { baseText: base, captured, includeList, pathOnly: false });
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(message, options);
   await previewInKitty(captured.data, captured.outputPath);
   emitCaptureHistory(pi, { action: "description", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options, descriptionModel: description.model });
-  return { ...captured, description, queued: !!options };
+  return { ...captured, description, queued: !!options, includeList };
 }
 
 async function sendStreamFrame(pi, ctx, stream) {
@@ -337,14 +391,21 @@ async function sendStreamFrame(pi, ctx, stream) {
     maxWidth: STREAM_MAX_WIDTH,
     maxHeight: STREAM_MAX_HEIGHT,
   }, ctx.signal);
-  const text = stream.prompt || `Tendril stream frame ${stream.frame} from ${stream.kind} ${stream.target.id}.`;
+  const frameText = stream.prompt || `Tendril stream frame ${stream.frame} from ${stream.kind} ${stream.target.id}.`;
+  const includeList = stream.includeList !== false && stream.frame === 1;
+  const text = await buildShareMessageText(pi, ctx.signal, {
+    baseText: frameText,
+    captured,
+    includeList,
+    pathOnly: stream.pathOnly,
+  });
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
-  pi.sendUserMessage([
+  pi.sendUserMessage(stream.pathOnly ? text : [
     { type: "text", text },
     { type: "image", data: captured.data, mimeType: PNG_MIME },
   ], options);
   await previewInKitty(captured.data, captured.outputPath);
-  emitCaptureHistory(pi, { action: `stream frame ${stream.frame}`, kind: stream.kind, target: stream.target, outputPath: captured.outputPath, queued: !!options });
+  emitCaptureHistory(pi, { action: stream.pathOnly ? `stream frame ${stream.frame} path` : `stream frame ${stream.frame}`, kind: stream.kind, target: stream.target, outputPath: captured.outputPath, queued: !!options });
   stream.lastFrameAt = Date.now();
   stream.lastOutputPath = captured.outputPath;
   return captured;
@@ -384,7 +445,7 @@ export function createTendrilShareState() {
   return { stream: null };
 }
 
-async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, prompt }) {
+async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, prompt, includeList = true, pathOnly = false }) {
   const resolved = await resolveTendrilTarget(pi, { kind, target: target || id }, ctx.signal);
   if (state.stream?.timer) clearInterval(state.stream.timer);
   const intervalMs = clampInteger(
@@ -398,6 +459,8 @@ async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, 
     target: resolved,
     intervalMs,
     prompt: prompt?.trim() || "",
+    includeList,
+    pathOnly,
     frame: 0,
     lastFrameAt: null,
     lastOutputPath: null,
@@ -508,6 +571,8 @@ export default function tendrilShareExtension(pi) {
         kind: { type: "string", enum: ["window", "display", "screen"], description: "Target kind. screen is an alias for display. Defaults to window." },
         target: { type: "string", description: "Tendril target id or unique case-insensitive name/title/app substring." },
         prompt: { type: "string", description: "Optional focus prompt included in the tool result text." },
+        pathOnly: { type: "boolean", description: "Return only text/path context and omit image content. Defaults to false." },
+        includeList: { type: "boolean", description: "Include current tendril list target context in the text result. Defaults to true." },
         maxWidth: { type: "number", description: "Optional maximum screenshot width passed to Tendril." },
         maxHeight: { type: "number", description: "Optional maximum screenshot height passed to Tendril." },
       },
@@ -524,12 +589,18 @@ export default function tendrilShareExtension(pi) {
         maxHeight: params.maxHeight,
       }, signal);
       const focus = params.prompt ? `\nFocus: ${params.prompt}` : "";
+      const text = await buildShareMessageText(pi, signal, {
+        baseText: `Captured Tendril ${kind} ${captured.target.id}${captured.target.label ? ` (${captured.target.label})` : ""}.${focus}`,
+        captured,
+        includeList: params.includeList !== false,
+        pathOnly: Boolean(params.pathOnly),
+      });
       return {
-        content: [
-          { type: "text", text: `Captured Tendril ${kind} ${captured.target.id}${captured.target.label ? ` (${captured.target.label})` : ""}: ${captured.outputPath}${focus}` },
+        content: Boolean(params.pathOnly) ? [{ type: "text", text }] : [
+          { type: "text", text },
           tendrilImageContent({ data: captured.data }),
         ],
-        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope },
+        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
       };
     },
   });
@@ -544,6 +615,8 @@ export default function tendrilShareExtension(pi) {
         kind: { type: "string", enum: ["window", "display", "screen"], description: "Target kind. screen is an alias for display. Defaults to window." },
         target: { type: "string", description: "Tendril target id or unique case-insensitive name/title/app substring." },
         prompt: { type: "string", description: "Optional description focus." },
+        pathOnly: { type: "boolean", description: "Return only text/path context and omit image content. Defaults to false." },
+        includeList: { type: "boolean", description: "Include current tendril list target context in the text result. Defaults to true." },
         maxWidth: { type: "number", description: "Optional maximum screenshot width passed to Tendril." },
         maxHeight: { type: "number", description: "Optional maximum screenshot height passed to Tendril." },
       },
@@ -560,12 +633,18 @@ export default function tendrilShareExtension(pi) {
         maxHeight: params.maxHeight,
       }, signal);
       const focus = params.prompt ? `\nUser focus: ${params.prompt}` : "";
+      const text = await buildShareMessageText(pi, signal, {
+        baseText: `${IMAGE_DESCRIPTION_PROMPT}\n\nTarget: Tendril ${kind} ${captured.target.id}${focus}`,
+        captured,
+        includeList: params.includeList !== false,
+        pathOnly: Boolean(params.pathOnly),
+      });
       return {
-        content: [
-          { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}\n\nTarget: Tendril ${kind} ${captured.target.id}${focus}\nSaved screenshot: ${captured.outputPath}` },
+        content: Boolean(params.pathOnly) ? [{ type: "text", text }] : [
+          { type: "text", text },
           tendrilImageContent({ data: captured.data }),
         ],
-        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope },
+        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
       };
     },
   });
@@ -582,6 +661,8 @@ export default function tendrilShareExtension(pi) {
         target: { type: "string", description: "Tendril target id or unique case-insensitive name/title/app substring for start." },
         intervalSeconds: { type: "number", description: "Stream interval in seconds. Defaults to 30; minimum 10." },
         prompt: { type: "string", description: "Optional prompt attached to each queued stream frame." },
+        pathOnly: { type: "boolean", description: "Queue only text/path context and omit image content. Defaults to false." },
+        includeList: { type: "boolean", description: "Include current tendril list target context in the first stream frame. Defaults to true." },
       },
       additionalProperties: false,
     },
@@ -594,11 +675,13 @@ export default function tendrilShareExtension(pi) {
       }
       if (action !== "start") throw new Error(`Unsupported Tendril stream action: ${params.action}`);
       if (!params.target) throw new Error("tendril_stream action=start requires target.");
-      const stream = await startStream(pi, toolContext(undefined), state, {
+      const stream = await startStream(pi, toolContext(signal), state, {
         kind: normalizeKind(params.kind || "window"),
         target: params.target,
         intervalSeconds: params.intervalSeconds,
         prompt: params.prompt,
+        includeList: params.includeList !== false,
+        pathOnly: Boolean(params.pathOnly),
       });
       return textResult(streamStatusText(stream), { stream: { ...stream, timer: undefined } });
     },
