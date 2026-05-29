@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,9 +12,13 @@ import { buildTendrilCommand, tendrilCommandSummary } from "./tendril-command.js
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
-const DEFAULT_DESCRIBE_MODEL = "github-copilot/claude-opus-4.7";
+const DEFAULT_DESCRIBE_MODEL = "github-copilot/claude-opus-4.8";
 const FALLBACK_DESCRIBE_MODELS = Object.freeze([
   DEFAULT_DESCRIBE_MODEL,
+  "github-copilot/claude-opus-4.8-1m-internal",
+  "github-copilot/claude-opus-4-8",
+  "github-copilot/claude-opus-4-8-1m-internal",
+  "github-copilot/claude-opus-4.7",
   "github-copilot/claude-opus-4.7-1m-internal",
   "github-copilot/claude-opus-4-7",
   "github-copilot/claude-opus-4-7-1m-internal",
@@ -206,8 +211,42 @@ function modelSupportsImage(model) {
   return !Array.isArray(model?.input) || model.input.includes("image");
 }
 
+function agentSettingsPath(env = process.env) {
+  return path.join(env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "settings.json");
+}
+
+function readAgentSettings(env = process.env) {
+  const settingsPath = agentSettingsPath(env);
+  try {
+    if (!existsSync(settingsPath)) return {};
+    return JSON.parse(readFileSync(settingsPath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function configuredDescribeModelFromSettings(settings = {}) {
+  const candidates = [
+    settings?.tendril?.describeModel,
+    settings?.tendrilShare?.describeModel,
+    settings?.agentUtils?.tendril?.describeModel,
+    settings?.agentUtils?.tendrilShare?.describeModel,
+  ];
+  return candidates.map((value) => String(value || "").trim()).find(Boolean) || "";
+}
+
+function describeModelConfig(env = process.env) {
+  const envValue = String(env.TENDRIL_SHARE_DESCRIBE_MODEL || "").trim();
+  if (envValue) return { spec: envValue, source: "TENDRIL_SHARE_DESCRIBE_MODEL" };
+  const settings = readAgentSettings(env);
+  const settingsValue = configuredDescribeModelFromSettings(settings);
+  if (settingsValue) return { spec: settingsValue, source: "settings.json" };
+  return { spec: DEFAULT_DESCRIBE_MODEL, source: "default" };
+}
+
 function resolveVisionModel(ctx) {
-  const configured = process.env.TENDRIL_SHARE_DESCRIBE_MODEL;
+  const config = describeModelConfig();
+  const configured = config.source !== "default" ? config.spec : "";
   const specs = configured ? [configured] : FALLBACK_DESCRIBE_MODELS;
   const missing = [];
   const textOnly = [];
@@ -219,7 +258,7 @@ function resolveVisionModel(ctx) {
     return model;
   }
   if (configured) {
-    throw new Error(`Vision model ${configured} is not registered or does not advertise image input support. Set TENDRIL_SHARE_DESCRIBE_MODEL=provider/model.`);
+    throw new Error(`Vision model ${configured} from ${config.source} is not registered or does not advertise image input support. Set TENDRIL_SHARE_DESCRIBE_MODEL=provider/model or tendril.describeModel in settings.json.`);
   }
   throw new Error(`No default Tendril vision model is registered. Tried: ${specs.join(", ")}.${textOnly.length ? ` Text-only matches: ${textOnly.join(", ")}.` : ""}${missing.length ? ` Missing: ${missing.join(", ")}.` : ""}`);
 }
@@ -537,9 +576,10 @@ export default function tendrilShareExtension(pi) {
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
       const summary = tendrilCommandSummary();
+      const describeModel = describeModelConfig();
       return textResult(
-        `tendril command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel} argsPrefix=${summary.argsPrefix.join(" ") || "none"}`,
-        { summary },
+        `tendril command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel} argsPrefix=${summary.argsPrefix.join(" ") || "none"}\ndescribeModel=${describeModel.spec} source=${describeModel.source}`,
+        { summary, describeModel },
       );
     },
   });
@@ -737,4 +777,6 @@ export const __tendrilShareTest = {
   buildTendrilCommand,
   tendrilCommandSummary,
   classifyTendrilBridgeProbe,
+  configuredDescribeModelFromSettings,
+  describeModelConfig,
 };

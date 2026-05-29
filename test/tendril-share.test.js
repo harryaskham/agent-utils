@@ -15,7 +15,8 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 function makeHarness({ idle = true } = {}) {
-  const visionModel = { provider: "github-copilot", id: "claude-opus-4.7", input: ["text", "image"] };
+  const visionModel = { provider: "github-copilot", id: "claude-opus-4.8", input: ["text", "image"] };
+  const oldVisionModel = { provider: "github-copilot", id: "claude-opus-4.7", input: ["text", "image"] };
   const fallbackVisionModel = { provider: "litellm-anthropic", id: "claude-opus-4-7", input: ["text", "image"] };
   const commands = new Map();
   const tools = new Map();
@@ -31,6 +32,7 @@ function makeHarness({ idle = true } = {}) {
     modelRegistry: {
       find(provider, id) {
         if (provider === visionModel.provider && id === visionModel.id) return visionModel;
+        if (provider === oldVisionModel.provider && id === oldVisionModel.id) return oldVisionModel;
         if (provider === fallbackVisionModel.provider && id === fallbackVisionModel.id) return fallbackVisionModel;
         return undefined;
       },
@@ -83,6 +85,27 @@ test("/tendril list formats Tendril targets", async () => {
   assert.match(notifications.at(-1).message, /window 4/);
 });
 
+test("tendril describe model configuration reads env, settings, and default", async () => {
+  const oldModel = process.env.TENDRIL_SHARE_DESCRIBE_MODEL;
+  const oldDir = process.env.PI_CODING_AGENT_DIR;
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-settings-test-"));
+  try {
+    delete process.env.TENDRIL_SHARE_DESCRIBE_MODEL;
+    process.env.PI_CODING_AGENT_DIR = tmp;
+    assert.deepEqual(__tendrilShareTest.describeModelConfig(), { spec: "github-copilot/claude-opus-4.8", source: "default" });
+    await writeFile(path.join(tmp, "settings.json"), JSON.stringify({ tendril: { describeModel: "github-copilot/claude-opus-4.7" } }), "utf8");
+    assert.deepEqual(__tendrilShareTest.describeModelConfig(), { spec: "github-copilot/claude-opus-4.7", source: "settings.json" });
+    process.env.TENDRIL_SHARE_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
+    assert.deepEqual(__tendrilShareTest.describeModelConfig(), { spec: "litellm-anthropic/claude-opus-4-7", source: "TENDRIL_SHARE_DESCRIBE_MODEL" });
+  } finally {
+    if (oldModel === undefined) delete process.env.TENDRIL_SHARE_DESCRIBE_MODEL;
+    else process.env.TENDRIL_SHARE_DESCRIBE_MODEL = oldModel;
+    if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("tendril tool registry exposes command-tree operations", async () => {
   const { pi, tools } = makeHarness();
   tendrilShareExtension(pi);
@@ -93,6 +116,7 @@ test("tendril tool registry exposes command-tree operations", async () => {
 
   const settings = await tools.get("tendril_settings").execute("call-1", {}, new AbortController().signal);
   assert.match(settings.content[0].text, /tendril command=tendril/);
+  assert.match(settings.content[0].text, /describeModel=github-copilot\/claude-opus-4\.8 source=(default|settings\.json)/);
 });
 
 test("tendril_list and tendril_capture tools return targets and PNG content", async () => {
@@ -276,14 +300,14 @@ test("/tendril describe captures, describes, and sends text context", async () =
 
     assert.equal(completeCalls.length, 1);
     assert.equal(completeCalls[0].model.provider, "github-copilot");
-    assert.equal(completeCalls[0].model.id, "claude-opus-4.7");
-    assert.equal(completeCalls[0].options.apiKey, "key-for-github-copilot-claude-opus-4.7");
+    assert.equal(completeCalls[0].model.id, "claude-opus-4.8");
+    assert.equal(completeCalls[0].options.apiKey, "key-for-github-copilot-claude-opus-4.8");
     assert.match(completeCalls[0].request.messages[0].content[0].text, /focus on errors/);
     assert.equal(completeCalls[0].request.messages[0].content[1].type, "image");
     assert.equal(completeCalls[0].request.messages[0].content[1].data, ONE_PIXEL_PNG.toString("base64"));
     assert.equal(userMessages.length, 1);
     assert.equal(typeof userMessages[0].content, "string");
-    assert.match(userMessages[0].content, /screenshot description from github-copilot\/claude-opus-4\.7/);
+    assert.match(userMessages[0].content, /screenshot description from github-copilot\/claude-opus-4\.8/);
     assert.match(userMessages[0].content, /A browser window with a dashboard is visible/);
     assert.match(userMessages[0].content, /Tendril targets:/);
     assert.match(notifications.at(-1).message, /Sent Tendril window 4 description/);
