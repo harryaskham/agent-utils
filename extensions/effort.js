@@ -96,6 +96,24 @@ function clampEffortToModel(candidate, model) {
   return supported[0];
 }
 
+function modelRequiresAdaptiveThinkingFormat(model) {
+  const compat = model?.compat || {};
+  const format = String(
+    model?.thinkingFormat ??
+    model?.thinking_format ??
+    model?.thinking?.format ??
+    compat.thinkingFormat ??
+    compat.thinking_format ??
+    compat.thinking?.format ??
+    "",
+  ).trim().toLowerCase();
+  if (["adaptive", "anthropic-adaptive", "output-config", "output_config"].includes(format)) return true;
+  if (model?.adaptiveThinking === true || model?.adaptive_thinking === true || model?.requiresAdaptiveThinking === true) return true;
+  if (compat.adaptiveThinking === true || compat.adaptive_thinking === true || compat.requiresAdaptiveThinking === true) return true;
+  if (modelSupportedEfforts(model)?.length) return true;
+  return false;
+}
+
 function effortForLevel(level, model) {
   const mapped = level ? model?.thinkingLevelMap?.[level] : undefined;
   if (typeof mapped === "string") return clampEffortToModel(mapped, model);
@@ -111,7 +129,7 @@ export function patchAdaptiveThinkingPayload(payload, { model, level, adaptive =
   if (!payload || typeof payload !== "object" || !supportsAdaptiveThinkingModel(model)) return payload;
   const next = { ...payload };
   const thinking = next.thinking && typeof next.thinking === "object" ? next.thinking : null;
-  const wantsAdaptive = adaptive || fast;
+  const wantsAdaptive = adaptive || fast || (thinking?.type === "enabled" && modelRequiresAdaptiveThinkingFormat(model));
   if (!wantsAdaptive) return payload;
   const display = thinking?.display ?? "summarized";
   next.thinking = { type: "adaptive", ...(display !== undefined ? { display } : {}) };
