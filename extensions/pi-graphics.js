@@ -499,8 +499,16 @@ export default function piGraphicsExtension(pi) {
     editorHeatRenderTimer.unref?.();
   }
 
+  function editorContextRedrawEnabled() {
+    return envBool("PI_GRAPHICS_EDITOR_CONTEXT_REDRAW", false);
+  }
+
   function requestEditorContextFrame() {
-    if (editorAnimationEnabled()) return;
+    // Avoid full TUI redraws for purely decorative thinking-context ticks. When
+    // editor animation is enabled, pre-rendered Kitty frames are advanced by
+    // ensureManualAnimationLoop via a=a,c=<frame>; when it is disabled, the
+    // contextual mask remains static until real editor state changes.
+    if (editorAnimationEnabled() || !editorContextRedrawEnabled()) return;
     if (editorContextTimer || !editorRenderTui || editorContextMode !== "thinking") return;
     editorContextTimer = setTimeout(() => {
       editorContextTimer = null;
