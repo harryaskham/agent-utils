@@ -1373,6 +1373,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor\.cursorStyle/);
   assert.match(source, /PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor\.trailingWorkspace/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor\.rowBackground/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE: editor\.typingImpulse/);
   assert.match(source, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
   assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === true \? "1" : "0"/);
   assert.match(source, /PI_GRAPHICS_AUTO_BOX_RAILS: off \? "0" : gfx\.boxRails === true \? "1" : "0"/);
@@ -1418,8 +1419,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function requestEditorContextFrame\(\)/);
   assert.match(source, /function valueLooksLikeThinking\(value\)/);
   assert.match(source, /let editorCursorImpulseCol = null/);
-  assert.match(source, /editorCursorImpulseCol = safeCol/);
-  assert.match(source, /impulseStrength = Math\.max\(0, Math\.min\(1, Math\.exp\(-impulseAge \/ 360\)/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE/);
+  assert.match(source, /function editorTypingImpulseEnabled\(\)/);
+  assert.match(source, /if \(editorTypingImpulseEnabled\(\)\) \{\n\s+editorCursorImpulseCol = safeCol/);
+  assert.match(source, /const impulseStrength = impulseEnabled \? Math\.max\(0, Math\.min\(1, Math\.exp\(-impulseAge \/ 360\)/);
   assert.match(source, /mixHexColor\(baseBorderColor, contextMode === "thinking" \? "#d8dee9" : "#ffffff", railHeat\)/);
   assert.match(source, /function editorBorderHeight\(edge\)/);
   assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
@@ -1661,11 +1664,13 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /`  cursor style:   \$\{editor\.cursorStyle \?\? "glow"\} \(also: cell\|off\)`/);
   assert.match(source, /`  trailing fill:  \$\{editor\.trailingWorkspace \? "on" : "off"\}`/);
   assert.match(source, /`  row background: \$\{editor\.rowBackground \? "on" : "off"\}`/);
+  assert.match(source, /`  typing impulse: \$\{editor\.typingImpulse === false \? "off" : "on"\}`/);
   assert.match(source, /\/gfx cursor-style glow\|cell\|off/);
-  assert.match(source, /\/gfx trailing-workspace on\|off \| \/gfx row-background on\|off/);
+  assert.match(source, /\/gfx trailing-workspace on\|off \| \/gfx row-background on\|off \| \/gfx typing-impulse on\|off/);
   assert.match(source, /key === "cursor-style" \|\| key === "cursorstyle" \|\| key === "cursor"/);
   assert.match(source, /key === "trailing-workspace" \|\| key === "workspace-fill" \|\| key === "trailing"/);
   assert.match(source, /key === "row-background" \|\| key === "rowbg" \|\| key === "row-backgrounds"/);
+  assert.match(source, /key === "typing-impulse" \|\| key === "typingimpulse" \|\| key === "impulse" \|\| key === "cursor-impulse"/);
   assert.match(source, /`  box chrome:     \$\{gfx\.boxChrome === true \? "on" : "off"\}`/);
   assert.match(source, /`  box rails:      \$\{gfx\.boxRails === true \? "on" : "off"\}/);
   assert.match(source, /box-rails on\|off/);
@@ -1701,6 +1706,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /key: "cursorStyle", label: "Cursor style", values: \["glow", "cell", "off"\]/);
   assert.match(source, /key: "trailingWorkspace", label: "Trailing workspace", values: \["off", "on"\]/);
   assert.match(source, /key: "rowBackground", label: "Row background", values: \["off", "on"\]/);
+  assert.match(source, /key: "typingImpulse", label: "Typing impulse", values: \["on", "off"\]/);
   assert.match(source, /__piGraphicsNoWrap: true,\n\s+piGraphics: false/);
   assert.match(source, /overlay: true, piGraphics: false/);
   assert.match(source, /This overlay opts out of Pi graphics wrapping to avoid Kitty escape flicker\/scroll/);

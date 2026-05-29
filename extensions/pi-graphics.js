@@ -159,6 +159,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor.cursorStyle ?? editor.cursorMode ?? editor.cursorEffect ?? editor.cursor?.style ?? editor.cursor?.mode,
     PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor.trailingWorkspace ?? editor.workspaceFill ?? features.editorTrailingWorkspace,
     PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor.rowBackground ?? features.editorRowBackground,
+    PI_GRAPHICS_EDITOR_TYPING_IMPULSE: editor.typingImpulse ?? editor.impulse ?? editor.cursorImpulse ?? features.editorTypingImpulse,
     PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === true ? "1" : "0",
     PI_GRAPHICS_AUTO_BOX_RAILS: off ? "0" : gfx.boxRails === true ? "1" : "0",
     PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx.exposeRenderTools != null ? String(gfx.exposeRenderTools) : undefined,
@@ -254,6 +255,10 @@ export default function piGraphicsExtension(pi) {
     const env = gfxEnv();
     const raw = Number(env.PI_GRAPHICS_EDITOR_ALPHA);
     return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.55;
+  }
+
+  function editorTypingImpulseEnabled() {
+    return envBool("PI_GRAPHICS_EDITOR_TYPING_IMPULSE", true);
   }
 
   function editorPaddingX() {
@@ -591,8 +596,13 @@ export default function piGraphicsExtension(pi) {
       if (editorCursorLastCol != null && safeCol !== editorCursorLastCol) {
         editorCursorTrailDirection = safeCol > editorCursorLastCol ? 1 : -1;
       }
-      editorCursorImpulseCol = safeCol;
-      editorCursorImpulseAt = now;
+      if (editorTypingImpulseEnabled()) {
+        editorCursorImpulseCol = safeCol;
+        editorCursorImpulseAt = now;
+      } else {
+        editorCursorImpulseCol = null;
+        editorCursorImpulseAt = 0;
+      }
       editorCursorLastText = plainText;
       editorCursorLastAt = now;
       editorCursorLastCol = safeCol;
@@ -861,8 +871,9 @@ export default function piGraphicsExtension(pi) {
     const alpha = editorAlpha();
     const contextMode = editorContextMode === "thinking" ? "thinking" : "idle";
     const contextPhase = contextMode === "thinking" ? (editorContextTick % 48) / 48 : 0;
-    const impulseAge = editorCursorImpulseAt ? Math.max(0, Date.now() - editorCursorImpulseAt) : Infinity;
-    const impulseStrength = Math.max(0, Math.min(1, Math.exp(-impulseAge / 360) * Math.max(editorCursorHeat, editorCursorHeatTarget, 0)));
+    const impulseEnabled = editorTypingImpulseEnabled();
+    const impulseAge = impulseEnabled && editorCursorImpulseAt ? Math.max(0, Date.now() - editorCursorImpulseAt) : Infinity;
+    const impulseStrength = impulseEnabled ? Math.max(0, Math.min(1, Math.exp(-impulseAge / 360) * Math.max(editorCursorHeat, editorCursorHeatTarget, 0))) : 0;
     const impulseBucket = Math.max(0, Math.min(12, Math.round(impulseStrength * 12)));
     const impulseCol = editorCursorImpulseCol == null ? null : Math.max(0, Math.min(cols - 1, Math.trunc(Number(editorCursorImpulseCol) || 0)));
     const railHeat = Math.max(editorRailHeat(), contextMode === "thinking" ? 0.42 : 0, impulseStrength * 0.55);
@@ -2767,6 +2778,7 @@ export default function piGraphicsExtension(pi) {
       { key: "cursorStyle", label: "Cursor style", values: ["glow", "cell", "off"], get: () => editor.cursorStyle || "glow", set: (v) => { editor.cursorStyle = v; } },
       { key: "trailingWorkspace", label: "Trailing workspace", values: ["off", "on"], get: () => editor.trailingWorkspace ? "on" : "off", set: (v) => { editor.trailingWorkspace = v === "on"; } },
       { key: "rowBackground", label: "Row background", values: ["off", "on"], get: () => editor.rowBackground ? "on" : "off", set: (v) => { editor.rowBackground = v === "on"; } },
+      { key: "typingImpulse", label: "Typing impulse", values: ["on", "off"], get: () => editor.typingImpulse === false ? "off" : "on", set: (v) => { editor.typingImpulse = v === "on"; } },
       { key: "debug", label: "Debug panel", values: ["off", "on"], get: () => gfx.debug ? "on" : "off", set: (v) => { gfx.debug = v === "on"; gfx.debugPlaceholders = gfx.debug; } },
       { key: "placeholders", label: "Debug placeholders", values: ["off", "on"], get: () => gfx.debugPlaceholders ? "on" : "off", set: (v) => { gfx.debugPlaceholders = v === "on"; } },
     ];
@@ -2861,6 +2873,7 @@ export default function piGraphicsExtension(pi) {
           `  cursor style:   ${editor.cursorStyle ?? "glow"} (also: cell|off)`,
           `  trailing fill:  ${editor.trailingWorkspace ? "on" : "off"}`,
           `  row background: ${editor.rowBackground ? "on" : "off"}`,
+          `  typing impulse: ${editor.typingImpulse === false ? "off" : "on"}`,
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
           `  box rails:      ${gfx.boxRails === true ? "on" : "off"} style=${gfx.boxRailStyle || "editor"} unicode=${gfx.boxRailUnicodeMode || "fill"}`,
           `  box mode:       ${gfx.boxMode || "unicode"} unicode=${gfx.boxUnicodeMode || "fill"} (also: relative)`,
@@ -2875,7 +2888,7 @@ export default function piGraphicsExtension(pi) {
           "       /gfx border-style gradient|glass|chrome|geometric",
           "       /gfx border-height <1-16> | /gfx top-border-height <1-16> | /gfx bottom-border-height <1-16>",
           "       /gfx cursor-style glow|cell|off",
-          "       /gfx trailing-workspace on|off | /gfx row-background on|off",
+          "       /gfx trailing-workspace on|off | /gfx row-background on|off | /gfx typing-impulse on|off",
           "       /gfx box on|off | /gfx box-rails on|off",
           "       /gfx box-unicode-mode fill|topLeft | /gfx box-rail-unicode-mode fill|topLeft",
           "       /gfx box-rail-style gradient|glass|chrome|geometric",
@@ -3012,6 +3025,10 @@ export default function piGraphicsExtension(pi) {
           if (/^(on|true|1)$/.test(value)) { editor.rowBackground = true; changed = true; }
           else if (/^(off|false|0)$/.test(value)) { editor.rowBackground = false; changed = true; }
           else ctx.ui.notify(`unknown row background value: ${value} (use on|off)`, "warning");
+        } else if (key === "typing-impulse" || key === "typingimpulse" || key === "impulse" || key === "cursor-impulse") {
+          if (/^(on|true|1)$/.test(value)) { editor.typingImpulse = true; changed = true; }
+          else if (/^(off|false|0)$/.test(value)) { editor.typingImpulse = false; changed = true; }
+          else ctx.ui.notify(`unknown typing impulse value: ${value} (use on|off)`, "warning");
         } else if (key === "box" || key === "box-chrome" || key === "boxchrome") {
           if (/^(on|true|1)$/.test(value)) { gfx.boxChrome = true; changed = true; }
           else if (/^(off|false|0)$/.test(value)) { gfx.boxChrome = false; changed = true; }

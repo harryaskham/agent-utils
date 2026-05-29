@@ -536,7 +536,10 @@ displayed using kitty Unicode placeholder cells, so:
   bubble ticks through the cached render key until the message/turn ends. During
   typing, the border render spec also tracks the cursor column and decaying heat
   to draw a cursor-local bell-curve energy impulse into the rail PNG. This
-  composes with `gradient`/`glass`/`chrome`/`geometric` border drawing and every
+  impulse is configurable with `piGraphics.editor.typingImpulse` (or
+  `PI_GRAPHICS_EDITOR_TYPING_IMPULSE`) and can be toggled live with
+  `/gfx typing-impulse on|off`. It composes with
+  `gradient`/`glass`/`chrome`/`geometric` border drawing and every
   placement mode because only the rendered PNG phase/context/impulse inputs
   change. In `relative` editor mode, the extra height is drawn as a relative
   placement without reflowing text; top borders are offset upward by `height - 1`,
