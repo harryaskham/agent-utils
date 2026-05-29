@@ -391,11 +391,14 @@ displayed using kitty Unicode placeholder cells, so:
   branch/compaction summaries, footer, dynamic borders, loaders, extension
   inputs/editors/selectors, login/OAuth/model/session/settings/theme/thinking
   dialogs, image chooser, tree selector, user-message selector, mascot/agent
-  announcement components, notifications (including bounded per-line treatment for multi-line notifications), extension status indicators, hidden
-  thinking labels, working messages, working-indicator frames, and generic extension-owned `custom`, widget, footer,
+  announcement components, notifications, hidden thinking labels, working messages,
+  working-indicator frames, and generic extension-owned `custom`, widget, footer,
   header, editor, and overlay components returned through Pi's public UI registration APIs. The generic
   wrappers cover components, plain string-array surfaces, and promises resolving
-  to either shape. Components/factories/status registrations can opt out with
+  to either shape. One-cell graphical status/notification indicators are opt-in
+  with `PI_GRAPHICS_STATUS_INDICATORS=1`; they default off so diagnostic output
+  such as `/gfx status` stays plain text and does not show visible placeholder
+  prefixes when a terminal cannot paint the image immediately. Components/factories/status registrations can opt out with
   `__piGraphicsNoWrap`, `piGraphics: false`, or registration options such as
   `{ piGraphics: false }`; Pi graphics' own internal rail widgets use that opt-out
   so they are not skinned twice. The generic API

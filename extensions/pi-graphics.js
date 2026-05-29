@@ -1097,8 +1097,12 @@ export default function piGraphicsExtension(pi) {
     return rows[0] ?? null;
   }
 
+  function statusIndicatorsEnabled() {
+    return envBool("PI_GRAPHICS_STATUS_INDICATORS", false);
+  }
+
   function buildStatusIndicatorPrefix() {
-    if (!ensureUnicodePlacement(state)) return "";
+    if (!statusIndicatorsEnabled() || !ensureUnicodePlacement(state)) return "";
     const cell = cellMetrics();
     const alpha = Math.max(0.18, editorAlpha() * 0.38);
     const leftColor = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
@@ -1128,13 +1132,14 @@ export default function piGraphicsExtension(pi) {
   }
 
   function decorateStatusValue(value) {
+    if (!statusIndicatorsEnabled()) return value;
     if (typeof value !== "string" || value.length === 0 || value.includes("\u{10eeee}")) return value;
     const prefix = buildStatusIndicatorPrefix();
     return prefix ? `${prefix}${value}` : value;
   }
 
   function decorateNotificationValue(value) {
-    if (typeof value !== "string" || value.length === 0) return value;
+    if (!statusIndicatorsEnabled() || typeof value !== "string" || value.length === 0) return value;
     if (!value.includes("\n")) return decorateStatusValue(value);
     let decoratedLines = 0;
     return value.split("\n").map((line) => {
@@ -1149,7 +1154,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function decorateWorkingIndicatorConfig(config) {
-    if (!config || config.piGraphics === false || config.piGraphics?.enabled === false) return config;
+    if (!statusIndicatorsEnabled() || !config || config.piGraphics === false || config.piGraphics?.enabled === false) return config;
     if (!Array.isArray(config.frames) || config.frames.length === 0) return config;
     return {
       ...config,
