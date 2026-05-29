@@ -123,6 +123,27 @@ function parseBriefingCommandArgs(words = []) {
   return { apps, staleAfterMinutes };
 }
 
+function parseCleanupCommandArgs(words = []) {
+  let app;
+  let keepLatest;
+  let confirmed = false;
+  for (const word of words) {
+    const text = String(word || "").trim();
+    if (!text) continue;
+    const keepMatch = text.match(/^(?:keep|keep-latest|keepLatest)[:=](\d+)$/i);
+    if (keepMatch) {
+      keepLatest = Number(keepMatch[1]);
+      continue;
+    }
+    if (["confirm", "confirmed", "confirmed=true", "--confirm", "--confirmed"].includes(text.toLowerCase())) {
+      confirmed = true;
+      continue;
+    }
+    if (!app) app = text;
+  }
+  return { app, keepLatest, confirmed };
+}
+
 async function runPlan(pi, plan, { signal, timeoutMs = 30_000 } = {}) {
   if (!plan.execution.executable) {
     return {
@@ -1257,7 +1278,7 @@ export default function appAutomationExtension(pi) {
   });
 
   pi.registerCommand("tendril-app", {
-    description: "List, doctor, overview, briefing, links, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|briefing [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
+    description: "List, doctor, overview, briefing, links, cleanup, staleness, refresh-staleness, or plan blessed API-less app automation actions. Usage: /tendril-app [doctor [probe]|overview [links] [fresh|stale|unknown] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [query:<text>|query words] [link-limit:<n>] [link-sort:<order>] [stale-after:<minutes>] [app...]|briefing [stale-after:<minutes>] [app...]|links [[app|all] [fresh|stale|unknown|freshness:<state>] [kind:<kind>] [source:<text>] [from:<text>] [time:<text>] [host:<domain>] [sort:<order>] [limit:<n>] [stale-after:<minutes>] [query]]|cleanup [app] [keep:<n>]|cleanup-apply [app] [keep:<n>] confirm|staleness|refresh-staleness|bundle|open-bundle|stale-refresh|app action]",
     handler: async (args, ctx) => {
       const words = String(args || "").trim().split(/\s+/).filter(Boolean);
       const catalog = await resolveCatalog();
@@ -1322,6 +1343,23 @@ export default function appAutomationExtension(pi) {
         ctx.ui.notify(renderSnapshotLinks(summary), "info");
         return;
       }
+      if (words[0] === "cleanup") {
+        const cleanupArgs = parseCleanupCommandArgs(words.slice(1));
+        const plan = await planSnapshotCleanup({ root: stateRoot(), app: cleanupArgs.app, keepLatest: cleanupArgs.keepLatest ?? 20 });
+        ctx.ui.notify(`${renderSnapshotCleanupPlan(plan)}\n\nDry run only. Use /tendril-app cleanup-apply ${cleanupArgs.app || "all"} keep:${plan.keepLatest} confirm to delete ${plan.candidateCount} candidate artifact(s).`, "info");
+        return;
+      }
+      if (words[0] === "cleanup-apply") {
+        const cleanupArgs = parseCleanupCommandArgs(words.slice(1));
+        const plan = await planSnapshotCleanup({ root: stateRoot(), app: cleanupArgs.app, keepLatest: cleanupArgs.keepLatest ?? 20 });
+        if (!cleanupArgs.confirmed) {
+          ctx.ui.notify(`${renderSnapshotCleanupPlan(plan)}\n\nRefusing to delete without explicit confirmation. Re-run with: /tendril-app cleanup-apply ${cleanupArgs.app || "all"} keep:${plan.keepLatest} confirm`, "warning");
+          return;
+        }
+        const result = await applySnapshotCleanup({ root: stateRoot(), app: cleanupArgs.app, keepLatest: cleanupArgs.keepLatest ?? 20 });
+        ctx.ui.notify(renderSnapshotCleanupApply(result), result.failedCount ? "warning" : "info");
+        return;
+      }
       if (words[0] === "staleness") {
         const wantedIds = words.slice(1).length ? words.slice(1) : ["slack", "calendar", "outlook", "teams", "canvas"];
         const report = await snapshotStalenessReport({ root: stateRoot(), apps: wantedIds, staleAfterMinutes: 60 });
@@ -1363,6 +1401,8 @@ export default function appAutomationExtension(pi) {
     ["tendril-app-overview", "overview", "Shortcut for /tendril-app overview; accepts the same filters and app ids."],
     ["tendril-app-briefing", "briefing", "Shortcut for /tendril-app briefing; builds the stale-aware work briefing index."],
     ["tendril-app-links", "links", "Shortcut for /tendril-app links; accepts link filters, sort, and limits."],
+    ["tendril-app-cleanup", "cleanup", "Shortcut for /tendril-app cleanup; dry-runs snapshot cleanup candidates."],
+    ["tendril-app-cleanup-apply", "cleanup-apply", "Shortcut for /tendril-app cleanup-apply; requires confirm to delete old snapshot artifacts."],
     ["tendril-app-bundle", "bundle", "Shortcut for /tendril-app bundle; shows the standard Slack/Outlook/Teams/calendar refresh bundle guidance."],
     ["tendril-app-open-bundle", "open-bundle", "Shortcut for /tendril-app open-bundle; shows browser-warming bundle guidance."],
     ["tendril-app-stale-refresh", "stale-refresh", "Shortcut for /tendril-app stale-refresh; shows the stale-only refresh guidance."],

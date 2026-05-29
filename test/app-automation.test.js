@@ -1594,6 +1594,11 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshots_cleanup_apply`/);
   assert.match(source, /confirmed=true/);
   assert.match(source, /applySnapshotCleanup/);
+  assert.match(source, /function parseCleanupCommandArgs\(words = \[\]\)/);
+  assert.match(source, /words\[0\] === "cleanup"/);
+  assert.match(source, /words\[0\] === "cleanup-apply"/);
+  assert.match(source, /Refusing to delete without explicit confirmation/);
+  assert.match(source, /tendril-app-cleanup-apply/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_snapshot_read`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_status`/);
   assert.match(source, /setInterval/);
