@@ -160,9 +160,16 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor.trailingWorkspace ?? editor.workspaceFill ?? features.editorTrailingWorkspace,
     PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor.rowBackground ?? features.editorRowBackground,
     PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === true ? "1" : "0",
+    PI_GRAPHICS_AUTO_BOX_RAILS: off ? "0" : gfx.boxRails === true ? "1" : "0",
     PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx.exposeRenderTools != null ? String(gfx.exposeRenderTools) : undefined,
     PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
     PI_GRAPHICS_BOX_MODE: gfx.boxMode != null ? String(gfx.boxMode) : "unicode",
+    PI_GRAPHICS_BOX_RAIL_STYLE: gfx.boxRailStyle ?? gfx.boxRailsStyle ?? gfx.box?.railStyle,
+    PI_GRAPHICS_BOX_RAIL_MODE: gfx.boxRailMode ?? gfx.boxRailsMode ?? gfx.boxMode,
+    PI_GRAPHICS_BOX_RAIL_UNICODE_MODE: gfx.boxRailUnicodeMode ?? gfx.boxRailsUnicodeMode ?? gfx.box?.railUnicodeMode ?? editor.unicodeMode,
+    PI_GRAPHICS_BOX_RAIL_ANIMATION: gfx.boxRailAnimation ?? gfx.boxRailsAnimation ?? gfx.box?.railAnimation,
+    PI_GRAPHICS_BOX_RAIL_TOP_HEIGHT: gfx.boxRailTopHeight ?? gfx.boxRailsTopHeight ?? gfx.boxRailHeight ?? gfx.boxRailsHeight ?? gfx.box?.railTopHeight ?? gfx.box?.railHeight,
+    PI_GRAPHICS_BOX_RAIL_BOTTOM_HEIGHT: gfx.boxRailBottomHeight ?? gfx.boxRailsBottomHeight ?? gfx.boxRailHeight ?? gfx.boxRailsHeight ?? gfx.box?.railBottomHeight ?? gfx.box?.railHeight,
     PI_GRAPHICS_DEBUG: gfx.debug != null ? String(gfx.debug) : undefined,
     PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx.debugPlaceholders != null ? String(gfx.debugPlaceholders) : undefined,
   };
@@ -316,6 +323,34 @@ export default function piGraphicsExtension(pi) {
     const env = gfxEnv();
     const raw = Number(env.PI_GRAPHICS_EDITOR_DELAY_MS);
     return Number.isFinite(raw) ? Math.max(8, Math.min(2000, Math.trunc(raw))) : 17;
+  }
+
+  function boxRailStyle() {
+    const raw = String(gfxEnv().PI_GRAPHICS_BOX_RAIL_STYLE || "").trim().toLowerCase();
+    return EDITOR_BORDER_STYLES.includes(raw) ? raw : editorBorderStyle();
+  }
+
+  function boxRailMode() {
+    const raw = String(gfxEnv().PI_GRAPHICS_BOX_RAIL_MODE || gfxEnv().PI_GRAPHICS_BOX_MODE || "unicode").trim().toLowerCase();
+    if (raw === "relative" || raw === "overlay") return "relative";
+    return "unicode";
+  }
+
+  function boxRailUnicodeMode() {
+    const raw = String(gfxEnv().PI_GRAPHICS_BOX_RAIL_UNICODE_MODE || "").trim().toLowerCase();
+    if (["topleft", "top-left", "top_left", "anchor", "single", "joined", "joinedunicode"].includes(raw)) return "topLeft";
+    return "fill";
+  }
+
+  function boxRailAnimationEnabled() {
+    const raw = String(gfxEnv().PI_GRAPHICS_BOX_RAIL_ANIMATION ?? "").trim().toLowerCase();
+    return ["1", "true", "yes", "on", "enabled", "animate", "animated"].includes(raw);
+  }
+
+  function boxRailHeight(edge) {
+    const env = gfxEnv();
+    const raw = Number(edge === "bottom" ? env.PI_GRAPHICS_BOX_RAIL_BOTTOM_HEIGHT : env.PI_GRAPHICS_BOX_RAIL_TOP_HEIGHT);
+    return Number.isFinite(raw) ? Math.max(1, Math.min(16, Math.trunc(raw))) : 1;
   }
 
   let writeGraphicsCommand = null;
@@ -2017,6 +2052,84 @@ export default function piGraphicsExtension(pi) {
     delete ui.__piGraphicsSurfacesPatched;
   }
 
+  function buildBoxRailRows({ width, edge, type = "assistant" }) {
+    if (!ensureUnicodePlacement(state)) return [];
+    const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
+    const cell = cellMetrics();
+    const height = boxRailHeight(edge);
+    const frames = boxRailAnimationEnabled() ? editorAnimationFrames() : 1;
+    const delayMs = editorAnimationDelayMs();
+    const color = getThemeColorHex(activeThemeRef, BOX_TYPE_THEME_TOKENS[type] || "accent", "#88c0d0");
+    const glow = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
+    const style = boxRailStyle();
+    const rendered = renderEditorBorderFramesPngs({
+      columns: cols,
+      rows: height,
+      edge,
+      ...cell,
+      frames,
+      borderColor: color,
+      glowColor: glow,
+      borderAlpha: Math.max(0.28, Math.min(0.75, editorAlpha() + 0.08)),
+      glowAlpha: Math.max(0.18, Math.min(0.66, editorAlpha() * 0.58)),
+      style,
+      context: "idle",
+    });
+    const unicodeMode = boxRailUnicodeMode();
+    const key = `box-rail-${type}-${edge}-${cols}x${height}-${style}-${boxRailMode()}-${unicodeMode}-${frames}-${color}-${glow}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
+    if (boxRailMode() === "unicode" && unicodeMode === "fill") {
+      const placement = frames > 1 ? buildAnimatedPlacement(state, {
+        name: key,
+        pngs: rendered.pngs,
+        delaysMs: Array.from({ length: frames }, () => delayMs),
+        columns: rendered.columns,
+        rows: rendered.rows,
+        width: cols,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+        autoLoop: true,
+      }) : buildPlacement(state, { name: key, png: rendered.pngs[0], columns: rendered.columns, rows: rendered.rows, width: cols, zIndex: PI_GRAPHICS_Z.SURFACE });
+      return placement.lines;
+    }
+    const imageId = piGraphicsImageId(key);
+    const placementId = boxRailMode() === "relative" ? piGraphicsPlaceholderPlacementId(`box-rail-anchor-placement-${type}-${edge}-${cols}`) : piGraphicsPlaceholderPlacementId(`box-rail-topleft-placement-${type}-${edge}-${cols}x${height}`);
+    if (!uploadedImages.has(imageId)) {
+      const transmit = frames > 1 ? buildPngVirtualPlacementAnimation({
+        imageId,
+        placementId,
+        pngBases: rendered.pngs.map((png) => bufferToBase64(png)),
+        delaysMs: Array.from({ length: frames }, () => delayMs),
+        columns: rendered.columns,
+        rows: rendered.rows,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+        passthrough: state.config.passthrough,
+        autoLoop: true,
+      }) : serializeKittyGraphicsChunks({ a: "T", f: 100, t: "d", i: imageId, p: placementId, U: 1, c: rendered.columns, r: rendered.rows, z: PI_GRAPHICS_Z.SURFACE, q: 2 }, bufferToBase64(rendered.pngs[0]), { passthrough: state.config.passthrough });
+      emitGraphicsCommand(transmit);
+      state.ownedImageIds.add(imageId);
+      uploadedImages.add(imageId);
+    }
+    const line = buildKittyUnicodePlaceholderLines({ imageId, placementId, columns: 1, rows: 1, width: cols })[0] ?? "";
+    return [line, ...Array.from({ length: Math.max(0, height - 1) }, () => emptyEditorBorderRow(cols))];
+  }
+
+  function createBoxRailsRuntime() {
+    const owned = new Set();
+    return {
+      applyToRows({ type, lines, renderWidth }) {
+        const input = Array.isArray(lines) ? lines : [];
+        if (!input.length) return input;
+        const width = Math.max(8, Math.trunc(Number(renderWidth) || Math.max(...input.map((line) => String(line || "").replace(/\x1b\[[0-9;]*m/g, "").length), 8)));
+        const before = new Set(state.ownedImageIds || []);
+        const top = buildBoxRailRows({ width, edge: "top", type });
+        const bottom = buildBoxRailRows({ width, edge: "bottom", type });
+        for (const id of state.ownedImageIds || []) if (!before.has(id)) owned.add(id);
+        return [...top, ...input, ...bottom];
+      },
+      resetCaches() { owned.clear(); },
+      ownedImageIds() { return new Set(owned); },
+    };
+  }
+
   function clearBoxChromeImages(ctx) {
     const owned = boxChromeRuntime?.ownedImageIds?.() || state.boxChromeImageIds || new Set();
     const scoped = buildScopedDeleteCommand({ ownedImageIds: owned });
@@ -2048,11 +2161,13 @@ export default function piGraphicsExtension(pi) {
   function installBoxChromeOnce(ctx, { force = false } = {}) {
     if (force) teardownBoxChrome(ctx);
     if (boxChromeInstalled) return;
-    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || !envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) {
+    const chromeEnabled = envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true);
+    const railsEnabled = envBool("PI_GRAPHICS_AUTO_BOX_RAILS", false);
+    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || (!chromeEnabled && !railsEnabled)) {
       teardownBoxChrome(ctx);
       return;
     }
-    const runtime = createBoxChromeRuntime({
+    const runtime = chromeEnabled ? createBoxChromeRuntime({
       emitGraphicsCommand,
       state,
       passthrough: state.config.passthrough,
@@ -2066,7 +2181,7 @@ export default function piGraphicsExtension(pi) {
         const colorRgb = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
         return { colorRgb };
       },
-    });
+    }) : createBoxRailsRuntime();
     boxChromeRuntime = runtime;
     const patch = installBoxChromeMonkeyPatch({
       components: boxChromeComponentMap(),
@@ -2202,7 +2317,7 @@ export default function piGraphicsExtension(pi) {
       if (themeName) ctx?.ui?.setTheme?.(themeName);
       activeThemeRef = ctx?.ui?.theme || activeThemeRef;
     } catch {}
-    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || !envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true)) {
+    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true) && !envBool("PI_GRAPHICS_AUTO_BOX_RAILS", false))) {
       teardownBoxChrome(ctx);
     } else {
       installBoxChromeOnce(ctx, { force: true });
@@ -2214,7 +2329,7 @@ export default function piGraphicsExtension(pi) {
 
   function settingsDisableBoxChrome(settings) {
     const nextEnv = settingsEnvFromPiGraphics(settings);
-    return modeIsOff(nextEnv.PI_GRAPHICS_MODE) || FALSE_RE.test(String(nextEnv.PI_GRAPHICS_AUTO_BOX_CHROME || "0"));
+    return modeIsOff(nextEnv.PI_GRAPHICS_MODE) || (FALSE_RE.test(String(nextEnv.PI_GRAPHICS_AUTO_BOX_CHROME || "0")) && FALSE_RE.test(String(nextEnv.PI_GRAPHICS_AUTO_BOX_RAILS || "0")));
   }
 
   async function applyGfxSettingsAndReload(ctx, settings, message = "Saved Pi Graphics settings. Reloading runtime to apply...") {
@@ -2580,6 +2695,9 @@ export default function piGraphicsExtension(pi) {
     const rows = [
       { key: "mode", label: "Mode", values: ["on", "off", "debug"], get: () => gfx.mode || "on", set: (v) => { gfx.mode = v; } },
       { key: "boxChrome", label: "Box chrome", values: ["on", "off"], get: () => gfx.boxChrome === true ? "on" : "off", set: (v) => { gfx.boxChrome = v === "on"; } },
+      { key: "boxRails", label: "Box rails", values: ["off", "on"], get: () => gfx.boxRails === true ? "on" : "off", set: (v) => { gfx.boxRails = v === "on"; } },
+      { key: "boxRailStyle", label: "Box rail style", values: ["gradient", "glass", "chrome", "geometric"], get: () => gfx.boxRailStyle || "gradient", set: (v) => { gfx.boxRailStyle = v; gfx.boxRails = true; } },
+      { key: "boxRailUnicodeMode", label: "Box rail unicode", values: ["fill", "topLeft"], get: () => gfx.boxRailUnicodeMode || "fill", set: (v) => { gfx.boxRailUnicodeMode = v; gfx.boxRails = true; } },
       { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "unicode", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
       { key: "boxEffect", label: "Box effect", values: effects, get: () => gfx.boxEffect || "auto", set: (v) => { if (v === "auto") delete gfx.boxEffect; else gfx.boxEffect = v; gfx.boxChrome = true; } },
       { key: "editor", label: "Editor placement", values: ["static", "unicode", "relative"], get: () => editor.style === "joinedUnicode" ? "unicode" : editor.style === "animated" ? "relative" : editor.style || "static", set: (v) => { editor.style = v; } },
@@ -2686,6 +2804,7 @@ export default function piGraphicsExtension(pi) {
           `  trailing fill:  ${editor.trailingWorkspace ? "on" : "off"}`,
           `  row background: ${editor.rowBackground ? "on" : "off"}`,
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
+          `  box rails:      ${gfx.boxRails === true ? "on" : "off"} style=${gfx.boxRailStyle || "editor"} unicode=${gfx.boxRailUnicodeMode || "fill"}`,
           `  box mode:       ${gfx.boxMode || "unicode"} (also: relative)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (use /gfx box effects for selectable names)`,
           `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary|effects|tokens|doctor|preview)`,
@@ -2699,7 +2818,8 @@ export default function piGraphicsExtension(pi) {
           "       /gfx border-height <1-16> | /gfx top-border-height <1-16> | /gfx bottom-border-height <1-16>",
           "       /gfx cursor-style glow|cell|off",
           "       /gfx trailing-workspace on|off | /gfx row-background on|off",
-          "       /gfx box on|off",
+          "       /gfx box on|off | /gfx box-rails on|off",
+          "       /gfx box-rail-style gradient|glass|chrome|geometric | /gfx box-rail-unicode-mode fill|topLeft",
           "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
           "       /gfx mode on|off|debug",
           "Ctrl+t cycles themes only when keybindings free it from app.thinking.toggle.",
@@ -2837,6 +2957,17 @@ export default function piGraphicsExtension(pi) {
           if (/^(on|true|1)$/.test(value)) { gfx.boxChrome = true; changed = true; }
           else if (/^(off|false|0)$/.test(value)) { gfx.boxChrome = false; changed = true; }
           else ctx.ui.notify(`unknown box value: ${value} (use on|off)`, "warning");
+        } else if (key === "box-rails" || key === "boxrails" || key === "rails") {
+          if (/^(on|true|1)$/.test(value)) { gfx.boxRails = true; changed = true; }
+          else if (/^(off|false|0)$/.test(value)) { gfx.boxRails = false; changed = true; }
+          else ctx.ui.notify(`unknown box rails value: ${value} (use on|off)`, "warning");
+        } else if (key === "box-rail-style" || key === "boxrailstyle" || key === "rail-style") {
+          if (["gradient", "glass", "chrome", "geometric"].includes(value)) { gfx.boxRailStyle = value; gfx.boxRails = true; changed = true; }
+          else ctx.ui.notify(`unknown box rail style: ${value} (use gradient|glass|chrome|geometric)`, "warning");
+        } else if (key === "box-rail-unicode-mode" || key === "boxrailunicodemode" || key === "rail-unicode-mode") {
+          if (["fill", "full"].includes(value)) { gfx.boxRailUnicodeMode = "fill"; gfx.boxRails = true; changed = true; }
+          else if (["topleft", "top-left", "top_left", "anchor", "joined"].includes(value)) { gfx.boxRailUnicodeMode = "topLeft"; gfx.boxRails = true; changed = true; }
+          else ctx.ui.notify(`unknown box rail unicode mode: ${value} (use fill|topLeft)`, "warning");
         } else if (key === "box-mode" || key === "boxmode") {
           if (value === "relative" || value === "unicode") { gfx.boxMode = value; gfx.boxChrome = true; changed = true; }
           else ctx.ui.notify(`unknown box mode: ${value} (use relative|unicode)`, "warning");

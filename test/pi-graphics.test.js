@@ -1375,6 +1375,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor\.rowBackground/);
   assert.match(source, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
   assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === true \? "1" : "0"/);
+  assert.match(source, /PI_GRAPHICS_AUTO_BOX_RAILS: off \? "0" : gfx\.boxRails === true \? "1" : "0"/);
+  assert.match(source, /PI_GRAPHICS_BOX_RAIL_STYLE/);
+  assert.match(source, /PI_GRAPHICS_BOX_RAIL_UNICODE_MODE/);
+  assert.match(source, /PI_GRAPHICS_BOX_RAIL_ANIMATION/);
   assert.match(source, /PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx\.exposeRenderTools/);
   assert.match(source, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode != null \? String\(gfx\.boxMode\) : "unicode"/);
   assert.match(source, /PI_GRAPHICS_DEBUG: gfx\.debug/);
@@ -1449,6 +1453,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /unknown editor animation: \$\{value\} \(use on\|off\)/);
   assert.match(source, /unknown unicode mode: \$\{value\} \(use fill\|topLeft\)/);
   assert.match(source, /function buildEditorRelativeBorderRow\(width, edge\)/);
+  assert.match(source, /function buildBoxRailRows\(\{ width, edge, type = "assistant" \}\)/);
+  assert.match(source, /function createBoxRailsRuntime\(\)/);
+  assert.match(source, /unicodeMode === "fill"/);
+  assert.match(source, /createBoxRailsRuntime\(\)/);
+  assert.match(source, /box-rail-/);
   assert.match(source, /const vOffset = edge === "top" \? -\(height - 1\) : 0/);
   assert.match(source, /const placementLineCache = new Map\(\)/);
   assert.match(source, /function cachedPlacementLine\(key, buildLine\)/);
@@ -1637,6 +1646,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /key === "trailing-workspace" \|\| key === "workspace-fill" \|\| key === "trailing"/);
   assert.match(source, /key === "row-background" \|\| key === "rowbg" \|\| key === "row-backgrounds"/);
   assert.match(source, /`  box chrome:     \$\{gfx\.boxChrome === true \? "on" : "off"\}`/);
+  assert.match(source, /`  box rails:      \$\{gfx\.boxRails === true \? "on" : "off"\}/);
+  assert.match(source, /box-rails on\|off/);
+  assert.match(source, /box-rail-style gradient\|glass\|chrome\|geometric/);
+  assert.match(source, /box-rail-unicode-mode fill\|topLeft/);
   assert.match(source, /`  box mode:       \$\{gfx\.boxMode \|\| "unicode"\} \(also: relative\)`/);
   assert.doesNotMatch(source, /`  box chrome:     \$\{gfx\.boxChrome === false \? "off" : "on"\}`/);
   assert.match(source, /`  box effect:     \$\{gfx\.boxEffect \|\| "per-type"\} \(use \/gfx box effects for selectable names\)`/);

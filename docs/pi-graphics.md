@@ -416,8 +416,14 @@ displayed using kitty Unicode placeholder cells, so:
   being skipped as isolated rows.
 * Box chrome is opt-in because live box placements can be visually janky in some
   terminals; enable it with `piGraphics.boxChrome: true` or `/gfx box on` when you
-  specifically want to inspect the effect set. Use `kitty-graphics-nord-transparent`
-  when Unicode or relative box chrome should be drawn on a blank terminal canvas;
+  specifically want to inspect the effect set. For transparent themes that should
+  keep subtle structure without side chrome, set `piGraphics.boxRails: true` or
+  use `/gfx box-rails on` while leaving box chrome off. Box rails draw only
+  top/bottom rails around native Pi boxes, using the same style names as the
+  editor border renderer via `piGraphics.boxRailStyle` (`gradient`, `glass`,
+  `chrome`, or `geometric`), optional animation, and Unicode anchoring modes
+  `fill` or `topLeft`. Use `kitty-graphics-nord-transparent` when Unicode or
+  relative box chrome/rails should be drawn on a blank terminal canvas;
   the normal `kitty-graphics-nord` theme keeps ordinary Pi box backgrounds but
   limits them to the canonical Nord palette. Unicode box mode clamps rendered rows
   to Pi's width hint before adding side placeholders, preventing the first/right
@@ -573,7 +579,11 @@ displayed using kitty Unicode placeholder cells, so:
   `editor.unicodeMode=topLeft`; legacy `/gfx editor animated` sets
   `editor.style=relative` and `editor.animation=true`.
 * Box borders are directional: top/bottom caps and left/right side cells render
-  different edge-specific PNGs, and unicode mode keeps the same line count as
+  different edge-specific PNGs, while box rails are horizontal-only and can be
+  used with `boxChrome: false`. Unicode rail mode `fill` paints placeholder cells
+  across the reserved rail rows; `topLeft` uses a single top-left placeholder as
+  an anchor for a full-width rail image, consuming fewer text cells and allowing
+  more overlap in Unicode mode. Full box unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative
   box mode anchors each full-row strip directly at its one-cell Unicode placeholder
   origin and intentionally emits no `H`/`V` offset, avoiding the cell-vs-pixel
