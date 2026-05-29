@@ -107,6 +107,31 @@ test("adaptive payload rewrite uses model settings instead of id filters", () =>
   assert.equal(payload.output_config.effort, "max");
 });
 
+test("adaptive payload rewrite clamps to model-declared output_config.effort values", () => {
+  const payload = patchAdaptiveThinkingPayload(
+    { thinking: { type: "enabled", budget_tokens: 1024 } },
+    { model: { id: "claude-opus-4.8", reasoning: true, supportedOutputConfigEfforts: ["medium"] }, level: "low", adaptive: true },
+  );
+  assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+  assert.equal(payload.output_config.effort, "medium");
+});
+
+test("fast adaptive payloads respect model-declared effort support", () => {
+  const payload = patchAdaptiveThinkingPayload(
+    { thinking: { type: "enabled", budget_tokens: 1024 } },
+    { model: { id: "claude-opus-4.8", reasoning: true, output_config: { efforts: ["medium"] } }, level: "high", fast: true },
+  );
+  assert.equal(payload.output_config.effort, "medium");
+});
+
+test("github-copilot Opus 4.8 avoids unsupported low effort even without refreshed model metadata", () => {
+  const payload = patchAdaptiveThinkingPayload(
+    { thinking: { type: "enabled", budget_tokens: 1024 } },
+    { model: { provider: "github-copilot", id: "claude-opus-4.8", reasoning: true }, level: "low", adaptive: true },
+  );
+  assert.equal(payload.output_config.effort, "medium");
+});
+
 test("/fast toggles adaptive low-effort payloads for supported models", async () => {
   const harness = makeHarness({ initialLevel: "high" });
   await harness.commands.get("fast").handler("", harness.ctx);

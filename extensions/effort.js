@@ -59,14 +59,51 @@ export function supportsAdaptiveThinkingModel(model) {
   return model?.reasoning === true;
 }
 
+function normalizeEffortValue(value) {
+  const effort = String(value || "").trim().toLowerCase();
+  return effort || undefined;
+}
+
+function modelSupportedEfforts(model) {
+  const modelId = String(model?.id || "").toLowerCase();
+  const provider = String(model?.provider || "").toLowerCase();
+  if (provider === "github-copilot" && modelId === "claude-opus-4.8") return ["medium"];
+
+  const candidates = [
+    model?.supportedOutputConfigEfforts,
+    model?.outputConfigEfforts,
+    model?.output_config_efforts,
+    model?.supportedEfforts,
+    model?.effortValues,
+    model?.outputConfig?.efforts,
+    model?.output_config?.efforts,
+  ];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    const values = candidate.map(normalizeEffortValue).filter(Boolean);
+    if (values.length > 0) return [...new Set(values)];
+  }
+  return undefined;
+}
+
+function clampEffortToModel(candidate, model) {
+  const effort = normalizeEffortValue(candidate);
+  if (!effort) return undefined;
+  const supported = modelSupportedEfforts(model);
+  if (!supported?.length) return effort;
+  if (supported.includes(effort)) return effort;
+  if (supported.includes("medium")) return "medium";
+  return supported[0];
+}
+
 function effortForLevel(level, model) {
   const mapped = level ? model?.thinkingLevelMap?.[level] : undefined;
-  if (typeof mapped === "string") return mapped;
-  if (level === "minimal" || level === "low") return "low";
-  if (level === "medium") return "medium";
-  if (level === "high") return "high";
-  if (level === "xhigh") return "xhigh";
-  if (level === "adaptive") return "medium";
+  if (typeof mapped === "string") return clampEffortToModel(mapped, model);
+  if (level === "minimal" || level === "low") return clampEffortToModel("low", model);
+  if (level === "medium") return clampEffortToModel("medium", model);
+  if (level === "high") return clampEffortToModel("high", model);
+  if (level === "xhigh") return clampEffortToModel("xhigh", model);
+  if (level === "adaptive") return clampEffortToModel("medium", model);
   return undefined;
 }
 
@@ -78,7 +115,7 @@ export function patchAdaptiveThinkingPayload(payload, { model, level, adaptive =
   if (!wantsAdaptive) return payload;
   const display = thinking?.display ?? "summarized";
   next.thinking = { type: "adaptive", ...(display !== undefined ? { display } : {}) };
-  const effort = fast ? "low" : effortForLevel(level || "medium", model);
+  const effort = fast ? effortForLevel("low", model) : effortForLevel(level || "medium", model);
   if (effort) next.output_config = { ...(next.output_config || {}), effort };
   return next;
 }
