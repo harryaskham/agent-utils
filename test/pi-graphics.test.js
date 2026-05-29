@@ -1540,6 +1540,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /width: FOOTER_DIVIDER_WIDTH/);
   assert.match(source, /key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 96/);
   assert.match(source, /key: "model", token: "customMessageLabel", value: model, truncate: noEllipsisFooterText, min: Math\.max\(8, approximateVisibleCells\(model\)\), max: 96, priority: "primary"/);
+  assert.match(source, /pi\?\.agentUtilsEffort\?\.getLevel\?\.\(ctx\) \|\| pi\?\.getThinkingLevel\?\.\(\) \|\| "off"/);
   assert.match(source, /const shrinkOrder = \[0, 5, 3, 1, 2, 4\]/);
   assert.match(source, /const modelSegment = segments\.find\(\(segment\) => segment\.key === "model"\)/);
   assert.match(source, /if \(modelSegment\) modelSegment\.width \+= spare/);

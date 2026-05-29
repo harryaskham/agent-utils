@@ -13,12 +13,14 @@ import effortExtension, {
   supportsAdaptiveThinkingModel,
 } from "../extensions/effort.js";
 
-function makeHarness({ initialLevel = "medium", clamp, model = { provider: "github-copilot", id: "arbitrary-adaptive-model", reasoning: true, thinkingLevelMap: { xhigh: "max" } }, models = [] } = {}) {
+function makeHarness({ initialLevel = "medium", clamp, model = { provider: "github-copilot", id: "arbitrary-adaptive-model", reasoning: true, thinkingLevelMap: { xhigh: "max" } }, models = [], settings = {} } = {}) {
   let thinkingLevel = initialLevel;
   const commands = new Map();
   const handlers = new Map();
   const notifications = [];
   const registryModels = [model, ...models];
+  const dir = mkdtempSync(join(tmpdir(), "agent-utils-effort-harness-"));
+  writeFileSync(join(dir, "settings.json"), JSON.stringify(settings));
   const ctx = {
     model,
     modelRegistry: {
@@ -39,8 +41,16 @@ function makeHarness({ initialLevel = "medium", clamp, model = { provider: "gith
     supportsThinking() { return true; },
     async setModel(next) { ctx.model = next; return true; },
   };
-  effortExtension(pi);
-  return { commands, handlers, notifications, ctx, get thinkingLevel() { return thinkingLevel; } };
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  try {
+    effortExtension(pi);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return { pi, commands, handlers, notifications, ctx, get thinkingLevel() { return thinkingLevel; } };
 }
 
 test("effort helpers validate and render supported thinking levels", () => {
@@ -107,22 +117,26 @@ test("/effort rejects unsupported levels without changing state", async () => {
   assert.match(harness.notifications.at(-1).message, /Unsupported effort level: turbo/);
 });
 
+test("effort extension exposes adaptive state for status/footer integrations", async () => {
+  const harness = makeHarness({ initialLevel: "medium" });
+  assert.equal(harness.pi.agentUtilsEffort.getLevel(harness.ctx), "medium");
+  await harness.commands.get("effort").handler("adaptive", harness.ctx);
+  assert.equal(harness.pi.agentUtilsEffort.getLevel(harness.ctx), "adaptive");
+  assert.equal(harness.pi.agentUtilsEffort.isAdaptive(), true);
+  await harness.commands.get("effort").handler("high", harness.ctx);
+  assert.equal(harness.pi.agentUtilsEffort.getLevel(harness.ctx), "high");
+  assert.equal(harness.pi.agentUtilsEffort.isAdaptive(), false);
+});
+
 test("adaptive true default enables adaptive payload rewrite on session start", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "agent-utils-effort-default-"));
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  try {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ agentUtils: { trueDefaults: { thinkingLevel: "adaptive" } } }));
-    process.env.PI_CODING_AGENT_DIR = dir;
-    const harness = makeHarness({ initialLevel: "medium" });
-    await harness.handlers.get("session_start")?.({}, harness.ctx);
-    const payload = harness.handlers.get("before_provider_request")({ payload: { thinking: { type: "enabled", budget_tokens: 2048 } } }, harness.ctx);
-    assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
-    assert.equal(payload.output_config.effort, "medium");
-  } finally {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const harness = makeHarness({
+    initialLevel: "medium",
+    settings: { agentUtils: { trueDefaults: { thinkingLevel: "adaptive" } } },
+  });
+  await harness.handlers.get("session_start")?.({}, harness.ctx);
+  const payload = harness.handlers.get("before_provider_request")({ payload: { thinking: { type: "enabled", budget_tokens: 2048 } } }, harness.ctx);
+  assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+  assert.equal(payload.output_config.effort, "medium");
 });
 
 test("/effort adaptive enables adaptive payload rewrite without clamping through Pi core", async () => {

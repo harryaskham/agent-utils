@@ -195,6 +195,11 @@ function findFastCounterpart(ctx, model, force) {
 export default function effortExtension(pi) {
   let adaptiveMode = configuredDefaultEffort() === "adaptive";
 
+  pi.agentUtilsEffort = {
+    getLevel(ctx) { return adaptiveMode ? "adaptive" : getThinkingLevel(pi, ctx); },
+    isAdaptive() { return adaptiveMode; },
+  };
+
   pi.on?.("session_start", () => {
     adaptiveMode = configuredDefaultEffort() === "adaptive";
   });

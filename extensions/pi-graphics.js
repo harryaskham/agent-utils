@@ -1528,7 +1528,7 @@ export default function piGraphicsExtension(pi) {
       { key: "context", token: "thinkingXhigh", value: context, truncate: truncateFooterEnd, min: 5, max: 18 },
       { key: "compact", token: "borderAccent", value: `${compactFooterModeLabel()} (${footerState.compactions})`, truncate: truncateFooterEnd, min: 5, max: 16 },
       { key: "model", token: "customMessageLabel", value: model, truncate: noEllipsisFooterText, min: Math.max(8, approximateVisibleCells(model)), max: 96, priority: "primary" },
-      { key: "thinking", token: "muted", value: pi?.getThinkingLevel?.() || "off", truncate: truncateFooterEnd, min: 3, max: 12 },
+      { key: "thinking", token: "muted", value: pi?.agentUtilsEffort?.getLevel?.(ctx) || pi?.getThinkingLevel?.() || "off", truncate: truncateFooterEnd, min: 3, max: 12 },
     ];
   }
 
