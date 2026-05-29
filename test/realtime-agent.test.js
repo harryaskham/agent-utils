@@ -489,6 +489,7 @@ test("realtime provider registers during extension startup with a dedicated API"
 
   try {
     assert.equal(providers.get("openai-realtime")?.api, "openai-realtime");
+    assert.equal(providers.get("openai-realtime")?.apiKey, "$PI_RT_API_KEY");
     assert.ok(providers.get("openai-realtime")?.models?.some((model) => model.id === "gpt-realtime-2"));
     handlers.get("session_start")?.({ reason: "startup" }, ctx);
     await commands.get("rt").handler("start nolisten", ctx);

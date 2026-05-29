@@ -2368,7 +2368,7 @@ function unregisterRealtimeProvider(_pi) {
 
 function registerRealtimeProvider(pi, session) {
   const baseUrl = env("PI_RT_BASE_URL", "OPENAI_BASE_URL") || "https://api.openai.com";
-  const apiKey = env("PI_RT_API_KEY") ? "PI_RT_API_KEY" : "OPENAI_API_KEY";
+  const apiKey = env("PI_RT_API_KEY") ? "$PI_RT_API_KEY" : "$OPENAI_API_KEY";
   const models = [
     {
       id: "gpt-realtime-2",
