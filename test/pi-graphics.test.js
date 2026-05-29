@@ -1448,6 +1448,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"/);
   assert.match(source, /function editorAnimationEnabled\(\)/);
   assert.match(source, /function editorUnicodeMode\(\)/);
+  assert.match(source, /function normalizeEditorGraphicsCombination\(editor = \{\}\)/);
+  assert.match(source, /if \(editor\.animation && editor\.style === "static"\) editor\.style = "relative"/);
+  assert.match(source, /if \(editor\.style !== "unicode"\) delete editor\.unicodeMode/);
   assert.match(source, /PI_GRAPHICS_EDITOR_ANIMATION/);
   assert.match(source, /PI_GRAPHICS_EDITOR_UNICODE_MODE/);
   assert.match(source, /values: \["static", "unicode", "relative"\]/);
@@ -1461,6 +1464,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-animation on\|off \| \/gfx unicode-mode fill\|topLeft/);
   assert.match(source, /unknown editor style: \$\{value\} \(use static\|unicode\|relative; legacy: joinedUnicode\|animated\)/);
   assert.match(source, /unknown editor animation: \$\{value\} \(use on\|off\)/);
+  assert.match(source, /editor\.style = "unicode"; editor\.unicodeMode = "fill"; normalizeEditorGraphicsCombination\(editor\)/);
+  assert.match(source, /editor\.style = "unicode"; editor\.unicodeMode = "topLeft"; normalizeEditorGraphicsCombination\(editor\)/);
   assert.match(source, /unknown unicode mode: \$\{value\} \(use fill\|topLeft\)/);
   assert.match(source, /function buildEditorRelativeBorderRow\(width, edge\)/);
   assert.match(source, /function editorBorderNeedsWidget\(edge\)/);
@@ -1709,6 +1714,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /model=gauge  settings=console  thinking=candle/);
   assert.match(source, /key: "cursorStyle", label: "Cursor style", values: \["glow", "cell", "off"\]/);
   assert.match(source, /key: "trailingWorkspace", label: "Trailing workspace", values: \["off", "on"\]/);
+  assert.match(source, /key: "unicodeMode", label: "Unicode mode", values: \["fill", "topLeft"\].*editor\.style = "unicode"/s);
   assert.match(source, /key: "rowBackground", label: "Row background", values: \["off", "on"\]/);
   assert.match(source, /key: "typingImpulse", label: "Typing impulse", values: \["on", "off"\]/);
   assert.match(source, /__piGraphicsNoWrap: true,\n\s+piGraphics: false/);

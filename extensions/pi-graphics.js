@@ -2766,6 +2766,23 @@ export default function piGraphicsExtension(pi) {
     return lines;
   }
 
+  function normalizeEditorGraphicsCombination(editor = {}) {
+    const raw = String(editor.style || "static").trim();
+    if (["joinedUnicode", "joinedunicode", "joined-unicode", "joined_unicode", "joined"].includes(raw)) {
+      editor.style = "unicode";
+      editor.unicodeMode = "topLeft";
+    } else if (raw === "animated") {
+      editor.style = "relative";
+      editor.animation = true;
+    } else if (!["static", "unicode", "relative"].includes(raw)) {
+      editor.style = "static";
+    }
+    if (editor.animation && editor.style === "static") editor.style = "relative";
+    if (editor.style !== "unicode") delete editor.unicodeMode;
+    if (editor.style === "unicode" && !["fill", "topLeft"].includes(editor.unicodeMode || "fill")) editor.unicodeMode = "fill";
+    return editor;
+  }
+
   async function showGfxSettingsWindow(ctx, settings, gfx, editor) {
     const effects = ["auto", ...BOX_EFFECT_NAMES];
     const rows = [
@@ -2777,9 +2794,9 @@ export default function piGraphicsExtension(pi) {
       { key: "boxRailUnicodeMode", label: "Box rail unicode", values: ["fill", "topLeft"], get: () => gfx.boxRailUnicodeMode || "fill", set: (v) => { gfx.boxRailUnicodeMode = v; gfx.boxRails = true; } },
       { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "unicode", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
       { key: "boxEffect", label: "Box effect", values: effects, get: () => gfx.boxEffect || "auto", set: (v) => { if (v === "auto") delete gfx.boxEffect; else gfx.boxEffect = v; gfx.boxChrome = true; } },
-      { key: "editor", label: "Editor placement", values: ["static", "unicode", "relative"], get: () => editor.style === "joinedUnicode" ? "unicode" : editor.style === "animated" ? "relative" : editor.style || "static", set: (v) => { editor.style = v; } },
-      { key: "editorAnimation", label: "Editor animation", values: ["off", "on"], get: () => editor.animation ? "on" : "off", set: (v) => { editor.animation = v === "on"; } },
-      { key: "unicodeMode", label: "Unicode mode", values: ["fill", "topLeft"], get: () => editor.unicodeMode || (editor.style === "joinedUnicode" ? "topLeft" : "fill"), set: (v) => { editor.unicodeMode = v; if (editor.style === "joinedUnicode") editor.style = "unicode"; } },
+      { key: "editor", label: "Editor placement", values: ["static", "unicode", "relative"], get: () => editor.style === "joinedUnicode" ? "unicode" : editor.style === "animated" ? "relative" : editor.style || "static", set: (v) => { editor.style = v; normalizeEditorGraphicsCombination(editor); } },
+      { key: "editorAnimation", label: "Editor animation", values: ["off", "on"], get: () => editor.animation ? "on" : "off", set: (v) => { editor.animation = v === "on"; normalizeEditorGraphicsCombination(editor); } },
+      { key: "unicodeMode", label: "Unicode mode", values: ["fill", "topLeft"], get: () => editor.style === "unicode" ? (editor.unicodeMode || "fill") : "fill", set: (v) => { editor.style = "unicode"; editor.unicodeMode = v; normalizeEditorGraphicsCombination(editor); } },
       { key: "borderStyle", label: "Border style", values: ["gradient", "glass", "chrome", "geometric"], get: () => editor.borderStyle || "gradient", set: (v) => { editor.borderStyle = v; } },
       { key: "topBorderHeight", label: "Top border height", values: ["1", "2", "3", "4", "5", "6"], get: () => String(editor.topBorderHeight ?? editor.borderHeight ?? 1), set: (v) => { editor.topBorderHeight = Number(v); } },
       { key: "bottomBorderHeight", label: "Bottom border height", values: ["1", "2", "3", "4", "5", "6"], get: () => String(editor.bottomBorderHeight ?? editor.borderHeight ?? 1), set: (v) => { editor.bottomBorderHeight = Number(v); } },
@@ -2852,6 +2869,7 @@ export default function piGraphicsExtension(pi) {
       ? await ctx.ui.custom(componentFactory, { overlay: true, piGraphics: false, overlayOptions: { width: "70%", minWidth: 54, maxHeight: "80%", anchor: "center", margin: 1 } })
       : "notify";
     if (result === "save") {
+      normalizeEditorGraphicsCombination(editor);
       await applyGfxSettingsAndReload(ctx, settings, "Saved Pi Graphics settings. Reloading runtime to apply...");
     } else if (result === "notify") {
       ctx.ui.notify("This Pi runtime does not expose custom overlay UI; use /gfx status, /gfx box-effect auto, or /gfx debug.", "warning");
@@ -2995,17 +3013,17 @@ export default function piGraphicsExtension(pi) {
         const value = String(tokens[i + 1] || "").toLowerCase();
         if (!key || !value) continue;
         if (key === "editor") {
-          if (["static", "unicode", "relative"].includes(value)) { editor.style = value; changed = true; }
-          else if (["joinedunicode", "joined-unicode", "joined_unicode", "joined"].includes(value)) { editor.style = "unicode"; editor.unicodeMode = "topLeft"; changed = true; }
-          else if (value === "animated") { editor.style = "relative"; editor.animation = true; changed = true; }
+          if (["static", "unicode", "relative"].includes(value)) { editor.style = value; normalizeEditorGraphicsCombination(editor); changed = true; }
+          else if (["joinedunicode", "joined-unicode", "joined_unicode", "joined"].includes(value)) { editor.style = "unicode"; editor.unicodeMode = "topLeft"; normalizeEditorGraphicsCombination(editor); changed = true; }
+          else if (value === "animated") { editor.style = "relative"; editor.animation = true; normalizeEditorGraphicsCombination(editor); changed = true; }
           else ctx.ui.notify(`unknown editor style: ${value} (use static|unicode|relative; legacy: joinedUnicode|animated)`, "warning");
         } else if (key === "editor-animation" || key === "editoranimation" || key === "animation") {
-          if (["on", "true", "1", "yes"].includes(value)) { editor.animation = true; changed = true; }
-          else if (["off", "false", "0", "no"].includes(value)) { editor.animation = false; changed = true; }
+          if (["on", "true", "1", "yes"].includes(value)) { editor.animation = true; normalizeEditorGraphicsCombination(editor); changed = true; }
+          else if (["off", "false", "0", "no"].includes(value)) { editor.animation = false; normalizeEditorGraphicsCombination(editor); changed = true; }
           else ctx.ui.notify(`unknown editor animation: ${value} (use on|off)`, "warning");
         } else if (key === "unicode-mode" || key === "unicodemode" || key === "unicode") {
-          if (["fill", "full"].includes(value)) { editor.unicodeMode = "fill"; if (editor.style === "joinedUnicode") editor.style = "unicode"; changed = true; }
-          else if (["topleft", "top-left", "top_left", "anchor", "joined", "joinedunicode"].includes(value)) { editor.unicodeMode = "topLeft"; if (editor.style === "joinedUnicode") editor.style = "unicode"; changed = true; }
+          if (["fill", "full"].includes(value)) { editor.style = "unicode"; editor.unicodeMode = "fill"; normalizeEditorGraphicsCombination(editor); changed = true; }
+          else if (["topleft", "top-left", "top_left", "anchor", "joined", "joinedunicode"].includes(value)) { editor.style = "unicode"; editor.unicodeMode = "topLeft"; normalizeEditorGraphicsCombination(editor); changed = true; }
           else ctx.ui.notify(`unknown unicode mode: ${value} (use fill|topLeft)`, "warning");
         } else if (key === "border-style" || key === "borderstyle" || key === "editor-border-style" || key === "editor-graphic-style") {
           if (["gradient", "glass", "chrome", "geometric"].includes(value)) { editor.borderStyle = value; changed = true; }
@@ -3073,6 +3091,7 @@ export default function piGraphicsExtension(pi) {
         }
       }
       if (!changed) { describe(); return; }
+      normalizeEditorGraphicsCombination(editor);
       await applyGfxSettingsAndReload(ctx, settings);
     },
   });

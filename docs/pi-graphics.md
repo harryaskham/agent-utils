@@ -586,10 +586,13 @@ displayed using kitty Unicode placeholder cells, so:
   `/gfx editor-animation on|off`, `/gfx unicode-mode fill|topLeft`, `/gfx
   border-height <1-16>`, `/gfx top-border-height <1-16>`, `/gfx
   bottom-border-height <1-16>`, `/gfx cursor-style glow|cell|off`, `/gfx
-  trailing-workspace on|off`, and `/gfx row-background on|off`. Legacy `/gfx
-  editor joinedUnicode` sets `editor.style=unicode` and
-  `editor.unicodeMode=topLeft`; legacy `/gfx editor animated` sets
-  `editor.style=relative` and `editor.animation=true`.
+  trailing-workspace on|off`, `/gfx row-background on|off`, and `/gfx
+  typing-impulse on|off`. The settings path normalizes incompatible editor
+  combinations: choosing `unicode-mode` switches placement to `unicode`, choosing
+  `editor static` clears Unicode anchor mode, and enabling editor animation from
+  `static` promotes placement to `relative`. Legacy `/gfx editor joinedUnicode`
+  sets `editor.style=unicode` and `editor.unicodeMode=topLeft`; legacy `/gfx
+  editor animated` sets `editor.style=relative` and `editor.animation=true`.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, while box rails are horizontal-only and can be
   used with `boxChrome: false`. Unicode rail mode `fill` paints placeholder cells
