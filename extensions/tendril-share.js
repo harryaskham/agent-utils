@@ -312,13 +312,13 @@ function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, desc
   });
 }
 
-async function previewInKitty(pngBase64, outputPath) {
-  if (!previewConfig().enabled || !process.stdout?.isTTY) return;
+async function previewInKitty(pngBase64, outputPath, { streamKey } = {}) {
+  if (!previewConfig().enabled || !process.stdout?.isTTY) return null;
   try {
     const columns = clampInteger(process.env.TENDRIL_SHARE_PREVIEW_COLUMNS, 64, 8, 200);
     const dims = await readPngDimensions(outputPath).catch(() => ({ width: 1280, height: 720 }));
     const rows = estimateRowsForImage({ imageWidth: dims.width, imageHeight: dims.height, columns, maxRows: 24, minRows: 4 });
-    const imageId = stableKittyImageId(`tendril-share:${outputPath}`);
+    const imageId = stableKittyImageId(streamKey ? `tendril-share-stream:${streamKey}` : `tendril-share:${outputPath}`);
     const sequence = buildPngDisplayCommand({
       imageId,
       placementId: 1,
@@ -328,8 +328,10 @@ async function previewInKitty(pngBase64, outputPath) {
       passthrough: "auto",
     });
     process.stdout.write(`\n${sequence}\n`);
+    return { imageId, columns, rows, outputPath, streamKey: streamKey || null };
   } catch {
     // best-effort preview; ignore failures (non-kitty terminal, etc.)
+    return null;
   }
 }
 
@@ -460,17 +462,19 @@ async function sendStreamFrame(pi, ctx, stream) {
     { type: "text", text },
     { type: "image", data: captured.data, mimeType: PNG_MIME },
   ], options);
-  await previewInKitty(captured.data, captured.outputPath);
+  const preview = await previewInKitty(captured.data, captured.outputPath, { streamKey: `${stream.kind}:${stream.target.id}` });
   emitCaptureHistory(pi, { action: stream.pathOnly ? `stream frame ${stream.frame} path` : `stream frame ${stream.frame}`, kind: stream.kind, target: stream.target, outputPath: captured.outputPath, queued: !!options });
   stream.lastFrameAt = Date.now();
   stream.lastOutputPath = captured.outputPath;
+  stream.lastPreview = preview;
   return captured;
 }
 
 function streamStatusText(stream) {
   if (!stream) return "No active Tendril stream.";
   const last = stream.lastFrameAt ? new Date(stream.lastFrameAt).toLocaleTimeString() : "never";
-  return `Tendril stream active: ${stream.kind} ${stream.target.id} (${stream.target.label || stream.target.id}), every ${Math.round(stream.intervalMs / 1000)}s, frames sent ${stream.frame}, last frame ${last}.`;
+  const preview = stream.lastPreview ? `, kitty preview image=${stream.lastPreview.imageId}` : `, kitty preview=${previewConfig().enabled ? "pending" : "off"}`;
+  return `Tendril stream active: ${stream.kind} ${stream.target.id} (${stream.target.label || stream.target.id}), every ${Math.round(stream.intervalMs / 1000)}s, frames sent ${stream.frame}, last frame ${last}${preview}.`;
 }
 
 function textResult(text, data = undefined) {

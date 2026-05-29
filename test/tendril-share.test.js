@@ -201,6 +201,7 @@ test("tendril_stream tool starts, reports, and stops queued frame streaming", as
 
     const status = await tools.get("tendril_stream").execute("call-2", { action: "status" }, new AbortController().signal);
     assert.match(status.content[0].text, /frames sent 1/);
+    assert.match(status.content[0].text, /kitty preview=(pending|off)|kitty preview image=/);
     const stopped = await tools.get("tendril_stream").execute("call-3", { action: "stop" }, new AbortController().signal);
     assert.match(stopped.content[0].text, /Stopped Tendril stream/);
   } finally {
@@ -404,6 +405,7 @@ test("/tendril stream sends low-resolution frames and can be stopped", async () 
 
     await commands.get("tendril").handler("stream status", ctx);
     assert.match(notifications.at(-1).message, /Tendril stream active/);
+    assert.match(notifications.at(-1).message, /kitty preview=(pending|off)|kitty preview image=/);
     await commands.get("tendril").handler("stream stop", ctx);
     assert.match(notifications.at(-1).message, /Stopped Tendril stream/);
   } finally {
