@@ -1432,8 +1432,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
   assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}-\$\{contextMode\}/);
   assert.match(source, /columns: 1,\n\s+rows: 1,\n\s+width: visualCols/);
-  assert.match(source, /edge === "top" && height > 1\) return \[emptyEditorBorderRow\(width\)\]/);
+  assert.match(source, /edge === "top" && height > 1/);
+  assert.match(source, /const row = buildEditorRelativeBorderRow\(width, edge\)/);
   assert.match(source, /function buildEditorBorderWidgetRows\(width, edge\)/);
+  assert.match(source, /if \(edge === "top"\) return \[\]/);
   assert.match(source, /rows\.slice\(0, -1\).*rows\.slice\(1\)/s);
   assert.match(source, /editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"/);
   assert.match(source, /function editorAnimationEnabled\(\)/);
@@ -1453,6 +1455,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /unknown editor animation: \$\{value\} \(use on\|off\)/);
   assert.match(source, /unknown unicode mode: \$\{value\} \(use fill\|topLeft\)/);
   assert.match(source, /function buildEditorRelativeBorderRow\(width, edge\)/);
+  assert.match(source, /function editorBorderNeedsWidget\(edge\)/);
+  assert.match(source, /editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft" && edge === "top"/);
+  assert.match(source, /A top-left Unicode placement can only grow down from its anchor/);
   assert.match(source, /function buildBoxRailRows\(\{ width, edge, type = "assistant" \}\)/);
   assert.match(source, /function createBoxRailsRuntime\(\)/);
   assert.match(source, /unicodeMode === "fill"/);

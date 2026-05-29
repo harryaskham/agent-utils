@@ -504,17 +504,18 @@ displayed using kitty Unicode placeholder cells, so:
   editor mode, heights above `1` add same-ID placeholder widget rows above or
   below the editor so the terminal sees one contiguous `width × height` rectangle
   for the single border image when `unicodeMode` is `fill`. `unicodeMode:
-  "topLeft"` (legacy `joinedUnicode`) is the single-anchor variant for multi-row
-  Unicode borders: top borders reserve `height - 1` rows in the above-editor
-  widget and draw one full-width `width × height` PNG from a single placeholder
-  at widget cell 0,0 while the editor rail row is blank; bottom borders put the
-  single placeholder on the editor rail and reserve empty rows in
-  the below-editor widget. These editor graphics widgets mark themselves as
-  full-width surfaces so right-side preview panels do not shrink the render
-  width; if an image preview overlaps the right half of the terminal, the editor
-  chrome still renders at 100% terminal width and wins those rows. This avoids
-  relative placements and avoids filling the whole reserved widget with
-  placeholder cells, leaving text cells usable around the singleton anchor. Its
+  "topLeft"` (legacy `joinedUnicode`) is the single-anchor variant. Single-row
+  rails use one top-left Unicode placeholder. Taller top borders cannot grow
+  upward from a top-left virtual placement without a detached above-editor widget,
+  so they automatically use the same relative upward placement as `relative`
+  style (`V=-(height-1)`) while preserving `topLeft` for single-row and bottom
+  rails. Bottom top-left borders put the single placeholder on the editor rail and
+  reserve empty rows in the below-editor widget. These editor graphics widgets
+  mark themselves as full-width surfaces so right-side preview panels do not
+  shrink the render width; if an image preview overlaps the right half of the
+  terminal, the editor chrome still renders at 100% terminal width and wins those
+  rows. This avoids filling the whole reserved widget with placeholder cells,
+  leaving text cells usable around the singleton anchor. Its
   render key includes the same rail heat buckets as
   `unicode`, so typing-speed heat redraws are at parity with the existing Unicode
   border effects. Because animation is now separate from placement, Unicode

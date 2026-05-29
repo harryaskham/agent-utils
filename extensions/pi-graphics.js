@@ -1070,7 +1070,16 @@ export default function piGraphicsExtension(pi) {
   function buildEditorBorderRows(width, edge) {
     if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
       const height = editorBorderRenderSpec(width, edge).height;
-      if (edge === "top" && height > 1) return [emptyEditorBorderRow(width)];
+      if (edge === "top" && height > 1) {
+        // A top-left Unicode placement can only grow down from its anchor. Using
+        // an above-editor widget for the anchor makes a lone left-to-right rail
+        // appear detached from the editor until the next editor repaint. For
+        // taller top borders, keep the topLeft setting for single-row cases but
+        // use the relative path so the border is anchored on the editor row and
+        // placed upward by V=-(height-1).
+        const row = buildEditorRelativeBorderRow(width, edge);
+        return row ? [row] : null;
+      }
       const line = buildJoinedUnicodeEditorBorderLine(width, edge);
       return line ? [line] : null;
     }
@@ -1695,16 +1704,19 @@ export default function piGraphicsExtension(pi) {
     if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
       const height = editorBorderHeight(edge);
       if (height <= 1) return [];
-      if (edge === "top") {
-        const line = buildJoinedUnicodeEditorBorderLine(width, edge);
-        return line ? [line, ...Array.from({ length: Math.max(0, height - 2) }, () => emptyEditorBorderRow(width))] : [];
-      }
+      if (edge === "top") return [];
       return Array.from({ length: height - 1 }, () => emptyEditorBorderRow(width));
     }
     if (editorBorderUsesRelativePlacement()) return [];
     const rows = buildEditorBorderRows(width, edge);
     if (!rows || rows.length <= 1) return [];
     return edge === "top" ? rows.slice(0, -1) : rows.slice(1);
+  }
+
+  function editorBorderNeedsWidget(edge) {
+    if (editorBorderUsesRelativePlacement()) return false;
+    if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft" && edge === "top") return false;
+    return editorBorderHeight(edge) > 1;
   }
 
   function isEditorChromeLine(line) {
@@ -1798,8 +1810,8 @@ export default function piGraphicsExtension(pi) {
   function mountEditorRails(ctx) {
     if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return;
     if (typeof ctx.ui?.setWidget !== "function") return;
-    const topNeedsWidget = (!editorBorderUsesRelativePlacement()) && editorBorderHeight("top") > 1;
-    const bottomNeedsWidget = (!editorBorderUsesRelativePlacement()) && editorBorderHeight("bottom") > 1;
+    const topNeedsWidget = editorBorderNeedsWidget("top");
+    const bottomNeedsWidget = editorBorderNeedsWidget("bottom");
     const factory = (edge) => (tui, theme) => ({
       __piGraphicsNoWrap: true,
       __piGraphicsFullWidthWidget: true,
