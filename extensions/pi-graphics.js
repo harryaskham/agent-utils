@@ -312,14 +312,15 @@ export default function piGraphicsExtension(pi) {
   }
 
   function runningInsideTmux() {
-    return Boolean(gfxEnv().TMUX);
+    return Boolean(gfxEnv().TMUX) || /screen|tmux/i.test(String(gfxEnv().TERM || ""));
   }
 
   function tmuxLiveEditorGraphicsEnabled() {
-    return !runningInsideTmux() || envBool("PI_GRAPHICS_TMUX_LIVE_EDITOR", false);
+    return !runningInsideTmux() || envBool("PI_GRAPHICS_TMUX_LIVE_EDITOR", false) || envBool("PI_GRAPHICS_EDITOR_DYNAMIC_IN_TMUX", false);
   }
 
   function editorDynamicHeatEnabled() {
+    if (!envBool("PI_GRAPHICS_EDITOR_DYNAMIC", true)) return false;
     return tmuxLiveEditorGraphicsEnabled();
   }
 
@@ -500,6 +501,7 @@ export default function piGraphicsExtension(pi) {
     editorBackgroundPlacementKey = null;
   }
 
+
   function requestEditorDecorativeRender() {
     // Decorative editor graphics updates must not force a full TUI redraw: in real
     // terminals/tmux that can jump scrollback back to the live bottom while the
@@ -533,7 +535,7 @@ export default function piGraphicsExtension(pi) {
     // contextual mask remains static until real editor state changes unless the
     // diagnostic redraw path is explicitly enabled. In tmux, keep this off by
     // default because repeated editor redraws can trigger full-screen flicker.
-    if (!tmuxLiveEditorGraphicsEnabled() || editorAnimationEnabled() || !editorContextRedrawEnabled()) return;
+    if (!editorDynamicHeatEnabled() || editorAnimationEnabled() || !editorContextRedrawEnabled()) return;
     if (editorContextTimer || !editorRenderTui || editorContextMode !== "thinking") return;
     editorContextTimer = setTimeout(() => {
       editorContextTimer = null;
@@ -548,15 +550,15 @@ export default function piGraphicsExtension(pi) {
   function setEditorContextMode(mode = "idle") {
     const next = String(mode || "idle").toLowerCase() === "thinking" ? "thinking" : "idle";
     if (editorContextMode === next) {
-      if (next === "thinking") requestEditorContextFrame();
+      if (next === "thinking" && editorDynamicHeatEnabled()) requestEditorContextFrame();
       return;
     }
     editorContextMode = next;
     editorContextTick = (editorContextTick + 1) % 4096;
     if (editorContextTimer) clearTimeout(editorContextTimer);
     editorContextTimer = null;
-    requestEditorDecorativeRender();
-    if (next === "thinking") requestEditorContextFrame();
+    if (editorDynamicHeatEnabled()) requestEditorDecorativeRender();
+    if (next === "thinking" && editorDynamicHeatEnabled()) requestEditorContextFrame();
   }
 
   function valueLooksLikeThinking(value) {
@@ -611,7 +613,17 @@ export default function piGraphicsExtension(pi) {
   }
 
   function updateEditorTypingHeat(plainText, cursorCol = 0) {
-    if (!editorDynamicHeatEnabled()) return { heat: 0, wpm: 0, trailDirection: editorCursorTrailDirection };
+    if (!editorDynamicHeatEnabled()) {
+      editorCursorHeat = 0;
+      editorCursorHeatTarget = 0;
+      editorCursorWpm = 0;
+      editorCursorImpulseCol = null;
+      editorCursorImpulseAt = 0;
+      editorCursorLastText = plainText;
+      editorCursorLastCol = Math.max(0, Math.trunc(Number(cursorCol) || 0));
+      editorCursorLastAt = Date.now();
+      return { heat: 0, wpm: 0, trailDirection: editorCursorTrailDirection };
+    }
     const now = Date.now();
     const safeCol = Math.max(0, Math.trunc(Number(cursorCol) || 0));
     stepEditorHeat(now);
@@ -709,6 +721,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   function editorRailHeat() {
+    if (!editorDynamicHeatEnabled()) return 0;
     // Rails should stay calm until typing heat is clearly visible, then catch
     // up over a wider 50%..150% band so heat appears to spread outward rather
     // than flashing the whole editor frame immediately.
