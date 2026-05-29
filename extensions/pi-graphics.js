@@ -164,6 +164,7 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx.exposeRenderTools != null ? String(gfx.exposeRenderTools) : undefined,
     PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
     PI_GRAPHICS_BOX_MODE: gfx.boxMode != null ? String(gfx.boxMode) : "unicode",
+    PI_GRAPHICS_BOX_UNICODE_MODE: gfx.boxUnicodeMode ?? gfx.box?.unicodeMode ?? gfx.boxRailUnicodeMode ?? gfx.boxRailsUnicodeMode ?? gfx.box?.railUnicodeMode,
     PI_GRAPHICS_BOX_RAIL_STYLE: gfx.boxRailStyle ?? gfx.boxRailsStyle ?? gfx.box?.railStyle,
     PI_GRAPHICS_BOX_RAIL_MODE: gfx.boxRailMode ?? gfx.boxRailsMode ?? gfx.boxMode,
     PI_GRAPHICS_BOX_RAIL_UNICODE_MODE: gfx.boxRailUnicodeMode ?? gfx.boxRailsUnicodeMode ?? gfx.box?.railUnicodeMode ?? editor.unicodeMode,
@@ -336,10 +337,18 @@ export default function piGraphicsExtension(pi) {
     return "unicode";
   }
 
-  function boxRailUnicodeMode() {
-    const raw = String(gfxEnv().PI_GRAPHICS_BOX_RAIL_UNICODE_MODE || "").trim().toLowerCase();
-    if (["topleft", "top-left", "top_left", "anchor", "single", "joined", "joinedunicode"].includes(raw)) return "topLeft";
+  function normalizeUnicodeAnchorMode(raw) {
+    const value = String(raw || "").trim().toLowerCase();
+    if (["topleft", "top-left", "top_left", "anchor", "single", "joined", "joinedunicode"].includes(value)) return "topLeft";
     return "fill";
+  }
+
+  function boxUnicodeMode() {
+    return normalizeUnicodeAnchorMode(gfxEnv().PI_GRAPHICS_BOX_UNICODE_MODE);
+  }
+
+  function boxRailUnicodeMode() {
+    return normalizeUnicodeAnchorMode(gfxEnv().PI_GRAPHICS_BOX_RAIL_UNICODE_MODE);
   }
 
   function boxRailAnimationEnabled() {
@@ -2207,6 +2216,7 @@ export default function piGraphicsExtension(pi) {
       cellHeightPx: cellMetrics().cellHeightPx,
       boxEffect: gfxEnv().PI_GRAPHICS_BOX_EFFECT,
       boxMode: String(gfxEnv().PI_GRAPHICS_BOX_MODE || "relative").toLowerCase() === "unicode" ? "unicode" : "relative",
+      boxUnicodeMode: boxUnicodeMode(),
       debugPlaceholders: envBool("PI_GRAPHICS_DEBUG_PLACEHOLDERS", envBool("PI_GRAPHICS_DEBUG", false)),
       resolveTheme({ type } = {}) {
         const token = (type && BOX_TYPE_THEME_TOKENS[type]) || "accent";
@@ -2730,6 +2740,7 @@ export default function piGraphicsExtension(pi) {
       { key: "boxChrome", label: "Box chrome", values: ["on", "off"], get: () => gfx.boxChrome === true ? "on" : "off", set: (v) => { gfx.boxChrome = v === "on"; } },
       { key: "boxRails", label: "Box rails", values: ["off", "on"], get: () => gfx.boxRails === true ? "on" : "off", set: (v) => { gfx.boxRails = v === "on"; } },
       { key: "boxRailStyle", label: "Box rail style", values: ["gradient", "glass", "chrome", "geometric"], get: () => gfx.boxRailStyle || "gradient", set: (v) => { gfx.boxRailStyle = v; gfx.boxRails = true; } },
+      { key: "boxUnicodeMode", label: "Box unicode", values: ["fill", "topLeft"], get: () => gfx.boxUnicodeMode || "fill", set: (v) => { gfx.boxUnicodeMode = v; gfx.boxChrome = true; } },
       { key: "boxRailUnicodeMode", label: "Box rail unicode", values: ["fill", "topLeft"], get: () => gfx.boxRailUnicodeMode || "fill", set: (v) => { gfx.boxRailUnicodeMode = v; gfx.boxRails = true; } },
       { key: "boxMode", label: "Box mode", values: ["relative", "unicode"], get: () => gfx.boxMode || "unicode", set: (v) => { gfx.boxMode = v; gfx.boxChrome = true; } },
       { key: "boxEffect", label: "Box effect", values: effects, get: () => gfx.boxEffect || "auto", set: (v) => { if (v === "auto") delete gfx.boxEffect; else gfx.boxEffect = v; gfx.boxChrome = true; } },
@@ -2838,7 +2849,7 @@ export default function piGraphicsExtension(pi) {
           `  row background: ${editor.rowBackground ? "on" : "off"}`,
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
           `  box rails:      ${gfx.boxRails === true ? "on" : "off"} style=${gfx.boxRailStyle || "editor"} unicode=${gfx.boxRailUnicodeMode || "fill"}`,
-          `  box mode:       ${gfx.boxMode || "unicode"} (also: relative)`,
+          `  box mode:       ${gfx.boxMode || "unicode"} unicode=${gfx.boxUnicodeMode || "fill"} (also: relative)`,
           `  box effect:     ${gfx.boxEffect || "per-type"} (use /gfx box effects for selectable names)`,
           `  box registry:   ${boxChromeRegistryCountLine()} (/gfx box status|summary|effects|tokens|doctor|preview)`,
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
@@ -2852,7 +2863,8 @@ export default function piGraphicsExtension(pi) {
           "       /gfx cursor-style glow|cell|off",
           "       /gfx trailing-workspace on|off | /gfx row-background on|off",
           "       /gfx box on|off | /gfx box-rails on|off",
-          "       /gfx box-rail-style gradient|glass|chrome|geometric | /gfx box-rail-unicode-mode fill|topLeft",
+          "       /gfx box-unicode-mode fill|topLeft | /gfx box-rail-unicode-mode fill|topLeft",
+          "       /gfx box-rail-style gradient|glass|chrome|geometric",
           "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
           "       /gfx mode on|off|debug",
           "Ctrl+t cycles themes only when keybindings free it from app.thinking.toggle.",
@@ -2997,6 +3009,10 @@ export default function piGraphicsExtension(pi) {
         } else if (key === "box-rail-style" || key === "boxrailstyle" || key === "rail-style") {
           if (["gradient", "glass", "chrome", "geometric"].includes(value)) { gfx.boxRailStyle = value; gfx.boxRails = true; changed = true; }
           else ctx.ui.notify(`unknown box rail style: ${value} (use gradient|glass|chrome|geometric)`, "warning");
+        } else if (key === "box-unicode-mode" || key === "boxunicodemode") {
+          if (["fill", "full"].includes(value)) { gfx.boxUnicodeMode = "fill"; gfx.boxChrome = true; changed = true; }
+          else if (["topleft", "top-left", "top_left", "anchor", "joined"].includes(value)) { gfx.boxUnicodeMode = "topLeft"; gfx.boxChrome = true; changed = true; }
+          else ctx.ui.notify(`unknown box unicode mode: ${value} (use fill|topLeft)`, "warning");
         } else if (key === "box-rail-unicode-mode" || key === "boxrailunicodemode" || key === "rail-unicode-mode") {
           if (["fill", "full"].includes(value)) { gfx.boxRailUnicodeMode = "fill"; gfx.boxRails = true; changed = true; }
           else if (["topleft", "top-left", "top_left", "anchor", "joined"].includes(value)) { gfx.boxRailUnicodeMode = "topLeft"; gfx.boxRails = true; changed = true; }

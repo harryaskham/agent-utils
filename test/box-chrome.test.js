@@ -146,6 +146,24 @@ test("unicode box mode leaves render-width slack for padded containers", () => {
   assert.doesNotMatch(out[0], /x{10}/, "unicode wrapper must not preserve full content plus side borders when renderWidth includes container padding");
 });
 
+test("unicode box topLeft mode emits one anchor and no redundant right placeholder", () => {
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    boxUnicodeMode: "topLeft",
+    debugPlaceholders: true,
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 113, lines: ["hello"], renderWidth: 12 });
+  const visible = out[0]
+    .replace(/\x1b_G[\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b\[[0-9;]*m/g, "");
+  assert.equal((visible.match(/U/g) || []).length, 1, "topLeft mode should expose only one debug anchor cell");
+  assert.match(visible, /^Uhell/);
+});
+
 test("unicode box mode clamps overwide content to render width hint", () => {
   const runtime = createBoxChromeRuntime({
     emitGraphicsCommand: () => {},

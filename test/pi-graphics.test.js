@@ -1377,6 +1377,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === true \? "1" : "0"/);
   assert.match(source, /PI_GRAPHICS_AUTO_BOX_RAILS: off \? "0" : gfx\.boxRails === true \? "1" : "0"/);
   assert.match(source, /PI_GRAPHICS_BOX_RAIL_STYLE/);
+  assert.match(source, /PI_GRAPHICS_BOX_UNICODE_MODE/);
   assert.match(source, /PI_GRAPHICS_BOX_RAIL_UNICODE_MODE/);
   assert.match(source, /PI_GRAPHICS_BOX_RAIL_ANIMATION/);
   assert.match(source, /PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx\.exposeRenderTools/);
@@ -1546,6 +1547,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 96/);
   assert.match(source, /key: "model", token: "customMessageLabel", value: model, truncate: noEllipsisFooterText, min: Math\.max\(8, approximateVisibleCells\(model\)\), max: 96, priority: "primary"/);
   assert.match(source, /pi\?\.agentUtilsEffort\?\.getLevel\?\.\(ctx\) \|\| pi\?\.getThinkingLevel\?\.\(\) \|\| "off"/);
+  assert.match(source, /boxUnicodeMode: boxUnicodeMode\(\)/);
+  assert.match(source, /box-unicode-mode fill\|topLeft/);
   assert.match(source, /const shrinkOrder = \[0, 5, 3, 1, 2, 4\]/);
   assert.match(source, /const modelSegment = segments\.find\(\(segment\) => segment\.key === "model"\)/);
   assert.match(source, /if \(modelSegment\) modelSegment\.width \+= spare/);
@@ -1663,8 +1666,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /`  box rails:      \$\{gfx\.boxRails === true \? "on" : "off"\}/);
   assert.match(source, /box-rails on\|off/);
   assert.match(source, /box-rail-style gradient\|glass\|chrome\|geometric/);
+  assert.match(source, /box-unicode-mode fill\|topLeft/);
   assert.match(source, /box-rail-unicode-mode fill\|topLeft/);
-  assert.match(source, /`  box mode:       \$\{gfx\.boxMode \|\| "unicode"\} \(also: relative\)`/);
+  assert.match(source, /`  box mode:       \$\{gfx\.boxMode \|\| "unicode"\} unicode=\$\{gfx\.boxUnicodeMode \|\| "fill"\} \(also: relative\)`/);
   assert.doesNotMatch(source, /`  box chrome:     \$\{gfx\.boxChrome === false \? "off" : "on"\}`/);
   assert.match(source, /`  box effect:     \$\{gfx\.boxEffect \|\| "per-type"\} \(use \/gfx box effects for selectable names\)`/);
   assert.match(source, /\/gfx box-effect <name\|auto>  \(\/gfx box effects lists names\)/);

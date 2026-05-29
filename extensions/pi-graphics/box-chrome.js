@@ -2922,6 +2922,7 @@ export function createBoxChromeRuntime({
   resolveTheme,
   boxEffect,
   boxMode = "relative",
+  boxUnicodeMode = "fill",
   debugPlaceholders = false,
 } = {}) {
   state.ownedImageIds ||= new Set();
@@ -2936,6 +2937,7 @@ export function createBoxChromeRuntime({
   const relativePlacements = new Set();
   const relativeByAnchorRow = new Map();
   const unicodeCellLines = new Map();
+  const unicodeTopLeftLines = new Map();
 
   function trackBoxChromeImageId(imageId) {
     state.ownedImageIds.add(imageId);
@@ -3054,6 +3056,11 @@ export function createBoxChromeRuntime({
     return "mid";
   }
 
+  function normalizedBoxUnicodeMode() {
+    const raw = String(boxUnicodeMode || "fill").trim().toLowerCase();
+    return ["topleft", "top-left", "top_left", "anchor", "single", "joined", "joinedunicode"].includes(raw) ? "topLeft" : "fill";
+  }
+
   function applyUnicodeBoxRows({ type, instanceId, lines, colorRgb, width, effect }) {
     const makeCell = (side, rowIndex, kind) => {
       const renderRowIndex = stripRenderRowBucket(rowIndex);
@@ -3077,6 +3084,27 @@ export function createBoxChromeRuntime({
       unicodeCellLines.set(cellKey, entry);
       return entry;
     };
+    const makeTopLeftRow = (rowIndex, kind) => {
+      const renderRowIndex = stripRenderRowBucket(rowIndex);
+      const rowKey = `box-unicode-topleft-${type}-${kind}-${effect}-${renderRowIndex}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}-${debugPlaceholders ? "debug" : "kitty"}`;
+      const cached = unicodeTopLeftLines.get(rowKey);
+      if (cached) return cached;
+      const rendered = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex: renderRowIndex });
+      const imageId = piGraphicsImageId(rowKey);
+      const placementId = piGraphicsPlaceholderPlacementId(`${rowKey}-placement`);
+      const transmit = serializeKittyGraphicsChunks(
+        { a: "T", f: 100, t: "d", i: imageId, p: placementId, U: 1, c: width, r: 1, z: BOX_Z_INDEX, q: 2 },
+        bufferToBase64(rendered.png),
+        { passthrough: state.config.passthrough },
+      );
+      const cell = debugPlaceholders
+        ? debugPlaceholderCell({ imageId, placementId })
+        : `${placeholderSgr({ imageId, placementId })}${buildKittyUnicodePlaceholderCell({ imageId, placementId, row: 0, column: 0, includeColumn: true })}${ESC}[39;59m`;
+      trackBoxChromeImageId(imageId);
+      const entry = { transmit, cell, line: `${transmit}${cell}${" ".repeat(Math.max(0, width - 1))}` };
+      unicodeTopLeftLines.set(rowKey, entry);
+      return entry;
+    };
     const makeFullBorderRow = (rowIndex, verticalKind) => {
       const leftKind = verticalKind === "bot" ? "bot-left" : "top-left";
       const midKind = verticalKind === "bot" ? "bot" : "top";
@@ -3090,6 +3118,15 @@ export function createBoxChromeRuntime({
     return lines.map((line, i) => {
       if (hasKittyPlaceholder(line)) return line;
       const verticalKind = boxRowKind(i, lines.length);
+      if (normalizedBoxUnicodeMode() === "topLeft") {
+        const kind = verticalKind === "top" ? "top" : verticalKind === "bot" ? "bot" : "mid";
+        const anchor = makeTopLeftRow(i, kind);
+        if (isLikelyBorderLine(line) && verticalKind !== "mid") return anchor.line;
+        const plainWidth = Math.max(0, width - 1);
+        const trimmed = truncateAnsiToVisibleWidth(String(line || ""), plainWidth);
+        const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));
+        return `${anchor.transmit}${anchor.cell}${trimmed}${pad}`;
+      }
       if (isLikelyBorderLine(line) && verticalKind !== "mid") return makeFullBorderRow(i, verticalKind);
       const leftKind = verticalKind === "top" ? "top-left" : verticalKind === "bot" ? "bot-left" : "left";
       const rightKind = verticalKind === "top" ? "top-right" : verticalKind === "bot" ? "bot-right" : "right";
@@ -3145,6 +3182,7 @@ export function createBoxChromeRuntime({
     relativePlacements.clear();
     relativeByAnchorRow.clear();
     unicodeCellLines.clear();
+    unicodeTopLeftLines.clear();
     state.boxChromeImageIds?.clear?.();
   }
 
