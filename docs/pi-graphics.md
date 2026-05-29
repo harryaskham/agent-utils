@@ -480,9 +480,13 @@ displayed using kitty Unicode placeholder cells, so:
 * Editor border chrome spans the full editor/terminal width instead of being
   capped and center-aligned, so fullscreen terminals keep a visible full-width
   input frame. Editor placement/layout is controlled by `piGraphics.editor.style`
-  (`static`, `unicode`, `joinedUnicode`, `relative`, or `animated`), while the
-  independent `piGraphics.editor.borderStyle` / `PI_GRAPHICS_EDITOR_BORDER_STYLE`
-  controls what is drawn into the reserved space. `gradient` is the existing
+  (`static`, `unicode`, or `relative`; legacy aliases `joinedUnicode` and
+  `animated` are migrated at runtime), while `piGraphics.editor.animation` /
+  `PI_GRAPHICS_EDITOR_ANIMATION` controls animation independently and
+  `piGraphics.editor.unicodeMode` / `PI_GRAPHICS_EDITOR_UNICODE_MODE` controls
+  Unicode anchoring (`fill` or `topLeft`). The independent
+  `piGraphics.editor.borderStyle` / `PI_GRAPHICS_EDITOR_BORDER_STYLE` controls
+  what is drawn into the reserved space. `gradient` is the existing
   glow-gradient look; `glass`, `chrome`, and `geometric` add different translucent
   separators and theme-colored responsive accents. All border styles include the
   same typing-speed rail heat in their cache keys and rendering inputs, so they
@@ -493,11 +497,12 @@ displayed using kitty Unicode placeholder cells, so:
   Height `1` preserves the default in-flow Unicode rail replacement. In Unicode
   editor mode, heights above `1` add same-ID placeholder widget rows above or
   below the editor so the terminal sees one contiguous `width × height` rectangle
-  for the single border image. `joinedUnicode` is the single-anchor variant for
-  multi-row Unicode borders: top borders reserve `height - 1` rows in the
-  above-editor widget and draw one full-width `width × height` PNG from a single
-  placeholder at widget cell 0,0 while the editor rail row is blank; bottom
-  borders put the single placeholder on the editor rail and reserve empty rows in
+  for the single border image when `unicodeMode` is `fill`. `unicodeMode:
+  "topLeft"` (legacy `joinedUnicode`) is the single-anchor variant for multi-row
+  Unicode borders: top borders reserve `height - 1` rows in the above-editor
+  widget and draw one full-width `width × height` PNG from a single placeholder
+  at widget cell 0,0 while the editor rail row is blank; bottom borders put the
+  single placeholder on the editor rail and reserve empty rows in
   the below-editor widget. These editor graphics widgets mark themselves as
   full-width surfaces so right-side preview panels do not shrink the render
   width; if an image preview overlaps the right half of the terminal, the editor
@@ -506,7 +511,9 @@ displayed using kitty Unicode placeholder cells, so:
   placeholder cells, leaving text cells usable around the singleton anchor. Its
   render key includes the same rail heat buckets as
   `unicode`, so typing-speed heat redraws are at parity with the existing Unicode
-  border effects. When Pi reports assistant thinking/reasoning through its
+  border effects. Because animation is now separate from placement, Unicode
+  `fill`, Unicode `topLeft`, and relative placement can all be paired with
+  animation. When Pi reports assistant thinking/reasoning through its
   working-message UI surface or an active structured hidden-thinking state, the
   same editor border renderer enters a contextual thinking mode: top rails use a
   cosine-squared thought-bubble mask,
@@ -516,10 +523,10 @@ displayed using kitty Unicode placeholder cells, so:
   to draw a cursor-local bell-curve energy impulse into the rail PNG. This
   composes with `gradient`/`glass`/`chrome`/`geometric` border drawing and every
   placement mode because only the rendered PNG phase/context/impulse inputs
-  change. In
-  `relative`/`animated` editor modes, the extra height is drawn as a relative
+  change. In `relative` editor mode, the extra height is drawn as a relative
   placement without reflowing text; top borders are offset upward by `height - 1`,
-  while bottom borders grow downward from the rail.
+  while bottom borders grow downward from the rail. Legacy `animated` mode maps
+  to relative placement plus `editor.animation=true`.
   The focused editor cursor is configurable with
   `piGraphics.editor.cursorStyle` (or `PI_GRAPHICS_EDITOR_CURSOR_STYLE`): `glow`
   is the default speed-responsive direct Unicode-placeholder cursor plus a best-effort
@@ -557,10 +564,14 @@ displayed using kitty Unicode placeholder cells, so:
   `PI_GRAPHICS_EDITOR_ROW_BACKGROUND` enables the row-wide background. Both are
   off by default because they can visually compete with live typing in narrow or
   frequently redrawn editors. These are visible in the `/gfx` settings overlay and
-  can also be changed directly with `/gfx border-height <1-16>`,
-  `/gfx top-border-height <1-16>`, `/gfx bottom-border-height <1-16>`,
-  `/gfx cursor-style glow|cell|off`, `/gfx trailing-workspace on|off`, and
-  `/gfx row-background on|off`.
+  can also be changed directly with `/gfx editor static|unicode|relative`,
+  `/gfx editor-animation on|off`, `/gfx unicode-mode fill|topLeft`, `/gfx
+  border-height <1-16>`, `/gfx top-border-height <1-16>`, `/gfx
+  bottom-border-height <1-16>`, `/gfx cursor-style glow|cell|off`, `/gfx
+  trailing-workspace on|off`, and `/gfx row-background on|off`. Legacy `/gfx
+  editor joinedUnicode` sets `editor.style=unicode` and
+  `editor.unicodeMode=topLeft`; legacy `/gfx editor animated` sets
+  `editor.style=relative` and `editor.animation=true`.
 * Box borders are directional: top/bottom caps and left/right side cells render
   different edge-specific PNGs, and unicode mode keeps the same line count as
   the source text to avoid stacked one-line boxes between content rows. Relative
