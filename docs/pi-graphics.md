@@ -569,7 +569,11 @@ displayed using kitty Unicode placeholder cells, so:
   the cursor, while backspacing or leftward movement flips the trail to the other
   side. At medium and high heat, the cursor silhouette gains small graphical
   bracket ticks and ember caps around the vertical core, so the frame itself
-  visibly changes rather than only the colour. Optional editor fill effects are
+  visibly changes rather than only the colour. Heat/context decay redraws are
+  scroll-safe by default: they use a coalescible non-forced TUI render request so
+  reading terminal scrollback is not pulled back to the live bottom by decorative
+  graphics. `PI_GRAPHICS_EDITOR_FORCE_REDRAW=1` restores the old forced redraw
+  path for diagnostics only. Optional editor fill effects are
   separate settings: `piGraphics.editor.trailingWorkspace` /
   `PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE` fills empty cells after the cursor with
   the same animated heat envelope and a right-only opacity falloff like the

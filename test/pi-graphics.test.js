@@ -1411,8 +1411,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /let editorCursorHeat = 0/);
   assert.match(source, /let editorCursorHeatTarget = 0/);
   assert.match(source, /function stepEditorHeat\(now = Date\.now\(\)\)/);
+  assert.match(source, /function requestEditorDecorativeRender\(\)/);
+  assert.match(source, /PI_GRAPHICS_EDITOR_FORCE_REDRAW/);
+  assert.match(source, /editorRenderTui\?\.requestRender\?\.\(force \? true : undefined\)/);
   assert.match(source, /function requestEditorHeatFrame\(\)/);
-  assert.match(source, /editorRenderTui\?\.requestRender\?\.\(true\)/);
+  assert.match(source, /requestEditorDecorativeRender\(\)/);
   assert.match(source, /function editorRailHeat\(\)/);
   assert.match(source, /\(editorCursorHeat - 0\.5\) \/ 1\.0/);
   assert.match(source, /function setEditorContextMode\(mode = "idle"\)/);

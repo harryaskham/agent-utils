@@ -488,12 +488,22 @@ export default function piGraphicsExtension(pi) {
     editorBackgroundPlacementKey = null;
   }
 
+  function requestEditorDecorativeRender() {
+    // Decorative editor graphics updates must not force a full TUI redraw: in real
+    // terminals/tmux that can jump scrollback back to the live bottom while the
+    // user is reading older output. A plain render request lets Pi coalesce or
+    // skip the frame without disturbing scroll position. Keep an opt-in diagnostic
+    // override for reproducing old forced-redraw behavior.
+    const force = envBool("PI_GRAPHICS_EDITOR_FORCE_REDRAW", false);
+    try { editorRenderTui?.requestRender?.(force ? true : undefined); } catch {}
+  }
+
   function requestEditorHeatFrame() {
     if (editorHeatRenderTimer || !editorRenderTui) return;
     if (editorCursorHeat <= 0.01 && editorCursorHeatTarget <= 0.01) return;
     editorHeatRenderTimer = setTimeout(() => {
       editorHeatRenderTimer = null;
-      try { editorRenderTui?.requestRender?.(true); } catch {}
+      requestEditorDecorativeRender();
       if (editorCursorHeat > 0.01 || editorCursorHeatTarget > 0.01) requestEditorHeatFrame();
     }, editorAnimationDelayMs());
     editorHeatRenderTimer.unref?.();
@@ -514,7 +524,7 @@ export default function piGraphicsExtension(pi) {
       editorContextTimer = null;
       if (editorContextMode !== "thinking") return;
       editorContextTick = (editorContextTick + 1) % 4096;
-      try { editorRenderTui?.requestRender?.(true); } catch {}
+      requestEditorDecorativeRender();
       requestEditorContextFrame();
     }, Math.max(80, editorAnimationDelayMs() * 5));
     editorContextTimer.unref?.();
@@ -530,7 +540,7 @@ export default function piGraphicsExtension(pi) {
     editorContextTick = (editorContextTick + 1) % 4096;
     if (editorContextTimer) clearTimeout(editorContextTimer);
     editorContextTimer = null;
-    try { editorRenderTui?.requestRender?.(true); } catch {}
+    requestEditorDecorativeRender();
     if (next === "thinking") requestEditorContextFrame();
   }
 
