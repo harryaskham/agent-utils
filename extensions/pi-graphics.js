@@ -2158,6 +2158,12 @@ export default function piGraphicsExtension(pi) {
     boxChromeInstalled = false;
   }
 
+  function clearStaleStartupGraphics() {
+    if (!envBool("PI_GRAPHICS_CLEAR_STALE_ON_STARTUP", true)) return;
+    const command = buildDeleteByZIndexBandCommand({ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES });
+    if (command) emitGraphicsCommand(command);
+  }
+
   function installBoxChromeOnce(ctx, { force = false } = {}) {
     if (force) teardownBoxChrome(ctx);
     if (boxChromeInstalled) return;
@@ -2196,6 +2202,7 @@ export default function piGraphicsExtension(pi) {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     writeGraphicsCommand = resolveGraphicsWriter(ctx);
     activeThemeRef = ctx?.ui?.theme || null;
+    clearStaleStartupGraphics();
     applyTheme(ctx);
     installEditorSurface(ctx);
     mountEditorRails(ctx);

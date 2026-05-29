@@ -1456,6 +1456,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function buildBoxRailRows\(\{ width, edge, type = "assistant" \}\)/);
   assert.match(source, /function createBoxRailsRuntime\(\)/);
   assert.match(source, /unicodeMode === "fill"/);
+  assert.match(source, /function clearStaleStartupGraphics\(\)/);
+  assert.match(source, /PI_GRAPHICS_CLEAR_STALE_ON_STARTUP/);
+  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES \}\)/);
   assert.match(source, /createBoxRailsRuntime\(\)/);
   assert.match(source, /box-rail-/);
   assert.match(source, /const vOffset = edge === "top" \? -\(height - 1\) : 0/);
