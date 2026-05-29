@@ -5,8 +5,8 @@
 // the common case where the user wants to adjust reasoning effort without
 // opening the settings UI.
 
-export const EFFORT_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh"]);
-export const EFFORT_USAGE = "Usage: /effort [status|off|minimal|low|medium|high|xhigh]";
+export const EFFORT_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]);
+export const EFFORT_USAGE = "Usage: /effort [status|off|minimal|low|medium|high|xhigh|adaptive]";
 
 export function normalizeEffortLevel(value) {
   const level = String(value || "").trim().toLowerCase();
@@ -55,14 +55,57 @@ function supportsThinking(pi, ctx) {
   return undefined;
 }
 
+export function supportsAdaptiveThinkingModel(model) {
+  const id = String(model?.id || "").toLowerCase();
+  return /(?:opus|sonnet)[-.]4[-.]6|(?:opus|sonnet)[-.]4[-.]7/.test(id);
+}
+
+function effortForLevel(level, model) {
+  const mapped = level ? model?.thinkingLevelMap?.[level] : undefined;
+  if (typeof mapped === "string") return mapped;
+  if (level === "minimal" || level === "low") return "low";
+  if (level === "medium") return "medium";
+  if (level === "high") return "high";
+  if (level === "xhigh") return model?.id?.includes?.("4.6") ? "max" : "xhigh";
+  return undefined;
+}
+
+export function patchAdaptiveThinkingPayload(payload, { model, level, adaptive = false, fast = false } = {}) {
+  if (!payload || typeof payload !== "object" || !supportsAdaptiveThinkingModel(model)) return payload;
+  const next = { ...payload };
+  const thinking = next.thinking && typeof next.thinking === "object" ? next.thinking : null;
+  const wantsAdaptive = adaptive || fast || (thinking && thinking.type === "enabled");
+  if (!wantsAdaptive) return payload;
+  const display = thinking?.display ?? "summarized";
+  next.thinking = { type: "adaptive", ...(display !== undefined ? { display } : {}) };
+  const effort = fast ? "low" : effortForLevel(level, model);
+  if (effort) next.output_config = { ...(next.output_config || {}), effort };
+  return next;
+}
+
 export default function effortExtension(pi) {
+  let adaptiveMode = false;
+  let fastMode = false;
+
+  pi.on?.("before_provider_request", (event, ctx) => patchAdaptiveThinkingPayload(event.payload, {
+    model: ctx?.model,
+    level: getThinkingLevel(pi, ctx),
+    adaptive: adaptiveMode,
+    fast: fastMode,
+  }));
+
+  pi.on?.("model_select", (_event, ctx) => {
+    if (fastMode && !supportsAdaptiveThinkingModel(ctx?.model)) fastMode = false;
+  });
+
   pi.registerCommand?.("effort", {
-    description: "Show or set model thinking effort. Usage: /effort [off|minimal|low|medium|high|xhigh]",
+    description: "Show or set model thinking effort. Usage: /effort [off|minimal|low|medium|high|xhigh|adaptive]",
     handler: async (args, ctx) => {
       const token = firstToken(args);
       if (!token || token === "status" || token === "help") {
+        const current = adaptiveMode ? `adaptive${fastMode ? "+fast" : ""}` : getThinkingLevel(pi, ctx);
         notify(ctx, formatEffortStatus({
-          current: getThinkingLevel(pi, ctx),
+          current,
           supportsThinking: supportsThinking(pi, ctx),
         }), "info");
         return;
@@ -74,6 +117,13 @@ export default function effortExtension(pi) {
         return;
       }
 
+      if (requested === "adaptive") {
+        adaptiveMode = true;
+        notify(ctx, `Effort: adaptive${fastMode ? " + fast" : ""}. Adaptive-capable Anthropic/Copilot models will use thinking.type=adaptive with output_config.effort when applicable.`, "info");
+        return;
+      }
+
+      adaptiveMode = false;
       const before = getThinkingLevel(pi, ctx);
       if (!setThinkingLevel(pi, ctx, requested)) {
         notify(ctx, "This Pi runtime does not expose thinking-level controls; update Pi or use /settings.", "error");
@@ -83,6 +133,22 @@ export default function effortExtension(pi) {
       const clamped = after !== requested ? ` (requested ${requested}; clamped by the current model)` : "";
       const unchanged = before === after ? " unchanged" : "";
       notify(ctx, `Effort${unchanged}: ${after}${clamped}.`, "info");
+    },
+  });
+
+  pi.registerCommand?.("fast", {
+    description: "Toggle fast adaptive thinking mode for models that support output_config.effort.",
+    handler: async (args, ctx) => {
+      const token = firstToken(args);
+      const supported = supportsAdaptiveThinkingModel(ctx?.model ?? pi?.model);
+      if (!supported && token !== "off") {
+        notify(ctx, "Fast mode is only available for adaptive-thinking models such as Claude Opus/Sonnet 4.6+.", "warning");
+        return;
+      }
+      const next = token === "on" ? true : token === "off" ? false : !fastMode;
+      fastMode = next;
+      if (fastMode) adaptiveMode = true;
+      notify(ctx, `Fast mode ${fastMode ? "on" : "off"}${fastMode ? " (adaptive thinking effort=low)" : ""}.`, "info");
     },
   });
 }
