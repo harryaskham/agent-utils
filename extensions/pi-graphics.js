@@ -1768,9 +1768,9 @@ export default function piGraphicsExtension(pi) {
   function buildEditorBorderWidgetRows(width, edge) {
     if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
       const height = editorBorderHeight(edge);
-      if (height <= 1) return [];
-      if (edge === "top") return [];
-      return Array.from({ length: height - 1 }, () => emptyEditorBorderRow(width));
+      const line = buildJoinedUnicodeEditorBorderLine(width, edge);
+      if (!line) return [];
+      return [line, ...Array.from({ length: Math.max(0, height - 1) }, () => emptyEditorBorderRow(width))];
     }
     if (editorBorderUsesRelativePlacement()) return [];
     const rows = buildEditorBorderRows(width, edge);
@@ -1780,7 +1780,7 @@ export default function piGraphicsExtension(pi) {
 
   function editorBorderNeedsWidget(edge) {
     if (editorBorderUsesRelativePlacement()) return false;
-    if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft" && edge === "top") return false;
+    if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") return true;
     return editorBorderHeight(edge) > 1;
   }
 
@@ -1808,7 +1808,10 @@ export default function piGraphicsExtension(pi) {
         for (let i = 0; i < next.length; i += 1) {
           if (isDashLine(next[i])) dashIndices.push(i);
         }
-        if (dashIndices.length === 0) return baseLines;
+        if (dashIndices.length === 0) return baseLines.map((line) => decorateEditorContentLine(line, width));
+        if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
+          return next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width));
+        }
         const firstDash = dashIndices[0];
         const lastDash = dashIndices[dashIndices.length - 1];
         const top = buildEditorBorderRow(width, "top");
