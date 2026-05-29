@@ -1527,6 +1527,20 @@ export default function piGraphicsExtension(pi) {
     return fillEditorTrailingWorkspace(replaceEditorCursorChrome(line, rowWidth));
   }
 
+  function configuredThinkingLevel() {
+    const scoped = settings.agentUtils?.trueDefaults || settings.agentUtils?.piTrueDefaults || settings.trueDefaults || {};
+    return scoped.thinkingLevel ?? scoped.defaultThinkingLevel ?? scoped.effort ?? scoped.trueDefaultEffort ??
+      settings.agentUtils?.trueDefaultThinkingLevel ?? settings.agentUtils?.trueDefaultEffort ??
+      settings.trueDefaultThinkingLevel ?? settings.trueDefaultEffort ?? settings.defaultThinkingLevel;
+  }
+
+  function effectiveThinkingLevel(ctx, pi) {
+    const runtime = pi?.agentUtilsEffort?.getLevel?.(ctx) || pi?.getThinkingLevel?.() || ctx?.getThinkingLevel?.();
+    const configured = configuredThinkingLevel();
+    if (!runtime || String(runtime).toLowerCase() === "off") return configured || runtime || "off";
+    return runtime;
+  }
+
   function footerSegmentValues(ctx, footerData, pi) {
     const branch = (() => {
       try { return footerData?.getGitBranch?.() || "no-branch"; } catch { return "no-branch"; }
@@ -1545,7 +1559,7 @@ export default function piGraphicsExtension(pi) {
       { key: "context", token: "thinkingXhigh", value: context, truncate: truncateFooterEnd, min: 5, max: 18 },
       { key: "compact", token: "borderAccent", value: `${compactFooterModeLabel()} (${footerState.compactions})`, truncate: truncateFooterEnd, min: 5, max: 16 },
       { key: "model", token: "customMessageLabel", value: model, truncate: noEllipsisFooterText, min: Math.max(8, approximateVisibleCells(model)), max: 96, priority: "primary" },
-      { key: "thinking", token: "muted", value: pi?.agentUtilsEffort?.getLevel?.(ctx) || pi?.getThinkingLevel?.() || "off", truncate: truncateFooterEnd, min: 3, max: 12 },
+      { key: "thinking", token: "muted", value: effectiveThinkingLevel(ctx, pi), truncate: truncateFooterEnd, min: 3, max: 12 },
     ];
   }
 
