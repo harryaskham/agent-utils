@@ -65,3 +65,57 @@ export function audioOutputBackendLabel(config) {
   if (process.env.PULSE_SERVER) return "out:pulse";
   return "out:ffplay";
 }
+
+export function defaultRecordCommand() {
+  if (process.env.PI_RT_RECORD_CMD) return process.env.PI_RT_RECORD_CMD;
+  const backend = (process.env.PI_RT_AUDIO_BACKEND || "").toLowerCase();
+  const inputDevice = process.env.PI_RT_INPUT_DEVICE || process.env.PI_RT_MIC_DEVICE || "0";
+  if (["pulse", "pulseaudio", "pacat", "parec"].includes(backend)) {
+    return "parec --raw --format=s16le --rate=24000 --channels=1";
+  }
+  if (["sox", "rec"].includes(backend)) {
+    return "rec -q -t raw -b 16 -e signed-integer -r 24000 -c 1 -";
+  }
+  if (["coreaudio", "audiotoolbox", "ffmpeg"].includes(backend)) {
+    // avfoundation audio input indexes can be listed with:
+    //   ffmpeg -f avfoundation -list_devices true -i ""
+    // Index 0 is often the current/default input, but macOS does not expose a
+    // stable "default" token here. Override with PI_RT_INPUT_DEVICE.
+    return `ffmpeg -hide_banner -loglevel error -f avfoundation -i ':${inputDevice}' -ac 1 -ar 24000 -f s16le -`;
+  }
+  if (process.env.PULSE_SERVER) {
+    return "parec --raw --format=s16le --rate=24000 --channels=1";
+  }
+  return "rec -q -t raw -b 16 -e signed-integer -r 24000 -c 1 -";
+}
+
+export function defaultPlaybackCommand() {
+  if (process.env.PI_RT_PLAYBACK_CMD) return process.env.PI_RT_PLAYBACK_CMD;
+  const backend = (process.env.PI_RT_AUDIO_BACKEND || "").toLowerCase();
+  const outDevice = process.env.PI_RT_OUTPUT_DEVICE || process.env.PI_RT_SPEAKER_DEVICE || "";
+  // Explicit backend always wins over PULSE_SERVER. The default is explicitly
+  // set to pulse above; only the separate auto mode should infer Pulse merely
+  // because PULSE_SERVER exists.
+  if (["pulse", "pulseaudio", "pacat", "paplay"].includes(backend)) {
+    return "pacat --playback --raw --format=s16le --rate=24000 --channels=1";
+  }
+  if (backend === "sox" || backend === "play") {
+    return "play -q -t raw -b 16 -e signed-integer -r 24000 -c 1 -";
+  }
+  if (backend === "audiotoolbox") {
+    // ffmpeg's AudioToolbox muxer allows picking a CoreAudio output device by
+    // index. List devices via /rt-devices. Without an explicit device the
+    // system default output is used.
+    const idx = outDevice ? `-audio_device_index ${outDevice} ` : "";
+    return `ffmpeg -hide_banner -loglevel error -f s16le -ar 24000 -ac 1 -i - -f audiotoolbox ${idx}-`;
+  }
+  if (["coreaudio", "ffplay", "ffmpeg"].includes(backend)) {
+    // ffplay routes through SDL/CoreAudio and follows the macOS system default
+    // output. ffmpeg 8 ffplay no longer accepts `-ac 1`; use `-ch_layout mono`.
+    return "ffplay -nodisp -autoexit -loglevel error -f s16le -ar 24000 -ch_layout mono -i -";
+  }
+  if (process.env.PULSE_SERVER) {
+    return "pacat --playback --raw --format=s16le --rate=24000 --channels=1";
+  }
+  return "ffplay -nodisp -autoexit -loglevel error -f s16le -ar 24000 -ch_layout mono -i -";
+}
