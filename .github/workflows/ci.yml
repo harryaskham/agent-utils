@@ -53,3 +53,23 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run Rust tests
         run: cargo test --workspace
+
+  audit:
+    name: Dependency audit (cargo audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        # Prebuilt binary install keeps this job fast and predictable.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit dependencies for security advisories
+        # Verified locally clean (80 deps, 0 vulnerabilities) when added.
+        # If a future advisory on an unrelated dep proves noisy, this step can
+        # be made advisory with `continue-on-error: true`.
+        run: cargo audit
