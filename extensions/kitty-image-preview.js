@@ -26,6 +26,9 @@ import {
   estimatedRowsForColumns,
   fitImageColumnsForRows,
   limitLinesToTerminalRows,
+  currentTerminalColumns,
+  previewViewportRowLimit,
+  previewImageRowLimit,
 } from "./kitty-image-preview/layout.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
@@ -45,7 +48,6 @@ import {
   shouldUseInMemoryTransfer,
   shouldUseUnicodePlaceholders,
   stableKittyImageId,
-  viewportHalfRowLimit,
 } from "./kitty-graphics.js";
 
 const TOOL_PREFIX = "kitty_image_preview";
@@ -260,27 +262,9 @@ function shouldUseInlineRightPlacement(state) {
   return configuredPassthroughMode(state) === "tmux";
 }
 
-function currentTerminalColumns() {
-  const columns = Number(process.stdout?.columns ?? process.env.COLUMNS);
-  return Number.isFinite(columns) && columns > 0 ? Math.trunc(columns) : undefined;
-}
-
-function currentTerminalRows() {
-  const rows = Number(process.stdout?.rows ?? process.env.LINES);
-  return Number.isFinite(rows) && rows > 0 ? Math.trunc(rows) : undefined;
-}
-
-export function previewViewportRowLimit(viewportRows = currentTerminalRows()) {
-  return viewportHalfRowLimit(viewportRows);
-}
-
-function previewImageRowLimit({ viewportRows = currentTerminalRows(), availableRows, includeControls = false, protocolMax = 200 } = {}) {
-  const limits = [Math.max(1, Math.trunc(protocolMax || 1))];
-  const viewportLimit = previewViewportRowLimit(viewportRows);
-  if (viewportLimit !== undefined) limits.push(Math.max(1, viewportLimit - (includeControls ? 1 : 0)));
-  if (availableRows !== undefined) limits.push(Math.max(1, Math.trunc(availableRows)));
-  return Math.max(1, Math.min(...limits));
-}
+// currentTerminalColumns/currentTerminalRows/previewViewportRowLimit/
+// previewImageRowLimit are imported from ./kitty-image-preview/layout.js
+// (extracted in bd-e1914a).
 
 function shouldAutoUseSidePanel(state) {
   if (shouldUseInlineRightPlacement(state)) return false;
