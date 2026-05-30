@@ -22,6 +22,11 @@ import {
   replaceItems,
   summarizeCurrent,
 } from "./kitty-image-preview/state.js";
+import {
+  estimatedRowsForColumns,
+  fitImageColumnsForRows,
+  limitLinesToTerminalRows,
+} from "./kitty-image-preview/layout.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -288,35 +293,8 @@ function resolvePlacement(state) {
   return shouldAutoUseSidePanel(state) ? SIDE_OVERLAY_PLACEMENT : "aboveEditor";
 }
 
-function estimatedRowsForColumns(item, columns) {
-  const columnCount = Math.max(1, Math.trunc(columns || 1));
-  if (!item?.width || !item?.height) return Math.max(1, Math.ceil(columnCount * 0.5));
-  return estimateRowsForImage({
-    imageWidth: item.width,
-    imageHeight: item.height,
-    columns: columnCount,
-    maxRows: MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1,
-    minRows: 1,
-  });
-}
-
-function fitImageColumnsForRows(item, maxColumns, maxRows) {
-  const columnLimit = Math.max(1, Math.trunc(maxColumns || 1));
-  const rowLimit = Math.max(1, Math.trunc(maxRows || 1));
-  let low = 1;
-  let high = columnLimit;
-  let best = 1;
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    if (estimatedRowsForColumns(item, mid) <= rowLimit) {
-      best = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return best;
-}
+// estimatedRowsForColumns/fitImageColumnsForRows are imported from
+// ./kitty-image-preview/layout.js (extracted in bd-e1914a).
 
 export function buildSidePanelLayout(state, terminalWidth, availableRows = DEFAULT_MAX_ROWS) {
   const width = Math.max(1, Math.trunc(terminalWidth || 1));
@@ -454,11 +432,8 @@ function renderChildrenForSidePanel(children, mainWidth, fullWidth) {
   return { lines, fullWidthLines };
 }
 
-function limitLinesToTerminalRows(lines, terminalRows) {
-  const rowLimit = Math.max(1, Math.trunc(Number(terminalRows) || 1));
-  const input = Array.isArray(lines) ? lines : [];
-  return input.length <= rowLimit ? input : input.slice(input.length - rowLimit);
-}
+// limitLinesToTerminalRows is imported from
+// ./kitty-image-preview/layout.js (extracted in bd-e1914a).
 
 function renderSidePanelImageLines(state, rows, layout) {
   const current = state.items[state.index];
