@@ -210,6 +210,51 @@ Example fixed right-side screenshot preview:
 
 The native protocol path currently accepts PNG/APNG input. Convert JPEG/WebP/GIF assets to PNG first when using the widget directly. `placement: "auto"` chooses the fixed right-side panel only when it should be ergonomic; use `"rightOverlay"`, `"aboveEditor"`, or `"belowEditor"` to force a location. `placementMode: "auto"` uses anchored Unicode placeholders by default so previews update in-place without moving the terminal cursor or flooding scrollback; use `"cursor"` only for debugging terminal-specific behavior. The right-side panel dynamically fits the image to the available frame, clamps total reserved width (including left padding) to 50% of the terminal, never exceeds the visible height above the editor/input area, and bottom-aligns the image immediately above that input area. If tmux passthrough or an older Pi runtime prevents side-panel rendering, it falls back to the inline above-editor widget. Preview images stay out of model context unless `describe: true` is explicitly requested for a still image.
 
+## Android CLI / emulator Pi extension
+
+The Android extension is loaded from [`extensions/android.js`](extensions/android.js). It wraps Google's Android command-line tools (`adb`, `emulator`, `sdkmanager`) so the model can diagnose/install the Android SDK and capture emulator/device screens.
+
+Available tools:
+
+- `android_cli_doctor` — diagnoses Android CLI / `adb` / `emulator` / SDK-manager availability and reports the relevant install/update commands.
+- `android_cli_help` — prints concise helper usage for install, update, screenshots, and streams.
+- `android_cli_install` — installs the Android CLI via Google's install script. Requires `confirmed: true`; otherwise returns the exact command as dry-run guidance.
+- `android_cli_update` — updates Android CLI / SDK packages (`android update` or `sdkmanager --update`). Requires `confirmed: true`.
+- `android_emulator_screenshot` — captures an `adb` screenshot as PNG, returns image content for immediate Pi display, and saves the file for `kitty_image_preview_add`.
+- `android_emulator_stream` — bounded repeated `adb` screencaps for a short live emulator screenshot stream.
+
+The SDK location is resolved from `ANDROID_HOME` / `ANDROID_SDK_ROOT`. Installs use `https://dl.google.com/android/cli/latest/linux_x86_64/install.sh`.
+
+## Web search Pi extension
+
+The web-search extension is loaded from [`extensions/web-search.js`](extensions/web-search.js). It registers the `search_web` native tool, which answers a query with live web results grounded through GitHub Copilot's Responses API and returns a cited answer.
+
+Configuration (environment):
+
+- `WEB_SEARCH_COPILOT_TOKEN_FILE` — path to the Copilot token (default `~/.config/gh-auth-tokens/copilot.token`).
+- `WEB_SEARCH_MODEL` — upstream Copilot model (default `gpt-5.2-codex`).
+- `WEB_SEARCH_MAX_OUTPUT_TOKENS` — maximum output tokens (default `16000`).
+- `WEB_SEARCH_COPILOT_API_BASE` — API base URL (default `https://api.githubcopilot.com/v1`).
+- `WEB_SEARCH_EDITOR_VERSION` — `editor-version` request header (default `vscode/1.103.1`).
+
+A separate Python MCP implementation also lives under [`web-search/`](web-search/); this extension is the in-process Pi tool wrapper.
+
+## Compaction continue guard Pi extension
+
+The compaction-continue-guard extension is loaded from [`extensions/compaction-continue-guard.js`](extensions/compaction-continue-guard.js). After a compaction, Pi core cannot continue an agent loop when the rebuilt transcript ends on an assistant message (it throws `Cannot continue from message role: assistant`). A compaction can legally retain a suffix whose newest message is assistant-authored, so this extension appends a single hidden custom/user-role checkpoint entry immediately after compaction. A later automatic retry or manual continue then starts from a provider-valid user/custom role instead of failing.
+
+The guard is enabled by default; disable it by setting `PI_COMPACTION_CONTINUE_GUARD` to a falsey value (`0`, `false`, `off`, `no`, or `disabled`).
+
+## Tendril command helper
+
+[`extensions/tendril-command.js`](extensions/tendril-command.js) is a shared helper module (not a tool/command surface of its own) that builds the Tendril bridge invocation used by all `tendril_*` tools and `/tendril` commands. It resolves the Tendril binary and bridge options from the environment:
+
+- `AGENT_UTILS_TENDRIL_COMMAND` / `TENDRIL_COMMAND` — Tendril binary to invoke (default `tendril`).
+- `AGENT_UTILS_TENDRIL_REMOTE` / `TENDRIL_REMOTE` — wrap calls with `--remote <host>`.
+- `AGENT_UTILS_TENDRIL_WSL_TUNNEL` / `TENDRIL_WSL_TUNNEL` — add Tendril's `--wsl-tunnel` hop (truthy: `1`, `true`, `yes`, or `on`).
+
+See the **Tendril share Pi extension** section above for the user-facing commands and tools that consume this helper.
+
 ## GitHub Pages tool inventory
 
 This repository includes a minimal GitHub Pages site in [`docs/`](docs/) with a concise inventory of the Cacophony, Pi, UI automation, and repo-local tools available to agents/operators.
