@@ -8,6 +8,9 @@ import {
   realtimeContextDiagnosticLine,
   statusLines,
   realtimePanelLines,
+  commandAvailable,
+  envPresent,
+  diagnosticLines,
 } from "../extensions/lib/realtime-status.js";
 import { numberEnv } from "../extensions/lib/realtime-helpers.js";
 
@@ -22,6 +25,11 @@ const STATUS_ENV_KEYS = [
   "PULSE_SINK",
   "PI_RT_VAD_THRESHOLD",
   "PI_RT_VAD_SILENCE_MS",
+  "PI_RT_API_KEY",
+  "OPENAI_API_KEY",
+  "PI_RT_AZURE_API_KEY",
+  "AZURE_CANADACENTRAL_API_KEY",
+  "AZURE_OPENAI_API_KEY",
 ];
 function withStatusEnv(overrides, fn) {
   const orig = Object.fromEntries(STATUS_ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -221,4 +229,40 @@ test("numberEnv reads env with a non-finite/empty fallback", () => {
     if (orig === undefined) delete process.env[KEY];
     else process.env[KEY] = orig;
   }
+});
+
+test("envPresent returns the first present env name or undefined", () => {
+  withStatusEnv({ OPENAI_API_KEY: "sk-xxx" }, () => {
+    assert.equal(envPresent("PI_RT_API_KEY", "OPENAI_API_KEY"), "OPENAI_API_KEY");
+  });
+  withStatusEnv({}, () => {
+    assert.equal(envPresent("PI_RT_API_KEY", "OPENAI_API_KEY"), undefined);
+  });
+});
+
+test("commandAvailable detects present vs missing executables", () => {
+  assert.equal(commandAvailable("sh"), true);
+  assert.equal(commandAvailable("definitely-not-a-real-command-xyz-123"), false);
+});
+
+test("diagnosticLines renders the /rt-doctor block with auth hints", () => {
+  const session = { pendingSpokenTranscripts: [], lastMicBytes: 0, forwardedMessageCount: 0, connected: true };
+  // No API key in env -> auth hint present, apiKey shown as <missing>.
+  withStatusEnv({}, () => {
+    const lines = diagnosticLines(session, baseConfig());
+    assert.equal(lines[0], "Realtime doctor");
+    for (const prefix of ["provider:", "audioBackend:", "pulse:", "commands:", "vad:", "state:", "micError:", "hint:"]) {
+      assert.ok(lines.some((l) => l.startsWith(prefix)), `missing line: ${prefix}`);
+    }
+    assert.ok(lines.some((l) => l.startsWith("provider:") && l.includes("apiKey:<missing>")));
+    const hint = lines.find((l) => l.startsWith("hint:"));
+    assert.ok(hint.includes("set OPENAI_API_KEY or PI_RT_API_KEY"));
+  });
+  // With an API key -> no auth hint, apiKey name shown.
+  withStatusEnv({ OPENAI_API_KEY: "sk-xxx" }, () => {
+    const lines = diagnosticLines(session, baseConfig());
+    assert.ok(lines.some((l) => l.startsWith("provider:") && l.includes("apiKey:OPENAI_API_KEY")));
+    const hint = lines.find((l) => l.startsWith("hint:"));
+    assert.ok(!hint.includes("set OPENAI_API_KEY or PI_RT_API_KEY"));
+  });
 });
