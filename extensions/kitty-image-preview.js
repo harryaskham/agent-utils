@@ -30,6 +30,20 @@ import {
   previewViewportRowLimit,
   previewImageRowLimit,
 } from "./kitty-image-preview/layout.js";
+import {
+  AUTO_PLACEMENT,
+  DEFAULT_COLUMNS,
+  DEFAULT_MAX_ROWS,
+  SIDE_OVERLAY_PLACEMENT,
+} from "./kitty-image-preview/constants.js";
+import {
+  configuredPassthroughMode,
+  shouldUseInlineRightPlacement,
+  shouldAutoUseSidePanel,
+  resolvePlacement,
+  sideOverlayWidth,
+  sideOverlayMaxHeight,
+} from "./kitty-image-preview/placement.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -52,19 +66,14 @@ import {
 
 const TOOL_PREFIX = "kitty_image_preview";
 const WIDGET_ID = "kitty-image-preview";
-const AUTO_PLACEMENT = "auto";
-const SIDE_OVERLAY_PLACEMENT = "rightOverlay";
 const DEFAULT_Z_INDEX = -10;
 const DEFAULT_BG_Z_INDEX = -1073741824;
-const DEFAULT_COLUMNS = 48;
-const DEFAULT_MAX_ROWS = 24;
 const DEFAULT_STREAM_INTERVAL_MS = 1000;
 const DEFAULT_DESCRIBE_INTERVAL_SECONDS = 30;
 const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
 const SIDE_PANEL_LAYOUT_SYMBOL = Symbol.for("agent-utils.kittyImagePreview.sidePanelLayout");
 const SIDE_PANEL_MAX_WIDTH_RATIO = 0.5;
 const SIDE_PANEL_LEFT_PADDING = 2;
-const AUTO_SIDE_MIN_COLUMNS = 100;
 const IMAGE_DESCRIPTION_PROMPT = `Describe this image objectively and exhaustively for an AI agent that cannot see it.
 
 Focus on absolute, verifiable visual facts:
@@ -244,38 +253,16 @@ export class KittyImagePreviewWidget {
   invalidate() {}
 }
 
-function sideOverlayWidth(state) {
-  return clampInteger(state.config.columns, DEFAULT_COLUMNS, 1, 4096);
-}
-
-function sideOverlayMaxHeight(state) {
-  const configured = clampInteger(state.config.rows || state.config.maxRows, DEFAULT_MAX_ROWS, 1, MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1);
-  const viewportLimit = previewViewportRowLimit();
-  return viewportLimit === undefined ? configured : Math.min(configured, viewportLimit);
-}
-
-function configuredPassthroughMode(state) {
-  return state.config.passthrough === "auto" ? detectKittyPassthroughMode(process.env) : state.config.passthrough;
-}
-
-function shouldUseInlineRightPlacement(state) {
-  return configuredPassthroughMode(state) === "tmux";
-}
+// sideOverlayWidth/sideOverlayMaxHeight/configuredPassthroughMode/
+// shouldUseInlineRightPlacement are imported from
+// ./kitty-image-preview/placement.js (extracted in bd-e1914a).
 
 // currentTerminalColumns/currentTerminalRows/previewViewportRowLimit/
 // previewImageRowLimit are imported from ./kitty-image-preview/layout.js
 // (extracted in bd-e1914a).
 
-function shouldAutoUseSidePanel(state) {
-  if (shouldUseInlineRightPlacement(state)) return false;
-  const columns = currentTerminalColumns();
-  return columns === undefined || columns >= AUTO_SIDE_MIN_COLUMNS;
-}
-
-function resolvePlacement(state) {
-  if (state.config.placement !== AUTO_PLACEMENT) return state.config.placement;
-  return shouldAutoUseSidePanel(state) ? SIDE_OVERLAY_PLACEMENT : "aboveEditor";
-}
+// shouldAutoUseSidePanel/resolvePlacement are imported from
+// ./kitty-image-preview/placement.js (extracted in bd-e1914a).
 
 // estimatedRowsForColumns/fitImageColumnsForRows are imported from
 // ./kitty-image-preview/layout.js (extracted in bd-e1914a).
