@@ -12,6 +12,8 @@ import {
   sanitizeFilenamePart,
   timestampForFilename,
   clampInteger,
+  pluralizeImages,
+  truncatePlainText,
 } from "../extensions/kitty-image-preview/text-utils.js";
 
 test("shellQuote single-quotes and escapes embedded quotes", () => {
@@ -72,4 +74,19 @@ test("clampInteger parses and clamps within bounds, falling back on NaN", () => 
   assert.equal(clampInteger("abc", 7, 1, 10), 7);
   assert.equal(clampInteger(undefined, 3, 1, 10), 3);
   assert.equal(clampInteger("8.9", 0, 1, 10), 8, "parseInt truncates");
+});
+
+test("pluralizeImages switches on a count of one", () => {
+  assert.equal(pluralizeImages(1), "image");
+  assert.equal(pluralizeImages(0), "images");
+  assert.equal(pluralizeImages(2), "images");
+});
+
+test("truncatePlainText trims to a width with an ellipsis and guards edges", () => {
+  assert.equal(truncatePlainText("hello", 10), "hello", "short text is untouched");
+  assert.equal(truncatePlainText("hello world", 8), "hello w\u2026");
+  assert.equal(truncatePlainText("hello", 0), "", "non-positive width yields empty");
+  assert.equal(truncatePlainText(null, 5), "");
+  assert.equal(truncatePlainText("abc", 1), "\u2026", "width at ellipsis length returns ellipsis slice");
+  assert.equal(truncatePlainText("abcdef", 4, "..."), "a...", "custom ellipsis respected");
 });

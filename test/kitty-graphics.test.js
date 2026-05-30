@@ -26,6 +26,29 @@ import {
   clampRowsToViewportHalf,
 } from "../extensions/kitty-graphics.js";
 
+// Read an extension's source "surface": the main file concatenated with its
+// local relative-imported submodules (one level deep). This keeps the
+// source-introspection assertions below structure-agnostic — a helper assertion
+// passes whether the symbol is defined inline in the main file or extracted
+// into a ./<name>/*.js lib module — so these tests no longer block
+// modularization of kitty-image-preview.js (bd-a7cd06 / bd-e1914a).
+async function readExtensionSurface(mainUrl) {
+  const main = await readFile(mainUrl, "utf8");
+  const parts = [main];
+  const seen = new Set();
+  for (const match of main.matchAll(/from\s+["'](\.[^"']+\.js)["']/g)) {
+    const spec = match[1];
+    if (seen.has(spec)) continue;
+    seen.add(spec);
+    try {
+      parts.push(await readFile(new URL(spec, mainUrl), "utf8"));
+    } catch {
+      // Optional/unreadable import: the main surface still applies.
+    }
+  }
+  return parts.join("\n");
+}
+
 const ESC = "\x1b";
 const D0 = "\u0305";
 const D1 = "\u030d";
@@ -264,8 +287,18 @@ test("viewport row helpers cap image previews to half the terminal height", () =
   assert.equal(clampRowsToViewportHalf({ rows: 3, viewportRows: 24, reserveRows: 1 }), 3);
 });
 
+test("readExtensionSurface spans extracted submodules so symbol pins survive modularization", async () => {
+  const surface = await readExtensionSurface(
+    new URL("../extensions/kitty-image-preview.js", import.meta.url),
+  );
+  // pluralizeImages is defined in the ./kitty-image-preview/text-utils.js
+  // submodule, not inline in the main file. The surface must include it so
+  // /function X/-style assertions keep passing as helpers are extracted.
+  assert.match(surface, /export function pluralizeImages/);
+});
+
 test("kitty image preview applies the half-viewport cap to inline and side-panel layouts", async () => {
-  const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+  const source = await readExtensionSurface(new URL("../extensions/kitty-image-preview.js", import.meta.url));
 
   assert.match(source, /function currentTerminalRows/);
   assert.match(source, /previewViewportRowLimit\(\)/);
@@ -280,7 +313,7 @@ test("kitty image preview applies the half-viewport cap to inline and side-panel
 });
 
 test("kitty image preview advertises a fixed right-side panel with tmux inline fallback", async () => {
-  const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+  const source = await readExtensionSurface(new URL("../extensions/kitty-image-preview.js", import.meta.url));
 
   assert.match(source, /SIDE_OVERLAY_PLACEMENT = "rightOverlay"/);
   assert.match(source, /PREVIEW_PLACEMENTS = \[AUTO_PLACEMENT, \.\.\.WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT\]/);
@@ -298,7 +331,7 @@ test("kitty image preview advertises a fixed right-side panel with tmux inline f
 });
 
 test("kitty multiviewer registers discoverable image commands, controls, and a cycle tool", async () => {
-  const source = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+  const source = await readExtensionSurface(new URL("../extensions/kitty-image-preview.js", import.meta.url));
 
   assert.match(source, /registerImageCommand\(\["kitty-show-next", "image-next"\]/);
   assert.match(source, /"image-prev", "image-previous"/);
@@ -329,7 +362,7 @@ test("interactive kitty animation smoke stays out of default node test discovery
 });
 
 test("kitty multiviewer scopes delete commands to images it owns", async () => {
-  const previewSource = await readFile(new URL("../extensions/kitty-image-preview.js", import.meta.url), "utf8");
+  const previewSource = await readExtensionSurface(new URL("../extensions/kitty-image-preview.js", import.meta.url));
   const graphicsSource = await readFile(new URL("../extensions/kitty-graphics.js", import.meta.url), "utf8");
 
   // The extension must NEVER use a global "delete all" (d=A) escape sequence,
