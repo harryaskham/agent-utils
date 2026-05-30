@@ -6,9 +6,51 @@ import {
   micCaptureSummary,
   realtimeContextDiagnostics,
   realtimeContextDiagnosticLine,
+  statusLines,
+  realtimePanelLines,
 } from "../extensions/lib/realtime-status.js";
+import { numberEnv } from "../extensions/lib/realtime-helpers.js";
 
 const num = (n) => Number(n).toLocaleString();
+
+// Clear the audio/vad env that statusLines/panelLines read so the structural
+// assertions are deterministic regardless of the host environment.
+const STATUS_ENV_KEYS = [
+  "PI_RT_AUDIO_BACKEND",
+  "PULSE_SERVER",
+  "PULSE_SOURCE",
+  "PULSE_SINK",
+  "PI_RT_VAD_THRESHOLD",
+  "PI_RT_VAD_SILENCE_MS",
+];
+function withStatusEnv(overrides, fn) {
+  const orig = Object.fromEntries(STATUS_ENV_KEYS.map((k) => [k, process.env[k]]));
+  try {
+    for (const k of STATUS_ENV_KEYS) {
+      if (overrides[k] === undefined) delete process.env[k];
+      else process.env[k] = overrides[k];
+    }
+    return fn();
+  } finally {
+    for (const k of STATUS_ENV_KEYS) {
+      if (orig[k] === undefined) delete process.env[k];
+      else process.env[k] = orig[k];
+    }
+  }
+}
+
+function baseConfig(overrides = {}) {
+  return {
+    model: "gpt-realtime-2",
+    audioEnabled: true,
+    transcriptionModel: "gpt-realtime-whisper",
+    voice: "marin",
+    reasoningEffort: "off",
+    chimeEnabled: false,
+    summaryContext: false,
+    ...overrides,
+  };
+}
 
 test("realtimeNextStepHint walks the session state machine", () => {
   assert.match(
@@ -113,4 +155,70 @@ test("realtimeContextDiagnosticLine renders n/a and populated variants", () => {
     line.endsWith(`full:${num(d.fullTokens)} (${d.fullPct}) · summary:${num(d.summaryTokens)} (${d.summaryPct})`),
     "observed full/summary tail",
   );
+});
+
+test("statusLines returns the 3-line compact array with conditional segments", () => {
+  withStatusEnv({}, () => {
+    const compact = statusLines({ connected: true, mic: false, forwardedMessageCount: 0 }, baseConfig());
+    assert.equal(compact.length, 3);
+    assert.match(compact[0], /^● rt gpt-realtime-2 · mode:connected · audio:on · mic:off · backend:/);
+    // reason:off and speed:1 are omitted.
+    assert.ok(!compact[1].includes("reason:"));
+    assert.ok(!compact[1].includes("speed:"));
+    // connecting (not yet connected) and idle markers.
+    assert.match(statusLines({ connecting: true }, baseConfig())[0], /^◐ /);
+    assert.match(statusLines({}, baseConfig())[0], /^○ /);
+    // conditional segments appear when configured.
+    const withSegs = statusLines(
+      { connected: true, mic: true, micMode: "vad", latestClipId: "c1", forwardedMessageCount: 2 },
+      baseConfig({ reasoningEffort: "low", sendReasoning: true, directAzure: true, speed: 1.25 }),
+    );
+    assert.match(withSegs[0], /mic:vad/);
+    assert.ok(withSegs[1].includes("reason:low"));
+    assert.ok(withSegs[1].includes("speed:1.25"));
+    assert.ok(withSegs[1].includes("clip:c1"));
+  });
+});
+
+test("statusLines full mode appends the diagnostic/record/playback block", () => {
+  withStatusEnv({}, () => {
+    const full = statusLines(
+      { connected: true, mic: false, forwardedMessageCount: 0 },
+      baseConfig(),
+      { full: true },
+    );
+    assert.equal(full.length, 13);
+    assert.ok(full.some((l) => l.startsWith("baseUrl: ")));
+    assert.ok(full.some((l) => l.startsWith("record: ")));
+    assert.ok(full.some((l) => l.startsWith("playback: ")));
+    assert.ok(full.some((l) => l.startsWith("context: window:")));
+  });
+});
+
+test("realtimePanelLines adds vad/pulse/controls with numberEnv defaults", () => {
+  withStatusEnv({}, () => {
+    const lines = realtimePanelLines({ connected: true, mic: false, forwardedMessageCount: 0 }, baseConfig());
+    assert.equal(lines.length, 7);
+    assert.match(lines[3], /^vad: thresh:0\.7 · silence:1100ms · /);
+    assert.match(lines[4], /^pulse: server:<unset> · source:<default> · sink:<default>$/);
+    assert.equal(lines[6], "controls: /rt-stop · /rt-cancel · /rt mic vad · /rt audio toggle · /rt thresh=0.85 · /rt status full · /rt off");
+  });
+});
+
+test("numberEnv reads env with a non-finite/empty fallback", () => {
+  const KEY = "PI_RT_TEST_NUMBER_ENV";
+  const orig = process.env[KEY];
+  try {
+    delete process.env[KEY];
+    assert.equal(numberEnv(KEY, 5), 5);
+    process.env[KEY] = "2.5";
+    assert.equal(numberEnv(KEY, 5), 2.5);
+    process.env[KEY] = "not-a-number";
+    assert.equal(numberEnv(KEY, 5), 5);
+    process.env[KEY] = "";
+    assert.equal(numberEnv(KEY, 5), 5);
+  } finally {
+    if (orig === undefined) delete process.env[KEY];
+    else process.env[KEY] = orig;
+  }
 });
