@@ -102,6 +102,8 @@ import {
   chimePcm,
   formatDurationMs,
   audioDurationMs,
+  audioInputBackendLabel,
+  audioOutputBackendLabel,
 } from "./lib/realtime-audio.js";
 import {
   REALTIME_CONTEXT_WINDOW_TOKENS,
@@ -2185,28 +2187,11 @@ function registerRealtimeProvider(pi, session) {
 // Status widget formatting
 // ---------------------------------------------------------------------------
 
-function audioOutputBackendLabel(config) {
-  if (config.playbackCommand) return "out:custom";
-  const backend = (process.env.PI_RT_AUDIO_BACKEND || "").toLowerCase();
-  if (["pulse", "pulseaudio", "pacat", "paplay"].includes(backend)) return "out:pulse";
-  if (["sox", "play"].includes(backend)) return "out:sox";
-  if (backend === "audiotoolbox") return "out:audiotoolbox";
-  if (backend === "coreaudio") return "out:coreaudio";
-  if (backend === "ffplay" || backend === "ffmpeg") return `out:${backend}`;
-  if (process.env.PULSE_SERVER) return "out:pulse";
-  return "out:ffplay";
-}
+// audioOutputBackendLabel is imported from ./lib/realtime-audio.js
+// (extracted in bd-e1914a).
 
-function audioInputBackendLabel(config) {
-  if (config.recordCommand) return "in:custom";
-  const backend = (process.env.PI_RT_AUDIO_BACKEND || "").toLowerCase();
-  if (["pulse", "pulseaudio", "pacat", "parec"].includes(backend)) return "in:pulse";
-  // AudioToolbox is output-only on macOS; input still uses AVFoundation.
-  if (["coreaudio", "audiotoolbox", "ffmpeg"].includes(backend)) return "in:avfoundation";
-  if (["sox", "rec", "play"].includes(backend)) return "in:sox";
-  if (process.env.PULSE_SERVER) return "in:pulse";
-  return "in:sox";
-}
+// audioInputBackendLabel is imported from ./lib/realtime-audio.js
+// (extracted in bd-e1914a).
 
 function realtimeNextStepHint(session, config) {
   if (session.mic) {
