@@ -13,6 +13,15 @@ import {
   pluralizeImages,
   truncatePlainText,
 } from "./kitty-image-preview/text-utils.js";
+import {
+  serializePublicState,
+  restorePublicState,
+  trackOwnedItem,
+  clearOwnedImageIds,
+  pushItems,
+  replaceItems,
+  summarizeCurrent,
+} from "./kitty-image-preview/state.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -73,31 +82,10 @@ function stringEnum(values, description) {
 // ./kitty-image-preview/text-utils.js (extracted in bd-e1914a).
 
 
-function serializePublicState(state) {
-  return {
-    version: 1,
-    visible: state.visible,
-    index: state.index,
-    config: { ...state.config },
-    items: state.items.map((item) => ({
-      id: item.id,
-      path: item.path,
-      label: item.label,
-      mediaType: item.mediaType,
-      width: item.width,
-      height: item.height,
-      addedAt: item.addedAt,
-    })),
-    ownedImageIds: Array.from(state.ownedImageIds || []),
-  };
-}
+// serializePublicState is imported from ./kitty-image-preview/state.js
+// (extracted in bd-e1914a).
 
-function trackOwnedItem(state, item) {
-  if (!item || typeof item.id !== "number") return item;
-  if (!state.ownedImageIds) state.ownedImageIds = new Set();
-  state.ownedImageIds.add(item.id);
-  return item;
-}
+// trackOwnedItem is imported from ./kitty-image-preview/state.js.
 
 export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
   return buildScopedDeleteCommandRaw({
@@ -108,56 +96,15 @@ export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
   });
 }
 
-function clearOwnedImageIds(state) {
-  state.ownedImageIds = new Set();
-}
+// clearOwnedImageIds is imported from ./kitty-image-preview/state.js.
 
-function pushItems(state, items) {
-  for (const item of items) {
-    state.items.push(item);
-    trackOwnedItem(state, item);
-  }
-}
+// pushItems is imported from ./kitty-image-preview/state.js.
 
-function replaceItems(state, items) {
-  // Note: we intentionally keep previously-owned image ids registered so that
-  // pending scoped-deletes can still target them on subsequent prepare/clear
-  // cycles. Items are evicted from ownership only on explicit clear/shutdown.
-  state.items = [];
-  pushItems(state, items);
-}
+// replaceItems is imported from ./kitty-image-preview/state.js.
 
-function restorePublicState(state, details) {
-  const snapshot = details?.kittyImagePreviewState;
-  if (!snapshot || !Array.isArray(snapshot.items)) return;
-  state.visible = Boolean(snapshot.visible);
-  state.index = clampInteger(snapshot.index, 0, 0, Math.max(0, snapshot.items.length - 1));
-  state.config = { ...state.config, ...(snapshot.config ?? {}) };
-  state.items = snapshot.items
-    .filter((item) => typeof item?.path === "string")
-    .map((item) => ({
-      id: Number.isFinite(item.id) ? item.id : stableKittyImageId(item.path),
-      path: item.path,
-      label: item.label || path.basename(item.path),
-      mediaType: item.mediaType || "image/png",
-      width: item.width,
-      height: item.height,
-      addedAt: item.addedAt || Date.now(),
-    }));
-  state.ownedImageIds = new Set(
-    Array.isArray(snapshot.ownedImageIds) && snapshot.ownedImageIds.length > 0
-      ? snapshot.ownedImageIds.filter((id) => Number.isFinite(id))
-      : state.items.map((item) => item.id),
-  );
-}
+// restorePublicState is imported from ./kitty-image-preview/state.js.
 
-function summarizeCurrent(state) {
-  const current = state.items[state.index];
-  if (!current) return "No image is loaded.";
-  const dims = current.width && current.height ? ` (${current.width}×${current.height})` : "";
-  const mode = state.config.transferMode === "auto" ? "auto" : state.config.transferMode;
-  return `Showing ${state.index + 1}/${state.items.length}: ${current.label}${dims}; placement=${state.config.placement}, transfer=${mode}, graphicsPlacement=${state.config.placementMode}, z=${state.config.zIndex}.`;
-}
+// summarizeCurrent is imported from ./kitty-image-preview/state.js.
 
 // pluralizeImages/truncatePlainText are imported from
 // ./kitty-image-preview/text-utils.js (extracted in bd-e1914a).
