@@ -50,6 +50,10 @@ import {
   buildPlaywrightCliScreenshotArgs,
   buildPlaywrightCliScreenshotCommand,
 } from "./kitty-image-preview/cli-commands.js";
+import {
+  imageControlHint,
+  imageStatusLine,
+} from "./kitty-image-preview/status-line.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -129,30 +133,16 @@ export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
 // pluralizeImages/truncatePlainText are imported from
 // ./kitty-image-preview/text-utils.js (extracted in bd-e1914a).
 
-function imageControlHint(state, { includeCount = false } = {}) {
-  if (state.items.length === 0) return "/image-status";
-  if (!state.visible) {
-    const count = includeCount ? ` ${state.items.length} ${pluralizeImages(state.items.length)}` : "";
-    return `/image-show /image-clear${count}`;
-  }
-  const nav = state.items.length > 1 ? "/image-prev /image-next " : "";
-  const count = includeCount ? ` ${state.index + 1}/${state.items.length}` : "";
-  return `${nav}/image-hide /image-clear${count}`;
-}
+// imageControlHint is imported from ./kitty-image-preview/status-line.js
+// (extracted in bd-e1914a).
 
 function imageControlsLine(state, width) {
   if (state.items.length === 0) return "";
   return truncatePlainText(`controls: ${imageControlHint(state, { includeCount: true })}`, width);
 }
 
-function imageStatusLine(state, current) {
-  if (state.items.length === 0) return undefined;
-  if (!state.visible) return `🖼 hidden ${state.items.length} ${pluralizeImages(state.items.length)} — /image-show /image-clear`;
-  const animation = state.animation?.running ? " ▶" : "";
-  const cycle = state.cycle?.running ? ` ⟳${Math.round((state.cycle.intervalMs || 0) / 1000)}s` : "";
-  const label = current?.label ? ` ${current.label}` : "";
-  return `🖼${animation}${cycle} ${state.index + 1}/${state.items.length}${label} — ${imageControlHint(state)}`;
-}
+// imageStatusLine is imported from ./kitty-image-preview/status-line.js
+// (extracted in bd-e1914a).
 
 function renderPlaceholderLines(width, rows, text) {
   const line = " ".repeat(Math.max(1, width));
