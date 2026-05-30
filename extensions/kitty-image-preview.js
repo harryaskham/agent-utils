@@ -1,6 +1,16 @@
 import { copyFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  shellQuote,
+  normalizeMaybeAtPath,
+  expandHome,
+  resolveUserPath,
+  relativeLabel,
+  sanitizeFilenamePart,
+  timestampForFilename,
+  clampInteger,
+} from "./kitty-image-preview/text-utils.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -56,46 +66,10 @@ function stringEnum(values, description) {
   return StringEnum(values, { description });
 }
 
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", `'\\''`)}'`;
-}
+// shellQuote/normalizeMaybeAtPath/expandHome/resolveUserPath/relativeLabel/
+// sanitizeFilenamePart/timestampForFilename/clampInteger are imported from
+// ./kitty-image-preview/text-utils.js (extracted in bd-e1914a).
 
-function normalizeMaybeAtPath(input) {
-  if (typeof input !== "string") return input;
-  return input.startsWith("@") ? input.slice(1) : input;
-}
-
-function expandHome(inputPath) {
-  if (!inputPath?.startsWith("~/")) return inputPath;
-  return path.join(os.homedir(), inputPath.slice(2));
-}
-
-function resolveUserPath(cwd, inputPath) {
-  const normalized = expandHome(normalizeMaybeAtPath(inputPath));
-  return path.resolve(cwd, normalized);
-}
-
-function relativeLabel(cwd, absolutePath) {
-  const relative = path.relative(cwd, absolutePath);
-  return relative && !relative.startsWith("..") ? relative : absolutePath;
-}
-
-function sanitizeFilenamePart(value) {
-  return String(value || "item")
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80) || "item";
-}
-
-function timestampForFilename(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, "-");
-}
-
-function clampInteger(value, fallback, min, max) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, Math.min(max, parsed));
-}
 
 function serializePublicState(state) {
   return {
