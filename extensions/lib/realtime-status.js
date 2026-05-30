@@ -17,6 +17,8 @@ import {
   defaultPlaybackCommand,
 } from "./realtime-audio.js";
 import { normalizeBaseUrl, numberEnv } from "./realtime-helpers.js";
+import { spawnSync } from "node:child_process";
+import { truncateDiagnostic, isAuthFailure, isMicPermissionFailure } from "./realtime-text.js";
 
 export function realtimeNextStepHint(session, config) {
   if (session.mic) {
@@ -119,5 +121,69 @@ export function realtimePanelLines(session, config) {
     `pulse: server:${process.env.PULSE_SERVER || "<unset>"} · source:${process.env.PULSE_SOURCE || "<default>"} · sink:${process.env.PULSE_SINK || "<default>"}`,
     `next: ${realtimeNextStepHint(session, config)}`,
     "controls: /rt-stop · /rt-cancel · /rt mic vad · /rt audio toggle · /rt thresh=0.85 · /rt status full · /rt off",
+  ];
+}
+
+export function commandAvailable(name) {
+  const result = spawnSync("/bin/sh", ["-lc", `command -v ${name} >/dev/null 2>&1`], { encoding: "utf8" });
+  return result.status === 0;
+}
+
+export function envPresent(...names) {
+  return names.find((name) => !!process.env[name]);
+}
+
+export function diagnosticLines(session, config) {
+  const provider = config.directAzure ? "azure" : "openai/proxy";
+  const backend = process.env.PI_RT_AUDIO_BACKEND || "pulse";
+  const record = config.recordCommand || defaultRecordCommand();
+  const playback = config.playbackCommand || defaultPlaybackCommand();
+  const apiKey = config.directAzure
+    ? envPresent("PI_RT_AZURE_API_KEY", "AZURE_CANADACENTRAL_API_KEY", "AZURE_OPENAI_API_KEY")
+    : envPresent("PI_RT_API_KEY", "OPENAI_API_KEY");
+  const requirements = [
+    `parec:${commandAvailable("parec") ? "ok" : "missing"}`,
+    `pacat:${commandAvailable("pacat") ? "ok" : "missing"}`,
+    `ffmpeg:${commandAvailable("ffmpeg") ? "ok" : "missing"}`,
+    `ffplay:${commandAvailable("ffplay") ? "ok" : "missing"}`,
+    `sox-rec:${commandAvailable("rec") ? "ok" : "missing"}`,
+  ].join(" · ");
+  const pulse = [
+    `PULSE_SERVER=${process.env.PULSE_SERVER || "<unset>"}`,
+    `PULSE_SOURCE=${process.env.PULSE_SOURCE || "<default>"}`,
+    `PULSE_SINK=${process.env.PULSE_SINK || "<default>"}`,
+  ].join(" · ");
+  const hints = [];
+  const responseError = truncateDiagnostic(session.lastResponseError || "");
+  const micError = truncateDiagnostic(session.lastMicError || "");
+  const playbackError = truncateDiagnostic(config.lastPlaybackError || "");
+  if (!apiKey) hints.push(config.directAzure ? "auth: set PI_RT_AZURE_API_KEY or AZURE_OPENAI_API_KEY" : "auth: set OPENAI_API_KEY or PI_RT_API_KEY");
+  if (responseError && isAuthFailure(responseError)) hints.push("auth: realtime server rejected credentials; refresh the API key/token and retry /rt-doctor");
+  if (/\bparec\b/.test(record) && !commandAvailable("parec")) hints.push("audio input: install PulseAudio tools (macOS: brew install pulseaudio) or set PI_RT_RECORD_CMD");
+  if (/\bpacat\b/.test(playback) && !commandAvailable("pacat")) hints.push("audio output: install PulseAudio tools (macOS: brew install pulseaudio) or set PI_RT_PLAYBACK_CMD");
+  if (/ffmpeg/.test(record) && !commandAvailable("ffmpeg")) hints.push("audio input: install ffmpeg for CoreAudio/AVFoundation capture or set PI_RT_RECORD_CMD");
+  if (/ffplay/.test(playback) && !commandAvailable("ffplay")) hints.push("audio output: install ffmpeg/ffplay or set PI_RT_PLAYBACK_CMD");
+  if ((micError || playbackError) && isMicPermissionFailure(`${micError}\n${playbackError}`)) hints.push("macOS audio permission: grant microphone/accessibility permission to the terminal/Pi process, then restart Pi");
+  if (micError && /No such file|not found|command not found/i.test(micError)) hints.push("audio input: record command failed to start; check PI_RT_RECORD_CMD and PATH");
+  if (playbackError && /No such file|not found|command not found/i.test(playbackError)) hints.push("audio output: playback command failed to start; check PI_RT_PLAYBACK_CMD and PATH");
+  if (backend === "pulse") hints.push(process.env.PULSE_SERVER
+    ? "Pulse-first setup active; confirm phone sink/source with PULSE_SINK/PULSE_SOURCE if audio routes incorrectly"
+    : "Pulse is the default backend; if using phone sink/source, set/confirm PULSE_SERVER/SINK/SOURCE, or override PI_RT_AUDIO_BACKEND for local devices");
+  if (session.phase === "transcribing" && session.pendingCommitTimer) hints.push("waiting for transcription; /rt-cancel discards stuck mic input");
+
+  return [
+    "Realtime doctor",
+    ...statusLines(session, config, { full: true }),
+    `provider: ${provider} · apiKey:${apiKey || "<missing>"}`,
+    `audioBackend: ${backend} · ${audioOutputBackendLabel(config)}/${audioInputBackendLabel(config)}`,
+    `pulse: ${pulse}`,
+    `commands: ${requirements}`,
+    `vad: threshold:${config.vadThreshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
+    `state: ${JSON.stringify(session.state?.snapshot?.({ sttOnly: config.sttOnly, audioEnabled: config.audioEnabled }) || {})}`,
+    `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length} · micRestart:${session.micRestartAttempts || 0}${session.micRestartTimer ? " pending" : ""}`,
+    `micError: ${micError || "<none>"}`,
+    `reconnect: ${config.autoReconnect ? "on" : "off"} · attempts:${config.reconnectAttempts || 0}/${config.reconnectMaxAttempts || 0} · next:${config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0}ms · last:${config.lastDisconnectReason || "<none>"}`,
+    `lastResponseError: ${responseError || "<none>"}`,
+    `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,
   ];
 }
