@@ -10,6 +10,8 @@ import {
   sanitizeFilenamePart,
   timestampForFilename,
   clampInteger,
+  pluralizeImages,
+  truncatePlainText,
 } from "./kitty-image-preview/text-utils.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
@@ -157,19 +159,8 @@ function summarizeCurrent(state) {
   return `Showing ${state.index + 1}/${state.items.length}: ${current.label}${dims}; placement=${state.config.placement}, transfer=${mode}, graphicsPlacement=${state.config.placementMode}, z=${state.config.zIndex}.`;
 }
 
-function pluralizeImages(count) {
-  return count === 1 ? "image" : "images";
-}
-
-function truncatePlainText(value, width, ellipsis = "…") {
-  const text = String(value ?? "");
-  const max = Math.max(0, Math.trunc(width || 0));
-  if (max <= 0) return "";
-  const chars = Array.from(text);
-  if (chars.length <= max) return text;
-  if (max <= ellipsis.length) return ellipsis.slice(0, max);
-  return `${chars.slice(0, max - ellipsis.length).join("")}${ellipsis}`;
-}
+// pluralizeImages/truncatePlainText are imported from
+// ./kitty-image-preview/text-utils.js (extracted in bd-e1914a).
 
 function imageControlHint(state, { includeCount = false } = {}) {
   if (state.items.length === 0) return "/image-status";

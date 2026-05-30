@@ -46,3 +46,17 @@ export function clampInteger(value, fallback, min, max) {
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
 }
+
+export function pluralizeImages(count) {
+  return count === 1 ? "image" : "images";
+}
+
+export function truncatePlainText(value, width, ellipsis = "…") {
+  const text = String(value ?? "");
+  const max = Math.max(0, Math.trunc(width || 0));
+  if (max <= 0) return "";
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  if (max <= ellipsis.length) return ellipsis.slice(0, max);
+  return `${chars.slice(0, max - ellipsis.length).join("")}${ellipsis}`;
+}
