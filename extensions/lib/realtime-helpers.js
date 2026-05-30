@@ -76,3 +76,8 @@ export function truncateToolOutput(text, max = TOOL_OUTPUT_CAP) {
   if (s.length <= max) return s;
   return s.slice(0, max) + `\n\n[truncated ${s.length - max} chars]`;
 }
+
+export function numberEnv(name, fallback) {
+  const value = Number(env(name) ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+}

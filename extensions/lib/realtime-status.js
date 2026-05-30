@@ -10,6 +10,13 @@ import {
   estimateRealtimeContextTokens,
   estimateRealtimeSummaryContextTokens,
 } from "./realtime-summary.js";
+import {
+  audioInputBackendLabel,
+  audioOutputBackendLabel,
+  defaultRecordCommand,
+  defaultPlaybackCommand,
+} from "./realtime-audio.js";
+import { normalizeBaseUrl, numberEnv } from "./realtime-helpers.js";
 
 export function realtimeNextStepHint(session, config) {
   if (session.mic) {
@@ -62,4 +69,55 @@ export function realtimeContextDiagnosticLine(session, config) {
     ? "estimate:n/a"
     : `full:${d.fullTokens.toLocaleString()} (${d.fullPct}) · summary:${d.summaryTokens.toLocaleString()} (${d.summaryPct})`;
   return `context: window:${d.contextWindow.toLocaleString()} · compactAt:${d.thresholdTokens.toLocaleString()} (${d.thresholdPct}) · reserve:${d.reserveTokens.toLocaleString()}${d.keepRecentTokens != null ? ` · keep:${Number(d.keepRecentTokens).toLocaleString()}` : ""} · ${observed}`;
+}
+
+export function statusLines(session, config, { full = false } = {}) {
+  const conn = session.connected ? "●" : (session.connecting ? "◐" : "○");
+  const mic = session.mic ? `mic:${session.micMode || "on"}` : "mic:off";
+  const provider = config.directAzure ? "azure" : "proxy";
+  const outBackend = audioOutputBackendLabel(config);
+  const inBackend = audioInputBackendLabel(config);
+  const reason = config.reasoningEffort === "off"
+    ? ""
+    : ` · reason:${config.reasoningEffort}${session.reasoningRejected ? "!" : ""}${(!config.directAzure && !config.sendReasoning) ? " unsent" : ""}`;
+  const speed = config.speed && config.speed !== 1 ? ` · speed:${config.speed}${session.speedRejected ? "!" : ""}` : "";
+  const phase = session.phase && session.phase !== "idle" ? ` · ${session.phase}` : "";
+  const clip = session.latestClipId ? ` · clip:${session.latestClipId}` : "";
+  const mode = session.state?.mode?.({ sttOnly: config.sttOnly }) || (config.sttOnly ? "stt" : "connected");
+  const restore = config.previousModel ? ` · ↩${config.previousModel.provider}/${config.previousModel.id}` : "";
+  const summary = config.summaryContext ? "summary:on" : "summary:off";
+  const chime = config.chimeEnabled ? "chime:on" : "chime:off";
+  const input = session.lastTurnInputMode ? ` · input:${session.lastTurnInputMode}` : "";
+  const compact = [
+    `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · backend:${outBackend}/${inBackend}${phase}`,
+    `trans:${config.transcriptionModel} · voice:${config.voice}${speed} · hist:${session.forwardedMessageCount} · ${summary} · ${chime}${input} · ${provider}${reason}${clip}${restore}`,
+    `mic capture: ${micCaptureSummary(session)} · next: ${realtimeNextStepHint(session, config)}`,
+  ];
+  if (!full) return compact;
+  return [
+    ...compact,
+    `baseUrl: ${normalizeBaseUrl(config.baseUrl)}`,
+    realtimeContextDiagnosticLine(session, config),
+    `azureEndpoint: ${config.azureEndpoint || "<unset>"}`,
+    `azureDeployment: ${config.azureDeployment || config.model}`,
+    `record: ${config.recordCommand || defaultRecordCommand()}`,
+    `playback: ${config.playbackCommand || defaultPlaybackCommand()}`,
+    `playbackStarted: ${config.lastPlaybackStartedAt ? new Date(config.lastPlaybackStartedAt).toLocaleTimeString() : "<never>"}`,
+    `nextStep: ${realtimeNextStepHint(session, config)}`,
+    `playbackExit: ${config.lastPlaybackExit || "<none>"}`,
+    `playbackError: ${config.lastPlaybackError || "<none>"}`,
+  ];
+}
+
+export function realtimePanelLines(session, config) {
+  const compact = statusLines(session, config);
+  const threshold = config.vadThreshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7);
+  const speed = config.speed && config.speed !== 1 ? `${config.speed}` : "1";
+  return [
+    ...compact,
+    `vad: thresh:${threshold} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · chime:${config.chimeEnabled ? "on" : "off"} · speed:${speed}`,
+    `pulse: server:${process.env.PULSE_SERVER || "<unset>"} · source:${process.env.PULSE_SOURCE || "<default>"} · sink:${process.env.PULSE_SINK || "<default>"}`,
+    `next: ${realtimeNextStepHint(session, config)}`,
+    "controls: /rt-stop · /rt-cancel · /rt mic vad · /rt audio toggle · /rt thresh=0.85 · /rt status full · /rt off",
+  ];
 }

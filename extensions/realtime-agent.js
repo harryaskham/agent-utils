@@ -91,6 +91,7 @@ import {
   parseVadThreshold,
   estimateRealtimeTokensForText,
   truncateToolOutput,
+  numberEnv,
 } from "./lib/realtime-helpers.js";
 import {
   SAMPLE_RATE,
@@ -140,6 +141,8 @@ import {
   micCaptureSummary,
   realtimeNextStepHint,
   realtimeContextDiagnosticLine,
+  statusLines,
+  realtimePanelLines,
 } from "./lib/realtime-status.js";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
@@ -231,10 +234,7 @@ async function eventDataToString(data) {
   return String(data);
 }
 
-function numberEnv(name, fallback) {
-  const value = Number(env(name) ?? fallback);
-  return Number.isFinite(value) ? value : fallback;
-}
+// numberEnv is imported from ./lib/realtime-helpers.js (extracted in bd-e1914a).
 
 // shouldAutoRestartMicMode is imported from ./lib/realtime-models.js
 // (extracted in bd-e1914a).
@@ -2156,43 +2156,7 @@ function registerRealtimeProvider(pi, session) {
 // realtimeContextDiagnosticLine are imported from ./lib/realtime-status.js
 // (extracted in bd-e1914a).
 
-function statusLines(session, config, { full = false } = {}) {
-  const conn = session.connected ? "●" : (session.connecting ? "◐" : "○");
-  const mic = session.mic ? `mic:${session.micMode || "on"}` : "mic:off";
-  const provider = config.directAzure ? "azure" : "proxy";
-  const outBackend = audioOutputBackendLabel(config);
-  const inBackend = audioInputBackendLabel(config);
-  const reason = config.reasoningEffort === "off"
-    ? ""
-    : ` · reason:${config.reasoningEffort}${session.reasoningRejected ? "!" : ""}${(!config.directAzure && !config.sendReasoning) ? " unsent" : ""}`;
-  const speed = config.speed && config.speed !== 1 ? ` · speed:${config.speed}${session.speedRejected ? "!" : ""}` : "";
-  const phase = session.phase && session.phase !== "idle" ? ` · ${session.phase}` : "";
-  const clip = session.latestClipId ? ` · clip:${session.latestClipId}` : "";
-  const mode = session.state?.mode?.({ sttOnly: config.sttOnly }) || (config.sttOnly ? "stt" : "connected");
-  const restore = config.previousModel ? ` · ↩${config.previousModel.provider}/${config.previousModel.id}` : "";
-  const summary = config.summaryContext ? "summary:on" : "summary:off";
-  const chime = config.chimeEnabled ? "chime:on" : "chime:off";
-  const input = session.lastTurnInputMode ? ` · input:${session.lastTurnInputMode}` : "";
-  const compact = [
-    `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · backend:${outBackend}/${inBackend}${phase}`,
-    `trans:${config.transcriptionModel} · voice:${config.voice}${speed} · hist:${session.forwardedMessageCount} · ${summary} · ${chime}${input} · ${provider}${reason}${clip}${restore}`,
-    `mic capture: ${micCaptureSummary(session)} · next: ${realtimeNextStepHint(session, config)}`,
-  ];
-  if (!full) return compact;
-  return [
-    ...compact,
-    `baseUrl: ${normalizeBaseUrl(config.baseUrl)}`,
-    realtimeContextDiagnosticLine(session, config),
-    `azureEndpoint: ${config.azureEndpoint || "<unset>"}`,
-    `azureDeployment: ${config.azureDeployment || config.model}`,
-    `record: ${config.recordCommand || defaultRecordCommand()}`,
-    `playback: ${config.playbackCommand || defaultPlaybackCommand()}`,
-    `playbackStarted: ${config.lastPlaybackStartedAt ? new Date(config.lastPlaybackStartedAt).toLocaleTimeString() : "<never>"}`,
-    `nextStep: ${realtimeNextStepHint(session, config)}`,
-    `playbackExit: ${config.lastPlaybackExit || "<none>"}`,
-    `playbackError: ${config.lastPlaybackError || "<none>"}`,
-  ];
-}
+// statusLines is imported from ./lib/realtime-status.js (extracted in bd-e1914a).
 
 function commandAvailable(name) {
   const result = spawnSync("/bin/sh", ["-lc", `command -v ${name} >/dev/null 2>&1`], { encoding: "utf8" });
@@ -2203,18 +2167,7 @@ function envPresent(...names) {
   return names.find((name) => !!process.env[name]);
 }
 
-function realtimePanelLines(session, config) {
-  const compact = statusLines(session, config);
-  const threshold = config.vadThreshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7);
-  const speed = config.speed && config.speed !== 1 ? `${config.speed}` : "1";
-  return [
-    ...compact,
-    `vad: thresh:${threshold} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · chime:${config.chimeEnabled ? "on" : "off"} · speed:${speed}`,
-    `pulse: server:${process.env.PULSE_SERVER || "<unset>"} · source:${process.env.PULSE_SOURCE || "<default>"} · sink:${process.env.PULSE_SINK || "<default>"}`,
-    `next: ${realtimeNextStepHint(session, config)}`,
-    "controls: /rt-stop · /rt-cancel · /rt mic vad · /rt audio toggle · /rt thresh=0.85 · /rt status full · /rt off",
-  ];
-}
+// realtimePanelLines is imported from ./lib/realtime-status.js (extracted in bd-e1914a).
 
 // isAuthFailure/isMicPermissionFailure/stripAnsi/truncateDiagnostic/
 // truncateVisible are imported from ./lib/realtime-text.js (extracted in bd-e1914a).
