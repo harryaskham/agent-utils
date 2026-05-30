@@ -90,7 +90,7 @@ impl SkillServerConfig {
             path: path.to_path_buf(),
             source,
         })?;
-        serde_yaml::from_str(&content).map_err(|source| SkillServerError::ConfigParse {
+        serde_yaml_ng::from_str(&content).map_err(|source| SkillServerError::ConfigParse {
             path: path.to_path_buf(),
             source,
         })
@@ -217,7 +217,7 @@ pub enum SkillServerError {
     #[error("failed to parse config {path}: {source}")]
     ConfigParse {
         path: PathBuf,
-        source: serde_yaml::Error,
+        source: serde_yaml_ng::Error,
     },
     #[error("invalid request: {0}")]
     Validation(String),
@@ -589,7 +589,8 @@ fn meta_request_from_call(command: &CallCommand) -> Result<MetaRequest, SkillSer
 fn meta_request_from_external(words: &[OsString]) -> Result<(MetaRequest, bool), SkillServerError> {
     let Some((domain, rest)) = words.split_first() else {
         return Err(SkillServerError::Validation(
-            "expected skill-search-style input: skill-search <domain> <query-or-command>".to_owned(),
+            "expected skill-search-style input: skill-search <domain> <query-or-command>"
+                .to_owned(),
         ));
     };
     let domain = domain.to_string_lossy().to_string();
@@ -747,7 +748,8 @@ mcp_servers:
 
     #[test]
     fn parses_config_with_skill_paths_and_mcp_servers() {
-        let config: SkillServerConfig = serde_yaml::from_str(SAMPLE_CONFIG).expect("valid config");
+        let config: SkillServerConfig =
+            serde_yaml_ng::from_str(SAMPLE_CONFIG).expect("valid config");
         assert_eq!(config.skill_paths, vec![PathBuf::from("./prompts")]);
         assert_eq!(config.mcp_servers[0].domains, vec!["web", "search"]);
         assert_eq!(config.mcp_servers[0].tools[0].name, "search_web");
@@ -755,7 +757,8 @@ mcp_servers:
 
     #[test]
     fn meta_request_routes_to_configured_mcp_tool() {
-        let config: SkillServerConfig = serde_yaml::from_str(SAMPLE_CONFIG).expect("valid config");
+        let config: SkillServerConfig =
+            serde_yaml_ng::from_str(SAMPLE_CONFIG).expect("valid config");
         let context = RuntimeContext {
             config_path: PathBuf::from("test.yaml"),
             config,
@@ -786,7 +789,8 @@ mcp_servers:
 
     #[test]
     fn mcp_tool_call_uses_same_meta_router() {
-        let config: SkillServerConfig = serde_yaml::from_str(SAMPLE_CONFIG).expect("valid config");
+        let config: SkillServerConfig =
+            serde_yaml_ng::from_str(SAMPLE_CONFIG).expect("valid config");
         let context = RuntimeContext {
             config_path: PathBuf::from("test.yaml"),
             config,
