@@ -353,6 +353,19 @@ fn build_tool_router() -> ToolRouter<RuntimeContext> {
 pub struct ListRequest {}
 
 #[must_use]
+/// Resolve the config path from the CLI flag, the `SS_CONFIG` environment
+/// variable, or the built-in default, in that order of precedence.
+///
+/// # Examples
+///
+/// ```
+/// use skill_server::resolve_config_path;
+/// use std::path::PathBuf;
+///
+/// // An explicit flag path always wins and is returned as-is.
+/// let explicit = PathBuf::from("/tmp/skill-server.yaml");
+/// assert_eq!(resolve_config_path(Some(&explicit)), explicit);
+/// ```
 pub fn resolve_config_path(flag_path: Option<&PathBuf>) -> PathBuf {
     flag_path
         .cloned()
