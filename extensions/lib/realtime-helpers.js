@@ -68,3 +68,11 @@ export function estimateRealtimeTokensForText(text) {
   // role/content wrappers are not free.
   return Math.ceil(s.length / 4) + 4;
 }
+
+export const TOOL_OUTPUT_CAP = 16_000;
+
+export function truncateToolOutput(text, max = TOOL_OUTPUT_CAP) {
+  const s = String(text ?? "");
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `\n\n[truncated ${s.length - max} chars]`;
+}
