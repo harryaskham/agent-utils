@@ -9,6 +9,7 @@ import {
   currentTerminalRows,
   previewViewportRowLimit,
   previewImageRowLimit,
+  buildSidePanelLayout,
 } from "../extensions/kitty-image-preview/layout.js";
 
 // An item with no width/height exercises the pure fallback path
@@ -137,4 +138,60 @@ test("previewImageRowLimit ignores the viewport when terminal rows are unknown",
     assert.equal(previewImageRowLimit({ protocolMax: 200, availableRows: 7 }), 7);
     assert.equal(previewImageRowLimit({ protocolMax: 50 }), 50);
   });
+});
+
+// A no-dimension item makes buildSidePanelLayout deterministic: the image fit
+// math falls back to ceil(columns / 2), independent of the kitty row estimator.
+function panelState(config = {}) {
+  return { config: { rows: undefined, ...config }, items: [{ id: 1, path: "/x.png" }], index: 0 };
+}
+
+test("buildSidePanelLayout disables the rail on too-narrow terminals", () => {
+  assert.deepEqual(buildSidePanelLayout(panelState(), 1, 20), {
+    mainWidth: 1,
+    imageWidth: 0,
+    imageRows: 0,
+    padding: 0,
+    totalWidth: 0,
+  });
+});
+
+test("buildSidePanelLayout disables the rail when no rows are available", () => {
+  assert.deepEqual(buildSidePanelLayout(panelState(), 100, 0), {
+    mainWidth: 100,
+    imageWidth: 0,
+    imageRows: 0,
+    padding: 0,
+    totalWidth: 0,
+  });
+});
+
+test("buildSidePanelLayout sizes the rail to half width with padding and main remainder", () => {
+  // width 100 -> maxTotalWidth 50; rows 20; padding 2; maxImageWidth 48;
+  // fit(48,20)=40 (ceil(40/2)=20); totalWidth=min(50,42)=42; main=58.
+  const layout = buildSidePanelLayout(panelState(), 100, 20);
+  assert.equal(layout.imageWidth, 40);
+  assert.equal(layout.imageRows, 20);
+  assert.equal(layout.padding, 2);
+  assert.equal(layout.totalWidth, 42);
+  assert.equal(layout.mainWidth, 58);
+  // invariant: the panel and the main column tile the terminal width.
+  assert.equal(layout.mainWidth + layout.totalWidth, 100);
+});
+
+test("buildSidePanelLayout clamps padding to maxTotalWidth-1 on narrow terminals", () => {
+  // width 4 -> maxTotalWidth 2; padding clamps to 1 (not the default 2).
+  const layout = buildSidePanelLayout(panelState(), 4, 10);
+  assert.equal(layout.totalWidth, 2);
+  assert.equal(layout.imageWidth, 1);
+  assert.equal(layout.padding, 1);
+  assert.equal(layout.mainWidth, 2);
+});
+
+test("buildSidePanelLayout honors config.rows when capping image height", () => {
+  // rows 5 -> fit(48,5)=10 (ceil(10/2)=5); imageRows 5; totalWidth=min(50,12)=12.
+  const layout = buildSidePanelLayout(panelState({ rows: 5 }), 100, 20);
+  assert.equal(layout.imageRows, 5);
+  assert.equal(layout.imageWidth, 10);
+  assert.equal(layout.totalWidth, 12);
 });
