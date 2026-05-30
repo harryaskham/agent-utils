@@ -79,6 +79,29 @@ import { spawn, spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { ToolSchema } from "./lib/tool-schema.js";
+import {
+  env,
+  envBool,
+  b64,
+  normalizeBaseUrl,
+  realtimeUrl,
+  azureRealtimeUrl,
+  parseBooleanValue,
+  parseRealtimeSpeed,
+  parseVadThreshold,
+  estimateRealtimeTokensForText,
+} from "./lib/realtime-helpers.js";
+import {
+  SAMPLE_RATE,
+  CHANNELS,
+  SAMPLE_WIDTH,
+  pcmBytesForMs,
+  synthTone,
+  concatPcm,
+  chimePcm,
+  formatDurationMs,
+  audioDurationMs,
+} from "./lib/realtime-audio.js";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
@@ -122,9 +145,6 @@ const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
 const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 summary=true fork=true chime=false start=vad";
-const SAMPLE_RATE = 24000;
-const CHANNELS = 1;
-const SAMPLE_WIDTH = 2;
 const TOOL_OUTPUT_CAP = 16_000;
 const REALTIME_CONTEXT_WINDOW_TOKENS = 128_000;
 const SUMMARY_FALLBACK_MESSAGE_CAP = 40;
@@ -154,65 +174,12 @@ function isRealtimeWebSocketOpen(ws) {
 // Tiny helpers
 // ---------------------------------------------------------------------------
 
-function env(...names) {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined && value !== "") return value;
-  }
-  return undefined;
-}
+// env/envBool/b64/normalizeBaseUrl/realtimeUrl/azureRealtimeUrl are imported
+// from ./lib/realtime-helpers.js (extracted in bd-e1914a).
 
-function envBool(name, defaultValue = false) {
-  const value = process.env[name];
-  if (value === undefined || value === "") return defaultValue;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
-}
+// pcmBytesForMs/synthTone/concatPcm/chimePcm are imported from
+// ./lib/realtime-audio.js (extracted in bd-e1914a).
 
-function b64(buf) { return Buffer.from(buf).toString("base64"); }
-
-function normalizeBaseUrl(baseUrl) {
-  return String(baseUrl || "https://api.openai.com").replace(/\/+$/, "").replace(/\/v1$/, "");
-}
-
-function realtimeUrl(baseUrl, model) {
-  const wsBase = normalizeBaseUrl(baseUrl).replace(/^http/, "ws");
-  return `${wsBase}/v1/realtime?model=${encodeURIComponent(model)}`;
-}
-
-function azureRealtimeUrl(endpoint, deployment, apiVersion, protocol = "v1") {
-  const base = String(endpoint || "").replace(/\/+$/, "").replace(/^http/, "ws");
-  if (protocol === "beta") {
-    return `${base}/openai/realtime?api-version=${encodeURIComponent(apiVersion)}&deployment=${encodeURIComponent(deployment)}`;
-  }
-  return `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}&api-version=${encodeURIComponent(apiVersion)}`;
-}
-
-function pcmBytesForMs(ms) {
-  return Math.floor(SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH * ms / 1000);
-}
-
-function synthTone({ frequency = 660, durationMs = 90, gain = 0.16 } = {}) {
-  const samples = Math.max(1, Math.floor(SAMPLE_RATE * durationMs / 1000));
-  const pcm = Buffer.alloc(samples * SAMPLE_WIDTH);
-  const fadeSamples = Math.max(1, Math.floor(samples * 0.12));
-  for (let i = 0; i < samples; i++) {
-    const fadeIn = Math.min(1, i / fadeSamples);
-    const fadeOut = Math.min(1, (samples - i - 1) / fadeSamples);
-    const envelope = Math.max(0, Math.min(fadeIn, fadeOut));
-    const value = Math.sin(2 * Math.PI * frequency * i / SAMPLE_RATE) * gain * envelope;
-    pcm.writeInt16LE(Math.max(-32767, Math.min(32767, Math.round(value * 32767))), i * SAMPLE_WIDTH);
-  }
-  return pcm;
-}
-
-function concatPcm(...buffers) { return Buffer.concat(buffers.filter(Boolean)); }
-
-function chimePcm(kind) {
-  if (kind === "listen") return concatPcm(synthTone({ frequency: 660, durationMs: 70 }), synthTone({ frequency: 880, durationMs: 70 }));
-  if (kind === "speech-start") return synthTone({ frequency: 880, durationMs: 85, gain: 0.14 });
-  if (kind === "speech-end") return synthTone({ frequency: 440, durationMs: 90, gain: 0.14 });
-  return synthTone({ frequency: 660, durationMs: 80 });
-}
 
 function truncateToolOutput(text, max = TOOL_OUTPUT_CAP) {
   const s = String(text ?? "");
@@ -220,36 +187,9 @@ function truncateToolOutput(text, max = TOOL_OUTPUT_CAP) {
   return s.slice(0, max) + `\n\n[truncated ${s.length - max} chars]`;
 }
 
-function parseBooleanValue(value, fallback = false) {
-  if (value === undefined || value === null || value === "") return fallback;
-  if (typeof value === "boolean") return value;
-  const normalized = String(value).trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) return true;
-  if (["0", "false", "no", "off"].includes(normalized)) return false;
-  throw new Error(`Expected boolean value, got: ${value}`);
-}
-
-function parseRealtimeSpeed(value, fallback = 1.0) {
-  if (value === undefined || value === null || value === "") return fallback;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0.25 || n > 1.5) throw new Error(`Expected realtime speed between 0.25 and 1.5, got: ${value}`);
-  return n;
-}
-
-function parseVadThreshold(value, fallback = 0.7) {
-  if (value === undefined || value === null || value === "") return fallback;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0 || n > 1) throw new Error(`Expected realtime VAD threshold between 0 and 1, got: ${value}`);
-  return n;
-}
-
-function estimateRealtimeTokensForText(text) {
-  const s = String(text ?? "");
-  // Same order-of-magnitude heuristic Pi uses for preflight-style guards: a
-  // token is usually ~4 chars in English/code-ish text. Add a small floor so
-  // role/content wrappers are not free.
-  return Math.ceil(s.length / 4) + 4;
-}
+// parseBooleanValue/parseRealtimeSpeed/parseVadThreshold/
+// estimateRealtimeTokensForText are imported from ./lib/realtime-helpers.js
+// (extracted in bd-e1914a).
 
 function messageTextContent(content) {
   if (!content) return "";
@@ -413,14 +353,9 @@ function estimateRealtimeSummaryContextTokens(context = {}) {
   });
 }
 
-function formatDurationMs(ms) {
-  if (!Number.isFinite(ms) || ms <= 0) return "0.0s";
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+// formatDurationMs/audioDurationMs are imported from ./lib/realtime-audio.js
+// (extracted in bd-e1914a).
 
-function audioDurationMs(buffer) {
-  return Math.round((buffer.length / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH)) * 1000);
-}
 
 async function eventDataToString(data) {
   if (typeof data === "string") return data;
