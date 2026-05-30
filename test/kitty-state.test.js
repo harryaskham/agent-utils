@@ -109,10 +109,10 @@ test("restorePublicState clamps index, filters bad items, and fills id fallback"
   });
   // two valid items survive (the path-less entry is dropped).
   assert.equal(state.items.length, 2);
-  // Quirk (characterized, see bd note): index is clamped against the RAW
-  // snapshot length (3 -> max 2), before filtering, so a dropped item can leave
-  // index past the filtered array. Asserting actual behavior, not assumed.
-  assert.equal(state.index, 2);
+  // Fixed (bd-811a7c): index is clamped against the FILTERED item count, so an
+  // out-of-range or post-drop index lands on the last valid item rather than
+  // past the end of the array (which would make summarizeCurrent report empty).
+  assert.equal(state.index, 1);
   assert.equal(Number.isFinite(state.items[0].id), true, "missing id is backfilled");
   assert.equal(state.items[0].label, "a.png", "label defaults to basename");
   // ownedImageIds falls back to all item ids when snapshot omits them.

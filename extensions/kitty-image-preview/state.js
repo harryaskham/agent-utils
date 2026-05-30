@@ -32,7 +32,6 @@ export function restorePublicState(state, details) {
   const snapshot = details?.kittyImagePreviewState;
   if (!snapshot || !Array.isArray(snapshot.items)) return;
   state.visible = Boolean(snapshot.visible);
-  state.index = clampInteger(snapshot.index, 0, 0, Math.max(0, snapshot.items.length - 1));
   state.config = { ...state.config, ...(snapshot.config ?? {}) };
   state.items = snapshot.items
     .filter((item) => typeof item?.path === "string")
@@ -45,6 +44,10 @@ export function restorePublicState(state, details) {
       height: item.height,
       addedAt: item.addedAt || Date.now(),
     }));
+  // Clamp against the FILTERED item count: dropped (path-less) entries must not
+  // leave the index past the end of state.items, which would make
+  // summarizeCurrent report "No image is loaded". (bd-811a7c)
+  state.index = clampInteger(snapshot.index, 0, 0, Math.max(0, state.items.length - 1));
   state.ownedImageIds = new Set(
     Array.isArray(snapshot.ownedImageIds) && snapshot.ownedImageIds.length > 0
       ? snapshot.ownedImageIds.filter((id) => Number.isFinite(id))
