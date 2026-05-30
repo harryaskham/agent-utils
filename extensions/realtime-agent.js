@@ -116,6 +116,13 @@ import {
   splitCurrentTurn,
   estimateRealtimeSummaryContextTokens,
 } from "./lib/realtime-summary.js";
+import {
+  isAuthFailure,
+  isMicPermissionFailure,
+  stripAnsi,
+  truncateDiagnostic,
+  truncateVisible,
+} from "./lib/realtime-text.js";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
 const DEFAULT_MODEL = "gpt-realtime-2";
@@ -2333,18 +2340,8 @@ function realtimePanelLines(session, config) {
   ];
 }
 
-function truncateDiagnostic(text, limit = 300) {
-  const s = String(text || "").replace(/\s+/g, " ").trim();
-  return s.length > limit ? `${s.slice(0, limit)}…` : s;
-}
-
-function isAuthFailure(text) {
-  return /(401|403|unauthori[sz]ed|invalid[_ -]?(api[_ -]?)?key|incorrect api key|authentication failed|permission denied)/i.test(String(text || ""));
-}
-
-function isMicPermissionFailure(text) {
-  return /(microphone|avfoundation|coreaudio|audio input|input device|record).*(permission|denied|not authorized|not authorised)|Operation not permitted|EACCES|Input\/output error/i.test(String(text || ""));
-}
+// isAuthFailure/isMicPermissionFailure/stripAnsi/truncateDiagnostic/
+// truncateVisible are imported from ./lib/realtime-text.js (extracted in bd-e1914a).
 
 function diagnosticLines(session, config) {
   const provider = config.directAzure ? "azure" : "openai/proxy";
@@ -2399,16 +2396,6 @@ function diagnosticLines(session, config) {
     `lastResponseError: ${responseError || "<none>"}`,
     `hint: ${hints.length ? hints.join("; ") : "configuration looks internally consistent"}`,
   ];
-}
-
-function stripAnsi(s) {
-  return String(s).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-function truncateVisible(s, width) {
-  if (stripAnsi(s).length <= width) return s;
-  const plain = stripAnsi(s);
-  return plain.slice(0, Math.max(0, width - 1)) + "…";
 }
 
 // ---------------------------------------------------------------------------
