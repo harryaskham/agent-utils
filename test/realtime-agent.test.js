@@ -1097,15 +1097,25 @@ test("/rt speed applies realtime response speed and retries if rejected", async 
   harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
 
   try {
+    const poll = async (fn, ms = 1000) => {
+      const deadline = Date.now() + ms;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const v = fn();
+        if (v || Date.now() >= deadline) return v;
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    };
     await harness.commands.get("rt").handler("speed 1.2", harness.ctx);
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    const create = FakeWebSocket.instances[0].sent.find((m) => m.type === "response.create");
+    const create = await poll(() => FakeWebSocket.instances[0]?.sent.find((m) => m.type === "response.create"));
     assert.equal(create.response.speed, 1.2);
 
     FakeWebSocket.instances[0].emit("message", JSON.stringify({ type: "error", error: { message: "Unknown parameter: 'response.speed'" } }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    const retry = FakeWebSocket.instances[0].sent.filter((m) => m.type === "response.create").at(-1);
+    const retry = await poll(() => {
+      const all = FakeWebSocket.instances[0].sent.filter((m) => m.type === "response.create");
+      return all.length >= 2 ? all.at(-1) : null;
+    });
     assert.equal(retry.response.speed, undefined);
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
