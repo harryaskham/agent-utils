@@ -7,3 +7,5 @@ export const SIDE_OVERLAY_PLACEMENT = "rightOverlay";
 export const DEFAULT_COLUMNS = 48;
 export const DEFAULT_MAX_ROWS = 24;
 export const AUTO_SIDE_MIN_COLUMNS = 100;
+export const SIDE_PANEL_MAX_WIDTH_RATIO = 0.5;
+export const SIDE_PANEL_LEFT_PADDING = 2;

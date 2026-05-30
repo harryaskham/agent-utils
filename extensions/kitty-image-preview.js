@@ -29,6 +29,7 @@ import {
   currentTerminalColumns,
   previewViewportRowLimit,
   previewImageRowLimit,
+  buildSidePanelLayout,
 } from "./kitty-image-preview/layout.js";
 import {
   AUTO_PLACEMENT,
@@ -72,8 +73,6 @@ const DEFAULT_STREAM_INTERVAL_MS = 1000;
 const DEFAULT_DESCRIBE_INTERVAL_SECONDS = 30;
 const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
 const SIDE_PANEL_LAYOUT_SYMBOL = Symbol.for("agent-utils.kittyImagePreview.sidePanelLayout");
-const SIDE_PANEL_MAX_WIDTH_RATIO = 0.5;
-const SIDE_PANEL_LEFT_PADDING = 2;
 const IMAGE_DESCRIPTION_PROMPT = `Describe this image objectively and exhaustively for an AI agent that cannot see it.
 
 Focus on absolute, verifiable visual facts:
@@ -267,36 +266,8 @@ export class KittyImagePreviewWidget {
 // estimatedRowsForColumns/fitImageColumnsForRows are imported from
 // ./kitty-image-preview/layout.js (extracted in bd-e1914a).
 
-export function buildSidePanelLayout(state, terminalWidth, availableRows = DEFAULT_MAX_ROWS) {
-  const width = Math.max(1, Math.trunc(terminalWidth || 1));
-  // Keep at least one text column. On absurdly narrow terminals, disable the
-  // side rail rather than generating lines wider than the terminal.
-  const maxTotalWidth = Math.max(0, Math.min(Math.floor(width * SIDE_PANEL_MAX_WIDTH_RATIO), width - 1));
-  const rowLimit = Math.max(0, Math.trunc(availableRows || 0));
-  if (maxTotalWidth < 1 || rowLimit < 1) {
-    return { mainWidth: width, imageWidth: 0, imageRows: 0, padding: 0, totalWidth: 0 };
-  }
-  const maxRows = Math.min(
-    state.config.rows === undefined ? rowLimit : clampInteger(state.config.rows, rowLimit, 1, rowLimit),
-    MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1,
-  );
-  if (maxRows < 1) {
-    return { mainWidth: width, imageWidth: 0, imageRows: 0, padding: 0, totalWidth: 0 };
-  }
-  const padding = Math.min(SIDE_PANEL_LEFT_PADDING, Math.max(0, maxTotalWidth - 1));
-  const maxImageWidth = Math.max(1, maxTotalWidth - padding);
-  const current = state.items[state.index];
-  const imageWidth = fitImageColumnsForRows(current, maxImageWidth, maxRows);
-  const imageRows = Math.min(maxRows, estimatedRowsForColumns(current, imageWidth));
-  const totalWidth = Math.min(maxTotalWidth, imageWidth + padding);
-  return {
-    mainWidth: Math.max(1, width - totalWidth),
-    imageWidth,
-    imageRows,
-    padding: Math.max(0, totalWidth - imageWidth),
-    totalWidth,
-  };
-}
+// buildSidePanelLayout is imported from ./kitty-image-preview/layout.js
+// (extracted in bd-e1914a).
 
 export function buildSideOverlayOptions(state) {
   return {
