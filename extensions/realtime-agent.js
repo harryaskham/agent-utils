@@ -123,15 +123,20 @@ import {
   truncateDiagnostic,
   truncateVisible,
 } from "./lib/realtime-text.js";
+import {
+  DEFAULT_MODEL,
+  REALTIME_VOICES,
+  isRealtimeModel,
+  normalizeRealtimeModelId,
+  normalizeTranscriptionModel,
+  resolveRealtimeVoice,
+  shouldAutoRestartMicMode,
+} from "./lib/realtime-models.js";
 
 const RT_CUSTOM_TYPE = "realtime-agent";
-const DEFAULT_MODEL = "gpt-realtime-2";
-const SUPPORTED_REALTIME_MODELS = new Set(["gpt-realtime-2", "gpt-realtime"]);
 const REALTIME_API = "openai-realtime";
 const REALTIME_INSTRUCTIONS_PREFIX = "You are running inside an OpenAI Realtime audio session. For microphone turns, the committed input audio is already present in the realtime conversation; the transcript visible in Pi is a UI/history trigger, not your only input. Do not tell the user you only receive text transcripts when full realtime mode is active.";
 const REALTIME_AUDIO_TURN_MESSAGE = "Realtime audio input committed; starting audio-native response.";
-const DEFAULT_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
-const DEFAULT_VOICE = "marin";
 
 // Sensible defaults for this extension. Anything already set in the env wins,
 // so users can still override per-launch. These match the recommended config
@@ -149,10 +154,6 @@ setEnvDefault("PI_RT_VAD_SILENCE_MS", "1100");
 setEnvDefault("PI_RT_TRANSCRIPTION_MODEL", "whisper-1");
 setEnvDefault("PI_RT_TRANSCRIPTION_LANGUAGE", "en");
 setEnvDefault("PI_RT_MODEL", DEFAULT_MODEL);
-const REALTIME_VOICES = new Set([
-  "alloy", "ash", "ballad", "coral", "echo",
-  "sage", "shimmer", "verse", "marin", "cedar",
-]);
 const REALTIME_AUDIO_BACKENDS = new Set([
   "pulse", "pulseaudio", "pacat", "paplay", "parec",
   "auto", "coreaudio", "audiotoolbox", "sox", "rec", "play", "ffplay", "ffmpeg",
@@ -226,9 +227,8 @@ function numberEnv(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function shouldAutoRestartMicMode(mode) {
-  return mode === "vad" || mode === "continuous";
-}
+// shouldAutoRestartMicMode is imported from ./lib/realtime-models.js
+// (extracted in bd-e1914a).
 
 function agentBaseDir() {
   return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
@@ -2090,24 +2090,8 @@ class RealtimeSession {
 // Initial config / voice resolution
 // ---------------------------------------------------------------------------
 
-function resolveRealtimeVoice() {
-  const raw = env("PI_RT_VOICE", "OPENAI_TTS_VOICE", "TTS_VOICE") || DEFAULT_VOICE;
-  return REALTIME_VOICES.has(raw) ? raw : DEFAULT_VOICE;
-}
-
-function normalizeTranscriptionModel(raw) {
-  // Historical env had OPENAI_REALTIME_TRANSCRIPTION_MODEL=whisper; for the
-  // realtime proxy we want the explicit realtime deployment by default.
-  if (!raw || raw === "whisper") return DEFAULT_TRANSCRIPTION_MODEL;
-  return raw;
-}
-
-function normalizeRealtimeModelId(raw) {
-  const value = String(raw || "").trim();
-  if (!value) return DEFAULT_MODEL;
-  const id = value.includes("/") ? value.split("/").pop() : value;
-  return SUPPORTED_REALTIME_MODELS.has(id) ? id : DEFAULT_MODEL;
-}
+// resolveRealtimeVoice/normalizeTranscriptionModel/normalizeRealtimeModelId are
+// imported from ./lib/realtime-models.js (extracted in bd-e1914a).
 
 function makeInitialConfig() {
   return {
@@ -2194,11 +2178,8 @@ function registerRealtimeProvider(pi, session) {
   });
 }
 
-function isRealtimeModel(model) {
-  const id = String(model?.id || "");
-  const provider = String(model?.provider || "");
-  return provider === "openai-realtime" || id.startsWith("gpt-realtime");
-}
+// isRealtimeModel is imported from ./lib/realtime-models.js
+// (extracted in bd-e1914a).
 
 // ---------------------------------------------------------------------------
 // Status widget formatting
