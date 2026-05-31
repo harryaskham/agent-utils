@@ -8,6 +8,7 @@ import path from "node:path";
 
 import { stableKittyImageId } from "../kitty-graphics.js";
 import { clampInteger } from "./text-utils.js";
+import { PREVIEW_PLACEMENTS } from "./constants.js";
 
 export function serializePublicState(state) {
   return {
@@ -132,4 +133,25 @@ export function makeDetails(state, extra = {}) {
 
 export function makeContent(state, extraLines = []) {
   return [{ type: "text", text: [summarizeCurrent(state), ...extraLines].filter(Boolean).join("\n") }];
+}
+
+// Validate + clamp a partial config patch onto state.config, invalidating the
+// memoized current command. Extracted from kitty-image-preview.js (bd-e1914a).
+export function applyConfig(state, config = {}) {
+  if (!config || typeof config !== "object") return;
+  if (config.columns !== undefined) state.config.columns = clampInteger(config.columns, state.config.columns, 1, 4096);
+  if (config.rows !== undefined) state.config.rows = clampInteger(config.rows, state.config.rows, 1, 200);
+  if (config.maxRows !== undefined) state.config.maxRows = clampInteger(config.maxRows, state.config.maxRows, 1, 200);
+  if (config.minRows !== undefined) state.config.minRows = clampInteger(config.minRows, state.config.minRows, 1, 200);
+  if (config.zIndex !== undefined) state.config.zIndex = clampInteger(config.zIndex, state.config.zIndex, -2147483648, 2147483647);
+  if (typeof config.background === "boolean") state.config.background = config.background;
+  if (typeof config.showCaption === "boolean") state.config.showCaption = config.showCaption;
+  if (typeof config.clearPrevious === "boolean") state.config.clearPrevious = config.clearPrevious;
+  if (PREVIEW_PLACEMENTS.includes(config.placement)) state.config.placement = config.placement;
+  if (["auto", "memory", "file"].includes(config.transferMode)) state.config.transferMode = config.transferMode;
+  if (["auto", "tmux", "none"].includes(config.passthrough)) state.config.passthrough = config.passthrough;
+  if (["auto", "unicode", "cursor"].includes(config.placementMode)) state.config.placementMode = config.placementMode;
+  if (config.placementId !== undefined) state.config.placementId = clampInteger(config.placementId, state.config.placementId, 1, 2147483647);
+  if (config.chunkSize !== undefined) state.config.chunkSize = clampInteger(config.chunkSize, state.config.chunkSize, 512, 4096);
+  state.currentCommand = undefined;
 }

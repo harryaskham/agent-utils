@@ -13,3 +13,7 @@ export const SIDE_PANEL_LEFT_PADDING = 2;
 // Default vision model for image-description (provider/model). Overridable via
 // KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL.
 export const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
+
+// Placement option sets for preview config validation and tool schemas.
+export const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"];
+export const PREVIEW_PLACEMENTS = [AUTO_PLACEMENT, ...WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT];

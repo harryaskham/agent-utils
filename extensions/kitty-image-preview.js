@@ -28,6 +28,7 @@ import {
   stopCycle,
   makeDetails,
   makeContent,
+  applyConfig,
 } from "./kitty-image-preview/state.js";
 import {
   estimatedRowsForColumns,
@@ -48,6 +49,7 @@ import {
   DEFAULT_MAX_ROWS,
   SIDE_OVERLAY_PLACEMENT,
   DEFAULT_DESCRIBE_MODEL,
+  PREVIEW_PLACEMENTS,
 } from "./kitty-image-preview/constants.js";
 import {
   configuredPassthroughMode,
@@ -121,8 +123,6 @@ Focus on absolute, verifiable visual facts:
 
 Do not infer hidden intent. Do not say what you cannot know. Be concise but detailed.`;
 const SUPPORTED_EXTENSIONS = new Set([".png", ".apng"]);
-const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"];
-const PREVIEW_PLACEMENTS = [AUTO_PLACEMENT, ...WIDGET_PLACEMENTS, SIDE_OVERLAY_PLACEMENT];
 
 function stringEnum(values, description) {
   return StringEnum(values, { description });
@@ -766,24 +766,6 @@ async function buildItem(cwd, inputPath, label) {
   };
 }
 
-function applyConfig(state, config = {}) {
-  if (!config || typeof config !== "object") return;
-  if (config.columns !== undefined) state.config.columns = clampInteger(config.columns, state.config.columns, 1, 4096);
-  if (config.rows !== undefined) state.config.rows = clampInteger(config.rows, state.config.rows, 1, 200);
-  if (config.maxRows !== undefined) state.config.maxRows = clampInteger(config.maxRows, state.config.maxRows, 1, 200);
-  if (config.minRows !== undefined) state.config.minRows = clampInteger(config.minRows, state.config.minRows, 1, 200);
-  if (config.zIndex !== undefined) state.config.zIndex = clampInteger(config.zIndex, state.config.zIndex, -2147483648, 2147483647);
-  if (typeof config.background === "boolean") state.config.background = config.background;
-  if (typeof config.showCaption === "boolean") state.config.showCaption = config.showCaption;
-  if (typeof config.clearPrevious === "boolean") state.config.clearPrevious = config.clearPrevious;
-  if (PREVIEW_PLACEMENTS.includes(config.placement)) state.config.placement = config.placement;
-  if (["auto", "memory", "file"].includes(config.transferMode)) state.config.transferMode = config.transferMode;
-  if (["auto", "tmux", "none"].includes(config.passthrough)) state.config.passthrough = config.passthrough;
-  if (["auto", "unicode", "cursor"].includes(config.placementMode)) state.config.placementMode = config.placementMode;
-  if (config.placementId !== undefined) state.config.placementId = clampInteger(config.placementId, state.config.placementId, 1, 2147483647);
-  if (config.chunkSize !== undefined) state.config.chunkSize = clampInteger(config.chunkSize, state.config.chunkSize, 512, 4096);
-  state.currentCommand = undefined;
-}
 
 
 
