@@ -1390,17 +1390,17 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(surface, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_BORDER_STYLE: editor\.borderStyle/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
-  assert.match(surface, /PI_GRAPHICS_EDITOR_ANIMATION: editor\.animation/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_ANIMATION: eink \? "0" : editor\.animation/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_UNICODE_MODE: editor\.unicodeMode/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT: editor\.topBorderHeight/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT: editor\.bottomBorderHeight/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor\.cursorStyle/);
-  assert.match(surface, /PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor\.trailingWorkspace/);
-  assert.match(surface, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor\.rowBackground/);
-  assert.match(surface, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE: editor\.typingImpulse/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: eink \? "0" : editor\.trailingWorkspace/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: eink \? "0" : editor\.rowBackground/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE: eink \? "0" : editor\.typingImpulse/);
   assert.match(surface, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
   assert.match(surface, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === true \? "1" : "0"/);
-  assert.match(surface, /PI_GRAPHICS_AUTO_BOX_RAILS: off \? "0" : gfx\.boxRails === true \? "1" : "0"/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_BOX_RAILS: off \? "0" : eink \? "0" : gfx\.boxRails === true \? "1" : "0"/);
   assert.match(surface, /PI_GRAPHICS_BOX_RAIL_STYLE/);
   assert.match(surface, /PI_GRAPHICS_BOX_UNICODE_MODE/);
   assert.match(surface, /PI_GRAPHICS_BOX_RAIL_UNICODE_MODE/);
@@ -1426,6 +1426,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function getGfxThemeCycle\(settings, ctx\)/);
   assert.match(source, /function cycleGfxTheme\(ctx, direction = 1\)/);
   assert.match(source, /settings\.theme = theme;\n\s+gfx\.theme = theme;/);
+  assert.match(source, /const EINK_THEME_NAME = "eink"/);
+  assert.match(source, /pi\.registerCommand\?\.\("eink"/);
+  assert.match(source, /applyEinkMode\(settings, enabled\)/);
+  assert.match(source, /editor\.animation = false/);
+  assert.match(source, /editor\.cursorStyle = "cell"/);
   assert.doesNotMatch(source, /handler: async \(ctx\) => cycleGfxPreset\(ctx, 1\)/);
   assert.match(source, /\$\{theme\}:static`, theme, mode: "on", editorStyle: "static", boxChrome: true, boxMode: "unicode"/);
   assert.match(source, /\$\{theme\}:unicode/);
@@ -2085,6 +2090,7 @@ test("package.json advertises the pi-graphics extension and theme through pi.* e
   assert.ok(Array.isArray(pkg.pi.extensions), "pi.extensions must be an array");
   assert.ok(pkg.pi.extensions.includes("./extensions/pi-graphics.js"), "pi.extensions must include pi-graphics.js");
   assert.ok(Array.isArray(pkg.pi.themes), "pi.themes must be an array");
+  assert.ok(pkg.pi.themes.includes("./themes/eink.json"), "pi.themes must include the e-ink theme");
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics.json"), "pi.themes must include the kitty-graphics theme");
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics-nord.json"), "pi.themes must include the calm Nord kitty graphics theme");
   assert.ok(pkg.pi.themes.includes("./themes/kitty-graphics-nord-transparent.json"), "pi.themes must include the transparent Nord kitty graphics theme");
@@ -2150,6 +2156,25 @@ test("themes/kitty-graphics-nord.json uses only canonical Nord colors", async ()
   assert.ok(contrastRatio(resolve("text"), resolve("userMessageBg")) > 8, "calm Nord text should still pop against rendered panel colors");
   assert.equal(theme.export.glowCyan, "#88c0d0");
   assert.equal(theme.export.glowAurora, "#b48ead");
+});
+
+test("themes/eink.json is transparent greyscale for tablet terminals", async () => {
+  const themePath = fileURLToPath(new URL("../themes/eink.json", import.meta.url));
+  const theme = JSON.parse(await readFile(themePath, "utf8"));
+  assert.equal(theme.name, "eink");
+  for (const token of ["selectedBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg"]) {
+    assert.equal(theme.colors[token], "", `${token} should use the terminal/paper background`);
+  }
+  for (const [token, value] of Object.entries(theme.colors)) {
+    if (value === "") continue;
+    assert.ok(value in theme.vars, `${token} should reference a greyscale var`);
+    const rgb = parseColor(theme.vars[value]);
+    assert.equal(rgb[0], rgb[1], `${token} should resolve to greyscale`);
+    assert.equal(rgb[1], rgb[2], `${token} should resolve to greyscale`);
+  }
+  assert.equal(theme.colors.thinkingText, "ink4");
+  assert.equal(theme.colors.thinkingXhigh, "ink0");
+  assert.equal(theme.export.pageBg, "paper1");
 });
 
 test("themes/kitty-graphics-nord-transparent.json removes box backgrounds", async () => {

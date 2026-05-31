@@ -11,6 +11,7 @@ export function modeIsOff(mode) {
 export function settingsEnvFromPiGraphics(settings = {}) {
   const gfx = settings.piGraphics || settings.kittyGraphics || {};
   const off = modeIsOff(gfx.mode);
+  const eink = gfx.einkMode === true || String(gfx.mode || "").trim().toLowerCase() === "eink";
   const features = gfx.features || {};
   const editor = gfx.editor || {};
   const env = {
@@ -25,19 +26,19 @@ export function settingsEnvFromPiGraphics(settings = {}) {
     PI_GRAPHICS_EDITOR_VARIANT: editor.variant != null ? String(editor.variant) : undefined,
     PI_GRAPHICS_EDITOR_BORDER_STYLE: editor.borderStyle ?? editor.graphicStyle ?? editor.drawingStyle ?? editor.chromeStyle,
     PI_GRAPHICS_EDITOR_ALPHA: editor.alpha != null ? String(editor.alpha) : undefined,
-    PI_GRAPHICS_EDITOR_FRAMES: editor.frames != null ? String(editor.frames) : undefined,
-    PI_GRAPHICS_EDITOR_DELAY_MS: editor.delayMs != null ? String(editor.delayMs) : undefined,
-    PI_GRAPHICS_EDITOR_ANIMATION: editor.animation ?? editor.animated ?? editor.animate,
+    PI_GRAPHICS_EDITOR_FRAMES: eink ? "1" : editor.frames != null ? String(editor.frames) : undefined,
+    PI_GRAPHICS_EDITOR_DELAY_MS: eink ? "1000" : editor.delayMs != null ? String(editor.delayMs) : undefined,
+    PI_GRAPHICS_EDITOR_ANIMATION: eink ? "0" : editor.animation ?? editor.animated ?? editor.animate,
     PI_GRAPHICS_EDITOR_UNICODE_MODE: editor.unicodeMode ?? editor.anchorMode ?? editor.unicode?.mode,
     PI_GRAPHICS_EDITOR_STYLE: editor.style != null ? String(editor.style) : undefined,
     PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT: editor.topBorderHeight ?? editor.borderTopHeight ?? editor.borderHeight ?? editor.border?.topHeight ?? editor.border?.height,
     PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT: editor.bottomBorderHeight ?? editor.borderBottomHeight ?? editor.borderHeight ?? editor.border?.bottomHeight ?? editor.border?.height,
     PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor.cursorStyle ?? editor.cursorMode ?? editor.cursorEffect ?? editor.cursor?.style ?? editor.cursor?.mode,
-    PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor.trailingWorkspace ?? editor.workspaceFill ?? features.editorTrailingWorkspace,
-    PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor.rowBackground ?? features.editorRowBackground,
-    PI_GRAPHICS_EDITOR_TYPING_IMPULSE: editor.typingImpulse ?? editor.impulse ?? editor.cursorImpulse ?? features.editorTypingImpulse,
+    PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: eink ? "0" : editor.trailingWorkspace ?? editor.workspaceFill ?? features.editorTrailingWorkspace,
+    PI_GRAPHICS_EDITOR_ROW_BACKGROUND: eink ? "0" : editor.rowBackground ?? features.editorRowBackground,
+    PI_GRAPHICS_EDITOR_TYPING_IMPULSE: eink ? "0" : editor.typingImpulse ?? editor.impulse ?? editor.cursorImpulse ?? features.editorTypingImpulse,
     PI_GRAPHICS_AUTO_BOX_CHROME: off ? "0" : gfx.boxChrome === true ? "1" : "0",
-    PI_GRAPHICS_AUTO_BOX_RAILS: off ? "0" : gfx.boxRails === true ? "1" : "0",
+    PI_GRAPHICS_AUTO_BOX_RAILS: off ? "0" : eink ? "0" : gfx.boxRails === true ? "1" : "0",
     PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx.exposeRenderTools != null ? String(gfx.exposeRenderTools) : undefined,
     PI_GRAPHICS_BOX_EFFECT: gfx.boxEffect != null ? String(gfx.boxEffect) : undefined,
     PI_GRAPHICS_BOX_MODE: gfx.boxMode != null ? String(gfx.boxMode) : "unicode",

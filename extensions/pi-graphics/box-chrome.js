@@ -2924,6 +2924,7 @@ export function createBoxChromeRuntime({
   boxMode = "relative",
   boxUnicodeMode = "fill",
   debugPlaceholders = false,
+  einkMode = false,
 } = {}) {
   state.ownedImageIds ||= new Set();
   state.boxChromeImageIds ||= new Set();
@@ -3115,15 +3116,16 @@ export function createBoxChromeRuntime({
       const inner = mid.cell.repeat(Math.max(0, width - 2));
       return `${left.transmit}${mid.transmit}${right.transmit}${left.cell}${inner}${right.cell}`;
     };
+    const styleContent = (line) => einkMode && type === "thinking" ? `${ESC}[3m${line}${ESC}[23m` : line;
     return lines.map((line, i) => {
-      if (hasKittyPlaceholder(line)) return truncateAnsiToVisibleWidth(line, width);
+      if (hasKittyPlaceholder(line)) return truncateAnsiToVisibleWidth(styleContent(line), width);
       const verticalKind = boxRowKind(i, lines.length);
       if (normalizedBoxUnicodeMode() === "topLeft") {
         const kind = verticalKind === "top" ? "top" : verticalKind === "bot" ? "bot" : "mid";
         const anchor = makeTopLeftRow(i, kind);
         if (isLikelyBorderLine(line) && verticalKind !== "mid") return anchor.line;
         const plainWidth = Math.max(0, width - 1);
-        const trimmed = truncateAnsiToVisibleWidth(String(line || ""), plainWidth);
+        const trimmed = truncateAnsiToVisibleWidth(styleContent(String(line || "")), plainWidth);
         const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));
         return `${anchor.transmit}${anchor.cell}${trimmed}${pad}`;
       }
@@ -3133,7 +3135,7 @@ export function createBoxChromeRuntime({
       const left = makeCell("left", i, leftKind).line;
       const right = makeCell("right", i, rightKind).line;
       const plainWidth = Math.max(0, width - 2);
-      const trimmed = truncateAnsiToVisibleWidth(String(line || ""), plainWidth);
+      const trimmed = truncateAnsiToVisibleWidth(styleContent(String(line || "")), plainWidth);
       const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));
       return `${left}${trimmed}${pad}${right}`;
     }).map((line) => truncateAnsiToVisibleWidth(line, width));
@@ -3162,7 +3164,7 @@ export function createBoxChromeRuntime({
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
     if (boxMode === "unicode") return applyUnicodeBoxRows({ type: effectiveType, instanceId, lines, colorRgb, width, effect });
     const wrapped = lines.map((line, i) => {
-      const clipped = truncateAnsiToVisibleWidth(line, width);
+      const clipped = truncateAnsiToVisibleWidth(einkMode && effectiveType === "thinking" ? `${ESC}[3m${line}${ESC}[23m` : line, width);
       if (hasKittyPlaceholder(clipped)) return clipped;
       const kind = boxRowKind(i, lines.length);
       const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });

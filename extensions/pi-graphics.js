@@ -109,6 +109,7 @@ import { PI_GRAPHICS_RESERVED_Z_INDICES, PI_GRAPHICS_Z } from "./pi-graphics/z-i
 const TOOL_PREFIX = "pi_graphics";
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
 const MAX_DECORATED_NOTIFICATION_LINES = 64;
+const EINK_THEME_NAME = "eink";
 
 export default function piGraphicsExtension(pi) {
   const chatContainerPrototype = Object.getPrototypeOf(AssistantMessageComponent.prototype);
@@ -2312,6 +2313,7 @@ export default function piGraphicsExtension(pi) {
       boxMode: String(gfxEnv().PI_GRAPHICS_BOX_MODE || "relative").toLowerCase() === "unicode" ? "unicode" : "relative",
       boxUnicodeMode: boxUnicodeMode(),
       debugPlaceholders: envBool("PI_GRAPHICS_DEBUG_PLACEHOLDERS", envBool("PI_GRAPHICS_DEBUG", false)),
+      einkMode: settings.piGraphics?.einkMode === true,
       resolveTheme({ type } = {}) {
         const token = (type && BOX_TYPE_THEME_TOKENS[type]) || "accent";
         const colorRgb = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
@@ -2417,6 +2419,70 @@ export default function piGraphicsExtension(pi) {
       unique.push(name);
     }
     return unique.length ? unique : [currentTheme];
+  }
+
+  function applyEinkMode(settings, enabled) {
+    const gfx = (settings.piGraphics = settings.piGraphics || {});
+    const editor = (gfx.editor = gfx.editor || {});
+    if (enabled) {
+      if (!gfx.einkMode && !gfx.einkPrevious) {
+        gfx.einkPrevious = {
+          theme: settings.theme,
+          gfxTheme: gfx.theme,
+          mode: gfx.mode,
+          editor: { ...editor },
+          boxChrome: gfx.boxChrome,
+          boxRails: gfx.boxRails,
+          boxMode: gfx.boxMode,
+          boxEffect: gfx.boxEffect,
+          boxUnicodeMode: gfx.boxUnicodeMode,
+          features: gfx.features ? { ...gfx.features } : undefined,
+        };
+      }
+      settings.theme = EINK_THEME_NAME;
+      gfx.theme = EINK_THEME_NAME;
+      gfx.mode = "on";
+      gfx.einkMode = true;
+      gfx.boxChrome = true;
+      gfx.boxRails = false;
+      gfx.boxMode = "unicode";
+      gfx.boxEffect = "glass";
+      gfx.boxUnicodeMode = "fill";
+      gfx.features = { ...(gfx.features || {}), footer: true, editor: true, editorCursor: true, editorTrailingWorkspace: false, editorRowBackground: false, editorTypingImpulse: false };
+      editor.style = "unicode";
+      editor.animation = false;
+      editor.frames = 1;
+      editor.delayMs = 1000;
+      editor.cursorStyle = "cell";
+      editor.trailingWorkspace = false;
+      editor.rowBackground = false;
+      editor.typingImpulse = false;
+      return;
+    }
+    const previous = gfx.einkPrevious;
+    if (previous && typeof previous === "object") {
+      if (previous.theme !== undefined) settings.theme = previous.theme;
+      else delete settings.theme;
+      if (previous.gfxTheme !== undefined) gfx.theme = previous.gfxTheme;
+      else delete gfx.theme;
+      if (previous.mode !== undefined) gfx.mode = previous.mode;
+      else delete gfx.mode;
+      gfx.editor = previous.editor && typeof previous.editor === "object" ? { ...previous.editor } : {};
+      if (previous.boxChrome !== undefined) gfx.boxChrome = previous.boxChrome;
+      else delete gfx.boxChrome;
+      if (previous.boxRails !== undefined) gfx.boxRails = previous.boxRails;
+      else delete gfx.boxRails;
+      if (previous.boxMode !== undefined) gfx.boxMode = previous.boxMode;
+      else delete gfx.boxMode;
+      if (previous.boxEffect !== undefined) gfx.boxEffect = previous.boxEffect;
+      else delete gfx.boxEffect;
+      if (previous.boxUnicodeMode !== undefined) gfx.boxUnicodeMode = previous.boxUnicodeMode;
+      else delete gfx.boxUnicodeMode;
+      if (previous.features !== undefined) gfx.features = { ...previous.features };
+      else delete gfx.features;
+    }
+    delete gfx.einkMode;
+    delete gfx.einkPrevious;
   }
 
   function applyGfxPreset(settings, preset) {
@@ -2937,6 +3003,33 @@ export default function piGraphicsExtension(pi) {
     }
     setDebugPanel(ctx, settings);
   }
+
+  pi.registerCommand?.("eink", {
+    description: "Enable or disable e-ink friendly transparent greyscale mode. Usage: /eink [on|off|status]",
+    handler: async (args, ctx) => {
+      const token = String(args || "").trim().split(/\s+/).filter(Boolean)[0]?.toLowerCase() || "status";
+      const settings = readJsonIfExists(agentSettingsPath()) || {};
+      const gfx = (settings.piGraphics = settings.piGraphics || {});
+      if (["status", "show", "info"].includes(token)) {
+        ctx.ui.notify([
+          `E-ink mode: ${gfx.einkMode ? "on" : "off"}`,
+          `theme: ${settings.theme || gfx.theme || "(default)"}`,
+          `settings: ${agentSettingsPath()}`,
+          "Usage: /eink on | /eink off | /eink status",
+        ].join("\n"), "info");
+        return;
+      }
+      if (!["on", "off", "true", "false", "1", "0", "enable", "disable"].includes(token)) {
+        ctx.ui.notify("Usage: /eink [on|off|status]", "warning");
+        return;
+      }
+      const enabled = ["on", "true", "1", "enable"].includes(token);
+      applyEinkMode(settings, enabled);
+      await applyGfxSettingsAndReload(ctx, settings, enabled
+        ? "E-ink mode enabled: transparent greyscale theme with minimal animation. Reloading..."
+        : "E-ink mode disabled: restored previous Pi graphics settings. Reloading...");
+    },
+  });
 
   pi.registerCommand?.("gfx", {
     description: "Inspect or change Pi Graphics modes. Usage: /gfx [status|next|presets|themes|box audit|box status|box summary|box effects|box tokens|box doctor|box preview|cursor audit|cursor preview|cursor status|cursor doctor|cursor clear|preset <n|name>|editor static|unicode|relative|editor-animation on|off|unicode-mode fill|topLeft|border-height <1-16>|box on|off|box-effect <name>|mode on|off|debug]",
