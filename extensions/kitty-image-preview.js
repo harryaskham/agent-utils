@@ -12,6 +12,7 @@ import {
   clampInteger,
   pluralizeImages,
   truncatePlainText,
+  renderPlaceholderLines,
 } from "./kitty-image-preview/text-utils.js";
 import {
   serializePublicState,
@@ -56,6 +57,7 @@ import {
 import {
   imageControlHint,
   imageStatusLine,
+  imageControlsLine,
 } from "./kitty-image-preview/status-line.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
@@ -138,20 +140,10 @@ export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
 // imageControlHint is imported from ./kitty-image-preview/status-line.js
 // (extracted in bd-e1914a).
 
-function imageControlsLine(state, width) {
-  if (state.items.length === 0) return "";
-  return truncatePlainText(`controls: ${imageControlHint(state, { includeCount: true })}`, width);
-}
 
 // imageStatusLine is imported from ./kitty-image-preview/status-line.js
 // (extracted in bd-e1914a).
 
-function renderPlaceholderLines(width, rows, text) {
-  const line = " ".repeat(Math.max(1, width));
-  const output = Array.from({ length: Math.max(1, rows) }, () => line);
-  if (text) output[0] = `${text}${line}`.slice(0, Math.max(1, width));
-  return output;
-}
 
 function renderCurrentImageLines(state, current, {
   columns,

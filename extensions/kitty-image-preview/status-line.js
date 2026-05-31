@@ -2,7 +2,7 @@
 // (bd-e1914a). Pure over `state`; produce the widget status string and the
 // slash-command control hint. Behavior unchanged from the inline definitions.
 
-import { pluralizeImages } from "./text-utils.js";
+import { pluralizeImages, truncatePlainText } from "./text-utils.js";
 
 export function imageControlHint(state, { includeCount = false } = {}) {
   if (state.items.length === 0) return "/image-status";
@@ -22,4 +22,11 @@ export function imageStatusLine(state, current) {
   const cycle = state.cycle?.running ? ` ⟳${Math.round((state.cycle.intervalMs || 0) / 1000)}s` : "";
   const label = current?.label ? ` ${current.label}` : "";
   return `🖼${animation}${cycle} ${state.index + 1}/${state.items.length}${label} — ${imageControlHint(state)}`;
+}
+
+// Single truncated "controls: …" hint line for the current preview state.
+// Extracted from kitty-image-preview.js (bd-e1914a).
+export function imageControlsLine(state, width) {
+  if (state.items.length === 0) return "";
+  return truncatePlainText(`controls: ${imageControlHint(state, { includeCount: true })}`, width);
 }

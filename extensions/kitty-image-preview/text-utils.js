@@ -60,3 +60,13 @@ export function truncatePlainText(value, width, ellipsis = "…") {
   if (max <= ellipsis.length) return ellipsis.slice(0, max);
   return `${chars.slice(0, max - ellipsis.length).join("")}${ellipsis}`;
 }
+
+// Pure blank/placeholder line block: `rows` lines of `width` spaces, with an
+// optional leading `text` overlaid on the first line. Extracted from
+// kitty-image-preview.js (bd-e1914a).
+export function renderPlaceholderLines(width, rows, text) {
+  const line = " ".repeat(Math.max(1, width));
+  const output = Array.from({ length: Math.max(1, rows) }, () => line);
+  if (text) output[0] = `${text}${line}`.slice(0, Math.max(1, width));
+  return output;
+}
