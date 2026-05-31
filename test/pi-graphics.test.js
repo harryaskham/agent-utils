@@ -136,6 +136,29 @@ import {
   renderTuiSurfaceScenePulseApng,
 } from "../extensions/pi-graphics/components.js";
 
+// Read an extension's source "surface": the main file concatenated with its
+// local relative-imported submodules (one level deep). Keeps positive
+// source-introspection assertions structure-agnostic so a symbol defined inline
+// or extracted into a ./pi-graphics/*.js submodule both pass — without weakening
+// the main-only negative (doesNotMatch) invariants, which keep using `source`.
+// Mirrors the kitty-graphics.test helper (bd-a7cd06 / bd-e1914a).
+async function readExtensionSurface(mainUrl) {
+  const main = await readFile(mainUrl, "utf8");
+  const parts = [main];
+  const seen = new Set();
+  for (const match of main.matchAll(/from\s+["'](\.[^"']+\.js)["']/g)) {
+    const spec = match[1];
+    if (seen.has(spec)) continue;
+    seen.add(spec);
+    try {
+      parts.push(await readFile(new URL(spec, mainUrl), "utf8"));
+    } catch {
+      // Optional/unreadable import: the main surface still applies.
+    }
+  }
+  return parts.join("\n");
+}
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function pngChunkTypes(png) {
@@ -1354,37 +1377,38 @@ test("pi graphics auto features default calm and honor explicit settings/env", (
 test("pi-graphics settings source maps minimal env", async () => {
   const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
   const source = await readFile(sourcePath, "utf8");
-  assert.match(source, /export function settingsEnvFromPiGraphics/);
-  assert.match(source, /PI_GRAPHICS_MODE: off \? "off" : "on"/);
-  assert.match(source, /PI_GRAPHICS_AUTO_THEME: off \? "0" : \(gfx\.autoApplyTheme \?\? true\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: off \? "0" : \(features\.editor \?\? true\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_CURSOR: off \? "0" : \(features\.editorCursor \?\? features\.cursor \?\? editor\.cursor \?\? true\)/);
-  assert.match(source, /PI_GRAPHICS_AUTO_FOOTER: off \? "0" : \(features\.footer \?\? true\)/);
-  assert.match(source, /PI_GRAPHICS_CELL_WIDTH_PX: gfx\.cell\?\.widthPx/);
-  assert.match(source, /PI_GRAPHICS_CELL_HEIGHT_PX: gfx\.cell\?\.heightPx/);
-  assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_BORDER_STYLE: editor\.borderStyle/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_ANIMATION: editor\.animation/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_UNICODE_MODE: editor\.unicodeMode/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT: editor\.topBorderHeight/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT: editor\.bottomBorderHeight/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor\.cursorStyle/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor\.trailingWorkspace/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor\.rowBackground/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE: editor\.typingImpulse/);
-  assert.match(source, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
-  assert.match(source, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === true \? "1" : "0"/);
-  assert.match(source, /PI_GRAPHICS_AUTO_BOX_RAILS: off \? "0" : gfx\.boxRails === true \? "1" : "0"/);
-  assert.match(source, /PI_GRAPHICS_BOX_RAIL_STYLE/);
-  assert.match(source, /PI_GRAPHICS_BOX_UNICODE_MODE/);
-  assert.match(source, /PI_GRAPHICS_BOX_RAIL_UNICODE_MODE/);
-  assert.match(source, /PI_GRAPHICS_BOX_RAIL_ANIMATION/);
-  assert.match(source, /PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx\.exposeRenderTools/);
-  assert.match(source, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode != null \? String\(gfx\.boxMode\) : "unicode"/);
-  assert.match(source, /PI_GRAPHICS_DEBUG: gfx\.debug/);
-  assert.match(source, /PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx\.debugPlaceholders/);
+  const surface = await readExtensionSurface(new URL("../extensions/pi-graphics.js", import.meta.url));
+  assert.match(surface, /export function settingsEnvFromPiGraphics/);
+  assert.match(surface, /PI_GRAPHICS_MODE: off \? "off" : "on"/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_THEME: off \? "0" : \(gfx\.autoApplyTheme \?\? true\)/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_EDITOR_SURFACE: off \? "0" : \(features\.editor \?\? true\)/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_EDITOR_CURSOR: off \? "0" : \(features\.editorCursor \?\? features\.cursor \?\? editor\.cursor \?\? true\)/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_FOOTER: off \? "0" : \(features\.footer \?\? true\)/);
+  assert.match(surface, /PI_GRAPHICS_CELL_WIDTH_PX: gfx\.cell\?\.widthPx/);
+  assert.match(surface, /PI_GRAPHICS_CELL_HEIGHT_PX: gfx\.cell\?\.heightPx/);
+  assert.match(surface, /PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx\.cell\?\.lineHeightScale/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_VARIANT: editor\.variant/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_BORDER_STYLE: editor\.borderStyle/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_ALPHA: editor\.alpha/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_ANIMATION: editor\.animation/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_UNICODE_MODE: editor\.unicodeMode/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT: editor\.topBorderHeight/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT: editor\.bottomBorderHeight/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_CURSOR_STYLE: editor\.cursorStyle/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE: editor\.trailingWorkspace/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_ROW_BACKGROUND: editor\.rowBackground/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE: editor\.typingImpulse/);
+  assert.match(surface, /PI_GRAPHICS_BOX_EFFECT: gfx\.boxEffect/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_BOX_CHROME: off \? "0" : gfx\.boxChrome === true \? "1" : "0"/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_BOX_RAILS: off \? "0" : gfx\.boxRails === true \? "1" : "0"/);
+  assert.match(surface, /PI_GRAPHICS_BOX_RAIL_STYLE/);
+  assert.match(surface, /PI_GRAPHICS_BOX_UNICODE_MODE/);
+  assert.match(surface, /PI_GRAPHICS_BOX_RAIL_UNICODE_MODE/);
+  assert.match(surface, /PI_GRAPHICS_BOX_RAIL_ANIMATION/);
+  assert.match(surface, /PI_GRAPHICS_EXPOSE_RENDER_TOOLS: gfx\.exposeRenderTools/);
+  assert.match(surface, /PI_GRAPHICS_BOX_MODE: gfx\.boxMode != null \? String\(gfx\.boxMode\) : "unicode"/);
+  assert.match(surface, /PI_GRAPHICS_DEBUG: gfx\.debug/);
+  assert.match(surface, /PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx\.debugPlaceholders/);
   assert.match(source, /installCompactChatSpacingPatch/);
   assert.match(source, /const chatContainerPrototype = Object\.getPrototypeOf\(AssistantMessageComponent\.prototype\)/);
   assert.match(source, /function boxChromeComponentMap\(\)/);
@@ -1806,15 +1830,16 @@ test("buildWorkingIndicatorFrames creates a themed neon pulse sequence", () => {
 test("pi-graphics extension source is the slim graphics primitive layer", async () => {
   const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
   const source = await readFile(sourcePath, "utf8");
-  assert.match(source, /export function settingsEnvFromPiGraphics/);
-  assert.match(source, /PI_GRAPHICS_MODE: off \? "off" : "on"/);
-  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_SURFACE/);
-  assert.match(source, /PI_GRAPHICS_AUTO_EDITOR_CURSOR/);
-  assert.match(source, /PI_GRAPHICS_AUTO_FOOTER/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_VARIANT/);
-  assert.match(source, /PI_GRAPHICS_EDITOR_ALPHA/);
-  assert.match(source, /PI_GRAPHICS_CELL_WIDTH_PX/);
-  assert.match(source, /PI_GRAPHICS_LINE_HEIGHT_SCALE/);
+  const surface = await readExtensionSurface(new URL("../extensions/pi-graphics.js", import.meta.url));
+  assert.match(surface, /export function settingsEnvFromPiGraphics/);
+  assert.match(surface, /PI_GRAPHICS_MODE: off \? "off" : "on"/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_EDITOR_SURFACE/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_EDITOR_CURSOR/);
+  assert.match(surface, /PI_GRAPHICS_AUTO_FOOTER/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_VARIANT/);
+  assert.match(surface, /PI_GRAPHICS_EDITOR_ALPHA/);
+  assert.match(surface, /PI_GRAPHICS_CELL_WIDTH_PX/);
+  assert.match(surface, /PI_GRAPHICS_LINE_HEIGHT_SCALE/);
   assert.match(source, /mountEditorRails/);
   assert.match(source, /setWidget\("pi-graphics-editor-top"/);
   assert.match(source, /setWidget\("pi-graphics-editor-bottom"/);
