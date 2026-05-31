@@ -36,6 +36,9 @@ import {
   previewImageRowLimit,
   buildSidePanelLayout,
   componentContains,
+  renderChildren,
+  wantsFullWidthWithSidePanel,
+  renderChildrenForSidePanel,
 } from "./kitty-image-preview/layout.js";
 import {
   AUTO_PLACEMENT,
@@ -319,29 +322,6 @@ function findEditorBoundaryIndex(tui) {
   return Math.max(0, children.length - 3);
 }
 
-function renderChildren(children, width) {
-  const lines = [];
-  for (const child of children) lines.push(...child.render(width));
-  return lines;
-}
-
-function wantsFullWidthWithSidePanel(component) {
-  return Boolean(component?.__piGraphicsFullWidthWidget || component?.__kittyImagePreviewFullWidthWidget);
-}
-
-function renderChildrenForSidePanel(children, mainWidth, fullWidth) {
-  const lines = [];
-  const fullWidthLines = [];
-  for (const child of children) {
-    const childFullWidth = wantsFullWidthWithSidePanel(child);
-    const childLines = child.render(childFullWidth ? fullWidth : mainWidth);
-    for (const line of childLines) {
-      lines.push(line);
-      fullWidthLines.push(childFullWidth);
-    }
-  }
-  return { lines, fullWidthLines };
-}
 
 // limitLinesToTerminalRows is imported from
 // ./kitty-image-preview/layout.js (extracted in bd-e1914a).

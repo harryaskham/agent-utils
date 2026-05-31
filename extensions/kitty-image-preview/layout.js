@@ -111,3 +111,29 @@ export function componentContains(root, target, seen = new Set()) {
   if (!Array.isArray(root.children)) return false;
   return root.children.some((child) => componentContains(child, target, seen));
 }
+
+// Pure component-tree render helpers extracted from kitty-image-preview.js
+// (bd-e1914a). They only invoke each child's render(width) method; no state/ctx.
+export function renderChildren(children, width) {
+  const lines = [];
+  for (const child of children) lines.push(...child.render(width));
+  return lines;
+}
+
+export function wantsFullWidthWithSidePanel(component) {
+  return Boolean(component?.__piGraphicsFullWidthWidget || component?.__kittyImagePreviewFullWidthWidget);
+}
+
+export function renderChildrenForSidePanel(children, mainWidth, fullWidth) {
+  const lines = [];
+  const fullWidthLines = [];
+  for (const child of children) {
+    const childFullWidth = wantsFullWidthWithSidePanel(child);
+    const childLines = child.render(childFullWidth ? fullWidth : mainWidth);
+    for (const line of childLines) {
+      lines.push(line);
+      fullWidthLines.push(childFullWidth);
+    }
+  }
+  return { lines, fullWidthLines };
+}
