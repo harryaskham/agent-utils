@@ -113,7 +113,7 @@ test("extension reapplies settings and runtime defaults on session_start", async
   }
 });
 
-test("adaptive true default is persisted but not passed to core setThinkingLevel", async () => {
+test("adaptive true default is delegated to core setThinkingLevel like any other level", async () => {
   const h = makeHarness({
     settings: {
       defaultThinkingLevel: "medium",
@@ -127,7 +127,7 @@ test("adaptive true default is persisted but not passed to core setThinkingLevel
     await h.handlers.get("session_start")({ reason: "startup" }, h.ctx);
 
     assert.equal(h.readSettings().defaultThinkingLevel, "adaptive");
-    assert.deepEqual(h.thinkingCalls, []);
+    assert.deepEqual(h.thinkingCalls, ["adaptive"]);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

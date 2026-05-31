@@ -5,7 +5,8 @@
 // of true-default settings as immutable-by-convention and copies them back onto
 // Pi's built-in default keys during extension load, session start, and clean
 // shutdown. Runtime model/effort switching remains allowed; this only guards
-// persisted defaults.
+// persisted defaults. Thinking values, including adaptive, are delegated to Pi
+// core unchanged.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -133,7 +134,7 @@ async function applyRuntimeDefaults(pi, ctx, defaults) {
   } else if (defaults.provider && defaults.model) {
     result.modelMissing = true;
   }
-  if (defaults.thinkingLevel && defaults.thinkingLevel !== "adaptive" && typeof pi.setThinkingLevel === "function") {
+  if (defaults.thinkingLevel && typeof pi.setThinkingLevel === "function") {
     pi.setThinkingLevel(defaults.thinkingLevel);
     result.thinkingApplied = true;
   }
