@@ -60,15 +60,17 @@ import {
   imageControlsLine,
 } from "./kitty-image-preview/status-line.js";
 
+import {
+  buildScopedDeleteCommand,
+  buildCurrentDisplayCommand,
+} from "./kitty-image-preview/display-commands.js";
+
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 
 import {
   MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
   buildKittyUnicodePlaceholderLines,
-  buildPngDisplayCommand,
-  buildPngVirtualPlacementCommand,
-  buildScopedDeleteCommand as buildScopedDeleteCommandRaw,
   detectKittyPassthroughMode,
   estimateRowsForImage,
   fileToBase64,
@@ -115,14 +117,6 @@ function stringEnum(values, description) {
 
 // trackOwnedItem is imported from ./kitty-image-preview/state.js.
 
-export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
-  return buildScopedDeleteCommandRaw({
-    ownedImageIds: state.ownedImageIds,
-    placementId: state.config.placementId,
-    passthrough: state.config.passthrough,
-    excludeIds,
-  });
-}
 
 // clearOwnedImageIds is imported from ./kitty-image-preview/state.js.
 
@@ -721,37 +715,6 @@ function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
   }, Math.max(50, intervalMs)));
 }
 
-function buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders = false) {
-  const prepared = state.currentCommand;
-  if (!prepared || prepared.itemId !== current.id) return "";
-  const placementMode = useUnicodePlaceholders ? "unicode" : "cursor";
-  const signature = `${columns}:${rows}:${prepared.zIndex}:${prepared.transport}:${prepared.passthrough}:${prepared.chunkSize}:${placementMode}:${state.config.placementId}`;
-  if (prepared.rendered?.signature === signature) return prepared.rendered.command;
-  const command = useUnicodePlaceholders
-    ? buildPngVirtualPlacementCommand({
-      imageId: current.id,
-      placementId: state.config.placementId,
-      pngBase64: prepared.pngBase64,
-      filePath: prepared.filePath,
-      columns,
-      rows,
-      passthrough: prepared.passthrough,
-      chunkSize: prepared.chunkSize,
-    })
-    : buildPngDisplayCommand({
-      imageId: current.id,
-      placementId: state.config.placementId,
-      pngBase64: prepared.pngBase64,
-      filePath: prepared.filePath,
-      columns,
-      rows,
-      zIndex: prepared.zIndex,
-      passthrough: prepared.passthrough,
-      chunkSize: prepared.chunkSize,
-    });
-  prepared.rendered = { signature, command };
-  return command;
-}
 
 async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
   const current = state.items[state.index];
