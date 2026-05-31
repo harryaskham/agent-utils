@@ -137,7 +137,10 @@ import {
   resolveRealtimeVoice,
   shouldAutoRestartMicMode,
 } from "./lib/realtime-models.js";
-import { makeInitialConfig } from "./lib/realtime-config.js";
+import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
+// Re-exported so the public test/runtime contract import path
+// (realtime-agent.js -> buildServerVadTurnDetection) is preserved after extraction.
+export { buildServerVadTurnDetection };
 import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
@@ -257,16 +260,6 @@ async function eventDataToString(data) {
 // Agent dir resolution, realtime dev-link management, and default-model settings
 // snapshot/restore are imported from ./lib/realtime-devlink.js (bd-e1914a).
 
-export function buildServerVadTurnDetection(options = {}) {
-  return {
-    type: "server_vad",
-    create_response: false,
-    interrupt_response: true,
-    threshold: options.threshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7),
-    prefix_padding_ms: options.prefixPaddingMs ?? numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300),
-    silence_duration_ms: options.silenceMs ?? numberEnv("PI_RT_VAD_SILENCE_MS", 1100),
-  };
-}
 
 
 // ---------------------------------------------------------------------------

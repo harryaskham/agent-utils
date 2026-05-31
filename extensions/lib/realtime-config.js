@@ -1,12 +1,25 @@
-// Pure initial-config builder for the realtime agent extension.
+// Pure config builders for the realtime agent extension.
 //
 // Reads PI_RT_* / OPENAI_* / AZURE_* environment variables and normalizes them
-// into the mutable session config object consumed by RealtimeSession and the
-// realtime controls. This is intentionally side-effect free (env reads only) so
-// it can be unit-tested in isolation.
+// into config objects consumed by RealtimeSession and the realtime controls.
+// These are intentionally side-effect free (env reads only) so they can be
+// unit-tested in isolation.
 
-import { env, envBool, parseRealtimeSpeed, parseVadThreshold } from "./realtime-helpers.js";
+import { env, envBool, numberEnv, parseRealtimeSpeed, parseVadThreshold } from "./realtime-helpers.js";
 import { normalizeRealtimeModelId, normalizeTranscriptionModel, resolveRealtimeVoice } from "./realtime-models.js";
+
+// Server-side VAD turn-detection descriptor sent on session.update. Options
+// override the PI_RT_VAD_* env defaults.
+export function buildServerVadTurnDetection(options = {}) {
+  return {
+    type: "server_vad",
+    create_response: false,
+    interrupt_response: true,
+    threshold: options.threshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7),
+    prefix_padding_ms: options.prefixPaddingMs ?? numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300),
+    silence_duration_ms: options.silenceMs ?? numberEnv("PI_RT_VAD_SILENCE_MS", 1100),
+  };
+}
 
 export function makeInitialConfig() {
   return {
