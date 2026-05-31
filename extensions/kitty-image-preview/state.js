@@ -119,3 +119,17 @@ export function stopCycle(state) {
   state.cycleTimer = undefined;
   state.cycle = { running: false };
 }
+
+// Tool-result shaping helpers extracted from kitty-image-preview.js (bd-e1914a).
+// makeDetails attaches the serialized public state; makeContent renders the
+// current-state summary plus any extra lines as a single text block.
+export function makeDetails(state, extra = {}) {
+  return {
+    ...extra,
+    kittyImagePreviewState: serializePublicState(state),
+  };
+}
+
+export function makeContent(state, extraLines = []) {
+  return [{ type: "text", text: [summarizeCurrent(state), ...extraLines].filter(Boolean).join("\n") }];
+}

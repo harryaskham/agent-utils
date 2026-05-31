@@ -26,6 +26,8 @@ import {
   advanceIndex,
   stopAnimation,
   stopCycle,
+  makeDetails,
+  makeContent,
 } from "./kitty-image-preview/state.js";
 import {
   estimatedRowsForColumns,
@@ -783,16 +785,7 @@ function applyConfig(state, config = {}) {
   state.currentCommand = undefined;
 }
 
-function makeDetails(state, extra = {}) {
-  return {
-    ...extra,
-    kittyImagePreviewState: serializePublicState(state),
-  };
-}
 
-function makeContent(state, extraLines = []) {
-  return [{ type: "text", text: [summarizeCurrent(state), ...extraLines].filter(Boolean).join("\n") }];
-}
 
 
 
