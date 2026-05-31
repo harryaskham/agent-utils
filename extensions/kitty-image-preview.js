@@ -30,6 +30,7 @@ import {
   previewViewportRowLimit,
   previewImageRowLimit,
   buildSidePanelLayout,
+  componentContains,
 } from "./kitty-image-preview/layout.js";
 import {
   AUTO_PLACEMENT,
@@ -329,13 +330,6 @@ function fallbackSideWidget(ctx, state, reason = "rightOverlay is unavailable", 
   }
 }
 
-function componentContains(root, target, seen = new Set()) {
-  if (!root || !target || seen.has(root)) return false;
-  if (root === target) return true;
-  seen.add(root);
-  if (!Array.isArray(root.children)) return false;
-  return root.children.some((child) => componentContains(child, target, seen));
-}
 
 function findEditorBoundaryIndex(tui) {
   const children = Array.isArray(tui?.children) ? tui.children : [];

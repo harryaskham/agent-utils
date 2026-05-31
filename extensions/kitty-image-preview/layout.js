@@ -100,3 +100,14 @@ export function buildSidePanelLayout(state, terminalWidth, availableRows = DEFAU
     totalWidth,
   };
 }
+
+// Pure recursive component-tree membership test (does root contain target in
+// its children graph). Extracted from kitty-image-preview.js (bd-e1914a);
+// no state/ctx/imports.
+export function componentContains(root, target, seen = new Set()) {
+  if (!root || !target || seen.has(root)) return false;
+  if (root === target) return true;
+  seen.add(root);
+  if (!Array.isArray(root.children)) return false;
+  return root.children.some((child) => componentContains(child, target, seen));
+}
