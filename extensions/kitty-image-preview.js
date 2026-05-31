@@ -65,6 +65,13 @@ import {
   buildCurrentDisplayCommand,
 } from "./kitty-image-preview/display-commands.js";
 
+import {
+  parseModelSpec,
+  fullResolutionDescribeParams,
+  parseJsonEnvelope,
+  targetText,
+} from "./kitty-image-preview/parse.js";
+
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 
@@ -837,12 +844,6 @@ function streamDescribeParameterSchema() {
   };
 }
 
-function parseModelSpec(spec) {
-  if (!spec) return undefined;
-  const slash = String(spec).indexOf("/");
-  if (slash <= 0 || slash === String(spec).length - 1) throw new Error(`Vision model must be provider/model, got: ${spec}`);
-  return { provider: String(spec).slice(0, slash), modelId: String(spec).slice(slash + 1) };
-}
 
 function resolveVisionModel(ctx, params = {}) {
   const spec = parseModelSpec(params.describeModel || process.env.KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL || DEFAULT_DESCRIBE_MODEL);
@@ -901,25 +902,7 @@ async function maybeDescribeImage(item, ctx, params = {}, signal, onUpdate) {
   return describeImageFile(item.path, item, ctx, params, signal);
 }
 
-function fullResolutionDescribeParams(params = {}) {
-  const full = { ...params };
-  delete full.maxWidth;
-  delete full.maxHeight;
-  return full;
-}
 
-function parseJsonEnvelope(stdout, commandName) {
-  const trimmed = String(stdout || "").trim();
-  if (!trimmed) throw new Error(`${commandName} returned no JSON output`);
-  try {
-    return JSON.parse(trimmed);
-  } catch (error) {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
-    throw new Error(`${commandName} returned invalid JSON: ${error.message}`);
-  }
-}
 
 async function runTendrilJson(pi, args, { signal, timeout = 30_000 } = {}) {
   const result = await pi.exec("tendril", args, { signal, timeout });
@@ -932,9 +915,6 @@ async function runTendrilJson(pi, args, { signal, timeout = 30_000 } = {}) {
   return envelope;
 }
 
-function targetText(target) {
-  return [target.title, target.name, target.app_name, target.id].filter(Boolean).join(" ").toLowerCase();
-}
 
 async function resolveTendrilTarget(pi, params, signal) {
   if (params.window && params.display) throw new Error("Specify only one of window or display.");
