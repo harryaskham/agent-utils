@@ -15,9 +15,7 @@
 // has been removed. The goal is to prove the graphics primitive layer before
 // adding decorative chrome.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
 
 import { Type } from "@sinclair/typebox";
 
@@ -77,6 +75,7 @@ import {
   renderBoxStripPng,
 } from "./pi-graphics/box-chrome.js";
 import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
+import { readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import {
   buildWorkingIndicatorFrames,
@@ -110,25 +109,6 @@ import { PI_GRAPHICS_RESERVED_Z_INDICES, PI_GRAPHICS_Z } from "./pi-graphics/z-i
 const TOOL_PREFIX = "pi_graphics";
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
 const MAX_DECORATED_NOTIFICATION_LINES = 64;
-
-function readJsonIfExists(path) {
-  try {
-    if (!path || !existsSync(path)) return null;
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function agentDir() {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-}
-
-function agentSettingsPath() {
-  return join(agentDir(), "settings.json");
-}
-
-
 
 export default function piGraphicsExtension(pi) {
   const chatContainerPrototype = Object.getPrototypeOf(AssistantMessageComponent.prototype);
