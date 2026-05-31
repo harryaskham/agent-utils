@@ -3,6 +3,8 @@
 // plus the fixed realtime PCM format (24 kHz, mono, 16-bit). Behavior is
 // unchanged from the original inline definitions.
 
+import { spawn } from "node:child_process";
+
 export const SAMPLE_RATE = 24000;
 export const CHANNELS = 1;
 export const SAMPLE_WIDTH = 2;
@@ -118,4 +120,38 @@ export function defaultPlaybackCommand() {
     return "pacat --playback --raw --format=s16le --rate=24000 --channels=1";
   }
   return "ffplay -nodisp -autoexit -loglevel error -f s16le -ar 24000 -ch_layout mono -i -";
+}
+
+// Shell/audio-playback plumbing extracted from realtime-agent.js (bd-e1914a).
+// runShellStream spawns a detached `/bin/sh -lc` pipe with no-op error handlers
+// so an EPIPE/exit never bubbles into an unhandled 'error' that takes down the
+// host; playPcmBuffer streams a PCM buffer into a playback command and resolves
+// when the process exits. Both are pure over their inputs (no ctx/module state).
+export function runShellStream(command) {
+  const proc = spawn("/bin/sh", ["-lc", command], { stdio: ["pipe", "pipe", "pipe"] });
+  // Default error handlers so an EPIPE / exit never bubbles into an
+  // Unhandled 'error' event that takes down the host.
+  proc.on("error", () => {});
+  proc.stdin?.on("error", () => {});
+  proc.stdout?.on("error", () => {});
+  proc.stderr?.on("error", () => {});
+  return proc;
+}
+
+export function playPcmBuffer(buffer, command, notify, debug = false) {
+  return new Promise((resolve) => {
+    const proc = runShellStream(command || defaultPlaybackCommand());
+    proc.stderr.on("data", (d) => {
+      const s = String(d).trim();
+      if (s && debug) notify?.(`replay: ${s}`, "warning");
+    });
+    proc.on("exit", () => resolve());
+    proc.on("close", () => resolve());
+    try {
+      proc.stdin.write(buffer);
+      proc.stdin.end();
+    } catch {
+      resolve();
+    }
+  });
 }

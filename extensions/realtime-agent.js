@@ -73,7 +73,7 @@
 //   PI_RT_DEBUG=1                                 verbose event logging
 
 import { join, resolve } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { ToolSchema } from "./lib/tool-schema.js";
@@ -105,6 +105,8 @@ import {
   audioOutputBackendLabel,
   defaultRecordCommand,
   defaultPlaybackCommand,
+  runShellStream,
+  playPcmBuffer,
 } from "./lib/realtime-audio.js";
 import {
   REALTIME_CONTEXT_WINDOW_TOKENS,
@@ -330,34 +332,6 @@ class AssistantMessageEventStream {
 // defaultPlaybackCommand is imported from ./lib/realtime-audio.js
 // (extracted in bd-e1914a).
 
-function runShellStream(command) {
-  const proc = spawn("/bin/sh", ["-lc", command], { stdio: ["pipe", "pipe", "pipe"] });
-  // Default error handlers so an EPIPE / exit never bubbles into an
-  // Unhandled 'error' event that takes down the host.
-  proc.on("error", () => {});
-  proc.stdin?.on("error", () => {});
-  proc.stdout?.on("error", () => {});
-  proc.stderr?.on("error", () => {});
-  return proc;
-}
-
-function playPcmBuffer(buffer, command, notify, debug = false) {
-  return new Promise((resolve) => {
-    const proc = runShellStream(command || defaultPlaybackCommand());
-    proc.stderr.on("data", (d) => {
-      const s = String(d).trim();
-      if (s && debug) notify?.(`replay: ${s}`, "warning");
-    });
-    proc.on("exit", () => resolve());
-    proc.on("close", () => resolve());
-    try {
-      proc.stdin.write(buffer);
-      proc.stdin.end();
-    } catch {
-      resolve();
-    }
-  });
-}
 
 // ---------------------------------------------------------------------------
 // AudioPlayer — buffered PCM16 playback
