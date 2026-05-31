@@ -22,6 +22,10 @@ import {
   pushItems,
   replaceItems,
   summarizeCurrent,
+  keepTimerFromHoldingProcess,
+  advanceIndex,
+  stopAnimation,
+  stopCycle,
 } from "./kitty-image-preview/state.js";
 import {
   estimatedRowsForColumns,
@@ -630,29 +634,9 @@ function flashDeleteWidget(ctx, state, deleteCommand) {
   }, 100);
 }
 
-function keepTimerFromHoldingProcess(timer) {
-  if (typeof timer?.unref === "function") timer.unref();
-  return timer;
-}
 
-function stopAnimation(state) {
-  if (state.animationTimer) clearInterval(state.animationTimer);
-  state.animationTimer = undefined;
-  state.animation = { running: false };
-}
 
-function stopCycle(state) {
-  if (state.cycleTimer) clearInterval(state.cycleTimer);
-  state.cycleTimer = undefined;
-  state.cycle = { running: false };
-}
 
-function advanceIndex(state, direction = 1) {
-  if (state.items.length === 0) return false;
-  const next = (state.index + direction + state.items.length) % state.items.length;
-  state.index = next;
-  return true;
-}
 
 function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true } = {}) {
   stopCycle(state);

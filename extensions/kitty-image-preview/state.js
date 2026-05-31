@@ -88,3 +88,34 @@ export function summarizeCurrent(state) {
   const mode = state.config.transferMode === "auto" ? "auto" : state.config.transferMode;
   return `Showing ${state.index + 1}/${state.items.length}: ${current.label}${dims}; placement=${state.config.placement}, transfer=${mode}, graphicsPlacement=${state.config.placementMode}, z=${state.config.zIndex}.`;
 }
+
+// Timer / index / animation-cycle state helpers extracted from
+// kitty-image-preview.js (bd-e1914a). Pure over `state` plus global timer APIs.
+
+// Detach a timer from the event loop so it never keeps the process alive.
+export function keepTimerFromHoldingProcess(timer) {
+  if (typeof timer?.unref === "function") timer.unref();
+  return timer;
+}
+
+// Advance the current image index by `direction`, wrapping; false if empty.
+export function advanceIndex(state, direction = 1) {
+  if (state.items.length === 0) return false;
+  const next = (state.index + direction + state.items.length) % state.items.length;
+  state.index = next;
+  return true;
+}
+
+// Stop and clear the animation timer/flag.
+export function stopAnimation(state) {
+  if (state.animationTimer) clearInterval(state.animationTimer);
+  state.animationTimer = undefined;
+  state.animation = { running: false };
+}
+
+// Stop and clear the cycle timer/flag.
+export function stopCycle(state) {
+  if (state.cycleTimer) clearInterval(state.cycleTimer);
+  state.cycleTimer = undefined;
+  state.cycle = { running: false };
+}
