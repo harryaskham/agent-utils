@@ -45,6 +45,8 @@ import {
   resolvePlacement,
   sideOverlayWidth,
   sideOverlayMaxHeight,
+  isSideOverlayPlacement,
+  shouldRenderUnicodePlaceholders,
 } from "./kitty-image-preview/placement.js";
 import {
   buildTendrilCaptureArgs,
@@ -71,7 +73,6 @@ import {
   isSupportedKittyPngPath,
   readPngDimensions,
   shouldUseInMemoryTransfer,
-  shouldUseUnicodePlaceholders,
   stableKittyImageId,
 } from "./kitty-graphics.js";
 
@@ -179,29 +180,6 @@ function renderCurrentImageLines(state, current, {
   return imageLines.map((line, index) => `${leftPadding}${index === 0 ? commandPrefix : ""}${line}`);
 }
 
-export function isSideOverlayPlacement(placement) {
-  return placement === SIDE_OVERLAY_PLACEMENT;
-}
-
-function shouldRenderUnicodePlaceholders(state, options = {}) {
-  const placement = options.placement ?? state.config.placement;
-  const forceAnchored = options.forceUnicodePlaceholders || (
-    // For this preview extension, anchored placeholders are the safe default.
-    // Direct cursor placement can move the real terminal cursor while Pi is
-    // differentially redrawing, which creates duplicate full-screen scrollback
-    // entries on image/frame updates. Keep direct cursor mode available only as
-    // an explicit debugging override with placementMode: "cursor".
-    state.config.placementMode === "auto" && options.preferAnchored !== false
-  ) || (
-    options.forceSideOverlay !== false && isSideOverlayPlacement(placement)
-  );
-  return shouldUseUnicodePlaceholders({
-    placementMode: state.config.placementMode,
-    passthrough: state.config.passthrough,
-    env: process.env,
-    forceAnchored,
-  });
-}
 
 export class KittyImagePreviewWidget {
   constructor(state, options = {}) {
