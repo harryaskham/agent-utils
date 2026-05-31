@@ -3116,7 +3116,7 @@ export function createBoxChromeRuntime({
       return `${left.transmit}${mid.transmit}${right.transmit}${left.cell}${inner}${right.cell}`;
     };
     return lines.map((line, i) => {
-      if (hasKittyPlaceholder(line)) return line;
+      if (hasKittyPlaceholder(line)) return truncateAnsiToVisibleWidth(line, width);
       const verticalKind = boxRowKind(i, lines.length);
       if (normalizedBoxUnicodeMode() === "topLeft") {
         const kind = verticalKind === "top" ? "top" : verticalKind === "bot" ? "bot" : "mid";
@@ -3136,7 +3136,7 @@ export function createBoxChromeRuntime({
       const trimmed = truncateAnsiToVisibleWidth(String(line || ""), plainWidth);
       const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));
       return `${left}${trimmed}${pad}${right}`;
-    });
+    }).map((line) => truncateAnsiToVisibleWidth(line, width));
   }
 
   function applyToRows({ type, instanceId, lines, component, renderWidth }) {
@@ -3154,20 +3154,21 @@ export function createBoxChromeRuntime({
     const renderWidthHint = Number.isFinite(requestedWidth) && requestedWidth > 0
       ? (boxMode === "unicode" && requestedWidth > contentWidth ? Math.max(0, requestedWidth - 2) : requestedWidth)
       : 0;
-    const unclampedWidth = boxMode === "unicode" && renderWidthHint > 0
-      ? Math.min(contentWidth || renderWidthHint, renderWidthHint)
-      : Math.max(contentWidth, renderWidthHint);
-    const width = Math.min(MAX_BOX_CHROME_COLUMNS, unclampedWidth);
+    const unclampedWidth = renderWidthHint > 0
+      ? renderWidthHint
+      : contentWidth;
+    const width = Math.max(1, Math.min(MAX_BOX_CHROME_COLUMNS, unclampedWidth));
     if (width <= 2) return lines;
     const effect = BOX_EFFECT_NAMES.includes(boxEffect) ? boxEffect : (BOX_TYPE_EFFECTS[effectiveType] || "glass");
     if (boxMode === "unicode") return applyUnicodeBoxRows({ type: effectiveType, instanceId, lines, colorRgb, width, effect });
     const wrapped = lines.map((line, i) => {
-      if (hasKittyPlaceholder(line)) return line;
+      const clipped = truncateAnsiToVisibleWidth(line, width);
+      if (hasKittyPlaceholder(clipped)) return clipped;
       const kind = boxRowKind(i, lines.length);
       const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });
       const { anchorImageId, anchorPlacementId } = ensureAnchor({ instanceId, rowIndex: i });
       ensureRelativeStrip({ stripImageId: stripId, anchorImageId, anchorPlacementId, instanceId, rowIndex: i, width });
-      return wrapRowText({ lineText: line, anchorImageId, anchorPlacementId });
+      return truncateAnsiToVisibleWidth(wrapRowText({ lineText: clipped, anchorImageId, anchorPlacementId }), width);
     });
     return wrapped;
   }
@@ -3198,7 +3199,7 @@ function isLikelyBorderLine(text) {
   return stripped.length >= 3 && /^[─━═╭╮╰╯╔╗╚╝┌┐└┘┬┴┼·✧\-\s]+$/.test(stripped) && /[─━═\-]/.test(stripped);
 }
 
-const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))|(?:\x1b[_P][\s\S]*?\x1b\\)/g;
+const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))|(?:\x1b[_PG][\s\S]*?\x1b\\)/g;
 
 function readControlAt(text, index) {
   CONTROL_RE.lastIndex = index;

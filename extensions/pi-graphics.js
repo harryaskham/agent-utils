@@ -409,7 +409,8 @@ export default function piGraphicsExtension(pi) {
   let editorContextTimer = null;
   let editorCursorAnchorSeq = 0;
   let editorCursorRelativePlacement = null;
-  const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_P][\s\S]*?\x1b\\/g;
+  const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_PG][\s\S]*?\x1b\\/g;
+  const TERMINAL_CONTROL_RE = /(?:\x1b\[[0-?]*[ -/]*[@-~])|(?:\x1b\][\s\S]*?(?:\x07|\x1b\\))|(?:\x1b[_PG][\s\S]*?\x1b\\)/g;
 
   function stopManualAnimationLoops() {
     for (const timer of animationTimers.values()) clearInterval(timer);
@@ -540,8 +541,83 @@ export default function piGraphicsExtension(pi) {
     return line;
   }
 
+  function readTerminalControlAt(text, index) {
+    TERMINAL_CONTROL_RE.lastIndex = index;
+    const match = TERMINAL_CONTROL_RE.exec(text);
+    return match && match.index === index ? match[0] : null;
+  }
+
+  function charCellWidth(ch) {
+    if (!ch) return 0;
+    const code = ch.codePointAt(0) || 0;
+    if (code === 0) return 0;
+    if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
+    if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
+    if (
+      code >= 0x1100 && (
+        code <= 0x115f || code === 0x2329 || code === 0x232a ||
+        (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+        (code >= 0xac00 && code <= 0xd7a3) ||
+        (code >= 0xf900 && code <= 0xfaff) ||
+        (code >= 0xfe10 && code <= 0xfe19) ||
+        (code >= 0xfe30 && code <= 0xfe6f) ||
+        (code >= 0xff00 && code <= 0xff60) ||
+        (code >= 0xffe0 && code <= 0xffe6) ||
+        (code >= 0x1f300 && code <= 0x1faff)
+      )
+    ) return 2;
+    return 1;
+  }
+
   function approximateVisibleCells(text) {
-    return String(text || "").replace(ZERO_WIDTH_CONTROL_RE, "").length;
+    const source = String(text || "");
+    let width = 0;
+    for (let i = 0; i < source.length;) {
+      const control = readTerminalControlAt(source, i);
+      if (control) { i += control.length; continue; }
+      const ch = String.fromCodePoint(source.codePointAt(i));
+      width += charCellWidth(ch);
+      i += ch.length;
+    }
+    return width;
+  }
+
+  function truncateAnsiToVisibleWidth(text, maxWidth) {
+    const limit = Math.max(0, Math.trunc(Number(maxWidth) || 0));
+    const source = String(text || "");
+    let out = "";
+    let width = 0;
+    let i = 0;
+    for (; i < source.length;) {
+      const control = readTerminalControlAt(source, i);
+      if (control) { out += control; i += control.length; continue; }
+      const ch = String.fromCodePoint(source.codePointAt(i));
+      const w = charCellWidth(ch);
+      if (w > 0 && width + w > limit) break;
+      out += ch;
+      width += w;
+      i += ch.length;
+    }
+    for (; i < source.length;) {
+      const control = readTerminalControlAt(source, i);
+      if (control) { out += control; i += control.length; continue; }
+      const ch = String.fromCodePoint(source.codePointAt(i));
+      i += ch.length;
+    }
+    return out;
+  }
+
+  function clampRenderedLineToWidth(line, width) {
+    const limit = Math.max(1, Math.trunc(Number(width) || 1));
+    const text = String(line ?? "");
+    if (approximateVisibleCells(text) <= limit) return text;
+    return truncateAnsiToVisibleWidth(text, limit);
+  }
+
+  function clampRenderedRowsToWidth(lines, width) {
+    if (!Array.isArray(lines)) return lines;
+    const limit = Math.max(1, Math.trunc(Number(width) || 1));
+    return lines.map((line) => clampRenderedLineToWidth(line, limit));
   }
 
   function updateEditorTypingHeat(plainText, cursorCol = 0) {
@@ -1344,10 +1420,18 @@ export default function piGraphicsExtension(pi) {
       q: 2,
     }, "", { passthrough: state.config.passthrough }));
 
+    const safeRowWidth = Math.max(1, Math.trunc(Number(rowWidth) || 1));
+    const safeCursorCol = Math.max(0, Math.min(safeRowWidth - 1, Math.trunc(Number(cursorCol) || 0)));
     const cursorColumns = 11;
     const cursorRows = 5;
-    // 11x5 glow centered on a 1x1 transparent cursor anchor: H=-5,V=-2.
-    const cursorHOffset = -Math.floor(cursorColumns / 2);
+    const displayColumns = Math.max(1, Math.min(cursorColumns, safeRowWidth));
+    // Keep the 11x5 glow horizontally inside the editor row. Center it when
+    // there is room, but clamp the relative placement at both edges so Kitty is
+    // never asked to draw outside the terminal width.
+    const centeredHOffset = -Math.floor(cursorColumns / 2);
+    const minHOffset = -safeCursorCol;
+    const maxHOffset = safeRowWidth - safeCursorCol - displayColumns;
+    const cursorHOffset = Math.max(minHOffset, Math.min(maxHOffset, centeredHOffset));
     const cursorVOffset = -Math.floor(cursorRows / 2);
     const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(imageId)) {
@@ -1390,7 +1474,7 @@ export default function piGraphicsExtension(pi) {
       parentPlacementId: anchorPlacementId,
       hOffset: cursorHOffset,
       vOffset: cursorVOffset,
-      columns: cursorColumns,
+      columns: displayColumns,
       rows: cursorRows,
       // Keep the halo under text but above non-default editor cell backgrounds.
       // BACKGROUND/DEEP_BACKGROUND are below Kitty's non-default-background
@@ -1718,7 +1802,7 @@ export default function piGraphicsExtension(pi) {
         render(width = 120) {
           refreshFooterState(ctx, pi);
           activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
-          return [buildSegmentedFooterLine(ctx, footerData, width, pi, activeThemeRef)];
+          return [clampRenderedLineToWidth(buildSegmentedFooterLine(ctx, footerData, width, pi, activeThemeRef), width)];
         },
       };
     };
@@ -1772,18 +1856,18 @@ export default function piGraphicsExtension(pi) {
         for (let i = 0; i < next.length; i += 1) {
           if (isDashLine(next[i])) dashIndices.push(i);
         }
-        if (dashIndices.length === 0) return baseLines.map((line) => decorateEditorContentLine(line, width));
+        if (dashIndices.length === 0) return clampRenderedRowsToWidth(baseLines.map((line) => decorateEditorContentLine(line, width)), width);
         if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
-          return next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width));
+          return clampRenderedRowsToWidth(next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width)), width);
         }
         const firstDash = dashIndices[0];
         const lastDash = dashIndices[dashIndices.length - 1];
         const top = buildEditorBorderRow(width, "top");
         const bot = firstDash !== lastDash ? buildEditorBorderRow(width, "bottom") : null;
-        if (!top) return baseLines;
+        if (!top) return clampRenderedRowsToWidth(baseLines, width);
         next[firstDash] = top;
         if (bot && lastDash !== firstDash) next[lastDash] = bot;
-        return next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width));
+        return clampRenderedRowsToWidth(next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width)), width);
       }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
@@ -1814,7 +1898,7 @@ export default function piGraphicsExtension(pi) {
     component.__piGraphicsDashPatched = true;
     component.render = (width) => {
       const line = buildEditorBorderRow(width, "symmetric");
-      return line ? [line] : original(width);
+      return clampRenderedRowsToWidth(line ? [line] : original(width), width);
     };
   }
 
@@ -1853,7 +1937,7 @@ export default function piGraphicsExtension(pi) {
         writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
         activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
         const lines = buildEditorBorderWidgetRows(width, edge);
-        return lines && lines.length ? lines : [];
+        return clampRenderedRowsToWidth(lines && lines.length ? lines : [], width);
       },
       invalidate() {},
     });

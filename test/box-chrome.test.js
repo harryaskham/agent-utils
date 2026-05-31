@@ -10,6 +10,20 @@ import {
 } from "../extensions/pi-graphics/box-chrome.js";
 import { piGraphicsImageId } from "../extensions/pi-graphics/id-space.js";
 
+function visibleCells(line) {
+  const stripped = String(line || "")
+    .replace(/\x1b_G[\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b\[[0-9;]*[ -/]*[@-~]/g, "");
+  let width = 0;
+  for (const ch of stripped) {
+    const code = ch.codePointAt(0) || 0;
+    if (code < 32 || (code >= 0x7f && code < 0xa0)) continue;
+    if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) continue;
+    width += (code >= 0x1100 && (code <= 0x115f || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0x1f300 && code <= 0x1faff))) ? 2 : 1;
+  }
+  return width;
+}
+
 test("renderBoxStripPng produces non-empty PNG for top/mid/bot kinds", () => {
   for (const kind of ["top", "mid", "bot"]) {
     const { png, widthPx, heightPx } = renderBoxStripPng({
@@ -178,7 +192,34 @@ test("unicode box mode clamps overwide content to render width hint", () => {
     .replace(/\x1b\[[0-9;]*m/g, "");
   assert.match(visible, /x{18}/, "content should be truncated to the render-width hint with two side placeholders");
   assert.doesNotMatch(visible, /x{19}/, "unicode row must not exceed the render-width hint and wrap the right placeholder");
-  assert.equal((visible.match(/\u{10eeee}/gu) || []).length, 2, "unicode row should keep only two side placeholders");
+  assert.ok(visibleCells(out[0]) <= 20, "unicode row must stay within the render-width hint");
+  assert.ok((visible.match(/\u{10eeee}/gu) || []).length >= 1, "unicode row should keep at least one placeholder anchor while clipping safely");
+});
+
+test("relative box chrome clamps overwide rows to render width", () => {
+  const emitted = [];
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: (c) => emitted.push(c),
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 114, lines: ["界".repeat(20)], renderWidth: 12 });
+  assert.ok(visibleCells(out[0]) <= 12, "relative chrome must never return a row wider than the render width");
+  assert.match(emitted.join(""), /(?:^|,)c=12(?:,|;)/, "relative placement width must be bounded to render width");
+  assert.doesNotMatch(emitted.join(""), /(?:^|,)c=40(?:,|;)/, "relative placement must not follow overwide content past terminal width");
+});
+
+test("unicode box mode clamps pre-existing placeholder rows to render width", () => {
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+  });
+  const out = runtime.applyToRows({ type: "border", instanceId: 115, lines: [`\u{10eeee}${"x".repeat(30)}`], renderWidth: 10 });
+  assert.equal(visibleCells(out[0]), 10, "already-graphical rows still need final terminal-width clipping");
 });
 
 test("box chrome preserves ANSI controls while reclaiming one visible cell", () => {

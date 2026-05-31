@@ -1487,7 +1487,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"/);
   assert.match(source, /buildEditorBorderWidgetRows\(width, edge\)[\s\S]*buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
   assert.match(source, /editorBorderNeedsWidget\(edge\)[\s\S]*editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"\) return true/);
-  assert.match(source, /dashIndices\.length === 0\) return baseLines\.map\(\(line\) => decorateEditorContentLine\(line, width\)\)/);
+  assert.match(source, /dashIndices\.length === 0\) return clampRenderedRowsToWidth\(baseLines\.map\(\(line\) => decorateEditorContentLine\(line, width\)\), width\)/);
   assert.match(source, /function editorAnimationEnabled\(\)/);
   assert.match(source, /function editorUnicodeMode\(\)/);
   assert.match(source, /function normalizeEditorGraphicsCombination\(editor = \{\}\)/);
@@ -1581,6 +1581,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /terminal-driven APNG\/native frame loops have not repainted/);
   assert.match(source, /buildAnimationStopCommand\(\{ imageId: animImageId/);
   assert.match(source, /function buildSegmentedFooterLine/);
+  assert.match(source, /function approximateVisibleCells\(text\)/);
+  assert.match(source, /function truncateAnsiToVisibleWidth\(text, maxWidth\)/);
+  assert.match(source, /function clampRenderedRowsToWidth\(lines, width\)/);
+  assert.match(source, /clampRenderedLineToWidth\(buildSegmentedFooterLine\(ctx, footerData, width, pi, activeThemeRef\), width\)/);
   assert.match(source, /function compactFooterPath\(path, threshold = 0\)/);
   assert.match(source, /\.map\(compactPathSegment\)/);
   assert.match(source, /function compactFooterProvider\(provider\)/);
@@ -1633,6 +1637,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editor-cursor-cell-direct-/);
   assert.match(source, /editor-cursor-glow-/);
   assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/);
+  assert.match(source, /const displayColumns = Math\.max\(1, Math\.min\(cursorColumns, safeRowWidth\)\)/);
+  assert.match(source, /const minHOffset = -safeCursorCol/);
+  assert.match(source, /const maxHOffset = safeRowWidth - safeCursorCol - displayColumns/);
+  assert.match(source, /columns: displayColumns/);
   assert.match(source, /columns: 1,\n\s+rows: 1,/);
   assert.match(source, /trailCells: 0/);
   assert.match(source, /trailCells: heat > 0\.04/);
