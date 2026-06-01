@@ -920,4 +920,83 @@ mcp_servers:
             "ambiguous human output should show the candidate domain, got: {human}"
         );
     }
+
+    #[test]
+    fn unknown_selector_returns_not_found_without_guessing() {
+        // Documented contract (docs/skill-server/README.md): "A miss returns a
+        // structured not_found response instead of guessing." Assert that an
+        // unknown selector yields NotFound, selects nothing, and surfaces no
+        // candidate routes.
+        let config: SkillServerConfig =
+            serde_yaml_ng::from_str(SAMPLE_CONFIG).expect("valid config");
+        let context = RuntimeContext {
+            config_path: PathBuf::from("test.yaml"),
+            config,
+        };
+        let response = execute_meta_request(
+            &context,
+            MetaRequest {
+                domain: "definitely-not-a-configured-domain".to_owned(),
+                query: "anything".to_owned(),
+                tool: None,
+            },
+        );
+        assert_eq!(response.status, RouteStatus::NotFound);
+        assert!(response.selected.is_none());
+        assert!(
+            response.matches.is_empty(),
+            "a miss must not surface guessed routes, got: {:?}",
+            response.matches
+        );
+        assert!(
+            response.message.contains("no configured skill or MCP server matched"),
+            "not_found message should explain the miss, got: {}",
+            response.message
+        );
+    }
+
+    #[test]
+    fn skill_file_routes_by_name_and_domain() {
+        // The RouteKind::SkillFile path: a `web-search.md` file in a scanned
+        // skill_path is discoverable by name `web-search` and domain `web`
+        // (the first `-_.`-delimited segment of the stem).
+        let dir = tempfile::TempDir::new().expect("create temp skill dir");
+        std::fs::write(dir.path().join("web-search.md"), "# web search skill\n")
+            .expect("write skill file");
+
+        let config = SkillServerConfig {
+            skill_paths: vec![dir.path().to_path_buf()],
+            mcp_servers: Vec::new(),
+        };
+        let context = RuntimeContext {
+            config_path: PathBuf::from("test.yaml"),
+            config,
+        };
+
+        for selector in ["web-search", "web"] {
+            let response = execute_meta_request(
+                &context,
+                MetaRequest {
+                    domain: selector.to_owned(),
+                    query: "find docs".to_owned(),
+                    tool: None,
+                },
+            );
+            assert_eq!(
+                response.status,
+                RouteStatus::Routed,
+                "selector `{selector}` should route to the skill file"
+            );
+            let selected = response
+                .selected
+                .unwrap_or_else(|| panic!("selector `{selector}` should select a route"));
+            assert_eq!(selected.kind, RouteKind::SkillFile);
+            assert_eq!(selected.name, "web-search");
+            assert_eq!(selected.domain, "web");
+            assert!(
+                selected.path.is_some(),
+                "skill-file route should carry the discovered file path"
+            );
+        }
+    }
 }
