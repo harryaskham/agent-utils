@@ -78,6 +78,7 @@ import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spaci
 import { readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import { mixHexColor } from "./pi-graphics/color-utils.js";
+import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-truncate.js";
 import {
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
@@ -735,20 +736,6 @@ export default function piGraphicsExtension(pi) {
     if (key === "openrouter") return "oprt";
     if (key.startsWith("azure-")) return "az";
     return raw;
-  }
-
-  function truncateFooterStart(text, width) {
-    const chars = Array.from(String(text ?? ""));
-    if (chars.length <= width) return chars.join("");
-    if (width <= 0) return "";
-    return chars.slice(chars.length - width).join("");
-  }
-
-  function truncateFooterEnd(text, width) {
-    const chars = Array.from(String(text ?? ""));
-    if (chars.length <= width) return chars.join("");
-    if (width <= 0) return "";
-    return chars.slice(0, width).join("");
   }
 
   function compactFooterModelName(model, provider = footerState.provider) {
