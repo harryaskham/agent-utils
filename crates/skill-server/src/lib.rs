@@ -713,6 +713,35 @@ fn render_meta_human(response: &MetaResponse) -> String {
         if let Some(path) = &selected.path {
             let _ = writeln!(output, "path: {}", path.display());
         }
+    } else if response.status == RouteStatus::Ambiguous {
+        // Surface the colliding candidates so the "pass a more specific domain
+        // or tool" guidance is actionable from the human output. This only
+        // lists the already-computed top-scoring matches; it never guesses a
+        // route on the caller's behalf.
+        let top_score = response.matches.first().map_or(0, |route| route.score);
+        let mut printed_header = false;
+        for route in response
+            .matches
+            .iter()
+            .filter(|route| route.score == top_score)
+        {
+            if !printed_header {
+                output.push_str("candidates:\n");
+                printed_header = true;
+            }
+            let _ = write!(
+                output,
+                "  - {} {} domain={} score={}",
+                route.kind.as_str(),
+                route.name,
+                route.domain,
+                route.score
+            );
+            if let Some(tool) = &route.tool {
+                let _ = write!(output, " tool={tool}");
+            }
+            output.push('\n');
+        }
     }
     output
 }
@@ -836,6 +865,59 @@ mcp_servers:
         assert_eq!(
             response["result"]["structuredContent"]["data"]["selected"]["tool"],
             "search_web"
+        );
+    }
+
+    #[test]
+    fn ambiguous_human_output_lists_colliding_candidates() {
+        // Two MCP servers share the same domain, so a domain-only selector
+        // produces equally-scored matches. The human renderer must list those
+        // candidates so the "pass a more specific domain or tool" hint is
+        // actionable, without auto-selecting a route.
+        let config = SkillServerConfig {
+            skill_paths: Vec::new(),
+            mcp_servers: vec![
+                McpServerDefinition {
+                    name: "alpha".to_owned(),
+                    domains: vec!["shared".to_owned()],
+                    command: "alpha-mcp".to_owned(),
+                    ..Default::default()
+                },
+                McpServerDefinition {
+                    name: "beta".to_owned(),
+                    domains: vec!["shared".to_owned()],
+                    command: "beta-mcp".to_owned(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let context = RuntimeContext {
+            config_path: PathBuf::from("test.yaml"),
+            config,
+        };
+        let response = execute_meta_request(
+            &context,
+            MetaRequest {
+                domain: "shared".to_owned(),
+                query: "do something".to_owned(),
+                tool: None,
+            },
+        );
+        assert_eq!(response.status, RouteStatus::Ambiguous);
+        assert!(response.selected.is_none());
+
+        let human = render_meta_human(&response);
+        assert!(
+            human.contains("candidates:"),
+            "ambiguous human output should include a candidates header, got: {human}"
+        );
+        assert!(
+            human.contains("alpha") && human.contains("beta"),
+            "ambiguous human output should list both colliding routes, got: {human}"
+        );
+        assert!(
+            human.contains("domain=shared"),
+            "ambiguous human output should show the candidate domain, got: {human}"
         );
     }
 }
