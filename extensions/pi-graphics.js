@@ -3074,7 +3074,6 @@ export default function piGraphicsExtension(pi) {
           "       /gfx box-rail-style gradient|glass|chrome|geometric",
           "       /gfx box-effect <name|auto>  (/gfx box effects lists names)",
           "       /gfx mode on|off|debug",
-          "Ctrl+t cycles themes only when keybindings free it from app.thinking.toggle.",
         ];
         ctx.ui.notify(lines.join("\n"), "info");
       };
@@ -3250,10 +3249,6 @@ export default function piGraphicsExtension(pi) {
     },
   });
 
-  pi.registerShortcut?.("ctrl+t", {
-    description: "Cycle Pi Graphics themes only",
-    handler: async (ctx) => cycleGfxTheme(ctx, 1),
-  });
 
   pi.on("session_end", async (_event, ctx) => {
     teardownBoxChrome(ctx);
