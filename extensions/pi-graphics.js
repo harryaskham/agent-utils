@@ -77,6 +77,7 @@ import {
 import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
 import { readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
+import { mixHexColor } from "./pi-graphics/color-utils.js";
 import {
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
@@ -712,21 +713,6 @@ export default function piGraphicsExtension(pi) {
         ? `~/${value.slice(home.length + 1)}`
         : value;
     return compactFooterPath(display);
-  }
-
-  function mixRgbChannel(a, b, t) {
-    return Math.round(a + (b - a) * Math.max(0, Math.min(1, t)));
-  }
-
-  function mixHexColor(fromHex, toHex, t) {
-    const parse = (hex, fallback) => {
-      const text = String(hex || "").replace(/^#/, "");
-      if (!/^[0-9a-f]{6}$/i.test(text)) return fallback;
-      return [parseInt(text.slice(0, 2), 16), parseInt(text.slice(2, 4), 16), parseInt(text.slice(4, 6), 16)];
-    };
-    const from = parse(fromHex, [136, 192, 208]);
-    const to = parse(toHex, [255, 255, 255]);
-    return `#${from.map((c, i) => mixRgbChannel(c, to[i], t).toString(16).padStart(2, "0")).join("")}`;
   }
 
   function editorRailHeat() {
