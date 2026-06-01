@@ -49,7 +49,7 @@ skill-search web query latest Rust MCP crate
 skill-search call web --tool query --query "latest Rust MCP crate" --json
 ```
 
-A successful meta request returns the selected server/tool plus its command vector. A miss returns a structured `not_found` response instead of guessing.
+A successful meta request returns the selected server/tool plus its command vector. A miss returns a structured `not_found` response instead of guessing. When multiple routes are equally good, the request returns a structured `ambiguous` response; the human (non-JSON) output also lists the colliding candidate routes (kind, name, domain, score) so you can re-run with a more specific domain or tool.
 
 ## MCP stdio
 
