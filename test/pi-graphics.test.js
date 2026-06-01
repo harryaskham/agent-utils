@@ -1956,6 +1956,46 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.doesNotMatch(source, /PI_GRAPHICS_SHOWCASE/);
 });
 
+test("/gfx mutations are runtime-only until saved via dialog Enter or /gfx save (bd-a1853d)", async () => {
+  const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
+  const source = await readFile(sourcePath, "utf8");
+  // Runtime overlay + helpers exist.
+  assert.match(source, /let runtimeSettingsOverride = null/);
+  assert.match(source, /function readGfxSettingsBase\(\)/);
+  assert.match(source, /function applyGfxSettingsRuntimeOnly\(ctx, settings\)/);
+  assert.match(source, /function hasUnsavedGfxChanges\(\)/);
+  assert.match(source, /function saveGfxRuntimeOverride\(ctx\)/);
+  // applyGfxSettingsRuntimeOnly holds the overlay and applies live WITHOUT reload.
+  assert.match(source, /runtimeSettingsOverride = settings;\s*\n\s*applyGfxSettingsLive\(ctx, settings\);/);
+  // The runtime-only apply must not call ctx.reload (reload would discard the
+  // unsaved change by re-reading on-disk settings).
+  const runtimeOnlyBody = source.slice(
+    source.indexOf("function applyGfxSettingsRuntimeOnly"),
+    source.indexOf("function hasUnsavedGfxChanges"),
+  );
+  assert.doesNotMatch(runtimeOnlyBody, /ctx\.reload|ctx\?\.reload/);
+  assert.doesNotMatch(runtimeOnlyBody, /saveSettings/);
+  // /gfx save subcommand flushes the overlay to disk.
+  assert.match(source, /if \(action === "save"\)/);
+  assert.match(source, /saveGfxRuntimeOverride\(ctx\)/);
+  // saveGfxRuntimeOverride clears the overlay after writing.
+  assert.match(source, /runtimeSettingsOverride = null;/);
+  // The main /gfx mutation loop applies runtime-only, not save+reload.
+  assert.match(source, /normalizeEditorGraphicsCombination\(editor\);\s*\n\s*applyGfxSettingsRuntimeOnly\(ctx, settings\);/);
+  // No /gfx CLI mutation path persists eagerly: applyGfxSettingsAndReload is no
+  // longer invoked anywhere (only its definition may remain).
+  const reloadCalls = source.match(/applyGfxSettingsAndReload\(/g) || [];
+  assert.equal(reloadCalls.length, 1, "applyGfxSettingsAndReload should only appear in its own definition, not as a call site");
+  // Dialog Enter persists (flushes overlay).
+  assert.match(source, /if \(result === "save"\)[\s\S]*?saveGfxRuntimeOverride\(ctx\)/);
+  // Status surfaces the unsaved-changes indicator and /gfx save in usage.
+  assert.match(source, /unsaved:/);
+  assert.match(source, /\/gfx save to persist/);
+  assert.match(source, /Usage: \/gfx status \| \/gfx save/);
+  // Mutating subcommands read the overlay base so successive /gfx edits compose.
+  assert.match(source, /const settings = readGfxSettingsBase\(\);/);
+});
+
 test("pi graphics scoped ids are stable within a process but salted by namespace and pid", () => {
   const envA = { PI_GRAPHICS_ID_NAMESPACE: "session-a" };
   const envB = { PI_GRAPHICS_ID_NAMESPACE: "session-b" };

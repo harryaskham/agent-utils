@@ -441,10 +441,19 @@ displayed using kitty Unicode placeholder cells, so:
   only when `piGraphics.boxChrome` is explicitly `true`); its box-effect line and
   unknown-effect warnings stay compact and point to `/gfx box effects` for the full
   selectable list.
+- **Runtime-only by default; persist only on save.** `/gfx` CLI mutations
+  (`/gfx mode on|off|debug`, `/gfx editor ...`, `/gfx box ...`, `/gfx preset`,
+  `/gfx next`/`/gfx prev`, `/gfx debug`, and `/eink on|off`) apply **live for the
+  current runtime only** and are *not* written to `settings.json`. This lets you
+  try modes ad hoc — e.g. `pi '/gfx mode on'` — without mangling your home config.
+  Successive runtime mutations compose. Persist the pending runtime state with
+  `/gfx save`, or by pressing **Enter** in the `/gfx` settings overlay (Esc/`q`
+  closes without saving). `/gfx status` shows an `unsaved:` line indicating
+  whether runtime-only changes are pending.
   `/gfx box-effect <name>` can select a specific effect or
   `/gfx box-effect auto` can return to per-message-type effects.
-  `/gfx debug` toggles a persistent graphics diagnostics panel and visible `U`
-  placeholder cells. `/gfx box status` prints box mode, forced-vs-per-type effect
+  `/gfx debug` toggles a graphics diagnostics panel and visible `U`
+  placeholder cells (runtime-only; `/gfx save` to persist). `/gfx box status` prints box mode, forced-vs-per-type effect
   state, mapped surface count, unique effect count, and the registry mapping without
   emitting preview graphics or changing settings. Ordinary `/gfx status` includes
   mapped surface, unique-effect, and theme-token counts with a pointer to the full

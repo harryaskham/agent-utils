@@ -132,6 +132,11 @@ export default function piGraphicsExtension(pi) {
 
   const settings = readJsonIfExists(agentSettingsPath()) || {};
   let settingsEnv = settingsEnvFromPiGraphics(settings);
+  // Runtime-only /gfx overlay (bd-a1853d): CLI mutations apply live without
+  // writing settings.json. They are held here so they survive across /gfx
+  // invocations within the session and can be flushed by `/gfx save` (or the
+  // settings dialog Enter). null = no unsaved runtime changes pending.
+  let runtimeSettingsOverride = null;
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "");
   const state = makeState();
@@ -2407,6 +2412,37 @@ export default function piGraphicsExtension(pi) {
     writeFileSync(agentSettingsPath(), JSON.stringify(settings, null, 2) + "\n");
   }
 
+  // Read the settings base for a /gfx command. When runtime-only changes are
+  // pending, build on top of them so successive /gfx mutations compose without
+  // touching disk; otherwise read the on-disk settings (bd-a1853d).
+  function readGfxSettingsBase() {
+    if (runtimeSettingsOverride) return runtimeSettingsOverride;
+    return readJsonIfExists(agentSettingsPath()) || {};
+  }
+
+  // Apply /gfx changes live WITHOUT persisting to settings.json. Holds them in
+  // the runtime overlay so `/gfx save` (or dialog Enter) can flush later, and
+  // marks unsaved state. Deliberately does NOT call ctx.reload(), which would
+  // re-read on-disk settings and discard the runtime-only change (bd-a1853d).
+  function applyGfxSettingsRuntimeOnly(ctx, settings) {
+    runtimeSettingsOverride = settings;
+    applyGfxSettingsLive(ctx, settings);
+  }
+
+  function hasUnsavedGfxChanges() {
+    return runtimeSettingsOverride !== null;
+  }
+
+  // Flush pending runtime-only /gfx changes to settings.json (`/gfx save` or
+  // dialog Enter). Clears the overlay on success (bd-a1853d).
+  function saveGfxRuntimeOverride(ctx) {
+    if (!runtimeSettingsOverride) return false;
+    try { saveSettings(runtimeSettingsOverride); }
+    catch (error) { ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error"); return false; }
+    runtimeSettingsOverride = null;
+    return true;
+  }
+
   function applyGfxSettingsLive(ctx, settings) {
     settingsEnv = settingsEnvFromPiGraphics(settings);
     try {
@@ -2444,7 +2480,7 @@ export default function piGraphicsExtension(pi) {
   }
 
   async function cycleGfxPreset(ctx, direction = 1) {
-    const settings = readJsonIfExists(agentSettingsPath()) || {};
+    const settings = readGfxSettingsBase();
     const gfx = (settings.piGraphics = settings.piGraphics || {});
     const presets = getGfxPresets(settings, ctx).map((p, index) => ({ ...p, index }));
     if (!presets.length) { ctx.ui.notify("No Pi Graphics presets configured.", "warning"); return; }
@@ -2452,11 +2488,12 @@ export default function piGraphicsExtension(pi) {
     const nextIndex = ((Math.trunc(current) + direction) % presets.length + presets.length) % presets.length;
     const preset = presets[nextIndex];
     applyGfxPreset(settings, preset);
-    await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics preset ${nextIndex + 1}/${presets.length}: ${preset.name || "unnamed"}. Reloading...`);
+    applyGfxSettingsRuntimeOnly(ctx, settings);
+    ctx.ui.notify(`Pi Graphics preset ${nextIndex + 1}/${presets.length}: ${preset.name || "unnamed"}. (runtime only — /gfx save to persist)`, "info");
   }
 
   async function cycleGfxTheme(ctx, direction = 1) {
-    const settings = readJsonIfExists(agentSettingsPath()) || {};
+    const settings = readGfxSettingsBase();
     const gfx = (settings.piGraphics = settings.piGraphics || {});
     const themes = getGfxThemeCycle(settings, ctx);
     if (!themes.length) { ctx.ui.notify("No Pi Graphics themes configured.", "warning"); return; }
@@ -2468,7 +2505,8 @@ export default function piGraphicsExtension(pi) {
     settings.theme = theme;
     gfx.theme = theme;
     delete gfx.activePresetIndex;
-    await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics theme ${nextIndex + 1}/${themes.length}: ${theme}. Reloading...`);
+    applyGfxSettingsRuntimeOnly(ctx, settings);
+    ctx.ui.notify(`Pi Graphics theme ${nextIndex + 1}/${themes.length}: ${theme}. (runtime only — /gfx save to persist)`, "info");
   }
 
   function themeProvenanceLines(ctx, settings) {
@@ -2891,7 +2929,10 @@ export default function piGraphicsExtension(pi) {
       : "notify";
     if (result === "save") {
       normalizeEditorGraphicsCombination(editor);
-      await applyGfxSettingsAndReload(ctx, settings, "Saved Pi Graphics settings. Reloading runtime to apply...");
+      // Dialog Enter persists (bd-a1853d): adopt the edited settings as the
+      // runtime overlay, apply live, then flush to disk and clear the overlay.
+      applyGfxSettingsRuntimeOnly(ctx, settings);
+      if (saveGfxRuntimeOverride(ctx)) ctx.ui.notify("Saved Pi Graphics settings.", "info");
     } else if (result === "notify") {
       ctx.ui.notify("This Pi runtime does not expose custom overlay UI; use /gfx status, /gfx box-effect auto, or /gfx debug.", "warning");
     }
@@ -2902,7 +2943,7 @@ export default function piGraphicsExtension(pi) {
     description: "Enable or disable e-ink friendly transparent greyscale mode. Usage: /eink [on|off|status]",
     handler: async (args, ctx) => {
       const token = String(args || "").trim().split(/\s+/).filter(Boolean)[0]?.toLowerCase() || "status";
-      const settings = readJsonIfExists(agentSettingsPath()) || {};
+      const settings = readGfxSettingsBase();
       const gfx = (settings.piGraphics = settings.piGraphics || {});
       if (["status", "show", "info"].includes(token)) {
         ctx.ui.notify([
@@ -2919,9 +2960,10 @@ export default function piGraphicsExtension(pi) {
       }
       const enabled = ["on", "true", "1", "enable"].includes(token);
       applyEinkMode(settings, enabled);
-      await applyGfxSettingsAndReload(ctx, settings, enabled
-        ? "E-ink mode enabled: transparent greyscale theme with minimal animation. Reloading..."
-        : "E-ink mode disabled: restored previous Pi graphics settings. Reloading...");
+      applyGfxSettingsRuntimeOnly(ctx, settings);
+      ctx.ui.notify(enabled
+        ? "E-ink mode enabled: transparent greyscale theme with minimal animation. (runtime only — /gfx save to persist)"
+        : "E-ink mode disabled: restored previous Pi graphics settings. (runtime only — /gfx save to persist)", "info");
     },
   });
 
@@ -2930,13 +2972,14 @@ export default function piGraphicsExtension(pi) {
     handler: async (args, ctx) => {
       const tokens = String(args || "").trim().split(/\s+/).filter(Boolean);
       const path = agentSettingsPath();
-      const settings = readJsonIfExists(path) || {};
+      const settings = readGfxSettingsBase();
       const gfx = (settings.piGraphics = settings.piGraphics || {});
       const editor = (gfx.editor = gfx.editor || {});
       const describe = () => {
         const presets = getGfxPresets(settings, ctx);
         const lines = [
           "Pi Graphics settings:",
+          `  unsaved:        ${hasUnsavedGfxChanges() ? "yes — runtime-only changes pending; /gfx save to persist" : "no (in sync with settings file)"}`,
           `  mode:           ${gfx.mode ?? "on"}`,
           `  theme:          ${settings.theme || gfx.theme || "(default)"}`,
           `  editor.style:   ${editor.style ?? "static"} (also: unicode|relative; legacy: joinedUnicode|animated)`,
@@ -2956,7 +2999,7 @@ export default function piGraphicsExtension(pi) {
           `  active preset:  ${Number.isFinite(Number(gfx.activePresetIndex)) ? Number(gfx.activePresetIndex) + 1 : "none"}/${presets.length}`,
           `  cursor:         ${cursorAnchorDiagnosticLine()}`,
           "",
-          "Usage: /gfx next | /gfx presets | /gfx themes | /gfx box audit | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor audit | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
+          "Usage: /gfx status | /gfx save | /gfx next | /gfx presets | /gfx themes | /gfx box audit | /gfx box status | /gfx box summary | /gfx box effects | /gfx box tokens | /gfx box doctor | /gfx box preview | /gfx cursor audit | /gfx cursor preview | /gfx cursor status | /gfx cursor doctor | /gfx cursor clear | /gfx preset <n|name>",
           "       /gfx editor static|unicode|relative  (legacy aliases: joinedUnicode, animated)",
           "       /gfx editor-animation on|off | /gfx unicode-mode fill|topLeft",
           "       /gfx border-style gradient|glass|chrome|geometric",
@@ -2974,14 +3017,18 @@ export default function piGraphicsExtension(pi) {
       if (tokens.length === 0) { await showGfxSettingsWindow(ctx, settings, gfx, editor); return; }
       const action = String(tokens[0] || "").toLowerCase();
       if (action === "status" || action === "show" || action === "info") { describe(); return; }
+      if (action === "save") {
+        if (!hasUnsavedGfxChanges()) { ctx.ui.notify("Pi Graphics: no unsaved runtime changes to save.", "info"); return; }
+        if (saveGfxRuntimeOverride(ctx)) ctx.ui.notify(`Saved Pi Graphics settings to ${path}.`, "info");
+        return;
+      }
       if (action === "debug") {
         gfx.debug = !gfx.debug;
         gfx.debugPlaceholders = gfx.debug;
         settingsEnv = settingsEnvFromPiGraphics(settings);
-        try { saveSettings(settings); } catch (error) { ctx.ui.notify(`Failed to write settings: ${error?.message || String(error)}`, "error"); return; }
         setDebugPanel(ctx, settings);
-        applyGfxSettingsLive(ctx, settings);
-        ctx.ui.notify(`Pi Graphics debug ${gfx.debug ? "on" : "off"}. Placeholder diagnostics ${gfx.debugPlaceholders ? "visible" : "hidden"}.`, "info");
+        applyGfxSettingsRuntimeOnly(ctx, settings);
+        ctx.ui.notify(`Pi Graphics debug ${gfx.debug ? "on" : "off"}. Placeholder diagnostics ${gfx.debugPlaceholders ? "visible" : "hidden"}. (runtime only — /gfx save to persist)`, "info");
         return;
       }
       if (action === "next" || action === "cycle") { await cycleGfxPreset(ctx, 1); return; }
@@ -3051,7 +3098,8 @@ export default function piGraphicsExtension(pi) {
         const preset = Number.isFinite(number) ? presets[Math.trunc(number) - 1] : presets.find((p) => String(p.name || "").toLowerCase() === query.toLowerCase());
         if (!preset) { ctx.ui.notify(`Unknown Pi Graphics preset: ${query}`, "warning"); return; }
         applyGfxPreset(settings, preset);
-        await applyGfxSettingsAndReload(ctx, settings, `Pi Graphics preset ${preset.index + 1}/${presets.length}: ${preset.name || "unnamed"}. Reloading...`);
+        applyGfxSettingsRuntimeOnly(ctx, settings);
+        ctx.ui.notify(`Pi Graphics preset ${preset.index + 1}/${presets.length}: ${preset.name || "unnamed"}. (runtime only — /gfx save to persist)`, "info");
         return;
       }
       let changed = false;
@@ -3139,7 +3187,8 @@ export default function piGraphicsExtension(pi) {
       }
       if (!changed) { describe(); return; }
       normalizeEditorGraphicsCombination(editor);
-      await applyGfxSettingsAndReload(ctx, settings);
+      applyGfxSettingsRuntimeOnly(ctx, settings);
+      ctx.ui.notify("Pi Graphics settings applied (runtime only — /gfx save to persist).", "info");
     },
   });
 
