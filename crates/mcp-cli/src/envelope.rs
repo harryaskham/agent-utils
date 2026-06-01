@@ -236,3 +236,54 @@ where
     writer.write_all(b"\n")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn success_envelope_round_trips_to_equal_typed_value() {
+        // Consumers parse responses back into typed JsonEnvelope<T>; assert a
+        // serialized success envelope deserializes to an equal value, not just
+        // valid JSON.
+        let envelope: JsonEnvelope<Value> =
+            JsonEnvelope::success_for("list", json!({ "crate": "mcp-cli" }));
+        let text = serde_json::to_string(&envelope).expect("serialize success envelope");
+        let parsed: JsonEnvelope<Value> =
+            serde_json::from_str(&text).expect("deserialize success envelope");
+        assert_eq!(parsed, envelope);
+        assert!(!parsed.is_error());
+    }
+
+    #[test]
+    fn error_envelope_round_trips_to_equal_typed_value() {
+        let envelope: JsonEnvelope<Value> = JsonEnvelope::error_for(
+            "call",
+            JsonError::new(ErrorCategory::Timeout, "deadline_exceeded", "timed out")
+                .with_details(json!({ "after_ms": 1000 })),
+        );
+        let text = serde_json::to_string(&envelope).expect("serialize error envelope");
+        let parsed: JsonEnvelope<Value> =
+            serde_json::from_str(&text).expect("deserialize error envelope");
+        assert_eq!(parsed, envelope);
+        assert!(parsed.is_error());
+    }
+
+    #[test]
+    fn none_details_are_omitted_from_error_json() {
+        // details uses skip_serializing_if = "Option::is_none"; consumers rely
+        // on the key being absent (not null) when there are no details.
+        let envelope: JsonEnvelope<Value> = JsonEnvelope::error(JsonError::new(
+            ErrorCategory::Validation,
+            "invalid_request",
+            "bad input",
+        ));
+        let value = serde_json::to_value(&envelope).expect("serialize to value");
+        let error = value.get("error").expect("error object present");
+        assert!(
+            error.get("details").is_none(),
+            "None details must be omitted entirely, got: {error}"
+        );
+    }
+}
