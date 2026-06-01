@@ -1585,9 +1585,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /terminal-driven APNG\/native frame loops have not repainted/);
   assert.match(source, /buildAnimationStopCommand\(\{ imageId: animImageId/);
   assert.match(source, /function buildSegmentedFooterLine/);
-  assert.match(source, /function approximateVisibleCells\(text\)/);
-  assert.match(source, /function truncateAnsiToVisibleWidth\(text, maxWidth\)/);
-  assert.match(source, /function clampRenderedRowsToWidth\(lines, width\)/);
+  assert.match(surface, /function approximateVisibleCells\(text\)/);
+  assert.match(surface, /function truncateAnsiToVisibleWidth\(text, maxWidth\)/);
+  assert.match(surface, /function clampRenderedRowsToWidth\(lines, width\)/);
   assert.match(source, /clampRenderedLineToWidth\(buildSegmentedFooterLine\(ctx, footerData, width, pi, activeThemeRef\), width\)/);
   assert.match(source, /function compactFooterPath\(path, threshold = 0\)/);
   assert.match(source, /\.map\(compactPathSegment\)/);
