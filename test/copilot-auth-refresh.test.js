@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import copilotAuthRefreshExtension, { installCopilotAuthRefresh } from "../extensions/copilot-auth-refresh.js";
+import copilotAuthRefreshExtension, { installCopilotAuthRefresh, MAX_COPILOT_AUTH_RETRIES } from "../extensions/copilot-auth-refresh.js";
 
 test("copilot auth refresh patches hasConfiguredAuth for stale GitHub Copilot auth", () => {
   let reloads = 0;
@@ -84,6 +84,56 @@ test("copilot auth refresh agent_end fallback reloads and queues one retry", asy
   assert.equal(sent.length, 1);
   assert.match(sent[0].text, /Retry the previous request now:\n\ndo the work/);
   assert.deepEqual(sent[0].options, { deliverAs: "followUp" });
+});
+
+test("copilot auth refresh bounds retries across distinct failure timestamps (no storm)", async () => {
+  const handlers = new Map();
+  const sent = [];
+  const notes = [];
+  const pi = {
+    on(name, handler) { handlers.set(name, handler); },
+    registerCommand() {},
+    sendUserMessage(text, options) { sent.push({ text, options }); },
+  };
+  copilotAuthRefreshExtension(pi);
+  const ctx = {
+    modelRegistry: { authStorage: { reload() {} } },
+    ui: { notify(message, level) { notes.push({ message, level }); } },
+  };
+  const makeEvent = (ts) => ({ messages: [
+    { role: "user", content: [{ type: "text", text: "do the work" }] },
+    { role: "assistant", stopReason: "error", errorMessage: "No API key for provider: github-copilot", timestamp: ts },
+  ] });
+  // Five successive failures with DISTINCT timestamps but the same retry text.
+  for (let ts = 1; ts <= 5; ts += 1) {
+    await handlers.get("agent_end")(makeEvent(ts), ctx);
+  }
+  // Injections are capped at MAX_COPILOT_AUTH_RETRIES regardless of distinct timestamps.
+  assert.equal(sent.length, MAX_COPILOT_AUTH_RETRIES);
+  // After the cap, a terminal error notify is emitted instead of more injections.
+  assert.ok(notes.some((n) => n.level === "error" && /not re-injecting/i.test(n.message)));
+});
+
+test("copilot auth refresh resets retry budget when the request text changes", async () => {
+  const handlers = new Map();
+  const sent = [];
+  const pi = {
+    on(name, handler) { handlers.set(name, handler); },
+    registerCommand() {},
+    sendUserMessage(text, options) { sent.push({ text, options }); },
+  };
+  copilotAuthRefreshExtension(pi);
+  const ctx = { modelRegistry: { authStorage: { reload() {} } }, ui: { notify() {} } };
+  const makeEvent = (ts, work) => ({ messages: [
+    { role: "user", content: [{ type: "text", text: work }] },
+    { role: "assistant", stopReason: "error", errorMessage: "No API key for provider: github-copilot", timestamp: ts },
+  ] });
+  // Exhaust budget on request A.
+  for (let ts = 1; ts <= 4; ts += 1) await handlers.get("agent_end")(makeEvent(ts, "work A"), ctx);
+  assert.equal(sent.length, MAX_COPILOT_AUTH_RETRIES);
+  // A different request text gets a fresh budget.
+  await handlers.get("agent_end")(makeEvent(10, "work B"), ctx);
+  assert.equal(sent.length, MAX_COPILOT_AUTH_RETRIES + 1);
 });
 
 test("package.json advertises copilot auth refresh extension", async () => {

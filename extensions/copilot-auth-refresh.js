@@ -88,8 +88,20 @@ function isCopilotMissingApiKeyError(message) {
     /No API key (?:for provider|found for).*github-copilot|provider:\s*github-copilot/i.test(text);
 }
 
+// Maximum number of auto-injected retries for a single underlying request
+// before we stop re-injecting and surface a terminal notice. This bounds the
+// reply-storm / context-fill failure mode where each successive copilot auth
+// failure carries a fresh assistant-error timestamp and would otherwise pass a
+// timestamp-keyed dedup guard forever.
+export const MAX_COPILOT_AUTH_RETRIES = 2;
+
 export default function copilotAuthRefreshExtension(pi) {
   let lastFallbackRetryKey = null;
+  // Bounded retry budget keyed on the stable retry text (the user request being
+  // retried). Distinct failure timestamps with the same retry text share one
+  // budget so transient repeated auth failures cannot inject unbounded retries.
+  let retryBudgetText = null;
+  let retryBudgetCount = 0;
   const patch = (ctx) => installCopilotAuthRefresh(ctx?.modelRegistry, {
     notify(message) { ctx?.ui?.notify?.(message, "info"); },
   });
@@ -108,9 +120,21 @@ export default function copilotAuthRefreshExtension(pi) {
     const retryKey = `${lastAssistant?.timestamp || ""}:${retryText}`;
     if (retryKey === lastFallbackRetryKey) return;
     lastFallbackRetryKey = retryKey;
+
+    // Reset the bounded budget when the underlying request text changes.
+    if (retryText !== retryBudgetText) {
+      retryBudgetText = retryText;
+      retryBudgetCount = 0;
+    }
+    if (retryBudgetCount >= MAX_COPILOT_AUTH_RETRIES) {
+      ctx?.ui?.notify?.(`GitHub Copilot auth still failing after ${MAX_COPILOT_AUTH_RETRIES} automatic retries; not re-injecting. Run /copilot-auth-refresh or check Copilot auth.`, "error");
+      return;
+    }
+    retryBudgetCount += 1;
+
     reloadRegistryAuthStorage(ctx?.modelRegistry);
     patch(ctx);
-    ctx?.ui?.notify?.("GitHub Copilot auth looked stale after a provider error; reloaded auth storage and queued one retry.", "warning");
+    ctx?.ui?.notify?.(`GitHub Copilot auth looked stale after a provider error; reloaded auth storage and queued one retry (${retryBudgetCount}/${MAX_COPILOT_AUTH_RETRIES}).`, "warning");
     pi.sendUserMessage(`GitHub Copilot auth was refreshed after a transient missing-token error. Retry the previous request now:\n\n${retryText}`, { deliverAs: "followUp" });
   });
 
