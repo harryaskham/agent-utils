@@ -949,7 +949,9 @@ mcp_servers:
             response.matches
         );
         assert!(
-            response.message.contains("no configured skill or MCP server matched"),
+            response
+                .message
+                .contains("no configured skill or MCP server matched"),
             "not_found message should explain the miss, got: {}",
             response.message
         );
