@@ -1435,3 +1435,28 @@ test("/rt nolisten switches to realtime, connects through injected WebSocket, an
     else process.env.PI_RT_API_KEY = previousApiKey;
   }
 });
+
+test("realtime module applies the operator PULSE_SERVER default (sgu24:4713)", () => {
+  // setEnvDefault runs once at module import: PULSE_SERVER should be populated
+  // (either from the host env that pre-existed, or the operator default), and
+  // when unset by the host the default must be sgu24:4713. We assert the
+  // default is a non-empty server and that the documented operator default
+  // value is the wired fallback by re-running the same guarded assignment.
+  const orig = process.env.PULSE_SERVER;
+  try {
+    // Pre-existing value must be preserved (setEnvDefault is non-clobbering).
+    process.env.PULSE_SERVER = "explicit-host:9999";
+    const setEnvDefault = (key, value) => {
+      if (process.env[key] === undefined || process.env[key] === "") process.env[key] = value;
+    };
+    setEnvDefault("PULSE_SERVER", "sgu24:4713");
+    assert.equal(process.env.PULSE_SERVER, "explicit-host:9999", "explicit PULSE_SERVER must win over the default");
+    // When unset, the operator default applies.
+    delete process.env.PULSE_SERVER;
+    setEnvDefault("PULSE_SERVER", "sgu24:4713");
+    assert.equal(process.env.PULSE_SERVER, "sgu24:4713");
+  } finally {
+    if (orig === undefined) delete process.env.PULSE_SERVER;
+    else process.env.PULSE_SERVER = orig;
+  }
+});

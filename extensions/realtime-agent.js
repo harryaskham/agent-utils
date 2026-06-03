@@ -179,6 +179,9 @@ function setEnvDefault(key, value) {
   }
 }
 setEnvDefault("PI_RT_AUDIO_BACKEND", "pulse");
+// Default Pulse network server for /rt and /stt (operator default: sgu24:4713).
+// Only applied when PULSE_SERVER is unset, so an explicit env/runtime override wins.
+setEnvDefault("PULSE_SERVER", "sgu24:4713");
 setEnvDefault("PI_RT_VAD_THRESHOLD", "0.7");
 setEnvDefault("PI_RT_VAD_SILENCE_MS", "1100");
 setEnvDefault("PI_RT_TRANSCRIPTION_MODEL", "whisper-1");
@@ -196,7 +199,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=host:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 summary=true fork=true chime=false start=vad";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 summary=true fork=true chime=false start=vad. Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
