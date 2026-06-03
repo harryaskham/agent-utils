@@ -8,7 +8,7 @@ import {
   readPngDimensions,
   stableKittyImageId,
 } from "./kitty-graphics.js";
-import { buildTendrilCommand, tendrilCommandSummary } from "./tendril-command.js";
+import { buildTendrilCommand, tendrilCommandSummary, tendrilBridgeConfig } from "./tendril-command.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
@@ -43,6 +43,7 @@ const USAGE = `Usage:
 /tendril stream status|stop                        inspect or stop active stream
 /tendril settings                                  open interactive Tendril settings overlay
 Flags: --path-only omits image content; --no-list omits default tendril list context
+Remote: --remote <host> targets a remote Tendril bridge for this command (cross-machine capture); --local forces the local bridge; --wsl-tunnel / --no-wsl-tunnel toggle the WSL hop
 /tendril help                                      show this help`;
 
 let completeForDescribe = null;
@@ -86,8 +87,8 @@ function parseJsonEnvelope(stdout, commandName = "tendril") {
   }
 }
 
-export async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEOUT_MS } = {}) {
-  const tendril = buildTendrilCommand(args);
+export async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEOUT_MS, override } = {}) {
+  const tendril = buildTendrilCommand(args, process.env, override || {});
   const result = await pi.exec(tendril.command, tendril.args, { signal, timeout });
   if (result.code !== 0 && !String(result.stdout || "").trim()) {
     const message = result.stderr || `tendril exited with code ${result.code}`;
@@ -146,7 +147,8 @@ function listTargetsText(envelope) {
 function parseShareFlags(tokens) {
   const flags = { pathOnly: false, includeList: true };
   const remaining = [];
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
     const normalized = String(token || "").trim().toLowerCase();
     if (["--path-only", "--pathonly", "pathonly", "pathonly=true", "path-only=true", "image=false", "includeimage=false"].includes(normalized)) {
       flags.pathOnly = true;
@@ -162,6 +164,29 @@ function parseShareFlags(tokens) {
     }
     if (["--include-list", "--list", "includelist=true", "include-list=true", "list=true"].includes(normalized)) {
       flags.includeList = true;
+      continue;
+    }
+    // Per-call bridge override: --remote <host>, --remote=<host>, or --local
+    // to force the local bridge for this command only.
+    if (normalized === "--local" || normalized === "--no-remote" || normalized === "remote=") {
+      flags.remote = "";
+      continue;
+    }
+    if (normalized.startsWith("--remote=") || normalized.startsWith("remote=")) {
+      flags.remote = String(token).slice(String(token).indexOf("=") + 1).trim();
+      continue;
+    }
+    if (normalized === "--remote" || normalized === "remote") {
+      flags.remote = String(tokens[i + 1] || "").trim();
+      i += 1;
+      continue;
+    }
+    if (["--wsl-tunnel", "--wsltunnel", "wsl-tunnel=true", "wsltunnel=true"].includes(normalized)) {
+      flags.wslTunnel = true;
+      continue;
+    }
+    if (["--no-wsl-tunnel", "--no-wsltunnel", "wsl-tunnel=false", "wsltunnel=false"].includes(normalized)) {
+      flags.wslTunnel = false;
       continue;
     }
     remaining.push(token);
@@ -280,12 +305,12 @@ function resolveVisionModel(ctx) {
   throw new Error(`No default Tendril vision model is registered. Tried: ${specs.join(", ")}.${textOnly.length ? ` Text-only matches: ${textOnly.join(", ")}.` : ""}${missing.length ? ` Missing: ${missing.join(", ")}.` : ""}`);
 }
 
-async function resolveTendrilTarget(pi, { kind, target }, signal) {
+async function resolveTendrilTarget(pi, { kind, target, override }, signal) {
   if (!target) throw new Error(`Missing ${kind} target. Use /tendril ${kind} <id-or-name> [prompt].`);
   const fallback = { kind, id: String(target), label: String(target), source: "explicit" };
   let envelope;
   try {
-    envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: DEFAULT_TIMEOUT_MS });
+    envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: DEFAULT_TIMEOUT_MS, override });
   } catch {
     return fallback;
   }
@@ -335,24 +360,24 @@ async function previewInKitty(pngBase64, outputPath, { streamKey } = {}) {
   }
 }
 
-async function tendrilListContextText(pi, signal) {
+async function tendrilListContextText(pi, signal, override) {
   try {
-    const envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: DEFAULT_TIMEOUT_MS });
+    const envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: DEFAULT_TIMEOUT_MS, override });
     return listTargetsText(envelope);
   } catch (error) {
     return `Tendril targets unavailable: ${error.message || String(error)}`;
   }
 }
 
-async function buildShareMessageText(pi, signal, { baseText, captured, includeList = true, pathOnly = false }) {
+async function buildShareMessageText(pi, signal, { baseText, captured, includeList = true, pathOnly = false, override }) {
   const lines = [baseText, `Saved screenshot: ${captured.outputPath}`];
   if (pathOnly) lines.push("Image content omitted because pathOnly=true.");
-  if (includeList !== false) lines.push("", await tendrilListContextText(pi, signal));
+  if (includeList !== false) lines.push("", await tendrilListContextText(pi, signal, override));
   return lines.join("\n");
 }
 
-async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight }, signal) {
-  const resolved = await resolveTendrilTarget(pi, { kind, target }, signal);
+async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight, override }, signal) {
+  const resolved = await resolveTendrilTarget(pi, { kind, target, override }, signal);
   const dir = getCaptureDir(ctx);
   await mkdir(dir, { recursive: true });
   const outputPath = path.join(dir, `${timestampForFilename()}-${sanitizeFilenamePart(kind)}-${sanitizeFilenamePart(resolved.id)}.png`);
@@ -366,19 +391,20 @@ async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight }, 
   ];
   if (maxWidth !== undefined) args.push("--max-width", String(maxWidth));
   if (maxHeight !== undefined) args.push("--max-height", String(maxHeight));
-  const envelope = await runTendrilJson(pi, args, { signal, timeout: DEFAULT_TIMEOUT_MS + 5_000 });
+  const envelope = await runTendrilJson(pi, args, { signal, timeout: DEFAULT_TIMEOUT_MS + 5_000, override });
   const data = await readFile(outputPath, "base64");
   return { outputPath, envelope, data, target: resolved };
 }
 
-async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = true, pathOnly = false }, signal) {
-  const captured = await capturePngTarget(pi, ctx, { kind, target: target || id }, signal);
+async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = true, pathOnly = false, override }, signal) {
+  const captured = await capturePngTarget(pi, ctx, { kind, target: target || id, override }, signal);
   const defaultPrompt = `Please inspect this Tendril ${kind} screenshot (${captured.target.id}).`;
   const text = await buildShareMessageText(pi, signal, {
     baseText: prompt?.trim() || defaultPrompt,
     captured,
     includeList,
     pathOnly,
+    override,
   });
   const content = pathOnly
     ? text
@@ -428,12 +454,12 @@ async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
   return { text, model: `${model.provider}/${model.id}`, usage: response.usage, stopReason: response.stopReason };
 }
 
-async function describeTarget(pi, ctx, { kind, target, id, prompt, includeList = true }, signal) {
-  const captured = await capturePngTarget(pi, ctx, { kind, target: target || id }, signal);
+async function describeTarget(pi, ctx, { kind, target, id, prompt, includeList = true, override }, signal) {
+  const captured = await capturePngTarget(pi, ctx, { kind, target: target || id, override }, signal);
   const description = await describeImageData(ctx, { kind, id: captured.target.id, prompt, data: captured.data }, signal);
   const focus = prompt?.trim() ? `\n\nUser focus: ${prompt.trim()}` : "";
   const base = `Tendril ${kind} ${captured.target.id} screenshot description from ${description.model}:${focus}\n\n${description.text}`;
-  const message = await buildShareMessageText(pi, signal, { baseText: base, captured, includeList, pathOnly: false });
+  const message = await buildShareMessageText(pi, signal, { baseText: base, captured, includeList, pathOnly: false, override });
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(message, options);
   await previewInKitty(captured.data, captured.outputPath);
@@ -448,6 +474,7 @@ async function sendStreamFrame(pi, ctx, stream) {
     target: stream.target.id,
     maxWidth: STREAM_MAX_WIDTH,
     maxHeight: STREAM_MAX_HEIGHT,
+    override: stream.override,
   }, ctx.signal);
   const frameText = stream.prompt || `Tendril stream frame ${stream.frame} from ${stream.kind} ${stream.target.id}.`;
   const includeList = stream.includeList !== false && stream.frame === 1;
@@ -456,6 +483,7 @@ async function sendStreamFrame(pi, ctx, stream) {
     captured,
     includeList,
     pathOnly: stream.pathOnly,
+    override: stream.override,
   });
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(stream.pathOnly ? text : [
@@ -488,6 +516,17 @@ function normalizeKind(kind = "window") {
   throw new Error(`Unsupported Tendril target kind: ${kind}. Use window, display, or screen.`);
 }
 
+// Build a per-call bridge override from tool params or parsed slash flags so a
+// single session can transparently target Tendril on different machines. Only
+// keys that are explicitly present are forwarded, letting buildTendrilCommand
+// fall back to env defaults for anything omitted.
+function overrideFromParams(params = {}) {
+  const override = {};
+  if (params.remote !== undefined) override.remote = params.remote;
+  if (params.wslTunnel !== undefined) override.wslTunnel = params.wslTunnel;
+  return Object.keys(override).length ? override : undefined;
+}
+
 function toolContext(signal) {
   return {
     cwd: process.cwd(),
@@ -505,8 +544,8 @@ export function createTendrilShareState() {
   return { stream: null };
 }
 
-async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, prompt, includeList = true, pathOnly = false }) {
-  const resolved = await resolveTendrilTarget(pi, { kind, target: target || id }, ctx.signal);
+async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, prompt, includeList = true, pathOnly = false, override }) {
+  const resolved = await resolveTendrilTarget(pi, { kind, target: target || id, override }, ctx.signal);
   if (state.stream?.timer) clearInterval(state.stream.timer);
   const intervalMs = clampInteger(
     intervalSeconds === undefined ? process.env.TENDRIL_SHARE_STREAM_INTERVAL_MS : Number(intervalSeconds) * 1000,
@@ -521,6 +560,7 @@ async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, 
     prompt: prompt?.trim() || "",
     includeList,
     pathOnly,
+    override,
     frame: 0,
     lastFrameAt: null,
     lastOutputPath: null,
@@ -627,13 +667,14 @@ async function showTendrilSettingsWindow(ctx) {
 
 async function handleTendrilCommand(pi, args, ctx, state, forcedAction) {
   const parsed = parseCaptureArgs(args, forcedAction);
+  parsed.override = overrideFromParams(parsed);
   try {
     if (["help", "usage", "?"].includes(parsed.action)) {
       ctx.ui.notify(USAGE, "info");
       return;
     }
     if (parsed.action === "list") {
-      const envelope = await runTendrilJson(pi, ["list", "--json"], { signal: ctx.signal, timeout: DEFAULT_TIMEOUT_MS });
+      const envelope = await runTendrilJson(pi, ["list", "--json"], { signal: ctx.signal, timeout: DEFAULT_TIMEOUT_MS, override: parsed.override });
       ctx.ui.notify(listTargetsText(envelope), "info");
       return;
     }
@@ -699,11 +740,13 @@ export default function tendrilShareExtension(pi) {
       type: "object",
       properties: {
         timeoutMs: { type: "number", description: "List timeout in milliseconds. Defaults to 30000." },
+        remote: { type: "string", description: "Per-call Tendril --remote host override for transparent cross-machine access. Empty string forces the local bridge even when AGENT_UTILS_TENDRIL_REMOTE is set." },
+        wslTunnel: { type: "boolean", description: "Per-call --wsl-tunnel override for this remote host." },
       },
       additionalProperties: false,
     },
     async execute(_toolCallId, params = {}, signal) {
-      const envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: params.timeoutMs || DEFAULT_TIMEOUT_MS });
+      const envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: params.timeoutMs || DEFAULT_TIMEOUT_MS, override: overrideFromParams(params) });
       return textResult(listTargetsText(envelope), envelope.data || envelope);
     },
   });
@@ -722,6 +765,8 @@ export default function tendrilShareExtension(pi) {
         includeList: { type: "boolean", description: "Include current tendril list target context in the text result. Defaults to true." },
         maxWidth: { type: "number", description: "Optional maximum screenshot width passed to Tendril." },
         maxHeight: { type: "number", description: "Optional maximum screenshot height passed to Tendril." },
+        remote: { type: "string", description: "Per-call Tendril --remote host override for transparent cross-machine capture. Empty string forces the local bridge even when AGENT_UTILS_TENDRIL_REMOTE is set." },
+        wslTunnel: { type: "boolean", description: "Per-call --wsl-tunnel override for this remote host." },
       },
       required: ["target"],
       additionalProperties: false,
@@ -729,11 +774,13 @@ export default function tendrilShareExtension(pi) {
     async execute(_toolCallId, params = {}, signal) {
       const kind = normalizeKind(params.kind || "window");
       const ctx = toolContext(signal);
+      const override = overrideFromParams(params);
       const captured = await capturePngTarget(pi, ctx, {
         kind,
         target: params.target,
         maxWidth: params.maxWidth,
         maxHeight: params.maxHeight,
+        override,
       }, signal);
       const focus = params.prompt ? `\nFocus: ${params.prompt}` : "";
       const text = await buildShareMessageText(pi, signal, {
@@ -741,6 +788,7 @@ export default function tendrilShareExtension(pi) {
         captured,
         includeList: params.includeList !== false,
         pathOnly: Boolean(params.pathOnly),
+        override,
       });
       return {
         content: Boolean(params.pathOnly) ? [{ type: "text", text }] : [
@@ -766,6 +814,8 @@ export default function tendrilShareExtension(pi) {
         includeList: { type: "boolean", description: "Include current tendril list target context in the text result. Defaults to true." },
         maxWidth: { type: "number", description: "Optional maximum screenshot width passed to Tendril." },
         maxHeight: { type: "number", description: "Optional maximum screenshot height passed to Tendril." },
+        remote: { type: "string", description: "Per-call Tendril --remote host override for transparent cross-machine capture. Empty string forces the local bridge even when AGENT_UTILS_TENDRIL_REMOTE is set." },
+        wslTunnel: { type: "boolean", description: "Per-call --wsl-tunnel override for this remote host." },
       },
       required: ["target"],
       additionalProperties: false,
@@ -773,11 +823,13 @@ export default function tendrilShareExtension(pi) {
     async execute(_toolCallId, params = {}, signal) {
       const kind = normalizeKind(params.kind || "window");
       const ctx = toolContext(signal);
+      const override = overrideFromParams(params);
       const captured = await capturePngTarget(pi, ctx, {
         kind,
         target: params.target,
         maxWidth: params.maxWidth,
         maxHeight: params.maxHeight,
+        override,
       }, signal);
       const focus = params.prompt ? `\nUser focus: ${params.prompt}` : "";
       const text = await buildShareMessageText(pi, signal, {
@@ -785,6 +837,7 @@ export default function tendrilShareExtension(pi) {
         captured,
         includeList: params.includeList !== false,
         pathOnly: Boolean(params.pathOnly),
+        override,
       });
       return {
         content: Boolean(params.pathOnly) ? [{ type: "text", text }] : [
@@ -810,6 +863,8 @@ export default function tendrilShareExtension(pi) {
         prompt: { type: "string", description: "Optional prompt attached to each queued stream frame." },
         pathOnly: { type: "boolean", description: "Queue only text/path context and omit image content. Defaults to false." },
         includeList: { type: "boolean", description: "Include current tendril list target context in the first stream frame. Defaults to true." },
+        remote: { type: "string", description: "Per-call Tendril --remote host override for transparent cross-machine streaming. Empty string forces the local bridge even when AGENT_UTILS_TENDRIL_REMOTE is set." },
+        wslTunnel: { type: "boolean", description: "Per-call --wsl-tunnel override for this remote host." },
       },
       additionalProperties: false,
     },
@@ -829,6 +884,7 @@ export default function tendrilShareExtension(pi) {
         prompt: params.prompt,
         includeList: params.includeList !== false,
         pathOnly: Boolean(params.pathOnly),
+        override: overrideFromParams(params),
       });
       return textResult(streamStatusText(stream), { stream: { ...stream, timer: undefined } });
     },
@@ -843,12 +899,15 @@ export default function tendrilShareExtension(pi) {
       properties: {
         probe: { type: "boolean", description: "Run tendril list --json through the configured bridge. Defaults to true." },
         timeoutMs: { type: "number", description: "Probe timeout in milliseconds. Defaults to 30000." },
+        remote: { type: "string", description: "Per-call Tendril --remote host override to inspect a specific remote bridge. Empty string forces the local bridge even when AGENT_UTILS_TENDRIL_REMOTE is set." },
+        wslTunnel: { type: "boolean", description: "Per-call --wsl-tunnel override for this remote host." },
       },
       additionalProperties: false,
     },
     async execute(_toolCallId, params = {}, signal) {
-      const summary = tendrilCommandSummary();
-      const probe = params.probe === false ? null : await runTendrilJson(pi, ["list", "--json"], { signal, timeout: params.timeoutMs || DEFAULT_TIMEOUT_MS })
+      const override = overrideFromParams(params);
+      const summary = tendrilCommandSummary(process.env, override || {});
+      const probe = params.probe === false ? null : await runTendrilJson(pi, ["list", "--json"], { signal, timeout: params.timeoutMs || DEFAULT_TIMEOUT_MS, override })
         .then((envelope) => ({ status: envelope.status || "ok", targets: envelope.data?.targets?.length || 0 }))
         .catch((error) => ({ status: "error", error: error.message || String(error) }));
       const hint = classifyTendrilBridgeProbe(summary, probe);
@@ -888,6 +947,9 @@ export const __tendrilShareTest = {
   stopStream,
   buildTendrilCommand,
   tendrilCommandSummary,
+  tendrilBridgeConfig,
+  overrideFromParams,
+  parseShareFlags,
   classifyTendrilBridgeProbe,
   configuredDescribeModelFromSettings,
   describeModelConfig,

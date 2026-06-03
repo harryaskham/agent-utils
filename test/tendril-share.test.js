@@ -44,7 +44,7 @@ function makeHarness({ idle = true } = {}) {
     registerTool(tool) { tools.set(tool.name, tool); },
     async exec(command, args) {
       execCalls.push({ command, args });
-      if (args[0] === "list") {
+      if (args.includes("list")) {
         return {
           code: 0,
           stdout: JSON.stringify({
@@ -59,7 +59,7 @@ function makeHarness({ idle = true } = {}) {
           stderr: "",
         };
       }
-      if (args[0] === "capture") {
+      if (args.includes("capture")) {
         const outputPath = args[args.indexOf("--output") + 1];
         await writeFile(outputPath, ONE_PIXEL_PNG);
         return { code: 0, stdout: JSON.stringify({ status: "ok", data: { output: outputPath } }), stderr: "" };
@@ -488,5 +488,92 @@ test("tendril share helpers parse commands and JSON envelopes", () => {
     args: ["--remote", "ms-dev", "--wsl-tunnel", "list", "--json"],
     remote: "ms-dev",
     wslTunnel: true,
+    remoteSource: "env",
+    wslTunnelSource: "env",
   });
+});
+
+test("buildTendrilCommand applies per-call remote/wslTunnel overrides over env", () => {
+  const env = { AGENT_UTILS_TENDRIL_REMOTE: "ms-dev", AGENT_UTILS_TENDRIL_WSL_TUNNEL: "1" };
+  // Override targets a different host and disables the tunnel for this call only.
+  assert.deepEqual(
+    __tendrilShareTest.buildTendrilCommand(["list", "--json"], env, { remote: "astra", wslTunnel: false }),
+    {
+      command: "tendril",
+      args: ["--remote", "astra", "list", "--json"],
+      remote: "astra",
+      wslTunnel: false,
+      remoteSource: "override",
+      wslTunnelSource: "override",
+    },
+  );
+  // Empty-string remote override forces the local bridge even when env sets one.
+  const local = __tendrilShareTest.buildTendrilCommand(["list", "--json"], env, { remote: "" });
+  assert.deepEqual(local.args, ["--wsl-tunnel", "list", "--json"]);
+  assert.equal(local.remote, null);
+  assert.equal(local.remoteSource, "override");
+  assert.equal(local.wslTunnelSource, "env");
+  // Omitted override keys fall back to env defaults.
+  const fallback = __tendrilShareTest.buildTendrilCommand(["list", "--json"], env, {});
+  assert.deepEqual(fallback.args, ["--remote", "ms-dev", "--wsl-tunnel", "list", "--json"]);
+  assert.equal(fallback.remoteSource, "env");
+});
+
+test("overrideFromParams forwards only explicitly provided bridge keys", () => {
+  assert.equal(__tendrilShareTest.overrideFromParams({}), undefined);
+  assert.equal(__tendrilShareTest.overrideFromParams({ kind: "window", target: "4" }), undefined);
+  assert.deepEqual(__tendrilShareTest.overrideFromParams({ remote: "astra" }), { remote: "astra" });
+  assert.deepEqual(__tendrilShareTest.overrideFromParams({ remote: "", wslTunnel: true }), { remote: "", wslTunnel: true });
+});
+
+test("parseShareFlags parses --remote, --local, and --wsl-tunnel slash flags", () => {
+  assert.deepEqual(
+    __tendrilShareTest.parseShareFlags(["window", "Safari", "--remote", "astra", "--wsl-tunnel", "inspect"]),
+    { tokens: ["window", "Safari", "inspect"], flags: { pathOnly: false, includeList: true, remote: "astra", wslTunnel: true } },
+  );
+  assert.deepEqual(
+    __tendrilShareTest.parseShareFlags(["window", "4", "--remote=ms-dev"]),
+    { tokens: ["window", "4"], flags: { pathOnly: false, includeList: true, remote: "ms-dev" } },
+  );
+  assert.deepEqual(
+    __tendrilShareTest.parseShareFlags(["window", "4", "--local", "--no-wsl-tunnel"]),
+    { tokens: ["window", "4"], flags: { pathOnly: false, includeList: true, remote: "", wslTunnel: false } },
+  );
+});
+
+test("parseCaptureArgs threads remote override flags into the parsed command", () => {
+  const parsed = __tendrilShareTest.parseCaptureArgs("window Safari --remote astra inspect now");
+  assert.equal(parsed.action, "capture");
+  assert.equal(parsed.kind, "window");
+  assert.equal(parsed.target, "Safari");
+  assert.equal(parsed.remote, "astra");
+  assert.equal(parsed.prompt, "inspect now");
+});
+
+test("tendril_capture forwards a per-call remote override to the tendril bridge", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, tools, execCalls } = makeHarness();
+    tendrilShareExtension(pi);
+
+    await tools.get("tendril_capture").execute("call-1", { kind: "window", target: "4", remote: "astra", wslTunnel: true, includeList: false }, new AbortController().signal);
+
+    // Every tendril invocation (list resolution + capture) should carry the override prefix.
+    for (const call of execCalls) {
+      assert.equal(call.command, "tendril");
+      assert.equal(call.args[0], "--remote");
+      assert.equal(call.args[1], "astra");
+      assert.equal(call.args[2], "--wsl-tunnel");
+    }
+    const captureCall = execCalls.find((call) => call.args.includes("capture"));
+    assert.ok(captureCall, "expected a capture invocation");
+    assert.ok(captureCall.args.includes("--window"));
+    assert.ok(captureCall.args.includes("4"));
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
 });
