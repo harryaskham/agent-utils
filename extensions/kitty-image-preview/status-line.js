@@ -30,3 +30,21 @@ export function imageControlsLine(state, width) {
   if (state.items.length === 0) return "";
   return truncatePlainText(`controls: ${imageControlHint(state, { includeCount: true })}`, width);
 }
+
+// Default label for a captured screenshot, derived from the Tendril target and
+// capture time. Pure over its arguments. Extracted from kitty-image-preview.js
+// (bd-e1914a).
+export function defaultScreenshotLabel(target, date = new Date()) {
+  const name = target.title || target.name || target.app_name || target.id;
+  return `screenshot ${target.kind} ${name} ${date.toLocaleTimeString()}`;
+}
+
+// One-line human-readable summary of an active screenshot stream. Pure over the
+// `stream` object plus the current clock. Extracted from kitty-image-preview.js
+// (bd-e1914a).
+export function streamStatusLine(stream) {
+  if (!stream?.running) return "No kitty image preview stream is running.";
+  const elapsedSeconds = Math.max(0.001, (Date.now() - stream.startedAt) / 1000);
+  const fps = stream.frameCount / elapsedSeconds;
+  return `Streaming ${stream.target.kind} ${stream.target.id}: frames=${stream.frameCount} fps=${fps.toFixed(2)} interval=${stream.intervalMs}ms latest=${stream.latestPath || "none"}`;
+}

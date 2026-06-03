@@ -70,6 +70,8 @@ import {
   imageControlHint,
   imageStatusLine,
   imageControlsLine,
+  defaultScreenshotLabel,
+  streamStatusLine,
 } from "./kitty-image-preview/status-line.js";
 
 import {
@@ -893,11 +895,6 @@ function buildScreenshotOutputPath(ctx, params, target, date = new Date()) {
 // buildTendrilCaptureArgs is imported from
 // ./kitty-image-preview/cli-commands.js (extracted in bd-e1914a).
 
-function defaultScreenshotLabel(target, date = new Date()) {
-  const name = target.title || target.name || target.app_name || target.id;
-  return `screenshot ${target.kind} ${name} ${date.toLocaleTimeString()}`;
-}
-
 async function describeTendrilTargetFullResolution(pi, target, ctx, params, signal, onUpdate, fallbackItem) {
   if (!params.describe && params.describeIntervalSecs === undefined) return undefined;
   const dir = getDescribeTempDir(ctx);
@@ -949,13 +946,6 @@ async function cleanupStreamFiles(stream) {
   const files = [stream.framePaths?.[0], stream.framePaths?.[1]];
   if (stream.ownsSourcePath) files.push(stream.sourcePath);
   await Promise.all(files.filter(Boolean).map((file) => unlinkIfExists(file)));
-}
-
-function streamStatusLine(stream) {
-  if (!stream?.running) return "No kitty image preview stream is running.";
-  const elapsedSeconds = Math.max(0.001, (Date.now() - stream.startedAt) / 1000);
-  const fps = stream.frameCount / elapsedSeconds;
-  return `Streaming ${stream.target.kind} ${stream.target.id}: frames=${stream.frameCount} fps=${fps.toFixed(2)} interval=${stream.intervalMs}ms latest=${stream.latestPath || "none"}`;
 }
 
 // buildPlaywrightCliScreenshotArgs / buildPlaywrightCliScreenshotCommand are
