@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { displayPath } from "./display-path.js";
+import { headlessDisplaySummary } from "../lib/headless-display.js";
 
 function compactDoctorValue(value, limit = 180) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -72,6 +73,7 @@ export function renderDoctorReport({ rootSummary, catalog, playwrightCli, tendri
     `app automation doctor stateRoot=${displayPath(rootSummary.root, { root: rootSummary.root })} exists=${rootSummary.exists}`,
     `playwrightCli=${playwrightCli}`,
     `tendrilBridge command=${tendrilBridge.command} remote=${tendrilBridge.remote || "none"} wslTunnel=${tendrilBridge.wslTunnel}`,
+    `display=${headlessDisplaySummary()}`,
     tendrilProbe ? `tendrilProbe=${tendrilProbe.status}${tendrilProbe.targets != null ? ` targets=${tendrilProbe.targets}` : ""}${tendrilProbe.error ? ` error=${tendrilProbe.error}` : ""}` : null,
     msDevCdpRefresh ? `msDevCdpRefresh=${msDevCdpRefresh.status}${msDevCdpRefresh.ageMinutes != null ? ` age=${msDevCdpRefresh.ageMinutes}m` : ""}${msDevCdpRefresh.snapshots != null ? ` snapshots=${msDevCdpRefresh.snapshots}` : ""}${msDevCdpRefresh.failed != null ? ` failed=${msDevCdpRefresh.failed}` : ""}${failureStatuses ? ` failureStatuses=${failureStatuses}` : ""}${failureErrorKinds ? ` failureErrorKinds=${failureErrorKinds}` : ""}${msDevCdpRefresh.sshTargetConfigured != null ? ` sshTargetConfigured=${msDevCdpRefresh.sshTargetConfigured}` : ""}${msDevCdpRefresh.cdpPort != null ? ` cdpPort=${msDevCdpRefresh.cdpPort}` : ""}${msDevCdpRefresh.sshConnectTimeoutSeconds != null ? ` connectTimeout=${msDevCdpRefresh.sshConnectTimeoutSeconds}s` : ""}${msDevCdpRefresh.preflightAttempts != null ? ` preflightAttempts=${msDevCdpRefresh.preflightAttempts}` : ""}${msDevCdpRefresh.scriptTransfer ? ` scriptTransfer=${msDevCdpRefresh.scriptTransfer}` : ""}${msDevCdpRefresh.error ? ` error=${msDevCdpRefresh.error}` : ""}` : null,
     `catalogApps=${catalog.apps.map((app) => app.id).join(",")}`,

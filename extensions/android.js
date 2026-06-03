@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { ToolSchema as Type } from "./lib/tool-schema.js";
+import { headlessDisplaySummary } from "./lib/headless-display.js";
 
 const INSTALL_URL = "https://dl.google.com/android/cli/latest/linux_x86_64/install.sh";
 const INSTALL_COMMAND = `curl -fsSL ${INSTALL_URL} | bash`;
@@ -156,7 +157,7 @@ async function doctorDetails() {
   const emulator = findCommand("emulator");
   const sdkmanager = findCommand("sdkmanager");
   const adbDevices = adb ? await runCommand(adb, ["devices", "-l"], { timeoutMs: 10_000 }) : undefined;
-  return { androidHome: androidHome(), android, adb, emulator, sdkmanager, adbDevices };
+  return { androidHome: androidHome(), android, adb, emulator, sdkmanager, adbDevices, display: headlessDisplaySummary() };
 }
 
 export default function androidCliExtension(pi) {
@@ -176,6 +177,7 @@ export default function androidCliExtension(pi) {
         `emulator: ${details.emulator || "missing"}`,
         `sdkmanager: ${details.sdkmanager || "missing"}`,
         details.adbDevices ? `adb devices:\n${String(details.adbDevices.stdout || details.adbDevices.stderr || "").trim() || "(no output)"}` : "adb devices: unavailable",
+        `display: ${details.display}`,
         "",
         helpText(),
       ];
@@ -296,7 +298,7 @@ export default function androidCliExtension(pi) {
       const action = String(args || "help").trim().toLowerCase();
       if (action === "doctor" || action === "status") {
         const details = await doctorDetails();
-        ctx.ui?.notify?.([`Android CLI doctor`, `android: ${details.android || "missing"}`, `adb: ${details.adb || "missing"}`, `emulator: ${details.emulator || "missing"}`, `sdkmanager: ${details.sdkmanager || "missing"}`, "", helpText()].join("\n"), "info");
+        ctx.ui?.notify?.([`Android CLI doctor`, `android: ${details.android || "missing"}`, `adb: ${details.adb || "missing"}`, `emulator: ${details.emulator || "missing"}`, `sdkmanager: ${details.sdkmanager || "missing"}`, `display: ${details.display}`, "", helpText()].join("\n"), "info");
         return;
       }
       if (action === "install") {

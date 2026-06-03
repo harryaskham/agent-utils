@@ -9,6 +9,7 @@ import {
   stableKittyImageId,
 } from "./kitty-graphics.js";
 import { buildTendrilCommand, tendrilCommandSummary, tendrilBridgeConfig } from "./tendril-command.js";
+import { headlessDisplaySummary } from "./lib/headless-display.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
@@ -911,13 +912,15 @@ export default function tendrilShareExtension(pi) {
         .then((envelope) => ({ status: envelope.status || "ok", targets: envelope.data?.targets?.length || 0 }))
         .catch((error) => ({ status: "error", error: error.message || String(error) }));
       const hint = classifyTendrilBridgeProbe(summary, probe);
+      const display = headlessDisplaySummary();
       const lines = [
         `tendril bridge command=${summary.command} remote=${summary.remote || "none"} wslTunnel=${summary.wslTunnel}`,
         `argsPrefix=${summary.argsPrefix.join(" ") || "none"}`,
         probe ? `probe=${probe.status}${probe.targets != null ? ` targets=${probe.targets}` : ""}${probe.error ? ` error=${probe.error}` : ""}` : "probe=skipped",
+        `display=${display}`,
         hint ? `hint=${hint}` : "hint=none",
       ];
-      return { content: [{ type: "text", text: lines.join("\n") }], data: { summary, probe, hint } };
+      return { content: [{ type: "text", text: lines.join("\n") }], data: { summary, probe, hint, display } };
     },
   });
 

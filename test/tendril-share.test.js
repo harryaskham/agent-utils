@@ -220,6 +220,7 @@ test("tendril bridge doctor reports bridge settings and probes targets", async (
   const result = await tools.get("tendril_bridge_doctor").execute("call-1", {}, new AbortController().signal);
   assert.match(result.content[0].text, /wslTunnel=false/);
   assert.match(result.content[0].text, /probe=ok targets=2/);
+  assert.match(result.content[0].text, /^display=display (?:available|MISSING) \(/m);
   assert.match(result.content[0].text, /hint=none/);
   assert.deepEqual(execCalls[0], { command: "tendril", args: ["list", "--json"] });
 });

@@ -32,6 +32,14 @@ test("android extension registers install, update, doctor, screenshot, and strea
   assert.ok(commands.has("android"));
 });
 
+test("android_cli_doctor surfaces a headless-display diagnostic line", async () => {
+  const { tools } = makeHarness();
+  const result = await tools.get("android_cli_doctor").execute();
+  const text = result.content.map((c) => c.text || "").join("\n");
+  assert.match(text, /display: display (?:available|MISSING) \(/);
+  assert.ok(typeof result.details.display === "string" && result.details.display.length > 0);
+});
+
 test("android install and update tools are dry-run unless confirmed", async () => {
   const { tools } = makeHarness();
   const install = await tools.get("android_cli_install").execute("call-1", {}, null, null, { cwd: process.cwd() });
