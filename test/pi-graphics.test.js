@@ -1462,7 +1462,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /PI_GRAPHICS_EDITOR_CONTEXT_REDRAW/);
   assert.match(source, /pre-rendered Kitty frames are advanced by\n\s+\/\/ ensureManualAnimationLoop via a=a,c=<frame>/);
   assert.match(source, /if \(!editorDynamicHeatEnabled\(\) \|\| editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
-  assert.match(source, /function valueLooksLikeThinking\(value\)/);
+  assert.match(surface, /function valueLooksLikeThinking\(value\)/);
   assert.match(source, /let editorCursorImpulseCol = null/);
   assert.match(source, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE/);
   assert.match(source, /function editorTypingImpulseEnabled\(\)/);

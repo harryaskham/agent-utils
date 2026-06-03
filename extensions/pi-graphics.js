@@ -80,6 +80,7 @@ import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/se
 import { mixHexColor } from "./pi-graphics/color-utils.js";
 import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-truncate.js";
 import { approximateVisibleCells, clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
+import { normalizeUnicodeAnchorMode, valueLooksLikeThinking } from "./pi-graphics/anchor-thinking.js";
 import {
   formatFooterTokens,
   formatFooterPct,
@@ -303,12 +304,6 @@ export default function piGraphicsExtension(pi) {
     return "unicode";
   }
 
-  function normalizeUnicodeAnchorMode(raw) {
-    const value = String(raw || "").trim().toLowerCase();
-    if (["topleft", "top-left", "top_left", "anchor", "single", "joined", "joinedunicode"].includes(value)) return "topLeft";
-    return "fill";
-  }
-
   function boxUnicodeMode() {
     return normalizeUnicodeAnchorMode(gfxEnv().PI_GRAPHICS_BOX_UNICODE_MODE);
   }
@@ -507,12 +502,6 @@ export default function piGraphicsExtension(pi) {
     editorContextTimer = null;
     if (editorDynamicHeatEnabled()) requestEditorDecorativeRender();
     if (next === "thinking" && editorDynamicHeatEnabled()) requestEditorContextFrame();
-  }
-
-  function valueLooksLikeThinking(value) {
-    if (value?.type === "thinking" || value?.stage === "thinking" || value?.phase === "thinking") return true;
-    const text = typeof value === "string" ? value : typeof value?.label === "string" ? value.label : typeof value?.text === "string" ? value.text : "";
-    return /\b(thinking|reasoning|responding)\b/i.test(text);
   }
 
   function stepEditorHeat(now = Date.now()) {
