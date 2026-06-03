@@ -1,5 +1,4 @@
 import { copyFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   shellQuote,
@@ -14,6 +13,13 @@ import {
   truncatePlainText,
   renderPlaceholderLines,
 } from "./kitty-image-preview/text-utils.js";
+import {
+  getSessionScreenshotDir,
+  buildScreenshotOutputPath,
+  sessionTempId,
+  getStreamDir,
+  getDescribeTempDir,
+} from "./kitty-image-preview/session-paths.js";
 import {
   serializePublicState,
   restorePublicState,
@@ -868,30 +874,6 @@ async function resolveTendrilTarget(pi, params, signal) {
   throw new Error("No capture-capable Tendril targets found.");
 }
 
-function getSessionScreenshotDir(ctx, outputDir) {
-  if (outputDir) return resolveUserPath(ctx.cwd, outputDir);
-  if (process.env.KITTY_IMAGE_PREVIEW_SCREENSHOT_DIR) {
-    return resolveUserPath(ctx.cwd, process.env.KITTY_IMAGE_PREVIEW_SCREENSHOT_DIR);
-  }
-  const sessionFile = ctx.sessionManager?.getSessionFile?.();
-  if (sessionFile) {
-    const sessionId = sanitizeFilenamePart(path.basename(sessionFile).replace(/\.jsonl?$/i, ""));
-    return path.join(path.dirname(sessionFile), "kitty-image-preview-screenshots", sessionId);
-  }
-  return path.join(os.tmpdir(), "pi-kitty-image-preview", `pid-${process.pid}`);
-}
-
-function buildScreenshotOutputPath(ctx, params, target, date = new Date()) {
-  const dir = getSessionScreenshotDir(ctx, params.outputDir);
-  const filename = params.filename
-    ? sanitizeFilenamePart(params.filename.replace(/\.png$/i, ""))
-    : `${timestampForFilename(date)}-${sanitizeFilenamePart(target.kind)}-${sanitizeFilenamePart(target.id)}`;
-  return {
-    dir,
-    path: path.join(dir, `${filename}.png`),
-  };
-}
-
 // buildTendrilCaptureArgs is imported from
 // ./kitty-image-preview/cli-commands.js (extracted in bd-e1914a).
 
@@ -917,21 +899,6 @@ async function describeTendrilTargetFullResolution(pi, target, ctx, params, sign
   } finally {
     await unlinkIfExists(filePath).catch(() => {});
   }
-}
-
-function sessionTempId(ctx) {
-  const sessionFile = ctx.sessionManager?.getSessionFile?.();
-  return sessionFile
-    ? sanitizeFilenamePart(path.basename(sessionFile).replace(/\.jsonl?$/i, ""))
-    : `pid-${process.pid}`;
-}
-
-function getStreamDir(ctx) {
-  return path.join(os.tmpdir(), "pi-kitty-image-preview-stream", sessionTempId(ctx));
-}
-
-function getDescribeTempDir(ctx) {
-  return path.join(os.tmpdir(), "pi-kitty-image-preview-describe", sessionTempId(ctx));
 }
 
 async function unlinkIfExists(filePath) {
