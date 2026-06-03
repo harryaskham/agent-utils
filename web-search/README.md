@@ -26,6 +26,23 @@ uv run web-search-mcp \
   --max-output-tokens 16000
 ```
 
+## Build and test
+
+Run the Python test suite from the `web-search/` directory using `uv`, which
+resolves `uv.lock`, builds a `.venv`, and installs the `test` extra (`mcp` +
+`pytest`):
+
+```bash
+cd ~/cosmos/projects/agent-utils/web-search
+uv run --extra test python -m pytest
+```
+
+This is the canonical invocation. Plain `python3 -m pytest` fails with
+`ModuleNotFoundError` because of the `src`-layout, and
+`PYTHONPATH=src python3 -m pytest` still fails on `No module named 'mcp'` since
+the `mcp` dependency is not installed in the ambient environment. Using
+`uv run --extra test` avoids both problems.
+
 ## Nix
 
 Build from the subflake:
