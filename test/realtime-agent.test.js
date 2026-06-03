@@ -61,6 +61,25 @@ class FakeWebSocket {
 
 setRealtimeWebSocketConstructor(FakeWebSocket);
 
+// Shared helper for the WSS history-forwarding state-machine tests. Builds a
+// RealtimeSession with an already-open fake socket so forwardNewMessages /
+// forwardSummaryMessages / forwardMessage can be exercised directly and the
+// emitted conversation.item.create payloads inspected. (bd-c360c2)
+async function makeForwardingSession() {
+  const { __RealtimeSessionForTest } = await import("../extensions/realtime-agent.js");
+  const { makeInitialConfig } = await import("../extensions/lib/realtime-config.js");
+  const pi = { sendMessage() {}, sendUserMessage() {}, on() {} };
+  const session = new __RealtimeSessionForTest(pi, makeInitialConfig());
+  const ws = new FakeWebSocket();
+  ws.readyState = FakeWebSocket.OPEN;
+  session.ws = ws;
+  session.connected = true;
+  ws.sent.length = 0;
+  const items = () => ws.sent.filter((m) => m.type === "conversation.item.create");
+  const reset = () => { ws.sent.length = 0; };
+  return { session, ws, items, reset };
+}
+
 test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
   const state = new RealtimeStateController();
   assert.deepEqual(state.snapshot({ sttOnly: false }), {
@@ -1462,28 +1481,14 @@ test("realtime module applies the operator PULSE_SERVER default (sgu24:4713)", (
 });
 
 test("realtime forwarding does not re-inject self-authored assistant replies across turns", async () => {
-  const { __RealtimeSessionForTest } = await import("../extensions/realtime-agent.js");
-  const { makeInitialConfig } = await import("../extensions/lib/realtime-config.js");
-
-  const pi = { sendMessage() {}, sendUserMessage() {}, on() {} };
-  const session = new __RealtimeSessionForTest(pi, makeInitialConfig());
-
-  // Attach an already-open fake socket so send() succeeds and we can capture
-  // the conversation.item.create items forwarded into the WSS.
-  const ws = new FakeWebSocket();
-  ws.readyState = FakeWebSocket.OPEN;
-  session.ws = ws;
-  session.connected = true;
-  ws.sent.length = 0;
-
-  const itemsOf = (sent) => sent.filter((m) => m.type === "conversation.item.create");
+  const { session, ws, items: itemsOf } = await makeForwardingSession();
 
   // Turn 1: a single typed user message is forwarded as one user item.
   const turn1 = [
     { role: "user", content: [{ type: "text", text: "hello there" }] },
   ];
   session.forwardNewMessages(turn1);
-  let items = itemsOf(ws.sent);
+  let items = itemsOf();
   assert.equal(items.length, 1);
   assert.equal(items[0].item.role, "user");
   assert.equal(items[0].item.content[0].text, "hello there");
@@ -1509,7 +1514,7 @@ test("realtime forwarding does not re-inject self-authored assistant replies acr
     { role: "user", content: [{ type: "text", text: "what time is it?" }] },
   ];
   session.forwardNewMessages(turn2);
-  items = itemsOf(ws.sent);
+  items = itemsOf();
 
   // Only the new user message should have been forwarded.
   assert.equal(items.length, 1, "self-authored assistant reply must not be re-forwarded");
@@ -1524,8 +1529,146 @@ test("realtime forwarding does not re-inject self-authored assistant replies acr
   session.forwardNewMessages([
     { role: "assistant", provider: "anthropic", content: [{ type: "text", text: "external reply" }] },
   ]);
-  items = itemsOf(ws.sent);
+  items = itemsOf();
   assert.equal(items.length, 1);
   assert.equal(items[0].item.role, "assistant");
   assert.equal(items[0].item.content[0].text, "external reply");
+});
+
+// bd-c360c2: broader multi-turn coverage of the WSS history-forwarding state
+// machine — the site of the post-first-turn echo-injection bug.
+
+test("realtime forwarding cursor only emits the new tail each turn", async () => {
+  const { session, reset, items: itemsOf } = await makeForwardingSession();
+
+  // Turn 1.
+  session.forwardNewMessages([
+    { role: "user", content: [{ type: "text", text: "one" }] },
+  ]);
+  assert.equal(itemsOf().length, 1);
+  assert.equal(session.forwardedMessageCount, 1);
+
+  // Turn 2: history grows; only the appended user message is forwarded, never
+  // the already-sent prefix.
+  reset();
+  session.forwardNewMessages([
+    { role: "user", content: [{ type: "text", text: "one" }] },
+    { role: "user", content: [{ type: "text", text: "two" }] },
+  ]);
+  let items = itemsOf();
+  assert.equal(items.length, 1, "prefix must not be re-forwarded");
+  assert.equal(items[0].item.content[0].text, "two");
+  assert.equal(session.forwardedMessageCount, 2);
+
+  // Turn 3: a no-op call (history unchanged) forwards nothing.
+  reset();
+  session.forwardNewMessages([
+    { role: "user", content: [{ type: "text", text: "one" }] },
+    { role: "user", content: [{ type: "text", text: "two" }] },
+  ]);
+  assert.equal(itemsOf().length, 0, "unchanged history forwards nothing");
+  assert.equal(session.forwardedMessageCount, 2);
+});
+
+test("realtime forwarding dedups model-emitted tool calls but forwards tool results", async () => {
+  const { session, reset, items: itemsOf } = await makeForwardingSession();
+
+  // A tool call the live model already emitted server-side: its call_id is in
+  // callIdsEmittedByModel, so realtimeCallId returns it unchanged and the
+  // assistant tool_call must NOT be re-forwarded as a function_call item.
+  const modelCallId = "call_model_emitted";
+  session.callIdsEmittedByModel.add(modelCallId);
+
+  session.forwardNewMessages([
+    { role: "user", content: [{ type: "text", text: "use a tool" }] },
+    {
+      role: "assistant",
+      provider: "anthropic", // external provenance: text would forward, but...
+      content: [
+        { type: "text", text: "calling tool" },
+        { type: "toolCall", id: modelCallId, name: "do_thing", arguments: { a: 1 } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: modelCallId,
+      content: [{ type: "text", text: "tool output" }],
+    },
+  ]);
+
+  const items = itemsOf();
+  const fnCalls = items.filter((m) => m.item.type === "function_call");
+  const fnOutputs = items.filter((m) => m.item.type === "function_call_output");
+  assert.equal(fnCalls.length, 0, "model-emitted tool call must not be re-forwarded");
+  assert.equal(fnOutputs.length, 1, "tool result must be forwarded under the same call_id");
+  assert.equal(fnOutputs[0].item.call_id, modelCallId);
+  assert.equal(fnOutputs[0].item.output, "tool output");
+
+  // A tool call NOT previously emitted by the model is forwarded (with a
+  // remapped/echoed call_id) so cross-model tool history replays correctly.
+  reset();
+  session.forwardedMessageCount = 0;
+  session.forwardNewMessages([
+    { role: "user", content: [{ type: "text", text: "again" }] },
+    {
+      role: "assistant",
+      provider: "anthropic",
+      content: [{ type: "toolCall", id: "call_external", name: "do_thing", arguments: {} }],
+    },
+  ]);
+  const fnCalls2 = itemsOf().filter((m) => m.item.type === "function_call");
+  assert.equal(fnCalls2.length, 1, "external tool call must be forwarded");
+  assert.equal(fnCalls2[0].item.name, "do_thing");
+});
+
+test("realtime summary forwarding sends only the current turn on first call", async () => {
+  const { session, items: itemsOf } = await makeForwardingSession();
+  session.config.summaryContext = true;
+
+  // splitCurrentTurn keeps everything from the last user message onward as the
+  // current turn; earlier history is summarized into the system prompt instead
+  // of forwarded as conversation items.
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "old question" }] },
+    { role: "assistant", provider: "anthropic", content: [{ type: "text", text: "old answer" }] },
+    { role: "user", content: [{ type: "text", text: "current question" }] },
+  ];
+  session.forwardSummaryMessages(messages);
+
+  const items = itemsOf();
+  assert.equal(items.length, 1, "only the current-turn user message is forwarded");
+  assert.equal(items[0].item.role, "user");
+  assert.equal(items[0].item.content[0].text, "current question");
+  assert.equal(session.forwardedMessageCount, messages.length);
+
+  // Subsequent summary forwarding falls through to the normal tail cursor.
+  const next = [...messages, { role: "user", content: [{ type: "text", text: "follow up" }] }];
+  session.forwardSummaryMessages(next);
+  const items2 = itemsOf();
+  assert.equal(items2.length, 2, "second summary call forwards the new tail");
+  assert.equal(items2[1].item.content[0].text, "follow up");
+});
+
+test("realtime forwarding replays full history after a cursor reset", async () => {
+  const { session, reset, items: itemsOf } = await makeForwardingSession();
+
+  session.forwardNewMessages([
+    { role: "user", content: [{ type: "text", text: "first" }] },
+  ]);
+  assert.equal(session.forwardedMessageCount, 1);
+
+  // Simulate a model_select / compaction reset: cursor and dedup state cleared
+  // so the next turn replays the whole (post-reset) history into a fresh WSS.
+  reset();
+  session.forwardedMessageCount = 0;
+  session.callIdsEmittedByModel.clear();
+  session.responseIdsEmittedByModel.clear();
+
+  session.forwardNewMessages([
+    { role: "user", content: [{ type: "text", text: "first" }] },
+    { role: "user", content: [{ type: "text", text: "second" }] },
+  ]);
+  const items = itemsOf();
+  assert.equal(items.length, 2, "full history replays after a cursor reset");
+  assert.deepEqual(items.map((m) => m.item.content[0].text), ["first", "second"]);
 });
