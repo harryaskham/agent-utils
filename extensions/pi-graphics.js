@@ -81,6 +81,13 @@ import { mixHexColor } from "./pi-graphics/color-utils.js";
 import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-truncate.js";
 import { approximateVisibleCells, clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
 import {
+  formatFooterTokens,
+  formatFooterPct,
+  prettyFooterCwd,
+  compactFooterProvider,
+  noEllipsisFooterText,
+} from "./pi-graphics/footer-text.js";
+import {
   buildWorkingIndicatorFrames,
   buildWorkingMessage,
 } from "./pi-graphics/auto-widget.js";
@@ -598,70 +605,12 @@ export default function piGraphicsExtension(pi) {
     return { heat: editorCursorHeat, wpm: editorCursorWpm, trailDirection: editorCursorTrailDirection };
   }
 
-  function formatFooterTokens(n) {
-    const value = Number(n) || 0;
-    if (value >= 1_000_000) {
-      const scaled = value / 1_000_000;
-      return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, "")}m`;
-    }
-    if (value >= 1_000) {
-      const scaled = value / 1_000;
-      return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, "")}k`;
-    }
-    return `${Math.round(value)}`;
-  }
-
-  function formatFooterPct(pct) {
-    const value = Number.isFinite(Number(pct)) ? Number(pct) : 0;
-    return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-  }
-
-  function compactPathSegment(segment) {
-    const chars = Array.from(String(segment || "").replace(/^\.+/, ""));
-    return chars[0] || Array.from(String(segment || ""))[0] || "";
-  }
-
-  function compactFooterPath(path, threshold = 0) {
-    const text = String(path || "");
-    if (approximateVisibleCells(text) <= threshold) return text;
-    const prefix = text.startsWith("~/") ? "~/" : text.startsWith("/") ? "/" : "";
-    const body = prefix ? text.slice(prefix.length) : text;
-    const parts = body.split("/").filter(Boolean);
-    if (parts.length <= 1) return text;
-    return `${prefix}${[...parts.slice(0, -1).map(compactPathSegment), parts.at(-1)].join("/")}`;
-  }
-
-  function prettyFooterCwd(cwd) {
-    const home = process.env.HOME;
-    const value = String(cwd || process.cwd());
-    const display = home && value === home
-      ? "~"
-      : home && value.startsWith(`${home}/`)
-        ? `~/${value.slice(home.length + 1)}`
-        : value;
-    return compactFooterPath(display);
-  }
-
   function editorRailHeat() {
     if (!editorDynamicHeatEnabled()) return 0;
     // Rails should stay calm until typing heat is clearly visible, then catch
     // up over a wider 50%..150% band so heat appears to spread outward rather
     // than flashing the whole editor frame immediately.
     return Math.max(0, Math.min(1, (editorCursorHeat - 0.5) / 1.0));
-  }
-
-  function compactFooterProvider(provider) {
-    const raw = String(provider || "").trim();
-    const key = raw.toLowerCase().replace(/[_./]+/g, "-");
-    if (!key) return "";
-    if (key === "github-copilot") return "ghcp";
-    if (key === "openai") return "oai";
-    if (key === "anthropic") return "ant";
-    if (key === "litellm-openai") return "loai";
-    if (key === "litellm-anthropic") return "lant";
-    if (key === "openrouter") return "oprt";
-    if (key.startsWith("azure-")) return "az";
-    return raw;
   }
 
   function compactFooterModelName(model, provider = footerState.provider) {
@@ -674,10 +623,6 @@ export default function piGraphicsExtension(pi) {
     value = value.replace(/^claude-/i, "");
     value = value.replace(/^opus-4-7$/i, "opus-4.7");
     return value;
-  }
-
-  function noEllipsisFooterText(text, _width) {
-    return String(text ?? "");
   }
 
   function compactFooterModeLabel() {
