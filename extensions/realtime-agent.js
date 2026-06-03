@@ -298,6 +298,12 @@ class RealtimeSession {
     this.audioModeApplied = null;            // "audio" | "text" most recently
     this.forwardedMessageCount = 0;
     this.callIdsEmittedByModel = new Set();  // call_ids the WSS already has
+    // response ids this realtime session already produced. Assistant messages
+    // Pi appends to canonical history are replayed back through forwardMessage
+    // on the next turn; without this guard we would re-inject the model's own
+    // prior reply as a fresh conversation.item.create (a duplicate "echo"
+    // injection that confuses the realtime model after the first turn).
+    this.responseIdsEmittedByModel = new Set();
     this.realtimeCallIdByOriginal = new Map();
     this.player = new AudioPlayer(config, (m, l) => this.notify(m, l));
     this.mic = null;
@@ -885,6 +891,17 @@ class RealtimeSession {
     }
 
     if (msg.role === "assistant") {
+      // Skip assistant messages this realtime session already produced: Pi
+      // appends our own reply to canonical history and replays it next turn,
+      // but the realtime server already holds that response. Re-injecting it as
+      // a conversation.item.create is the post-first-turn "echo" injection that
+      // makes the model react to its own prior words. Matched by emitted
+      // response id, or defensively by the realtime provider tag. Tool calls
+      // remain guarded independently by callIdsEmittedByModel below.
+      const selfAuthored = (msg.responseId && this.responseIdsEmittedByModel.has(msg.responseId))
+        || msg.provider === "openai-realtime"
+        || msg.api === REALTIME_API;
+      if (selfAuthored) return;
       // Walk content in order; emit text and tool_calls separately.
       for (const c of (msg.content || [])) {
         if (c?.type === "text" && typeof c.text === "string" && c.text.trim()) {
@@ -1530,6 +1547,9 @@ class RealtimeSession {
     state.partial.responseModel = event.response?.model || state.partial.responseModel;
     state.partial.responseId = event.response?.id || state.partial.responseId;
     state.partial.timestamp = Date.now();
+    // Remember this response id so the assistant message Pi appends to canonical
+    // history is not re-forwarded into the WSS as a duplicate item next turn.
+    if (state.partial.responseId) this.responseIdsEmittedByModel.add(state.partial.responseId);
 
     const hasToolCalls = state.partial.content.some((c) => c.type === "toolCall");
     const reason = hasToolCalls ? "toolUse" : "stop";
@@ -1695,6 +1715,7 @@ class RealtimeSession {
     this.audioModeApplied = null;
     this.forwardedMessageCount = 0;
     this.callIdsEmittedByModel.clear();
+    this.responseIdsEmittedByModel.clear();
     this.realtimeCallIdByOriginal.clear();
     this.failPending(new Error("Realtime closed"));
     if (display) this.notify("Realtime stopped", "info");
@@ -1776,6 +1797,11 @@ function registerRealtimeProvider(pi, session) {
 
 // isAuthFailure/isMicPermissionFailure/stripAnsi/truncateDiagnostic/
 // truncateVisible are imported from ./lib/realtime-text.js (extracted in bd-e1914a).
+
+// Test-only export: lets unit tests exercise the WSS history-forwarding state
+// machine (forwardMessage/forwardNewMessages, self-authored assistant dedup)
+// without standing up the full provider/loop integration harness.
+export { RealtimeSession as __RealtimeSessionForTest };
 
 
 // ---------------------------------------------------------------------------
@@ -1972,6 +1998,7 @@ export function createRealtimeControls({ pi, session, config }) {
         // modes, so restart the WSS history cursor for the next turn.
         session.forwardedMessageCount = 0;
         session.callIdsEmittedByModel.clear();
+        session.responseIdsEmittedByModel.clear();
       }
       session.updateStatus(ctx);
       return this.snapshot();
@@ -2098,6 +2125,7 @@ export default function realtimeAgentExtension(pi) {
     session.toolsAppliedKey = null;
     session.audioModeApplied = null;
     session.callIdsEmittedByModel.clear();
+    session.responseIdsEmittedByModel.clear();
     session.realtimeCallIdByOriginal.clear();
     ctx?.ui?.notify?.("Realtime compaction used local simple mode; realtime stays active and the text model was not restored.", "info");
     return result;
@@ -2127,6 +2155,7 @@ export default function realtimeAgentExtension(pi) {
       session.toolsAppliedKey = null;
       session.audioModeApplied = null;
       session.callIdsEmittedByModel.clear();
+      session.responseIdsEmittedByModel.clear();
       session.realtimeCallIdByOriginal.clear();
       ctx.ui.notify(`Realtime: ${event.model.provider}/${event.model.id} selected`, "info");
     } else {

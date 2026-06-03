@@ -1460,3 +1460,72 @@ test("realtime module applies the operator PULSE_SERVER default (sgu24:4713)", (
     else process.env.PULSE_SERVER = orig;
   }
 });
+
+test("realtime forwarding does not re-inject self-authored assistant replies across turns", async () => {
+  const { __RealtimeSessionForTest } = await import("../extensions/realtime-agent.js");
+  const { makeInitialConfig } = await import("../extensions/lib/realtime-config.js");
+
+  const pi = { sendMessage() {}, sendUserMessage() {}, on() {} };
+  const session = new __RealtimeSessionForTest(pi, makeInitialConfig());
+
+  // Attach an already-open fake socket so send() succeeds and we can capture
+  // the conversation.item.create items forwarded into the WSS.
+  const ws = new FakeWebSocket();
+  ws.readyState = FakeWebSocket.OPEN;
+  session.ws = ws;
+  session.connected = true;
+  ws.sent.length = 0;
+
+  const itemsOf = (sent) => sent.filter((m) => m.type === "conversation.item.create");
+
+  // Turn 1: a single typed user message is forwarded as one user item.
+  const turn1 = [
+    { role: "user", content: [{ type: "text", text: "hello there" }] },
+  ];
+  session.forwardNewMessages(turn1);
+  let items = itemsOf(ws.sent);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].item.role, "user");
+  assert.equal(items[0].item.content[0].text, "hello there");
+
+  // The realtime model produces a reply server-side; Pi appends it to canonical
+  // history tagged with this provider + the response id we recorded.
+  const responseId = "resp_123";
+  session.responseIdsEmittedByModel.add(responseId);
+
+  ws.sent.length = 0;
+
+  // Turn 2: canonical history now includes the prior user turn, the model's own
+  // assistant reply, and a fresh user turn. The self-authored assistant message
+  // must NOT be re-injected as a conversation.item.create.
+  const turn2 = [
+    { role: "user", content: [{ type: "text", text: "hello there" }] },
+    {
+      role: "assistant",
+      provider: "openai-realtime",
+      responseId,
+      content: [{ type: "text", text: "hi, how can I help?" }],
+    },
+    { role: "user", content: [{ type: "text", text: "what time is it?" }] },
+  ];
+  session.forwardNewMessages(turn2);
+  items = itemsOf(ws.sent);
+
+  // Only the new user message should have been forwarded.
+  assert.equal(items.length, 1, "self-authored assistant reply must not be re-forwarded");
+  assert.equal(items[0].item.role, "user");
+  assert.equal(items[0].item.content[0].text, "what time is it?");
+
+  // A genuinely external assistant message (no realtime provenance) is still
+  // forwarded, preserving normal cross-model history replay.
+  ws.sent.length = 0;
+  session.forwardedMessageCount = 0;
+  session.responseIdsEmittedByModel.clear();
+  session.forwardNewMessages([
+    { role: "assistant", provider: "anthropic", content: [{ type: "text", text: "external reply" }] },
+  ]);
+  items = itemsOf(ws.sent);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].item.role, "assistant");
+  assert.equal(items[0].item.content[0].text, "external reply");
+});
