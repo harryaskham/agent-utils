@@ -1,11 +1,22 @@
 #!/usr/bin/env node
 // Quick smoke test for kitty graphics animation.
-// Usage: node scripts/kitty-animation-smoke.mjs
+// Usage:
+//   node scripts/kitty-animation-smoke.mjs              # validate-only (no escapes)
+//   KITTY_ANIMATION_SMOKE_RENDER=1 node scripts/...     # live terminal preview
+//
 // Emits a 40x1-cell image with frames moving left-to-right. By default it uses
 // explicit a=a,c=<frame> advancement, because APNG/native s=3 loops have not
 // reliably repainted in Pi/tmux sessions. Set KITTY_ANIMATION_MODE=native to
 // test terminal-driven looping.
+//
+// By default this script does NOT write kitty APC/DCS escape sequences to
+// stdout: under `npm test`, CI, or an agent terminal that would pollute the
+// operator/agent screen and interact badly with concurrent kitty graphics
+// content. Instead it builds the same serialized commands, asserts they are
+// well-formed, and prints an escape-free summary. Set
+// KITTY_ANIMATION_SMOKE_RENDER=1 (or pass --render) to opt into live rendering.
 
+import assert from "node:assert";
 import {
   buildAnimationFrameCommand,
   buildKittyUnicodePlaceholderLines,
@@ -35,6 +46,15 @@ function makeFrame(i) {
   return encodeRgbaPng(px, w, h);
 }
 
+function envFlagEnabled(value) {
+  if (value === undefined) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+const renderLive =
+  process.argv.includes("--render") || envFlagEnabled(process.env.KITTY_ANIMATION_SMOKE_RENDER);
+
 const pngs = Array.from({ length: FRAMES }, (_, i) => makeFrame(i));
 const imageId = stableKittyImageId(`kitty-anim-smoke-${Date.now()}`);
 const placementId = 1;
@@ -59,9 +79,55 @@ const lines = buildKittyUnicodePlaceholderLines({
   rows: ROWS,
 });
 
+const frameCommands = Array.from({ length: FRAMES }, (_, i) =>
+  buildAnimationFrameCommand({ imageId, frame: i + 1, passthrough }),
+);
+
+const modeLabel = nativeMode ? "native s=3 loop" : "manual a=a,c=<frame> advancement";
+
+if (!renderLive) {
+  // Validate-only mode: assert the serialized commands are well-formed without
+  // writing any escape sequences to stdout.
+  assert.ok(transmit.length > 0, "transmit command should be non-empty");
+  assert.match(transmit, /_G/, "transmit should contain a kitty graphics APC payload");
+  assert.ok(lines.length >= ROWS, "placeholder lines should cover every image row");
+  assert.ok(lines[0].length > 0, "placeholder line should be non-empty");
+  assert.equal(frameCommands.length, FRAMES, "every animation frame should serialize a command");
+  assert.ok(
+    frameCommands.every((cmd) => cmd.length > 0),
+    "each frame advancement command should be non-empty",
+  );
+
+  // Escape-free summary; safe under npm test / CI / agent terminals.
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: modeLabel,
+        nativeMode,
+        passthrough,
+        columns: COLS,
+        rows: ROWS,
+        frames: FRAMES,
+        delayMs: DELAY_MS,
+        imageId,
+        placementId,
+        transmitBytes: transmit.length,
+        placeholderLineBytes: lines[0].length,
+        frameCommandBytes: frameCommands[1]?.length ?? 0,
+        hint: "Set KITTY_ANIMATION_SMOKE_RENDER=1 (or pass --render) for a live terminal preview.",
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
+}
+
+// Live render mode: opt-in only. Writes real kitty escape sequences to stdout.
 process.stdout.write("\n");
 process.stdout.write(`${transmit}${lines[0]}\n`);
-process.stdout.write(`\nAnimation mode: ${nativeMode ? "native s=3 loop" : "manual a=a,c=<frame> advancement"}.\n`);
+process.stdout.write(`\nAnimation mode: ${modeLabel}.\n`);
 process.stdout.write("If you see a bright bump sweeping left-to-right across a dim bar above, the selected animation mode works.\n");
 let timer;
 if (!nativeMode) {

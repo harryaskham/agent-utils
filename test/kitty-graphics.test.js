@@ -374,6 +374,22 @@ test("interactive kitty animation smoke stays out of default node test discovery
   await assert.rejects(access(new URL("../scripts/test-kitty-animation.mjs", import.meta.url)), /ENOENT/);
 });
 
+test("kitty animation smoke is non-rendering by default and gates live escapes behind an opt-in flag", async () => {
+  // bd-659f55: running the animation smoke must not emit kitty APC/DCS escape
+  // sequences to stdout by default (it would pollute an agent/operator terminal
+  // and collide with concurrent kitty graphics). Live rendering is opt-in only.
+  const source = await readFile(new URL("../scripts/kitty-animation-smoke.mjs", import.meta.url), "utf8");
+  // An explicit opt-in gate exists (flag or env var) and the live stdout writes
+  // are guarded by it rather than running unconditionally at module top level.
+  assert.match(source, /KITTY_ANIMATION_SMOKE_RENDER/);
+  assert.match(source, /const\s+renderLive\s*=/);
+  assert.match(source, /if\s*\(!renderLive\)/);
+  // Default path validates the serialized commands without writing escapes and
+  // emits an escape-free JSON summary.
+  assert.match(source, /import\s+assert\s+from\s+"node:assert"/);
+  assert.match(source, /JSON\.stringify/);
+});
+
 test("kitty multiviewer scopes delete commands to images it owns", async () => {
   const previewSource = await readExtensionSurface(new URL("../extensions/kitty-image-preview.js", import.meta.url));
   const graphicsSource = await readFile(new URL("../extensions/kitty-graphics.js", import.meta.url), "utf8");
