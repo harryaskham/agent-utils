@@ -61,6 +61,23 @@ class FakeWebSocket {
 
 setRealtimeWebSocketConstructor(FakeWebSocket);
 
+// Bounded poll helper shared by the async WebSocket state-machine tests. Many
+// assertions below settle after one or more microtasks of async message
+// handling; polling a predicate until it is truthy (or a deadline passes) is
+// deterministic where a fixed setTimeout sleep is merely a guess that flakes
+// under concurrent-reintegration load. Returns the last predicate value so a
+// caller can `await waitFor(...)` and then assert on the settled state, keeping
+// the original assertion as the authoritative check and failure message.
+// (bd-43afce; generalizes the inline poll() landed in bd-b447e1.)
+async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 1 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = predicate();
+    if (value || Date.now() >= deadline) return value;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 // Shared helper for the WSS history-forwarding state-machine tests. Builds a
 // RealtimeSession with an already-open fake socket so forwardNewMessages /
 // forwardSummaryMessages / forwardMessage can be exercised directly and the
@@ -785,13 +802,16 @@ test("realtime connection auto-reconnects after unexpected close but not after /
     await commands.get("rt").handler("start nolisten", ctx);
     assert.equal(FakeWebSocket.instances.length, 1);
     FakeWebSocket.instances[0].close();
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitFor(() => FakeWebSocket.instances.length >= 2);
     assert.ok(FakeWebSocket.instances.length >= 2);
 
     await commands.get("rt-off").handler("", ctx);
     const countAfterOff = FakeWebSocket.instances.length;
     FakeWebSocket.instances.at(-1)?.close();
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    // Negative check: /rt-off must NOT auto-reconnect. The reconnect base delay
+    // is 1ms here, so a wrongful reconnect would appear almost immediately;
+    // briefly poll for the unwanted instance, then assert it never arrived.
+    await waitFor(() => FakeWebSocket.instances.length !== countAfterOff, { timeoutMs: 50 });
     assert.equal(FakeWebSocket.instances.length, countAfterOff);
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
@@ -896,7 +916,14 @@ test("/rt temporary realtime switch preserves default model settings", async () 
 
   try {
     await commands.get("rt").handler("start nolisten", ctx);
-    await new Promise((resolve) => setTimeout(resolve, 320));
+    // Negative check over a settle window: a temporary realtime switch must not
+    // rewrite the persisted defaults. Poll for an unwanted mutation (short-
+    // circuiting if one appears) up to the original guard window, then assert
+    // the settings file is still the untouched defaults.
+    await waitFor(
+      () => JSON.parse(readFileSync(settingsPath, "utf8")).defaultModel !== "gpt-5.5",
+      { timeoutMs: 320 },
+    );
     assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { defaultProvider: "litellm-openai", defaultModel: "gpt-5.5" });
   } finally {
     await commands.get("rt-off").handler("", ctx).catch(() => {});
@@ -952,11 +979,11 @@ test("/rt stt shows partial transcripts and queues completed transcripts as foll
     await harness.commands.get("rt").handler("stt vad", harness.ctx);
     const ws = FakeWebSocket.instances[0];
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "queue this" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.statuses.get("rt-transcript") === "◇ … queue this");
     assert.equal(harness.statuses.get("rt-transcript"), "◇ … queue this");
 
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "queue this while busy" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.statuses.get("rt-transcript") === "◇ queue this while busy");
 
     assert.equal(harness.statuses.get("rt-transcript"), "◇ queue this while busy");
     assert.deepEqual(harness.sentUserMessages, [
@@ -1116,22 +1143,13 @@ test("/rt speed applies realtime response speed and retries if rejected", async 
   harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
 
   try {
-    const poll = async (fn, ms = 1000) => {
-      const deadline = Date.now() + ms;
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const v = fn();
-        if (v || Date.now() >= deadline) return v;
-        await new Promise((r) => setTimeout(r, 1));
-      }
-    };
     await harness.commands.get("rt").handler("speed 1.2", harness.ctx);
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
-    const create = await poll(() => FakeWebSocket.instances[0]?.sent.find((m) => m.type === "response.create"));
+    const create = await waitFor(() => FakeWebSocket.instances[0]?.sent.find((m) => m.type === "response.create"));
     assert.equal(create.response.speed, 1.2);
 
     FakeWebSocket.instances[0].emit("message", JSON.stringify({ type: "error", error: { message: "Unknown parameter: 'response.speed'" } }));
-    const retry = await poll(() => {
+    const retry = await waitFor(() => {
       const all = FakeWebSocket.instances[0].sent.filter((m) => m.type === "response.create");
       return all.length >= 2 ? all.at(-1) : null;
     });
@@ -1167,7 +1185,10 @@ test("/rt summary=true keeps compact summary in instructions, not spoken user me
       ],
     };
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, context, {});
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitFor(() =>
+      FakeWebSocket.instances[0]?.sent.some((m) => m.type === "session.update") &&
+      FakeWebSocket.instances[0]?.sent.some((m) => m.type === "conversation.item.create"),
+    );
 
     const sessionUpdate = FakeWebSocket.instances[0].sent.find((m) => m.type === "session.update");
     assert.match(sessionUpdate.session.instructions, /important compact facts/);
@@ -1195,23 +1216,25 @@ test("full realtime speech lifecycle does not expose a blocking transcribing pha
     await harness.commands.get("rt").handler("start nolisten", harness.ctx);
     const ws = FakeWebSocket.instances[0];
     ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.pi.realtime.snapshot().state.phase === "thinking");
     assert.equal(harness.pi.realtime.snapshot().state.phase, "thinking");
     assert.equal(harness.pi.realtime.snapshot().state.mode, "responding");
 
     ws.emit("message", JSON.stringify({ type: "input_audio_buffer.committed" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.sentMessages.length === 1);
     assert.equal(harness.sentMessages.length, 1);
     assert.equal(harness.pi.realtime.snapshot().state.phase, "thinking");
 
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Let the outgoing stream attach (emit its response.create) before the
+    // server response.done arrives, so the completion is not dropped.
+    await waitFor(() => ws.sent.some((m) => m.type === "response.create"));
     ws.emit("message", JSON.stringify({ type: "response.done", response: { id: "resp_1" } }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.pi.realtime.snapshot().state.phase === "idle");
     assert.equal(harness.pi.realtime.snapshot().state.phase, "idle");
 
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "late transcript" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.statuses.get("rt-transcript") === "◇ late transcript");
     assert.equal(harness.pi.realtime.snapshot().state.phase, "idle");
     assert.equal(harness.pi.realtime.snapshot().state.mode, "connected");
     assert.equal(harness.statuses.get("rt-transcript"), "◇ late transcript");
@@ -1234,7 +1257,7 @@ test("full realtime committed audio triggers a custom turn, not transcript user 
     await harness.commands.get("rt").handler("start nolisten", harness.ctx);
     const ws = FakeWebSocket.instances[0];
     ws.emit("message", JSON.stringify({ type: "input_audio_buffer.committed" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.sentMessages.length === 1);
     assert.equal(harness.sentMessages.length, 1);
     assert.equal(harness.sentMessages[0].message.customType, "realtime-agent");
     assert.equal(harness.sentMessages[0].message.display, false);
@@ -1242,18 +1265,18 @@ test("full realtime committed audio triggers a custom turn, not transcript user 
     assert.equal(harness.sentUserMessages.length, 0);
 
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "da da" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.statuses.get("rt-transcript") === "◇ … da da");
     assert.equal(harness.statuses.get("rt-transcript"), "◇ … da da");
 
     ws.emit("message", JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "da da da da" }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.statuses.get("rt-transcript") === "◇ da da da da");
     assert.equal(harness.sentMessages.length, 1);
     assert.equal(harness.statuses.get("rt-transcript"), "◇ da da da da");
     assert.equal(harness.notifications.at(-1)?.message, "◇ da da da da");
     assert.equal(harness.sentUserMessages.length, 0);
 
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitFor(() => ws.sent.some((m) => m.type === "response.create"));
     assert.equal(ws.sent.some((m) => m.type === "conversation.item.create" && JSON.stringify(m).includes("da da da da")), false);
     assert.equal(ws.sent.some((m) => m.type === "response.create"), true);
   } finally {
@@ -1280,7 +1303,7 @@ test("realtime flushes spoken preamble before tool calls", async () => {
     ws.emit("message", JSON.stringify({ type: "response.audio.delta", delta: Buffer.alloc(64).toString("base64") }));
     assert.equal(harness.pi.realtime.snapshot().health.lastPlaybackStartedAt, null);
     ws.emit("message", JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", call_id: "call-1", name: "read" } }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitFor(() => harness.pi.realtime.snapshot().health.lastPlaybackStartedAt);
     assert.ok(harness.pi.realtime.snapshot().health.lastPlaybackStartedAt);
     stream[Symbol.asyncIterator]?.();
   } finally {
@@ -1304,11 +1327,13 @@ test("realtime restarts VAD mic when recorder exits unexpectedly", async () => {
 
   try {
     await harness.commands.get("rt").handler("start vad", harness.ctx);
-    let snapshot = harness.pi.realtime.snapshot();
-    for (let i = 0; i < 20 && !(snapshot.health.micRestartPending || snapshot.health.micRestartAttempts >= 1); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      snapshot = harness.pi.realtime.snapshot();
-    }
+    const snapshot = await waitFor(
+      () => {
+        const snap = harness.pi.realtime.snapshot();
+        return snap.health.micRestartPending || snap.health.micRestartAttempts >= 1 ? snap : null;
+      },
+      { timeoutMs: 1000, intervalMs: 50 },
+    ) ?? harness.pi.realtime.snapshot();
     assert.ok(snapshot.health.micRestartPending || snapshot.health.micRestartAttempts >= 1);
     assert.ok(harness.notifications.some((n) => /restarting vad capture/.test(n.message)));
   } finally {
@@ -1333,7 +1358,7 @@ test("realtime preserves live model-emitted tool call ids for tool outputs, incl
   try {
     const liveCallIds = ["call_live_123", "call_1fk4b5p_1", "call_1lg16bt_2"];
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, { systemPrompt: "", tools: [], messages: [] }, {});
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitFor(() => FakeWebSocket.instances[0]);
     const ws = FakeWebSocket.instances[0];
 
     for (const liveCallId of liveCallIds) {
@@ -1341,14 +1366,15 @@ test("realtime preserves live model-emitted tool call ids for tool outputs, incl
       ws.emit("message", JSON.stringify({ type: "response.function_call_arguments.done", call_id: liveCallId, arguments: "{}", name: "read" }));
     }
     ws.emit("message", JSON.stringify({ type: "response.done", response: { id: "resp_reported_tool_ids" } }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
 
     harness.providers.get("openai-realtime").streamSimple(harness.ctx.model, {
       systemPrompt: "",
       tools: [],
       messages: liveCallIds.map((liveCallId) => ({ role: "toolResult", toolCallId: liveCallId, content: [{ type: "text", text: "tool ok" }] })),
     }, {});
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitFor(
+      () => ws.sent.filter((m) => m.type === "conversation.item.create" && m.item?.type === "function_call_output").length >= liveCallIds.length,
+    );
 
     const outputs = ws.sent.filter((m) => m.type === "conversation.item.create" && m.item?.type === "function_call_output");
     assert.deepEqual(outputs.map((m) => m.item.call_id), liveCallIds);
@@ -1380,14 +1406,16 @@ test("realtime sanitizes long history tool call ids and recovers from server err
         { role: "toolResult", toolCallId: longId, content: [{ type: "text", text: "ok" }] },
       ],
     }, {});
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitFor(
+      () => FakeWebSocket.instances[0]?.sent.filter((m) => m.type === "conversation.item.create" && /function_call/.test(m.item?.type)).length >= 2,
+    );
     const callItems = FakeWebSocket.instances[0].sent.filter((m) => m.type === "conversation.item.create" && /function_call/.test(m.item?.type));
     assert.equal(callItems.length, 2);
     assert.ok(callItems.every((m) => m.item.call_id.length <= 32));
     assert.equal(callItems[0].item.call_id, callItems[1].item.call_id);
 
     FakeWebSocket.instances[0].emit("message", JSON.stringify({ type: "error", error: { message: "boom" } }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => harness.pi.realtime.snapshot().state.phase === "idle");
     assert.equal(harness.pi.realtime.snapshot().state.phase, "idle");
   } finally {
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
