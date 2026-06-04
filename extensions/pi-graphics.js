@@ -211,6 +211,37 @@ export default function piGraphicsExtension(pi) {
     return envBool("PI_GRAPHICS_EDITOR_TYPING_IMPULSE", true);
   }
 
+  // Footer underlay theming (bd-5fce31). The glow/hline colors resolve from
+  // theme tokens (overridable via /gfx footer-underlay-glow|line <token>) and
+  // the alphas are tunable; the whole underlay can be disabled with
+  // /gfx footer-underlay off without touching code.
+  function footerUnderlayEnabled() {
+    return envBool("PI_GRAPHICS_FOOTER_UNDERLAY", true);
+  }
+
+  function footerUnderlayGlowToken() {
+    const raw = String(gfxEnv().PI_GRAPHICS_FOOTER_UNDERLAY_GLOW_TOKEN || "").trim();
+    return raw || "editorBg";
+  }
+
+  function footerUnderlayLineToken() {
+    const raw = String(gfxEnv().PI_GRAPHICS_FOOTER_UNDERLAY_LINE_TOKEN || "").trim();
+    return raw || "borderAccent";
+  }
+
+  function footerUnderlayGlowAlpha() {
+    const raw = Number(gfxEnv().PI_GRAPHICS_FOOTER_UNDERLAY_GLOW_ALPHA);
+    // Default tracks the editor alpha so the underlay stays in proportion with
+    // the rest of the editor chrome unless explicitly overridden.
+    if (Number.isFinite(raw)) return Math.max(0, Math.min(1, raw));
+    return Math.max(0.10, Math.min(0.4, editorAlpha() * 0.42));
+  }
+
+  function footerUnderlayLineAlpha() {
+    const raw = Number(gfxEnv().PI_GRAPHICS_FOOTER_UNDERLAY_LINE_ALPHA);
+    return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.7;
+  }
+
   function editorPaddingX() {
     const raw = Number(settings.editorPaddingX);
     return Number.isFinite(raw) ? Math.max(0, Math.min(8, Math.trunc(raw))) : 0;
@@ -1552,21 +1583,23 @@ export default function piGraphicsExtension(pi) {
   // is a mild upward glow with a solid hline along the bottom edge -- like a
   // gentle 1-row editor top border, but milder.
   function buildFooterUnderlayCell(width) {
+    if (!footerUnderlayEnabled()) return null;
     if (!ensureUnicodePlacement(state)) return null;
     const cols = Math.max(1, Math.min(512, Math.trunc(Number(width) || 1)));
     if (cols < 2) return null;
     const cell = cellMetrics();
-    const glowColor = getThemeColorHex(activeThemeRef, "editorBg", "#101729");
-    const lineColor = getThemeColorHex(activeThemeRef, "borderAccent", "#5e81ac");
-    const glowAlpha = Math.max(0.10, Math.min(0.4, editorAlpha() * 0.42));
-    const key = `footer-underlay-${cols}-${glowColor}-${lineColor}-${glowAlpha.toFixed(3)}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
+    const glowColor = getThemeColorHex(activeThemeRef, footerUnderlayGlowToken(), "#101729");
+    const lineColor = getThemeColorHex(activeThemeRef, footerUnderlayLineToken(), "#5e81ac");
+    const glowAlpha = footerUnderlayGlowAlpha();
+    const lineAlpha = footerUnderlayLineAlpha();
+    const key = `footer-underlay-${cols}-${glowColor}-${lineColor}-${glowAlpha.toFixed(3)}-${lineAlpha.toFixed(3)}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
     return cachedPlacementLine(key, () => {
       const rendered = renderFooterUnderlay({
         columns: cols,
         glowColor,
         lineColor,
         glowAlpha,
-        lineAlpha: 0.7,
+        lineAlpha,
         ...cell,
       });
       const imageId = piGraphicsImageId(key);
@@ -2815,6 +2848,7 @@ export default function piGraphicsExtension(pi) {
       { key: "trailingWorkspace", label: "Trailing workspace", values: ["off", "on"], get: () => editor.trailingWorkspace ? "on" : "off", set: (v) => { editor.trailingWorkspace = v === "on"; } },
       { key: "rowBackground", label: "Row background", values: ["off", "on"], get: () => editor.rowBackground ? "on" : "off", set: (v) => { editor.rowBackground = v === "on"; } },
       { key: "typingImpulse", label: "Typing impulse", values: ["on", "off"], get: () => editor.typingImpulse === false ? "off" : "on", set: (v) => { editor.typingImpulse = v === "on"; } },
+      { key: "footerUnderlay", label: "Footer underlay", values: ["on", "off"], get: () => (gfx.footer?.underlay ?? true) ? "on" : "off", set: (v) => { gfx.footer = gfx.footer || {}; gfx.footer.underlay = v === "on"; } },
       { key: "debug", label: "Debug panel", values: ["off", "on"], get: () => gfx.debug ? "on" : "off", set: (v) => { gfx.debug = v === "on"; gfx.debugPlaceholders = gfx.debug; } },
       { key: "placeholders", label: "Debug placeholders", values: ["off", "on"], get: () => gfx.debugPlaceholders ? "on" : "off", set: (v) => { gfx.debugPlaceholders = v === "on"; } },
     ];
@@ -2943,6 +2977,7 @@ export default function piGraphicsExtension(pi) {
           `  trailing fill:  ${editor.trailingWorkspace ? "on" : "off"}`,
           `  row background: ${editor.rowBackground ? "on" : "off"}`,
           `  typing impulse: ${editor.typingImpulse === false ? "off" : "on"}`,
+          `  footer underlay: ${(gfx.footer?.underlay ?? true) ? "on" : "off"} glow=${gfx.footer?.glowToken ?? "editorBg"} line=${gfx.footer?.lineToken ?? "borderAccent"} glowAlpha=${gfx.footer?.glowAlpha ?? "auto"} lineAlpha=${gfx.footer?.lineAlpha ?? 0.7}`,
           `  box chrome:     ${gfx.boxChrome === true ? "on" : "off"}`,
           `  box rails:      ${gfx.boxRails === true ? "on" : "off"} style=${gfx.boxRailStyle || "editor"} unicode=${gfx.boxRailUnicodeMode || "fill"}`,
           `  box mode:       ${gfx.boxMode || "unicode"} unicode=${gfx.boxUnicodeMode || "fill"} (also: relative)`,
@@ -2958,6 +2993,8 @@ export default function piGraphicsExtension(pi) {
           "       /gfx border-height <1-16> | /gfx top-border-height <1-16> | /gfx bottom-border-height <1-16>",
           "       /gfx cursor-style glow|cell|off",
           "       /gfx trailing-workspace on|off | /gfx row-background on|off | /gfx typing-impulse on|off",
+          "       /gfx footer-underlay on|off | /gfx footer-underlay-glow <token|default> | /gfx footer-underlay-line <token|default>",
+          "       /gfx footer-underlay-glow-alpha <0-1|default> | /gfx footer-underlay-line-alpha <0-1|default>",
           "       /gfx box on|off | /gfx box-rails on|off",
           "       /gfx box-unicode-mode fill|topLeft | /gfx box-rail-unicode-mode fill|topLeft",
           "       /gfx box-rail-style gradient|glass|chrome|geometric",
@@ -3102,6 +3139,29 @@ export default function piGraphicsExtension(pi) {
           if (/^(on|true|1)$/.test(value)) { editor.typingImpulse = true; changed = true; }
           else if (/^(off|false|0)$/.test(value)) { editor.typingImpulse = false; changed = true; }
           else ctx.ui.notify(`unknown typing impulse value: ${value} (use on|off)`, "warning");
+        } else if (key === "footer-underlay" || key === "footerunderlay" || key === "underlay") {
+          const footer = (gfx.footer = gfx.footer || {});
+          if (/^(on|true|1)$/.test(value)) { footer.underlay = true; changed = true; }
+          else if (/^(off|false|0)$/.test(value)) { footer.underlay = false; changed = true; }
+          else ctx.ui.notify(`unknown footer underlay value: ${value} (use on|off)`, "warning");
+        } else if (key === "footer-underlay-glow" || key === "footerunderlayglow" || key === "underlay-glow") {
+          const footer = (gfx.footer = gfx.footer || {});
+          if (value === "default" || value === "auto") { delete footer.glowToken; changed = true; }
+          else if (/^[a-zA-Z][\w-]*$/.test(value)) { footer.glowToken = value; changed = true; }
+          else ctx.ui.notify(`unknown footer underlay glow token: ${value} (use a theme token name, or default)`, "warning");
+        } else if (key === "footer-underlay-line" || key === "footerunderlayline" || key === "underlay-line") {
+          const footer = (gfx.footer = gfx.footer || {});
+          if (value === "default" || value === "auto") { delete footer.lineToken; changed = true; }
+          else if (/^[a-zA-Z][\w-]*$/.test(value)) { footer.lineToken = value; changed = true; }
+          else ctx.ui.notify(`unknown footer underlay line token: ${value} (use a theme token name, or default)`, "warning");
+        } else if (key === "footer-underlay-glow-alpha" || key === "footerunderlayglowalpha" || key === "underlay-glow-alpha") {
+          const footer = (gfx.footer = gfx.footer || {});
+          if (value === "default" || value === "auto") { delete footer.glowAlpha; changed = true; }
+          else { const a = Number(value); if (Number.isFinite(a) && a >= 0 && a <= 1) { footer.glowAlpha = a; changed = true; } else ctx.ui.notify(`unknown footer underlay glow alpha: ${value} (use 0-1, or default)`, "warning"); }
+        } else if (key === "footer-underlay-line-alpha" || key === "footerunderlaylinealpha" || key === "underlay-line-alpha") {
+          const footer = (gfx.footer = gfx.footer || {});
+          if (value === "default" || value === "auto") { delete footer.lineAlpha; changed = true; }
+          else { const a = Number(value); if (Number.isFinite(a) && a >= 0 && a <= 1) { footer.lineAlpha = a; changed = true; } else ctx.ui.notify(`unknown footer underlay line alpha: ${value} (use 0-1, or default)`, "warning"); }
         } else if (key === "box" || key === "box-chrome" || key === "boxchrome") {
           if (/^(on|true|1)$/.test(value)) { gfx.boxChrome = true; changed = true; }
           else if (/^(off|false|0)$/.test(value)) { gfx.boxChrome = false; changed = true; }

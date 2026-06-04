@@ -654,6 +654,18 @@ displayed using kitty Unicode placeholder cells, so:
   render as `ghcp/gpt-5.5`, `lant/opus-4.7`, or `lant/sonnet-4-6`.
 * The `⠼ Working...` indicator receives themed Pi graphics flair via custom
   working-indicator frames while preserving Pi's normal loader lifecycle.
+* The segmented footer draws a mild full-width **underlay** behind the footer
+  line — a soft upward glow with a solid hline along the bottom edge, rendered
+  as a single 1×1 Unicode placeholder transmitted at full terminal width. The
+  underlay is tunable without touching code: toggle it with `/gfx footer-underlay
+  on|off` (or `piGraphics.footer.underlay`), pick theme tokens for the glow and
+  hline colors with `/gfx footer-underlay-glow <token>` /
+  `/gfx footer-underlay-line <token>` (defaults `editorBg` and `borderAccent`;
+  pass `default` to reset), and set intensities with
+  `/gfx footer-underlay-glow-alpha <0-1>` / `/gfx footer-underlay-line-alpha
+  <0-1>` (the glow alpha defaults to `editorAlpha × 0.42`, the hline alpha to
+  `0.7`). These map to `piGraphics.footer.{underlay,glowToken,lineToken,glowAlpha,
+  lineAlpha}` and the `PI_GRAPHICS_FOOTER_UNDERLAY*` env keys.
 
 ## Tools
 

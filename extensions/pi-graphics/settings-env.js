@@ -14,12 +14,18 @@ export function settingsEnvFromPiGraphics(settings = {}) {
   const eink = gfx.einkMode === true || String(gfx.mode || "").trim().toLowerCase() === "eink";
   const features = gfx.features || {};
   const editor = gfx.editor || {};
+  const footer = gfx.footer || {};
   const env = {
     PI_GRAPHICS_MODE: off ? "off" : "on",
     PI_GRAPHICS_AUTO_THEME: off ? "0" : (gfx.autoApplyTheme ?? true) ? "1" : "0",
     PI_GRAPHICS_AUTO_EDITOR_SURFACE: off ? "0" : (features.editor ?? true) ? "1" : "0",
     PI_GRAPHICS_AUTO_EDITOR_CURSOR: off ? "0" : (features.editorCursor ?? features.cursor ?? editor.cursor ?? true) ? "1" : "0",
     PI_GRAPHICS_AUTO_FOOTER: off ? "0" : (features.footer ?? true) ? "1" : "0",
+    PI_GRAPHICS_FOOTER_UNDERLAY: off ? "0" : (footer.underlay ?? features.footerUnderlay ?? true) ? "1" : "0",
+    PI_GRAPHICS_FOOTER_UNDERLAY_GLOW_TOKEN: footer.glowToken ?? footer.glow ?? undefined,
+    PI_GRAPHICS_FOOTER_UNDERLAY_LINE_TOKEN: footer.lineToken ?? footer.line ?? undefined,
+    PI_GRAPHICS_FOOTER_UNDERLAY_GLOW_ALPHA: footer.glowAlpha != null ? String(footer.glowAlpha) : undefined,
+    PI_GRAPHICS_FOOTER_UNDERLAY_LINE_ALPHA: footer.lineAlpha != null ? String(footer.lineAlpha) : undefined,
     PI_GRAPHICS_CELL_WIDTH_PX: gfx.cell?.widthPx != null ? String(gfx.cell.widthPx) : undefined,
     PI_GRAPHICS_CELL_HEIGHT_PX: gfx.cell?.heightPx != null ? String(gfx.cell.heightPx) : undefined,
     PI_GRAPHICS_LINE_HEIGHT_SCALE: gfx.cell?.lineHeightScale != null ? String(gfx.cell.lineHeightScale) : undefined,

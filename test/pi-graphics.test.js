@@ -1852,6 +1852,9 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(surface, /PI_GRAPHICS_AUTO_EDITOR_SURFACE/);
   assert.match(surface, /PI_GRAPHICS_AUTO_EDITOR_CURSOR/);
   assert.match(surface, /PI_GRAPHICS_AUTO_FOOTER/);
+  assert.match(surface, /PI_GRAPHICS_FOOTER_UNDERLAY/);
+  assert.match(surface, /PI_GRAPHICS_FOOTER_UNDERLAY_GLOW_TOKEN/);
+  assert.match(surface, /PI_GRAPHICS_FOOTER_UNDERLAY_LINE_TOKEN/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_VARIANT/);
   assert.match(surface, /PI_GRAPHICS_EDITOR_ALPHA/);
   assert.match(surface, /PI_GRAPHICS_CELL_WIDTH_PX/);
