@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+export LINEAR_API_KEY=$(cltv-secret-get -s ".keys.ms.linear")
+nix build .#linear-extra-mcp > /dev/null
+exec result/bin/linear-extra-mcp "$@"
