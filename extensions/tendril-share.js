@@ -593,6 +593,21 @@ function tendrilImageContent({ data, mimeType = PNG_MIME }) {
   return { type: "image", data, mimeType };
 }
 
+// Single source of truth for the tendril_capture / tendril_describe tool-result
+// `data` envelope. Both handlers return the identical shape, so threading any
+// new field (e.g. sourceMachine) stays single-site instead of editing two
+// near-identical inline literals (bd-e8a473).
+function buildTendrilToolData(captured, params = {}) {
+  return {
+    outputPath: captured.outputPath,
+    target: captured.target,
+    envelope: captured.envelope,
+    sourceMachine: captured.sourceMachine,
+    pathOnly: Boolean(params.pathOnly),
+    includeList: params.includeList !== false,
+  };
+}
+
 export function createTendrilShareState() {
   return { stream: null };
 }
@@ -848,7 +863,7 @@ export default function tendrilShareExtension(pi) {
           { type: "text", text },
           tendrilImageContent({ data: captured.data }),
         ],
-        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, sourceMachine: captured.sourceMachine, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
+        data: buildTendrilToolData(captured, params),
       };
     },
   });
@@ -897,7 +912,7 @@ export default function tendrilShareExtension(pi) {
           { type: "text", text },
           tendrilImageContent({ data: captured.data }),
         ],
-        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, sourceMachine: captured.sourceMachine, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
+        data: buildTendrilToolData(captured, params),
       };
     },
   });

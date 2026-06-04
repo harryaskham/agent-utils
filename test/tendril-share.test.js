@@ -182,6 +182,42 @@ test("tendril_describe tool returns objective prompt plus image content", async 
   }
 });
 
+test("tendril_capture and tendril_describe return the same data envelope shape (bd-e8a473)", async () => {
+  // The capture/describe tool-result `data` envelope is centralized in
+  // buildTendrilToolData; both tools must expose the identical key set and
+  // honor pathOnly/includeList so future fields stay single-site.
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, tools } = makeHarness();
+    tendrilShareExtension(pi);
+
+    const capture = await tools
+      .get("tendril_capture")
+      .execute("call-1", { kind: "window", target: "4", includeList: false }, new AbortController().signal);
+    const describe = await tools
+      .get("tendril_describe")
+      .execute("call-2", { kind: "display", target: "1", pathOnly: true }, new AbortController().signal);
+
+    const expectedKeys = ["outputPath", "target", "envelope", "sourceMachine", "pathOnly", "includeList"].sort();
+    assert.deepEqual(Object.keys(capture.data).sort(), expectedKeys);
+    assert.deepEqual(Object.keys(describe.data).sort(), expectedKeys);
+
+    // Flags are derived consistently from params by the shared builder.
+    assert.equal(capture.data.pathOnly, false);
+    assert.equal(capture.data.includeList, false);
+    assert.equal(describe.data.pathOnly, true);
+    assert.equal(describe.data.includeList, true);
+    assert.equal(typeof capture.data.outputPath, "string");
+    assert.equal(typeof describe.data.outputPath, "string");
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("tendril_stream tool starts, reports, and stops queued frame streaming", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
   const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
