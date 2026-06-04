@@ -283,13 +283,14 @@ def fetch_drafts(config: ServerConfig, issue: str) -> dict[str, Any]:
     issue_uuid = resolve_issue_uuid(config, issue) if issue else None
     data = graphql(
         config,
-        "query Drafts { drafts { nodes { id issueId bodyData updatedAt } } }",
+        "query Drafts { viewer { issueDrafts { nodes "
+        "{ id title description descriptionData parentIssueId parentId updatedAt createdAt } } } }",
         operation_name="Drafts",
         user_id=uid,
     )
-    nodes = ((data.get("drafts") or {}).get("nodes")) or []
+    nodes = (((data.get("viewer") or {}).get("issueDrafts") or {}).get("nodes")) or []
     if issue_uuid:
-        nodes = [d for d in nodes if d.get("issueId") == issue_uuid]
+        nodes = [d for d in nodes if d.get("parentIssueId") == issue_uuid]
     return {"issueId": issue_uuid, "count": len(nodes), "drafts": nodes}
 
 
