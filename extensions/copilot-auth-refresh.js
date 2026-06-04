@@ -95,6 +95,27 @@ function isCopilotMissingApiKeyError(message) {
 // timestamp-keyed dedup guard forever.
 export const MAX_COPILOT_AUTH_RETRIES = 2;
 
+// Prefix prepended to the underlying request when we re-inject a retry. The
+// injected message becomes the most recent user message, so on the next auth
+// failure it is what we extract as `retryText`. To keep the bounded budget
+// keyed on the STABLE underlying request (and not reset every cycle), we strip
+// this prefix back off before computing the budget key. Without this, the
+// budget text changes each injection, the counter resets to 0, and the storm
+// the budget was meant to prevent continues unbounded (bd-57477b).
+export const COPILOT_RETRY_INJECTION_PREFIX =
+  "GitHub Copilot auth was refreshed after a transient missing-token error. Retry the previous request now:\n\n";
+
+// Recover the original underlying request from a (possibly already-injected)
+// retry message. Strips one or more nested injection prefixes so that a
+// re-failure of an already-injected retry shares the original request's budget.
+export function underlyingRetryText(text) {
+  let value = String(text || "");
+  while (value.startsWith(COPILOT_RETRY_INJECTION_PREFIX)) {
+    value = value.slice(COPILOT_RETRY_INJECTION_PREFIX.length);
+  }
+  return value;
+}
+
 export default function copilotAuthRefreshExtension(pi) {
   let lastFallbackRetryKey = null;
   // Bounded retry budget keyed on the stable retry text (the user request being
@@ -115,8 +136,14 @@ export default function copilotAuthRefreshExtension(pi) {
     const lastAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
     if (!isCopilotMissingApiKeyError(lastAssistant)) return;
     const lastUser = [...messages].reverse().find((message) => message?.role === "user");
-    const retryText = messageText(lastUser);
-    if (!retryText) return;
+    const rawRetryText = messageText(lastUser);
+    if (!rawRetryText) return;
+    // Normalize away any auto-injection prefix(es) so the budget keys on the
+    // stable underlying request. The injected retry message becomes the next
+    // turn's most recent user message; without this recovery the budget text
+    // would change every cycle and reset the counter, defeating the bound
+    // (bd-57477b).
+    const retryText = underlyingRetryText(rawRetryText);
     const retryKey = `${lastAssistant?.timestamp || ""}:${retryText}`;
     if (retryKey === lastFallbackRetryKey) return;
     lastFallbackRetryKey = retryKey;
@@ -135,7 +162,9 @@ export default function copilotAuthRefreshExtension(pi) {
     reloadRegistryAuthStorage(ctx?.modelRegistry);
     patch(ctx);
     ctx?.ui?.notify?.(`GitHub Copilot auth looked stale after a provider error; reloaded auth storage and queued one retry (${retryBudgetCount}/${MAX_COPILOT_AUTH_RETRIES}).`, "warning");
-    pi.sendUserMessage(`GitHub Copilot auth was refreshed after a transient missing-token error. Retry the previous request now:\n\n${retryText}`, { deliverAs: "followUp" });
+    // Re-inject using the recovered underlying request so the injected message
+    // does not accrete nested prefixes across retries.
+    pi.sendUserMessage(`${COPILOT_RETRY_INJECTION_PREFIX}${retryText}`, { deliverAs: "followUp" });
   });
 
   pi.registerCommand?.("copilot-auth-refresh", {
