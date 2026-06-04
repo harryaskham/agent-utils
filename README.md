@@ -144,7 +144,7 @@ Available tools:
 - `kitty_image_preview_add_folder` — add a sorted image series from a directory, optionally recursively.
 - `kitty_image_preview_show` — navigate `current`, `next`, `previous`, `first`, `last`, `index`, `hide`, or `clear`.
 - `kitty_image_preview_animate` — start or stop lightweight frame animation by cycling a loaded image series.
-- `kitty_image_preview_cycle` — start (`action: "start", intervalSeconds: 5`) or stop (`action: "stop"`) timed cycling through the loaded gallery. Slash-command equivalents: `/image-next`, `/image-prev`, `/image-hide`, `/image-show`, `/image-clear`, `/image-start-cycle [seconds]`, `/image-stop-cycle` (legacy `/kitty-show-next`, `/kitty-show-prev`, `/kitty-start-cycle`, and `/kitty-stop-cycle` aliases remain supported).
+- `kitty_image_preview_cycle` — start (`action: "start", intervalSeconds: 5`) or stop (`action: "stop"`) timed cycling through the loaded gallery. Slash-command equivalents: `/image-next`, `/image-prev`, `/image-hide`, `/image-show`, `/image-clear`, `/image-config [key=value …]`, `/image-start-cycle [seconds]`, `/image-stop-cycle`.
 - `kitty_image_preview_stream_start` / `kitty_image_preview_stream_stop` / `kitty_image_preview_stream_status` — show an ephemeral Tendril screenshot stream using a two-file temp buffer so frames do not accumulate on disk or in model context. Set `intervalMs: 0` for max non-overlapping Tendril capture rate.
 - `kitty_image_preview_stream_sample` — persist one selected stream frame, optionally with `describe: true`.
 - `kitty_image_preview_playwright_start` — watch a PNG path written by Playwright `page.screenshot()` calls so users see a live browser mirror while the agent can keep using DOM-only context.
@@ -153,7 +153,7 @@ Available tools:
 Key capabilities:
 
 - Native kitty graphics APC serialization with chunking, PNG file or in-memory transfer, and tmux DCS passthrough autodetection.
-- Unicode placeholder placement under tmux so the image is anchored to the widget text cells and scrolls with the pane instead of floating at the outer terminal cursor.
+- Unicode placeholder placement under tmux so the image is anchored to the widget text cells and scrolls with the pane instead of floating at the outer terminal cursor. In this mode the inline preview is framed as a horizontal rule, a `name (current/total)` header line, the image, and a closing horizontal rule (the controls hint moves to the status line).
 - First-party screenshot capture via `tendril capture --output`, saved under a per-session `kitty-image-preview-screenshots` folder by default.
 - Persistent Pi widget mounted above or below the editor with configurable cell width/height and captioning.
 - Automatic screenshot-friendly placement via `placement: "auto"` (the default): outside tmux on wide terminals it uses a right-side side panel sized to the current image, capped by 50% of terminal width and the visible height above the input box, so chat text reflows beside it; inside tmux or on narrow terminals it falls back to the inline above-editor widget.
@@ -165,7 +165,7 @@ Key capabilities:
 - Playwright visual mirroring can automatically run `playwright-cli screenshot --filename <temp>` on an interval for the active/session browser, or can watch a screenshot path written by external Playwright code when `autoScreenshot: false`. Frames remain display-only unless sampled.
 - Session-state reconstruction from prior tool results so loaded image lists survive Pi session reloads.
 - Scoped kitty image cleanup: the extension tracks the kitty graphics image ids it transmits and only ever issues per-image deletes (`d=i,i=<id>`) for those owned ids when hiding, clearing, or shutting down. It never emits a global delete-all (`d=A`) sequence, so running it inside another kitty graphics consumer (e.g. caco) does not erase unrelated images or the surrounding UI.
-- User-facing TUI controls: the preview widget/status line advertises `/image-prev`, `/image-next`, `/image-hide`, `/image-show`, and `/image-clear` so the operator can control multi-image galleries without waiting for an agent tool call. Legacy `/kitty-show-next`, `/kitty-show-prev`, `/kitty-start-cycle [seconds]`, and `/kitty-stop-cycle` aliases remain supported; `/image-start-cycle [seconds]` and `/image-stop-cycle` are the preferred cycle commands.
+- User-facing TUI controls: the preview widget/status line advertises `/image-prev`, `/image-next`, `/image-hide`, `/image-show`, and `/image-clear` so the operator can control multi-image galleries without waiting for an agent tool call. `/image-config [key=value …]` shows or updates render params (placement, placementMode, transferMode, passthrough, zIndex, columns, rows, maxRows, minRows, background, showCaption, clearPrevious) at runtime; `/image-start-cycle [seconds]` and `/image-stop-cycle` control cycling. (The legacy `/kitty-*` slash-command aliases were removed; the `kitty_image_preview_*` tool names are unchanged.)
 
 Example image tool use:
 
@@ -178,7 +178,7 @@ Example image tool use:
     "transferMode": "auto",
     "passthrough": "auto",
     "placementMode": "auto",
-    "zIndex": -10
+    "zIndex": 0
   }
 }
 ```

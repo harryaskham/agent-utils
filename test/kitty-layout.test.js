@@ -124,6 +124,9 @@ test("previewImageRowLimit clamps to the minimum of protocol/viewport/available"
   assert.equal(previewImageRowLimit({ viewportRows: 24, protocolMax: 200 }), 12);
   // includeControls reserves one row from the viewport limit.
   assert.equal(previewImageRowLimit({ viewportRows: 24, includeControls: true, protocolMax: 200 }), 11);
+  // reservedRows takes precedence and can reserve several rows (unicode frame).
+  assert.equal(previewImageRowLimit({ viewportRows: 24, reservedRows: 3, protocolMax: 200 }), 9);
+  assert.equal(previewImageRowLimit({ viewportRows: 24, reservedRows: 0, includeControls: true, protocolMax: 200 }), 12);
   // availableRows can be the binding minimum.
   assert.equal(previewImageRowLimit({ viewportRows: 24, availableRows: 5, protocolMax: 200 }), 5);
   // a small protocol cap wins.

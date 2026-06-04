@@ -41,9 +41,19 @@ export function detectKittyPassthroughMode(env = process.env) {
 export function shouldUseInMemoryTransfer(env = process.env) {
   const forced = env.KITTY_IMAGE_PREVIEW_TRANSFER_MODE;
   if (forced && forced !== "auto") return forced === "memory" || forced === "direct";
-  // In tmux, direct/in-memory transport avoids terminal-side path visibility
-  // surprises while still using tmux DCS passthrough for the escape stream.
-  return Boolean(env.TMUX);
+  // Inline/direct (t=d) transmission embeds the PNG bytes in the escape stream
+  // itself, so it works across a connection where the terminal does not share a
+  // filesystem with this process. File transmission (t=f) only sends a path the
+  // terminal opens locally, which breaks over SSH. Use inline transmission
+  // whenever we are inside tmux OR a remote SSH session; fall back to file
+  // transmission only for a local terminal that shares our filesystem.
+  return Boolean(env.TMUX) || isRemoteSshSession(env);
+}
+
+// Detect a remote SSH session where the controlling terminal lives on another
+// machine and cannot read local file paths (so t=f file transmission fails).
+export function isRemoteSshSession(env = process.env) {
+  return Boolean(env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY);
 }
 
 export function bufferToBase64(buffer) {

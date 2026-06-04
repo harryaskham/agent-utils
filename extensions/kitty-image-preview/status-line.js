@@ -48,3 +48,20 @@ export function streamStatusLine(stream) {
   const fps = stream.frameCount / elapsedSeconds;
   return `Streaming ${stream.target.kind} ${stream.target.id}: frames=${stream.frameCount} fps=${fps.toFixed(2)} interval=${stream.intervalMs}ms latest=${stream.latestPath || "none"}`;
 }
+
+// Horizontal rule that fills the available width. Used to frame the unicode-mode
+// preview (bd-9b5b18): hline / name (n/max) / image / hline.
+export function imageSeparatorLine(width, ch = "\u2500") {
+  const cols = Math.max(1, Math.trunc(width || 1));
+  return ch.repeat(cols);
+}
+
+// Header line shown above the image in the framed unicode layout: the image
+// label plus a "current/total" counter, truncated to the available width.
+export function imageHeaderLine(state, width) {
+  const current = state.items[state.index];
+  if (!current) return "";
+  const counter = `(${state.index + 1}/${state.items.length})`;
+  const label = current.label ? `${current.label} ${counter}` : counter;
+  return truncatePlainText(label, width);
+}

@@ -1,3 +1,4 @@
 /target/
 .direnv
+/artifacts/
 export CACOPHONY_PROJECT=agent-utils

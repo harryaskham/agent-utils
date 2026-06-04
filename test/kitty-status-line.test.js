@@ -4,7 +4,32 @@ import assert from "node:assert/strict";
 import {
   imageControlHint,
   imageStatusLine,
+  imageSeparatorLine,
+  imageHeaderLine,
 } from "../extensions/kitty-image-preview/status-line.js";
+
+function makeLabeledState({ items = 1, index = 0, showCaption = true } = {}) {
+  return {
+    items: Array.from({ length: items }, (_, i) => ({ id: i, label: `HE-${300 + i} preview` })),
+    index,
+    config: { showCaption },
+  };
+}
+
+test("imageSeparatorLine fills the width with a horizontal rule", () => {
+  assert.equal(imageSeparatorLine(5), "\u2500\u2500\u2500\u2500\u2500");
+  assert.equal(imageSeparatorLine(0).length, 1);
+  assert.equal(imageSeparatorLine(3, "-"), "---");
+});
+
+test("imageHeaderLine shows label with a (current/total) counter", () => {
+  assert.equal(imageHeaderLine(makeLabeledState({ items: 2, index: 1 }), 80), "HE-301 preview (2/2)");
+  assert.equal(imageHeaderLine(makeLabeledState({ items: 2, index: 0 }), 80), "HE-300 preview (1/2)");
+  // Truncates to width.
+  assert.ok(imageHeaderLine(makeLabeledState({ items: 2, index: 0 }), 8).length <= 8);
+  // Empty state yields an empty header.
+  assert.equal(imageHeaderLine({ items: [], index: 0, config: {} }, 80), "");
+});
 
 function makeState({ items = 0, visible = true, index = 0, animation, cycle } = {}) {
   return {

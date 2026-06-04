@@ -62,10 +62,14 @@ export function previewViewportRowLimit(viewportRows = currentTerminalRows()) {
   return viewportHalfRowLimit(viewportRows);
 }
 
-export function previewImageRowLimit({ viewportRows = currentTerminalRows(), availableRows, includeControls = false, protocolMax = 200 } = {}) {
+export function previewImageRowLimit({ viewportRows = currentTerminalRows(), availableRows, includeControls = false, reservedRows, protocolMax = 200 } = {}) {
   const limits = [Math.max(1, Math.trunc(protocolMax || 1))];
   const viewportLimit = previewViewportRowLimit(viewportRows);
-  if (viewportLimit !== undefined) limits.push(Math.max(1, viewportLimit - (includeControls ? 1 : 0)));
+  // reservedRows takes precedence when provided (e.g. the unicode framing uses
+  // two hlines + a header line); otherwise fall back to the legacy single
+  // controls-row reservation.
+  const reserve = reservedRows !== undefined ? Math.max(0, Math.trunc(reservedRows)) : (includeControls ? 1 : 0);
+  if (viewportLimit !== undefined) limits.push(Math.max(1, viewportLimit - reserve));
   if (availableRows !== undefined) limits.push(Math.max(1, Math.trunc(availableRows)));
   return Math.max(1, Math.min(...limits));
 }

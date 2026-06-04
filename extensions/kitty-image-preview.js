@@ -78,7 +78,16 @@ import {
   imageControlsLine,
   defaultScreenshotLabel,
   streamStatusLine,
+  imageSeparatorLine,
+  imageHeaderLine,
 } from "./kitty-image-preview/status-line.js";
+import {
+  tokenizeConfigArgs,
+  parseConfigPatch,
+  applyConfigPatch,
+  formatConfigSummary,
+  configUsageHint,
+} from "./kitty-image-preview/config-command.js";
 
 import {
   buildScopedDeleteCommand,
@@ -106,6 +115,7 @@ import {
   detectKittyPassthroughMode,
   estimateRowsForImage,
   fileToBase64,
+  isRemoteSshSession,
   isSupportedKittyPngPath,
   readPngDimensions,
   shouldUseInMemoryTransfer,
@@ -114,7 +124,7 @@ import {
 
 const TOOL_PREFIX = "kitty_image_preview";
 const WIDGET_ID = "kitty-image-preview";
-const DEFAULT_Z_INDEX = -10;
+const DEFAULT_Z_INDEX = 0;
 const DEFAULT_BG_Z_INDEX = -1073741824;
 const DEFAULT_STREAM_INTERVAL_MS = 1000;
 const DEFAULT_DESCRIBE_INTERVAL_SECONDS = 30;
@@ -174,8 +184,33 @@ function renderCurrentImageLines(state, current, {
   lineWidth = columns,
   useUnicodePlaceholders = false,
   leadingSpaces = 0,
+  frame = false,
 } = {}) {
   const command = buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders);
+  const leftPadding = " ".repeat(Math.max(0, leadingSpaces));
+  const commandPrefix = `${state.lastDeleteCommand || ""}${command}`;
+  state.lastDeleteCommand = "";
+
+  // Framed unicode mode renders: hline / name (n/max) / image / hline. The
+  // caption lives on its own header line rather than being embedded into the
+  // first placeholder row (bd-9b5b18). The transmit/display escape command still
+  // rides on the very first emitted line so kitty receives it once. Only the
+  // main inline widget frames; the side panel opts out to keep its tight
+  // bottom-aligned geometry.
+  if (useUnicodePlaceholders && frame) {
+    const imageLines = buildKittyUnicodePlaceholderLines({
+      imageId: current.id,
+      placementId: state.config.placementId,
+      columns,
+      rows,
+      width: lineWidth,
+    });
+    const framed = [imageSeparatorLine(lineWidth)];
+    if (state.config.showCaption) framed.push(imageHeaderLine(state, lineWidth));
+    framed.push(...imageLines, imageSeparatorLine(lineWidth));
+    return framed.map((line, index) => `${leftPadding}${index === 0 ? commandPrefix : ""}${line}`);
+  }
+
   const label = state.config.showCaption
     ? `kitty image ${state.index + 1}/${state.items.length}: ${current.label}`
     : "";
@@ -189,9 +224,6 @@ function renderCurrentImageLines(state, current, {
       caption: label,
     })
     : renderPlaceholderLines(lineWidth, rows, label);
-  const leftPadding = " ".repeat(Math.max(0, leadingSpaces));
-  const commandPrefix = `${state.lastDeleteCommand || ""}${command}`;
-  state.lastDeleteCommand = "";
   return imageLines.map((line, index) => `${leftPadding}${index === 0 ? commandPrefix : ""}${line}`);
 }
 
@@ -214,7 +246,12 @@ export class KittyImagePreviewWidget {
     });
     const controls = imageControlsLine(state, availableWidth);
     const protocolMax = useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200;
-    const rowLimit = previewImageRowLimit({ includeControls: Boolean(controls), protocolMax });
+    // Unicode framing reserves two hline rows plus an optional header row; the
+    // legacy placeholder path reserves one controls row.
+    const reservedRows = useUnicodePlaceholders
+      ? 2 + (state.config.showCaption ? 1 : 0)
+      : (controls ? 1 : 0);
+    const rowLimit = previewImageRowLimit({ reservedRows, protocolMax });
     const rows = clampInteger(
       state.config.rows || estimateRowsForImage({
         imageWidth: current.width,
@@ -233,7 +270,11 @@ export class KittyImagePreviewWidget {
       rows,
       lineWidth: availableWidth,
       useUnicodePlaceholders,
+      frame: useUnicodePlaceholders,
     });
+    // Unicode mode is self-framed (hline / name / image / hline) and omits the
+    // separate controls footer; the status line still advertises the controls.
+    if (useUnicodePlaceholders) return lines;
     const widgetRowLimit = previewViewportRowLimit();
     return controls && (widgetRowLimit === undefined || lines.length < widgetRowLimit) ? [...lines, controls] : lines;
   }
@@ -1683,7 +1724,7 @@ export default function kittyImagePreviewExtension(pi) {
       const snapshot = serializePublicState(state);
       const lines = [
         summarizeCurrent(state),
-        `visible=${state.visible} images=${state.items.length} passthroughDetected=${detectKittyPassthroughMode(process.env)} memoryAuto=${shouldUseInMemoryTransfer(process.env)}`,
+        `visible=${state.visible} images=${state.items.length} passthroughDetected=${detectKittyPassthroughMode(process.env)} ssh=${isRemoteSshSession(process.env)} memoryAuto=${shouldUseInMemoryTransfer(process.env)}`,
         ...state.items.map((item, index) => `${index === state.index ? "→" : " "} ${index}: ${item.label}`),
       ];
       return {
@@ -1696,7 +1737,7 @@ export default function kittyImagePreviewExtension(pi) {
   pi.registerTool({
     name: "kitty_image_preview_cycle",
     label: "Kitty Image Preview Cycle",
-    description: "Start or stop a timed cycling mode that advances through the loaded preview images on a fixed interval. Equivalent to /kitty-start-cycle and /kitty-stop-cycle.",
+    description: "Start or stop a timed cycling mode that advances through the loaded preview images on a fixed interval. Equivalent to /image-start-cycle and /image-stop-cycle.",
     promptSnippet: "Start or stop timed cycling through the kitty image preview gallery.",
     parameters: Type.Object({
       action: stringEnum(["start", "stop"], "Cycle control action."),
@@ -1816,15 +1857,45 @@ export default function kittyImagePreviewExtension(pi) {
     ctx.ui?.notify?.("Stopped kitty preview cycle.", "info");
   }
 
+  async function configCommand(args, ctx) {
+    const tokens = tokenizeConfigArgs(args);
+    if (tokens.length === 0) {
+      ctx.ui?.notify?.(`image preview config: ${formatConfigSummary(state.config)}\n${configUsageHint()}`, "info");
+      return;
+    }
+    let parsed;
+    try {
+      parsed = parseConfigPatch(tokens);
+    } catch (error) {
+      ctx.ui?.notify?.(`/image-config: ${error.message}`, "warning");
+      return;
+    }
+    const changes = applyConfigPatch(state.config, parsed.patch);
+    if (changes.length === 0) {
+      ctx.ui?.notify?.(`image preview config unchanged: ${formatConfigSummary(state.config)}`, "info");
+      return;
+    }
+    if (state.visible && state.items[state.index]) {
+      await prepareCurrentImage(state, ctx, { forceReload: true });
+    }
+    syncWidget(ctx, state);
+    const summary = changes.map((c) => `${c.key}: ${c.from === undefined ? "auto" : c.from} \u2192 ${c.to === undefined ? "auto" : c.to}`).join(", ");
+    ctx.ui?.notify?.(`Updated image preview config — ${summary}.`, "info");
+  }
+
   registerImageCommand(["kitty-image-preview", "image-status", "image-preview"],
     "Show kitty image preview extension status and quick usage.",
     async (_args, ctx) => statusCommand(ctx));
 
-  registerImageCommand(["kitty-show-next", "image-next"],
+  registerImageCommand(["image-config"],
+    "Show or update image preview render params at runtime (placement, placementMode, transferMode, passthrough, zIndex, columns, rows, maxRows, minRows, background, showCaption, clearPrevious). Call with no args to print current config.",
+    configCommand);
+
+  registerImageCommand(["image-next"],
     "Show the next image in the kitty multiviewer gallery.",
     async (_args, ctx) => navigateCommand(ctx, 1));
 
-  registerImageCommand(["kitty-show-prev", "kitty-show-previous", "image-prev", "image-previous"],
+  registerImageCommand(["image-prev", "image-previous"],
     "Show the previous image in the kitty multiviewer gallery.",
     async (_args, ctx) => navigateCommand(ctx, -1));
 
@@ -1844,23 +1915,23 @@ export default function kittyImagePreviewExtension(pi) {
       return showCommand(ctx);
     });
 
-  registerImageCommand(["image-show", "kitty-show"],
+  registerImageCommand(["image-show"],
     "Show or restore the current kitty image preview.",
     async (_args, ctx) => showCommand(ctx));
 
-  registerImageCommand(["image-hide", "kitty-hide"],
+  registerImageCommand(["image-hide"],
     "Hide the kitty image preview without forgetting the loaded gallery.",
     async (_args, ctx) => hideCommand(ctx));
 
-  registerImageCommand(["image-clear", "kitty-clear"],
+  registerImageCommand(["image-clear"],
     "Clear the kitty image preview gallery and delete its terminal placements.",
     async (_args, ctx) => clearCommand(ctx));
 
-  registerImageCommand(["kitty-start-cycle", "image-start-cycle", "image-cycle"],
+  registerImageCommand(["image-start-cycle", "image-cycle"],
     "Start cycling kitty multiviewer images. Optional argument: interval in seconds (default 5).",
     startCycleCommand);
 
-  registerImageCommand(["kitty-stop-cycle", "image-stop-cycle"],
+  registerImageCommand(["image-stop-cycle"],
     "Stop the kitty multiviewer cycling timer.",
     async (_args, ctx) => stopCycleCommand(ctx));
 }

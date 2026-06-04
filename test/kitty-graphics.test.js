@@ -17,6 +17,8 @@ import {
   buildDeleteByZIndexBandCommand,
   buildDeleteByZIndexCommand,
   buildScopedDeleteCommand,
+  isRemoteSshSession,
+  shouldUseInMemoryTransfer,
   serializeKittyGraphicsCommand,
   shouldUseUnicodePlaceholders,
   stableKittyImageId,
@@ -302,7 +304,12 @@ test("kitty image preview applies the half-viewport cap to inline and side-panel
 
   assert.match(source, /function currentTerminalRows/);
   assert.match(source, /previewViewportRowLimit\(\)/);
-  assert.match(source, /previewImageRowLimit\(\{ includeControls: Boolean\(controls\), protocolMax \}\)/);
+  assert.match(source, /previewImageRowLimit\(\{ reservedRows, protocolMax \}\)/);
+  // Unicode mode frames the preview with hline / header / image / hline and
+  // omits the trailing controls footer (bd-9b5b18).
+  assert.match(source, /imageSeparatorLine\(lineWidth\)/);
+  assert.match(source, /framed\.push\(imageHeaderLine\(state, lineWidth\)\)/);
+  assert.match(source, /if \(useUnicodePlaceholders\) return lines;/);
   assert.match(source, /lines\.length < widgetRowLimit/);
   assert.match(source, /viewportPanelLimit = previewViewportRowLimit\(terminalHeight\) \?\? terminalHeight/);
   assert.match(source, /Math\.min\(terminalHeight - bottomVisibleRows, viewportPanelLimit\)/);
@@ -333,13 +340,19 @@ test("kitty image preview advertises a fixed right-side panel with tmux inline f
 test("kitty multiviewer registers discoverable image commands, controls, and a cycle tool", async () => {
   const source = await readExtensionSurface(new URL("../extensions/kitty-image-preview.js", import.meta.url));
 
-  assert.match(source, /registerImageCommand\(\["kitty-show-next", "image-next"\]/);
+  assert.match(source, /registerImageCommand\(\["image-next"\]/);
   assert.match(source, /"image-prev", "image-previous"/);
-  assert.match(source, /"image-show", "kitty-show"/);
-  assert.match(source, /"image-hide", "kitty-hide"/);
-  assert.match(source, /"image-clear", "kitty-clear"/);
-  assert.match(source, /"kitty-start-cycle", "image-start-cycle", "image-cycle"/);
-  assert.match(source, /"kitty-stop-cycle", "image-stop-cycle"/);
+  assert.match(source, /registerImageCommand\(\["image-show"\]/);
+  assert.match(source, /registerImageCommand\(\["image-hide"\]/);
+  assert.match(source, /registerImageCommand\(\["image-clear"\]/);
+  assert.match(source, /"image-start-cycle", "image-cycle"/);
+  assert.match(source, /registerImageCommand\(\["image-stop-cycle"\]/);
+  assert.match(source, /registerImageCommand\(\["image-config"\]/);
+  // Legacy /kitty-* slash-command aliases were removed (bd-9b5b18); only the
+  // /image-* variants remain. The kitty_image_preview_* MCP tool names are
+  // unaffected.
+  assert.doesNotMatch(source, /registerImageCommand\(\[[^\]]*"kitty-show/);
+  assert.doesNotMatch(source, /"kitty-start-cycle"|"kitty-stop-cycle"|"kitty-hide"|"kitty-clear"|"kitty-show"/);
   assert.match(source, /function imageControlsLine/);
   assert.match(source, /controls: \$\{imageControlHint/);
   assert.match(source, /name: "kitty_image_preview_cycle"/);
@@ -404,6 +417,23 @@ test("buildScopedDeleteCommand emits per-image deletes for owned ids only", () =
 test("buildScopedDeleteCommand returns empty string when no images are owned", () => {
   assert.equal(buildScopedDeleteCommand({ ownedImageIds: new Set(), passthrough: "none" }), "");
   assert.equal(buildScopedDeleteCommand({ passthrough: "none" }), "");
+});
+
+test("auto transfer uses inline transmission over SSH and tmux but file transmission locally", () => {
+  // Local terminal that shares our filesystem: file transmission (t=f) is fine.
+  assert.equal(shouldUseInMemoryTransfer({}), false);
+  assert.equal(isRemoteSshSession({}), false);
+  // tmux: inline so the DCS passthrough carries the bytes in-band.
+  assert.equal(shouldUseInMemoryTransfer({ TMUX: "/tmp/tmux-1000/default,1,0" }), true);
+  // Bare SSH without tmux must also use inline transmission, because the remote
+  // terminal cannot open a local file path (bd-9b5b18).
+  assert.equal(isRemoteSshSession({ SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" }), true);
+  assert.equal(shouldUseInMemoryTransfer({ SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" }), true);
+  assert.equal(shouldUseInMemoryTransfer({ SSH_TTY: "/dev/pts/3" }), true);
+  assert.equal(shouldUseInMemoryTransfer({ SSH_CLIENT: "1.2.3.4 5 22" }), true);
+  // Explicit override still wins over autodetection.
+  assert.equal(shouldUseInMemoryTransfer({ TMUX: "x", KITTY_IMAGE_PREVIEW_TRANSFER_MODE: "file" }), false);
+  assert.equal(shouldUseInMemoryTransfer({ KITTY_IMAGE_PREVIEW_TRANSFER_MODE: "memory" }), true);
 });
 
 test("firecracker VM extension is packaged and exposes lifecycle, screen, and Tendril manifest controls", async () => {
