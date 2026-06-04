@@ -1627,11 +1627,15 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /\$\{chars\.slice\(0, width - 1\)\.join\(""\)\}…/);
   assert.match(source, /function installSegmentedFooter/);
   assert.match(source, /ctx\.ui\.setFooter\(factory, \{ piGraphics: false \}\)/);
-  assert.match(source, /ensureFooterSegmentBackground/);
+  assert.match(source, /ensureUnicodePlacement\(state\)/);
+  assert.match(source, /function buildFooterUnderlayCell\(width\)/);
+  assert.match(source, /renderFooterUnderlay\(\{/);
+  assert.match(source, /z: PI_GRAPHICS_Z\.BACKGROUND,/);
+  assert.doesNotMatch(source, /ensureFooterSegmentBackground/);
+  assert.doesNotMatch(source, /hOffset: FOOTER_DIVIDER_WIDTH/);
   assert.match(source, /function themeProvenanceLines/);
   assert.match(source, /getAllThemes\?\.\(\)/);
   assert.match(source, /action === "themes"/);
-  assert.match(source, /hOffset: FOOTER_DIVIDER_WIDTH/);
   assert.match(source, /function cursorStylingEnabled/);
   assert.match(source, /envBool\("PI_GRAPHICS_AUTO_EDITOR_CURSOR", true\)/);
   assert.match(source, /function installHardwareCursorGuard\(tui\)/);

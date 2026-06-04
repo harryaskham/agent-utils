@@ -261,6 +261,58 @@ export function renderFooterDividerPng({ columns = 3, barColor = DEFAULT_GRADIEN
   };
 }
 
+/**
+ * Render a full-width footer underlay: a solid 1px hline along the BOTTOM edge
+ * with a mild glow radiating vertically UPWARD (fading to alpha 0 at the top),
+ * so it subtly highlights the footer text drawn above it. This is intentionally
+ * milder than the editor border frame -- a lower glow alpha and a thin stroke --
+ * and it draws no horizontal gradient (avoiding the old relative footer-segment
+ * background that could detach onto the editor/rails).
+ *
+ * For Nord the defaults are the lightest dark base (`glowColor`) fading out
+ * upward, with a nord deep-blue hline (`lineColor`).
+ *
+ * @returns {{ png: Buffer, columns: number, rows: number, widthPx: number, heightPx: number }}
+ */
+export function renderFooterUnderlay({
+  columns,
+  glowColor = NORDIC_DEEP_BOTTOM,
+  lineColor = NORDIC_BLUE,
+  glowAlpha = 0.26,
+  lineAlpha = 0.7,
+  cellWidthPx,
+  cellHeightPx,
+  lineHeightScale,
+} = {}) {
+  const cols = clampPositive(columns, 1, "columns");
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const widthPx = cols * metrics.cellWidthPx;
+  const heightPx = metrics.cellHeightPx;
+  const pixels = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+
+  // Mild upward glow: opaque-ish near the bottom hline, fading to nothing at the
+  // top of the cell. Kept deliberately gentle (glowAlpha ~0.26) so it reads as a
+  // soft highlight under the footer text rather than a hard band.
+  const glowA = Math.round(normalizeAlpha(glowAlpha, 0.26) * 255);
+  fillVerticalGradient(pixels, widthPx, 0, 0, widthPx, heightPx, withAlpha(glowColor, 0), withAlpha(glowColor, glowA));
+
+  // Solid hline along the very bottom edge (nord deep blue by default).
+  const strokeH = Math.max(1, Math.round(heightPx * 0.06));
+  const lineA = Math.round(normalizeAlpha(lineAlpha, 0.7) * 255);
+  fillRect(pixels, widthPx, 0, heightPx - strokeH, widthPx, strokeH, withAlpha(lineColor, lineA));
+
+  return {
+    png: encodeRgbaPng(pixels, widthPx, heightPx),
+    columns: cols,
+    rows: 1,
+    widthPx,
+    heightPx,
+    cellWidthPx: metrics.cellWidthPx,
+    cellHeightPx: metrics.cellHeightPx,
+    lineHeightScale: metrics.lineHeightScale,
+  };
+}
+
 function applyHorizontalEdgeFade(pixels, widthPx, heightPx, { fadeLeft = true, fadeRight = true, edgePx = Math.min(widthPx / 4, CELL_PX_W * 3) } = {}) {
   const safeEdge = Math.max(1, Math.min(Math.floor(edgePx), Math.floor(widthPx / 2) || 1));
   for (let y = 0; y < heightPx; y += 1) {

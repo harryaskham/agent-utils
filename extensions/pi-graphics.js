@@ -103,6 +103,7 @@ import {
   renderEditorBorderFramesPngs,
   renderEditorCursorVline,
   renderFooterDividerPng,
+  renderFooterUnderlay,
   renderGradientBorder,
   renderPromptEnclosure,
   resolveCellMetrics,
@@ -1520,49 +1521,6 @@ export default function piGraphicsExtension(pi) {
       + Math.max(0, segments.length - 1) * FOOTER_DIVIDER_WIDTH;
   }
 
-  function ensureFooterSegmentBackground({ anchor, segmentKey, index, width, token }) {
-    const textWidth = Math.max(1, Math.min(128, Math.trunc(Number(width) || 1)));
-    const cell = cellMetrics();
-    const color = getThemeColorHex(activeThemeRef, token || "accent", "#88c0d0");
-    const imageId = piGraphicsImageId(`footer-bg-${segmentKey}-${textWidth}-${color}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(imageId)) {
-      const rendered = renderPromptEnclosure({
-        columns: textWidth,
-        variant: "glow",
-        alpha: Math.max(0.09, editorAlpha() * 0.20),
-        leftColor: color,
-        rightColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
-        fadeEdges: true,
-        ...cell,
-      });
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: imageId,
-        q: 2,
-      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(imageId);
-      uploadedImages.add(imageId);
-    }
-    const placementId = piGraphicsPlacementId(`footer-bg-${segmentKey}-${index}-${textWidth}`);
-    const key = `footer-bg:${imageId}->${anchor.imageId}/${anchor.placementId}:${placementId}`;
-    if (!relativeUploaded.has(key)) {
-      emitGraphicsCommand(buildRelativePlacementCommand({
-        imageId,
-        placementId,
-        parentImageId: anchor.imageId,
-        parentPlacementId: anchor.placementId,
-        hOffset: FOOTER_DIVIDER_WIDTH,
-        columns: textWidth,
-        rows: 1,
-        zIndex: PI_GRAPHICS_Z.BACKGROUND,
-        passthrough: state.config.passthrough,
-      }));
-      relativeUploaded.add(key);
-    }
-  }
-
   function buildFooterDividerCell(segmentKey, index, token = "borderAccent") {
     if (!ensureUnicodePlacement(state)) return "│";
     const cell = cellMetrics();
@@ -1586,21 +1544,81 @@ export default function piGraphicsExtension(pi) {
     return { cell: placement.lines[0] ?? "│", imageId: placement.imageId, placementId: placement.placementId };
   }
 
+  // Render the footer underlay as a single 1x1 Unicode placeholder cell whose
+  // image is transmitted at the FULL terminal width, so the picture spills out
+  // of its 1x1 marker cell to sit beneath the entire footer line. This avoids
+  // the old relative footer-segment background (a horizontal gradient anchored to
+  // divider cells) that could detach and bleed onto the editor/rails. The visual
+  // is a mild upward glow with a solid hline along the bottom edge -- like a
+  // gentle 1-row editor top border, but milder.
+  function buildFooterUnderlayCell(width) {
+    if (!ensureUnicodePlacement(state)) return null;
+    const cols = Math.max(1, Math.min(512, Math.trunc(Number(width) || 1)));
+    if (cols < 2) return null;
+    const cell = cellMetrics();
+    const glowColor = getThemeColorHex(activeThemeRef, "editorBg", "#101729");
+    const lineColor = getThemeColorHex(activeThemeRef, "borderAccent", "#5e81ac");
+    const glowAlpha = Math.max(0.10, Math.min(0.4, editorAlpha() * 0.42));
+    const key = `footer-underlay-${cols}-${glowColor}-${lineColor}-${glowAlpha.toFixed(3)}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
+    return cachedPlacementLine(key, () => {
+      const rendered = renderFooterUnderlay({
+        columns: cols,
+        glowColor,
+        lineColor,
+        glowAlpha,
+        lineAlpha: 0.7,
+        ...cell,
+      });
+      const imageId = piGraphicsImageId(key);
+      const placementId = piGraphicsPlaceholderPlacementId(`footer-underlay-placement-${cols}`);
+      if (!uploadedImages.has(imageId)) {
+        const transmit = `${serializeKittyGraphicsChunks({
+          a: "t",
+          f: 100,
+          t: "d",
+          i: imageId,
+          q: 2,
+        }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough })}${serializeKittyGraphicsCommand({
+          a: "p",
+          i: imageId,
+          p: placementId,
+          U: 1,
+          c: rendered.columns,
+          r: rendered.rows,
+          z: PI_GRAPHICS_Z.BACKGROUND,
+          q: 2,
+        }, "", { passthrough: state.config.passthrough })}`;
+        emitGraphicsCommand(transmit);
+        state.ownedImageIds.add(imageId);
+        uploadedImages.add(imageId);
+      }
+      return buildKittyUnicodePlaceholderLines({
+        imageId,
+        placementId,
+        columns: 1,
+        rows: 1,
+        width: 1,
+      })[0] ?? null;
+    });
+  }
+
   function buildSegmentedFooterLine(ctx, footerData, width, pi, theme = activeThemeRef) {
     const rawSegments = footerSegmentValues(ctx, footerData, pi);
-    const target = Math.max(1, Math.trunc(Number(width) || 1));
+    const fullWidth = Math.max(1, Math.trunc(Number(width) || 1));
+    // The 1x1 underlay placeholder consumes one text cell on the LHS, so the
+    // footer text is laid out into width-1 columns and we add a single trailing
+    // space on the RHS so the line ends with `provider/model<space>`.
+    const underlay = buildFooterUnderlayCell(fullWidth);
+    const target = underlay ? Math.max(1, fullWidth - 1) - 1 : fullWidth;
+    const prefix = underlay || "";
+    const suffix = underlay ? " " : "";
     const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
     const renderSegments = (segments, indexOffset = 0) => {
       let line = "";
       segments.forEach((segment, index) => {
         if (index > 0) {
           const divider = buildFooterDividerCell(segment.key, index + indexOffset, segment.token);
-          if (divider && typeof divider === "object") {
-            ensureFooterSegmentBackground({ anchor: divider, segmentKey: segment.key, index: index + indexOffset, width: approximateVisibleCells(segment.text), token: segment.token });
-            line += divider.cell;
-          } else {
-            line += divider;
-          }
+          line += (divider && typeof divider === "object") ? divider.cell : divider;
         }
         line += fg(segment.token, segment.text);
       });
@@ -1612,12 +1630,12 @@ export default function piGraphicsExtension(pi) {
     const leftWidth = footerSegmentsWidth(left);
     const rightWidth = footerSegmentsWidth(right);
     if (left && right && leftWidth + 1 + rightWidth <= target) {
-      return `${renderSegments(left)}${" ".repeat(target - leftWidth - rightWidth)}${renderSegments(right, left.length)}`;
+      return `${prefix}${renderSegments(left)}${" ".repeat(target - leftWidth - rightWidth)}${renderSegments(right, left.length)}${suffix}`;
     }
 
     const fitted = fitFooterSegments(rawSegments, target);
-    if (!fitted) return truncateFooterEnd(" pi graphics ", target);
-    return renderSegments(fitted);
+    if (!fitted) return `${prefix}${truncateFooterEnd(" pi graphics ", target)}${suffix}`;
+    return `${prefix}${renderSegments(fitted)}${suffix}`;
   }
 
   function installSegmentedFooter(ctx, pi, event) {
