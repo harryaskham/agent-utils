@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
 export LINEAR_API_KEY=$(cltv-secret-get -s ".keys.ms.linear")
 export LINEAR_USER_ID="2e676734-9e83-4497-a699-e09b54637f07"
-nix build .#linear-extra-mcp > /dev/null
-exec result/bin/linear-extra-mcp "$@"
+exec cltv-run linear-extra-mcp "$@"
