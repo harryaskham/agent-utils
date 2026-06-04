@@ -8,6 +8,7 @@ import tendrilShareExtension, {
   __tendrilShareTest,
   setTendrilShareCompleteForTest,
 } from "../extensions/tendril-share.js";
+import { resolveTendrilSubcommand } from "../extensions/tendril-command.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lDL+WQAAAABJRU5ErkJggg==",
@@ -44,7 +45,11 @@ function makeHarness({ idle = true } = {}) {
     registerTool(tool) { tools.set(tool.name, tool); },
     async exec(command, args) {
       execCalls.push({ command, args });
-      if (args.includes("list")) {
+      // Dispatch on the resolved subcommand so bridge-prefix flags (e.g.
+      // --remote <host>, --wsl-tunnel) prepended by buildTendrilCommand don't
+      // silently push the real subcommand off args[0] into the error branch.
+      const subcommand = resolveTendrilSubcommand(args);
+      if (subcommand === "list") {
         return {
           code: 0,
           stdout: JSON.stringify({
@@ -59,7 +64,7 @@ function makeHarness({ idle = true } = {}) {
           stderr: "",
         };
       }
-      if (args.includes("capture")) {
+      if (subcommand === "capture") {
         const outputPath = args[args.indexOf("--output") + 1];
         await writeFile(outputPath, ONE_PIXEL_PNG);
         return { code: 0, stdout: JSON.stringify({ status: "ok", data: { output: outputPath } }), stderr: "" };

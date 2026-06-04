@@ -5,6 +5,7 @@ import {
   DEFAULT_TENDRIL_COMMAND,
   tendrilBridgeConfig,
   buildTendrilCommand,
+  resolveTendrilSubcommand,
   tendrilCommandSummary,
   tendrilSourceMachine,
 } from "../extensions/tendril-command.js";
@@ -49,6 +50,37 @@ test("buildTendrilCommand prefixes --remote and --wsl-tunnel native hooks", () =
   const localBuilt = buildTendrilCommand(["capture"], {}, {});
   assert.deepEqual(localBuilt.args, ["capture"]);
   assert.equal(localBuilt.remote, null);
+});
+
+test("resolveTendrilSubcommand finds the subcommand independent of bridge-prefix flags (bd-5bc6e5)", () => {
+  // Bare argv.
+  assert.equal(resolveTendrilSubcommand(["list", "--json"]), "list");
+  assert.equal(resolveTendrilSubcommand(["capture", "--window", "4"]), "capture");
+
+  // The exact argv buildTendrilCommand produces with each bridge prefix must
+  // still resolve to the real subcommand (args[0] checks would break here).
+  assert.equal(
+    resolveTendrilSubcommand(buildTendrilCommand(["list", "--json"], { AGENT_UTILS_TENDRIL_REMOTE: "ms-dev" }, {}).args),
+    "list",
+  );
+  assert.equal(
+    resolveTendrilSubcommand(buildTendrilCommand(["capture"], { AGENT_UTILS_TENDRIL_WSL_TUNNEL: "1" }, {}).args),
+    "capture",
+  );
+  assert.equal(
+    resolveTendrilSubcommand(
+      buildTendrilCommand(["capture", "--window", "4"], { AGENT_UTILS_TENDRIL_REMOTE: "astra", AGENT_UTILS_TENDRIL_WSL_TUNNEL: "1" }, {}).args,
+    ),
+    "capture",
+  );
+
+  // --remote consumes its host value, so a host literally named like a
+  // subcommand must not be mistaken for the subcommand.
+  assert.equal(resolveTendrilSubcommand(["--remote", "capture", "list", "--json"]), "list");
+
+  // Empty / prefix-only argv yields no subcommand.
+  assert.equal(resolveTendrilSubcommand([]), undefined);
+  assert.equal(resolveTendrilSubcommand(["--remote", "ms-dev", "--wsl-tunnel"]), undefined);
 });
 
 test("tendrilCommandSummary surfaces the resolved bridge prefix", () => {

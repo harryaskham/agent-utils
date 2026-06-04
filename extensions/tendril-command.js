@@ -57,6 +57,33 @@ export function buildTendrilCommand(args = [], env = process.env, overrides = {}
   };
 }
 
+// Bridge-prefix flags that buildTendrilCommand may prepend before the actual
+// Tendril subcommand. Kept beside buildTendrilCommand so adding a new prefix
+// flag updates both the producer and the subcommand resolver in one place.
+// Map value = number of following argv tokens the flag consumes as its value.
+const TENDRIL_BRIDGE_PREFIX_FLAGS = new Map([
+  ["--remote", 1],
+  ["--wsl-tunnel", 0],
+]);
+
+// Resolve the Tendril subcommand (e.g. "list", "capture") from a fully-built
+// argv, independent of any bridge-prefix flags buildTendrilCommand prepended.
+// This avoids fragile args[0] checks (which break when a prefix is present) and
+// fragile args.includes("capture") checks (which can false-match a target id or
+// flag value). Returns undefined if no non-prefix token is found.
+export function resolveTendrilSubcommand(args = []) {
+  for (let i = 0; i < args.length; i += 1) {
+    const token = String(args[i]);
+    const consumes = TENDRIL_BRIDGE_PREFIX_FLAGS.get(token);
+    if (consumes !== undefined) {
+      i += consumes; // skip the flag and any value tokens it owns
+      continue;
+    }
+    return token;
+  }
+  return undefined;
+}
+
 // Resolve a stable, human-readable identity for the machine a Tendril command
 // targets, so captured images and downstream model-inference results can be
 // associated with their source machine. Remote captures (via --remote <host>)
