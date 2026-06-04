@@ -578,3 +578,113 @@ test("tendril_capture forwards a per-call remote override to the tendril bridge"
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("resolveSourceMachine derives source machine from bridge override and env", () => {
+  // Remote override identifies the source machine for inference association.
+  const remote = __tendrilShareTest.resolveSourceMachine({ remote: "astra" }, {});
+  assert.deepEqual(remote, { host: "astra", remote: true, source: "override" });
+
+  // Env-configured remote is honoured when no override is supplied.
+  const envRemote = __tendrilShareTest.resolveSourceMachine(undefined, { AGENT_UTILS_TENDRIL_REMOTE: "ms-dev" });
+  assert.deepEqual(envRemote, { host: "ms-dev", remote: true, source: "env" });
+
+  // No remote anywhere collapses to the local source machine label.
+  const local = __tendrilShareTest.resolveSourceMachine(undefined, {});
+  assert.deepEqual(local, { host: "local", remote: false, source: "env" });
+
+  // Empty-string override forces local even when env sets a remote host.
+  const forcedLocal = __tendrilShareTest.resolveSourceMachine({ remote: "" }, { AGENT_UTILS_TENDRIL_REMOTE: "ms-dev" });
+  assert.deepEqual(forcedLocal, { host: "local", remote: false, source: "override" });
+
+  assert.equal(__tendrilShareTest.sourceMachineLabel({ host: "astra", remote: true }), "astra");
+  assert.equal(__tendrilShareTest.sourceMachineLabel({ host: "astra", remote: false }), "local");
+  assert.equal(__tendrilShareTest.sourceMachineLabel(undefined), "local");
+});
+
+test("tendril_describe associates inference result with the remote source machine", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, tools } = makeHarness();
+    tendrilShareExtension(pi);
+
+    const result = await tools.get("tendril_describe").execute(
+      "call-describe",
+      { kind: "window", target: "4", remote: "astra", includeList: false },
+      new AbortController().signal,
+    );
+
+    // Inference result data carries the source machine for downstream association.
+    assert.deepEqual(result.data.sourceMachine, { host: "astra", remote: true, source: "override" });
+    // The textual context surfaces the source machine so the model can attribute it.
+    assert.match(result.content[0].text, /Source machine: astra/);
+    // The on-disk artifact filename is namespaced by source machine to avoid collisions.
+    assert.match(path.basename(result.data.outputPath), /-astra-window-4\.png$/);
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("/tendril describe tags the inference description with its source machine", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  const completeCalls = [];
+  setTendrilShareCompleteForTest(async (model, request, options) => {
+    completeCalls.push({ model, request, options });
+    return {
+      content: [{ type: "text", text: "Remote dashboard visible." }],
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 4 },
+    };
+  });
+  try {
+    const { pi, commands, userMessages, ctx } = makeHarness();
+    tendrilShareExtension(pi);
+
+    await commands.get("tendril").handler("describe window 4 --remote astra --no-list", ctx);
+
+    // The inference request prompt carries the source machine for attribution.
+    assert.match(completeCalls[0].request.messages[0].content[0].text, /Source machine: astra/);
+    // The shared description message attributes the source machine to the operator/model.
+    assert.equal(userMessages.length, 1);
+    assert.match(userMessages[0].content, /source machine astra/);
+    assert.match(userMessages[0].content, /Source machine: astra/);
+    assert.match(userMessages[0].content, /Remote dashboard visible/);
+  } finally {
+    setTendrilShareCompleteForTest();
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("concurrent remote captures from different machines produce distinct artifacts", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tendril-share-test-"));
+  const oldDir = process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+  process.env.TENDRIL_SHARE_SCREENSHOT_DIR = tmp;
+  try {
+    const { pi, tools } = makeHarness();
+    tendrilShareExtension(pi);
+    const capture = tools.get("tendril_capture");
+
+    // Two remote hosts capturing the same window id concurrently must not collide.
+    const [astra, msDev] = await Promise.all([
+      capture.execute("call-a", { kind: "window", target: "4", remote: "astra", includeList: false }, new AbortController().signal),
+      capture.execute("call-b", { kind: "window", target: "4", remote: "ms-dev", includeList: false }, new AbortController().signal),
+    ]);
+
+    assert.deepEqual(astra.data.sourceMachine, { host: "astra", remote: true, source: "override" });
+    assert.deepEqual(msDev.data.sourceMachine, { host: "ms-dev", remote: true, source: "override" });
+    assert.notEqual(astra.data.outputPath, msDev.data.outputPath);
+    assert.match(path.basename(astra.data.outputPath), /-astra-window-4\.png$/);
+    assert.match(path.basename(msDev.data.outputPath), /-ms-dev-window-4\.png$/);
+  } finally {
+    if (oldDir === undefined) delete process.env.TENDRIL_SHARE_SCREENSHOT_DIR;
+    else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

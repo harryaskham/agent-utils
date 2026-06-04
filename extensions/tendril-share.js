@@ -11,6 +11,31 @@ import {
 import { buildTendrilCommand, tendrilCommandSummary, tendrilBridgeConfig } from "./tendril-command.js";
 import { headlessDisplaySummary } from "./lib/headless-display.js";
 
+// Label used when a capture/inference comes from the bridge on this host rather
+// than a --remote host, so source-machine attribution is always populated.
+const LOCAL_SOURCE_MACHINE = "local";
+
+// Resolve the source machine for a capture from the effective Tendril bridge
+// config. For remote captures (--remote <host> / AGENT_UTILS_TENDRIL_REMOTE)
+// this is the remote host; otherwise it is the local bridge. The returned
+// descriptor lets downstream inference results be associated with the machine
+// that produced the image, which is required to disambiguate multiple
+// concurrent remote captures.
+function resolveSourceMachine(override, env = process.env) {
+  const config = tendrilBridgeConfig(env, override || {});
+  const host = String(config.remote || "").trim();
+  return {
+    host: host || LOCAL_SOURCE_MACHINE,
+    remote: Boolean(host),
+    source: config.remoteSource,
+  };
+}
+
+function sourceMachineLabel(sourceMachine) {
+  if (!sourceMachine) return LOCAL_SOURCE_MACHINE;
+  return sourceMachine.remote ? sourceMachine.host : LOCAL_SOURCE_MACHINE;
+}
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PNG_MIME = "image/png";
 const DEFAULT_DESCRIBE_MODEL = "github-copilot/claude-opus-4.8";
@@ -329,12 +354,13 @@ async function resolveTendrilTarget(pi, { kind, target, override }, signal) {
   return fallback;
 }
 
-function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, descriptionModel }) {
+function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, descriptionModel, sourceMachine }) {
+  const sourceSuffix = sourceMachine?.remote ? ` [source ${sourceMachine.host}]` : "";
   pi.sendMessage?.({
     customType: "tendril-share",
     display: true,
-    content: `${queued ? "Queued" : "Sent"} Tendril ${kind} ${target.id}${target.label && target.label !== target.id ? ` (${target.label})` : ""} ${action}: ${outputPath}`,
-    details: { action, kind, target, outputPath, descriptionModel },
+    content: `${queued ? "Queued" : "Sent"} Tendril ${kind} ${target.id}${target.label && target.label !== target.id ? ` (${target.label})` : ""} ${action}${sourceSuffix}: ${outputPath}`,
+    details: { action, kind, target, outputPath, descriptionModel, sourceMachine },
   });
 }
 
@@ -372,6 +398,7 @@ async function tendrilListContextText(pi, signal, override) {
 
 async function buildShareMessageText(pi, signal, { baseText, captured, includeList = true, pathOnly = false, override }) {
   const lines = [baseText, `Saved screenshot: ${captured.outputPath}`];
+  if (captured?.sourceMachine?.remote) lines.push(`Source machine: ${captured.sourceMachine.host}`);
   if (pathOnly) lines.push("Image content omitted because pathOnly=true.");
   if (includeList !== false) lines.push("", await tendrilListContextText(pi, signal, override));
   return lines.join("\n");
@@ -379,9 +406,15 @@ async function buildShareMessageText(pi, signal, { baseText, captured, includeLi
 
 async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight, override }, signal) {
   const resolved = await resolveTendrilTarget(pi, { kind, target, override }, signal);
+  const sourceMachine = resolveSourceMachine(override);
   const dir = getCaptureDir(ctx);
   await mkdir(dir, { recursive: true });
-  const outputPath = path.join(dir, `${timestampForFilename()}-${sanitizeFilenamePart(kind)}-${sanitizeFilenamePart(resolved.id)}.png`);
+  // Include the source-machine label in the filename so multiple concurrent
+  // remote captures (different hosts, same target id) cannot collide on disk.
+  const outputPath = path.join(
+    dir,
+    `${timestampForFilename()}-${sanitizeFilenamePart(sourceMachineLabel(sourceMachine))}-${sanitizeFilenamePart(kind)}-${sanitizeFilenamePart(resolved.id)}.png`,
+  );
   const args = [
     "capture",
     "--json",
@@ -394,7 +427,7 @@ async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight, ov
   if (maxHeight !== undefined) args.push("--max-height", String(maxHeight));
   const envelope = await runTendrilJson(pi, args, { signal, timeout: DEFAULT_TIMEOUT_MS + 5_000, override });
   const data = await readFile(outputPath, "base64");
-  return { outputPath, envelope, data, target: resolved };
+  return { outputPath, envelope, data, target: resolved, sourceMachine };
 }
 
 async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = true, pathOnly = false, override }, signal) {
@@ -420,11 +453,13 @@ async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = 
   return { ...captured, queued: !!options, pathOnly, includeList };
 }
 
-async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
+async function describeImageData(ctx, { kind, id, prompt, data, sourceMachine }, signal) {
   const model = resolveVisionModel(ctx);
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
   const describeComplete = await getCompleteForDescribe();
+  const machineLabel = sourceMachineLabel(sourceMachine);
+  const sourceLine = sourceMachine?.remote ? `\nSource machine: ${machineLabel}` : "";
   const response = await describeComplete(
     model,
     {
@@ -433,7 +468,7 @@ async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
         role: "user",
         timestamp: Date.now(),
         content: [
-          { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}\n\nTarget: Tendril ${kind} ${id}${prompt ? `\nUser focus: ${prompt}` : ""}` },
+          { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}\n\nTarget: Tendril ${kind} ${id}${sourceLine}${prompt ? `\nUser focus: ${prompt}` : ""}` },
           { type: "image", data, mimeType: PNG_MIME },
         ],
       }],
@@ -452,19 +487,26 @@ async function describeImageData(ctx, { kind, id, prompt, data }, signal) {
     .map((item) => item.text)
     .join("\n")
     .trim();
-  return { text, model: `${model.provider}/${model.id}`, usage: response.usage, stopReason: response.stopReason };
+  return {
+    text,
+    model: `${model.provider}/${model.id}`,
+    usage: response.usage,
+    stopReason: response.stopReason,
+    sourceMachine: { host: machineLabel, remote: Boolean(sourceMachine?.remote) },
+  };
 }
 
 async function describeTarget(pi, ctx, { kind, target, id, prompt, includeList = true, override }, signal) {
   const captured = await capturePngTarget(pi, ctx, { kind, target: target || id, override }, signal);
-  const description = await describeImageData(ctx, { kind, id: captured.target.id, prompt, data: captured.data }, signal);
+  const description = await describeImageData(ctx, { kind, id: captured.target.id, prompt, data: captured.data, sourceMachine: captured.sourceMachine }, signal);
   const focus = prompt?.trim() ? `\n\nUser focus: ${prompt.trim()}` : "";
-  const base = `Tendril ${kind} ${captured.target.id} screenshot description from ${description.model}:${focus}\n\n${description.text}`;
+  const sourceSuffix = captured.sourceMachine?.remote ? ` (source machine ${captured.sourceMachine.host})` : "";
+  const base = `Tendril ${kind} ${captured.target.id} screenshot description from ${description.model}${sourceSuffix}:${focus}\n\n${description.text}`;
   const message = await buildShareMessageText(pi, signal, { baseText: base, captured, includeList, pathOnly: false, override });
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(message, options);
   await previewInKitty(captured.data, captured.outputPath);
-  emitCaptureHistory(pi, { action: "description", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options, descriptionModel: description.model });
+  emitCaptureHistory(pi, { action: "description", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options, descriptionModel: description.model, sourceMachine: captured.sourceMachine });
   return { ...captured, description, queued: !!options, includeList };
 }
 
@@ -796,7 +838,7 @@ export default function tendrilShareExtension(pi) {
           { type: "text", text },
           tendrilImageContent({ data: captured.data }),
         ],
-        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
+        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, sourceMachine: captured.sourceMachine, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
       };
     },
   });
@@ -845,7 +887,7 @@ export default function tendrilShareExtension(pi) {
           { type: "text", text },
           tendrilImageContent({ data: captured.data }),
         ],
-        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
+        data: { outputPath: captured.outputPath, target: captured.target, envelope: captured.envelope, sourceMachine: captured.sourceMachine, pathOnly: Boolean(params.pathOnly), includeList: params.includeList !== false },
       };
     },
   });
@@ -958,4 +1000,6 @@ export const __tendrilShareTest = {
   describeModelConfig,
   previewConfig,
   showTendrilSettingsWindow,
+  resolveSourceMachine,
+  sourceMachineLabel,
 };
