@@ -82,6 +82,29 @@ def test_body_data_is_json_string():
     assert parsed["type"] == "doc"
 
 
+def test_bold_wrapping_inline_code_does_not_stack_code_and_strong():
+    # Linear's ProseMirror schema rejects a text node carrying both `code` and `strong`
+    # marks at once. Bold-wrapped inline code (**`x`**) must stay code-only.
+    doc = markdown_to_prosemirror("never calls **`AddCitableEntity`** here")
+    code_nodes = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("type") == "text":
+                marks = {m.get("type") for m in node.get("marks", [])}
+                assert not ("code" in marks and "strong" in marks), node
+                if "code" in marks:
+                    code_nodes.append(node)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(doc)
+    assert any(n["text"] == "AddCitableEntity" for n in code_nodes)
+
+
 def test_empty_input_yields_empty_paragraph():
     doc = markdown_to_prosemirror("")
     assert doc == {"type": "doc", "content": [{"type": "paragraph"}]}

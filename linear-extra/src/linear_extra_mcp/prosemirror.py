@@ -69,11 +69,16 @@ def _parse_inline(text: str) -> list[dict[str, Any]]:
 
     if kind == "bold":
         inner = m.group(1) if m.group(1) is not None else m.group(2)
-        # bold can itself contain inline code/links; recurse and add the strong mark
+        # bold can itself contain inline code/links; recurse and add the strong mark.
+        # Linear's ProseMirror schema rejects a text node carrying both `code` and `strong`
+        # marks at once (Argument Validation Error / IsProsemirrorDocument), so do NOT stack
+        # strong onto a child that already has a code mark — leave inline code un-bolded.
         for child in _parse_inline(inner):
             if child.get("type") == "text":
-                child.setdefault("marks", [])
-                child["marks"].append({"type": "strong"})
+                existing = child.setdefault("marks", [])
+                has_code = any(mark.get("type") == "code" for mark in existing)
+                if not has_code:
+                    existing.append({"type": "strong"})
             nodes.append(child)
     elif kind == "code":
         nodes.append(_text_node(m.group(1), [{"type": "code"}]))
