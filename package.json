@@ -34,7 +34,8 @@
     "docs:check": "node scripts/render-pages.mjs --check",
     "pi-graphics:smoke": "node scripts/render-pi-graphics-smoke.mjs",
     "pi-graphics:animation-smoke": "node scripts/kitty-animation-smoke.mjs",
-    "pi-graphics:tmux-smoke": "node scripts/test-pi-graphics-tmux-smoke.mjs"
+    "pi-graphics:tmux-smoke": "node scripts/test-pi-graphics-tmux-smoke.mjs",
+    "pi-graphics:widget-smoke": "node scripts/test-kitty-image-preview-widget-smoke.mjs"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
