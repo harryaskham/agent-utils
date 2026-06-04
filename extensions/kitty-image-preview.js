@@ -92,6 +92,7 @@ import {
 import {
   buildScopedDeleteCommand,
   buildCurrentDisplayCommand,
+  resetTransmissionGuard,
 } from "./kitty-image-preview/display-commands.js";
 
 import {
@@ -756,6 +757,10 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
   if (!forceReload && state.currentCommand?.signature === signature) return;
 
   const pngBase64 = useMemory ? await fileToBase64(current.path) : undefined;
+  // A freshly prepared currentCommand means the payload (or its transport)
+  // changed, so any prior transmit-once guard entry for this image is stale and
+  // must be cleared to force a re-upload on the next render (bd-d6fa1b).
+  state.transmittedSignatures?.delete?.(current.id);
   state.lastDeleteCommand = state.config.clearPrevious
     ? buildScopedDeleteCommand(state, { excludeIds: [current.id] })
     : "";
@@ -1149,6 +1154,11 @@ export default function kittyImagePreviewExtension(pi) {
         restorePublicState(state, entry.message.details);
       }
     }
+    // A session_start fires on a fresh terminal attach/restore. In unicode
+    // passthrough mode the new terminal does not hold any previously uploaded
+    // image, so clear the transmit-once guard to force a re-upload of the
+    // current image's payload on the next render (bd-d6fa1b).
+    resetTransmissionGuard(state);
     if (state.visible && state.items[state.index]) {
       await prepareCurrentImage(state, ctx).catch((error) => {
         if (ctx.hasUI) ctx.ui.notify(`kitty image preview restore failed: ${error.message}`, "warning");
