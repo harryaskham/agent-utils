@@ -24,6 +24,7 @@ It currently provides:
 - `search_web` native Pi tool for live web lookups via GitHub Copilot Responses API
 - `kitty_image_preview_*` native Pi tools for persistent terminal image previews via the kitty graphics protocol
 - `firecracker_vm_*` native Pi tools for preparing, spawning, inspecting, and stopping Firecracker VM workloads for Tendril-visible services
+- `xvfb_*` native Pi tools (`xvfb_ensure` / `xvfb_stop` / `xvfb_status`) for opt-in, guarded Xvfb virtual-display orchestration on headless Linux nodes so display-dependent tools can run
 - OpenAI Realtime provider and voice commands (`/rt`, `/rt summary=true`, `/rt-listen`, `/rt-doctor`, `/rt-status full`, `/rt-off`) via [`extensions/realtime-agent.js`](extensions/realtime-agent.js). See the [Realtime Agent guide](docs/realtime-agent.md) for recommended workflows, Pulse/phone routing, summary context mode, VAD tuning, replay, and troubleshooting.
 - `/update`, `/reload-tools`, `/restart`, and the `pi_self_update` / `pi_reload_tools` / `pi_restart` native Pi tools via [`extensions/pi-self-update.js`](extensions/pi-self-update.js). `/update` runs `pi update --extensions`, reloads the Pi runtime, then refreshes active tools; use `/update --no-reload` to skip the reload and `/update --status` to inspect startup auto-update controls. Startup package auto-update is opt-in: set `PI_AUTO_UPDATE_ON_STARTUP=1` or add `{ "piSelfUpdate": { "autoUpdateOnStartup": true, "autoReloadAfterUpdate": true } }` to `settings.json`; `PI_AUTO_RELOAD_AFTER_UPDATE=0` or `autoReloadAfterUpdate: false` leaves changed packages installed but asks the user to run `/reload` or `/reload-tools`, and `PI_OFFLINE=1` suppresses startup updates. `/reload-tools` reloads extensions/resources and then activates all registered tools so newly landed dynamic tools become model-visible. `/restart` is stronger: it re-execs the Pi process against the current persisted session with `--session`, preserves recognized runtime flags, and deliberately omits original prompt and `@file` startup arguments so non-idempotent launch instructions are not replayed while newly installed runtime/tool injections are picked up. Use `/restart --dry-run` to inspect the reexec plan. The tools queue the matching slash commands as follow-ups for agent-driven updates, refreshes, and restarts.
 - GitHub Copilot OAuth stale-token recovery via [`extensions/copilot-auth-refresh.js`](extensions/copilot-auth-refresh.js): when Pi would otherwise surface `No API key for provider: github-copilot`, the extension reloads auth storage and retries Copilot auth resolution. If the provider error still reaches `agent_end`, it reloads auth storage and queues one follow-up retry of the previous user request so managed agents do not stop on the transient missing-token state. `/copilot-auth-refresh` manually reloads the same auth storage without a full runtime reload.
@@ -229,6 +230,18 @@ Available tools:
 - `android_emulator_stream` — bounded repeated `adb` screencaps for a short live emulator screenshot stream.
 
 The SDK location is resolved from `ANDROID_HOME` / `ANDROID_SDK_ROOT`. Installs use `https://dl.google.com/android/cli/latest/linux_x86_64/install.sh`.
+
+## Xvfb virtual display Pi extension
+
+The Xvfb extension is loaded from [`extensions/xvfb.js`](extensions/xvfb.js). It is the opt-in orchestration follow-up to the headless display-detection helper in [`extensions/lib/headless-display.js`](extensions/lib/headless-display.js): on a headless Linux node (no `DISPLAY`/`WAYLAND_DISPLAY`, not WSLg) it can spawn an Xvfb virtual display and export `DISPLAY` so display-dependent tools — Tendril capture, Android screenshots, app-automation browser — can run instead of dead-ending.
+
+It never spawns unprompted: the model invokes `xvfb_ensure` explicitly, and the tool refuses unless the node is genuinely headless (override with `force: true`), refuses if the `Xvfb` binary is not on `PATH`, and selects a unique display number by probing `/tmp/.X11-unix` so it does not collide with another agent's display on the same host. The spawned process is tracked and torn down on session shutdown (or via `xvfb_stop`), mirroring the Firecracker extension's `autostop` lifecycle.
+
+- `xvfb_ensure` — opt-in: spawn an Xvfb virtual display and export `DISPLAY`. Idempotent (reuses a live session display); supports `screen` geometry (default `1920x1080x24`), a custom `command`/path, and `dryRun: true` to report the spawn plan (binary, args, chosen `DISPLAY`) without spawning.
+- `xvfb_stop` — stop the session-owned Xvfb display (if any) and unset the exported `DISPLAY`, with `forceAfterMs` controlling the SIGTERM→SIGKILL grace period.
+- `xvfb_status` — report current display availability (reusing the detection helper's summary) and whether a session-owned virtual display is active.
+
+The policy, free-display selection, and command construction live in [`extensions/lib/xvfb.js`](extensions/lib/xvfb.js) and are pure over injected probes, so they are unit-tested without spawning or touching the real filesystem.
 
 ## Web search Pi extension
 

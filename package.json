@@ -58,7 +58,8 @@
       "./extensions/true-defaults.js",
       "./extensions/tendril-share.js",
       "./extensions/app-automation.js",
-      "./extensions/android.js"
+      "./extensions/android.js",
+      "./extensions/xvfb.js"
     ],
     "prompts": [
       "./prompts"
