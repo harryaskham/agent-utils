@@ -85,3 +85,32 @@ def test_body_data_is_json_string():
 def test_empty_input_yields_empty_paragraph():
     doc = markdown_to_prosemirror("")
     assert doc == {"type": "doc", "content": [{"type": "paragraph"}]}
+
+
+# --- cookie resolution (settings.cookieFile + default-file fallback) ---
+
+def test_settings_cookie_file_and_default_fallback(tmp_path, monkeypatch):
+    import argparse
+    import json as _json
+
+    from linear_extra_mcp import server
+
+    for var in ("LINEAR_SESSION_COOKIE", "LINEAR_COOKIE_FILE", "LINEAR_EXTRA_SETTINGS"):
+        monkeypatch.delenv(var, raising=False)
+
+    cookie_path = tmp_path / "linear.cookie"
+    cookie_path.write_text("session:acct=jwt; uploadsSig:acct=jwt", encoding="utf-8")
+
+    # 1) settings.json -> linear-extra.cookieFile points at the file
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        _json.dumps({"linear-extra": {"cookieFile": str(cookie_path)}}), encoding="utf-8"
+    )
+    args = argparse.Namespace(cookie=None, cookie_file=None, settings=str(settings))
+    assert server.resolve_cookie(args).startswith("session:acct=")
+
+    # 2) default-file fallback when nothing else is configured
+    monkeypatch.setattr(server, "DEFAULT_SETTINGS_PATH", tmp_path / "missing.json")
+    monkeypatch.setattr(server, "DEFAULT_COOKIE_PATH", cookie_path)
+    args2 = argparse.Namespace(cookie=None, cookie_file=None, settings=None)
+    assert server.resolve_cookie(args2).startswith("session:acct=")

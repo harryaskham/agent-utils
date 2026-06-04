@@ -42,6 +42,7 @@ from .prosemirror import markdown_to_body_data
 DEFAULT_ENDPOINT = "https://client-api.linear.app/graphql"
 DEFAULT_CLIENT_VERSION = "1.66706.0"
 DEFAULT_SETTINGS_PATH = Path("~/.pi/agent/settings.json").expanduser()
+DEFAULT_COOKIE_PATH = Path("~/.pi/agent/linear-session.cookie").expanduser()
 
 log = logging.getLogger("linear-extra-mcp")
 
@@ -114,11 +115,21 @@ def resolve_cookie(args: argparse.Namespace) -> str:
             data = {}
         for key in ("linear-extra", "linearExtra"):
             section = data.get(key)
-            if isinstance(section, dict) and section.get("cookie"):
+            if not isinstance(section, dict):
+                continue
+            # A literal cookie value takes precedence over a referenced file.
+            if section.get("cookie"):
                 return str(section["cookie"]).strip()
+            cookie_file_setting = section.get("cookieFile") or section.get("cookie_file")
+            if cookie_file_setting:
+                return Path(str(cookie_file_setting)).expanduser().read_text(encoding="utf-8").strip()
+    # Final fallback: the conventional cookie file location, so the server works with no config.
+    if DEFAULT_COOKIE_PATH.exists():
+        return DEFAULT_COOKIE_PATH.read_text(encoding="utf-8").strip()
     raise RuntimeError(
         "No Linear session cookie found. Set LINEAR_SESSION_COOKIE, LINEAR_COOKIE_FILE, "
-        "or a linear-extra.cookie entry in settings.json."
+        "a linear-extra.cookie or linear-extra.cookieFile entry in settings.json, "
+        f"or place the cookie at {DEFAULT_COOKIE_PATH}."
     )
 
 

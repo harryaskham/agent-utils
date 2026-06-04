@@ -35,7 +35,9 @@ accepted by the internal endpoint). Resolution order (first match wins):
 1. `LINEAR_SESSION_COOKIE` — the full cookie string:
    `session:<acct>=<jwt>; uploadsSig:<acct>=<jwt>`
 2. `LINEAR_COOKIE_FILE` — path to a file containing that cookie string
-3. `settings.json` (`~/.pi/agent/settings.json` or `--settings`): a `linear-extra.cookie` entry
+3. `settings.json` (`~/.pi/agent/settings.json` or `--settings`): a `linear-extra.cookie`
+   (literal value) or `linear-extra.cookieFile` (path) entry
+4. Default file: `~/.pi/agent/linear-session.cookie` — picked up automatically with no config
 
 `accountId` and `organizationId` are derived from the cookie's JWT claims automatically; the Linear
 `user` id (needed for one header, distinct from the account id) is fetched once via `viewer { id }`.
