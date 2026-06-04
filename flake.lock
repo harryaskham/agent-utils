@@ -18,6 +18,34 @@
         "type": "github"
       }
     },
+    "linear-extra": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "pyproject-build-systems": [
+          "pyproject-build-systems"
+        ],
+        "pyproject-nix": [
+          "pyproject-nix"
+        ],
+        "uv2nix": [
+          "uv2nix"
+        ]
+      },
+      "locked": {
+        "path": "./linear-extra",
+        "type": "path"
+      },
+      "original": {
+        "path": "./linear-extra",
+        "type": "path"
+      },
+      "parent": []
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1779508470,
@@ -83,6 +111,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "linear-extra": "linear-extra",
         "nixpkgs": "nixpkgs",
         "pyproject-build-systems": "pyproject-build-systems",
         "pyproject-nix": "pyproject-nix",

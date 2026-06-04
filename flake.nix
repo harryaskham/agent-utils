@@ -31,9 +31,18 @@
       inputs.uv2nix.follows = "uv2nix";
       inputs.pyproject-build-systems.follows = "pyproject-build-systems";
     };
+
+    linear-extra = {
+      url = "path:./linear-extra";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.pyproject-build-systems.follows = "pyproject-build-systems";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, web-search, ... }:
+  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, ... }:
     let
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -51,6 +60,7 @@
           };
           allPackages = [
             web-search.packages.${system}.web-search-mcp
+            linear-extra.packages.${system}.linear-extra-mcp
             skillServer
           ];
         in {
@@ -60,6 +70,7 @@
           };
           all = self.packages.${system}.default;
           web-search-mcp = web-search.packages.${system}.web-search-mcp;
+          linear-extra-mcp = linear-extra.packages.${system}.linear-extra-mcp;
           skill-server = skillServer;
           skill-search = skillServer;
         });
@@ -70,6 +81,10 @@
           program = "${self.packages.${system}.web-search-mcp}/bin/web-search-mcp";
         };
         web-search-mcp = self.apps.${system}.default;
+        linear-extra-mcp = {
+          type = "app";
+          program = "${self.packages.${system}.linear-extra-mcp}/bin/linear-extra-mcp";
+        };
         skill-server = {
           type = "app";
           program = "${self.packages.${system}.skill-server}/bin/skill-server";
