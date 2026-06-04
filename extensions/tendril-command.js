@@ -57,6 +57,24 @@ export function buildTendrilCommand(args = [], env = process.env, overrides = {}
   };
 }
 
+// Resolve a stable, human-readable identity for the machine a Tendril command
+// targets, so captured images and downstream model-inference results can be
+// associated with their source machine. Remote captures (via --remote <host>)
+// report the host; local captures report "local". The returned shape also
+// includes whether the identity came from a per-call override or the ambient
+// env, mirroring tendrilBridgeConfig's *Source fields.
+export function tendrilSourceMachine(env = process.env, overrides = {}) {
+  const config = tendrilBridgeConfig(env, overrides);
+  const remote = config.remote ? String(config.remote) : "";
+  return {
+    machine: remote || "local",
+    remote: remote || null,
+    isRemote: Boolean(remote),
+    wslTunnel: config.wslTunnel,
+    source: config.remoteSource,
+  };
+}
+
 export function tendrilCommandSummary(env = process.env, overrides = {}) {
   const sample = buildTendrilCommand(["list", "--json"], env, overrides);
   return {
