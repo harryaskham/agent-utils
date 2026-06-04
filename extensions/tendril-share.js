@@ -8,7 +8,12 @@ import {
   readPngDimensions,
   stableKittyImageId,
 } from "./kitty-graphics.js";
-import { buildTendrilCommand, tendrilCommandSummary, tendrilBridgeConfig } from "./tendril-command.js";
+import {
+  buildTendrilCommand,
+  tendrilCommandSummary,
+  tendrilBridgeConfig,
+  tendrilSourceMachine,
+} from "./tendril-command.js";
 import { headlessDisplaySummary } from "./lib/headless-display.js";
 
 // Label used when a capture/inference comes from the bridge on this host rather
@@ -21,13 +26,18 @@ const LOCAL_SOURCE_MACHINE = "local";
 // descriptor lets downstream inference results be associated with the machine
 // that produced the image, which is required to disambiguate multiple
 // concurrent remote captures.
+//
+// Delegates the actual bridge resolution to the shared tendrilSourceMachine()
+// helper in tendril-command.js so there is a single source of truth for "which
+// machine produced this capture". The shared helper returns
+// { machine, remote, isRemote, wslTunnel, source }; this adapts it to the
+// { host, remote, source } shape the tendril-share call sites and tests expect.
 function resolveSourceMachine(override, env = process.env) {
-  const config = tendrilBridgeConfig(env, override || {});
-  const host = String(config.remote || "").trim();
+  const resolved = tendrilSourceMachine(env, override || {});
   return {
-    host: host || LOCAL_SOURCE_MACHINE,
-    remote: Boolean(host),
-    source: config.remoteSource,
+    host: resolved.isRemote ? resolved.machine : LOCAL_SOURCE_MACHINE,
+    remote: resolved.isRemote,
+    source: resolved.source,
   };
 }
 
