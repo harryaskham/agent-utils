@@ -79,6 +79,7 @@ import { readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/age
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import { mixHexColor } from "./pi-graphics/color-utils.js";
 import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-truncate.js";
+import { FOOTER_DIVIDER_WIDTH, fitFooterSegments, footerSegmentsWidth } from "./pi-graphics/footer-layout.js";
 import { approximateVisibleCells, clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
 import { normalizeUnicodeAnchorMode, valueLooksLikeThinking } from "./pi-graphics/anchor-thinking.js";
 import {
@@ -86,6 +87,7 @@ import {
   formatFooterPct,
   prettyFooterCwd,
   compactFooterProvider,
+  compactFooterModelName,
   noEllipsisFooterText,
 } from "./pi-graphics/footer-text.js";
 import {
@@ -634,17 +636,8 @@ export default function piGraphicsExtension(pi) {
     return Math.max(0, Math.min(1, (editorCursorHeat - 0.5) / 1.0));
   }
 
-  function compactFooterModelName(model, provider = footerState.provider) {
-    let value = String(model || "").trim();
-    const providerKey = String(provider || "").toLowerCase().replace(/[_./]+/g, "-");
-    value = value.replace(/-1m-internal$/i, "");
-    if (providerKey !== "github-copilot" || !/^gpt-5(?:\.|-|$)/i.test(value)) {
-      value = value.replace(/^gpt-/i, "");
-    }
-    value = value.replace(/^claude-/i, "");
-    value = value.replace(/^opus-4-7$/i, "opus-4.7");
-    return value;
-  }
+  // compactFooterModelName is pure over (model, provider) and now lives in
+  // ./pi-graphics/footer-text.js (bd-0f9032); call sites pass footerState.provider.
 
   function compactFooterModeLabel() {
     const envMode = process.env.PI_COMPACT_MODE;
@@ -1506,51 +1499,9 @@ export default function piGraphicsExtension(pi) {
     ];
   }
 
-  const FOOTER_DIVIDER_WIDTH = 3;
-
-  function fitFooterSegments(rawSegments, width, { absorbSpare = true } = {}) {
-    const terminalWidth = Math.max(1, Math.trunc(Number(width) || 1));
-    const dividerBudget = Math.max(0, rawSegments.length - 1) * FOOTER_DIVIDER_WIDTH;
-    let budget = terminalWidth - dividerBudget;
-    if (budget < rawSegments.length) return null;
-    const segments = rawSegments.map((segment) => {
-      const preferred = Math.min(segment.max, approximateVisibleCells(segment.value));
-      return { ...segment, width: Math.max(segment.min, preferred) };
-    });
-    let used = segments.reduce((sum, segment) => sum + segment.width, 0);
-    const shrinkOrder = [0, 5, 3, 1, 2, 4];
-    while (used > budget) {
-      let changed = false;
-      for (const index of shrinkOrder) {
-        const segment = segments[index];
-        if (segment && segment.width > segment.min) {
-          segment.width -= 1;
-          used -= 1;
-          changed = true;
-          if (used <= budget) break;
-        }
-      }
-      if (!changed) break;
-    }
-    if (absorbSpare && used < budget && segments.length) {
-      const modelSegment = segments.find((segment) => segment.key === "model");
-      const spare = budget - used;
-      if (modelSegment) modelSegment.width += spare;
-      else segments[0].width += spare;
-    }
-    return segments.map((segment) => {
-      const innerWidth = Math.max(0, segment.width);
-      const text = segment.truncate(segment.value, innerWidth);
-      const padded = `${text}${" ".repeat(Math.max(0, innerWidth - approximateVisibleCells(text)))}`;
-      return { ...segment, text: padded };
-    });
-  }
-
-  function footerSegmentsWidth(segments) {
-    if (!Array.isArray(segments) || segments.length === 0) return 0;
-    return segments.reduce((sum, segment) => sum + approximateVisibleCells(segment.text), 0)
-      + Math.max(0, segments.length - 1) * FOOTER_DIVIDER_WIDTH;
-  }
+  // FOOTER_DIVIDER_WIDTH, fitFooterSegments, and footerSegmentsWidth are pure
+  // over their inputs and now live in ./pi-graphics/footer-layout.js (bd-0f9032)
+  // so the width-budget/shrink-order behavior is covered by calling them.
 
   function buildFooterDividerCell(segmentKey, index, token = "borderAccent") {
     if (!ensureUnicodePlacement(state)) return "│";

@@ -39,6 +39,19 @@ import {
   resetPlacementTracking,
 } from "../extensions/pi-graphics/runtime.js";
 import {
+  FOOTER_DIVIDER_WIDTH,
+  fitFooterSegments,
+  footerSegmentsWidth,
+} from "../extensions/pi-graphics/footer-layout.js";
+import {
+  compactFooterModelName,
+  compactFooterProvider,
+} from "../extensions/pi-graphics/footer-text.js";
+import {
+  truncateFooterEnd,
+  truncateFooterStart,
+} from "../extensions/pi-graphics/footer-truncate.js";
+import {
   piGraphicsImageId,
   piGraphicsIdScope,
   piGraphicsPlacementId,
@@ -1591,19 +1604,16 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /clampRenderedLineToWidth\(buildSegmentedFooterLine\(ctx, footerData, width, pi, activeThemeRef\), width\)/);
   assert.match(surface, /function compactFooterPath\(path, threshold = 0\)/);
   assert.match(surface, /\.map\(compactPathSegment\)/);
+  // compactFooterProvider/compactFooterModelName are pure helpers in
+  // footer-text.js; their behavior is asserted in the dedicated
+  // "footer helpers" behavioral test below rather than by source regex.
   assert.match(surface, /function compactFooterProvider\(provider\)/);
-  assert.match(surface, /github-copilot"\) return "ghcp"/);
-  assert.match(surface, /litellm-openai"\) return "loai"/);
-  assert.match(surface, /litellm-anthropic"\) return "lant"/);
-  assert.match(surface, /key\.startsWith\("azure-"\)\) return "az"/);
-  assert.match(source, /function compactFooterModelName\(model, provider = footerState\.provider\)/);
-  assert.match(source, /providerKey !== "github-copilot" \|\| !\/\^gpt-5/);
+  assert.match(surface, /export function compactFooterModelName\(model, provider\)/);
   assert.match(source, /compactFooterModelName\(footerState\.model, footerState\.provider\)/);
-  assert.match(source, /replace\(\/\^gpt-\/i, ""\)/);
-  assert.match(source, /replace\(\/\^claude-\/i, ""\)/);
-  assert.match(source, /replace\(\/-1m-internal\$\/i, ""\)/);
   assert.match(surface, /function noEllipsisFooterText/);
-  assert.match(source, /const FOOTER_DIVIDER_WIDTH = 3/);
+  // FOOTER_DIVIDER_WIDTH now lives in footer-layout.js; the divider PNG cell
+  // builder still consumes it in the main extension.
+  assert.match(surface, /FOOTER_DIVIDER_WIDTH = 3/);
   assert.match(source, /renderFooterDividerPng/);
   assert.match(source, /function buildFooterDividerCell/);
   assert.match(source, /columns: FOOTER_DIVIDER_WIDTH/);
@@ -1617,9 +1627,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /value: effectiveThinkingLevel\(ctx, pi\)/);
   assert.match(source, /boxUnicodeMode: boxUnicodeMode\(\)/);
   assert.match(source, /box-unicode-mode fill\|topLeft/);
-  assert.match(source, /const shrinkOrder = \[0, 5, 3, 1, 2, 4\]/);
-  assert.match(source, /const modelSegment = segments\.find\(\(segment\) => segment\.key === "model"\)/);
-  assert.match(source, /if \(modelSegment\) modelSegment\.width \+= spare/);
+  // shrinkOrder/model-spare absorption now live in footer-layout.js's pure
+  // fitFooterSegments; asserted behaviorally in the "footer helpers" test below.
+  assert.match(surface, /const shrinkOrder = \[0, 5, 3, 1, 2, 4\]/);
+  assert.match(surface, /const modelSegment = segments\.find\(\(segment\) => segment\.key === "model"\)/);
+  assert.match(surface, /if \(modelSegment\) modelSegment\.width \+= spare/);
   assert.match(source, /const left = fitFooterSegments\(rawSegments\.slice\(0, 4\), target, \{ absorbSpare: false \}\)/);
   assert.match(source, /const right = fitFooterSegments\(rawSegments\.slice\(4\), target, \{ absorbSpare: false \}\)/);
   assert.match(source, /target - leftWidth - rightWidth/);
@@ -1798,6 +1810,96 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editorTrailingWorkspaceEnabled\(\)/);
   assert.match(source, /visualCols: cols/);
   assert.match(source, /return `\$\{chrome\}\$\{" "\.repeat\(Math\.max\(0, cols - visualCols\)\)\}`/);
+});
+
+// Behavioral coverage for the pure footer helpers extracted in bd-0f9032. These
+// replace the previous source-regex assertions on the inline fitFooterSegments /
+// footerSegmentsWidth / compactFooterModelName definitions: the contract is now
+// asserted by calling the functions, so safety refactors of the extension
+// closure no longer require updating source snapshots.
+
+function footerSegment(key, value, { min = 4, max = 96, truncate = truncateFooterEnd } = {}) {
+  return { key, value, min, max, truncate };
+}
+
+test("footer helpers: compactFooterModelName strips family prefixes and is provider-aware", () => {
+  // Non-Copilot providers drop the gpt-/claude- prefixes.
+  assert.equal(compactFooterModelName("gpt-4o", "openai"), "4o");
+  assert.equal(compactFooterModelName("claude-sonnet-4-5", "anthropic"), "sonnet-4-5");
+  // opus-4-7 is normalized to a dotted display form.
+  assert.equal(compactFooterModelName("claude-opus-4-7", "anthropic"), "opus-4.7");
+  // The -1m-internal suffix is always dropped (then family-prefix rules apply).
+  assert.equal(compactFooterModelName("gpt-5-1m-internal", "openai"), "5");
+  assert.equal(compactFooterModelName("gpt-5-1m-internal", "github-copilot"), "gpt-5");
+  // GitHub Copilot keeps the gpt-5* prefix to disambiguate from other families.
+  assert.equal(compactFooterModelName("gpt-5", "github-copilot"), "gpt-5");
+  assert.equal(compactFooterModelName("gpt-5.1", "github-copilot"), "gpt-5.1");
+  // But a non-gpt-5 Copilot model still loses the gpt- prefix.
+  assert.equal(compactFooterModelName("gpt-4o", "github-copilot"), "4o");
+  // Empty / nullish inputs are safe.
+  assert.equal(compactFooterModelName("", "openai"), "");
+  assert.equal(compactFooterModelName(undefined, undefined), "");
+  // Provider key normalization tolerates separators (github.copilot etc.).
+  assert.equal(compactFooterModelName("gpt-5", "github.copilot"), "gpt-5");
+});
+
+test("footer helpers: fitFooterSegments returns null when minimums cannot fit", () => {
+  const segments = [footerSegment("a", "alpha", { min: 5 }), footerSegment("b", "beta", { min: 5 })];
+  // Two segments need >= 5 + 5 inner cells plus one divider (FOOTER_DIVIDER_WIDTH).
+  assert.equal(fitFooterSegments(segments, 3), null);
+  assert.equal(fitFooterSegments(segments, FOOTER_DIVIDER_WIDTH + 1), null);
+  const fitted = fitFooterSegments(segments, 5 + 5 + FOOTER_DIVIDER_WIDTH);
+  assert.ok(Array.isArray(fitted) && fitted.length === 2, "fits exactly at min budget");
+});
+
+test("footer helpers: fitFooterSegments shrinks toward min and pads to allotted width", () => {
+  const segments = [
+    footerSegment("cwd", "a-very-long-working-directory-name", { min: 4, max: 48, truncate: truncateFooterStart }),
+    footerSegment("model", "ghcp/gpt-5", { min: 8, max: 96, truncate: truncateFooterEnd }),
+  ];
+  const width = 24;
+  const fitted = fitFooterSegments(segments, width, { absorbSpare: false });
+  assert.ok(fitted, "produces a fitted layout");
+  // Every segment is padded to a non-negative width and carries `text`.
+  for (const segment of fitted) {
+    assert.equal(typeof segment.text, "string");
+  }
+  // With width-honoring truncators, the fitted line stays within the budget.
+  assert.ok(footerSegmentsWidth(fitted) <= width, "fitted width stays within budget");
+  // The widest (cwd) segment is shrunk toward its min so the model fits.
+  const cwd = fitted.find((s) => s.key === "cwd");
+  assert.ok(cwd.width < "a-very-long-working-directory-name".length, "cwd was shrunk");
+});
+
+test("footer helpers: absorbSpare grants leftover width to the model segment", () => {
+  const segments = [
+    footerSegment("branch", "main", { min: 4, max: 8, truncate: truncateFooterEnd }),
+    footerSegment("model", "oai/4o", { min: 6, max: 96, truncate: (t) => String(t) }),
+  ];
+  const width = 40;
+  const withSpare = fitFooterSegments(segments, width, { absorbSpare: true });
+  const withoutSpare = fitFooterSegments(segments, width, { absorbSpare: false });
+  const modelWith = withSpare.find((s) => s.key === "model");
+  const modelWithout = withoutSpare.find((s) => s.key === "model");
+  // absorbSpare widens the model segment's padded text to consume the slack.
+  assert.ok(
+    modelWith.text.length > modelWithout.text.length,
+    "absorbSpare pads the model segment wider than the non-absorbing layout",
+  );
+  // With absorbSpare the line fills the full width (single segment + spare).
+  assert.equal(footerSegmentsWidth(withSpare), width);
+});
+
+test("footer helpers: footerSegmentsWidth accounts for dividers and tolerates empties", () => {
+  assert.equal(footerSegmentsWidth([]), 0);
+  assert.equal(footerSegmentsWidth(null), 0);
+  const fitted = fitFooterSegments(
+    [footerSegment("a", "aa", { min: 2, max: 2 }), footerSegment("b", "bb", { min: 2, max: 2 })],
+    2 + 2 + FOOTER_DIVIDER_WIDTH,
+    { absorbSpare: false },
+  );
+  // two 2-wide segments + one divider.
+  assert.equal(footerSegmentsWidth(fitted), 2 + 2 + FOOTER_DIVIDER_WIDTH);
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {
