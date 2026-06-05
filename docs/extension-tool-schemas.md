@@ -20,3 +20,53 @@ pi.registerTool({
 ```
 
 Use TypeBox directly only when the package owns the dependency or when a host profile guarantees the dependency is installed. Keeping simple schemas dependency-free prevents `ERR_MODULE_NOT_FOUND` failures during `npm test`, Pi package loading, or partial installs.
+
+## Porting TypeBox call sites: `import { ToolSchema as Type }`
+
+If you are converting an extension that already uses `Type.object(...)` /
+`Type.string(...)` TypeBox-style call sites (or you simply prefer that name),
+alias the shim on import so the call sites do not have to change:
+
+```js
+import { ToolSchema as Type } from "./lib/tool-schema.js";
+
+parameters: Type.object({
+  id: Type.string({ description: "VM id" }),
+  force: Type.optional(Type.boolean({ description: "Force teardown" })),
+}, { required: ["id"] }),
+```
+
+The shim's API is intentionally lowercase and TypeBox-shaped
+(`Type.object` / `Type.string` / `Type.boolean` / `Type.number`, with
+`Type.optional` acting as identity), so most simple schemas port by changing
+only the import line. `extensions/android.js` and `extensions/xvfb.js` use this
+`as Type` alias.
+
+## Which extensions use the shim vs TypeBox (import-test consequence)
+
+The shim choice is what determines whether an extension can be loaded under
+`node --test` in this checkout. typebox is only a peer dependency here, so an
+extension that imports `@sinclair/typebox` directly throws `ERR_MODULE_NOT_FOUND`
+the moment a test file imports it — which is why those extensions are tested via
+other seams (extracted pure submodules, source-surface assertions) rather than
+by importing the extension module itself.
+
+| Extension | Schema source | Import-testable under `node --test`? |
+| --- | --- | --- |
+| `android.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
+| `pi-self-update.js` | `lib/tool-schema.js` shim | Yes |
+| `realtime-agent.js` | `lib/tool-schema.js` shim | Yes |
+| `xvfb.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
+| `app-automation.js` | `@sinclair/typebox` directly | No — peer dep not installed in this checkout |
+| `firecracker-vm.js` | `@sinclair/typebox` directly | No |
+| `kitty-image-preview.js` | `@sinclair/typebox` directly | No |
+| `pi-graphics.js` | `@sinclair/typebox` directly | No |
+| `web-search.js` | `@sinclair/typebox` directly | No |
+
+Rule of thumb: **if you want a new extension unit-tested at import level, use the
+shim, not typebox.** If an extension genuinely needs full TypeBox (or a host
+profile guarantees the dependency), import typebox directly but expect to test
+its behavior through an extracted pure module or source-surface assertions
+instead of by importing the extension. The list above is current as of writing;
+regenerate it with `grep -l '@sinclair/typebox' extensions/*.js` versus
+`grep -l 'lib/tool-schema' extensions/*.js` if it drifts.
