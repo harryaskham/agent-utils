@@ -44,6 +44,10 @@ import {
   footerSegmentsWidth,
 } from "../extensions/pi-graphics/footer-layout.js";
 import {
+  composeEditorRenderRows,
+  isEditorDashLine,
+} from "../extensions/pi-graphics/editor-render.js";
+import {
   compactFooterModelName,
   compactFooterProvider,
 } from "../extensions/pi-graphics/footer-text.js";
@@ -1504,7 +1508,12 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"/);
   assert.match(source, /buildEditorBorderWidgetRows\(width, edge\)[\s\S]*buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
   assert.match(source, /editorBorderNeedsWidget\(edge\)[\s\S]*editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"\) return true/);
-  assert.match(source, /dashIndices\.length === 0\) return clampRenderedRowsToWidth\(baseLines\.map\(\(line\) => decorateEditorContentLine\(line, width\)\), width\)/);
+  // The dash-rule detection + border/decorate/clamp composition moved into the
+  // pure composeEditorRenderRows seam (bd-f5f802); it is asserted behaviorally in
+  // the "editor render composition" test below. The surface still contains the
+  // no-dash decorate+clamp branch (now in editor-render.js).
+  assert.match(surface, /clampRows\(baseLines\.map\(\(line\) => decorateLine\(line, width\)\), width\)/);
+  assert.match(source, /composeEditorRenderRows\(baseLines, \{/);
   assert.match(source, /function editorAnimationEnabled\(\)/);
   assert.match(source, /function editorUnicodeMode\(\)/);
   assert.match(source, /function normalizeEditorGraphicsCombination\(editor = \{\}\)/);
@@ -1805,7 +1814,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
   assert.match(source, /\\x1b\\\[\(\?:0\|27\)m/);
   assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
-  assert.match(source, /decorateEditorContentLine\(line, width\)/);
+  // decorateEditorContentLine is now invoked via the composeEditorRenderRows
+  // decorateLine callback (bd-f5f802); the wiring is asserted here and the
+  // composition behavior in the "editor render composition" tests above.
+  assert.match(source, /decorateLine: \(line, lineWidth\) => decorateEditorContentLine\(line, lineWidth\)/);
   assert.match(source, /if \(!tmuxLiveEditorGraphicsEnabled\(\)\) return line/);
   assert.match(source, /editorTrailingWorkspaceEnabled\(\)/);
   assert.match(source, /visualCols: cols/);
@@ -1900,6 +1912,96 @@ test("footer helpers: footerSegmentsWidth accounts for dividers and tolerates em
   );
   // two 2-wide segments + one divider.
   assert.equal(footerSegmentsWidth(fitted), 2 + 2 + FOOTER_DIVIDER_WIDTH);
+});
+
+// Behavioral coverage for the editor render composition seam extracted in
+// bd-f5f802. These replace the source-regex assertion on the exact dash-render
+// return expression: the control flow is now asserted by driving
+// composeEditorRenderRows with injected callbacks and recording how rows are
+// decorated, bordered, and clamped.
+
+function editorComposeHarness(overrides = {}) {
+  const calls = { decorate: [], border: [], clamp: 0 };
+  const opts = {
+    width: 20,
+    decorateLine: (line, width) => {
+      calls.decorate.push([line, width]);
+      return `D:${line}`;
+    },
+    clampRows: (lines, width) => {
+      calls.clamp += 1;
+      calls.lastClampWidth = width;
+      return lines.map((line) => `C:${line}`);
+    },
+    buildBorderRow: (width, edge) => {
+      calls.border.push([width, edge]);
+      return `BORDER-${edge}`;
+    },
+    ...overrides,
+  };
+  return { opts, calls };
+}
+
+test("isEditorDashLine matches ANSI-wrapped dash rules and rejects content", () => {
+  assert.equal(isEditorDashLine("\u2500\u2500\u2500\u2500"), true);
+  assert.equal(isEditorDashLine("\x1b[38;2;1;2;3m\u2500\u2500\u2500\x1b[39m"), true);
+  assert.equal(isEditorDashLine("\u2501\u2550 \u2500"), true);
+  assert.equal(isEditorDashLine(""), false);
+  assert.equal(isEditorDashLine("   "), false);
+  assert.equal(isEditorDashLine("> hello"), false);
+  assert.equal(isEditorDashLine("\u2500 text \u2500"), false);
+});
+
+test("composeEditorRenderRows passes through fewer than two base rows unclamped", () => {
+  const { opts, calls } = editorComposeHarness();
+  assert.deepEqual(composeEditorRenderRows(["only-one"], opts), ["only-one"]);
+  assert.deepEqual(composeEditorRenderRows([], opts), []);
+  assert.deepEqual(composeEditorRenderRows(null, opts), null);
+  assert.equal(calls.clamp, 0, "short input never clamps");
+});
+
+test("composeEditorRenderRows with no dash rows decorates every row then clamps", () => {
+  const { opts, calls } = editorComposeHarness();
+  const out = composeEditorRenderRows(["> a", "> b"], opts);
+  assert.deepEqual(out, ["C:D:> a", "C:D:> b"]);
+  assert.equal(calls.border.length, 0, "no borders built without dash rows");
+  assert.equal(calls.clamp, 1);
+});
+
+test("composeEditorRenderRows replaces first/last dash rows with borders and decorates the rest", () => {
+  const { opts, calls } = editorComposeHarness();
+  const base = ["\u2500\u2500\u2500", "> body", "\u2500\u2500\u2500"];
+  const out = composeEditorRenderRows(base, opts);
+  // First dash -> top border, last dash -> bottom border, middle decorated.
+  assert.deepEqual(out, ["C:BORDER-top", "C:D:> body", "C:BORDER-bottom"]);
+  assert.deepEqual(calls.border, [[20, "top"], [20, "bottom"]]);
+  // Dash rows are not decorated; only the single content row is.
+  assert.deepEqual(calls.decorate, [["> body", 20]]);
+});
+
+test("composeEditorRenderRows with a single dash row builds only a top border", () => {
+  const { opts, calls } = editorComposeHarness();
+  const out = composeEditorRenderRows(["\u2500\u2500\u2500", "> body"], opts);
+  assert.deepEqual(out, ["C:BORDER-top", "C:D:> body"]);
+  assert.deepEqual(calls.border, [[20, "top"]], "single dash row never requests a bottom border");
+});
+
+test("composeEditorRenderRows clamps untouched base rows when no top border is available", () => {
+  const { opts, calls } = editorComposeHarness({ buildBorderRow: () => null });
+  const base = ["\u2500\u2500\u2500", "> body", "\u2500\u2500\u2500"];
+  const out = composeEditorRenderRows(base, opts);
+  // Falsy top border short-circuits to clamping the original rows verbatim.
+  assert.deepEqual(out, base.map((line) => `C:${line}`));
+  assert.equal(calls.decorate.length, 0, "no decoration when the border is unavailable");
+});
+
+test("composeEditorRenderRows in topLeftUnicode mode passes dash rows through and decorates content", () => {
+  const { opts, calls } = editorComposeHarness({ topLeftUnicode: true });
+  const base = ["\u2500\u2500\u2500", "> body", "\u2500\u2500\u2500"];
+  const out = composeEditorRenderRows(base, opts);
+  // Dash rows verbatim (the unicode top-left border owns them), content decorated.
+  assert.deepEqual(out, ["C:\u2500\u2500\u2500", "C:D:> body", "C:\u2500\u2500\u2500"]);
+  assert.equal(calls.border.length, 0, "topLeftUnicode never builds graphical border rows here");
 });
 
 test("buildVisualContractLines exposes a complete operator checklist", () => {

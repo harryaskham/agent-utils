@@ -80,6 +80,7 @@ import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/se
 import { mixHexColor } from "./pi-graphics/color-utils.js";
 import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-truncate.js";
 import { FOOTER_DIVIDER_WIDTH, fitFooterSegments, footerSegmentsWidth } from "./pi-graphics/footer-layout.js";
+import { composeEditorRenderRows, isEditorDashLine } from "./pi-graphics/editor-render.js";
 import { approximateVisibleCells, clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
 import { normalizeUnicodeAnchorMode, valueLooksLikeThinking } from "./pi-graphics/anchor-thinking.js";
 import {
@@ -1679,31 +1680,20 @@ export default function piGraphicsExtension(pi) {
     if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return false;
     if (typeof ctx.ui?.setEditorComponent !== "function") return false;
     if (typeof CustomEditor !== "function") return false;
-    const isDashLine = (line) => {
-      const text = String(line || "").replace(/\x1b\[[0-9;]*m/g, "").trim();
-      return text.length > 0 && /^[\s─━═]+$/.test(text);
-    };
     class KittyEditor extends CustomEditor {
       render(width) {
         const baseLines = super.render(width);
-        if (!Array.isArray(baseLines) || baseLines.length < 2) return baseLines;
-        const next = baseLines.slice();
-        const dashIndices = [];
-        for (let i = 0; i < next.length; i += 1) {
-          if (isDashLine(next[i])) dashIndices.push(i);
-        }
-        if (dashIndices.length === 0) return clampRenderedRowsToWidth(baseLines.map((line) => decorateEditorContentLine(line, width)), width);
-        if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
-          return clampRenderedRowsToWidth(next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width)), width);
-        }
-        const firstDash = dashIndices[0];
-        const lastDash = dashIndices[dashIndices.length - 1];
-        const top = buildEditorBorderRow(width, "top");
-        const bot = firstDash !== lastDash ? buildEditorBorderRow(width, "bottom") : null;
-        if (!top) return clampRenderedRowsToWidth(baseLines, width);
-        next[firstDash] = top;
-        if (bot && lastDash !== firstDash) next[lastDash] = bot;
-        return clampRenderedRowsToWidth(next.map((line, index) => dashIndices.includes(index) ? line : decorateEditorContentLine(line, width)), width);
+        // The dash-rule detection + border/decoration/clamp composition is a pure
+        // seam (composeEditorRenderRows, bd-f5f802); the stateful pieces stay
+        // here and are injected as callbacks.
+        return composeEditorRenderRows(baseLines, {
+          width,
+          isDashLine: isEditorDashLine,
+          decorateLine: (line, lineWidth) => decorateEditorContentLine(line, lineWidth),
+          clampRows: (lines, lineWidth) => clampRenderedRowsToWidth(lines, lineWidth),
+          buildBorderRow: (lineWidth, edge) => buildEditorBorderRow(lineWidth, edge),
+          topLeftUnicode: editorStyle() === "unicode" && editorUnicodeMode() === "topLeft",
+        });
       }
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
