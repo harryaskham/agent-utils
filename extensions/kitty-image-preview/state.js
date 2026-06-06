@@ -6,7 +6,7 @@
 
 import path from "node:path";
 
-import { stableKittyImageId } from "../kitty-graphics.js";
+import { kittyPreviewImageId } from "./id-space.js";
 import { clampInteger } from "./text-utils.js";
 import { PREVIEW_PLACEMENTS } from "./constants.js";
 
@@ -37,7 +37,7 @@ export function restorePublicState(state, details) {
   state.items = snapshot.items
     .filter((item) => typeof item?.path === "string")
     .map((item) => ({
-      id: Number.isFinite(item.id) ? item.id : stableKittyImageId(item.path),
+      id: Number.isFinite(item.id) ? item.id : kittyPreviewImageId(`restored.${item.path}`),
       path: item.path,
       label: item.label || path.basename(item.path),
       mediaType: item.mediaType || "image/png",

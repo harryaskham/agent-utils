@@ -119,8 +119,12 @@ import {
   isSupportedKittyPngPath,
   readPngDimensions,
   shouldUseInMemoryTransfer,
-  stableKittyImageId,
 } from "./kitty-graphics.js";
+import {
+  kittyPreviewDefaultPlacementId,
+  kittyPreviewImageId,
+  kittyPreviewItemName,
+} from "./kitty-image-preview/id-space.js";
 
 const TOOL_PREFIX = "kitty_image_preview";
 const WIDGET_ID = "kitty-image-preview";
@@ -711,7 +715,7 @@ async function buildItem(cwd, inputPath, label) {
   // get unique kitty image ids. This keeps scoped-delete able to evict the
   // previous frame without affecting unrelated images in the terminal.
   return {
-    id: stableKittyImageId(`${absolutePath}:${info.mtimeMs}:${info.size}`),
+    id: kittyPreviewImageId(kittyPreviewItemName({ absolutePath, mtimeMs: info.mtimeMs, size: info.size })),
     path: absolutePath,
     label: label || relativeLabel(cwd, absolutePath),
     mediaType: "image/png",
@@ -1041,7 +1045,7 @@ export default function kittyImagePreviewExtension(pi) {
       showCaption: true,
       clearPrevious: true,
       placement: AUTO_PLACEMENT,
-      placementId: stableKittyImageId("agent-utils-kitty-image-preview-placement"),
+      placementId: kittyPreviewDefaultPlacementId(),
       transferMode: "auto",
       passthrough: "auto",
       placementMode: "auto",
@@ -1625,6 +1629,50 @@ export default function kittyImagePreviewExtension(pi) {
     },
   });
 
+  function previewDiagnostics() {
+    const current = state.items[state.index];
+    const passthroughDetected = detectKittyPassthroughMode(process.env);
+    const passthrough = state.config.passthrough === "auto" ? passthroughDetected : state.config.passthrough;
+    const memoryAuto = shouldUseInMemoryTransfer(process.env);
+    const transport = state.config.transferMode === "auto" ? (memoryAuto ? "memory" : "file") : state.config.transferMode;
+    const placement = state.config.placementMode === "auto"
+      ? (shouldRenderUnicodePlaceholders(state, { placement: resolvePlacement(state) }) ? "unicode" : "cursor")
+      : state.config.placementMode;
+    const placementId = state.config.placementId;
+    const unicodePlacement24 = placementId ? (placementId % 0x1000000 || 1) : undefined;
+    return {
+      requested: {
+        transferMode: state.config.transferMode,
+        passthrough: state.config.passthrough,
+        placementMode: state.config.placementMode,
+      },
+      resolved: {
+        transport,
+        passthrough,
+        passthroughDetected,
+        placement,
+        ssh: isRemoteSshSession(process.env),
+        memoryAuto,
+      },
+      ids: {
+        imageId: current?.id,
+        imageHex: current?.id !== undefined ? `0x${Number(current.id).toString(16)}` : undefined,
+        placementId,
+        placementHex: placementId !== undefined ? `0x${Number(placementId).toString(16)}` : undefined,
+        unicodePlacement24,
+        unicodePlacement24Hex: unicodePlacement24 !== undefined ? `0x${Number(unicodePlacement24).toString(16)}` : undefined,
+        ownedCount: state.ownedImageIds?.size || 0,
+        transmittedGuardCount: state.transmittedSignatures?.size || 0,
+      },
+      currentCommand: state.currentCommand ? {
+        transport: state.currentCommand.transport,
+        signature: state.currentCommand.signature,
+        hasInlinePayload: Boolean(state.currentCommand.pngBase64),
+        hasFilePath: Boolean(state.currentCommand.filePath),
+      } : undefined,
+    };
+  }
+
   pi.registerTool({
     name: "kitty_image_preview_status",
     label: "Kitty Image Preview Status",
@@ -1633,14 +1681,22 @@ export default function kittyImagePreviewExtension(pi) {
     parameters: Type.Object({}),
     async execute() {
       const snapshot = serializePublicState(state);
+      const diagnostics = previewDiagnostics();
       const lines = [
         summarizeCurrent(state),
-        `visible=${state.visible} images=${state.items.length} passthroughDetected=${detectKittyPassthroughMode(process.env)} ssh=${isRemoteSshSession(process.env)} memoryAuto=${shouldUseInMemoryTransfer(process.env)}`,
+        `visible=${state.visible} images=${state.items.length} passthroughDetected=${diagnostics.resolved.passthroughDetected} ssh=${diagnostics.resolved.ssh} memoryAuto=${diagnostics.resolved.memoryAuto}`,
+        `resolved transport=${diagnostics.resolved.transport} passthrough=${diagnostics.resolved.passthrough} placement=${diagnostics.resolved.placement}`,
+        diagnostics.ids.imageId !== undefined
+          ? `ids image=${diagnostics.ids.imageId} (${diagnostics.ids.imageHex}) placement=${diagnostics.ids.placementId} (${diagnostics.ids.placementHex}) unicodePlacement24=${diagnostics.ids.unicodePlacement24} (${diagnostics.ids.unicodePlacement24Hex}) owned=${diagnostics.ids.ownedCount} guard=${diagnostics.ids.transmittedGuardCount}`
+          : undefined,
+        diagnostics.currentCommand
+          ? `currentCommand transport=${diagnostics.currentCommand.transport} inlinePayload=${diagnostics.currentCommand.hasInlinePayload} filePath=${diagnostics.currentCommand.hasFilePath}`
+          : undefined,
         ...state.items.map((item, index) => `${index === state.index ? "→" : " "} ${index}: ${item.label}`),
-      ];
+      ].filter(Boolean);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { kittyImagePreviewState: snapshot },
+        details: { kittyImagePreviewState: snapshot, diagnostics },
       };
     },
   });
