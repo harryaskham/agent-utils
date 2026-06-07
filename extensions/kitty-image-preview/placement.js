@@ -2,7 +2,13 @@
 // (bd-e1914a). Pure over `state` plus terminal width, passthrough detection, and
 // the viewport row limit. Behavior is unchanged from the original inline defs.
 
-import { MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE, detectKittyPassthroughMode, shouldUseUnicodePlaceholders } from "../kitty-graphics.js";
+import {
+  MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
+  detectKittyPassthroughMode,
+  isNativeKittyGraphicsTerminal,
+  isRemoteSshSession,
+  shouldUseUnicodePlaceholders,
+} from "../kitty-graphics.js";
 
 import {
   AUTO_PLACEMENT,
@@ -53,20 +59,25 @@ export function isSideOverlayPlacement(placement) {
 
 export function shouldRenderUnicodePlaceholders(state, options = {}) {
   const placement = options.placement ?? state.config.placement;
-  const forceAnchored = options.forceUnicodePlaceholders || (
-    // For this preview extension, anchored placeholders are the safe default.
-    // Direct cursor placement can move the real terminal cursor while Pi is
-    // differentially redrawing, which creates duplicate full-screen scrollback
-    // entries on image/frame updates. Keep direct cursor mode available only as
-    // an explicit debugging override with placementMode: "cursor".
-    state.config.placementMode === "auto" && options.preferAnchored !== false
-  ) || (
-    options.forceSideOverlay !== false && isSideOverlayPlacement(placement)
+  const env = options.env ?? process.env;
+  const passthrough = state.config.passthrough;
+  const passthroughMode = passthrough === "auto" ? detectKittyPassthroughMode(env) : passthrough;
+  const nativeNoPassthrough = passthroughMode === "none" && !isRemoteSshSession(env) && isNativeKittyGraphicsTerminal(env);
+  const preferAnchored = state.config.placementMode === "auto"
+    && options.preferAnchored !== false
+    // On native kitty-compatible terminals with no passthrough hop (not tmux,
+    // not SSH), default to cursor placement. Unicode placeholders are useful as
+    // an anchored tmux/side-panel workaround, but in no-passthrough Ghostty they
+    // can leak PUA placeholder cells as tofu when the TUI text stream and kitty
+    // protocol writes interleave (bd-903d89).
+    && !nativeNoPassthrough;
+  const forceAnchored = options.forceUnicodePlaceholders || preferAnchored || (
+    options.forceSideOverlay !== false && isSideOverlayPlacement(placement) && !nativeNoPassthrough
   );
   return shouldUseUnicodePlaceholders({
     placementMode: state.config.placementMode,
-    passthrough: state.config.passthrough,
-    env: process.env,
+    passthrough,
+    env,
     forceAnchored,
   });
 }

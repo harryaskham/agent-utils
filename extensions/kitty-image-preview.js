@@ -287,14 +287,15 @@ function renderSidePanelImageLines(state, rows, layout) {
   const current = state.items[state.index];
   const blank = " ".repeat(layout.totalWidth);
   if (!current || rows <= 0) return [];
-  // Side-panel rendering must not use direct cursor placement. Direct kitty
-  // placement can move the terminal cursor while Pi is doing differential
-  // redraws, which pushes full-screen copies into scrollback on every update
-  // and is especially bad during animation. Virtual placement + Unicode
-  // placeholders anchors the image to these cells without scrolling.
+  // Side-panel rendering normally uses virtual placement + Unicode
+  // placeholders so the image anchors to reserved cells without moving the
+  // terminal cursor during Pi's differential redraws. Native kitty-compatible
+  // terminals with no passthrough hop are the exception: in Ghostty the
+  // placeholder cells can leak as tofu when interleaved with the TUI text
+  // stream, so shouldRenderUnicodePlaceholders falls back to cursor placement
+  // for that environment (bd-903d89).
   const useUnicodePlaceholders = shouldRenderUnicodePlaceholders(state, {
-    forceUnicodePlaceholders: true,
-    forceSideOverlay: false,
+    forceSideOverlay: true,
   });
   const maxRows = previewImageRowLimit({
     viewportRows: undefined,
@@ -474,7 +475,7 @@ function ensureSideOverlay(ctx, state) {
     promise = ctx.ui.custom((_tui, _theme, _keybindings, _done) => {
       overlay.pending = false;
       overlay.tui = _tui;
-      overlay.component = new KittyImagePreviewWidget(state, { forceUnicodePlaceholders: true });
+      overlay.component = new KittyImagePreviewWidget(state, { forceSideOverlay: true });
       return overlay.component;
     }, {
       overlay: true,

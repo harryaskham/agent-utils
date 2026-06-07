@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { KittyImagePreviewWidget } from "../extensions/kitty-image-preview/widget.js";
 import { resetTransmissionGuard } from "../extensions/kitty-image-preview/display-commands.js";
+import { shouldRenderUnicodePlaceholders } from "../extensions/kitty-image-preview/placement.js";
 import { stableKittyImageId } from "../extensions/kitty-graphics.js";
 
 // Widget-level coverage for the bd-d6fa1b transmit-once / placement-only path,
@@ -102,4 +103,31 @@ test("hidden or empty widget renders nothing", () => {
   const empty = makeState();
   empty.items = [];
   assert.deepEqual(new KittyImagePreviewWidget(empty, OPTIONS).render(WIDTH), []);
+});
+
+test("auto placement defaults to cursor on no-passthrough native Ghostty", () => {
+  const state = makeState();
+  state.config.passthrough = "auto";
+  state.config.placementMode = "auto";
+  assert.equal(shouldRenderUnicodePlaceholders(state, {
+    env: { TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" },
+    placement: "aboveEditor",
+    forceSideOverlay: false,
+  }), false);
+  assert.equal(shouldRenderUnicodePlaceholders(state, {
+    env: { TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" },
+    placement: "rightOverlay",
+    forceSideOverlay: true,
+  }), false);
+  assert.equal(shouldRenderUnicodePlaceholders(state, {
+    env: { TMUX: "/tmp/tmux-1000/default,1,0", TERM: "screen-256color" },
+    placement: "aboveEditor",
+    forceSideOverlay: false,
+  }), true);
+  assert.equal(shouldRenderUnicodePlaceholders(state, {
+    env: { TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" },
+    placement: "aboveEditor",
+    forceSideOverlay: false,
+    forceUnicodePlaceholders: true,
+  }), true);
 });

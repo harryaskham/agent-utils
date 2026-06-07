@@ -38,16 +38,31 @@ export function detectKittyPassthroughMode(env = process.env) {
   return "none";
 }
 
+export function isNativeKittyGraphicsTerminal(env = process.env) {
+  const term = String(env.TERM || "").toLowerCase();
+  const termProgram = String(env.TERM_PROGRAM || "").toLowerCase();
+  return Boolean(env.KITTY_WINDOW_ID)
+    || term === "xterm-kitty"
+    || term === "xterm-ghostty"
+    || term.includes("wezterm")
+    || termProgram === "kitty"
+    || termProgram === "ghostty"
+    || termProgram === "wezterm";
+}
+
 export function shouldUseInMemoryTransfer(env = process.env) {
   const forced = env.KITTY_IMAGE_PREVIEW_TRANSFER_MODE;
   if (forced && forced !== "auto") return forced === "memory" || forced === "direct";
   // Inline/direct (t=d) transmission embeds the PNG bytes in the escape stream
   // itself, so it works across a connection where the terminal does not share a
   // filesystem with this process. File transmission (t=f) only sends a path the
-  // terminal opens locally, which breaks over SSH. Use inline transmission
-  // whenever we are inside tmux OR a remote SSH session; fall back to file
-  // transmission only for a local terminal that shares our filesystem.
-  return Boolean(env.TMUX) || isRemoteSshSession(env);
+  // terminal opens locally, which breaks over SSH and can trip Node's unmanaged
+  // fd warnings in native kitty-compatible terminals (for example Ghostty)
+  // when a no-passthrough Pi process writes the file-transport escape stream.
+  // Use inline transmission for tmux/SSH and for native kitty/Ghostty/WezTerm;
+  // fall back to file transmission only for a generic local terminal that shares
+  // our filesystem and is not known to need in-band kitty bytes.
+  return Boolean(env.TMUX) || isRemoteSshSession(env) || isNativeKittyGraphicsTerminal(env);
 }
 
 // Detect a remote SSH session where the controlling terminal lives on another

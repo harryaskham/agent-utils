@@ -17,6 +17,7 @@ import {
   buildDeleteByZIndexBandCommand,
   buildDeleteByZIndexCommand,
   buildScopedDeleteCommand,
+  isNativeKittyGraphicsTerminal,
   isRemoteSshSession,
   shouldUseInMemoryTransfer,
   serializeKittyGraphicsCommand,
@@ -435,10 +436,11 @@ test("buildScopedDeleteCommand returns empty string when no images are owned", (
   assert.equal(buildScopedDeleteCommand({ passthrough: "none" }), "");
 });
 
-test("auto transfer uses inline transmission over SSH and tmux but file transmission locally", () => {
-  // Local terminal that shares our filesystem: file transmission (t=f) is fine.
+test("auto transfer uses inline transmission over SSH, tmux, and native kitty terminals", () => {
+  // Generic local terminal that shares our filesystem: file transmission (t=f) is fine.
   assert.equal(shouldUseInMemoryTransfer({}), false);
   assert.equal(isRemoteSshSession({}), false);
+  assert.equal(isNativeKittyGraphicsTerminal({}), false);
   // tmux: inline so the DCS passthrough carries the bytes in-band.
   assert.equal(shouldUseInMemoryTransfer({ TMUX: "/tmp/tmux-1000/default,1,0" }), true);
   // Bare SSH without tmux must also use inline transmission, because the remote
@@ -447,8 +449,14 @@ test("auto transfer uses inline transmission over SSH and tmux but file transmis
   assert.equal(shouldUseInMemoryTransfer({ SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" }), true);
   assert.equal(shouldUseInMemoryTransfer({ SSH_TTY: "/dev/pts/3" }), true);
   assert.equal(shouldUseInMemoryTransfer({ SSH_CLIENT: "1.2.3.4 5 22" }), true);
+  // Native kitty-compatible terminals also default to in-band memory transfer
+  // so no-passthrough Ghostty does not trip Node fd-33 warnings (bd-903d89).
+  assert.equal(isNativeKittyGraphicsTerminal({ TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" }), true);
+  assert.equal(shouldUseInMemoryTransfer({ TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" }), true);
+  assert.equal(shouldUseInMemoryTransfer({ TERM: "xterm-kitty", KITTY_WINDOW_ID: "42" }), true);
   // Explicit override still wins over autodetection.
   assert.equal(shouldUseInMemoryTransfer({ TMUX: "x", KITTY_IMAGE_PREVIEW_TRANSFER_MODE: "file" }), false);
+  assert.equal(shouldUseInMemoryTransfer({ TERM_PROGRAM: "ghostty", KITTY_IMAGE_PREVIEW_TRANSFER_MODE: "file" }), false);
   assert.equal(shouldUseInMemoryTransfer({ KITTY_IMAGE_PREVIEW_TRANSFER_MODE: "memory" }), true);
 });
 
