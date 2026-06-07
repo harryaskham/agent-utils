@@ -10,9 +10,26 @@ export const AUTO_SIDE_MIN_COLUMNS = 100;
 export const SIDE_PANEL_MAX_WIDTH_RATIO = 0.5;
 export const SIDE_PANEL_LEFT_PADDING = 2;
 
-// Default vision model for image-description (provider/model). Overridable via
-// KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL.
-export const DEFAULT_DESCRIBE_MODEL = "litellm-anthropic/claude-opus-4-7";
+// Default vision model for image-description (provider/model). Overridable per
+// call (describeModel), via KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL, or in
+// settings.json (kittyImagePreview.describeModel). Uses a github-copilot model so
+// describe calls reuse pi's Copilot auth through the model registry (bd-02c6ff).
+export const DEFAULT_DESCRIBE_MODEL = "github-copilot/claude-opus-4.8";
+
+// Fallback chain tried only when no explicit param/env/settings override is
+// configured, so a node missing the exact default id degrades gracefully instead
+// of hard-throwing "not registered" (mirrors tendril-share's chain).
+export const FALLBACK_DESCRIBE_MODELS = Object.freeze([
+  DEFAULT_DESCRIBE_MODEL,
+  "github-copilot/claude-opus-4.8-1m-internal",
+  "github-copilot/claude-opus-4-8",
+  "github-copilot/claude-opus-4-8-1m-internal",
+  "github-copilot/claude-opus-4.7",
+  "github-copilot/claude-opus-4.7-1m-internal",
+  "github-copilot/claude-opus-4-7",
+  "github-copilot/claude-opus-4-7-1m-internal",
+  "litellm-anthropic/claude-opus-4-7",
+]);
 
 // Placement option sets for preview config validation and tool schemas.
 export const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"];

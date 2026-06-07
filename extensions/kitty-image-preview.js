@@ -53,7 +53,6 @@ import {
   DEFAULT_COLUMNS,
   DEFAULT_MAX_ROWS,
   SIDE_OVERLAY_PLACEMENT,
-  DEFAULT_DESCRIBE_MODEL,
   PREVIEW_PLACEMENTS,
 } from "./kitty-image-preview/constants.js";
 import {
@@ -97,7 +96,6 @@ import {
 } from "./kitty-image-preview/widget.js";
 
 import {
-  parseModelSpec,
   fullResolutionDescribeParams,
   parseJsonEnvelope,
   targetText,
@@ -107,6 +105,8 @@ import {
   describeParameterSchema,
   streamDescribeParameterSchema,
 } from "./kitty-image-preview/schema.js";
+
+import { resolveDescribeModel } from "./kitty-image-preview/describe-model.js";
 
 import { complete, StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -733,15 +733,12 @@ async function buildItem(cwd, inputPath, label) {
 
 
 function resolveVisionModel(ctx, params = {}) {
-  const spec = parseModelSpec(params.describeModel || process.env.KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL || DEFAULT_DESCRIBE_MODEL);
-  const model = spec ? ctx.modelRegistry?.find?.(spec.provider, spec.modelId) : ctx.model;
-  if (!model) {
-    throw new Error(`Vision model ${params.describeModel || process.env.KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL || DEFAULT_DESCRIBE_MODEL} is not registered. Pass describeModel as provider/model.`);
-  }
-  if (Array.isArray(model.input) && !model.input.includes("image")) {
-    throw new Error(`Model ${model.provider}/${model.id} does not advertise image input support. Pass describeModel with an image-capable model.`);
-  }
-  return model;
+  // Precedence: per-call describeModel -> KITTY_IMAGE_PREVIEW_DESCRIBE_MODEL ->
+  // settings.json (kittyImagePreview.describeModel) -> default github-copilot
+  // model (with fallback chain). Auth is unchanged: the resolved model is fed to
+  // ctx.modelRegistry.getApiKeyAndHeaders, so github-copilot models reuse pi's
+  // Copilot token (bd-02c6ff).
+  return resolveDescribeModel(ctx, { params }).model;
 }
 
 async function describeImageFile(filePath, item, ctx, params = {}, signal) {
