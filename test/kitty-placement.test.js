@@ -66,23 +66,47 @@ test("configuredPassthroughMode returns explicit modes and auto-detects from env
   });
 });
 
-test("shouldUseInlineRightPlacement is true only under tmux passthrough", () => {
-  assert.equal(shouldUseInlineRightPlacement(makeState({ passthrough: "tmux" })), true);
+test("shouldUseInlineRightPlacement only uses the legacy tmux inline fallback when explicitly requested", () => {
+  assert.equal(shouldUseInlineRightPlacement(makeState({ passthrough: "tmux" })), false);
   assert.equal(shouldUseInlineRightPlacement(makeState({ passthrough: "none" })), false);
+  assert.equal(
+    shouldUseInlineRightPlacement(makeState({ passthrough: "tmux" }), { KITTY_IMAGE_PREVIEW_INLINE_RIGHT_IN_TMUX: "1" }),
+    true,
+  );
+  assert.equal(
+    shouldUseInlineRightPlacement(makeState({ passthrough: "tmux" }), { KITTY_IMAGE_PREVIEW_SCROLL_SAFE_AUTO: "0" }),
+    true,
+  );
 });
 
-test("shouldAutoUseSidePanel honors tmux opt-out and the width threshold", () => {
-  // tmux -> inline right, never the auto side panel.
-  assert.equal(shouldAutoUseSidePanel(makeState({ passthrough: "tmux" })), false);
+test("shouldAutoUseSidePanel defaults to scroll-safe height-neutral placement", () => {
+  assert.equal(shouldAutoUseSidePanel(makeState({ passthrough: "tmux" })), true, "tmux still uses side panel by default");
   withTerminal({ columns: 120, rows: 40 }, () => {
     assert.equal(shouldAutoUseSidePanel(makeState({ passthrough: "none" })), true, "wide -> side panel");
   });
   withTerminal({ columns: 80, rows: 40 }, () => {
-    assert.equal(shouldAutoUseSidePanel(makeState({ passthrough: "none" })), false, "narrow -> no side panel");
+    assert.equal(shouldAutoUseSidePanel(makeState({ passthrough: "none" })), true, "narrow still avoids height-adding inline rows");
   });
   withTerminal({ columns: undefined, rows: undefined }, () => {
     assert.equal(shouldAutoUseSidePanel(makeState({ passthrough: "none" })), true, "unknown width -> side panel");
   });
+});
+
+test("shouldAutoUseSidePanel can restore legacy width and tmux fallback via env", () => {
+  assert.equal(
+    shouldAutoUseSidePanel(makeState({ passthrough: "tmux" }), { env: { KITTY_IMAGE_PREVIEW_SCROLL_SAFE_AUTO: "0" }, columns: 120 }),
+    false,
+    "legacy mode keeps tmux inline fallback",
+  );
+  assert.equal(
+    shouldAutoUseSidePanel(makeState({ passthrough: "none" }), { env: { KITTY_IMAGE_PREVIEW_SCROLL_SAFE_AUTO: "0" }, columns: 80 }),
+    false,
+    "legacy mode honors the width threshold",
+  );
+  assert.equal(
+    shouldAutoUseSidePanel(makeState({ passthrough: "none" }), { env: { KITTY_IMAGE_PREVIEW_SCROLL_SAFE_AUTO: "0" }, columns: 120 }),
+    true,
+  );
 });
 
 test("resolvePlacement passes through explicit placements and resolves auto", () => {
@@ -92,10 +116,14 @@ test("resolvePlacement passes through explicit placements and resolves auto", ()
     assert.equal(resolvePlacement(makeState({ placement: "auto", passthrough: "none" })), "rightOverlay");
   });
   withTerminal({ columns: 80, rows: 40 }, () => {
-    assert.equal(resolvePlacement(makeState({ placement: "auto", passthrough: "none" })), "aboveEditor");
+    assert.equal(resolvePlacement(makeState({ placement: "auto", passthrough: "none" })), "rightOverlay");
   });
-  // auto under tmux falls back to aboveEditor (no auto side panel).
-  assert.equal(resolvePlacement(makeState({ placement: "auto", passthrough: "tmux" })), "aboveEditor");
+  assert.equal(resolvePlacement(makeState({ placement: "auto", passthrough: "tmux" })), "rightOverlay");
+  assert.equal(
+    resolvePlacement(makeState({ placement: "auto", passthrough: "tmux" }), { env: { KITTY_IMAGE_PREVIEW_SCROLL_SAFE_AUTO: "0" }, columns: 120 }),
+    "aboveEditor",
+    "legacy opt-out restores tmux inline placement",
+  );
 });
 
 test("sideOverlayWidth clamps the configured column count", () => {

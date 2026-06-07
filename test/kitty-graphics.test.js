@@ -320,7 +320,7 @@ test("kitty image preview applies the half-viewport cap to inline and side-panel
   assert.match(source, /sideOverlayMaxHeight/);
 });
 
-test("kitty image preview advertises a fixed right-side panel with tmux inline fallback", async () => {
+test("kitty image preview advertises a scroll-safe fixed right-side panel with opt-in legacy inline fallback", async () => {
   const source = await readExtensionSurface(new URL("../extensions/kitty-image-preview.js", import.meta.url));
 
   assert.match(source, /SIDE_OVERLAY_PLACEMENT = "rightOverlay"/);
@@ -332,8 +332,11 @@ test("kitty image preview advertises a fixed right-side panel with tmux inline f
   assert.match(source, /topFullWidthLines\[index\] \? line/);
   assert.match(source, /if \(topFullWidthLines\[lineIndex\]\) continue/);
   assert.match(source, /function shouldUseInlineRightPlacement/);
+  assert.match(source, /function scrollSafeAutoPlacementEnabled/);
+  assert.match(source, /KITTY_IMAGE_PREVIEW_SCROLL_SAFE_AUTO/);
+  assert.match(source, /KITTY_IMAGE_PREVIEW_INLINE_RIGHT_IN_TMUX/);
   assert.match(source, /function resolvePlacement/);
-  assert.match(source, /rightOverlay is inline inside tmux passthrough/);
+  assert.match(source, /Scroll-safe auto placement keeps rightOverlay height-neutral even under/);
   assert.match(source, /nonCapturing: true/);
   assert.match(source, /options\.forceSideOverlay !== false && isSideOverlayPlacement\(placement\)/);
 });

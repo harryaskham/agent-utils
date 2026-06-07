@@ -105,6 +105,24 @@ test("hidden or empty widget renders nothing", () => {
   assert.deepEqual(new KittyImagePreviewWidget(empty, OPTIONS).render(WIDTH), []);
 });
 
+test("stream widget locks image row count across changing frame dimensions", () => {
+  const state = makeState();
+  state.config.showCaption = false;
+  state.stream = { running: true };
+  const widget = new KittyImagePreviewWidget(state, OPTIONS);
+
+  const first = widget.render(WIDTH);
+  const lockedRows = state.stream.lockedImageRows;
+  assert.ok(Number.isInteger(lockedRows) && lockedRows >= 1, "first stream render records the image row budget");
+
+  state.items[0] = { ...state.items[0], width: 64, height: 512, label: "tall-frame" };
+  state.currentCommand = { ...state.currentCommand, itemId: state.items[0].id, rendered: undefined };
+  const second = widget.render(WIDTH);
+
+  assert.equal(state.stream.lockedImageRows, lockedRows, "subsequent frames keep the original image row budget");
+  assert.equal(second.length, first.length, "stream repaint reserves the same number of widget rows");
+});
+
 test("auto placement defaults to cursor on no-passthrough native Ghostty", () => {
   const state = makeState();
   state.config.passthrough = "auto";

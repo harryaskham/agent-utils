@@ -93,7 +93,7 @@ export class KittyImagePreviewWidget {
       ? 2 + (state.config.showCaption ? 1 : 0)
       : (controls ? 1 : 0);
     const rowLimit = previewImageRowLimit({ reservedRows, protocolMax });
-    const rows = clampInteger(
+    let rows = clampInteger(
       state.config.rows || estimateRowsForImage({
         imageWidth: current.width,
         imageHeight: current.height,
@@ -105,6 +105,17 @@ export class KittyImagePreviewWidget {
       1,
       rowLimit,
     );
+
+    // Streams repaint frequently. When the inline widget fallback is in use,
+    // changing the widget row count is the scrollback-yanking path: Pi must
+    // reserve a different number of terminal rows and the viewport jumps to the
+    // live bottom. Lock the image row count on the first stream render and reuse
+    // it for subsequent frames (bounded by the current protocol/viewport limit)
+    // so frame dimension changes update in place instead of re-reserving rows.
+    if (state.stream?.running) {
+      if (!Number.isFinite(state.stream.lockedImageRows)) state.stream.lockedImageRows = rows;
+      rows = clampInteger(state.stream.lockedImageRows, rows, 1, rowLimit);
+    }
 
     const lines = renderCurrentImageLines(state, current, {
       columns,

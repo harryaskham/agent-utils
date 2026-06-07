@@ -249,8 +249,10 @@ test("extension registers ensure/stop/status tools and a shutdown handler", () =
 test("xvfb_ensure dry-run reports a plan without spawning on a forced path", async () => {
   const { pi, tools } = makeHarness();
   xvfbExtension(pi);
-  // force=true so the test does not depend on the host actually being headless.
-  const result = await tools.get("xvfb_ensure").execute("t", { force: true, dryRun: true }, null, null, {});
+  // force=true avoids depending on the host being headless; an explicit known
+  // executable avoids depending on host Xvfb installation for this dry-run-only
+  // assertion. The tool will not spawn process.execPath because dryRun=true.
+  const result = await tools.get("xvfb_ensure").execute("t", { force: true, dryRun: true, command: process.execPath }, null, null, {});
   assert.equal(result.details.dryRun, true);
   assert.match(result.content[0].text, /\(dry-run\)/);
   assert.equal(result.details.xvfb, null);

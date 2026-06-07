@@ -1,6 +1,6 @@
 // Placement / side-panel resolution helpers extracted from kitty-image-preview.js
 // (bd-e1914a). Pure over `state` plus terminal width, passthrough detection, and
-// the viewport row limit. Behavior is unchanged from the original inline defs.
+// the viewport row limit.
 
 import {
   MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
@@ -20,23 +20,39 @@ import {
 import { clampInteger } from "./text-utils.js";
 import { currentTerminalColumns, previewViewportRowLimit } from "./layout.js";
 
-export function configuredPassthroughMode(state) {
-  return state.config.passthrough === "auto" ? detectKittyPassthroughMode(process.env) : state.config.passthrough;
+function envFlagDisabled(value) {
+  return /^(?:0|false|off|no|legacy)$/i.test(String(value ?? ""));
 }
 
-export function shouldUseInlineRightPlacement(state) {
-  return configuredPassthroughMode(state) === "tmux";
+function envFlagEnabled(value) {
+  return /^(?:1|true|on|yes)$/i.test(String(value ?? ""));
 }
 
-export function shouldAutoUseSidePanel(state) {
-  if (shouldUseInlineRightPlacement(state)) return false;
-  const columns = currentTerminalColumns();
+export function scrollSafeAutoPlacementEnabled(env = process.env) {
+  return !envFlagDisabled(env.KITTY_IMAGE_PREVIEW_SCROLL_SAFE_AUTO);
+}
+
+export function configuredPassthroughMode(state, env = process.env) {
+  return state.config.passthrough === "auto" ? detectKittyPassthroughMode(env) : state.config.passthrough;
+}
+
+export function shouldUseInlineRightPlacement(state, env = process.env) {
+  if (configuredPassthroughMode(state, env) !== "tmux") return false;
+  // Scroll-safe auto placement keeps rightOverlay height-neutral even under
+  // tmux by patching the existing TUI rows. Operators can opt back into the
+  // legacy height-adding inline widget for diagnosis/compatibility.
+  return !scrollSafeAutoPlacementEnabled(env) || envFlagEnabled(env.KITTY_IMAGE_PREVIEW_INLINE_RIGHT_IN_TMUX);
+}
+
+export function shouldAutoUseSidePanel(state, { env = process.env, columns = currentTerminalColumns() } = {}) {
+  if (shouldUseInlineRightPlacement(state, env)) return false;
+  if (scrollSafeAutoPlacementEnabled(env)) return true;
   return columns === undefined || columns >= AUTO_SIDE_MIN_COLUMNS;
 }
 
-export function resolvePlacement(state) {
+export function resolvePlacement(state, options = {}) {
   if (state.config.placement !== AUTO_PLACEMENT) return state.config.placement;
-  return shouldAutoUseSidePanel(state) ? SIDE_OVERLAY_PLACEMENT : "aboveEditor";
+  return shouldAutoUseSidePanel(state, options) ? SIDE_OVERLAY_PLACEMENT : "aboveEditor";
 }
 
 export function sideOverlayWidth(state) {
