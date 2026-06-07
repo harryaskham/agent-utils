@@ -35,6 +35,7 @@ function makeRegistry(models = MODELS, { scoped = [] } = {}) {
 function makeHarness({ models = MODELS, setModelResult = true, withRegistry = true } = {}) {
   const notifications = [];
   const commands = new Map();
+  const tools = new Map();
   const events = new Map();
   const ctx = {
     modelRegistry: makeRegistry(models),
@@ -44,13 +45,14 @@ function makeHarness({ models = MODELS, setModelResult = true, withRegistry = tr
   const pi = {
     on(event, handler) { events.set(event, handler); },
     registerCommand(name, definition) { commands.set(name, definition); },
+    registerTool(definition) { tools.set(definition.name, definition); },
     async setModel(model) { if (setModelResult) currentModel = model; return setModelResult; },
   };
   mCommandExtension(pi);
   // Simulate session_start so completion registry is captured.
   if (withRegistry) events.get("session_start")?.({}, ctx);
   return {
-    pi, ctx, commands, notifications, events,
+    pi, ctx, commands, tools, notifications, events,
     get currentModel() { return currentModel; },
     get last() { return notifications.at(-1); },
   };
@@ -142,6 +144,28 @@ test("/m reports a failed switch", async () => {
   await h.commands.get("m").handler("openai/gpt-5.5", h.ctx);
   assert.equal(h.last.level, "error");
   assert.match(h.last.message, /Failed to switch model/);
+});
+
+test("self_set_model tool switches models and warns it is operator-instructed only", async () => {
+  const h = makeHarness();
+  const tool = h.tools.get("self_set_model");
+  assert.ok(tool, "tool is registered");
+  assert.match(tool.description, /only when explicitly instructed by the operator/);
+  assert.match(tool.parameters.properties.model.description, /operator explicitly instructed/);
+
+  const result = await tool.execute("tool-1", { model: "github-copilot/gpt-5.5" }, undefined, undefined, h.ctx);
+  assert.equal(h.currentModel, MODELS[2]);
+  assert.equal(result.details.ok, true);
+  assert.equal(result.details.code, "model_set");
+  assert.equal(result.content[0].text, "Model: github-copilot/gpt-5.5");
+});
+
+test("self_set_model tool returns model resolution errors", async () => {
+  const h = makeHarness();
+  const result = await h.tools.get("self_set_model").execute("tool-1", { model: "gpt-5.5" }, undefined, undefined, h.ctx);
+  assert.equal(result.details.ok, false);
+  assert.equal(result.details.code, "model_not_found");
+  assert.match(result.content[0].text, /No model matches/);
 });
 
 test("/m argument completions use the captured full registry", () => {

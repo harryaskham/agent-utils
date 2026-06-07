@@ -133,6 +133,46 @@ export function buildModelCompletions(models, prefix, limit = M_COMPLETION_LIMIT
   return Number.isFinite(limit) && limit > 0 ? items.slice(0, limit) : items;
 }
 
+export async function switchModelReference(pi, ctx, reference, { notifyResult = true } = {}) {
+  const trimmed = String(reference ?? "").trim();
+  const models = listAvailableModels(ctx?.modelRegistry);
+
+  if (!trimmed) {
+    const count = models.length;
+    const message = `${M_USAGE}${count ? ` ${count} model${count === 1 ? "" : "s"} available — press Tab to browse.` : ""}`;
+    if (notifyResult) notify(ctx, message, "info");
+    return { ok: false, code: "missing_model", message };
+  }
+
+  if (typeof pi.setModel !== "function") {
+    const message = "This Pi runtime does not expose model switching controls; update Pi or use /model.";
+    if (notifyResult) notify(ctx, message, "error");
+    return { ok: false, code: "unsupported_runtime", message };
+  }
+
+  const model = resolveModelReference(trimmed, models);
+  if (!model) {
+    const suggestions = buildModelCompletions(models, trimmed, 5)
+      .map((item) => item.value)
+      .join(", ");
+    const hint = suggestions ? ` Did you mean: ${suggestions}?` : " Press Tab to browse available models.";
+    const message = `No model matches "${trimmed}".${hint} ${M_USAGE}`;
+    if (notifyResult) notify(ctx, message, "warning");
+    return { ok: false, code: "model_not_found", message, suggestions };
+  }
+
+  const ok = await pi.setModel(model);
+  if (!ok) {
+    const message = `Failed to switch model: could not select ${modelLabel(model)}.`;
+    if (notifyResult) notify(ctx, message, "error");
+    return { ok: false, code: "set_model_failed", message, model };
+  }
+
+  const message = `Model: ${modelLabel(model)}`;
+  if (notifyResult) notify(ctx, message, "info");
+  return { ok: true, code: "model_set", message, model };
+}
+
 export default function mCommandExtension(pi) {
   // getArgumentCompletions receives only the prefix (no ctx), so capture the
   // registry from session_start for completion listing. The handler always has
@@ -151,40 +191,31 @@ export default function mCommandExtension(pi) {
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
-      const reference = String(args ?? "").trim();
-      const models = listAvailableModels(ctx?.modelRegistry);
+      await switchModelReference(pi, ctx, args, { notifyResult: true });
+    },
+  });
 
-      if (!reference) {
-        const count = models.length;
-        notify(
-          ctx,
-          `${M_USAGE}${count ? ` ${count} model${count === 1 ? "" : "s"} available — press Tab to browse.` : ""}`,
-          "info",
-        );
-        return;
-      }
-
-      if (typeof pi.setModel !== "function") {
-        notify(ctx, "This Pi runtime does not expose model switching controls; update Pi or use /model.", "error");
-        return;
-      }
-
-      const model = resolveModelReference(reference, models);
-      if (!model) {
-        const suggestions = buildModelCompletions(models, reference, 5)
-          .map((item) => item.value)
-          .join(", ");
-        const hint = suggestions ? ` Did you mean: ${suggestions}?` : " Press Tab to browse available models.";
-        notify(ctx, `No model matches "${reference}".${hint} ${M_USAGE}`, "warning");
-        return;
-      }
-
-      const ok = await pi.setModel(model);
-      if (!ok) {
-        notify(ctx, `Failed to switch model: could not select ${modelLabel(model)}.`, "error");
-        return;
-      }
-      notify(ctx, `Model: ${modelLabel(model)}`, "info");
+  pi.registerTool?.({
+    name: "self_set_model",
+    label: "Self Set Model",
+    description: "Set this agent session's active model. Agents should use this only when explicitly instructed by the operator; it is not for autonomous self-tuning.",
+    promptSnippet: "Set this agent's model only after explicit operator instruction.",
+    parameters: {
+      type: "object",
+      required: ["model"],
+      properties: {
+        model: {
+          type: "string",
+          description: "Model reference to select, usually provider/model. Use this only when the operator explicitly instructed this agent to switch models.",
+        },
+      },
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await switchModelReference(pi, ctx, params?.model, { notifyResult: true });
+      return {
+        content: [{ type: "text", text: result.message }],
+        details: result,
+      };
     },
   });
 }

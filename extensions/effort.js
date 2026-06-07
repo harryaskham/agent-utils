@@ -74,6 +74,38 @@ function findFastCounterpart(ctx, model, force) {
   return ctx?.modelRegistry?.find?.(provider, targetId) || null;
 }
 
+export function applyEffortLevel(pi, ctx, value, { notifyResult = true } = {}) {
+  const token = firstToken(value);
+  if (!token || token === "status" || token === "help") {
+    const message = formatEffortStatus({
+      current: getThinkingLevel(pi, ctx),
+      supportsThinking: supportsThinking(pi, ctx),
+    });
+    if (notifyResult) notify(ctx, message, "info");
+    return { ok: false, code: "status", message };
+  }
+
+  const requested = normalizeEffortLevel(token);
+  if (!requested) {
+    const message = `Unsupported effort level: ${token}. Accepted values: ${EFFORT_LEVELS.join(", ")}. ${EFFORT_USAGE}`;
+    if (notifyResult) notify(ctx, message, "warning");
+    return { ok: false, code: "unsupported_effort", message };
+  }
+
+  const before = getThinkingLevel(pi, ctx);
+  if (!setThinkingLevel(pi, ctx, requested)) {
+    const message = "This Pi runtime does not expose thinking-level controls; update Pi or use /settings.";
+    if (notifyResult) notify(ctx, message, "error");
+    return { ok: false, code: "unsupported_runtime", message, requested };
+  }
+  const after = getThinkingLevel(pi, ctx) || requested;
+  const clamped = after !== requested ? ` (requested ${requested}; clamped by the current model)` : "";
+  const unchanged = before === after ? " unchanged" : "";
+  const message = `Effort${unchanged}: ${after}${clamped}.`;
+  if (notifyResult) notify(ctx, message, "info");
+  return { ok: true, code: "effort_set", message, requested, before, after, clamped: after !== requested };
+}
+
 export default function effortExtension(pi) {
   pi.agentUtilsEffort = {
     getLevel(ctx) { return getThinkingLevel(pi, ctx); },
@@ -83,30 +115,31 @@ export default function effortExtension(pi) {
   pi.registerCommand?.("effort", {
     description: "Show or set model thinking effort. Usage: /effort [off|minimal|low|medium|high|xhigh|adaptive]",
     handler: async (args, ctx) => {
-      const token = firstToken(args);
-      if (!token || token === "status" || token === "help") {
-        notify(ctx, formatEffortStatus({
-          current: getThinkingLevel(pi, ctx),
-          supportsThinking: supportsThinking(pi, ctx),
-        }), "info");
-        return;
-      }
+      applyEffortLevel(pi, ctx, args, { notifyResult: true });
+    },
+  });
 
-      const requested = normalizeEffortLevel(token);
-      if (!requested) {
-        notify(ctx, `Unsupported effort level: ${token}. Accepted values: ${EFFORT_LEVELS.join(", ")}. ${EFFORT_USAGE}`, "warning");
-        return;
-      }
-
-      const before = getThinkingLevel(pi, ctx);
-      if (!setThinkingLevel(pi, ctx, requested)) {
-        notify(ctx, "This Pi runtime does not expose thinking-level controls; update Pi or use /settings.", "error");
-        return;
-      }
-      const after = getThinkingLevel(pi, ctx) || requested;
-      const clamped = after !== requested ? ` (requested ${requested}; clamped by the current model)` : "";
-      const unchanged = before === after ? " unchanged" : "";
-      notify(ctx, `Effort${unchanged}: ${after}${clamped}.`, "info");
+  pi.registerTool?.({
+    name: "self_set_effort",
+    label: "Self Set Effort",
+    description: "Set this agent session's active model thinking effort. Agents should use this only when explicitly instructed by the operator; it is not for autonomous self-tuning.",
+    promptSnippet: "Set this agent's effort only after explicit operator instruction.",
+    parameters: {
+      type: "object",
+      required: ["level"],
+      properties: {
+        level: {
+          enum: EFFORT_LEVELS,
+          description: "Effort level to select. Use this only when the operator explicitly instructed this agent to change effort.",
+        },
+      },
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = applyEffortLevel(pi, ctx, params?.level, { notifyResult: true });
+      return {
+        content: [{ type: "text", text: result.message }],
+        details: result,
+      };
     },
   });
 

@@ -10,6 +10,7 @@ import effortExtension, {
 function makeHarness({ initialLevel = "medium", clamp, model = { provider: "test-provider", id: "reasoning-model", reasoning: true }, models = [] } = {}) {
   let thinkingLevel = initialLevel;
   const commands = new Map();
+  const tools = new Map();
   const notifications = [];
   const registryModels = [model, ...models];
   const ctx = {
@@ -26,13 +27,14 @@ function makeHarness({ initialLevel = "medium", clamp, model = { provider: "test
   const pi = {
     get model() { return ctx.model; },
     registerCommand(name, definition) { commands.set(name, definition); },
+    registerTool(definition) { tools.set(definition.name, definition); },
     getThinkingLevel() { return thinkingLevel; },
     setThinkingLevel(level) { thinkingLevel = clamp ? clamp(level) : level; },
     supportsThinking() { return true; },
     async setModel(next) { ctx.model = next; return true; },
   };
   effortExtension(pi);
-  return { pi, commands, notifications, ctx, get thinkingLevel() { return thinkingLevel; } };
+  return { pi, commands, tools, notifications, ctx, get thinkingLevel() { return thinkingLevel; } };
 }
 
 test("effort helpers validate and render supported thinking levels", () => {
@@ -94,6 +96,28 @@ test("/effort rejects unsupported levels without changing state", async () => {
   assert.equal(harness.thinkingLevel, "medium");
   assert.equal(harness.notifications.at(-1).level, "warning");
   assert.match(harness.notifications.at(-1).message, /Unsupported effort level: turbo/);
+});
+
+test("self_set_effort tool sets effort and warns it is operator-instructed only", async () => {
+  const harness = makeHarness({ initialLevel: "low" });
+  const tool = harness.tools.get("self_set_effort");
+  assert.ok(tool, "tool is registered");
+  assert.match(tool.description, /only when explicitly instructed by the operator/);
+  assert.match(tool.parameters.properties.level.description, /operator explicitly instructed/);
+
+  const result = await tool.execute("tool-1", { level: "high" }, undefined, undefined, harness.ctx);
+  assert.equal(harness.thinkingLevel, "high");
+  assert.equal(result.details.ok, true);
+  assert.equal(result.details.code, "effort_set");
+  assert.match(result.content[0].text, /Effort: high/);
+});
+
+test("self_set_effort tool returns unsupported level errors", async () => {
+  const harness = makeHarness({ initialLevel: "medium" });
+  const result = await harness.tools.get("self_set_effort").execute("tool-1", { level: "turbo" }, undefined, undefined, harness.ctx);
+  assert.equal(harness.thinkingLevel, "medium");
+  assert.equal(result.details.ok, false);
+  assert.equal(result.details.code, "unsupported_effort");
 });
 
 test("/fast toggles only between model ids with and without -fast suffix", async () => {
