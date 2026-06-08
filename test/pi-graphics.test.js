@@ -1498,8 +1498,13 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /impulseX: impulseCol == null \? null : \(impulseCol \+ 0\.5\) \* cell\.cellWidthPx/);
   assert.match(source, /rows: height/);
   assert.match(source, /function buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
-  assert.match(source, /editor-border-joined-unicode-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}-\$\{contextMode\}/);
-  assert.match(source, /columns: 1,\n\s+rows: 1,\n\s+width: visualCols/);
+  // Border now uses the cursor strategy: transparent anchor + a full-width
+  // RELATIVE escalation strip uploaded once + rail-heat -> frame-select. The old
+  // per-heat-bucket image key + manual loop are gone.
+  assert.match(source, /editor-border-escalation-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{paletteKey\}/);
+  assert.match(source, /editor-border-anchor-\$\{edge\}/);
+  assert.match(source, /const frame = 1 \+ Math\.max\(0, Math\.min\(BORDER_FRAMES - 1, Math\.round\(\(Number\(railHeat\) \|\| 0\) \* \(BORDER_FRAMES - 1\)\)\)\)/);
+  assert.match(source, /buildAnimationFrameCommand\(\{ imageId, frame, passthrough/);
   assert.match(source, /edge === "top" && height > 1/);
   assert.match(source, /const row = buildEditorRelativeBorderRow\(width, edge\)/);
   assert.match(source, /function buildEditorBorderWidgetRows\(width, edge\)/);
@@ -1551,7 +1556,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const placementLineCache = new Map\(\)/);
   assert.match(source, /function cachedPlacementLine\(key, buildLine\)/);
   assert.match(source, /function clearEditorCursorPlacement\(\)/);
-  assert.match(source, /editorCursorRelativePlacement = null;\n\s+editorCursorAnchorSeq = 0;\n\s+return true/);
+  assert.match(source, /editorCursorRelativePlacement = null;\n\s+editorCursorGlowFrame = -1;\n\s+editorCursorGlowImageId = null;\n\s+return true/);
   assert.match(source, /function editorWorkspaceCellMetrics\(\)/);
   assert.match(source, /lineHeightScale: env\.PI_GRAPHICS_LINE_HEIGHT_SCALE \?\? 1\.2/);
   assert.match(source, /const cell = editorWorkspaceCellMetrics\(\)/);
@@ -1566,21 +1571,28 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function editorCursorStyle\(\)/);
   assert.match(source, /const cursorStyle = editorCursorStyle\(\)/);
   assert.match(source, /if \(cursorStyle === "cell"\)/);
-  assert.match(source, /Glow mode draws the proven direct Unicode cursor cell first/);
+  assert.match(source, /Glow mode: a precomputed escalation animation/);
   assert.match(source, /const key = `editor-cursor-cell-direct-\$\{heatBucket\}-\$\{trailBucket\}-\$\{directionBucket\}/);
-  assert.match(source, /editor-cursor-glow-direct-anchor-/);
+  // Glow now: transparent stable anchor + escalation frames uploaded once + a
+  // single persistent relative halo + heat->frame-select (no per-keystroke
+  // re-upload, no cell+halo double-draw, no churn).
+  assert.match(source, /editor-cursor-glow-anchor-/);
+  assert.match(source, /ensureAnchorUploaded\(\{ anchorImageId, anchorPlacementId \}\)/);
+  assert.match(source, /renderEditorCursorGlowFrames\(\{/);
+  assert.match(source, /editor-cursor-glow-frames-/);
+  assert.match(source, /buildPngCursorAnimationUpload\(\{/);
+  assert.match(source, /editor-cursor-glow-halo-/);
   assert.match(source, /columns: 1,\n\s+rows: 1,/);
-  assert.match(source, /glowRadiusCells: 0\.72 \+ heat \* 0\.35/);
-  assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/);
   assert.match(source, /cursorColumns = 11/);
   assert.match(source, /const cursorHOffset = -Math\.floor\(cursorColumns \/ 2\)/);
   assert.match(source, /const cursorVOffset = -Math\.floor\(cursorRows \/ 2\)/);
   assert.match(source, /hOffset: cursorHOffset/);
   assert.match(source, /vOffset: cursorVOffset/);
   assert.match(source, /zIndex: PI_GRAPHICS_Z\.BOX_CHROME/);
-  assert.match(source, /disappeared as soon as typing repainted the editor row/);
+  assert.match(source, /vanishes when the editor row repaints during typing/);
   assert.match(source, /function deferGraphicsCommand\(command\)/);
-  assert.match(source, /deferGraphicsCommand\(relativePlacement\);\n\s+const anchorLine = buildKittyUnicodePlaceholderLines/);
+  assert.match(source, /deferGraphicsCommand\(buildRelativePlacementCommand\(\{/);
+  assert.match(source, /buildAnimationFrameCommand\(\{ imageId, frame, passthrough/);
   assert.match(source, /return `\$\{String\(label \|\| "anchored"\)\.padEnd\(12\)\} \$\{anchorLine\}\$\{relativePlacement\}`/);
   assert.doesNotMatch(source, /return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null/);
   assert.match(source, /trailCells: heat > 0\.04/);
@@ -1651,7 +1663,12 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /ensureUnicodePlacement\(state\)/);
   assert.match(source, /function buildFooterUnderlayCell\(width\)/);
   assert.match(source, /renderFooterUnderlay\(\{/);
-  assert.match(source, /z: PI_GRAPHICS_Z\.BACKGROUND,/);
+  // Footer underlay now spills full-width from a 1x1 transparent virtual anchor
+  // via a NON-virtual relative placement (H=0,V=0) at the background z-index,
+  // rather than a single tiled virtual placeholder cell (which only ever drew
+  // one cell). See the kitty relative-placement probe findings.
+  assert.match(source, /ensureAnchorUploaded\(\{ anchorImageId, anchorPlacementId \}\)/);
+  assert.match(source, /buildRelativePlacementCommand\(\{[\s\S]*?zIndex: PI_GRAPHICS_Z\.BACKGROUND,[\s\S]*?\}\)/);
   assert.doesNotMatch(source, /ensureFooterSegmentBackground/);
   assert.doesNotMatch(source, /hOffset: FOOTER_DIVIDER_WIDTH/);
   assert.match(source, /function themeProvenanceLines/);
@@ -1665,11 +1682,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 \} = \{\}\)/);
   assert.match(source, /editor-cursor-cell-direct-/);
   assert.match(source, /editor-cursor-glow-/);
-  assert.match(source, /editor-cursor-glow-relative-\$\{editorCursorAnchorSeq\}/);
-  assert.match(source, /const displayColumns = Math\.max\(1, Math\.min\(cursorColumns, safeRowWidth\)\)/);
-  assert.match(source, /const minHOffset = -safeCursorCol/);
-  assert.match(source, /const maxHOffset = safeRowWidth - safeCursorCol - displayColumns/);
-  assert.match(source, /columns: displayColumns/);
+  assert.match(source, /editor-cursor-glow-halo-/);
+  assert.match(source, /1 \+ Math\.max\(0, Math\.min\(GLOW_FRAMES - 1, Math\.round\(heat \* \(GLOW_FRAMES - 1\)\)\)\)/);
   assert.match(source, /columns: 1,\n\s+rows: 1,/);
   assert.match(source, /trailCells: 0/);
   assert.match(source, /trailCells: heat > 0\.04/);

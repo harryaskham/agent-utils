@@ -232,6 +232,124 @@ export function renderEditorCursorVline({ cellWidthPx, cellHeightPx, lineHeightS
   };
 }
 
+// Mix two colors (hex or [r,g,b]) in linear RGB. t in [0,1].
+function mixRgb(a, b, t) {
+  const [ar, ag, ab] = parseColor(a);
+  const [br, bg, bb] = parseColor(b);
+  const k = Math.max(0, Math.min(1, Number(t) || 0));
+  return [Math.round(ar + (br - ar) * k), Math.round(ag + (bg - ag) * k), Math.round(ab + (bb - ab) * k)];
+}
+
+// h,s,l in [0,1] -> [r,g,b] 0..255. Used for the high-heat rainbow rings.
+function hslToRgb(h, s, l) {
+  const hue = ((Number(h) % 1) + 1) % 1;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => {
+    const k = (n + hue * 12) % 12;
+    return l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+  };
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
+// Precomputed cursor-glow escalation animation.
+//
+// Returns an ordered array of `frameCount` PNG frames for an NxM-cell halo that
+// escalates with typing heat: calm cool glow -> warm -> white-hot core with a
+// rainbow inner-gradient bloom, and a horizontal energy trail that grows longer
+// and brighter. Frame index 0 is fully calm, the last frame fully escalated.
+//
+// The whole sequence is uploaded ONCE to a single kitty image id; the live
+// cursor then just emits an `a=a,c=<frame>` frame-select code mapped from the
+// current heat. There is no per-keystroke re-render/re-upload and no corner
+// bounding-box bracket -- the richness comes from the inner gradients/rings.
+export function renderEditorCursorGlowFrames({
+  cellWidthPx,
+  cellHeightPx,
+  lineHeightScale,
+  columns = 11,
+  rows = 5,
+  frameCount = 24,
+  calmColor = NORDIC_CYAN,
+  warmColor = NORDIC_VIOLET,
+  hotColor = "#ff9f5a",
+  coreColor = NORDIC_EDGE,
+  radioactiveBlue = "#3ce6ff",
+} = {}) {
+  const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
+  const cols = clampPositive(columns, 11, "columns");
+  const rowCount = clampPositive(rows, 5, "rows");
+  const widthPx = metrics.cellWidthPx * cols;
+  const heightPx = metrics.cellHeightPx * rowCount;
+  const cx = Math.floor((Math.floor(cols / 2) + 0.5) * metrics.cellWidthPx);
+  const cy = Math.floor(heightPx / 2);
+  const N = Math.max(2, Math.trunc(Number(frameCount) || 24));
+  const blue = parseColor(radioactiveBlue).slice(0, 3);
+  const frames = [];
+  for (let i = 0; i < N; i += 1) {
+    const t = i / (N - 1); // 0..1 escalation
+    const px = makeCanvas(widthPx, heightPx, [0, 0, 0, 0]);
+    // Base glow hue: calm cool -> warm -> hot.
+    const base = t < 0.5 ? mixRgb(calmColor, warmColor, t / 0.5) : mixRgb(warmColor, hotColor, (t - 0.5) / 0.5);
+    // Radial 1 (from 0%): the base escalating bloom; radius + alpha grow.
+    const radius = metrics.cellWidthPx * (1.4 + t * 4.2);
+    addRadialGlow(px, widthPx, cx, cy, radius, [...base, Math.round(38 + t * 120)], 0.9);
+    addRadialGlow(px, widthPx, cx, cy, radius * 0.6, [...base, Math.round(30 + t * 110)], 0.8);
+    // Radial 2 (from 50%): white bloom stacked on top.
+    if (t > 0.5) {
+      const w = (t - 0.5) / 0.5;
+      addRadialGlow(px, widthPx, cx, cy, radius * 0.82, [255, 255, 255, Math.round(w * 125)], 0.72);
+      addRadialGlow(px, widthPx, cx, cy, radius * 0.45, [255, 255, 255, Math.round(w * 95)], 0.66);
+    }
+    // Radial 3 (from 75%): radioactive-blue aura stacked on top.
+    if (t > 0.75) {
+      const b = (t - 0.75) / 0.25;
+      addRadialGlow(px, widthPx, cx, cy, radius * 1.08, [...blue, Math.round(b * 135)], 0.6);
+      addRadialGlow(px, widthPx, cx, cy, radius * 0.5, [...blue, Math.round(b * 90)], 0.72);
+    }
+    // Trail: LEFT of the cursor only, fatter, longer + brighter with heat.
+    const flareLen = Math.round((cols / 2) * metrics.cellWidthPx * (0.34 + t * 0.66));
+    const trailH = Math.max(2, Math.round(metrics.cellHeightPx * (0.20 + t * 0.16)));
+    const trailY = cy - Math.floor(trailH / 2);
+    for (let dx = 1; dx <= flareLen; dx += 1) {
+      const fade = 1 - dx / flareLen;
+      const a = Math.round((32 + t * 128) * fade ** 1.4);
+      if (a <= 0) continue;
+      const col = t > 0.7 ? hslToRgb((dx / flareLen) + t, 0.85, 0.62) : base;
+      fillRect(px, widthPx, cx - dx, trailY, 1, trailH, [...col, a]);
+    }
+    // Core: white-hot vertical bar + halo, sheared to lean clockwise. The tilt
+    // ramps 0deg (<=25%) -> ~15deg (>=75%); top leans right, bottom leans left.
+    const tiltDeg = 15 * Math.max(0, Math.min(1, (t - 0.25) / 0.5));
+    const tan = Math.tan((tiltDeg * Math.PI) / 180);
+    const coreW = Math.max(1, Math.round(metrics.cellWidthPx * (0.22 + t * 0.16)));
+    const coreH = Math.round(metrics.cellHeightPx * (1.0 + t * 0.6));
+    const coreTop = Math.max(0, cy - Math.floor(coreH / 2));
+    const coreBottom = Math.min(heightPx, coreTop + coreH);
+    const coreCenterY = (coreTop + coreBottom) / 2;
+    const haloSpan = Math.ceil(metrics.cellWidthPx * (0.5 + t * 0.5));
+    const coreRgb = t > 0.8 ? [255, 255, 255] : mixRgb(coreColor, [255, 255, 255], t * 0.6);
+    const coreAlpha = Math.round(208 + t * 47);
+    for (let y = coreTop; y < coreBottom; y += 1) {
+      const xc = cx + Math.round(tan * (coreCenterY - y)); // clockwise shear
+      for (let dx = -haloSpan; dx <= haloSpan; dx += 1) {
+        const d = Math.abs(dx) / Math.max(1, haloSpan);
+        const a = Math.round((70 + t * 120) * (1 - d) ** 1.7);
+        if (a > 0) fillRect(px, widthPx, xc + dx, y, 1, 1, [...base, a]);
+      }
+      fillRect(px, widthPx, xc - Math.floor(coreW / 2), y, coreW, 1, [...coreRgb, coreAlpha]);
+    }
+    frames.push(encodeRgbaPng(px, widthPx, heightPx));
+  }
+  return {
+    frames,
+    columns: cols,
+    rows: rowCount,
+    cellWidthPx: metrics.cellWidthPx,
+    cellHeightPx: metrics.cellHeightPx,
+    lineHeightScale: metrics.lineHeightScale,
+  };
+}
+
 export function renderFooterDividerPng({ columns = 3, barColor = DEFAULT_GRADIENT_LEFT, glowColor = DEFAULT_GRADIENT_RIGHT, alpha = 0.72, cellWidthPx, cellHeightPx, lineHeightScale } = {}) {
   const cols = clampPositive(columns, 3, "columns");
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });

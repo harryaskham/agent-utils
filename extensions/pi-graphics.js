@@ -104,6 +104,7 @@ import {
 import {
   renderEditorBoxApng,
   renderEditorBorderFramesPngs,
+  renderEditorCursorGlowFrames,
   renderEditorCursorVline,
   renderFooterDividerPng,
   renderFooterUnderlay,
@@ -453,8 +454,18 @@ export default function piGraphicsExtension(pi) {
   let editorContextMode = "idle";
   let editorContextTick = 0;
   let editorContextTimer = null;
-  let editorCursorAnchorSeq = 0;
   let editorCursorRelativePlacement = null;
+  let footerUnderlayRelative = null;
+  // Cursor-glow escalation: one precomputed frame set uploaded once, frame-
+  // selected by typing heat via a=a,c=<frame> (no per-keystroke re-upload).
+  let editorCursorGlowImageId = null;
+  let editorCursorGlowFrame = -1;
+  // Editor border escalation: one precomputed heat-escalation strip per edge,
+  // uploaded once and frame-selected by rail heat (cursor speed) -- mirrors the
+  // cursor glow. Replaces the per-heat-bucket image churn + manual setInterval
+  // loops that stacked frames.
+  const BORDER_FRAMES = 16;
+  const editorBorderRelative = { top: null, bottom: null, symmetric: null };
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_PG][\s\S]*?\x1b\\/g;
 
   function stopManualAnimationLoops() {
@@ -569,7 +580,8 @@ export default function piGraphicsExtension(pi) {
       passthrough: state.config.passthrough,
     }));
     editorCursorRelativePlacement = null;
-    editorCursorAnchorSeq = 0;
+    editorCursorGlowFrame = -1;
+    editorCursorGlowImageId = null;
     return true;
   }
 
@@ -805,7 +817,7 @@ export default function piGraphicsExtension(pi) {
     const height = edge === "symmetric" ? 1 : editorBorderHeight(edge);
     const frames = editorAnimationEnabled() ? editorAnimationFrames() : 1;
     const delayMs = editorAnimationDelayMs();
-    return { cols, visualCols: cols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs };
+    return { cols, visualCols: cols, cell, variant, borderStyle, alpha, railHeat, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs };
   }
 
   function buildEditorBorderPlaceholderLines(width, edge) {
@@ -943,68 +955,101 @@ export default function piGraphicsExtension(pi) {
   function buildJoinedUnicodeEditorBorderLine(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs } = spec;
-    const key = `editor-border-joined-unicode-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-impulse-${impulseCol ?? "none"}-${impulseBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}-${frames}`;
-    return cachedPlacementLine(key, () => {
-      const rendered = renderEditorBorderFramesPngs({
-        columns: visualCols,
-        rows: height,
-        edge,
-        ...cell,
-        frames,
-        borderColor,
-        glowColor,
-        borderAlpha,
-        glowAlpha,
-        phase: contextPhase,
-        style: borderStyle,
-        context: contextMode,
-        impulseX: impulseCol == null ? null : (impulseCol + 0.5) * cell.cellWidthPx,
-        impulseStrength,
-      });
-      const imageId = piGraphicsImageId(key);
-      const placementId = piGraphicsPlaceholderPlacementId(`editor-border-joined-unicode-placement-${edge}-${visualCols}x${height}-${railHeatBucket}`);
-      if (!uploadedImages.has(imageId)) {
-        const transmit = frames > 1 ? buildPngVirtualPlacementAnimation({
-          imageId,
-          placementId,
-          pngBases: rendered.pngs.map((png) => bufferToBase64(png)),
-          delaysMs: Array.from({ length: frames }, () => delayMs),
-          columns: rendered.columns,
-          rows: rendered.rows,
-          zIndex: PI_GRAPHICS_Z.SURFACE,
-          passthrough: state.config.passthrough,
-          autoLoop: false,
-        }) : `${serializeKittyGraphicsChunks({
-          a: "t",
-          f: 100,
-          t: "d",
-          i: imageId,
-          q: 2,
-        }, bufferToBase64(rendered.pngs[0]), { passthrough: state.config.passthrough })}${serializeKittyGraphicsCommand({
-          a: "p",
-          i: imageId,
-          p: placementId,
-          U: 1,
-          c: rendered.columns,
-          r: rendered.rows,
-          z: PI_GRAPHICS_Z.SURFACE,
-          q: 2,
-        }, "", { passthrough: state.config.passthrough })}`;
-        emitGraphicsCommand(transmit);
-        state.ownedImageIds.add(imageId);
-        uploadedImages.add(imageId);
-        if (frames > 1) ensureManualAnimationLoop({ imageId, frames, delayMs });
+    const { visualCols, cell, variant, borderStyle, contextMode, height, railHeat } = spec;
+    const fullWidth = Math.max(0, Math.trunc(Number(width) || 0));
+    // Calm/hot palette endpoints, independent of the live heat, so the image key
+    // is stable across keystrokes and only the SELECTED FRAME changes.
+    const baseBorderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const baseGlowColor = contextMode === "thinking"
+      ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
+      : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
+    const paletteKey = `${baseBorderColor}-${baseGlowColor}-${contextMode}-${borderStyle}-${variant}`;
+    // Transparent stable anchor on the border row. The full-width escalation
+    // strip is a relative (non-virtual) placement off it -- a lone virtual
+    // placement would only tile a single cell (the original footer/border bug).
+    const anchorImageId = piGraphicsImageId(`editor-border-anchor-${edge}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-${edge}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
+    const imageId = piGraphicsImageId(`editor-border-escalation-${edge}-${visualCols}x${height}-${paletteKey}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`);
+    const placementId = piGraphicsPlacementId(`editor-border-escalation-placement-${edge}-${visualCols}x${height}`);
+    const vOffset = edge === "top" ? -(height - 1) : 0;
+    const entry = editorBorderRelative[edge];
+    if (!uploadedImages.has(imageId)) {
+      // Precompute BORDER_FRAMES frames at increasing rail heat (calm -> hot),
+      // reusing the existing styled border renderer for each frame, and upload
+      // them ONCE. No per-keystroke re-render, no manual animation loop.
+      const pngs = [];
+      for (let i = 0; i < BORDER_FRAMES; i += 1) {
+        const r = i / (BORDER_FRAMES - 1);
+        const borderColor = mixHexColor(baseBorderColor, contextMode === "thinking" ? "#d8dee9" : "#ffffff", r);
+        const glowColor = mixHexColor(baseGlowColor, r > 0.65 ? "#ffffff" : "#ff9f5a", r);
+        const borderAlpha = Math.max(0.32, Math.min(0.82, spec.alpha + r * 0.22 + (contextMode === "thinking" ? 0.04 : 0)));
+        const glowAlpha = Math.max(0.22, Math.min(0.76, spec.alpha * 0.62 + r * 0.34 + (contextMode === "thinking" ? 0.08 : 0)));
+        const rendered = renderEditorBorderFramesPngs({
+          columns: visualCols,
+          rows: height,
+          edge,
+          ...cell,
+          frames: 1,
+          borderColor,
+          glowColor,
+          borderAlpha,
+          glowAlpha,
+          phase: 0,
+          style: borderStyle,
+          context: contextMode,
+          impulseX: null,
+          impulseStrength: 0,
+        });
+        pngs.push(rendered.pngs[0]);
       }
-      const line = buildKittyUnicodePlaceholderLines({
+      emitGraphicsCommand(buildPngCursorAnimationUpload({
+        imageId,
+        pngBases: pngs.map((png) => bufferToBase64(png)),
+        delaysMs: 80,
+        passthrough: state.config.passthrough,
+      }));
+      state.ownedImageIds.add(imageId);
+      uploadedImages.add(imageId);
+      // Replace any prior strip for this edge (width/palette change) so stale
+      // strips do not linger.
+      if (entry && (entry.imageId !== imageId || entry.placementId !== placementId)) {
+        emitGraphicsCommand(buildDeleteCommand({
+          imageId: entry.imageId,
+          placementId: entry.placementId,
+          deleteMode: "i",
+          passthrough: state.config.passthrough,
+        }));
+      }
+      deferGraphicsCommand(buildRelativePlacementCommand({
         imageId,
         placementId,
-        columns: 1,
-        rows: 1,
-        width: visualCols,
-      })[0] ?? "";
-      return `${line}${" ".repeat(Math.max(0, Math.trunc(Number(width) || 0) - visualCols))}`;
-    });
+        parentImageId: anchorImageId,
+        parentPlacementId: anchorPlacementId,
+        hOffset: 0,
+        vOffset,
+        columns: visualCols,
+        rows: height,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+        passthrough: state.config.passthrough,
+      }));
+      editorBorderRelative[edge] = { imageId, placementId, frame: -1 };
+    }
+    // Select the escalation frame for the live rail heat; emit only on change.
+    const cur = editorBorderRelative[edge];
+    const frame = 1 + Math.max(0, Math.min(BORDER_FRAMES - 1, Math.round((Number(railHeat) || 0) * (BORDER_FRAMES - 1))));
+    if (cur && frame !== cur.frame) {
+      emitGraphicsCommand(buildAnimationFrameCommand({ imageId, frame, passthrough: state.config.passthrough }));
+      cur.frame = frame;
+    }
+    const anchorLine = buildKittyUnicodePlaceholderLines({
+      imageId: anchorImageId,
+      placementId: anchorPlacementId,
+      columns: 1,
+      rows: 1,
+      width: 1,
+    })[0] ?? "";
+    return `${anchorLine}${" ".repeat(Math.max(0, fullWidth - 1))}`;
   }
 
   function emptyEditorBorderRow(width) {
@@ -1238,127 +1283,101 @@ export default function piGraphicsExtension(pi) {
       });
     }
 
-    // Glow mode draws the proven direct Unicode cursor cell first, then attempts
-    // the larger 11x5 relative halo against that same visible cursor placement.
-    // If the relative path drifts or fails in live Kitty/tmux, the cursor cell
-    // itself still lands exactly like trailing workspace placeholders.
-    const anchorImageId = piGraphicsImageId(`editor-cursor-glow-direct-anchor-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(anchorImageId)) {
-      const rendered = renderEditorCursorVline({
-        alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
-        backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
-        coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-        glowColor,
-        columns: 1,
-        rows: 1,
-        heat,
-        glowRadiusCells: 0.72 + heat * 0.35,
-        trailCells: 0,
-        trailDirection,
-        ...cell,
-      });
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: anchorImageId,
-        q: 2,
-      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(anchorImageId);
-      uploadedImages.add(anchorImageId);
-    }
-    editorCursorAnchorSeq = (editorCursorAnchorSeq + 1) % 0x800000;
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-glow-direct-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}-${editorCursorAnchorSeq}`);
-    emitGraphicsCommand(serializeKittyGraphicsCommand({
-      a: "p",
-      i: anchorImageId,
-      p: anchorPlacementId,
-      U: 1,
-      c: 1,
-      r: 1,
-      z: PI_GRAPHICS_Z.SURFACE,
-      q: 2,
-    }, "", { passthrough: state.config.passthrough }));
+    // Glow mode: a precomputed escalation animation (calm -> white-hot ->
+    // radioactive bloom) uploaded ONCE to a stable image id and attached as a
+    // single relative halo to a TRANSPARENT virtual anchor at the cursor cell.
+    // Typing heat selects a frame via a=a,c=<frame>; there is no per-keystroke
+    // re-render/re-upload, no visible cell+halo double-draw (the old flicker),
+    // and no placement churn/stacking. kitty honors the relative H/V offset, so
+    // the 11x5 halo centers on the cursor (this path targets kitty; Ghostty
+    // drops offsets off a virtual parent).
+    const GLOW_COLS = 11;
+    const GLOW_ROWS = 5;
+    const GLOW_FRAMES = 24;
+    const calmColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const warmColor = getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead");
 
-    const safeRowWidth = Math.max(1, Math.trunc(Number(rowWidth) || 1));
-    const safeCursorCol = Math.max(0, Math.min(safeRowWidth - 1, Math.trunc(Number(cursorCol) || 0)));
-    const cursorColumns = 11;
-    const cursorRows = 5;
-    const displayColumns = Math.max(1, Math.min(cursorColumns, safeRowWidth));
-    // Keep the 11x5 glow horizontally inside the editor row. Center it when
-    // there is room, but clamp the relative placement at both edges so Kitty is
-    // never asked to draw outside the terminal width.
-    const centeredHOffset = -Math.floor(cursorColumns / 2);
-    const minHOffset = -safeCursorCol;
-    const maxHOffset = safeRowWidth - safeCursorCol - displayColumns;
-    const cursorHOffset = Math.max(minHOffset, Math.min(maxHOffset, centeredHOffset));
-    const cursorVOffset = -Math.floor(cursorRows / 2);
-    const imageId = piGraphicsImageId(`editor-cursor-glow-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    // Transparent stable anchor -- it draws nothing itself, so only the halo is
+    // visible (kills the cell+halo conflict). Its placeholder cell (returned
+    // below) is repainted at the cursor each render and the halo follows it.
+    const anchorImageId = piGraphicsImageId(`editor-cursor-glow-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-glow-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
+
+    // Precomputed escalation frames, uploaded once to a stable image id. We do
+    // NOT start a native time loop (s=3,v=1) -- the frame is driven by heat.
+    const imageId = piGraphicsImageId(`editor-cursor-glow-frames-${GLOW_COLS}x${GLOW_ROWS}-${GLOW_FRAMES}-${calmColor}-${warmColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
     if (!uploadedImages.has(imageId)) {
-      const rendered = renderEditorCursorVline({
-        alpha: Math.max(0.08, editorAlpha() * (0.18 + heat * 0.92)),
-        backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
+      const rendered = renderEditorCursorGlowFrames({
+        columns: GLOW_COLS,
+        rows: GLOW_ROWS,
+        frameCount: GLOW_FRAMES,
+        calmColor,
+        warmColor,
         coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-        glowColor,
-        columns: cursorColumns,
-        rows: cursorRows,
-        heat,
-        glowRadiusCells: 0.9 + heat * 0.9,
-        trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
-        trailDirection,
         ...cell,
       });
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: imageId,
-        q: 2,
-      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(imageId);
-      uploadedImages.add(imageId);
-    }
-    const placementId = piGraphicsPlacementId(`editor-cursor-glow-relative-${editorCursorAnchorSeq}`);
-    if (editorCursorRelativePlacement) {
-      emitGraphicsCommand(buildDeleteCommand({
-        imageId: editorCursorRelativePlacement.imageId,
-        placementId: editorCursorRelativePlacement.placementId,
-        deleteMode: "i",
+      emitGraphicsCommand(buildPngCursorAnimationUpload({
+        imageId,
+        pngBases: rendered.frames.map((png) => bufferToBase64(png)),
+        delaysMs: 80,
         passthrough: state.config.passthrough,
       }));
+      state.ownedImageIds.add(imageId);
+      uploadedImages.add(imageId);
+      editorCursorGlowFrame = -1; // force a frame-select after (re)upload
     }
-    const relativePlacement = buildRelativePlacementCommand({
-      imageId,
-      placementId,
-      parentImageId: anchorImageId,
-      parentPlacementId: anchorPlacementId,
-      hOffset: cursorHOffset,
-      vOffset: cursorVOffset,
-      columns: displayColumns,
-      rows: cursorRows,
-      // Keep the halo under text but above non-default editor cell backgrounds.
-      // BACKGROUND/DEEP_BACKGROUND are below Kitty's non-default-background
-      // threshold and disappeared as soon as typing repainted the editor row.
-      zIndex: PI_GRAPHICS_Z.BOX_CHROME,
-      passthrough: state.config.passthrough,
-    });
-    editorCursorRelativePlacement = { imageId, placementId };
-    // Keep raw Kitty APC out of the editor's rendered text. Inline APC escapes
-    // confuse Pi's TUI width/diffing path and can duplicate/wrap the input line.
-    // Also defer the side-channel write until after the current TUI render turn:
-    // Kitty only knows the virtual parent's physical cell after the direct
-    // cursor placeholder has been written, so immediate side-channel placement
-    // can make the centered cell offsets appear ignored and leave the 11x5 image
-    // top-left on the cursor.
-    deferGraphicsCommand(relativePlacement);
-    const anchorLine = buildKittyUnicodePlaceholderLines({
+
+    // One persistent relative halo centered on the cursor (H=-5,V=-2). Created
+    // once per (image, anchor) and left in place; kitty moves it as the anchor
+    // placeholder moves. Near the left edge it simply clips at the screen edge.
+    const placementId = piGraphicsPlacementId(`editor-cursor-glow-halo-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    if (!editorCursorRelativePlacement
+      || editorCursorRelativePlacement.imageId !== imageId
+      || editorCursorRelativePlacement.placementId !== placementId) {
+      if (editorCursorRelativePlacement) {
+        emitGraphicsCommand(buildDeleteCommand({
+          imageId: editorCursorRelativePlacement.imageId,
+          placementId: editorCursorRelativePlacement.placementId,
+          deleteMode: "i",
+          passthrough: state.config.passthrough,
+        }));
+      }
+      // Defer so kitty resolves the parent's physical cell after the placeholder
+      // is painted. Raw APC must stay out of the editor's rendered text.
+      deferGraphicsCommand(buildRelativePlacementCommand({
+        imageId,
+        placementId,
+        parentImageId: anchorImageId,
+        parentPlacementId: anchorPlacementId,
+        hOffset: -Math.floor(GLOW_COLS / 2),
+        vOffset: -Math.floor(GLOW_ROWS / 2),
+        columns: GLOW_COLS,
+        rows: GLOW_ROWS,
+        // Under text but above non-default editor cell backgrounds, else it
+        // vanishes when the editor row repaints during typing.
+        zIndex: PI_GRAPHICS_Z.BOX_CHROME,
+        passthrough: state.config.passthrough,
+      }));
+      editorCursorRelativePlacement = { imageId, placementId };
+    }
+
+    // Map typing heat -> 1-based escalation frame and select it only on change,
+    // so steady typing/idle does not spam frame-select codes.
+    const frame = 1 + Math.max(0, Math.min(GLOW_FRAMES - 1, Math.round(heat * (GLOW_FRAMES - 1))));
+    if (frame !== editorCursorGlowFrame || imageId !== editorCursorGlowImageId) {
+      emitGraphicsCommand(buildAnimationFrameCommand({ imageId, frame, passthrough: state.config.passthrough }));
+      editorCursorGlowFrame = frame;
+      editorCursorGlowImageId = imageId;
+    }
+
+    return buildKittyUnicodePlaceholderLines({
       imageId: anchorImageId,
       placementId: anchorPlacementId,
       columns: 1,
       rows: 1,
       width: 1,
     })[0] ?? null;
-    return anchorLine;
   }
 
   function buildAnchoredEditorCursorPreviewLine({ label, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
@@ -1527,13 +1546,17 @@ export default function piGraphicsExtension(pi) {
     return { cell: placement.lines[0] ?? "│", imageId: placement.imageId, placementId: placement.placementId };
   }
 
-  // Render the footer underlay as a single 1x1 Unicode placeholder cell whose
-  // image is transmitted at the FULL terminal width, so the picture spills out
-  // of its 1x1 marker cell to sit beneath the entire footer line. This avoids
-  // the old relative footer-segment background (a horizontal gradient anchored to
-  // divider cells) that could detach and bleed onto the editor/rails. The visual
-  // is a mild upward glow with a solid hline along the bottom edge -- like a
-  // gentle 1-row editor top border, but milder.
+  // The footer underlay sits beneath the entire footer line. It is anchored to a
+  // single 1x1 transparent virtual Unicode-placeholder cell on the LHS, but the
+  // visible image is a NON-virtual RELATIVE placement parented to that anchor at
+  // H=0,V=0 -- so it spills right across the full footer width from the one
+  // anchor cell. (A lone virtual placement only ever renders the single
+  // placeholder cell it is tiled into; relative placements are how one anchor
+  // cell projects a wider image. This is the kitty-blessed transparent-pixel
+  // placeholder + relative child pattern. Because the offset is H=0,V=0 it needs
+  // no displacement, so it works on every kitty-protocol terminal -- only
+  // non-zero H/V offsets hit terminal-specific gaps.) The visual is a mild
+  // upward glow with a solid hline along the bottom edge.
   function buildFooterUnderlayCell(width) {
     if (!footerUnderlayEnabled()) return null;
     if (!ensureUnicodePlacement(state)) return null;
@@ -1544,47 +1567,57 @@ export default function piGraphicsExtension(pi) {
     const lineColor = getThemeColorHex(activeThemeRef, footerUnderlayLineToken(), "#5e81ac");
     const glowAlpha = footerUnderlayGlowAlpha();
     const lineAlpha = footerUnderlayLineAlpha();
+    // Stable transparent anchor in the footer's first cell; the placeholder cell
+    // (returned below) tracks wherever Pi paints the footer, and the relative
+    // strip follows it.
+    const anchorImageId = piGraphicsImageId(`footer-underlay-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
+    const anchorPlacementId = piGraphicsPlaceholderPlacementId("footer-underlay-anchor-placement");
+    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
     const key = `footer-underlay-${cols}-${glowColor}-${lineColor}-${glowAlpha.toFixed(3)}-${lineAlpha.toFixed(3)}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
-    return cachedPlacementLine(key, () => {
-      const rendered = renderFooterUnderlay({
-        columns: cols,
-        glowColor,
-        lineColor,
-        glowAlpha,
-        lineAlpha,
-        ...cell,
-      });
-      const imageId = piGraphicsImageId(key);
-      const placementId = piGraphicsPlaceholderPlacementId(`footer-underlay-placement-${cols}`);
+    const imageId = piGraphicsImageId(key);
+    const placementId = piGraphicsPlacementId(`footer-underlay-relative-${cols}`);
+    const relativeKey = `${imageId}->${anchorImageId}/${anchorPlacementId}@0,0`;
+    if (!uploadedImages.has(imageId) || !relativeUploaded.has(relativeKey)) {
+      const rendered = renderFooterUnderlay({ columns: cols, glowColor, lineColor, glowAlpha, lineAlpha, ...cell });
       if (!uploadedImages.has(imageId)) {
-        const transmit = `${serializeKittyGraphicsChunks({
-          a: "t",
-          f: 100,
-          t: "d",
-          i: imageId,
-          q: 2,
-        }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough })}${serializeKittyGraphicsCommand({
-          a: "p",
-          i: imageId,
-          p: placementId,
-          U: 1,
-          c: rendered.columns,
-          r: rendered.rows,
-          z: PI_GRAPHICS_Z.BACKGROUND,
-          q: 2,
-        }, "", { passthrough: state.config.passthrough })}`;
-        emitGraphicsCommand(transmit);
+        emitGraphicsCommand(serializeKittyGraphicsChunks({
+          a: "t", f: 100, t: "d", i: imageId, q: 2,
+        }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
         state.ownedImageIds.add(imageId);
         uploadedImages.add(imageId);
       }
-      return buildKittyUnicodePlaceholderLines({
+      // Replace any prior footer strip (e.g. on a width/theme change) so stale
+      // wider strips do not linger beneath the footer.
+      if (footerUnderlayRelative && (footerUnderlayRelative.imageId !== imageId || footerUnderlayRelative.placementId !== placementId)) {
+        emitGraphicsCommand(buildDeleteCommand({
+          imageId: footerUnderlayRelative.imageId,
+          placementId: footerUnderlayRelative.placementId,
+          deleteMode: "i",
+          passthrough: state.config.passthrough,
+        }));
+      }
+      emitGraphicsCommand(buildRelativePlacementCommand({
         imageId,
         placementId,
-        columns: 1,
-        rows: 1,
-        width: 1,
-      })[0] ?? null;
-    });
+        parentImageId: anchorImageId,
+        parentPlacementId: anchorPlacementId,
+        hOffset: 0,
+        vOffset: 0,
+        columns: rendered.columns,
+        rows: rendered.rows,
+        zIndex: PI_GRAPHICS_Z.BACKGROUND,
+        passthrough: state.config.passthrough,
+      }));
+      footerUnderlayRelative = { imageId, placementId };
+      relativeUploaded.add(relativeKey);
+    }
+    return buildKittyUnicodePlaceholderLines({
+      imageId: anchorImageId,
+      placementId: anchorPlacementId,
+      columns: 1,
+      rows: 1,
+      width: 1,
+    })[0] ?? null;
   }
 
   function buildSegmentedFooterLine(ctx, footerData, width, pi, theme = activeThemeRef) {
