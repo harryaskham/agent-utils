@@ -1,14 +1,13 @@
 name: Deploy GitHub Pages
 
 on:
+  # bd-e9884a: Pages now publishes on release tag pushes (plus manual dispatch)
+  # rather than every push to main. GitHub does NOT apply `paths:` filters to
+  # tag refs, so the `changes` job below diffs the pushed tag against the
+  # previous tag and skips build/deploy when no render-affecting files changed.
   push:
-    branches:
-      - main
-    paths:
-      - "docs/**"
-      - "scripts/render-pages.mjs"
-      - "package.json"
-      - ".github/workflows/pages.yml"
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -21,8 +20,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  changes:
+    name: Detect docs changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_deploy: ${{ steps.decide.outputs.should_deploy }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          # Need full history + all tags to diff the pushed tag against its
+          # predecessor.
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Decide whether render inputs changed
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Manual runs always deploy (operator explicitly asked for a build).
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "workflow_dispatch: forcing deploy"
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CURRENT_TAG="$CURRENT_REF"
+          # Most recent tag reachable from the parent of the current tag commit.
+          PREV_TAG="$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || true)"
+          if [ -z "$PREV_TAG" ]; then
+            echo "no previous tag found; deploying"
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "diffing ${PREV_TAG}..${CURRENT_TAG} for render-affecting paths"
+          if git diff --name-only "$PREV_TAG" "$CURRENT_TAG" -- \
+               docs \
+               scripts/render-pages.mjs \
+               package.json \
+               .github/workflows/pages.yml \
+             | grep -q .; then
+            echo "render-affecting changes detected; deploying"
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no render-affecting changes between ${PREV_TAG} and ${CURRENT_TAG}; skipping deploy"
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build static SPA
+    needs: changes
+    if: needs.changes.outputs.should_deploy == 'true'
     # This static docs job does not require the managed/self-hosted agent fleet.
     # Keep it on GitHub-hosted Linux so flaky or busy Mac/self-hosted runners do
     # not leave Pages publication queued indefinitely.
@@ -32,9 +82,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
       - name: Set up Pages
+        # bd-e9884a: `enablement: true` was failing ("Create Pages site failed:
+        # Resource not accessible by integration") because the workflow
+        # GITHUB_TOKEN cannot bootstrap the Pages site. The site must be enabled
+        # once via repo Settings -> Pages -> Source = "GitHub Actions"; after
+        # that this step is a no-op read of the existing config.
         uses: actions/configure-pages@v6
-        with:
-          enablement: true
       - name: Validate generated site
         run: npm run docs:check
       - name: Upload Pages artifact

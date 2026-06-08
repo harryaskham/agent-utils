@@ -1,9 +1,13 @@
 name: CI
 
 on:
+  # bd-e9884a: gate CI off main-branch pushes. CI now runs on release tag
+  # pushes and on pull requests (operator decision: keep pre-merge PR CI as a
+  # gate), plus manual dispatch. Direct reintegration / the merge queue is the
+  # gate for work landing on main.
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   pull_request:
   workflow_dispatch:
 
