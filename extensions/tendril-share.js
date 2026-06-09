@@ -15,6 +15,14 @@ import {
   tendrilSourceMachine,
 } from "./tendril-command.js";
 import { headlessDisplaySummary } from "./lib/headless-display.js";
+import {
+  agentSettingsPath,
+  computeDescribeModelConfig,
+  parseModelSpec,
+  pickConfiguredModel,
+  readAgentSettings,
+  resolveDescribeModel as resolveDescribeModelCore,
+} from "./lib/describe-model.js";
 
 // Label used when a capture/inference comes from the bridge on this host rather
 // than a --remote host, so source-machine attribution is always populated.
@@ -262,30 +270,18 @@ function parseCaptureArgs(args, forcedAction) {
   return { action: subcommand || action, ...flags };
 }
 
-function parseModelSpec(spec) {
-  if (!spec) return undefined;
-  const slash = String(spec).indexOf("/");
-  if (slash <= 0 || slash === String(spec).length - 1) throw new Error(`Vision model must be provider/model, got: ${spec}`);
-  return { provider: String(spec).slice(0, slash), modelId: String(spec).slice(slash + 1) };
-}
-
-function modelSupportsImage(model) {
-  return !Array.isArray(model?.input) || model.input.includes("image");
-}
-
-function agentSettingsPath(env = process.env) {
-  return path.join(env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "settings.json");
-}
-
-function readAgentSettings(env = process.env) {
-  const settingsPath = agentSettingsPath(env);
-  try {
-    if (!existsSync(settingsPath)) return {};
-    return JSON.parse(readFileSync(settingsPath, "utf8"));
-  } catch {
-    return {};
-  }
-}
+// Describe/vision-model resolution is parameterized in the shared resolver
+// (extensions/lib/describe-model.js, bd-f20ebd). parseModelSpec, agentSettingsPath,
+// and readAgentSettings are imported from there; the constants below bind the
+// Tendril-specific env var, settings.json key namespace, and error hint.
+const TENDRIL_DESCRIBE_ENV_VAR = "TENDRIL_SHARE_DESCRIBE_MODEL";
+const TENDRIL_DESCRIBE_SETTINGS_KEYS = Object.freeze([
+  "tendril.describeModel",
+  "tendrilShare.describeModel",
+  "agentUtils.tendril.describeModel",
+  "agentUtils.tendrilShare.describeModel",
+]);
+const TENDRIL_DESCRIBE_CONFIG_HINT = `Set ${TENDRIL_DESCRIBE_ENV_VAR}=provider/model or tendril.describeModel in settings.json.`;
 
 function saveAgentSettings(settings, env = process.env) {
   const settingsPath = agentSettingsPath(env);
@@ -294,22 +290,16 @@ function saveAgentSettings(settings, env = process.env) {
 }
 
 function configuredDescribeModelFromSettings(settings = {}) {
-  const candidates = [
-    settings?.tendril?.describeModel,
-    settings?.tendrilShare?.describeModel,
-    settings?.agentUtils?.tendril?.describeModel,
-    settings?.agentUtils?.tendrilShare?.describeModel,
-  ];
-  return candidates.map((value) => String(value || "").trim()).find(Boolean) || "";
+  return pickConfiguredModel(settings, TENDRIL_DESCRIBE_SETTINGS_KEYS);
 }
 
 function describeModelConfig(env = process.env) {
-  const envValue = String(env.TENDRIL_SHARE_DESCRIBE_MODEL || "").trim();
-  if (envValue) return { spec: envValue, source: "TENDRIL_SHARE_DESCRIBE_MODEL" };
-  const settings = readAgentSettings(env);
-  const settingsValue = configuredDescribeModelFromSettings(settings);
-  if (settingsValue) return { spec: settingsValue, source: "settings.json" };
-  return { spec: DEFAULT_DESCRIBE_MODEL, source: "default" };
+  return computeDescribeModelConfig({
+    env,
+    envVar: TENDRIL_DESCRIBE_ENV_VAR,
+    settingsKeys: TENDRIL_DESCRIBE_SETTINGS_KEYS,
+    defaultModel: DEFAULT_DESCRIBE_MODEL,
+  });
 }
 
 function previewConfig(env = process.env) {
@@ -323,22 +313,14 @@ function previewConfig(env = process.env) {
 }
 
 function resolveVisionModel(ctx) {
-  const config = describeModelConfig();
-  const configured = config.source !== "default" ? config.spec : "";
-  const specs = configured ? [configured] : FALLBACK_DESCRIBE_MODELS;
-  const missing = [];
-  const textOnly = [];
-  for (const modelSpec of specs) {
-    const parsed = parseModelSpec(modelSpec);
-    const model = parsed ? ctx.modelRegistry?.find?.(parsed.provider, parsed.modelId) : ctx.model;
-    if (!model) { missing.push(modelSpec); continue; }
-    if (!modelSupportsImage(model)) { textOnly.push(`${model.provider}/${model.id}`); continue; }
-    return model;
-  }
-  if (configured) {
-    throw new Error(`Vision model ${configured} from ${config.source} is not registered or does not advertise image input support. Set TENDRIL_SHARE_DESCRIBE_MODEL=provider/model or tendril.describeModel in settings.json.`);
-  }
-  throw new Error(`No default Tendril vision model is registered. Tried: ${specs.join(", ")}.${textOnly.length ? ` Text-only matches: ${textOnly.join(", ")}.` : ""}${missing.length ? ` Missing: ${missing.join(", ")}.` : ""}`);
+  return resolveDescribeModelCore(ctx, {
+    envVar: TENDRIL_DESCRIBE_ENV_VAR,
+    settingsKeys: TENDRIL_DESCRIBE_SETTINGS_KEYS,
+    defaultModel: DEFAULT_DESCRIBE_MODEL,
+    fallbacks: FALLBACK_DESCRIBE_MODELS,
+    configHint: TENDRIL_DESCRIBE_CONFIG_HINT,
+    subject: "Tendril",
+  }).model;
 }
 
 async function resolveTendrilTarget(pi, { kind, target, override }, signal) {
