@@ -13,7 +13,9 @@ from urllib import error, request
 from mcp.server.fastmcp import FastMCP
 
 DEFAULT_TOKEN_FILE = Path("~/.config/gh-auth-tokens/copilot.token").expanduser()
-DEFAULT_MODEL = "gpt-5.2-codex"
+DEFAULT_AUTH_JSON_FILE = Path("~/.pi/agent/auth.json").expanduser()
+DEFAULT_AUTH_JSON_KEY = "github-copilot"
+DEFAULT_MODEL = "gpt-5.3-codex"
 DEFAULT_MAX_OUTPUT_TOKENS = 16000
 DEFAULT_API_BASE = "https://api.githubcopilot.com/v1"
 DEFAULT_EDITOR_VERSION = "vscode/1.103.1"
@@ -24,6 +26,8 @@ log = logging.getLogger("web-search-mcp")
 @dataclass(frozen=True)
 class ServerConfig:
     token_file: Path = DEFAULT_TOKEN_FILE
+    auth_json_file: Path = DEFAULT_AUTH_JSON_FILE
+    auth_json_key: str = DEFAULT_AUTH_JSON_KEY
     model: str = DEFAULT_MODEL
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     api_base: str = DEFAULT_API_BASE
@@ -48,6 +52,46 @@ def read_token(token_file: Path) -> str:
         raise RuntimeError(f"Token file is empty: {token_file}")
 
     return token
+
+
+def read_token_from_auth_json(auth_json_file: Path, auth_json_key: str) -> str | None:
+    """Pull the auto-refreshed Copilot bearer out of Pi's auth.json.
+
+    Pi keeps ``<auth_json_key>.access`` (e.g. ``github-copilot.access``) refreshed,
+    so reading it avoids the stale static token-file problem. Returns ``None`` on
+    any failure (missing file, bad JSON, missing field) so the caller can fall
+    back to the legacy static token file.
+    """
+    try:
+        raw = auth_json_file.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    entry = parsed.get(auth_json_key) if isinstance(parsed, dict) else None
+    access = entry.get("access") if isinstance(entry, dict) else None
+    if not isinstance(access, str):
+        return None
+    token = access.strip()
+    return token or None
+
+
+def resolve_token(config: ServerConfig) -> str:
+    """Resolve the Copilot bearer.
+
+    Order: an explicitly-configured token file (non-default path) wins for
+    back-compat; otherwise prefer Pi's auto-refreshed auth.json; otherwise fall
+    back to the legacy default static token file.
+    """
+    explicit_token_file = config.token_file != DEFAULT_TOKEN_FILE
+    if explicit_token_file:
+        return read_token(config.token_file)
+    from_auth_json = read_token_from_auth_json(config.auth_json_file, config.auth_json_key)
+    if from_auth_json:
+        return from_auth_json
+    return read_token(config.token_file)
 
 
 def build_request_payload(query: str, config: ServerConfig) -> dict[str, Any]:
@@ -108,7 +152,7 @@ def extract_text_and_citations(response_body: dict[str, Any]) -> tuple[str, list
 
 
 def invoke_web_search(query: str, config: ServerConfig) -> dict[str, Any]:
-    token = read_token(config.token_file)
+    token = resolve_token(config)
     payload = build_request_payload(query, config)
     body = json.dumps(payload).encode("utf-8")
     url = f"{config.api_base.rstrip('/')}/responses"
@@ -185,6 +229,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to the GitHub Copilot bearer token file",
     )
     parser.add_argument(
+        "--auth-json",
+        default=os.environ.get("WEB_SEARCH_COPILOT_AUTH_JSON", str(DEFAULT_AUTH_JSON_FILE)),
+        help="Path to Pi's auth.json holding the auto-refreshed Copilot bearer",
+    )
+    parser.add_argument(
+        "--auth-json-key",
+        default=os.environ.get("WEB_SEARCH_COPILOT_AUTH_JSON_KEY", DEFAULT_AUTH_JSON_KEY),
+        help="Top-level key in auth.json whose .access field holds the bearer",
+    )
+    parser.add_argument(
         "--model",
         default=os.environ.get("WEB_SEARCH_MODEL", DEFAULT_MODEL),
         help="Responses API model to use",
@@ -216,7 +270,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def validate_config(config: ServerConfig) -> None:
     if config.max_output_tokens <= 0:
         raise SystemExit("--max-output-tokens must be positive")
-    read_token(config.token_file)
+    resolve_token(config)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -225,6 +279,8 @@ def main(argv: list[str] | None = None) -> None:
 
     config = ServerConfig(
         token_file=Path(args.token_file).expanduser(),
+        auth_json_file=Path(args.auth_json).expanduser(),
+        auth_json_key=args.auth_json_key,
         model=args.model,
         max_output_tokens=args.max_output_tokens,
         api_base=args.api_base,

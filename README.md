@@ -249,8 +249,10 @@ The web-search extension is loaded from [`extensions/web-search.js`](extensions/
 
 Configuration (environment):
 
-- `WEB_SEARCH_COPILOT_TOKEN_FILE` — path to the Copilot token (default `~/.config/gh-auth-tokens/copilot.token`).
-- `WEB_SEARCH_MODEL` — upstream Copilot model (default `gpt-5.2-codex`).
+- `WEB_SEARCH_COPILOT_TOKEN_FILE` — explicit path to a Copilot bearer token file. When set (or pointed at a non-default path), it takes precedence. Otherwise the bearer is read from Pi's auto-refreshed `auth.json` (see below), falling back to `~/.config/gh-auth-tokens/copilot.token`.
+- `WEB_SEARCH_COPILOT_AUTH_JSON` — path to Pi's `auth.json` holding the auto-refreshed Copilot bearer (default `~/.pi/agent/auth.json`). The bearer is taken from `<key>.access`; Pi keeps this fresh, avoiding the stale static-token-file problem.
+- `WEB_SEARCH_COPILOT_AUTH_JSON_KEY` — top-level key in `auth.json` whose `.access` field holds the bearer (default `github-copilot`).
+- `WEB_SEARCH_MODEL` — upstream Copilot model (default `gpt-5.3-codex`).
 - `WEB_SEARCH_MAX_OUTPUT_TOKENS` — maximum output tokens (default `16000`).
 - `WEB_SEARCH_COPILOT_API_BASE` — API base URL (default `https://api.githubcopilot.com/v1`).
 - `WEB_SEARCH_EDITOR_VERSION` — `editor-version` request header (default `vscode/1.103.1`).
