@@ -1638,18 +1638,28 @@ class RealtimeSession {
       if (s) this.lastMicError = truncateDiagnostic(s);
       if (s && this.config.debug) this.notify(`mic: ${s}`, "warning");
     });
-    proc.on("exit", (code, signal) => {
-      if (this.mic === proc) {
-        if ((code || signal) && this.lastMicBytes <= 0 && !this.lastMicError) {
-          this.lastMicError = `record command exited before audio: ${code ?? "?"}${signal ? `/${signal}` : ""}`;
-        }
-        this.mic = null;
-        this.micMode = null;
-        this.sendTurnDetectionUpdate();
-        this.updateStatus();
-        this.scheduleMicRestart(`${code ?? "?"}${signal ? `/${signal}` : ""}`);
+    const handleMicExit = (code, signal) => {
+      if (this.mic !== proc) return;
+      if ((code || signal) && this.lastMicBytes <= 0 && !this.lastMicError) {
+        this.lastMicError = `record command exited before audio: ${code ?? "?"}${signal ? `/${signal}` : ""}`;
       }
-    });
+      this.mic = null;
+      this.micMode = null;
+      this.sendTurnDetectionUpdate();
+      this.updateStatus();
+      this.scheduleMicRestart(`${code ?? "?"}${signal ? `/${signal}` : ""}`);
+    };
+    proc.on("exit", handleMicExit);
+    // A fast-failing record command (e.g. a misconfigured PI_RT_RECORD_CMD that
+    // exits before producing audio) can terminate during the
+    // `await this.maybeApplySession(...)` above, before this listener was
+    // attached. Node emits 'exit' once; with no listener the event is lost and
+    // the mic-restart path never fires. Reconcile the already-exited case
+    // synchronously. handleMicExit is idempotent via the `this.mic === proc`
+    // guard, so this never double-restarts if the real event also arrives.
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      handleMicExit(proc.exitCode, proc.signalCode);
+    }
     this.setPhase("recording");
     if (mode === "vad" || mode === "continuous") this.playChime("listen");
     this.notify(
