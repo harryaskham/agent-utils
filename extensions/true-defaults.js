@@ -3,10 +3,12 @@
 // Pi's built-in runtime controls may update defaultProvider/defaultModel and
 // defaultThinkingLevel in settings.json. This extension treats a namespaced set
 // of true-default settings as immutable-by-convention and copies them back onto
-// Pi's built-in default keys during extension load, session start, and clean
-// shutdown. Runtime model/effort switching remains allowed; this only guards
-// persisted defaults. Thinking values, including adaptive, are delegated to Pi
-// core unchanged.
+// Pi's built-in default keys during extension load, FRESH session start
+// (startup/new), and clean shutdown (quit/new). Continuing sessions
+// (reload/resume/fork) deliberately preserve runtime/temp model/effort changes
+// instead of re-asserting the default, so an operator `/model` switch is not
+// yanked back mid-session. Thinking values, including adaptive, are delegated to
+// Pi core unchanged.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -156,14 +158,24 @@ function notify(ctx, message, level = "info") {
 export default function trueDefaultsExtension(pi) {
   let lastRestore = restoreTrueDefaultSettings();
 
-  pi.on?.("session_start", async (_event, ctx) => {
+  // Reasons that *continue* an operator's working session rather than starting a
+  // fresh one. On these, true-defaults must NOT re-assert the persisted default
+  // model/effort, so a runtime/temp change (e.g. an operator `/model` switch)
+  // survives the reload/resume/fork instead of being yanked back to the default.
+  const CONTINUING_REASONS = new Set(["reload", "resume", "fork"]);
+
+  pi.on?.("session_start", async (event, ctx) => {
+    if (CONTINUING_REASONS.has(event?.reason)) return;
     lastRestore = restoreTrueDefaultSettings();
     if (!lastRestore.defaults || !hasTrueDefaults(readSettingsFile(lastRestore.path) || {})) return;
     await applyRuntimeDefaults(pi, ctx, lastRestore.defaults);
   });
 
   pi.on?.("session_shutdown", async (event) => {
-    if (event?.reason === "reload" || event?.reason === "quit" || event?.reason === "new" || event?.reason === "resume" || event?.reason === "fork") {
+    // Only re-persist true defaults when the operator's working session truly
+    // ends (quit) or a brand-new one begins (new). reload/resume/fork continue
+    // the session and must preserve runtime/temp changes.
+    if (event?.reason === "quit" || event?.reason === "new") {
       lastRestore = restoreTrueDefaultSettings();
     }
   });

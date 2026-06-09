@@ -166,6 +166,61 @@ test("session_shutdown restores persisted defaults after runtime settings drift"
   }
 });
 
+test("continuing session_start reasons (reload/resume/fork) preserve runtime model changes", async () => {
+  for (const reason of ["reload", "resume", "fork"]) {
+    const h = makeHarness({
+      settings: {
+        trueDefaultProvider: "github-copilot",
+        trueDefaultModel: "claude-fable-5.0",
+      },
+      models: [{ provider: "github-copilot", id: "claude-fable-5.0" }],
+    });
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = h.dir;
+    try {
+      trueDefaultsExtension(h.pi);
+      await h.handlers.get("session_start")({ reason }, h.ctx);
+      // No runtime setModel on a continuing session: the operator's temp model
+      // switch must survive reload/resume/fork.
+      assert.deepEqual(h.setModelCalls, [], `reason=${reason} should not re-apply the default model`);
+      assert.deepEqual(h.thinkingCalls, [], `reason=${reason} should not re-apply thinking`);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+      h.cleanup();
+    }
+  }
+});
+
+test("session_shutdown reload/resume/fork does not re-persist defaults over runtime drift", async () => {
+  for (const reason of ["reload", "resume", "fork"]) {
+    const h = makeHarness({
+      settings: {
+        defaultProvider: "github-copilot",
+        defaultModel: "claude-fable-5.0",
+        agentUtils: { trueDefaults: { provider: "github-copilot", model: "claude-fable-5.0" } },
+      },
+    });
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = h.dir;
+    try {
+      trueDefaultsExtension(h.pi);
+      const drifted = h.readSettings();
+      drifted.defaultModel = "claude-opus-4.8";
+      writeFileSync(join(h.dir, "settings.json"), `${JSON.stringify(drifted, null, 2)}\n`);
+
+      await h.handlers.get("session_shutdown")({ reason }, h.ctx);
+
+      // The operator's runtime drift to opus-4.8 must survive a reload/resume/fork.
+      assert.equal(h.readSettings().defaultModel, "claude-opus-4.8", `reason=${reason} should preserve runtime drift`);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+      h.cleanup();
+    }
+  }
+});
+
 test("runtime model changes remain possible because true-defaults does not intercept setModel", async () => {
   const h = makeHarness({
     settings: { trueDefaultProvider: "litellm-openai", trueDefaultModel: "gpt-5.5" },
