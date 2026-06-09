@@ -4,10 +4,16 @@ import path from "node:path";
 
 import { Type } from "@sinclair/typebox";
 
+import {
+  DEFAULT_MODEL,
+  parseFallbackModels,
+  modelCandidates,
+  isModelUnavailableError,
+} from "./web-search-models.js";
+
 const DEFAULT_TOKEN_FILE = "~/.config/gh-auth-tokens/copilot.token";
 const DEFAULT_AUTH_JSON_FILE = "~/.pi/agent/auth.json";
 const DEFAULT_AUTH_JSON_KEY = "github-copilot";
-const DEFAULT_MODEL = "gpt-5.3-codex";
 const DEFAULT_MAX_OUTPUT_TOKENS = 16000;
 const DEFAULT_API_BASE = "https://api.githubcopilot.com/v1";
 const DEFAULT_EDITOR_VERSION = "vscode/1.103.1";
@@ -33,8 +39,14 @@ function getConfig() {
     ),
     apiBase: (process.env.WEB_SEARCH_COPILOT_API_BASE || DEFAULT_API_BASE).replace(/\/$/, ""),
     editorVersion: process.env.WEB_SEARCH_EDITOR_VERSION || DEFAULT_EDITOR_VERSION,
+    fallbackModels: parseFallbackModels(process.env.WEB_SEARCH_FALLBACK_MODELS),
   };
 }
+
+// Pure model-selection helpers (parseFallbackModels / modelCandidates /
+// isModelUnavailableError) live in ./web-search-models.js so they can be
+// unit-tested without importing this entrypoint's @sinclair/typebox dependency.
+
 
 async function readTokenFile(tokenFile) {
   const token = (await readFile(tokenFile, "utf8")).trim();
@@ -165,28 +177,41 @@ export default function webSearchExtension(pi) {
     async execute(_toolCallId, params, signal) {
       const config = getConfig();
       const token = await resolveToken(config);
-      const payload = {
-        model: params.model || config.model,
-        input: params.query,
-        tool_choice: "required",
-        tools: [{ type: "web_search", search_context_size: "high" }],
-        max_output_tokens: params.maxOutputTokens || config.maxOutputTokens,
-      };
-
-      const response = await fetch(`${config.apiBase}/responses`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          "editor-version": config.editorVersion,
-        },
-        body: JSON.stringify(payload),
-        signal,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`GitHub Copilot web search failed (${response.status}): ${errorText}`);
+      const candidates = modelCandidates(config, params.model);
+      let response;
+      let model;
+      let lastErrorText = "";
+      let lastStatus = 0;
+      for (let i = 0; i < candidates.length; i += 1) {
+        model = candidates[i];
+        const payload = {
+          model,
+          input: params.query,
+          tool_choice: "required",
+          tools: [{ type: "web_search", search_context_size: "high" }],
+          max_output_tokens: params.maxOutputTokens || config.maxOutputTokens,
+        };
+        response = await fetch(`${config.apiBase}/responses`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "editor-version": config.editorVersion,
+          },
+          body: JSON.stringify(payload),
+          signal,
+        });
+        if (response.ok) break;
+        lastStatus = response.status;
+        lastErrorText = await response.text();
+        // Only fall through to the next model when this one is unavailable and
+        // another candidate remains; otherwise surface the error.
+        if (!(isModelUnavailableError(lastStatus, lastErrorText) && i < candidates.length - 1)) {
+          throw new Error(`GitHub Copilot web search failed (${lastStatus}): ${lastErrorText}`);
+        }
+      }
+      if (!response || !response.ok) {
+        throw new Error(`GitHub Copilot web search failed (${lastStatus}): ${lastErrorText}`);
       }
 
       const responseBody = await response.json();
@@ -207,7 +232,7 @@ export default function webSearchExtension(pi) {
           citations,
           responseId: responseBody.id || null,
           status: responseBody.status || null,
-          model: responseBody.model || payload.model,
+          model: responseBody.model || model,
           incompleteDetails: responseBody.incomplete_details || null,
           webSearchCalls,
           usage: responseBody.usage || null,
