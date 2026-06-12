@@ -123,6 +123,69 @@ export function packImagesIntoPages(items, {
   return pages;
 }
 
+// Compose the side-panel lines for one packed page (Part C-wire of the
+// image-preview sidebar work, bd-502d6a). Given a packed page from
+// packImagesIntoPages plus per-entry header/image render callbacks, this lays
+// each entry's header rows followed by its image rows at the entry's packed
+// `startRow`, fills unused rows with blank lines, and (by default) bottom-aligns
+// the whole page block within the visible `rows` budget so the multi-image
+// preview pins immediately above the editor exactly like the single-image side
+// panel. Pure over its arguments plus the injected callbacks; there is no
+// kitty/terminal coupling so it is unit-testable headlessly, mirroring the
+// widget render seam (bd-c75d9e) — the live wiring just supplies callbacks that
+// emit the name header and the per-entry transmit/placeholder lines.
+//
+//   renderHeaderLines(entry) -> string[]  (up to entry.headerRows lines)
+//   renderImageLines(entry)  -> string[]  (up to entry.imageRows lines)
+//
+// Both callbacks own their own width/padding; any gap (missing callback line,
+// inter-block slack, or top padding from bottom-alignment) is filled with a
+// `totalWidth`-wide blank so the panel column stays rectangular. Entries (or
+// rows) that fall outside the visible `rows` budget are clipped, so a caller may
+// safely pass a page packed for a larger row budget than is currently visible.
+export function composePagedSidePanelLines(page, {
+  rows,
+  totalWidth = 0,
+  renderHeaderLines,
+  renderImageLines,
+  bottomAlign = true,
+} = {}) {
+  const rowCount = Math.max(0, Math.trunc(Number(rows) || 0));
+  if (rowCount <= 0) return [];
+  const blank = " ".repeat(Math.max(0, Math.trunc(Number(totalWidth) || 0)));
+  const entries = Array.isArray(page?.entries) ? page.entries : [];
+  // The packed page height is the bottom of its last block; clip to the visible
+  // budget so an over-tall packed page never overflows the reserved frame.
+  const usedRows = entries.reduce(
+    (max, entry) => Math.max(max, Math.trunc(entry?.startRow ?? 0) + Math.trunc(entry?.blockRows ?? 0)),
+    0,
+  );
+  const pageHeight = Math.min(rowCount, Math.max(0, usedRows));
+  const slots = new Array(pageHeight).fill(blank);
+  for (const entry of entries) {
+    const headerLines = renderHeaderLines?.(entry) ?? [];
+    const imageLines = renderImageLines?.(entry) ?? [];
+    const startRow = Math.trunc(entry?.startRow ?? 0);
+    const header = Math.max(0, Math.trunc(entry?.headerRows ?? headerLines.length));
+    const imageRows = Math.max(0, Math.trunc(entry?.imageRows ?? imageLines.length));
+    for (let h = 0; h < header; h += 1) {
+      const slot = startRow + h;
+      if (slot >= 0 && slot < pageHeight) slots[slot] = headerLines[h] ?? blank;
+    }
+    for (let i = 0; i < imageRows; i += 1) {
+      const slot = startRow + header + i;
+      if (slot >= 0 && slot < pageHeight) slots[slot] = imageLines[i] ?? blank;
+    }
+  }
+  // Bottom-align the packed block within the visible frame by default, padding
+  // the top with blanks; bottomAlign=false anchors the block to the top instead.
+  const topPad = bottomAlign ? Math.max(0, rowCount - pageHeight) : 0;
+  return Array.from({ length: rowCount }, (_unused, row) => {
+    const local = row - topPad;
+    return local >= 0 && local < pageHeight ? slots[local] : blank;
+  });
+}
+
 // Find which packed page contains the image at the given global item index.
 // Returns the 0-based page number, or 0 when the index is not found (degenerate
 // or empty page sets). Pure over its arguments.

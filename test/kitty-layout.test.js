@@ -6,6 +6,7 @@ import {
   fitImageColumnsForRows,
   containImageBox,
   packImagesIntoPages,
+  composePagedSidePanelLines,
   pageForIndex,
   limitLinesToTerminalRows,
   currentTerminalColumns,
@@ -182,6 +183,100 @@ test("pageForIndex locates the page containing a global item index", () => {
   assert.equal(pageForIndex(pages, 99), 0);
   assert.equal(pageForIndex([], 3), 0);
   assert.equal(pageForIndex(null, 1), 0);
+});
+
+// Deterministic header/image callbacks so the composition geometry can be
+// asserted exactly without any kitty/terminal coupling.
+const HEADER = (entry) => [`H${entry.index}`];
+const IMAGE = (entry) => Array.from({ length: entry.imageRows }, (_v, i) => `I${entry.index}.${i}`);
+
+test("composePagedSidePanelLines bottom-aligns header+image blocks within the row budget", () => {
+  const items = [
+    { id: 1, path: "/a.png", label: "a" },
+    { id: 2, path: "/b.png", label: "b" },
+  ];
+  // Two 6-row blocks (header 1 + image 5) -> usedRows 12. Visible 14 rows ->
+  // 2 rows of top padding, then H0 / I0.0..4 / H1 / I1.0..4.
+  const page = packImagesIntoPages(items, { columnWidth: 10, availableRows: 14, headerRows: 1 })[0];
+  const lines = composePagedSidePanelLines(page, {
+    rows: 14,
+    totalWidth: 4,
+    renderHeaderLines: HEADER,
+    renderImageLines: IMAGE,
+  });
+  assert.equal(lines.length, 14);
+  assert.deepEqual(lines.slice(0, 2), ["    ", "    "], "top is blank-padded to bottom-align the block");
+  assert.equal(lines[2], "H0");
+  assert.deepEqual(lines.slice(3, 8), ["I0.0", "I0.1", "I0.2", "I0.3", "I0.4"]);
+  assert.equal(lines[8], "H1");
+  assert.deepEqual(lines.slice(9, 14), ["I1.0", "I1.1", "I1.2", "I1.3", "I1.4"]);
+});
+
+test("composePagedSidePanelLines can top-align instead of bottom-align", () => {
+  const page = packImagesIntoPages([{ id: 1, path: "/a.png", label: "a" }], {
+    columnWidth: 10,
+    availableRows: 10,
+    headerRows: 1,
+  })[0];
+  const lines = composePagedSidePanelLines(page, {
+    rows: 10,
+    totalWidth: 2,
+    renderHeaderLines: HEADER,
+    renderImageLines: IMAGE,
+    bottomAlign: false,
+  });
+  // Block is header(1)+image(5)=6 rows at the top; the remaining 4 are blank.
+  assert.equal(lines[0], "H0");
+  assert.deepEqual(lines.slice(1, 6), ["I0.0", "I0.1", "I0.2", "I0.3", "I0.4"]);
+  assert.deepEqual(lines.slice(6, 10), ["  ", "  ", "  ", "  "]);
+});
+
+test("composePagedSidePanelLines clips a page taller than the visible budget", () => {
+  // Pack for 14 rows (two blocks) but only 5 rows are visible: only the first
+  // entry's header + first 4 image rows survive; bottomAlign cannot pad because
+  // the page already fills the budget (topPad 0).
+  const items = [
+    { id: 1, path: "/a.png", label: "a" },
+    { id: 2, path: "/b.png", label: "b" },
+  ];
+  const page = packImagesIntoPages(items, { columnWidth: 10, availableRows: 14, headerRows: 1 })[0];
+  const lines = composePagedSidePanelLines(page, {
+    rows: 5,
+    totalWidth: 4,
+    renderHeaderLines: HEADER,
+    renderImageLines: IMAGE,
+  });
+  assert.equal(lines.length, 5);
+  assert.deepEqual(lines, ["H0", "I0.0", "I0.1", "I0.2", "I0.3"]);
+});
+
+test("composePagedSidePanelLines fills missing callback lines and empty pages with blanks", () => {
+  // A callback that under-produces image lines leaves the slack blank rather
+  // than collapsing the block.
+  const page = packImagesIntoPages([{ id: 1, path: "/a.png", label: "a" }], {
+    columnWidth: 10,
+    availableRows: 7,
+    headerRows: 1,
+  })[0];
+  const lines = composePagedSidePanelLines(page, {
+    rows: 7,
+    totalWidth: 3,
+    renderHeaderLines: HEADER,
+    renderImageLines: () => ["only-one"],
+  });
+  assert.equal(lines.length, 7);
+  // header(1)+image(5)=6 block, bottom-aligned -> 1 blank row on top.
+  assert.equal(lines[0], "   ");
+  assert.equal(lines[1], "H0");
+  assert.equal(lines[2], "only-one");
+  assert.deepEqual(lines.slice(3, 7), ["   ", "   ", "   ", "   "], "missing image rows stay blank");
+  // Degenerate inputs: empty page / zero rows.
+  assert.deepEqual(
+    composePagedSidePanelLines({ entries: [] }, { rows: 3, totalWidth: 2, renderHeaderLines: HEADER, renderImageLines: IMAGE }),
+    ["  ", "  ", "  "],
+  );
+  assert.deepEqual(composePagedSidePanelLines(null, { rows: 0 }), []);
+  assert.deepEqual(composePagedSidePanelLines(undefined, {}), []);
 });
 
 test("limitLinesToTerminalRows keeps the tail when over the row budget", () => {
