@@ -42,6 +42,24 @@ export function fitImageColumnsForRows(item, maxColumns, maxRows) {
   return best;
 }
 
+// Aspect-preserving "contain" fit for one image inside a (maxWidth x maxRows)
+// cell box (bd image-preview sidebar work). Returns the largest box, in terminal
+// cells, that (a) never exceeds maxWidth columns, (b) never exceeds maxRows rows,
+// and (c) keeps the image's natural aspect ratio so kitty is never asked to
+// scale into a mismatched cell rectangle (the side-panel vertical-squish bug).
+//
+// When the image's aspect-natural height at maxWidth fits within maxRows the box
+// fills the full column width (imageWidth === maxWidth); only height-bound
+// (portrait/tall) images reduce width to stay aspect-correct. Pure over its
+// arguments plus the shared row estimator.
+export function containImageBox(item, maxWidth, maxRows) {
+  const widthCap = Math.max(1, Math.trunc(maxWidth || 1));
+  const rowCap = Math.max(1, Math.trunc(maxRows || 1));
+  const imageWidth = fitImageColumnsForRows(item, widthCap, rowCap);
+  const imageRows = Math.max(1, Math.min(rowCap, estimatedRowsForColumns(item, imageWidth)));
+  return { imageWidth, imageRows };
+}
+
 export function limitLinesToTerminalRows(lines, terminalRows) {
   const rowLimit = Math.max(1, Math.trunc(Number(terminalRows) || 1));
   const input = Array.isArray(lines) ? lines : [];

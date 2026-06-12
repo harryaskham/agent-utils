@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   estimatedRowsForColumns,
   fitImageColumnsForRows,
+  containImageBox,
   limitLinesToTerminalRows,
   currentTerminalColumns,
   currentTerminalRows,
@@ -57,6 +58,33 @@ test("fitImageColumnsForRows result is on the fit boundary", () => {
   if (best < maxColumns) {
     assert.ok(estimatedRowsForColumns(SIZED, best + 1) > maxRows);
   }
+});
+
+test("containImageBox fills the full column width when height is not the binding constraint", () => {
+  // Generous row budget: a width-bound image keeps the full column width and the
+  // aspect-natural height, so kitty receives an aspect-correct (w, r) box.
+  const box = containImageBox(SIZED, 40, 1000);
+  assert.equal(box.imageWidth, 40, "fills the full column width");
+  assert.equal(box.imageRows, estimatedRowsForColumns(SIZED, 40), "height tracks the aspect ratio at full width");
+  assert.ok(box.imageRows <= 1000);
+});
+
+test("containImageBox narrows tall images to stay aspect-correct instead of squishing", () => {
+  // No-dimension fallback is deterministic: estimatedRows = ceil(c/2). With a
+  // 3-row budget the widest aspect-correct width is c<=6 (ceil(6/2)=3); the box
+  // must NOT keep width 40 at 3 rows (that is the vertical-squish bug).
+  const box = containImageBox(NO_DIMS, 40, 3);
+  assert.equal(box.imageWidth, 6, "reduces width so the aspect-natural height fits the row budget");
+  assert.equal(box.imageRows, 3, "uses the full row budget at the reduced width");
+  // Invariant: the chosen box never needs more rows than the budget.
+  assert.ok(estimatedRowsForColumns(NO_DIMS, box.imageWidth) <= 3);
+});
+
+test("containImageBox clamps to >=1 cell and tolerates degenerate caps", () => {
+  const box = containImageBox(SIZED, 0, 0);
+  assert.ok(box.imageWidth >= 1 && box.imageRows >= 1);
+  const undef = containImageBox(NO_DIMS, undefined, undefined);
+  assert.ok(undef.imageWidth >= 1 && undef.imageRows >= 1);
 });
 
 test("limitLinesToTerminalRows keeps the tail when over the row budget", () => {

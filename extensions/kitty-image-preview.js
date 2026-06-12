@@ -38,6 +38,7 @@ import {
 import {
   estimatedRowsForColumns,
   fitImageColumnsForRows,
+  containImageBox,
   limitLinesToTerminalRows,
   currentTerminalColumns,
   previewViewportRowLimit,
@@ -302,10 +303,19 @@ function renderSidePanelImageLines(state, rows, layout) {
     availableRows: rows,
     protocolMax: useUnicodePlaceholders ? MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE + 1 : 200,
   });
-  const imageRows = Math.max(1, Math.min(rows, layout.imageRows || rows, maxRows));
+  // Aspect-preserving contain fit (bd image-preview sidebar work): derive the
+  // rendered cell box from the actual row budget so kitty is never handed a
+  // (width, rows) pair that mismatches the image's natural aspect ratio. The
+  // previous code clamped imageRows to the visible rows while keeping the column
+  // width fixed, which scaled tall images into a too-short box and squished them
+  // vertically. containImageBox fills the full column width whenever height is
+  // not the binding constraint, and only narrows the image for tall/portrait
+  // sources so the aspect ratio is preserved either way.
+  const rowBudget = Math.max(1, Math.min(rows, layout.imageRows || rows, maxRows));
+  const box = containImageBox(current, layout.imageWidth, rowBudget);
   const imageLines = renderCurrentImageLines(state, current, {
-    columns: layout.imageWidth,
-    rows: imageRows,
+    columns: box.imageWidth,
+    rows: box.imageRows,
     lineWidth: layout.imageWidth,
     useUnicodePlaceholders,
     leadingSpaces: layout.padding,
