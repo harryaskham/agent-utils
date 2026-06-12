@@ -60,6 +60,83 @@ export function containImageBox(item, maxWidth, maxRows) {
   return { imageWidth, imageRows };
 }
 
+// Greedy multi-image page packing for the side panel (Part C of the
+// image-preview sidebar work, bd-502d6a). Packs as many aspect-fit images as
+// fit into each page of `availableRows`, reserving `headerRows` per image for a
+// name header, and starts a fresh page when the next image's header+image block
+// would overflow the page. Each image's height is additionally bounded by the
+// page height minus its own header, so a single tall image never needs more than
+// one page. Pure over its arguments plus containImageBox; reflow on resize is
+// automatic because callers recompute pages from the live terminal width/rows on
+// every render.
+//
+// Returns an array of pages; each page is { entries, usedRows } where every
+// entry is { index, item, label, headerRows, imageWidth, imageRows, startRow,
+// blockRows }. `startRow` is the 0-based row within the page where the entry's
+// header begins; `blockRows` is headerRows + imageRows.
+export function packImagesIntoPages(items, {
+  columnWidth,
+  availableRows,
+  headerRows = 1,
+  rowGap = 0,
+  minImageRows = 1,
+} = {}) {
+  const width = Math.max(1, Math.trunc(columnWidth || 1));
+  const rowCap = Math.max(1, Math.trunc(availableRows || 1));
+  const header = Math.max(0, Math.trunc(headerRows));
+  const gap = Math.max(0, Math.trunc(rowGap));
+  const minRows = Math.max(1, Math.trunc(minImageRows));
+  const list = Array.isArray(items) ? items : [];
+  // Each image is height-bounded by the page minus its own header so a single
+  // tall image can never demand more than one page.
+  const imageRowBudget = Math.max(minRows, rowCap - header);
+  const pages = [];
+  let current = null;
+
+  const flush = () => {
+    if (current && current.entries.length) pages.push(current);
+    current = null;
+  };
+
+  list.forEach((item, index) => {
+    const box = containImageBox(item, width, imageRowBudget);
+    const blockRows = header + box.imageRows;
+    if (current && current.entries.length) {
+      const projected = current.usedRows + gap + blockRows;
+      if (projected > rowCap) flush();
+    }
+    if (!current) current = { entries: [], usedRows: 0 };
+    const startRow = current.entries.length ? current.usedRows + gap : 0;
+    current.entries.push({
+      index,
+      item,
+      label: item?.label ?? "",
+      headerRows: header,
+      imageWidth: box.imageWidth,
+      imageRows: box.imageRows,
+      startRow,
+      blockRows,
+    });
+    current.usedRows = startRow + blockRows;
+  });
+  flush();
+  return pages;
+}
+
+// Find which packed page contains the image at the given global item index.
+// Returns the 0-based page number, or 0 when the index is not found (degenerate
+// or empty page sets). Pure over its arguments.
+export function pageForIndex(pages, index) {
+  const target = Math.trunc(Number(index) || 0);
+  const list = Array.isArray(pages) ? pages : [];
+  for (let page = 0; page < list.length; page += 1) {
+    if (Array.isArray(list[page]?.entries) && list[page].entries.some((entry) => entry.index === target)) {
+      return page;
+    }
+  }
+  return 0;
+}
+
 export function limitLinesToTerminalRows(lines, terminalRows) {
   const rowLimit = Math.max(1, Math.trunc(Number(terminalRows) || 1));
   const input = Array.isArray(lines) ? lines : [];

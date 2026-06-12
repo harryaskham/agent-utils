@@ -5,6 +5,8 @@ import {
   estimatedRowsForColumns,
   fitImageColumnsForRows,
   containImageBox,
+  packImagesIntoPages,
+  pageForIndex,
   limitLinesToTerminalRows,
   currentTerminalColumns,
   currentTerminalRows,
@@ -85,6 +87,101 @@ test("containImageBox clamps to >=1 cell and tolerates degenerate caps", () => {
   assert.ok(box.imageWidth >= 1 && box.imageRows >= 1);
   const undef = containImageBox(NO_DIMS, undefined, undefined);
   assert.ok(undef.imageWidth >= 1 && undef.imageRows >= 1);
+});
+
+test("packImagesIntoPages packs multiple width-fit images per page and overflows to a new page", () => {
+  // No-dimension items are deterministic: estimatedRows = ceil(c/2), so
+  // containImageBox(NO_DIMS, 10, budget>=5) -> { imageWidth: 10, imageRows: 5 }.
+  // headerRows 1 -> each block is 6 rows. availableRows 14 -> two blocks fit
+  // (6 + 6 = 12 <= 14); the third overflows (12 + 6 = 18 > 14) to page two.
+  const items = [
+    { id: 1, path: "/a.png", label: "a" },
+    { id: 2, path: "/b.png", label: "b" },
+    { id: 3, path: "/c.png", label: "c" },
+  ];
+  const pages = packImagesIntoPages(items, { columnWidth: 10, availableRows: 14, headerRows: 1 });
+  assert.equal(pages.length, 2, "third image overflows onto a second page");
+  assert.equal(pages[0].entries.length, 2);
+  assert.equal(pages[1].entries.length, 1);
+  // First page entries are header(1) + image(5) blocks stacked with no gap.
+  assert.deepEqual(pages[0].entries.map((e) => e.startRow), [0, 6]);
+  assert.deepEqual(pages[0].entries.map((e) => e.blockRows), [6, 6]);
+  assert.equal(pages[0].usedRows, 12);
+  // Labels and global indices are preserved for header rendering + navigation.
+  assert.deepEqual(pages[0].entries.map((e) => e.label), ["a", "b"]);
+  assert.equal(pages[1].entries[0].index, 2);
+  assert.equal(pages[1].entries[0].startRow, 0, "a fresh page starts at row 0");
+  // Every image is width-fit to the column and bounded by the page height.
+  for (const page of pages) {
+    for (const entry of page.entries) {
+      assert.equal(entry.imageWidth, 10);
+      assert.ok(entry.headerRows + entry.imageRows <= 14);
+    }
+  }
+});
+
+test("packImagesIntoPages honors an inter-image row gap", () => {
+  const items = [
+    { id: 1, path: "/a.png", label: "a" },
+    { id: 2, path: "/b.png", label: "b" },
+    { id: 3, path: "/c.png", label: "c" },
+  ];
+  // Same blocks (6 rows each) but a 1-row gap between images: 6 + 1 + 6 = 13
+  // still fits 14, so the second image starts at row 7 instead of 6.
+  const pages = packImagesIntoPages(items, { columnWidth: 10, availableRows: 14, headerRows: 1, rowGap: 1 });
+  assert.equal(pages.length, 2);
+  assert.deepEqual(pages[0].entries.map((e) => e.startRow), [0, 7]);
+  assert.equal(pages[0].usedRows, 13);
+});
+
+test("packImagesIntoPages bounds each image height by the page minus its header", () => {
+  // availableRows 6, headerRows 1 -> imageRowBudget 5; one 6-row block per page.
+  const items = [
+    { id: 1, path: "/a.png", label: "a" },
+    { id: 2, path: "/b.png", label: "b" },
+  ];
+  const pages = packImagesIntoPages(items, { columnWidth: 10, availableRows: 6, headerRows: 1 });
+  assert.equal(pages.length, 2, "a full-height image takes a page each");
+  for (const page of pages) {
+    assert.equal(page.entries.length, 1);
+    assert.equal(page.entries[0].imageRows, 5);
+    assert.equal(page.entries[0].blockRows, 6);
+  }
+});
+
+test("packImagesIntoPages never needs more than one page for a single tall image", () => {
+  // A big header relative to the page still yields a single bounded block.
+  const pages = packImagesIntoPages([{ id: 1, path: "/tall.png", label: "tall" }], {
+    columnWidth: 10,
+    availableRows: 4,
+    headerRows: 2,
+  });
+  assert.equal(pages.length, 1);
+  const entry = pages[0].entries[0];
+  assert.ok(entry.blockRows <= 4, `block ${entry.blockRows} must fit the page`);
+  assert.ok(entry.imageRows >= 1 && entry.imageWidth >= 1);
+});
+
+test("packImagesIntoPages returns no pages for an empty or non-array input", () => {
+  assert.deepEqual(packImagesIntoPages([], { columnWidth: 10, availableRows: 10 }), []);
+  assert.deepEqual(packImagesIntoPages(null, { columnWidth: 10, availableRows: 10 }), []);
+  assert.deepEqual(packImagesIntoPages(undefined, {}), []);
+});
+
+test("pageForIndex locates the page containing a global item index", () => {
+  const items = Array.from({ length: 5 }, (_v, i) => ({ id: i, path: `/${i}.png`, label: String(i) }));
+  // 14 rows / 6-per-block -> 2 images per page: [0,1] [2,3] [4].
+  const pages = packImagesIntoPages(items, { columnWidth: 10, availableRows: 14, headerRows: 1 });
+  assert.equal(pages.length, 3);
+  assert.equal(pageForIndex(pages, 0), 0);
+  assert.equal(pageForIndex(pages, 1), 0);
+  assert.equal(pageForIndex(pages, 2), 1);
+  assert.equal(pageForIndex(pages, 3), 1);
+  assert.equal(pageForIndex(pages, 4), 2);
+  // Unknown / out-of-range indices fall back to the first page.
+  assert.equal(pageForIndex(pages, 99), 0);
+  assert.equal(pageForIndex([], 3), 0);
+  assert.equal(pageForIndex(null, 1), 0);
 });
 
 test("limitLinesToTerminalRows keeps the tail when over the row budget", () => {
