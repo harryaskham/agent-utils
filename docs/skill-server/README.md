@@ -64,7 +64,7 @@ Tools exposed:
 - `skill_search` — accepts `{ "domain": "web", "query": "query ...", "tool": "query" }` and returns route metadata.
 - `skill_server_list` — lists configured MCP servers and scanned skill files.
 
-The stdio transport uses MCP `Content-Length` framing via `mcp-cli`, matching Tendril's `mcp stdio` structure.
+The stdio transport uses MCP newline-delimited JSON (NDJSON) framing via `mcp-cli` — one compact JSON object per line, `\n`-terminated — matching Tendril's `mcp stdio` structure.
 
 ## Build and test
 

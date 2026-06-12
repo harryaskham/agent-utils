@@ -71,7 +71,7 @@ pub struct McpCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum McpSubcommand {
-    /// Run the MCP server using Content-Length framed stdio.
+    /// Run the MCP server using newline-delimited JSON (NDJSON) framed stdio.
     Stdio,
 }
 

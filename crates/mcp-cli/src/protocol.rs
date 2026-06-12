@@ -1,4 +1,4 @@
-//! MCP wire framing (Content-Length headers) and transport error type.
+//! MCP wire framing (newline-delimited JSON / NDJSON) and transport error type.
 
 use std::io::{self, BufRead, Write};
 
@@ -25,56 +25,45 @@ impl McpCliError {
     }
 }
 
+/// Read one newline-delimited JSON (NDJSON) message from `reader`.
+///
+/// Each MCP stdio message is a single compact JSON object on its own line,
+/// terminated by `\n` (the MCP-spec-correct framing). Blank lines are skipped
+/// so spacing / keep-alive newlines between messages are tolerated. Returns
+/// `Ok(None)` at end of input.
 pub(crate) fn read_protocol_message<R>(reader: &mut R) -> Result<Option<Vec<u8>>, McpCliError>
 where
     R: BufRead,
 {
-    let mut content_length = None;
     let mut line = String::new();
 
     loop {
         line.clear();
         let bytes_read = reader.read_line(&mut line)?;
         if bytes_read == 0 {
-            return if content_length.is_none() {
-                Ok(None)
-            } else {
-                Err(McpCliError::Protocol(
-                    "unexpected EOF while reading MCP headers".to_string(),
-                ))
-            };
+            return Ok(None);
         }
 
-        if line == "\r\n" || line == "\n" {
-            break;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
         }
 
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if let Some((name, value)) = trimmed.split_once(':')
-            && name.eq_ignore_ascii_case("content-length")
-        {
-            let parsed_length = value.trim().parse::<usize>().map_err(|error| {
-                McpCliError::Protocol(format!("invalid Content-Length header: {error}"))
-            })?;
-            content_length = Some(parsed_length);
-        }
+        return Ok(Some(trimmed.as_bytes().to_vec()));
     }
-
-    let length = content_length.ok_or_else(|| {
-        McpCliError::Protocol("missing Content-Length header in MCP message".to_string())
-    })?;
-    let mut body = vec![0; length];
-    std::io::Read::read_exact(reader, &mut body)?;
-    Ok(Some(body))
 }
 
+/// Write `value` as a single newline-delimited JSON (NDJSON) message.
+///
+/// The JSON is serialized compactly (no embedded literal newlines) and
+/// terminated with a single `\n`, matching the MCP stdio NDJSON framing.
 pub(crate) fn write_protocol_message<W>(writer: &mut W, value: &Value) -> Result<(), McpCliError>
 where
     W: Write,
 {
     let body = serde_json::to_vec(value)?;
-    write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
     writer.write_all(&body)?;
+    writer.write_all(b"\n")?;
     writer.flush()?;
     Ok(())
 }

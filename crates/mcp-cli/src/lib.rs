@@ -353,34 +353,16 @@ mod tests {
     }
 
     fn frame_request(value: &Value) -> Vec<u8> {
-        let body = serde_json::to_vec(value).expect("request should serialize");
-        let mut message = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
-        message.extend(body);
+        let mut message = serde_json::to_vec(value).expect("request should serialize");
+        message.push(b'\n');
         message
     }
 
-    fn parse_framed_responses(mut bytes: &[u8]) -> Vec<Value> {
-        let mut responses = Vec::new();
-
-        while !bytes.is_empty() {
-            let header_end = bytes
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .expect("framed response should contain a header terminator");
-            let (header, remainder) = bytes.split_at(header_end + 4);
-            let header_str = std::str::from_utf8(header).expect("header should be valid utf-8");
-            let length = header_str
-                .lines()
-                .find_map(|line| line.strip_prefix("Content-Length: "))
-                .expect("response should include Content-Length")
-                .trim()
-                .parse::<usize>()
-                .expect("content length should parse");
-            let (body, rest) = remainder.split_at(length);
-            responses.push(serde_json::from_slice(body).expect("response body should be json"));
-            bytes = rest;
-        }
-
-        responses
+    fn parse_framed_responses(bytes: &[u8]) -> Vec<Value> {
+        let text = std::str::from_utf8(bytes).expect("framed responses should be valid utf-8");
+        text.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("response body should be json"))
+            .collect()
     }
 }
