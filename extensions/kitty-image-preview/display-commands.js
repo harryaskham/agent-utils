@@ -47,8 +47,13 @@ export function resetTransmissionGuard(state) {
   state.transmittedSignatures = new Map();
 }
 
-export function buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders = false) {
-  const prepared = state.currentCommand;
+// `prepared` is the prepared payload for `current`; it defaults to the single
+// state.currentCommand (the legacy single-image path) but the multi-image side
+// panel passes a per-entry payload so each packed-page image transmits from its
+// own prepared bytes while sharing the id-keyed transmit-once guard (bd-502d6a
+// C-wire). All existing call sites omit the argument and keep the prior
+// behaviour exactly.
+export function buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders = false, prepared = state.currentCommand) {
   if (!prepared || prepared.itemId !== current.id) return "";
   const placementMode = useUnicodePlaceholders ? "unicode" : "cursor";
   const signature = `${columns}:${rows}:${prepared.zIndex}:${prepared.transport}:${prepared.passthrough}:${prepared.chunkSize}:${placementMode}:${state.config.placementId}`;

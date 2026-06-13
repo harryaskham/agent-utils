@@ -8,8 +8,8 @@
 // schema-free preview submodules plus the kitty-graphics primitives, mirroring
 // the bd-e1914a modularization of display-commands/status-line/etc.
 
-import { clampInteger, renderPlaceholderLines } from "./text-utils.js";
-import { previewViewportRowLimit, previewImageRowLimit } from "./layout.js";
+import { clampInteger, renderPlaceholderLines, truncatePlainText } from "./text-utils.js";
+import { previewViewportRowLimit, previewImageRowLimit, composePagedSidePanelLines } from "./layout.js";
 import { DEFAULT_COLUMNS } from "./constants.js";
 import { resolvePlacement, shouldRenderUnicodePlaceholders } from "./placement.js";
 import { imageControlsLine, imageSeparatorLine, imageHeaderLine } from "./status-line.js";
@@ -27,8 +27,9 @@ export function renderCurrentImageLines(state, current, {
   useUnicodePlaceholders = false,
   leadingSpaces = 0,
   frame = false,
+  prepared = undefined,
 } = {}) {
-  const command = buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders);
+  const command = buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders, prepared);
   const leftPadding = " ".repeat(Math.max(0, leadingSpaces));
   const commandPrefix = `${state.lastDeleteCommand || ""}${command}`;
   state.lastDeleteCommand = "";
@@ -67,6 +68,60 @@ export function renderCurrentImageLines(state, current, {
     })
     : renderPlaceholderLines(lineWidth, rows, label);
   return imageLines.map((line, index) => `${leftPadding}${index === 0 ? commandPrefix : ""}${line}`);
+}
+
+// Side-panel name header for one packed page entry: "n/total label", padded to
+// the panel width so the column stays rectangular (Part C-wire, bd-502d6a).
+// Pure over its arguments plus state.items.length.
+export function sidePanelEntryHeaderLine(state, entry, width) {
+  const cols = Math.max(0, Math.trunc(Number(width) || 0));
+  if (cols <= 0) return "";
+  const total = Array.isArray(state?.items) ? state.items.length : 0;
+  const counter = `${Math.trunc(entry?.index ?? 0) + 1}/${total}`;
+  const label = entry?.label ? `${counter} ${entry.label}` : counter;
+  return truncatePlainText(label, cols).padEnd(cols);
+}
+
+// Assemble the multi-image side-panel lines for one packed page (Part C-wire,
+// bd-502d6a). Reuses renderCurrentImageLines per packed-page entry so the
+// bd-d6fa1b transmit-once / placement-only-on-repaint invariant holds per image
+// id, and composes the per-entry name header + image block with
+// composePagedSidePanelLines (header at the entry's startRow, image rows below,
+// blank-filled, bottom-aligned). `preparedById` supplies each entry's prepared
+// payload (the per-entry analogue of state.currentCommand); an entry with no
+// prepared payload falls back to state.currentCommand and therefore emits only
+// its placeholder cells (empty transmit prefix) until the live wiring prepares
+// page payloads before render. The actual escape/transmit emission lives in the
+// injected render seam, so this is unit-testable headlessly like the widget.
+export function renderSidePanelPageLines(state, {
+  page,
+  rows,
+  totalWidth,
+  imageWidth,
+  padding = 0,
+  useUnicodePlaceholders = false,
+  preparedById,
+  bottomAlign = true,
+} = {}) {
+  const rowCount = Math.max(0, Math.trunc(Number(rows) || 0));
+  if (rowCount <= 0 || !page) return [];
+  const panelWidth = Math.max(0, Math.trunc(Number(totalWidth) || 0));
+  const lineWidth = Math.max(1, Math.trunc(Number(imageWidth) || 1));
+  const leadingSpaces = Math.max(0, Math.trunc(Number(padding) || 0));
+  return composePagedSidePanelLines(page, {
+    rows: rowCount,
+    totalWidth: panelWidth,
+    bottomAlign,
+    renderHeaderLines: (entry) => [sidePanelEntryHeaderLine(state, entry, panelWidth)],
+    renderImageLines: (entry) => renderCurrentImageLines(state, entry.item, {
+      columns: Math.max(1, Math.trunc(entry?.imageWidth || lineWidth)),
+      rows: Math.max(1, Math.trunc(entry?.imageRows || 1)),
+      lineWidth,
+      useUnicodePlaceholders,
+      leadingSpaces,
+      prepared: preparedById?.get?.(entry?.item?.id),
+    }),
+  });
 }
 
 export class KittyImagePreviewWidget {
