@@ -8,7 +8,7 @@ const TMUX_DCS_END = `${ESC}\\`;
 
 const DEFAULT_CHUNK_SIZE = 4096;
 const CONTROL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
-const KITTY_PLACEHOLDER_CODEPOINT = 0x10eeee;
+export const KITTY_PLACEHOLDER_CODEPOINT = 0x10eeee;
 const KITTY_PLACEHOLDER = String.fromCodePoint(KITTY_PLACEHOLDER_CODEPOINT);
 const ROW_COLUMN_DIACRITIC_CODEPOINTS = Object.freeze([
   "0305 030D 030E 0310 0312 033D 033E 033F 0346 034A 034B 034C 0350 0351 0352 0357",
@@ -149,6 +149,24 @@ function diacriticForValue(value, name) {
   return String.fromCodePoint(codepoint);
 }
 
+// Inverse of diacriticForValue: map a combining diacritic codepoint (or the
+// single-character string carrying it) back to the unsigned integer it encodes
+// in a Unicode placeholder cell, or undefined if the codepoint is not part of
+// the row/column diacritic table. Used by the headless render harness
+// (bd-3623f7) to decode placeholder row/column/image-high-byte structurally
+// without a live terminal.
+const DIACRITIC_VALUE_BY_CODEPOINT = new Map(
+  ROW_COLUMN_DIACRITIC_CODEPOINTS.map((codepoint, index) => [codepoint, index]),
+);
+
+export function decodePlaceholderDiacritic(charOrCodepoint) {
+  if (charOrCodepoint === undefined || charOrCodepoint === null) return undefined;
+  const codepoint = typeof charOrCodepoint === "number"
+    ? charOrCodepoint
+    : String(charOrCodepoint).codePointAt(0);
+  return DIACRITIC_VALUE_BY_CODEPOINT.get(codepoint);
+}
+
 function colorBytesForId(value, name) {
   const id = normalizeUnsignedInteger(value, name);
   const low24 = id % 0x1000000;
@@ -186,6 +204,47 @@ export function serializeKittyGraphicsCommand(control, payloadBase64 = "", optio
   const controlData = controlDataToString(control);
   const raw = `${APC_START}${controlData}${payloadBase64 ? ";" : ""}${payloadBase64}${APC_END}`;
   return wrapForPassthrough(raw, options.passthrough ?? "auto", options.env ?? process.env);
+}
+
+// Strip tmux DCS graphics passthrough framing so the inner kitty APC commands
+// can be parsed uniformly. The serializer wraps each command as
+// `ESC Ptmux; <ESC-doubled body> ESC \\`; removing the start markers and
+// collapsing doubled ESC bytes yields the raw `ESC _G ... ESC \\` stream (the
+// trailing DCS terminators become harmless stray `ESC \\` with no preceding
+// `ESC _G`, which the command scanner ignores). bd-3623f7.
+export function unwrapTmuxGraphicsPassthrough(text) {
+  const value = String(text ?? "");
+  if (!value.includes(TMUX_DCS_START)) return value;
+  return value.split(TMUX_DCS_START).join("").split(`${ESC}${ESC}`).join(ESC);
+}
+
+// Inverse of serializeKittyGraphicsCommand / serializeKittyGraphicsChunks: scan a
+// rendered string for kitty graphics APC commands and return one entry per
+// command with its parsed control map and (un-decoded) base64 payload. Handles
+// both raw and tmux-passthrough-wrapped streams and chunked transmissions (each
+// chunk surfaces as its own entry, continuation chunks carrying only `m`). The
+// control/payload bodies never contain a bare ESC, so a non-ESC body scan is
+// sufficient. bd-3623f7 headless render harness primitive.
+export function parseKittyGraphicsCommands(text) {
+  const stream = unwrapTmuxGraphicsPassthrough(text);
+  const commands = [];
+  const commandRe = new RegExp(`${ESC}_G([^${ESC}]*)${ESC}\\\\`, "g");
+  let match;
+  while ((match = commandRe.exec(stream)) !== null) {
+    const body = match[1] ?? "";
+    const semicolon = body.indexOf(";");
+    const controlData = semicolon === -1 ? body : body.slice(0, semicolon);
+    const payloadBase64 = semicolon === -1 ? "" : body.slice(semicolon + 1);
+    const control = {};
+    for (const pair of controlData.split(",")) {
+      if (!pair) continue;
+      const equals = pair.indexOf("=");
+      if (equals === -1) continue;
+      control[pair.slice(0, equals)] = pair.slice(equals + 1);
+    }
+    commands.push({ control, payloadBase64, raw: match[0] });
+  }
+  return commands;
 }
 
 export function chunkBase64(payloadBase64, chunkSize = DEFAULT_CHUNK_SIZE) {
