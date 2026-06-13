@@ -39,6 +39,8 @@ import {
   estimatedRowsForColumns,
   fitImageColumnsForRows,
   containImageBox,
+  packImagesIntoPages,
+  pageForIndex,
   limitLinesToTerminalRows,
   currentTerminalColumns,
   previewViewportRowLimit,
@@ -93,6 +95,7 @@ import {
 
 import {
   renderCurrentImageLines,
+  renderSidePanelPageLines,
   KittyImagePreviewWidget,
 } from "./kitty-image-preview/widget.js";
 
@@ -327,6 +330,37 @@ function renderSidePanelImageLines(state, rows, layout) {
   return Array.from({ length: rows }, (_unused, index) => imageLines[index - topBlankRows] ?? blank);
 }
 
+// Multi-image paged side panel (Part C-wire live, bd-502d6a). Renders the packed
+// page that contains the current image — per-entry name header + width-fit image
+// blocks — reusing renderSidePanelPageLines (transmit-once-per-image-id). Falls
+// back to the single-image renderer whenever there are <2 images, the per-entry
+// page payloads are not all prepared, or packing yields nothing, so the common
+// single-image / unprepared paths are byte-for-byte unchanged.
+function renderSidePanelImageLinesPaged(state, rows, layout) {
+  const prepared = state.pagePrepared;
+  const ready = prepared instanceof Map && state.items.every((item) => prepared.has(item.id));
+  if (state.items.length < 2 || !ready || rows <= 0) {
+    return renderSidePanelImageLines(state, rows, layout);
+  }
+  const useUnicodePlaceholders = shouldRenderUnicodePlaceholders(state, { forceSideOverlay: true });
+  const pages = packImagesIntoPages(state.items, {
+    columnWidth: layout.imageWidth,
+    availableRows: rows,
+    headerRows: 1,
+  });
+  if (pages.length === 0) return renderSidePanelImageLines(state, rows, layout);
+  const pageIndex = Math.min(pages.length - 1, Math.max(0, pageForIndex(pages, state.index)));
+  return renderSidePanelPageLines(state, {
+    page: pages[pageIndex],
+    rows,
+    totalWidth: layout.totalWidth,
+    imageWidth: layout.imageWidth,
+    padding: layout.padding,
+    useUnicodePlaceholders,
+    preparedById: prepared,
+  });
+}
+
 function renderTuiWithSidePanel(tui, originalRender, width, state) {
   const placement = resolvePlacement(state);
   if (!state.visible || state.items.length === 0 || !isSideOverlayPlacement(placement) || shouldUseInlineRightPlacement(state)) {
@@ -382,7 +416,7 @@ function renderTuiWithSidePanel(tui, originalRender, width, state) {
 
   const moveToPanel = `\x1b[${layout.mainWidth + 1}G`;
   const blankPanel = " ".repeat(layout.totalWidth);
-  const panelLines = renderSidePanelImageLines(state, visiblePanelRows, layout);
+  const panelLines = renderSidePanelImageLinesPaged(state, visiblePanelRows, layout);
   for (let index = 0; index < visiblePanelRows; index += 1) {
     const lineIndex = panelStart + index;
     if (topFullWidthLines[lineIndex]) continue;
@@ -660,6 +694,68 @@ function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
 }
 
 
+// Build a prepared transmit payload for one item (the per-entry analogue of
+// state.currentCommand) used by the multi-image paged side panel (bd-502d6a).
+// Reuses an unchanged `existing` payload (matching signature) so animation /
+// cycle frames do not re-read base64, and clears the id's transmit-once guard
+// only when the payload is actually rebuilt so the next render re-uploads it.
+async function buildPreparedPayload(state, item, existing) {
+  const useMemory = state.config.transferMode === "memory" || (
+    state.config.transferMode === "auto" && shouldUseInMemoryTransfer(process.env)
+  );
+  const transport = useMemory ? "memory" : "file";
+  const zIndex = state.config.background ? DEFAULT_BG_Z_INDEX : state.config.zIndex;
+  const signature = `${item.id}:${transport}:${zIndex}:${state.config.passthrough}:${state.config.chunkSize}`;
+  if (existing && existing.signature === signature) return existing;
+  const pngBase64 = useMemory ? await fileToBase64(item.path) : undefined;
+  state.transmittedSignatures?.delete?.(item.id);
+  return {
+    itemId: item.id,
+    signature,
+    transport,
+    pngBase64,
+    filePath: useMemory ? undefined : item.path,
+    zIndex,
+    passthrough: state.config.passthrough,
+    chunkSize: state.config.chunkSize,
+    rendered: undefined,
+  };
+}
+
+// Prepare per-entry payloads for the multi-image rightOverlay side panel
+// (bd-502d6a). Only active for 2+ images in a (non-inline) side-overlay
+// placement; otherwise it clears state.pagePrepared so the single-image side
+// panel path is unaffected. When any payload is (re)built it also widens the
+// scoped clear-previous delete to exclude every current page image, so the
+// sibling images are not evicted by the single-image prepare's [current.id]
+// exclusion.
+async function preparePagePayloads(state) {
+  const placement = resolvePlacement(state);
+  const multiImageSidePanel = state.items.length >= 2
+    && isSideOverlayPlacement(placement)
+    && !shouldUseInlineRightPlacement(state);
+  if (!multiImageSidePanel) {
+    state.pagePrepared = undefined;
+    return;
+  }
+  const prepared = state.pagePrepared instanceof Map ? state.pagePrepared : new Map();
+  const liveIds = new Set(state.items.map((item) => item.id));
+  for (const id of [...prepared.keys()]) if (!liveIds.has(id)) prepared.delete(id);
+  let changed = false;
+  for (const item of state.items) {
+    const existing = prepared.get(item.id);
+    const next = await buildPreparedPayload(state, item, existing);
+    if (next !== existing) changed = true;
+    prepared.set(item.id, next);
+  }
+  state.pagePrepared = prepared;
+  if (changed) {
+    state.lastDeleteCommand = state.config.clearPrevious
+      ? buildScopedDeleteCommand(state, { excludeIds: state.items.map((item) => item.id) })
+      : "";
+  }
+}
+
 async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
   const current = state.items[state.index];
   if (!current) return;
@@ -691,6 +787,7 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
     chunkSize: state.config.chunkSize,
     rendered: undefined,
   };
+  await preparePagePayloads(state).catch(() => {});
   syncWidget(ctx, state);
 }
 
@@ -1072,6 +1169,12 @@ export default function kittyImagePreviewExtension(pi) {
     // image, so clear the transmit-once guard to force a re-upload of the
     // current image's payload on the next render (bd-d6fa1b).
     resetTransmissionGuard(state);
+    // Reattach: the new terminal holds none of the multi-image page payloads, so
+    // clear each page entry's render memo too, forcing a fresh upload per image
+    // on the next render (the per-id transmit guard above is also cleared).
+    if (state.pagePrepared instanceof Map) {
+      for (const payload of state.pagePrepared.values()) payload.rendered = undefined;
+    }
     if (state.visible && state.items[state.index]) {
       await prepareCurrentImage(state, ctx).catch((error) => {
         if (ctx.hasUI) ctx.ui.notify(`kitty image preview restore failed: ${error.message}`, "warning");
