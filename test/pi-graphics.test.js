@@ -176,6 +176,24 @@ async function readExtensionSurface(mainUrl) {
   return parts.join("\n");
 }
 
+// Resilient source-call assertion (bd-92f38c). pi-graphics.js pulls in typebox +
+// pi-ai, so several wiring checks read the module SOURCE rather than importing +
+// driving it. Earlier checks matched the full literal call text, so a single
+// benign change (e.g. adding `, freeData: true`) broke them en masse this
+// session. This helper instead checks that SOME `fnName(...)` call in the source
+// has an argument list containing every required fragment — tolerant of argument
+// order, added options, and whitespace/formatting. It lazy-matches to the first
+// `)`, so it suits the flat object-literal args (no nested calls) of the
+// delete-builder wiring it guards.
+function assertSourceCallIncludes(source, fnName, fragments, message) {
+  const escaped = fnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const callRe = new RegExp(`${escaped}\\(([\\s\\S]*?)\\)`, "g");
+  for (const match of source.matchAll(callRe)) {
+    if (fragments.every((fragment) => match[1].includes(fragment))) return;
+  }
+  assert.fail(message || `expected a ${fnName}(...) call whose args include all of: ${fragments.join(" | ")}`);
+}
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function pngChunkTypes(png) {
@@ -1431,7 +1449,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function boxChromeComponentMap\(\)/);
   assert.match(source, /function clearBoxChromeImages\(ctx\)/);
   assert.match(source, /boxChromeRuntime\?\.ownedImageIds\?\.\(\) \|\| state\.boxChromeImageIds/);
-  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: \[PI_GRAPHICS_Z\.BOX_CHROME\], freeData: true \}\)/);
+  assertSourceCallIncludes(source, "buildDeleteByZIndexBandCommand", ["PI_GRAPHICS_Z.BOX_CHROME", "freeData: true"], "box-chrome z-band teardown frees image data (uppercase d=Z)");
   assert.match(source, /settingsDisableBoxChrome\(settings\)/);
   assert.match(source, /installBoxChromeMonkeyPatch\(\{ components: boxChromeComponentMap\(\), runtime: null \}\)\?\.restore\?\.\(\)/);
   assert.match(source, /BOX_EFFECT_NAMES/);
@@ -1549,7 +1567,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /unicodeMode === "fill"/);
   assert.match(source, /function clearStaleStartupGraphics\(\)/);
   assert.match(source, /PI_GRAPHICS_CLEAR_STALE_ON_STARTUP/);
-  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES, freeData: true \}\)/);
+  assertSourceCallIncludes(source, "buildDeleteByZIndexBandCommand", ["PI_GRAPHICS_RESERVED_Z_INDICES", "freeData: true"], "stale-startup reserved-z-band cleanup frees image data");
   assert.match(source, /createBoxRailsRuntime\(\)/);
   assert.match(source, /box-rail-/);
   assert.match(source, /const vOffset = edge === "top" \? -\(height - 1\) : 0/);
@@ -1596,7 +1614,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /return `\$\{String\(label \|\| "anchored"\)\.padEnd\(12\)\} \$\{anchorLine\}\$\{relativePlacement\}`/);
   assert.doesNotMatch(source, /return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null/);
   assert.match(source, /trailCells: heat > 0\.04/);
-  assert.match(source, /buildDeleteCommand\(\{\n\s+imageId: editorCursorRelativePlacement\.imageId,\n\s+placementId: editorCursorRelativePlacement\.placementId,\n\s+deleteMode: "i"/);
+  assertSourceCallIncludes(source, "buildDeleteCommand", ["editorCursorRelativePlacement.imageId", "editorCursorRelativePlacement.placementId", "deleteMode: \"i\""], "editor cursor-glow clear stays placement-only (transient, lowercase d=i)");
   assert.doesNotMatch(source, /deleteMode: "p"/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /editorRowBackgroundEnabled\(\)/);
@@ -2089,8 +2107,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /pi_graphics_clear/);
   assert.match(source, /PI_GRAPHICS_RESERVED_Z_INDICES/);
   assert.match(source, /hostedBand is supplemental for real\/relative reserved-z placements; Unicode virtual placements still require scoped image-id deletes/);
-  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES, freeData: true \}\)/);
-  assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds, freeData: true \}\)/);
+  assertSourceCallIncludes(source, "buildDeleteByZIndexBandCommand", ["PI_GRAPHICS_RESERVED_Z_INDICES", "freeData: true"], "pi_graphics_clear hostedBand frees image data");
+  assertSourceCallIncludes(source, "buildScopedDeleteCommand", ["ownedImageIds: state.ownedImageIds", "freeData: true"], "pi_graphics_clear scoped delete frees image data");
   assert.match(source, /BorderedLoader/);
   assert.match(source, /DynamicBorder/);
   assert.match(source, /ModelSelectorComponent/);
