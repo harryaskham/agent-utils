@@ -8,7 +8,7 @@ import {
   buildDeleteByZIndexBandCommand,
   stableKittyImageId,
 } from "../extensions/kitty-graphics.js";
-import { releaseOwnedImageData } from "../extensions/kitty-image-preview/display-commands.js";
+import { releaseOwnedImageData, buildScopedDeleteCommand as buildScopedDeleteCommandFromState } from "../extensions/kitty-image-preview/display-commands.js";
 
 // bd-b94fa1: the kitty delete builders only ever emitted LOWERCASE delete modes
 // (d=i / d=z / d=a), which delete the placement but keep the image DATA resident
@@ -97,4 +97,17 @@ test("releaseOwnedImageData is a no-op (empty string) when nothing needs freeing
   const state = makeState(ids);
   assert.equal(releaseOwnedImageData(state, { keepIds: ids }), "", "keeping every id frees nothing");
   assert.equal(releaseOwnedImageData({ ownedImageIds: new Set() }), "", "no owned ids frees nothing");
+});
+
+test("buildScopedDeleteCommand wrapper: freeData emits d=I and honors excludeIds (startup reclaim)", () => {
+  const ids = [stableKittyImageId("cur"), stableKittyImageId("old1"), stableKittyImageId("old2")];
+  const state = makeState(ids);
+  // Default placement-only.
+  assert.match(buildScopedDeleteCommandFromState(state, {}), /,d=i,/);
+  // Startup reclaim: free all prior-session data EXCEPT the current image id.
+  const reclaim = buildScopedDeleteCommandFromState(state, { freeData: true, excludeIds: [ids[0]] });
+  assert.equal((reclaim.match(/,d=I,/g) || []).length, 2, "frees the two non-current owned ids");
+  assert.doesNotMatch(reclaim, /,d=i,/, "reclaim never emits placement-only deletes");
+  // The wrapper does NOT clear ownedImageIds (so re-shown images stay tracked).
+  assert.equal(state.ownedImageIds.size, 3, "reclaim keeps ownership tracking intact");
 });

@@ -1168,6 +1168,22 @@ export default function kittyImagePreviewExtension(pi) {
         restorePublicState(state, entry.message.details);
       }
     }
+    // Cross-generation startup reclaim (bd-b257e8 / bd-ad43f8): images transmitted
+    // by a PRIOR session persist as IOSurfaces in the terminal. Because managed
+    // agents now use a stable (pid-free) image-id namespace, those prior-session
+    // ids — restored above into state.ownedImageIds — are addressable by THIS
+    // process, so free their DATA (uppercase d=I) on restore to reclaim
+    // prior-generation orphans instead of leaving them resident until a
+    // WindowServer restart. The current image is excluded: with stable ids it is
+    // the same id the prior generation already uploaded, so it stays resident
+    // (no free+re-upload race); non-current items re-upload on navigation since
+    // the transmit-once guard is cleared just below.
+    const restoredCurrent = state.items[state.index];
+    const startupReclaim = buildScopedDeleteCommand(state, {
+      freeData: true,
+      excludeIds: restoredCurrent ? [restoredCurrent.id] : [],
+    });
+    if (startupReclaim) flashDeleteWidget(ctx, state, startupReclaim);
     // A session_start fires on a fresh terminal attach/restore. In unicode
     // passthrough mode the new terminal does not hold any previously uploaded
     // image, so clear the transmit-once guard to force a re-upload of the

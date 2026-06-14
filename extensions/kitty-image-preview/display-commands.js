@@ -13,12 +13,16 @@ import {
   buildScopedDeleteCommand as buildScopedDeleteCommandRaw,
 } from "../kitty-graphics.js";
 
-export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
+export function buildScopedDeleteCommand(state, { excludeIds = [], freeData = false } = {}) {
   return buildScopedDeleteCommandRaw({
     ownedImageIds: state.ownedImageIds,
     placementId: state.config.placementId,
     passthrough: state.config.passthrough,
     excludeIds,
+    // freeData=true frees each owned image's stored data (d=I) instead of only
+    // deleting its placement (d=i) — used by the cross-generation startup
+    // reclaim and teardown paths (bd-b94fa1 / bd-b257e8).
+    freeData,
   });
 }
 
