@@ -92,3 +92,52 @@ in `test/pi-graphics.test.js` / `test/box-chrome.test.js`.
 A second worker (agnt-dev-1) independently implemented the same fix in the same
 session; bd-b94fa1 (agnt-dev-0) landed first, so the duplicate was stood down
 and only this audit-doc record was retained.
+
+---
+
+# Follow-up — 2026-06-14: cross-pid image-id orphaning is the DOMINANT WindowServer leak (fixed in bd-ad43f8)
+
+The free-on-removal fix above (bd-b94fa1) is necessary but not sufficient. The
+**dominant** driver of unbounded macOS `WindowServer` growth for long-running /
+restarting managed agents is **cross-pid image-id orphaning**, fixed separately
+in bd-ad43f8.
+
+## Mechanism
+
+`extensions/pi-graphics/id-space.js` `piGraphicsIdScope()` previously salted the
+kitty image-id namespace with the process pid. A managed Cacophony agent owns a
+persistent tmux pane and restarts **in place** (`caco agent restart` / `recreate`
+/ `resume`), so every restart minted a **fresh** pid-salted id namespace. A
+terminal can only delete/free image ids it still knows about, so every image the
+*previous* process generation transmitted became an **orphan** — unreachable to
+any scoped delete, including `pi_graphics_clear` (which only knows the live
+process's owned ids). Those orphaned images stayed resident as IOSurface
+accounted to WindowServer for the life of the terminal, accumulating one full
+generation of images per restart. This is why the leak grew over time even
+though each individual process scoped-deleted its own images, and why
+`pi_graphics_clear` could not reclaim it.
+
+## Fix (landed in bd-ad43f8)
+
+For managed agents (`CACO_AGENT_ID` / `CACOPHONY_AGENT` present, and no explicit
+operator-configured `PI_GRAPHICS_ID_NAMESPACE` / `*_EXACT`), `piGraphicsIdScope`
+now drops the pid salt and keys to a **stable** `caco-agent:<id>` namespace. A
+restart therefore **reuses and overwrites** the prior generation's image ids —
+which frees their data — instead of orphaning them. Distinct agents still have
+distinct `CACO_AGENT_ID`, so removing the pid salt does not introduce cross-pane
+id collisions, and an explicit operator namespace still takes precedence.
+Covered by `test/pi-graphics-id-space.test.js` and
+`test/kitty-image-preview-id-space.test.js`. Full suite green (635 tests).
+
+## Combined picture
+
+- **bd-b94fa1** (within-process): permanent-removal paths now emit the uppercase
+  free selector (`d=I` / `d=Z`) so a live process actually reclaims its image
+  data instead of only hiding placements.
+- **bd-ad43f8** (cross-process, dominant): a stable per-agent id namespace makes
+  a restart reuse+overwrite+free the prior generation's images instead of
+  orphaning unreclaimable cross-pid IOSurfaces.
+
+Together they bound WindowServer image memory both within a process and across
+restarts. Two non-critical refinements remain tracked as a P3 draft by
+agnt-dev-0 (screenshot/preview stream-frame id reuse; preview headless-free).
