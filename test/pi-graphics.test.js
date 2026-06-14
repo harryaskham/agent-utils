@@ -1431,7 +1431,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function boxChromeComponentMap\(\)/);
   assert.match(source, /function clearBoxChromeImages\(ctx\)/);
   assert.match(source, /boxChromeRuntime\?\.ownedImageIds\?\.\(\) \|\| state\.boxChromeImageIds/);
-  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: \[PI_GRAPHICS_Z\.BOX_CHROME\] \}\)/);
+  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: \[PI_GRAPHICS_Z\.BOX_CHROME\], freeData: true \}\)/);
   assert.match(source, /settingsDisableBoxChrome\(settings\)/);
   assert.match(source, /installBoxChromeMonkeyPatch\(\{ components: boxChromeComponentMap\(\), runtime: null \}\)\?\.restore\?\.\(\)/);
   assert.match(source, /BOX_EFFECT_NAMES/);
@@ -1549,7 +1549,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /unicodeMode === "fill"/);
   assert.match(source, /function clearStaleStartupGraphics\(\)/);
   assert.match(source, /PI_GRAPHICS_CLEAR_STALE_ON_STARTUP/);
-  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES \}\)/);
+  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES, freeData: true \}\)/);
   assert.match(source, /createBoxRailsRuntime\(\)/);
   assert.match(source, /box-rail-/);
   assert.match(source, /const vOffset = edge === "top" \? -\(height - 1\) : 0/);
@@ -2089,8 +2089,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /pi_graphics_clear/);
   assert.match(source, /PI_GRAPHICS_RESERVED_Z_INDICES/);
   assert.match(source, /hostedBand is supplemental for real\/relative reserved-z placements; Unicode virtual placements still require scoped image-id deletes/);
-  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES \}\)/);
-  assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds \}\)/);
+  assert.match(source, /buildDeleteByZIndexBandCommand\(\{ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES, freeData: true \}\)/);
+  assert.match(source, /buildScopedDeleteCommand\(\{ ownedImageIds: state\.ownedImageIds, freeData: true \}\)/);
   assert.match(source, /BorderedLoader/);
   assert.match(source, /DynamicBorder/);
   assert.match(source, /ModelSelectorComponent/);

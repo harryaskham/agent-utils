@@ -1014,12 +1014,19 @@ export default function piGraphicsExtension(pi) {
       // Replace any prior strip for this edge (width/palette change) so stale
       // strips do not linger.
       if (entry && (entry.imageId !== imageId || entry.placementId !== placementId)) {
+        // Genuine eviction: this edge's prior strip (width/palette change) will
+        // not be reused. Free its image data (d=I) and drop the upload-cache /
+        // ownership entries so memory is reclaimed and a future strip re-uploads
+        // (bd-b94fa1).
         emitGraphicsCommand(buildDeleteCommand({
           imageId: entry.imageId,
           placementId: entry.placementId,
           deleteMode: "i",
+          freeData: true,
           passthrough: state.config.passthrough,
         }));
+        uploadedImages.delete(entry.imageId);
+        state.ownedImageIds?.delete?.(entry.imageId);
       }
       deferGraphicsCommand(buildRelativePlacementCommand({
         imageId,
@@ -1589,12 +1596,18 @@ export default function piGraphicsExtension(pi) {
       // Replace any prior footer strip (e.g. on a width/theme change) so stale
       // wider strips do not linger beneath the footer.
       if (footerUnderlayRelative && (footerUnderlayRelative.imageId !== imageId || footerUnderlayRelative.placementId !== placementId)) {
+        // Genuine eviction: the prior footer strip (width/theme change) will not
+        // be reused. Free its image data (d=I) and drop the upload-cache /
+        // ownership entries so memory is reclaimed (bd-b94fa1).
         emitGraphicsCommand(buildDeleteCommand({
           imageId: footerUnderlayRelative.imageId,
           placementId: footerUnderlayRelative.placementId,
           deleteMode: "i",
+          freeData: true,
           passthrough: state.config.passthrough,
         }));
+        uploadedImages.delete(footerUnderlayRelative.imageId);
+        state.ownedImageIds?.delete?.(footerUnderlayRelative.imageId);
       }
       emitGraphicsCommand(buildRelativePlacementCommand({
         imageId,
@@ -2120,8 +2133,8 @@ export default function piGraphicsExtension(pi) {
 
   function clearBoxChromeImages(ctx) {
     const owned = boxChromeRuntime?.ownedImageIds?.() || state.boxChromeImageIds || new Set();
-    const scoped = buildScopedDeleteCommand({ ownedImageIds: owned });
-    const hosted = buildDeleteByZIndexBandCommand({ zIndices: [PI_GRAPHICS_Z.BOX_CHROME] });
+    const scoped = buildScopedDeleteCommand({ ownedImageIds: owned, freeData: true });
+    const hosted = buildDeleteByZIndexBandCommand({ zIndices: [PI_GRAPHICS_Z.BOX_CHROME], freeData: true });
     const command = `${scoped}${hosted}`;
     if (command) {
       try { resolveGraphicsWriter(ctx)?.(command); } catch {}
@@ -2148,7 +2161,7 @@ export default function piGraphicsExtension(pi) {
 
   function clearStaleStartupGraphics() {
     if (!envBool("PI_GRAPHICS_CLEAR_STALE_ON_STARTUP", true)) return;
-    const command = buildDeleteByZIndexBandCommand({ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES });
+    const command = buildDeleteByZIndexBandCommand({ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES, freeData: true });
     if (command) emitGraphicsCommand(command);
   }
 
@@ -3187,7 +3200,7 @@ export default function piGraphicsExtension(pi) {
     try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
     try { if (envBool("PI_GRAPHICS_AUTO_FOOTER", true)) ctx.ui?.setFooter?.(undefined, { piGraphics: false }); } catch {}
     try {
-      const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
+      const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds, freeData: true });
       if (command) resolveGraphicsWriter(ctx)?.(command);
     } catch {}
     resetGraphicsUploadCaches();
@@ -3297,8 +3310,8 @@ export default function piGraphicsExtension(pi) {
       hostedBand: Type.Optional(Type.Boolean({ description: "Also clear the reserved Pi graphics z-index band for caco-hosted stale-view cleanup of real/relative placements; does not replace scoped image-id cleanup for Unicode virtual placements." })),
     }),
     async execute(_toolCallId, params = {}, _signal, _onUpdate, ctx) {
-      const scoped = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds });
-      const hostedBand = params.hostedBand ? buildDeleteByZIndexBandCommand({ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES }) : "";
+      const scoped = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds, freeData: true });
+      const hostedBand = params.hostedBand ? buildDeleteByZIndexBandCommand({ zIndices: PI_GRAPHICS_RESERVED_Z_INDICES, freeData: true }) : "";
       const command = `${scoped}${hostedBand}`;
       if (command) {
         try { resolveGraphicsWriter(ctx)?.(command); } catch {}

@@ -115,7 +115,7 @@ test("createBoxChromeRuntime uploads strips once and wraps lines", () => {
   const beforeResize = emitted.length;
   runtime.applyToRows({ type: "assistant", instanceId: 1, lines: ["first row wider", "second row wider", "third row wider"], renderWidth: 24 });
   const resizeCmds = emitted.slice(beforeResize).join("");
-  assert.match(resizeCmds, /a=d,d=i,i=\d+,p=\d+/, "resized rows should delete stale relative placements by image id plus placement id");
+  assert.match(resizeCmds, /a=d,d=I,i=\d+,p=\d+/, "resized rows should evict stale relative strips by image id plus placement id AND free the image data (uppercase d=I) so they do not leak (bd-b94fa1)");
   assert.doesNotMatch(resizeCmds, /a=d,d=p/, "d=p is cell-intersection deletion in the Kitty protocol, not placement-id deletion");
 });
 

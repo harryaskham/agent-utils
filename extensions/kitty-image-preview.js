@@ -89,6 +89,7 @@ import {
 
 import {
   buildScopedDeleteCommand,
+  releaseOwnedImageData,
   buildCurrentDisplayCommand,
   resetTransmissionGuard,
 } from "./kitty-image-preview/display-commands.js";
@@ -751,7 +752,10 @@ async function preparePagePayloads(state) {
   state.pagePrepared = prepared;
   if (changed) {
     state.lastDeleteCommand = state.config.clearPrevious
-      ? buildScopedDeleteCommand(state, { excludeIds: state.items.map((item) => item.id) })
+      // Eviction (images dropped from the list): free their terminal image data
+      // (d=I) and stop tracking them so ownedImageIds + the IOSurface store do
+      // not grow without bound. Current items are kept (bd-b94fa1).
+      ? releaseOwnedImageData(state, { keepIds: state.items.map((item) => item.id) })
       : "";
   }
 }
@@ -1189,7 +1193,7 @@ export default function kittyImagePreviewExtension(pi) {
     void stopStream(state, { cleanup: true });
     state.visible = false;
     if (ctx?.hasUI) {
-      const ownedDelete = buildScopedDeleteCommand(state);
+      const ownedDelete = releaseOwnedImageData(state, { keepIds: [] });
       clearOwnedImageIds(state);
       if (ownedDelete) flashDeleteWidget(ctx, state, ownedDelete);
       ctx.ui.setStatus(WIDGET_ID, undefined);
@@ -1415,7 +1419,7 @@ export default function kittyImagePreviewExtension(pi) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       applyConfig(state, params.config);
       if (params.action === "clear") {
-        state.lastDeleteCommand = buildScopedDeleteCommand(state);
+        state.lastDeleteCommand = releaseOwnedImageData(state, { keepIds: [] });
         clearOwnedImageIds(state);
         state.visible = false;
         state.items = [];
@@ -1896,7 +1900,7 @@ export default function kittyImagePreviewExtension(pi) {
       noImages(ctx);
       return;
     }
-    state.lastDeleteCommand = buildScopedDeleteCommand(state);
+    state.lastDeleteCommand = releaseOwnedImageData(state, { keepIds: [] });
     clearOwnedImageIds(state);
     state.visible = false;
     state.items = [];

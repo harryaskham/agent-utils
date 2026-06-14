@@ -22,6 +22,45 @@ export function buildScopedDeleteCommand(state, { excludeIds = [] } = {}) {
   });
 }
 
+// Free the terminal's stored image DATA (uppercase kitty delete d=I) for owned
+// preview images that are no longer needed, then stop tracking them. Unlike the
+// placement-only lowercase delete used for transient hide / in-session
+// navigation (where the image may be shown again and a cheap placement-only
+// delete avoids a re-upload), this reclaims the IOSurface/GPU memory the
+// terminal holds per image. It fixes the unbounded growth where
+// state.ownedImageIds accrues every image id ever shown (replaceItems keeps old
+// ids on purpose) and the terminal image store therefore grows without bound on
+// long-running/backgrounded sessions (bd-b94fa1).
+//
+// Images whose id is in keepIds are retained; every other owned id is freed
+// (d=I removes its placement AND frees its data), removed from
+// state.ownedImageIds, and has its transmit-once guard entry cleared so a later
+// re-add re-uploads the bytes. The upload-cache (transmittedSignatures)
+// invalidation is REQUIRED: d=I also drops the data, so without it the next show
+// would emit only a placement against freed data and render nothing (tofu).
+// Callers that free data for the CURRENT image must also invalidate
+// state.currentCommand so the next prepare re-uploads.
+export function releaseOwnedImageData(state, { keepIds = [] } = {}) {
+  const owned = state?.ownedImageIds;
+  if (!owned || typeof owned[Symbol.iterator] !== "function") return "";
+  const keep = new Set(keepIds);
+  const freed = [];
+  for (const id of owned) if (!keep.has(id)) freed.push(id);
+  if (freed.length === 0) return "";
+  const command = buildScopedDeleteCommandRaw({
+    ownedImageIds: freed,
+    placementId: state.config?.placementId,
+    passthrough: state.config?.passthrough,
+    freeData: true,
+  });
+  const guard = state.transmittedSignatures;
+  for (const id of freed) {
+    owned.delete?.(id);
+    guard?.delete?.(id);
+  }
+  return command;
+}
+
 // Transmit-once / placement-only-on-repaint guard for the unicode-placeholder
 // path (bd-d6fa1b). In unicode mode the image is resolved by the placeholder
 // cells that renderCurrentImageLines emits on every frame, so the base64 PNG

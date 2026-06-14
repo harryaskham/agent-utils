@@ -3005,7 +3005,11 @@ export function createBoxChromeRuntime({
     const relPlacementId = piGraphicsPlacementId(`box-relative-strip.${anchorRowKey}`);
     const previous = relativeByAnchorRow.get(anchorRowKey);
     if (previous && (previous.stripImageId !== stripImageId || previous.relPlacementId !== relPlacementId)) {
-      emitGraphicsCommand(buildDeleteCommand({ imageId: previous.stripImageId, placementId: previous.relPlacementId, deleteMode: "i", passthrough }));
+      // Genuine eviction: the prior relative strip for this anchor row will not
+      // be reused. Free its image data (d=I) and drop its upload-cache entry so
+      // memory is reclaimed and a future identical strip re-uploads (bd-b94fa1).
+      emitGraphicsCommand(buildDeleteCommand({ imageId: previous.stripImageId, placementId: previous.relPlacementId, deleteMode: "i", freeData: true, passthrough }));
+      uploadedStrips.delete(previous.stripImageId);
     }
     const cmd = buildRelativePlacementCommand({
       imageId: stripImageId,

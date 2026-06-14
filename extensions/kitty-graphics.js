@@ -661,14 +661,20 @@ export function buildDeleteCommand({
   imageId,
   placementId,
   deleteMode = imageId ? "i" : "A",
+  // When true, emit the UPPERCASE kitty delete mode, which deletes the
+  // placement AND frees the stored image data (IOSurface/GPU memory) instead of
+  // only removing the placement and keeping the bytes cached. Lowercase modes
+  // leak image data on long-running sessions (bd-b94fa1).
+  freeData = false,
   quiet = 2,
   passthrough = "auto",
   env = process.env,
 } = {}) {
+  const d = freeData ? String(deleteMode).toUpperCase() : deleteMode;
   return serializeKittyGraphicsCommand(
     {
       a: "d",
-      d: deleteMode,
+      d,
       i: imageId,
       p: placementId,
       q: quiet,
@@ -680,6 +686,9 @@ export function buildDeleteCommand({
 
 export function buildDeleteByZIndexCommand({
   zIndex,
+  // freeData=true uses d=Z (uppercase), which also frees the image data of the
+  // placements at this z-index instead of leaving the bytes cached (bd-b94fa1).
+  freeData = false,
   quiet = 2,
   passthrough = "auto",
   env = process.env,
@@ -689,7 +698,7 @@ export function buildDeleteByZIndexCommand({
   return serializeKittyGraphicsCommand(
     {
       a: "d",
-      d: "z",
+      d: freeData ? "Z" : "z",
       z: Math.trunc(z),
       q: quiet,
     },
@@ -700,13 +709,14 @@ export function buildDeleteByZIndexCommand({
 
 export function buildDeleteByZIndexBandCommand({
   zIndices,
+  freeData = false,
   quiet = 2,
   passthrough = "auto",
   env = process.env,
 } = {}) {
   if (!zIndices || typeof zIndices[Symbol.iterator] !== "function") return "";
   const unique = [...new Set([...zIndices].map((value) => Math.trunc(Number(value))).filter(Number.isFinite))];
-  return unique.map((zIndex) => buildDeleteByZIndexCommand({ zIndex, quiet, passthrough, env })).join("");
+  return unique.map((zIndex) => buildDeleteByZIndexCommand({ zIndex, freeData, quiet, passthrough, env })).join("");
 }
 
 function fnv1a32(input) {
@@ -776,6 +786,12 @@ export function buildScopedDeleteCommand({
   placementId,
   passthrough = "auto",
   excludeIds = [],
+  // freeData=true frees each owned image's stored data (d=I) instead of only
+  // deleting its placement (d=i). Use it on teardown / removal paths so a
+  // long-running session reclaims the terminal's IOSurface memory; keep it
+  // false for in-session navigation where the image may be shown again and a
+  // cheap placement-only delete avoids a re-upload (bd-b94fa1).
+  freeData = false,
   env = process.env,
 } = {}) {
   if (!ownedImageIds || (typeof ownedImageIds[Symbol.iterator] !== "function")) return "";
@@ -787,6 +803,7 @@ export function buildScopedDeleteCommand({
       imageId: id,
       placementId,
       deleteMode: "i",
+      freeData,
       passthrough,
       env,
     });
