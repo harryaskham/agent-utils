@@ -102,3 +102,48 @@ test("real placement ids keep the full 32-bit namespace while placeholder placem
     "placeholder placement ids remain encodable by Unicode underline truecolor",
   );
 });
+
+// bd-ad43f8: managed Cacophony agents restart in place inside a persistent tmux
+// pane. Their kitty image-id namespace must be STABLE across restarts (drop the
+// pid salt) so a restart reuses + overwrites (and frees) prior images instead of
+// orphaning unreachable cross-pid IOSurfaces — the dominant macOS WindowServer
+// leak. Distinct agents must still get distinct namespaces; an explicit
+// operator-configured namespace must still take precedence and pid-salt.
+test("managed-agent ids (CACO_AGENT_ID) are stable across pid so restarts reuse + free prior images", () => {
+  const env = { CACO_AGENT_ID: "agent-a", CACO_MANAGED_PI_AGENT: "1" };
+  assert.equal(piGraphicsIdScope({ env, pid: 11, cwd: "/repo" }), "caco-agent:agent-a");
+  assert.equal(
+    piGraphicsIdScope({ env, pid: 11, cwd: "/repo" }),
+    piGraphicsIdScope({ env, pid: 99, cwd: "/elsewhere" }),
+    "namespace drops the pid salt for a managed agent (restart reuse)",
+  );
+  assert.equal(
+    piGraphicsImageId("editor-border", { env, pid: 11 }),
+    piGraphicsImageId("editor-border", { env, pid: 99 }),
+    "the same agent restarting gets the SAME image id (overwrite/free, not orphan)",
+  );
+});
+
+test("distinct managed agents still get distinct namespaces (no cross-pane collision without pid salt)", () => {
+  assert.notEqual(
+    piGraphicsIdScope({ env: { CACO_AGENT_ID: "agent-a" }, pid: 11 }),
+    piGraphicsIdScope({ env: { CACO_AGENT_ID: "agent-b" }, pid: 11 }),
+  );
+  assert.notEqual(
+    piGraphicsImageId("editor-border", { env: { CACO_AGENT_ID: "agent-a" }, pid: 11 }),
+    piGraphicsImageId("editor-border", { env: { CACO_AGENT_ID: "agent-b" }, pid: 11 }),
+  );
+});
+
+test("CACOPHONY_AGENT is honored as the managed-agent signal when CACO_AGENT_ID is absent", () => {
+  assert.equal(piGraphicsIdScope({ env: { CACOPHONY_AGENT: "agent-z" }, pid: 5 }), "caco-agent:agent-z");
+});
+
+test("an explicit operator namespace still takes precedence over the managed-agent shortcut and pid-salts", () => {
+  const env = { PI_GRAPHICS_ID_NAMESPACE: "explicit", CACO_AGENT_ID: "agent-a" };
+  assert.equal(piGraphicsIdScope({ env, pid: 11, cwd: "/repo" }), "explicit:pid:11");
+  assert.equal(
+    piGraphicsIdScope({ env: { ...env, PI_GRAPHICS_ID_NAMESPACE_EXACT: "1" }, pid: 11 }),
+    "explicit",
+  );
+});

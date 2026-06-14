@@ -45,11 +45,28 @@ export const PI_GRAPHICS_IMAGE_ID_BAND_SIZE = 0x3ffffffe;
 
 export function piGraphicsIdScope({ env = process.env, pid = process.pid, cwd = process.cwd() } = {}) {
   const configured = env.PI_GRAPHICS_ID_NAMESPACE || env.PI_KITTY_GRAPHICS_NAMESPACE;
+
+  // Managed Cacophony agents own a persistent tmux pane and restart in place
+  // (caco agent restart / recreate / resume). Key their kitty image-id namespace
+  // to the STABLE per-agent id (CACO_AGENT_ID) WITHOUT the pid salt so a restart
+  // REUSES + overwrites (and thereby frees) the prior process's image ids instead
+  // of minting fresh ids and orphaning unreachable cross-pid IOSurfaces. That
+  // cross-pid orphaning is the DOMINANT macOS WindowServer RAM leak for
+  // long-running backgrounded agents (bd-ad43f8): a process can only free image
+  // ids it still knows, so pid-salted ids from a prior generation are
+  // unreclaimable. Distinct agents have distinct CACO_AGENT_ID, so dropping the
+  // pid salt still avoids cross-pane collisions. An explicit operator-configured
+  // namespace (PI_GRAPHICS_ID_NAMESPACE / *_EXACT) always takes precedence.
+  const managedAgentId = env.CACO_AGENT_ID || env.CACOPHONY_AGENT;
+  if (!configured && managedAgentId) {
+    return `caco-agent:${managedAgentId}`;
+  }
+
   const sessionish = configured
     || env.PI_CODING_AGENT_SESSION
     || env.PI_CODING_AGENT_SESSION_FILE
     || env.PI_CODING_AGENT_DIR
-    || env.CACO_AGENT_ID
+    || managedAgentId
     || cwd
     || "unknown-session";
   // Include pid even when an operator provided a namespace: tmux panes commonly

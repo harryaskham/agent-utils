@@ -18,10 +18,10 @@ test("kitty preview ids delegate to the pi-graphics scoped namespace", () => {
     kittyPreviewImageId(name, options),
     piGraphicsImageId(`${KITTY_IMAGE_PREVIEW_ID_PREFIX}.${name}`, options),
   );
-  assert.notEqual(
+  assert.equal(
     kittyPreviewImageId(name, options),
     kittyPreviewImageId(name, { ...options, pid: 5678 }),
-    "process ids salt preview ids to avoid cross-pane stale-image collisions",
+    "managed-agent (CACO_AGENT_ID) ids drop the pid salt so a restart reuses + overwrites (frees) prior images instead of orphaning unreachable cross-pid IOSurfaces (bd-ad43f8)",
   );
 });
 
