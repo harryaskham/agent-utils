@@ -777,9 +777,23 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
   // changed, so any prior transmit-once guard entry for this image is stale and
   // must be cleared to force a re-upload on the next render (bd-d6fa1b).
   state.transmittedSignatures?.delete?.(current.id);
-  state.lastDeleteCommand = state.config.clearPrevious
-    ? buildScopedDeleteCommand(state, { excludeIds: [current.id] })
-    : "";
+  // During an active stream every captured frame gets a fresh image id (derived
+  // from path+mtime+size) and supersedes the prior frame, which is never shown
+  // again. The multi-image page reclaim in preparePagePayloads only runs for 2+
+  // images in side-overlay mode, and a stream replaces items down to the single
+  // live frame — so neither that reclaim nor the single-image placement-only
+  // delete below frees the superseded bitmaps. Without this, a long-running
+  // stream accumulates one resident bitmap / macOS IOSurface per frame within a
+  // single session; the bd-b94fa1 teardown + startup reclaim only bounds it
+  // across session boundaries. Free the superseded frames' DATA (d=I) and prune
+  // them from ownedImageIds, keeping only the live frame (bd-1be5ca).
+  if (state.stream && state.config.clearPrevious) {
+    state.lastDeleteCommand = releaseOwnedImageData(state, { keepIds: [current.id] });
+  } else {
+    state.lastDeleteCommand = state.config.clearPrevious
+      ? buildScopedDeleteCommand(state, { excludeIds: [current.id] })
+      : "";
+  }
   state.currentCommand = {
     itemId: current.id,
     signature,

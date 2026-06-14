@@ -404,6 +404,13 @@ test("kitty multiviewer scopes delete commands to images it owns", async () => {
   assert.doesNotMatch(previewSource, /buildDeleteCommand\(\{ deleteMode: "A"/);
   assert.match(previewSource, /buildScopedDeleteCommand/);
   assert.match(previewSource, /ownedImageIds/);
+  // A long-running stream replaces items down to a single live frame, so the
+  // multi-image page reclaim (preparePagePayloads) does not run. The stream
+  // path must instead free superseded frame DATA and prune ownership so it
+  // cannot leak one resident bitmap / IOSurface per captured frame within a
+  // single session (bd-1be5ca).
+  assert.match(previewSource, /state\.stream && state\.config\.clearPrevious/);
+  assert.match(previewSource, /releaseOwnedImageData\(state, \{ keepIds: \[current\.id\] \}\)/);
   // Scoped deletion uses per-image-id deletes (d=i with i=<id>) defined in the
   // shared kitty-graphics helper.
   assert.match(graphicsSource, /deleteMode: "i"/);

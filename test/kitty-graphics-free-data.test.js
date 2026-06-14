@@ -111,3 +111,20 @@ test("buildScopedDeleteCommand wrapper: freeData emits d=I and honors excludeIds
   // The wrapper does NOT clear ownedImageIds (so re-shown images stay tracked).
   assert.equal(state.ownedImageIds.size, 3, "reclaim keeps ownership tracking intact");
 });
+
+test("stream supersede frees every prior frame's data and prunes ownership to the live frame (bd-1be5ca)", () => {
+  // Each captured stream frame adds a fresh image id; prepareCurrentImage's
+  // streaming branch reclaims the superseded frames via releaseOwnedImageData
+  // (keepIds: [current]). This is what bounds a long-running stream to a single
+  // resident bitmap instead of one per frame, the gap left by the multi-image
+  // page reclaim (which only runs for 2+ side-panel images).
+  const frames = ["f1", "f2", "f3", "f4", "f5"].map((n) => stableKittyImageId(n));
+  const current = frames[frames.length - 1];
+  const state = makeState(frames);
+
+  const command = releaseOwnedImageData(state, { keepIds: [current] });
+  assert.equal((command.match(/,d=I,/g) || []).length, frames.length - 1, "frees every superseded frame's data");
+  assert.doesNotMatch(command, /,d=i,/, "stream reclaim never emits placement-only deletes");
+  assert.deepEqual([...state.ownedImageIds], [current], "owned set is pruned to just the live frame");
+  assert.equal(state.transmittedSignatures.size, 1, "only the live frame keeps a transmit guard");
+});
