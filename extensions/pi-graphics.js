@@ -573,6 +573,12 @@ export default function piGraphicsExtension(pi) {
 
   function clearEditorCursorPlacement() {
     if (!editorCursorRelativePlacement) return false;
+    // Intentional placement-only delete (bd-15ea4f): this clears the live cursor
+    // halo placement (cursor inactive / editor blur), but the frame image id is
+    // stable per (theme, font-geometry) and is re-used when the cursor returns,
+    // so freeing the data here would force an immediate re-upload on every
+    // clear/return. The id stays tracked in state.ownedImageIds and is reclaimed
+    // by the freeData:true session_end teardown (bd-b94fa1). Bounded, not a leak.
     emitGraphicsCommand(buildDeleteCommand({
       imageId: editorCursorRelativePlacement.imageId,
       placementId: editorCursorRelativePlacement.placementId,
@@ -1343,12 +1349,25 @@ export default function piGraphicsExtension(pi) {
       || editorCursorRelativePlacement.imageId !== imageId
       || editorCursorRelativePlacement.placementId !== placementId) {
       if (editorCursorRelativePlacement) {
+        // Genuine eviction when the frame image id itself changed (theme or
+        // font-geometry change): the prior halo frames will not be reused, so
+        // free their image data (d=I) and drop the upload-cache / ownership
+        // entries instead of waiting for session_end reclaim (bd-15ea4f,
+        // matching the strip/footer eviction pattern from bd-b94fa1). When only
+        // the placement id changed (same image id), stay placement-only so the
+        // still-live frame image is not freed out from under the new placement.
+        const evictsImage = editorCursorRelativePlacement.imageId !== imageId;
         emitGraphicsCommand(buildDeleteCommand({
           imageId: editorCursorRelativePlacement.imageId,
           placementId: editorCursorRelativePlacement.placementId,
           deleteMode: "i",
+          freeData: evictsImage,
           passthrough: state.config.passthrough,
         }));
+        if (evictsImage) {
+          uploadedImages.delete(editorCursorRelativePlacement.imageId);
+          state.ownedImageIds?.delete?.(editorCursorRelativePlacement.imageId);
+        }
       }
       // Defer so kitty resolves the parent's physical cell after the placeholder
       // is painted. Raw APC must stay out of the editor's rendered text.
