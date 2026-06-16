@@ -1615,18 +1615,17 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null/);
   assert.match(source, /trailCells: heat > 0\.04/);
   assertSourceCallIncludes(source, "buildDeleteCommand", ["editorCursorRelativePlacement.imageId", "editorCursorRelativePlacement.placementId", "deleteMode: \"i\""], "editor cursor-glow clear stays placement-only (transient, lowercase d=i)");
-  // bd-15ea4f: the cursor-glow halo SUPERSEDE (theme / font-geometry change) is
-  // a genuine eviction of the old frame image, so it frees the data (guarded so
-  // a placement-only change never frees a still-live shared image) and drops the
-  // upload-cache / ownership entries, matching the strip/footer eviction pattern.
-  assert.match(source, /const evictsImage = editorCursorRelativePlacement\.imageId !== imageId;/);
-  assertSourceCallIncludes(source, "buildDeleteCommand", ["editorCursorRelativePlacement.imageId", "freeData: evictsImage"], "cursor-glow halo supersede frees image data on genuine eviction (bd-15ea4f)");
-  assert.match(source, /if \(evictsImage\) \{\n\s+uploadedImages\.delete\(editorCursorRelativePlacement\.imageId\);\n\s+state\.ownedImageIds\?\.delete\?\.\(editorCursorRelativePlacement\.imageId\);/);
-  // bd-b94fa1 / bd-15ea4f: genuine strip and footer-underlay evictions free image
-  // data (d=I) and drop caches so a width/theme change cannot orphan a fresh-id
-  // bitmap until session_end.
-  assertSourceCallIncludes(source, "buildDeleteCommand", ["entry.imageId", "freeData: true"], "box-rail strip eviction frees image data (bd-b94fa1)");
-  assertSourceCallIncludes(source, "buildDeleteCommand", ["footerUnderlayRelative.imageId", "freeData: true"], "footer underlay eviction frees image data (bd-b94fa1)");
+  // bd-f4d277: the strip, footer, and cursor-glow halo evictions all route
+  // through the shared evictOwnedImage helper, which frees image data (d=I) and
+  // drops the upload-cache / ownership entries, guarded by a replacement image
+  // id so a placement-only change never frees a still-live shared image.
+  assert.match(source, /function evictOwnedImage\(\{ imageId, placementId, replacementImageId \} = \{\}\) \{/);
+  assert.match(source, /const freesImage = replacementImageId === undefined \|\| imageId !== replacementImageId;/);
+  assertSourceCallIncludes(source, "buildDeleteCommand", ["freeData: freesImage"], "evictOwnedImage frees image data on genuine eviction (bd-f4d277)");
+  assert.match(source, /if \(freesImage\) \{\n\s+uploadedImages\.delete\(imageId\);\n\s+state\.ownedImageIds\?\.delete\?\.\(imageId\);/);
+  assertSourceCallIncludes(source, "evictOwnedImage", ["imageId: entry.imageId", "replacementImageId: imageId"], "box-rail strip eviction routes through evictOwnedImage (bd-f4d277)");
+  assertSourceCallIncludes(source, "evictOwnedImage", ["imageId: editorCursorRelativePlacement.imageId", "replacementImageId: imageId"], "cursor-glow halo supersede routes through evictOwnedImage (bd-15ea4f / bd-f4d277)");
+  assertSourceCallIncludes(source, "evictOwnedImage", ["imageId: footerUnderlayRelative.imageId", "replacementImageId: imageId"], "footer underlay eviction routes through evictOwnedImage (bd-f4d277)");
   assert.doesNotMatch(source, /deleteMode: "p"/);
   assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /editorRowBackgroundEnabled\(\)/);

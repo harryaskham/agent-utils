@@ -490,6 +490,32 @@ export default function piGraphicsExtension(pi) {
     editorBackgroundPlacementKey = null;
   }
 
+  // Evict a superseded owned kitty image: free its image DATA (uppercase d=I)
+  // and drop the upload-cache / ownership entries so memory is reclaimed and a
+  // future render re-uploads. Pass replacementImageId to guard the
+  // placement-only case: when the new placement still references the SAME image
+  // id, the image is still live, so only the old placement is removed (lowercase
+  // d=i) and the data / caches are preserved. Generalizes the strip, footer, and
+  // cursor-halo eviction pattern (bd-b94fa1 / bd-15ea4f) into one definition so
+  // the free + cache-drop and the imageId-equality guard cannot drift apart
+  // (bd-f4d277). box-chrome.js keeps its own parallel eviction over uploadedStrips
+  // because it runs in a separate closure.
+  function evictOwnedImage({ imageId, placementId, replacementImageId } = {}) {
+    if (imageId === undefined || imageId === null) return false;
+    const freesImage = replacementImageId === undefined || imageId !== replacementImageId;
+    emitGraphicsCommand(buildDeleteCommand({
+      imageId,
+      placementId,
+      deleteMode: "i",
+      freeData: freesImage,
+      passthrough: state.config.passthrough,
+    }));
+    if (freesImage) {
+      uploadedImages.delete(imageId);
+      state.ownedImageIds?.delete?.(imageId);
+    }
+    return freesImage;
+  }
 
   function requestEditorDecorativeRender() {
     // Decorative editor graphics updates must not force a full TUI redraw: in real
@@ -1023,16 +1049,9 @@ export default function piGraphicsExtension(pi) {
         // Genuine eviction: this edge's prior strip (width/palette change) will
         // not be reused. Free its image data (d=I) and drop the upload-cache /
         // ownership entries so memory is reclaimed and a future strip re-uploads
-        // (bd-b94fa1).
-        emitGraphicsCommand(buildDeleteCommand({
-          imageId: entry.imageId,
-          placementId: entry.placementId,
-          deleteMode: "i",
-          freeData: true,
-          passthrough: state.config.passthrough,
-        }));
-        uploadedImages.delete(entry.imageId);
-        state.ownedImageIds?.delete?.(entry.imageId);
+        // (bd-b94fa1). The replacement image id guards the placement-only case so
+        // a still-live shared strip image is never freed (bd-f4d277).
+        evictOwnedImage({ imageId: entry.imageId, placementId: entry.placementId, replacementImageId: imageId });
       }
       deferGraphicsCommand(buildRelativePlacementCommand({
         imageId,
@@ -1352,22 +1371,14 @@ export default function piGraphicsExtension(pi) {
         // Genuine eviction when the frame image id itself changed (theme or
         // font-geometry change): the prior halo frames will not be reused, so
         // free their image data (d=I) and drop the upload-cache / ownership
-        // entries instead of waiting for session_end reclaim (bd-15ea4f,
-        // matching the strip/footer eviction pattern from bd-b94fa1). When only
-        // the placement id changed (same image id), stay placement-only so the
-        // still-live frame image is not freed out from under the new placement.
-        const evictsImage = editorCursorRelativePlacement.imageId !== imageId;
-        emitGraphicsCommand(buildDeleteCommand({
+        // entries instead of waiting for session_end reclaim (bd-15ea4f). The
+        // replacement-id guard keeps a placement-only change from freeing the
+        // still-live frame image (bd-f4d277).
+        evictOwnedImage({
           imageId: editorCursorRelativePlacement.imageId,
           placementId: editorCursorRelativePlacement.placementId,
-          deleteMode: "i",
-          freeData: evictsImage,
-          passthrough: state.config.passthrough,
-        }));
-        if (evictsImage) {
-          uploadedImages.delete(editorCursorRelativePlacement.imageId);
-          state.ownedImageIds?.delete?.(editorCursorRelativePlacement.imageId);
-        }
+          replacementImageId: imageId,
+        });
       }
       // Defer so kitty resolves the parent's physical cell after the placeholder
       // is painted. Raw APC must stay out of the editor's rendered text.
@@ -1617,16 +1628,13 @@ export default function piGraphicsExtension(pi) {
       if (footerUnderlayRelative && (footerUnderlayRelative.imageId !== imageId || footerUnderlayRelative.placementId !== placementId)) {
         // Genuine eviction: the prior footer strip (width/theme change) will not
         // be reused. Free its image data (d=I) and drop the upload-cache /
-        // ownership entries so memory is reclaimed (bd-b94fa1).
-        emitGraphicsCommand(buildDeleteCommand({
+        // ownership entries so memory is reclaimed (bd-b94fa1); the replacement
+        // image id guards the placement-only case (bd-f4d277).
+        evictOwnedImage({
           imageId: footerUnderlayRelative.imageId,
           placementId: footerUnderlayRelative.placementId,
-          deleteMode: "i",
-          freeData: true,
-          passthrough: state.config.passthrough,
-        }));
-        uploadedImages.delete(footerUnderlayRelative.imageId);
-        state.ownedImageIds?.delete?.(footerUnderlayRelative.imageId);
+          replacementImageId: imageId,
+        });
       }
       emitGraphicsCommand(buildRelativePlacementCommand({
         imageId,
