@@ -73,6 +73,20 @@ skill-search mcp stdio
 
 Configuration defaults to [`.config/ss/config.yaml`](.config/ss/config.yaml) and can be overridden with `SS_CONFIG` or `--config`. See [docs/skill-server/README.md](docs/skill-server/README.md) for the config schema, MCP tools, and build/test commands.
 
+### Build gotcha: stage renamed/new binary sources before Nix flake builds
+
+`flake.nix` builds `skill-server` (and the `skill-search` bin) from the **git tree**, so Nix only sees files that are tracked or staged. If you rename or add a bin source file referenced from [`crates/skill-server/Cargo.toml`](crates/skill-server/Cargo.toml) (for example `src/bin/skill_search.rs`) and leave it untracked, `nix build .#skill-server` / `nix run .#skill-search` fails with a missing-source error **even though `cargo build -p skill-server` and `cargo test` pass in the working tree** — the working-tree Cargo build sees the untracked file, but the flake build does not.
+
+Before validating a binary rename with Nix, stage the change so the flake can see it:
+
+```bash
+git add -A crates/skill-server          # stage renamed/new bin sources
+git status --porcelain crates/          # preflight: nothing untracked under the crate
+nix build .#skill-server                # now builds against the staged tree
+```
+
+If a flake build fails on a source path you can see in the working tree, suspect an untracked rename first.
+
 ## Firecracker VM Pi extension
 
 The Firecracker VM extension is loaded from [`extensions/firecracker-vm.js`](extensions/firecracker-vm.js). It gives Pi agents a first-class control plane for microVM workloads that should be visible and controllable by Tendril agents. Firecracker itself is headless, so the extension tracks both serial-console output and any declared host-visible screen/control services such as VNC, noVNC, browser debug endpoints, or web apps.
