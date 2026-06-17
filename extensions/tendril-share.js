@@ -575,7 +575,7 @@ function tendrilImageContent({ data, mimeType = PNG_MIME }) {
   return { type: "image", data, mimeType };
 }
 
-// Single source of truth for the tendril_capture / tendril_describe tool-result
+// Single source of truth for the tendril_pi_capture / tendril_pi_describe tool-result
 // `data` envelope. Both handlers return the identical shape, so threading any
 // new field (e.g. sourceMachine) stays single-site instead of editing two
 // near-identical inline literals (bd-e8a473).
@@ -767,7 +767,7 @@ export default function tendrilShareExtension(pi) {
   pi.on?.("session_shutdown", () => stopStream(state));
 
   pi.registerTool?.({
-    name: "tendril_settings",
+    name: "tendril_pi_settings",
     label: "Tendril Settings",
     description: "Report the configured Tendril command, remote bridge, and WSL tunnel settings used by tendril_* tools.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
@@ -783,7 +783,7 @@ export default function tendrilShareExtension(pi) {
   });
 
   pi.registerTool?.({
-    name: "tendril_list",
+    name: "tendril_pi_list",
     label: "Tendril List Targets",
     description: "List Tendril windows and displays available through the configured Tendril bridge.",
     parameters: {
@@ -802,7 +802,7 @@ export default function tendrilShareExtension(pi) {
   });
 
   pi.registerTool?.({
-    name: "tendril_capture",
+    name: "tendril_pi_capture",
     label: "Tendril Capture Screenshot",
     description: "Capture a Tendril window/display screenshot and return PNG image content to the model.",
     parameters: {
@@ -851,7 +851,7 @@ export default function tendrilShareExtension(pi) {
   });
 
   pi.registerTool?.({
-    name: "tendril_describe",
+    name: "tendril_pi_describe",
     label: "Tendril Describe Screenshot",
     description: "Capture a Tendril window/display and return the screenshot plus an objective-description prompt for the calling model to inspect directly.",
     parameters: {
@@ -900,7 +900,7 @@ export default function tendrilShareExtension(pi) {
   });
 
   pi.registerTool?.({
-    name: "tendril_stream",
+    name: "tendril_pi_stream",
     label: "Tendril Stream Control",
     description: "Start, inspect, or stop the low-resolution Tendril screenshot stream. Started streams queue follow-up screenshot messages for the model.",
     parameters: {
@@ -926,7 +926,7 @@ export default function tendrilShareExtension(pi) {
         return textResult(stopped ? `Stopped Tendril stream for ${stopped.kind} ${stopped.target.id}.` : "No active Tendril stream.", { stopped: !!stopped });
       }
       if (action !== "start") throw new Error(`Unsupported Tendril stream action: ${params.action}`);
-      if (!params.target) throw new Error("tendril_stream action=start requires target.");
+      if (!params.target) throw new Error("tendril_pi_stream action=start requires target.");
       const stream = await startStream(pi, toolContext(signal), state, {
         kind: normalizeKind(params.kind || "window"),
         target: params.target,
@@ -941,7 +941,7 @@ export default function tendrilShareExtension(pi) {
   });
 
   pi.registerTool?.({
-    name: "tendril_bridge_doctor",
+    name: "tendril_pi_bridge_doctor",
     label: "Tendril Bridge Doctor",
     description: "Inspect configured Tendril remote/WSL tunnel settings and optionally probe target discovery through the bridge.",
     parameters: {
