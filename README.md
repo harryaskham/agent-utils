@@ -31,6 +31,7 @@ It currently provides:
 - `/effort [status|off|minimal|low|medium|high|xhigh|adaptive]`, `/fast [on|off]`, and the `self_set_effort` native Pi tool via [`extensions/effort.js`](extensions/effort.js), shortcuts for Pi core thinking controls and configured fast-model variants. `/effort` and `self_set_effort` delegate every supported value, including `adaptive`, directly to Pi's thinking-level API and never rewrite provider request payloads; adaptive-thinking request semantics and model metadata are owned by Pi itself. `self_set_effort` is agent-callable specifically for operator-instructed changes and its tool wording tells agents not to use it for autonomous self-tuning. `/fast` switches only between the current model id and a configured sibling with the same id plus or minus a `-fast` suffix; it does not lower reasoning effort, enable adaptive thinking, or otherwise mutate request payloads.
 - `/m <provider/model>` and the `self_set_model` native Pi tool via [`extensions/m.js`](extensions/m.js), an independent model switcher that always resolves against the **full** model registry and switches immediately, with Tab-completion over every available `provider/model` string. Pi's built-in `/model` command and Ctrl+P cycling are governed by the scoped-models feature, so when models are scoped (for example via `enabledModels`) `/model <arg>` only matches the scoped set and arbitrary models fall through to the selector UI. `/m` and `self_set_model` deliberately ignore that scope so an operator-instructed agent can jump straight to any model without opening the selector or toggling its `all` scope; they never touch `/model` or `/scoped-models`, which keep governing Ctrl+P cycling. Matching mirrors Pi core: canonical `provider/id`, then a `provider/id` split, then an unambiguous bare id. `/m` with no argument prints usage and the available-model count. `self_set_model` is agent-callable specifically for operator-instructed changes and its tool wording tells agents not to use it for autonomous self-tuning.
 - `/true-defaults [status|apply]` via [`extensions/true-defaults.js`](extensions/true-defaults.js), a persistence guard for Pi model/provider/thinking defaults. Configure immutable-by-convention values in `settings.json` under `agentUtils.trueDefaults`, for example `{ "agentUtils": { "trueDefaults": { "provider": "litellm-anthropic", "model": "claude-sonnet-4-5", "thinkingLevel": "medium" } } }`; the extension copies them back to Pi's built-in `defaultProvider`, `defaultModel`, and `defaultThinkingLevel` on startup and clean shutdown, then delegates runtime model/thinking application to Pi core unchanged. Runtime switching through `/model`, Ctrl+P, `/settings`, and `/effort` remains allowed; those runtime changes just do not become the persisted defaults unless the true-default values are edited directly.
+- `/git-behind [status|check|on|off|reload]` via [`extensions/git-behind-warning.js`](extensions/git-behind-warning.js), a generic, throttled advisory that warns ANY Pi agent when its checkout falls significantly behind the origin default branch (a reusable, daemon-decoupled replacement for Cacophony's lost git-check mixin). See the [Checkout-behind warning](#checkout-behind-warning-pi-extension) section below.
 - `/eink [on|off|status]` via [`extensions/pi-graphics.js`](extensions/pi-graphics.js), a tablet/e-ink toggle that applies the packaged `eink` theme, transparent greyscale surfaces, cell cursor, static Unicode editor chrome, and minimal/no animation. `/eink off` restores the previous Pi graphics/theme settings saved before enabling e-ink mode.
 - `app_automation_*` native Pi tools plus `/tendril-app` for blessed Slack, canvas, Outlook, and Teams app automation diagnostics/overviews/freshness/plans
 - `skill-server` / `skill-search`, a Rust CLI + MCP stdio meta-tool for dynamic skill and host MCP server discovery
@@ -278,6 +279,39 @@ A separate Python MCP implementation also lives under [`web-search/`](web-search
 The compaction-continue-guard extension is loaded from [`extensions/compaction-continue-guard.js`](extensions/compaction-continue-guard.js). After a compaction, Pi core cannot continue an agent loop when the rebuilt transcript ends on an assistant message (it throws `Cannot continue from message role: assistant`). A compaction can legally retain a suffix whose newest message is assistant-authored, so this extension appends a single hidden custom/user-role checkpoint entry immediately after compaction. A later automatic retry or manual continue then starts from a provider-valid user/custom role instead of failing.
 
 The guard is enabled by default; disable it by setting `PI_COMPACTION_CONTINUE_GUARD` to a falsey value (`0`, `false`, `off`, `no`, or `disabled`).
+
+## Checkout-behind warning Pi extension
+
+The checkout-behind warning extension is loaded from [`extensions/git-behind-warning.js`](extensions/git-behind-warning.js) (policy/throttle/parse logic in [`extensions/lib/git-behind.js`](extensions/lib/git-behind.js)). It is a generic, reusable replacement for Cacophony's git-check mixin — a PostToolUse nudge when a managed checkout fell behind `main` — which was effectively lost when managed Pi moved to the pi-home-override path. This extension warns **any** Pi agent, managed or not, when its checkout is significantly behind the origin default branch, so it can rebase before drift causes painful conflicts. It is decoupled from daemon-checkout specifics and works in any git repository.
+
+It is **async, throttled, and never per-message**. Two triggers schedule a fire-and-forget check that never blocks a tool call:
+
+- **pre-git hook**: a `tool_call` on a bash `git ...` command.
+- **turn cadence**: a `turn_end` trigger that fires at most every N turns.
+
+The check is a graceful no-op outside the happy path — non-git directory, detached HEAD, an undetectable default branch, or a missing upstream tracking ref all return quietly. On the happy path it resolves the default branch (auto-detected from `origin/HEAD` via `symbolic-ref`, then `rev-parse --abbrev-ref`, then probing `main`/`master`, or an explicit override), fetches the remote default branch, and counts `git rev-list --count HEAD..<remote>/<default>`. When the behind-count reaches the threshold it surfaces an **advisory** warning (a status-line indicator, a UI notification, and — unless disabled — a single non-interrupting follow-up nudge to rebase). Fetches are **cached** so back-to-back git calls don't each hit the network, and active warnings are **cooldown-throttled**.
+
+Commands:
+
+- `/git-behind status` — show effective config and the last check result.
+- `/git-behind check` — run a check now and report the behind-count.
+- `/git-behind on` / `/git-behind off` — toggle the advisory at runtime.
+- `/git-behind reload` — re-resolve config from env and `settings.json`.
+
+Configuration (env wins over `settings.json` `agentUtils.gitBehindWarning`, which wins over defaults):
+
+| Env | settings.json key | Default | Meaning |
+|-----|-------------------|---------|---------|
+| `AGENT_UTILS_GIT_BEHIND_WARNING` | `enabled` | `true` | Enable/disable the extension (falsey: `0`/`false`/`off`/`no`/`disabled`). |
+| `AGENT_UTILS_GIT_BEHIND_THRESHOLD` | `threshold` | `25` | Warn when the checkout is at least N commits behind. |
+| `AGENT_UTILS_GIT_BEHIND_BRANCH` | `defaultBranch` | auto-detect | Explicit default-branch override instead of `origin/HEAD` detection. |
+| `AGENT_UTILS_GIT_BEHIND_REMOTE` | `remote` | `origin` | Remote whose default branch is tracked. |
+| `AGENT_UTILS_GIT_BEHIND_EVERY_TURNS` | `everyTurns` | `10` | Turn-cadence: run the turn-driven check at most every N turns. |
+| `AGENT_UTILS_GIT_BEHIND_COOLDOWN_MS` | `cooldownMs` | `600000` | Minimum interval between active warnings. |
+| `AGENT_UTILS_GIT_BEHIND_FETCH_CACHE_MS` | `fetchCacheMs` | `180000` | Minimum interval between fetches (fetch cache window). |
+| `AGENT_UTILS_GIT_BEHIND_NUDGE` | `nudge` | `true` | Inject a follow-up rebase nudge message (in addition to the UI notification). |
+
+Example `settings.json`: `{ "agentUtils": { "gitBehindWarning": { "threshold": 40, "everyTurns": 15 } } }`.
 
 ## Tendril command helper
 
