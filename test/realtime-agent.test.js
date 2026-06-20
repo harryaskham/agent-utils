@@ -1332,7 +1332,13 @@ test("realtime restarts VAD mic when recorder exits unexpectedly", async () => {
         const snap = harness.pi.realtime.snapshot();
         return snap.health.micRestartPending || snap.health.micRestartAttempts >= 1 ? snap : null;
       },
-      { timeoutMs: 1000, intervalMs: 50 },
+      // This case spawns a real recorder subprocess (PI_RT_RECORD_CMD=sh -c 'exit 7')
+      // and waits for its exit event to drive scheduleMicRestart. That spawn -> exit
+      // -> event -> restart-scheduling chain has real OS latency, so under full-suite
+      // CPU contention it can exceed a tight 1s budget and flake (671/672). waitFor
+      // returns the instant the predicate is met, so a larger headroom timeout costs
+      // nothing on the fast path and only absorbs load (bd-43afce intent).
+      { timeoutMs: 5000, intervalMs: 50 },
     ) ?? harness.pi.realtime.snapshot();
     assert.ok(snapshot.health.micRestartPending || snapshot.health.micRestartAttempts >= 1);
     assert.ok(harness.notifications.some((n) => /restarting vad capture/.test(n.message)));
