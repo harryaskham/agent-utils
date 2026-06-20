@@ -11,6 +11,11 @@ const INSTALL_URL = "https://dl.google.com/android/cli/latest/linux_x86_64/insta
 const INSTALL_COMMAND = `curl -fsSL ${INSTALL_URL} | bash`;
 const TOOL_PREFIX = "android_cli";
 const FALSE_RE = /^(0|false|off|no|disabled)$/i;
+// PNG 8-byte file signature: \x89 P N G \r \n \x1a \n. `adb exec-out screencap -p`
+// returns a PNG; validating the magic bytes catches the case where adb exits 0
+// but emits a warning/error on stdout, which would otherwise be written as a
+// corrupt .png (bd-462d9d).
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function env(...names) {
   for (const name of names) {
@@ -115,6 +120,10 @@ async function captureAdbPng({ serial, outputPath, timeoutMs = 15_000 } = {}) {
   if (!result.ok || !Buffer.isBuffer(result.stdout) || result.stdout.length === 0) {
     const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : String(result.stderr || "");
     throw new Error(`adb screencap failed${result.timedOut ? " (timed out)" : ""}: ${stderr || result.error || `exit ${result.code}`}`);
+  }
+  if (!result.stdout.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    const preview = result.stdout.subarray(0, 200).toString("utf8").replace(/\s+/g, " ").trim();
+    throw new Error(`adb screencap did not return PNG data (${result.stdout.length} bytes); ensure a device/emulator is connected${preview ? `: ${preview}` : ""}`);
   }
   await writeFile(outputPath, result.stdout);
   return outputPath;
