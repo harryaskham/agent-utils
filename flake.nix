@@ -107,6 +107,11 @@
               pkgs.rustc
               pkgs.rustfmt
               pkgs.clippy
+              # bd-ce9baf: GitHub Actions workflow linter. `npm run lint:workflows`
+              # uses actionlint when it is on PATH (as it is inside this shell)
+              # for full semantic checks, and falls back to a YAML well-formedness
+              # check otherwise.
+              pkgs.actionlint
             ];
           };
         });
