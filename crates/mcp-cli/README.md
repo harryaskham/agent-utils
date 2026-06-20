@@ -12,7 +12,8 @@ JSON schema generation, MCP framing, tool listing, and tool calls.
 - `StructuredError` and `JsonError` for projecting domain errors into a shared
   machine-readable shape.
 - `ToolRouter` and typed `Tool` registration backed by `schemars` input schemas.
-- A minimal `McpServer` that speaks MCP over stdio using JSON-RPC framing.
+- A minimal `McpServer` that speaks MCP over stdio using newline-delimited JSON
+  (NDJSON) framing — one compact JSON-RPC object per line, `\n`-terminated.
 - Generic tests that prove a CLI command surface and MCP tool surface can share
   the same command contracts without hard-coding any one application.
 
@@ -61,6 +62,23 @@ let server = McpServer::new(
 
 For CLI commands, use `write_json_result` or `write_json_result_ref` to emit the
 same stable envelope shape that MCP `tools/call` returns as structured content.
+
+## Source of truth and wire compatibility
+
+This crate is **vendored** into `agent-utils` from its canonical upstream,
+[`github.com/harryaskham/mcp-cli`](https://github.com/harryaskham/mcp-cli). Treat
+the upstream as the source of truth for the framework's API: land cross-cutting
+framework changes upstream and re-vendor, rather than letting this copy drift on
+its own.
+
+The MCP stdio transport uses **newline-delimited JSON (NDJSON)** framing — one
+compact JSON-RPC object per line, `\n`-terminated, with **no `Content-Length`
+headers**. It must stay wire-compatible with Tendril's `mcp stdio` structure and
+with consumers such as `skill-server` (see `docs/skill-server/README.md`). A
+silent reversion to `Content-Length` framing previously broke that compatibility
+in production (bd-dc9438 / bd-6ffb52, caught only by a manual broadcast), so the
+framing contract is now pinned by drift-guard tests in `src/protocol.rs`. Keep
+those tests green — and this section accurate — when touching the transport.
 
 ## Development
 
