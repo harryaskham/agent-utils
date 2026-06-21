@@ -1708,7 +1708,10 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function installHardwareCursorGuard\(tui\)/);
   assert.match(source, /applyHardwareCursorPolicy\(tui\)/);
   assert.match(source, /restoreHardwareCursorPolicy\(\)/);
-  assert.match(source, /function buildEditorCursorCell\(\{ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 \} = \{\}\)/);
+  // bd-dcca28: minimal-invariant pin — assert the editor-cursor-cell builder is
+  // defined and takes a destructured options object, without pinning the exact
+  // parameter list/defaults (which churns on every benign signature tweak).
+  assert.match(source, /function buildEditorCursorCell\(\{/);
   assert.match(source, /editor-cursor-cell-direct-/);
   assert.match(source, /editor-cursor-glow-/);
   assert.match(source, /editor-cursor-glow-halo-/);
@@ -1717,10 +1720,14 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /trailCells: 0/);
   assert.match(source, /trailCells: heat > 0\.04/);
   assert.match(source, /editorCursorTrailDirection = safeCol > editorCursorLastCol \? 1 : -1/);
-  assert.match(source, /function buildAnchoredEditorCursorPreviewLine\(\{ label, heat = 0, wpm = 0, trailDirection = 1 \} = \{\}\)/);
+  // bd-dcca28: minimal-invariant pin — builder is defined and destructures an
+  // options object; do not pin the full parameter list/defaults.
+  assert.match(source, /function buildAnchoredEditorCursorPreviewLine\(\{/);
   assert.match(source, /editor-cursor-preview-anchor-/);
   assert.match(source, /editor-cursor-preview-relative-placement-/);
-  assert.match(source, /lines\.push\(buildAnchoredEditorCursorPreviewLine\(\{ label: "anchored", heat: 0\.55, wpm: 80, trailDirection: 1 \}\)\)/);
+  // bd-dcca28: keep the meaningful invariant (an "anchored"-labeled preview line
+  // is pushed) but drop the brittle exact heat/wpm/trailDirection argument values.
+  assert.match(source, /lines\.push\(buildAnchoredEditorCursorPreviewLine\(\{ label: "anchored"/);
   assert.match(source, /function buildEditorCursorPreviewLines\(\)/);
   assert.match(source, /editor-cursor-preview-/);
   assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);
