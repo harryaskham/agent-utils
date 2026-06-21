@@ -91,6 +91,7 @@ import {
   buildScopedDeleteCommand,
   releaseOwnedImageData,
   runHeadlessOwnedFree,
+  enumerateGraphicsWriters,
   buildCurrentDisplayCommand,
   resetTransmissionGuard,
 } from "./kitty-image-preview/display-commands.js";
@@ -133,6 +134,7 @@ import {
   kittyPreviewStreamImageId,
   resolveStreamFrameId,
 } from "./kitty-image-preview/id-space.js";
+import { buildPassthroughProbePlan } from "./kitty-image-preview/passthrough-probe.js";
 
 const TOOL_PREFIX = "kitty_image_preview";
 const WIDGET_ID = "kitty-image-preview";
@@ -2012,6 +2014,31 @@ export default function kittyImagePreviewExtension(pi) {
     ctx.ui?.notify?.(`Updated image preview config — ${summary}.`, "info");
   }
 
+  async function passthroughProbeCommand(ctx) {
+    const mode = detectKittyPassthroughMode(process.env);
+    const writers = enumerateGraphicsWriters(ctx);
+    if (writers.length === 0) {
+      ctx.ui?.notify?.("kitty passthrough probe: no terminal writer is reachable from this session (no ctx.ui.write / ui.terminal.write / terminal.write), so a raw kitty graphics escape cannot be emitted at all. That itself is the failure: the host exposes no output path for raw kitty sequences.", "warning");
+      return;
+    }
+    const { entries } = buildPassthroughProbePlan({ writerNames: writers.map((w) => w.name), mode, env: process.env });
+    const byName = new Map(entries.map((e) => [e.name, e]));
+    const emitted = [];
+    for (const w of writers) {
+      const entry = byName.get(w.name);
+      if (!entry) continue;
+      try {
+        w.write(entry.label);
+        w.write(entry.command);
+        w.write("\n");
+        emitted.push(w.name);
+      } catch (error) {
+        ctx.ui?.notify?.(`kitty passthrough probe: write via ${w.name} failed: ${error.message}`, "warning");
+      }
+    }
+    ctx.ui?.notify?.(`kitty passthrough probe: passthrough mode=${mode}; emitted a magenta test cell through ${emitted.length} path(s): ${emitted.join(", ") || "none"}. Whichever label shows a magenta cell is the working kitty output path; a blank cell or raw escape text means that path does not reach the kitty client.`, "info");
+  }
+
   registerImageCommand(["kitty-image-preview", "image-status", "image-preview"],
     "Show kitty image preview extension status and quick usage.",
     async (_args, ctx) => statusCommand(ctx));
@@ -2063,4 +2090,8 @@ export default function kittyImagePreviewExtension(pi) {
   registerImageCommand(["image-stop-cycle"],
     "Stop the kitty multiviewer cycling timer.",
     async (_args, ctx) => stopCycleCommand(ctx));
+
+  registerImageCommand(["image-passthrough-probe", "kitty-passthrough-probe"],
+    "Emit a tiny kitty graphics test cell through each available terminal output path to diagnose which path reaches the kitty client (raw-placeholder / blank-pixel failures).",
+    async (_args, ctx) => passthroughProbeCommand(ctx));
 }

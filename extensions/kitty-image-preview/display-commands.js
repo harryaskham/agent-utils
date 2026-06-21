@@ -27,6 +27,20 @@ export function resolveGraphicsWriter(ctx) {
   return null;
 }
 
+// Enumerate ALL reachable terminal writers from a Pi context, in the same
+// precedence order resolveGraphicsWriter picks the first of, each tagged with a
+// stable name. The kitty passthrough probe (bd-15374a) emits a test cell through
+// every available path so the operator can see which one reaches the outer kitty
+// client; resolveGraphicsWriter only needs the first working path for normal
+// teardown frees.
+export function enumerateGraphicsWriters(ctx) {
+  const writers = [];
+  if (typeof ctx?.ui?.write === "function") writers.push({ name: "ui.write", write: ctx.ui.write.bind(ctx.ui) });
+  if (typeof ctx?.ui?.terminal?.write === "function") writers.push({ name: "ui.terminal.write", write: ctx.ui.terminal.write.bind(ctx.ui.terminal) });
+  if (typeof ctx?.terminal?.write === "function") writers.push({ name: "terminal.write", write: ctx.terminal.write.bind(ctx.terminal) });
+  return writers;
+}
+
 // Free all owned preview image DATA (d=I) and emit the delete through a non-UI
 // writer. Used by the headless branch of session_shutdown: flashDeleteWidget
 // early-returns when there is no UI, so without this a no-UI preview session
