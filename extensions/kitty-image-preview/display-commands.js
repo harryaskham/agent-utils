@@ -12,6 +12,38 @@ import {
   buildPngVirtualPlacementCommand,
   buildScopedDeleteCommand as buildScopedDeleteCommandRaw,
 } from "../kitty-graphics.js";
+import { clearOwnedImageIds } from "./state.js";
+
+// Resolve a direct terminal writer from a Pi context, independent of whether a
+// UI/widget surface is mounted. Mirrors pi-graphics' resolveGraphicsWriter so
+// the preview can flush a kitty free (d=I) on a HEADLESS shutdown, where the
+// widget-based flashDeleteWidget path early-returns without a UI and would
+// otherwise leave the terminal's image data resident. Returns null when no
+// writer is reachable (best-effort robustness, bd-ded98d element (e)).
+export function resolveGraphicsWriter(ctx) {
+  if (typeof ctx?.ui?.write === "function") return ctx.ui.write.bind(ctx.ui);
+  if (typeof ctx?.ui?.terminal?.write === "function") return ctx.ui.terminal.write.bind(ctx.ui.terminal);
+  if (typeof ctx?.terminal?.write === "function") return ctx.terminal.write.bind(ctx.terminal);
+  return null;
+}
+
+// Free all owned preview image DATA (d=I) and emit the delete through a non-UI
+// writer. Used by the headless branch of session_shutdown: flashDeleteWidget
+// early-returns when there is no UI, so without this a no-UI preview session
+// would forget the owned ids without telling the terminal to reclaim them.
+// Mirrors the hasUI teardown (releaseOwnedImageData -> clearOwnedImageIds ->
+// emit), but routes the emit through resolveGraphicsWriter instead of a widget.
+// Returns the emitted command ("" when nothing was owned). Soft-fails when no
+// writer is reachable -- robustness-only, since the restart-overwrite reclaim
+// already bounds the realistic UI case (bd-ded98d element (e)).
+export function runHeadlessOwnedFree(ctx, state) {
+  const command = releaseOwnedImageData(state, { keepIds: [] });
+  clearOwnedImageIds(state);
+  if (command) {
+    try { resolveGraphicsWriter(ctx)?.(command); } catch {}
+  }
+  return command;
+}
 
 export function buildScopedDeleteCommand(state, { excludeIds = [], freeData = false } = {}) {
   return buildScopedDeleteCommandRaw({

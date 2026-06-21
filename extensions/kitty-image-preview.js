@@ -90,6 +90,7 @@ import {
 import {
   buildScopedDeleteCommand,
   releaseOwnedImageData,
+  runHeadlessOwnedFree,
   buildCurrentDisplayCommand,
   resetTransmissionGuard,
 } from "./kitty-image-preview/display-commands.js";
@@ -129,6 +130,8 @@ import {
   kittyPreviewDefaultPlacementId,
   kittyPreviewImageId,
   kittyPreviewItemName,
+  kittyPreviewStreamImageId,
+  resolveStreamFrameId,
 } from "./kitty-image-preview/id-space.js";
 
 const TOOL_PREFIX = "kitty_image_preview";
@@ -777,16 +780,19 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
   // changed, so any prior transmit-once guard entry for this image is stale and
   // must be cleared to force a re-upload on the next render (bd-d6fa1b).
   state.transmittedSignatures?.delete?.(current.id);
-  // During an active stream every captured frame gets a fresh image id (derived
-  // from path+mtime+size) and supersedes the prior frame, which is never shown
-  // again. The multi-image page reclaim in preparePagePayloads only runs for 2+
-  // images in side-overlay mode, and a stream replaces items down to the single
-  // live frame — so neither that reclaim nor the single-image placement-only
-  // delete below frees the superseded bitmaps. Without this, a long-running
-  // stream accumulates one resident bitmap / macOS IOSurface per frame within a
-  // single session; the bd-b94fa1 teardown + startup reclaim only bounds it
-  // across session boundaries. Free the superseded frames' DATA (d=I) and prune
-  // them from ownedImageIds, keeping only the live frame (bd-1be5ca).
+  // Streams now reuse a SINGLE stable image id and overwrite it each frame
+  // (bd-ded98d element (d)), so the active id is normally the only owned stream
+  // surface and this free is a no-op safety net. It remains because (a) it stays
+  // correct for any frame that still carried a per-frame fallback id (a stream
+  // started before the stable id was seeded, or a non-stream multi-id path), and
+  // (b) it preserves the bd-1be5ca guarantee: free every superseded frame's DATA
+  // (d=I) and prune it from ownedImageIds, keeping only the live frame, so a
+  // long-running stream can never accumulate one resident bitmap / macOS
+  // IOSurface per frame within a session. The multi-image page reclaim in
+  // preparePagePayloads only runs for 2+ images in side-overlay mode, and a
+  // stream replaces items down to the single live frame, so neither that reclaim
+  // nor the single-image placement-only delete below would otherwise free a
+  // superseded bitmap.
   if (state.stream && state.config.clearPrevious) {
     state.lastDeleteCommand = releaseOwnedImageData(state, { keepIds: [current.id] });
   } else {
@@ -1046,6 +1052,9 @@ async function captureTendrilStreamFrame(pi, ctx, state, stream) {
     });
     if (!stream.running) return;
     const item = await buildItem(ctx.cwd, outputPath, `stream ${stream.target.kind} ${stream.target.id} frame ${stream.frameCount + 1}`);
+    // Reuse the stream's single stable image id and overwrite it each frame
+    // instead of minting a fresh per-frame id (bd-ded98d element (d)).
+    item.id = resolveStreamFrameId(stream, item.id);
     replaceItems(state, [item]);
     state.index = 0;
     state.visible = true;
@@ -1086,6 +1095,9 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
     await copyFile(sourcePath, outputPath);
     if (!stream.running) return;
     const item = await buildItem(ctx.cwd, outputPath, `playwright mirror frame ${stream.frameCount + 1}`);
+    // Reuse the stream's single stable image id and overwrite it each frame
+    // instead of minting a fresh per-frame id (bd-ded98d element (d)).
+    item.id = resolveStreamFrameId(stream, item.id);
     replaceItems(state, [item]);
     state.index = 0;
     state.visible = true;
@@ -1228,7 +1240,10 @@ export default function kittyImagePreviewExtension(pi) {
       if (ownedDelete) flashDeleteWidget(ctx, state, ownedDelete);
       ctx.ui.setStatus(WIDGET_ID, undefined);
     } else {
-      clearOwnedImageIds(state);
+      // Headless shutdown: flashDeleteWidget early-returns without a UI, so emit
+      // the owned-data free (d=I) through a non-UI writer instead of only
+      // forgetting the ids (bd-ded98d element (e)).
+      runHeadlessOwnedFree(ctx, state);
     }
   });
 
@@ -1564,6 +1579,7 @@ export default function kittyImagePreviewExtension(pi) {
         params: { ...params, timeoutMs: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) },
         dir,
         framePaths: [path.join(dir, "frame-a.png"), path.join(dir, "frame-b.png")],
+        imageId: kittyPreviewStreamImageId(),
         intervalMs: clampInteger(params.intervalMs, DEFAULT_STREAM_INTERVAL_MS, 0, 60_000),
         nextFrameIndex: 0,
         frameCount: 0,
@@ -1643,6 +1659,7 @@ export default function kittyImagePreviewExtension(pi) {
         ownsSourcePath: !params.screenshotPath,
         describeSourcePath: sourcePath,
         framePaths: [path.join(dir, "playwright-frame-a.png"), path.join(dir, "playwright-frame-b.png")],
+        imageId: kittyPreviewStreamImageId(),
         intervalMs: clampInteger(params.pollMs, 250, 50, 60_000),
         nextFrameIndex: 0,
         frameCount: 0,
