@@ -2,6 +2,35 @@
 
 These notes capture Cacophony operating conventions that agent-utils agents rely on while filing or triaging work.
 
+## Labeling drafts by owning-checkout and lane
+
+The `agent-utils` bead project accumulates drafts from every agent that runs in this project, but those drafts do not all land here. Reflect-session and quick-file drafts mix three categories that determine whether an idle agent-utils worker can actually claim and land them:
+
+1. **In-lane** — the fix lives in *this* `agent-utils` checkout (a Pi extension under `extensions/`, a crate under `crates/`, a skill, a doc, a theme, a prompt). Claimable and landable here.
+2. **Out-of-checkout** — the fix lives in another repo reachable only from another checkout/scope: the `caco` CLI / cacophony daemon, Pi core, or the standalone Pi extension tree. Not landable from an agent-utils checkout even though the friction was observed while running here.
+3. **Peer specialist lane** — in-lane by repo, but inside an active specialist surface (for example `pi-graphics` behavior work) that should not be force-claimed by a generic idle worker.
+
+Without a label, an idle worker must hydrate each draft with `caco bd show` one at a time just to decide claimability. Adopt these labels at filing and triage time so the pool is server-side filterable:
+
+- `owning-checkout:agent-utils` — category 1; the fix lands in this repo.
+- `out-of-checkout` — category 2; the fix lands elsewhere. Where the target repo is known, pair it with a specific `owning-checkout:<repo>` label, e.g. `owning-checkout:caco-cli`, `owning-checkout:cacophony-daemon`, or `owning-checkout:pi-core`. A bead is either `owning-checkout:agent-utils` **or** `out-of-checkout`, never both.
+- `lane:<surface>` *(optional)* — narrows an in-lane bead to a surface/specialist lane: `lane:kitty`, `lane:pi-graphics`, `lane:app-automation`, `lane:realtime`, `lane:web-search`, `lane:skill-server`, `lane:tendril`, `lane:tui`. A draft may carry both an `owning-checkout:*` and a `lane:*` label.
+
+An idle agent-utils worker scanning for claimable-in-lane work then runs:
+
+```bash
+# claimable-in-lane drafts only
+caco bd list --label owning-checkout:agent-utils --status draft
+
+# everything that is NOT landable here (route to the owning repo/operator)
+caco bd list --label out-of-checkout --status draft
+
+# a specific specialist surface
+caco bd list --label lane:pi-graphics --status draft
+```
+
+Apply the label as part of triage on existing drafts with `caco bd update --bead-id <id> --add-label owning-checkout:agent-utils` (or `--add-label out-of-checkout`), and include the appropriate `owning-checkout:*` label in `--labels` when filing new drafts. This complements `bd-fec29a` (filing-time path/project validation) from the consumer/filter side: filing-time validation keeps drafts in the right *project*, while these labels keep the right-project drafts filterable by *checkout*.
+
 ## Parent epics vs blocking dependencies
 
 Use `dependencies` only for prerequisite work that must close before the current bead is ready. A dependency is a blocker: if a new task depends on an unresolved epic, controller/worker flows may correctly treat that task as not claimable yet.

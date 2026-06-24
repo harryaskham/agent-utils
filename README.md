@@ -3,7 +3,7 @@ Tools, skills, agents, MCP servers, etc
 
 ## Cacophony workflow notes
 
-Agent/operator bead-filing conventions live in [`docs/bead-workflow.md`](docs/bead-workflow.md), including the distinction between parent epics and blocking `dependencies`.
+Agent/operator bead-filing conventions live in [`docs/bead-workflow.md`](docs/bead-workflow.md), including the distinction between parent epics and blocking `dependencies`, and the `owning-checkout:` / `out-of-checkout` / `lane:` draft-labeling convention that lets idle workers server-side filter claimable-in-lane drafts.
 
 Extension tool schema guidance lives in [`docs/extension-tool-schemas.md`](docs/extension-tool-schemas.md). Prefer the local `ToolSchema` helper for simple extension tools unless the package has a guaranteed runtime TypeBox dependency.
 
