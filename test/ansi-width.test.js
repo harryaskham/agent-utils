@@ -48,6 +48,28 @@ test("charCellWidth: combining marks and variation selectors are zero width", ()
   assert.equal(charCellWidth("\ufe00"), 0); // variation selector-1
 });
 
+test("charCellWidth: zero-width formatting / joiner / bidi controls are zero width (bd-15271b)", () => {
+  assert.equal(charCellWidth("\u200b"), 0); // ZERO WIDTH SPACE
+  assert.equal(charCellWidth("\u200c"), 0); // ZERO WIDTH NON-JOINER
+  assert.equal(charCellWidth("\u200d"), 0); // ZERO WIDTH JOINER (emoji ZWJ)
+  assert.equal(charCellWidth("\u200e"), 0); // LEFT-TO-RIGHT MARK
+  assert.equal(charCellWidth("\u200f"), 0); // RIGHT-TO-LEFT MARK
+  assert.equal(charCellWidth("\u202a"), 0); // LEFT-TO-RIGHT EMBEDDING
+  assert.equal(charCellWidth("\u202e"), 0); // RIGHT-TO-LEFT OVERRIDE
+  assert.equal(charCellWidth("\u2060"), 0); // WORD JOINER
+  assert.equal(charCellWidth("\u2064"), 0); // INVISIBLE PLUS
+  assert.equal(charCellWidth("\ufeff"), 0); // ZERO WIDTH NO-BREAK SPACE / BOM
+});
+
+test("approximateVisibleCells: emoji ZWJ sequences do not over-count the joiners (bd-15271b)", () => {
+  // U+1F468 ZWJ U+1F469 ZWJ U+1F467 — three 2-wide emoji joined by two ZWJ.
+  // The ZWJ now contribute 0, so the estimate is 2+0+2+0+2 = 6 rather than 8.
+  const family = "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}";
+  assert.equal(approximateVisibleCells(family), 6);
+  // A zero-width space between letters does not consume a cell.
+  assert.equal(approximateVisibleCells("a\u200bb"), 2);
+});
+
 test("charCellWidth: CJK / Hangul / fullwidth / emoji are double width", () => {
   assert.equal(charCellWidth("中"), 2); // U+4E2D CJK
   assert.equal(charCellWidth("한"), 2); // U+D55C Hangul syllable

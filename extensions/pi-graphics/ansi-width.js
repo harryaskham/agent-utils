@@ -19,7 +19,17 @@ export function charCellWidth(ch) {
   const code = ch.codePointAt(0) || 0;
   if (code === 0) return 0;
   if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
-  if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
+  // Zero-width: Latin combining diacriticals, zero-width/bidi/invisible
+  // formatting and joiner controls (incl. ZWJ used in emoji sequences), and
+  // variation selectors. These render as 0 cells.
+  if (
+    (code >= 0x300 && code <= 0x36f) ||
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2060 && code <= 0x2064) ||
+    code === 0xfeff ||
+    (code >= 0xfe00 && code <= 0xfe0f)
+  ) return 0;
   if (
     code >= 0x1100 && (
       code <= 0x115f || code === 0x2329 || code === 0x232a ||
