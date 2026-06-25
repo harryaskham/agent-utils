@@ -323,6 +323,17 @@ Example `settings.json`: `{ "agentUtils": { "gitBehindWarning": { "threshold": 4
 
 See the **Tendril share Pi extension** section above for the user-facing commands and tools that consume this helper.
 
+## Testing
+
+The test suite uses the Node.js built-in test runner (`node:test`) over the files in [`test/`](test/). No external test framework or project secrets are required.
+
+```bash
+npm test                 # run the full suite
+npm run test:coverage    # run the suite with a per-file coverage report
+```
+
+`npm run test:coverage` adds Node's `--experimental-test-coverage`, printing a per-file line/branch/function coverage table plus uncovered line ranges. It is an opt-in developer aid only: it is **not** wired into CI and enforces **no** coverage threshold, so it never gates a merge. CI (`.github/workflows/ci.yml`) runs `npm test` (plus the Rust suite and `npm run check`); use `test:coverage` locally to spot under-covered modules before adding tests.
+
 ## GitHub Pages tool inventory
 
 This repository includes a minimal GitHub Pages site in [`docs/`](docs/) with a concise inventory of the Cacophony, Pi, UI automation, and repo-local tools available to agents/operators.

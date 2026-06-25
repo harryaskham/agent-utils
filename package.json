@@ -29,6 +29,7 @@
     "clean": "echo 'nothing to clean'",
     "build": "npm run docs:build",
     "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
     "check": "npm run lint:workflows && npm run docs:check",
     "lint:workflows": "node scripts/lint-workflows.mjs",
     "docs:build": "node scripts/render-pages.mjs",
