@@ -50,7 +50,9 @@ import {
   buildAuthRequiredDiagnostic,
   buildBrowserOpenCommand,
   buildDomExtractCommand,
+  playwrightCliCommand,
   playwrightSessionArgs,
+  prepareDomExtractStep,
 } from "../extensions/app-automation/playwright-bridge.js";
 import {
   buildSlackNotificationSnapshot,
@@ -1649,4 +1651,43 @@ test("extension is packaged and exposes list, doctor, overview, plan, run, open 
 test("sanitizeId normalizes user-facing app selectors", () => {
   assert.equal(sanitizeId("Slack Web!"), "slack-web");
   assert.equal(sanitizeId("  Teams/v2  "), "teams-v2");
+});
+
+test("playwrightCliCommand honors the env override and falls back to the default (bd-5f820f)", () => {
+  assert.equal(playwrightCliCommand({}), "playwright-cli");
+  assert.equal(playwrightCliCommand({ APP_AUTOMATION_PLAYWRIGHT_CLI: "pw2" }), "pw2");
+});
+
+test("prepareDomExtractStep resolves output paths and writes an extractor only when scripted (bd-5f820f)", async () => {
+  const dir = path.join(os.tmpdir(), `pwb-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  try {
+    // No script source: only the output path is resolved (relative joined to snapshotDir); no file written.
+    const r1 = await prepareDomExtractStep({ output: "out.json" }, {}, { snapshotDir: dir, actionId: "act" });
+    assert.equal(r1.step.outputPath, path.join(dir, "out.json"));
+    assert.equal(r1.paths.outputPath, path.join(dir, "out.json"));
+    assert.equal(r1.paths.scriptPath, undefined);
+    assert.equal(r1.step.scriptFile, undefined);
+
+    // Scripted: writes <sanitized-actionId>-extractor.js into snapshotDir; keeps an absolute output path as-is.
+    const r2 = await prepareDomExtractStep(
+      { script: "S", output: "/abs/o.json" },
+      { extractorScript: "console.log(1)" },
+      { snapshotDir: dir, actionId: "my act!" },
+    );
+    assert.equal(path.basename(r2.step.scriptFile), "my-act-extractor.js"); // actionId sanitized
+    assert.equal(r2.step.outputPath, "/abs/o.json"); // absolute kept as-is
+    assert.equal(r2.paths.scriptPath, r2.step.scriptFile);
+    assert.equal((await readFile(r2.paths.scriptPath, "utf8")).trim(), "console.log(1)");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("authMissingHint detects auth-required signals in stdout or stderr (bd-5f820f)", () => {
+  assert.equal(authMissingHint({ stdout: "Please Sign In" }), true);
+  assert.equal(authMissingHint({ stderr: "403 Forbidden" }), true);
+  assert.equal(authMissingHint({ stdout: "Unauthorized" }), true);
+  assert.equal(authMissingHint({ stdout: "everything ok" }), false);
+  assert.equal(authMissingHint({}), false);
 });
