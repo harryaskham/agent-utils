@@ -78,6 +78,39 @@ test("charCellWidth: spacing characters adjacent to the combining blocks stay si
   assert.equal(charCellWidth("\u1d00"), 1); // Latin letter small capital A (before supplement block)
 });
 
+test("charCellWidth: Hebrew and Arabic non-spacing combining marks are zero width (bd-46436b)", () => {
+  // Hebrew points / accents (Mn)
+  assert.equal(charCellWidth("\u0591"), 0); // HEBREW ACCENT ETNAHTA
+  assert.equal(charCellWidth("\u05bd"), 0); // HEBREW POINT METEG
+  assert.equal(charCellWidth("\u05bf"), 0); // HEBREW POINT RAFE
+  assert.equal(charCellWidth("\u05c1"), 0); // HEBREW POINT SHIN DOT
+  assert.equal(charCellWidth("\u05c5"), 0); // HEBREW MARK LOWER DOT
+  assert.equal(charCellWidth("\u05c7"), 0); // HEBREW POINT QAMATS QATAN
+  // Arabic harakat / marks (Mn)
+  assert.equal(charCellWidth("\u0610"), 0); // ARABIC SIGN SALLALLAHOU ALAYHE WASSALLAM
+  assert.equal(charCellWidth("\u064b"), 0); // ARABIC FATHATAN
+  assert.equal(charCellWidth("\u0670"), 0); // ARABIC LETTER SUPERSCRIPT ALEF
+  assert.equal(charCellWidth("\u06d6"), 0); // ARABIC SMALL HIGH LIGATURE SAD WITH LAM
+  assert.equal(charCellWidth("\u06e7"), 0); // ARABIC SMALL HIGH YEH
+  assert.equal(charCellWidth("\u06ed"), 0); // ARABIC SMALL LOW MEEM
+});
+
+test("charCellWidth: interspersed Hebrew/Arabic SPACING punctuation/format chars keep their width (bd-46436b)", () => {
+  // Hebrew spacing punctuation interleaved with the Mn ranges -> must NOT be zeroed.
+  assert.equal(charCellWidth("\u05be"), 1); // HEBREW PUNCTUATION MAQAF
+  assert.equal(charCellWidth("\u05c0"), 1); // HEBREW PUNCTUATION PASEQ
+  assert.equal(charCellWidth("\u05c3"), 1); // HEBREW PUNCTUATION SOF PASUQ
+  assert.equal(charCellWidth("\u05c6"), 1); // HEBREW PUNCTUATION NUN HAFUKHA
+  assert.equal(charCellWidth("\u05d0"), 1); // HEBREW LETTER ALEF (spacing)
+  // Arabic non-Mn chars interleaved with the harakat ranges -> must NOT be zeroed.
+  assert.equal(charCellWidth("\u06dd"), 1); // ARABIC END OF AYAH (format Cf)
+  assert.equal(charCellWidth("\u06de"), 1); // ARABIC START OF RUB EL HIZB (symbol)
+  assert.equal(charCellWidth("\u06e5"), 1); // ARABIC SMALL WAW (modifier letter Lm)
+  assert.equal(charCellWidth("\u06e6"), 1); // ARABIC SMALL YEH (modifier letter Lm)
+  assert.equal(charCellWidth("\u06e9"), 1); // ARABIC PLACE OF SAJDAH (symbol)
+  assert.equal(charCellWidth("\u0627"), 1); // ARABIC LETTER ALEF (spacing)
+});
+
 test("approximateVisibleCells: emoji ZWJ sequences do not over-count the joiners (bd-15271b)", () => {
   // U+1F468 ZWJ U+1F469 ZWJ U+1F467 — three 2-wide emoji joined by two ZWJ.
   // The ZWJ now contribute 0, so the estimate is 2+0+2+0+2 = 6 rather than 8.

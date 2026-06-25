@@ -21,13 +21,27 @@ export function charCellWidth(ch) {
   if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
   // Zero-width: Latin combining diacriticals, zero-width/bidi/invisible
   // formatting and joiner controls (incl. ZWJ used in emoji sequences),
-  // variation selectors, and the dedicated all-non-spacing combining-mark
-  // blocks (Cyrillic, combining extensions/supplement, symbols, half marks).
-  // These render as 0 cells. Interspersed-spacing scripts (Hebrew/Arabic)
-  // need per-codepoint ranges and are intentionally excluded (bd-46436b).
+  // variation selectors, the dedicated all-non-spacing combining-mark blocks
+  // (Cyrillic, combining extensions/supplement, symbols, half marks), and the
+  // per-codepoint non-spacing (Mn) ranges of Hebrew and Arabic. These render as
+  // 0 cells. The Hebrew/Arabic ranges deliberately EXCLUDE interspersed spacing
+  // punctuation/format chars (U+05BE/05C0/05C3/05C6, U+06DD/06DE/06E5/06E6/06E9)
+  // which keep their width (bd-46436b).
   if (
     (code >= 0x300 && code <= 0x36f) ||
     (code >= 0x483 && code <= 0x489) ||
+    (code >= 0x591 && code <= 0x5bd) ||
+    code === 0x5bf ||
+    (code >= 0x5c1 && code <= 0x5c2) ||
+    (code >= 0x5c4 && code <= 0x5c5) ||
+    code === 0x5c7 ||
+    (code >= 0x610 && code <= 0x61a) ||
+    (code >= 0x64b && code <= 0x65f) ||
+    code === 0x670 ||
+    (code >= 0x6d6 && code <= 0x6dc) ||
+    (code >= 0x6df && code <= 0x6e4) ||
+    (code >= 0x6e7 && code <= 0x6e8) ||
+    (code >= 0x6ea && code <= 0x6ed) ||
     (code >= 0x200b && code <= 0x200f) ||
     (code >= 0x202a && code <= 0x202e) ||
     (code >= 0x2060 && code <= 0x2064) ||
