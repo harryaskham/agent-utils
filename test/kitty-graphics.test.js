@@ -37,6 +37,8 @@ import {
   isSupportedKittyPngPath,
   wrapForPassthrough,
   unwrapTmuxGraphicsPassthrough,
+  serializeKittyGraphicsChunks,
+  detectKittyPassthroughMode,
 } from "../extensions/kitty-graphics.js";
 
 // Read an extension's source "surface": the main file concatenated with its
@@ -547,4 +549,23 @@ test("unwrapTmuxGraphicsPassthrough strips DCS start and un-doubles ESC for the 
   // Not a strict inverse: it un-doubles ESC and drops the DCS start, leaving the
   // trailing DCS terminator (which the APC command parser ignores downstream).
   assert.ok(unwrapTmuxGraphicsPassthrough(wrapped).startsWith(seq));
+});
+
+test("serializeKittyGraphicsChunks delegates for one chunk and splits large payloads with m-flags (bd-0b022b)", () => {
+  // Single chunk -> one APC (delegates to serializeKittyGraphicsCommand).
+  const one = serializeKittyGraphicsChunks({ a: "T" }, "AB", { chunkSize: 4096 });
+  assert.equal((one.match(/\x1b_G/g) || []).length, 1);
+  // Multi-chunk: 'A'*2000 at chunkSize 512 -> 4 APCs.
+  const out = serializeKittyGraphicsChunks({ a: "T", f: 100 }, "A".repeat(2000), { chunkSize: 512 });
+  assert.equal((out.match(/\x1b_G/g) || []).length, 4);
+  assert.match(out, /\x1b_G[^;]*a=T/); // first chunk carries the control's a=T
+  // m (more) flag runs 1,1,1,0 — every chunk but the last sets m=1.
+  assert.equal([...out.matchAll(/m=(\d)/g)].map((x) => x[1]).join(""), "1110");
+});
+
+test("detectKittyPassthroughMode resolves override, then tmux, then none (bd-0b022b)", () => {
+  assert.equal(detectKittyPassthroughMode({}), "none");
+  assert.equal(detectKittyPassthroughMode({ TMUX: "/tmp/tmux-1/default,1,0" }), "tmux");
+  // Explicit override wins over TMUX.
+  assert.equal(detectKittyPassthroughMode({ KITTY_IMAGE_PREVIEW_PASSTHROUGH: "none", TMUX: "x" }), "none");
 });
