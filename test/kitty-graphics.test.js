@@ -27,6 +27,16 @@ import {
   stableKittyPlaceholderPlacementId,
   viewportHalfRowLimit,
   clampRowsToViewportHalf,
+  parsePngDimensions,
+  transparentPixelPngBase64,
+  bufferToBase64,
+  textToBase64,
+  chunkBase64,
+  controlDataToString,
+  estimateRowsForImage,
+  isSupportedKittyPngPath,
+  wrapForPassthrough,
+  unwrapTmuxGraphicsPassthrough,
 } from "../extensions/kitty-graphics.js";
 
 // Read an extension's source "surface": the main file concatenated with its
@@ -484,4 +494,57 @@ test("firecracker VM extension is packaged and exposes lifecycle, screen, and Te
   assert.match(source, /serial-console-log/);
   assert.match(source, /firecracker --api-sock/);
   assert.match(source, /pi\.registerCommand\("firecracker-vms"/);
+});
+
+test("parsePngDimensions reads PNG IHDR dimensions and rejects non-PNG (bd-5332d7)", () => {
+  const png = Buffer.from(transparentPixelPngBase64(), "base64");
+  assert.deepEqual(parsePngDimensions(png), { width: 1, height: 1 });
+  assert.equal(parsePngDimensions(Buffer.alloc(4)), undefined); // too short
+  assert.equal(parsePngDimensions(Buffer.alloc(24)), undefined); // 24 bytes but no PNG signature
+});
+
+test("bufferToBase64 / textToBase64 encode to base64 (bd-5332d7)", () => {
+  assert.equal(bufferToBase64(Buffer.from("hi")), "aGk=");
+  assert.equal(textToBase64("hi"), "aGk=");
+});
+
+test("chunkBase64 splits a payload into bounded chunks (bd-5332d7)", () => {
+  assert.deepEqual(chunkBase64("ABCDEFGHIJ", 4), ["ABCD", "EFGH", "IJ"]);
+  assert.deepEqual(chunkBase64("", 4), [""]);
+});
+
+test("controlDataToString serializes control maps and rejects bad keys (bd-5332d7)", () => {
+  assert.equal(controlDataToString({ a: 1, t: "d", q: undefined }), "a=1,t=d"); // undefined dropped
+  assert.throws(() => controlDataToString({ "bad key": 1 }), /Invalid kitty graphics control key/);
+});
+
+test("estimateRowsForImage applies aspect math clamped to [minRows,maxRows] (bd-5332d7)", () => {
+  assert.equal(estimateRowsForImage({ imageWidth: 100, imageHeight: 100, columns: 10 }), 5);
+  assert.equal(estimateRowsForImage({}), 16); // default when inputs missing
+  assert.equal(estimateRowsForImage({ imageWidth: 10, imageHeight: 1000, columns: 10, maxRows: 24 }), 24); // clamp high
+  assert.equal(estimateRowsForImage({ imageWidth: 1000, imageHeight: 10, columns: 10, minRows: 4 }), 4); // clamp low
+});
+
+test("isSupportedKittyPngPath accepts .png/.apng case-insensitively (bd-5332d7)", () => {
+  assert.equal(isSupportedKittyPngPath("a.png"), true);
+  assert.equal(isSupportedKittyPngPath("b.APNG"), true);
+  assert.equal(isSupportedKittyPngPath("c.jpg"), false);
+});
+
+test("wrapForPassthrough tmux-wraps (doubling ESC) or passes through, and rejects bad modes (bd-5332d7)", () => {
+  const seq = `X${ESC}Y`;
+  assert.equal(wrapForPassthrough(seq, "none"), seq);
+  const wrapped = wrapForPassthrough(seq, "tmux");
+  assert.notEqual(wrapped, seq);
+  assert.ok(wrapped.includes(`${ESC}${ESC}`)); // ESC doubled for tmux DCS
+  assert.throws(() => wrapForPassthrough(seq, "bogus"), /Unsupported kitty graphics passthrough mode/);
+});
+
+test("unwrapTmuxGraphicsPassthrough strips DCS start and un-doubles ESC for the parser (bd-5332d7)", () => {
+  assert.equal(unwrapTmuxGraphicsPassthrough("plain text"), "plain text"); // no DCS -> unchanged
+  const seq = `X${ESC}Y`;
+  const wrapped = wrapForPassthrough(seq, "tmux");
+  // Not a strict inverse: it un-doubles ESC and drops the DCS start, leaving the
+  // trailing DCS terminator (which the APC command parser ignores downstream).
+  assert.ok(unwrapTmuxGraphicsPassthrough(wrapped).startsWith(seq));
 });
