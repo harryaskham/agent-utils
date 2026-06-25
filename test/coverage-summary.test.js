@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { summarizeLcov } from "../scripts/coverage-summary.mjs";
+import { summarizeLcov, parseArgs, renderSummary } from "../scripts/coverage-summary.mjs";
 
 const SAMPLE = [
   "TN:",
@@ -69,4 +69,28 @@ test("summarizeLcov tolerates empty / malformed input", () => {
   assert.deepEqual(summarizeLcov("").records, []);
   assert.deepEqual(summarizeLcov(null).records, []);
   assert.equal(summarizeLcov("").totals.files, 0);
+});
+
+test("parseArgs handles defaults, flags, --threshold N, and a positional lcov path (bd-5a4ca0)", () => {
+  assert.deepEqual(parseArgs([]), { threshold: 90, all: false, lcovPath: null });
+  assert.equal(parseArgs(["--all"]).all, true);
+  assert.equal(parseArgs(["--threshold", "80"]).threshold, 80);
+  assert.equal(parseArgs(["cov.lcov"]).lcovPath, "cov.lcov");
+  const mixed = parseArgs(["--threshold", "75", "--all", "x.lcov"]);
+  assert.deepEqual(mixed, { threshold: 75, all: true, lcovPath: "x.lcov" });
+  // A non-numeric threshold keeps the default rather than becoming NaN.
+  assert.equal(parseArgs(["--threshold", "oops"]).threshold, 90);
+});
+
+test("renderSummary reflects threshold/all in the heading, lists rows, and prints totals (bd-5a4ca0)", () => {
+  const summary = summarizeLcov(SAMPLE, { all: true });
+  const out = renderSummary(summary, { threshold: 90, all: false });
+  assert.match(out, /modules below 90% line or func/);
+  assert.match(out, /extensions\/a\.js/);
+  assert.match(out, /Overall: line .* across 2 files/);
+  // --all switches the heading wording.
+  assert.match(renderSummary(summary, { threshold: 90, all: true }), /all files, lowest line coverage first/);
+  // Empty records render the 'none' branch.
+  const none = renderSummary({ records: [], totals: { line: 100, branch: 100, func: 100, files: 3 } }, { threshold: 90, all: false });
+  assert.match(none, /none — every file is at or above 90%/);
 });

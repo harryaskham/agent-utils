@@ -76,7 +76,7 @@ function fmt(n) {
   return `${n.toFixed(2).padStart(6)}%`;
 }
 
-function renderSummary(summary, { threshold, all }) {
+export function renderSummary(summary, { threshold, all }) {
   const lines = [];
   const heading = all
     ? "Coverage summary (all files, lowest line coverage first):"
@@ -94,7 +94,7 @@ function renderSummary(summary, { threshold, all }) {
   return lines.join("\n");
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const opts = { threshold: 90, all: false, lcovPath: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
