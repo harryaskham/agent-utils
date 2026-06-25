@@ -47,6 +47,10 @@ export function fitFooterSegments(rawSegments, width, { absorbSpare = true } = {
     }
     if (!changed) break;
   }
+  // Honor the documented contract: if even the per-segment minimums plus the
+  // inter-segment dividers cannot fit, return null rather than an overflowing
+  // layout. The count-based guard above only catches the min==1 case.
+  if (used > budget) return null;
   if (absorbSpare && used < budget && segments.length) {
     const modelSegment = segments.find((segment) => segment.key === "model");
     const spare = budget - used;
