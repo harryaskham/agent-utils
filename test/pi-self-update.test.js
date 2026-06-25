@@ -281,6 +281,62 @@ test("executePiRestartPlan prefers execve with full argv", () => {
   assert.deepEqual(calls, [{ file: "/bin/pi", args: ["pi", "--session", "/tmp/session.jsonl"], env: { PI_RESTARTED_WITHOUT_INITIAL_PROMPT: "1" } }]);
 });
 
+test("executePiRestartPlan falls back to spawn when execve is unavailable (bd-31ca09)", () => {
+  const plan = {
+    executable: "/bin/pi",
+    args: ["pi", "--session", "/tmp/s.jsonl"],
+    env: { X: "1" },
+    cwd: "/work",
+  };
+  const spawnCalls = [];
+  const exitCalls = [];
+  let exitHandler;
+  let errorHandler;
+  const fakeChild = {
+    on(event, cb) {
+      if (event === "exit") exitHandler = cb;
+      if (event === "error") errorHandler = cb;
+    },
+  };
+  const result = executePiRestartPlan(plan, {
+    execve: null, // null (not undefined, which would hit the process.execve default) -> spawn fallback
+    spawnImpl(file, args, opts) { spawnCalls.push({ file, args, opts }); return fakeChild; },
+    exit(code) { exitCalls.push(code); },
+  });
+  assert.equal(result.method, "spawn");
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0].file, "/bin/pi");
+  assert.deepEqual(spawnCalls[0].args, ["--session", "/tmp/s.jsonl"]); // args.slice(1)
+  assert.equal(spawnCalls[0].opts.cwd, "/work");
+  assert.equal(spawnCalls[0].opts.stdio, "inherit");
+  // exit wiring: a clean exit forwards the code; an error exits 1.
+  exitHandler(3, null);
+  assert.deepEqual(exitCalls, [3]);
+  errorHandler(new Error("boom"));
+  assert.deepEqual(exitCalls, [3, 1]);
+});
+
+test("buildPiRestartPlan includes --session-dir when a session dir is provided (bd-31ca09)", () => {
+  const plan = buildPiRestartPlan({
+    argv: ["node", "/bin/pi"],
+    env: {},
+    sessionFile: "/tmp/s.jsonl",
+    sessionDir: "/tmp/sessions",
+    command: "pi",
+  });
+  const i = plan.restartArgs.indexOf("--session-dir");
+  assert.ok(i >= 0, "--session-dir should be present");
+  assert.equal(plan.restartArgs[i + 1], "/tmp/sessions");
+  assert.ok(plan.restartArgs.includes("--session"));
+});
+
+test("buildPiRestartPlan throws when no persistent session file is available (bd-31ca09)", () => {
+  assert.throws(
+    () => buildPiRestartPlan({ argv: ["node", "/bin/pi"], env: {} }),
+    /persistent session file/,
+  );
+});
+
 test("startup auto-update defaults off without env or settings opt-in", async () => {
   const previous = process.env.PI_AUTO_UPDATE_ON_STARTUP;
   const prevOffline = process.env.PI_OFFLINE;

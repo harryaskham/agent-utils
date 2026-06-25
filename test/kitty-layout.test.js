@@ -14,7 +14,21 @@ import {
   previewViewportRowLimit,
   previewImageRowLimit,
   buildSidePanelLayout,
+  componentContains,
 } from "../extensions/kitty-image-preview/layout.js";
+
+test("componentContains finds a target nested in the component tree and is cycle-safe (bd-31ca09)", () => {
+  const leaf = { type: "leaf" };
+  const tree = { type: "root", children: [{ type: "a", children: [leaf] }, { type: "b" }] };
+  assert.equal(componentContains(tree, leaf), true);
+  assert.equal(componentContains(tree, tree), true); // root === target
+  assert.equal(componentContains(tree, { type: "x" }), false);
+  assert.equal(componentContains(null, leaf), false);
+  assert.equal(componentContains(tree, null), false);
+  const cyc = { type: "c" };
+  cyc.children = [cyc];
+  assert.equal(componentContains(cyc, { type: "z" }), false); // cycle-safe via seen-set
+});
 
 // An item with no width/height exercises the pure fallback path
 // (ceil(columns * 0.5)), which is deterministic and independent of the
