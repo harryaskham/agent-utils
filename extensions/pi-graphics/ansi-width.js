@@ -20,15 +20,23 @@ export function charCellWidth(ch) {
   if (code === 0) return 0;
   if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
   // Zero-width: Latin combining diacriticals, zero-width/bidi/invisible
-  // formatting and joiner controls (incl. ZWJ used in emoji sequences), and
-  // variation selectors. These render as 0 cells.
+  // formatting and joiner controls (incl. ZWJ used in emoji sequences),
+  // variation selectors, and the dedicated all-non-spacing combining-mark
+  // blocks (Cyrillic, combining extensions/supplement, symbols, half marks).
+  // These render as 0 cells. Interspersed-spacing scripts (Hebrew/Arabic)
+  // need per-codepoint ranges and are intentionally excluded (bd-46436b).
   if (
     (code >= 0x300 && code <= 0x36f) ||
+    (code >= 0x483 && code <= 0x489) ||
     (code >= 0x200b && code <= 0x200f) ||
     (code >= 0x202a && code <= 0x202e) ||
     (code >= 0x2060 && code <= 0x2064) ||
+    (code >= 0x20d0 && code <= 0x20ff) ||
+    (code >= 0x1ab0 && code <= 0x1aff) ||
+    (code >= 0x1dc0 && code <= 0x1dff) ||
     code === 0xfeff ||
-    (code >= 0xfe00 && code <= 0xfe0f)
+    (code >= 0xfe00 && code <= 0xfe0f) ||
+    (code >= 0xfe20 && code <= 0xfe2f)
   ) return 0;
   if (
     code >= 0x1100 && (

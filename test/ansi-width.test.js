@@ -61,6 +61,23 @@ test("charCellWidth: zero-width formatting / joiner / bidi controls are zero wid
   assert.equal(charCellWidth("\ufeff"), 0); // ZERO WIDTH NO-BREAK SPACE / BOM
 });
 
+test("charCellWidth: dedicated all-non-spacing combining-mark blocks are zero width (bd-c7f504)", () => {
+  assert.equal(charCellWidth("\u0483"), 0); // Combining Cyrillic titlo
+  assert.equal(charCellWidth("\u0489"), 0); // Combining Cyrillic millions sign (enclosing)
+  assert.equal(charCellWidth("\u1ab0"), 0); // Combining Diacritical Marks Extended
+  assert.equal(charCellWidth("\u1dc0"), 0); // Combining Diacritical Marks Supplement
+  assert.equal(charCellWidth("\u20d0"), 0); // Combining mark for symbols (left harpoon)
+  assert.equal(charCellWidth("\u20dd"), 0); // Combining enclosing circle
+  assert.equal(charCellWidth("\ufe20"), 0); // Combining ligature left half
+  assert.equal(charCellWidth("\ufe2f"), 0); // Combining Cyrillic titlo right half
+});
+
+test("charCellWidth: spacing characters adjacent to the combining blocks stay single width (bd-c7f504)", () => {
+  assert.equal(charCellWidth("\u048a"), 1); // Cyrillic capital letter Komi Dje (spacing letter)
+  assert.equal(charCellWidth("\u2100"), 1); // Account-of sign (just past combining-for-symbols)
+  assert.equal(charCellWidth("\u1d00"), 1); // Latin letter small capital A (before supplement block)
+});
+
 test("approximateVisibleCells: emoji ZWJ sequences do not over-count the joiners (bd-15271b)", () => {
   // U+1F468 ZWJ U+1F469 ZWJ U+1F467 — three 2-wide emoji joined by two ZWJ.
   // The ZWJ now contribute 0, so the estimate is 2+0+2+0+2 = 6 rather than 8.
