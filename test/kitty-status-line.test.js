@@ -6,6 +6,9 @@ import {
   imageStatusLine,
   imageSeparatorLine,
   imageHeaderLine,
+  imageControlsLine,
+  defaultScreenshotLabel,
+  streamStatusLine,
 } from "../extensions/kitty-image-preview/status-line.js";
 
 function makeLabeledState({ items = 1, index = 0, showCaption = true } = {}) {
@@ -120,4 +123,41 @@ test("imageStatusLine adds animation and cycle markers", () => {
     ),
     "🖼 ▶ ⟳3s 1/1 c — /image-hide /image-clear",
   );
+});
+
+test("imageControlsLine is empty with no images and a truncated controls hint otherwise (bd-dbaf7e)", () => {
+  assert.equal(imageControlsLine(makeState({ items: 0 }), 40), "");
+  assert.equal(
+    imageControlsLine(makeState({ items: 3, visible: true, index: 0 }), 80),
+    "controls: /image-prev /image-next /image-hide /image-clear 1/3",
+  );
+  // Truncated to the available width.
+  assert.ok(imageControlsLine(makeState({ items: 3, visible: true }), 10).length <= 10);
+});
+
+test("defaultScreenshotLabel selects the best name and prefixes screenshot/kind (bd-dbaf7e)", () => {
+  const date = new Date("2020-01-02T03:04:05Z");
+  // title > name > app_name > id precedence.
+  assert.ok(defaultScreenshotLabel({ kind: "display", title: "T", name: "N", id: "x" }, date).startsWith("screenshot display T "));
+  assert.ok(defaultScreenshotLabel({ kind: "window", name: "N", id: "x" }, date).startsWith("screenshot window N "));
+  assert.ok(defaultScreenshotLabel({ kind: "window", app_name: "App", id: "x" }, date).startsWith("screenshot window App "));
+  assert.ok(defaultScreenshotLabel({ kind: "window", id: "w1" }, date).startsWith("screenshot window w1 "));
+  // The time portion (toLocaleTimeString) is locale/TZ-dependent, so only assert it is present.
+  assert.match(defaultScreenshotLabel({ kind: "window", id: "w1" }, date), /screenshot window w1 .+/);
+});
+
+test("streamStatusLine summarizes running and not-running streams (bd-dbaf7e)", () => {
+  assert.equal(streamStatusLine(null), "No kitty image preview stream is running.");
+  assert.equal(streamStatusLine({ running: false }), "No kitty image preview stream is running.");
+  const line = streamStatusLine({
+    running: true,
+    startedAt: Date.now() - 2000,
+    frameCount: 10,
+    intervalMs: 500,
+    target: { kind: "display", id: "d1" },
+    latestPath: "/tmp/x.png",
+  });
+  assert.ok(line.startsWith("Streaming display d1: frames=10 "));
+  assert.match(line, /fps=[\d.]+/); // fps is timing-derived, assert shape not exact value
+  assert.match(line, /interval=500ms latest=\/tmp\/x\.png$/);
 });
