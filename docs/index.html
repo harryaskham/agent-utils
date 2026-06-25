@@ -25,8 +25,8 @@
         <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
         <div class="hero-stats" aria-label="Inventory summary">
           <span><strong>4</strong> sections</span>
-          <span><strong>26</strong> tools and surfaces</span>
-          <span><strong>2026-05-12</strong> reviewed</span>
+          <span><strong>34</strong> tools and surfaces</span>
+          <span><strong>2026-06-25</strong> reviewed</span>
         </div>
       </div>
     </header>
@@ -806,6 +806,210 @@
               <li><code>/m &lt;provider/model&gt;</code></li>
               <li><code>/m (Tab to browse)</code></li>
               <li><code>/m anthropic/claude-opus-4-7</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Effort and fast-model switch Pi extension</h3>
+              <code>/effort, /fast, self_set_effort</code>
+            </div>
+            <p>Shortcut Pi thinking-effort levels and configured fast-model variants; delegates every value (including adaptive) to Pi&#39;s thinking API without rewriting request payloads.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>operators, Pi agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/effort.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/effort high</code></li>
+              <li><code>/fast on</code></li>
+              <li><code>self_set_effort (operator-instructed)</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>True-defaults persistence guard Pi extension</h3>
+              <code>/true-defaults</code>
+            </div>
+            <p>Persist immutable-by-convention model/provider/thinking defaults from settings.json agentUtils.trueDefaults back onto Pi&#39;s built-in defaults on startup and clean shutdown, while leaving runtime switching unchanged.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/true-defaults.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/true-defaults status</code></li>
+              <li><code>/true-defaults apply</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Self-update and restart Pi extension</h3>
+              <code>/update, /reload-tools, /restart</code>
+            </div>
+            <p>Run pi update --extensions, reload the runtime, refresh active tools, and re-exec the Pi session in place to pick up newly installed runtime/tool injections.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>operators, Pi agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/pi-self-update.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/update</code></li>
+              <li><code>/reload-tools</code></li>
+              <li><code>/restart --dry-run</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Copilot auth refresh Pi extension</h3>
+              <code>/copilot-auth-refresh</code>
+            </div>
+            <p>Recover from GitHub Copilot OAuth stale-token errors by reloading auth storage and retrying Copilot auth resolution, queueing one follow-up retry so managed agents do not stop on a transient missing token.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/copilot-auth-refresh.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/copilot-auth-refresh</code></li>
+              <li><code>automatic retry on missing Copilot token</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Compaction continue guard Pi extension</h3>
+              <code>(automatic)</code>
+            </div>
+            <p>Keep the agent loop continuable after a context compaction when the rebuilt transcript would otherwise end on an assistant message that Pi core cannot continue from.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/compaction-continue-guard.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>runs automatically after compaction</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Checkout-behind warning Pi extension</h3>
+              <code>/git-behind</code>
+            </div>
+            <p>Throttled advisory that warns any Pi agent when its checkout falls significantly behind the origin default branch; a reusable, daemon-decoupled replacement for Cacophony&#39;s git-check mixin.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/git-behind-warning.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/git-behind status</code></li>
+              <li><code>/git-behind check</code></li>
+              <li><code>/git-behind on|off</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Xvfb virtual-display Pi extension</h3>
+              <code>xvfb_ensure, xvfb_stop, xvfb_status</code>
+            </div>
+            <p>Opt-in, guarded Xvfb virtual-display orchestration on headless Linux nodes so display-dependent tools can run; never spawns unprompted and refuses unless the node is genuinely headless.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/xvfb.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>xvfb_ensure</code></li>
+              <li><code>xvfb_status</code></li>
+              <li><code>xvfb_stop</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Android CLI / emulator Pi extension</h3>
+              <code>android_cli_doctor, android_emulator_screenshot, android_emulator_stream</code>
+            </div>
+            <p>Wrap Google&#39;s Android command-line tools (adb, emulator, sdkmanager) so the model can diagnose/install the Android SDK and capture emulator or device screens.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/android.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>android_cli_doctor</code></li>
+              <li><code>android_emulator_screenshot</code></li>
+              <li><code>android_emulator_stream</code></li>
               </ul>
             </details>
           </article>

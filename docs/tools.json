@@ -1,7 +1,7 @@
 {
   "title": "Agent Utils tool inventory",
   "description": "Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.",
-  "lastReviewed": "2026-05-12",
+  "lastReviewed": "2026-06-25",
   "publishing": {
     "githubPagesPath": "Repository Settings → Pages → Source: GitHub Actions, workflow: .github/workflows/pages.yml on self-hosted runners",
     "localPreview": "npm run docs:build && python3 -m http.server --directory docs 8000",
@@ -382,6 +382,98 @@
             "/m anthropic/claude-opus-4-7"
           ],
           "sourceOfTruth": "extensions/m.js"
+        },
+        {
+          "name": "Effort and fast-model switch Pi extension",
+          "command": "/effort, /fast, self_set_effort",
+          "audience": "operators, Pi agents",
+          "purpose": "Shortcut Pi thinking-effort levels and configured fast-model variants; delegates every value (including adaptive) to Pi's thinking API without rewriting request payloads.",
+          "commonActions": [
+            "/effort high",
+            "/fast on",
+            "self_set_effort (operator-instructed)"
+          ],
+          "sourceOfTruth": "extensions/effort.js"
+        },
+        {
+          "name": "True-defaults persistence guard Pi extension",
+          "command": "/true-defaults",
+          "audience": "operators",
+          "purpose": "Persist immutable-by-convention model/provider/thinking defaults from settings.json agentUtils.trueDefaults back onto Pi's built-in defaults on startup and clean shutdown, while leaving runtime switching unchanged.",
+          "commonActions": [
+            "/true-defaults status",
+            "/true-defaults apply"
+          ],
+          "sourceOfTruth": "extensions/true-defaults.js"
+        },
+        {
+          "name": "Self-update and restart Pi extension",
+          "command": "/update, /reload-tools, /restart",
+          "audience": "operators, Pi agents",
+          "purpose": "Run pi update --extensions, reload the runtime, refresh active tools, and re-exec the Pi session in place to pick up newly installed runtime/tool injections.",
+          "commonActions": [
+            "/update",
+            "/reload-tools",
+            "/restart --dry-run"
+          ],
+          "sourceOfTruth": "extensions/pi-self-update.js"
+        },
+        {
+          "name": "Copilot auth refresh Pi extension",
+          "command": "/copilot-auth-refresh",
+          "audience": "Pi agents, operators",
+          "purpose": "Recover from GitHub Copilot OAuth stale-token errors by reloading auth storage and retrying Copilot auth resolution, queueing one follow-up retry so managed agents do not stop on a transient missing token.",
+          "commonActions": [
+            "/copilot-auth-refresh",
+            "automatic retry on missing Copilot token"
+          ],
+          "sourceOfTruth": "extensions/copilot-auth-refresh.js"
+        },
+        {
+          "name": "Compaction continue guard Pi extension",
+          "command": "(automatic)",
+          "audience": "Pi agents",
+          "purpose": "Keep the agent loop continuable after a context compaction when the rebuilt transcript would otherwise end on an assistant message that Pi core cannot continue from.",
+          "commonActions": [
+            "runs automatically after compaction"
+          ],
+          "sourceOfTruth": "extensions/compaction-continue-guard.js"
+        },
+        {
+          "name": "Checkout-behind warning Pi extension",
+          "command": "/git-behind",
+          "audience": "Pi agents, operators",
+          "purpose": "Throttled advisory that warns any Pi agent when its checkout falls significantly behind the origin default branch; a reusable, daemon-decoupled replacement for Cacophony's git-check mixin.",
+          "commonActions": [
+            "/git-behind status",
+            "/git-behind check",
+            "/git-behind on|off"
+          ],
+          "sourceOfTruth": "extensions/git-behind-warning.js"
+        },
+        {
+          "name": "Xvfb virtual-display Pi extension",
+          "command": "xvfb_ensure, xvfb_stop, xvfb_status",
+          "audience": "Pi agents",
+          "purpose": "Opt-in, guarded Xvfb virtual-display orchestration on headless Linux nodes so display-dependent tools can run; never spawns unprompted and refuses unless the node is genuinely headless.",
+          "commonActions": [
+            "xvfb_ensure",
+            "xvfb_status",
+            "xvfb_stop"
+          ],
+          "sourceOfTruth": "extensions/xvfb.js"
+        },
+        {
+          "name": "Android CLI / emulator Pi extension",
+          "command": "android_cli_doctor, android_emulator_screenshot, android_emulator_stream",
+          "audience": "Pi agents",
+          "purpose": "Wrap Google's Android command-line tools (adb, emulator, sdkmanager) so the model can diagnose/install the Android SDK and capture emulator or device screens.",
+          "commonActions": [
+            "android_cli_doctor",
+            "android_emulator_screenshot",
+            "android_emulator_stream"
+          ],
+          "sourceOfTruth": "extensions/android.js"
         }
       ]
     }
