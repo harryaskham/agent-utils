@@ -4,7 +4,36 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import trueDefaultsExtension, { extractTrueDefaults, restoreTrueDefaultSettings } from "../extensions/true-defaults.js";
+import trueDefaultsExtension, {
+  extractTrueDefaults,
+  restoreTrueDefaultSettings,
+  settingsFileCandidates,
+  hasTrueDefaults,
+} from "../extensions/true-defaults.js";
+
+test("settingsFileCandidates resolves ordered global + project paths, honoring PI_CODING_AGENT_DIR", () => {
+  const candidates = settingsFileCandidates({ env: { PI_CODING_AGENT_DIR: "/agent" }, cwd: "/work" });
+  assert.deepEqual(candidates, [
+    { path: "/agent/settings.json", scope: "global" },
+    { path: "/work/.pi/settings.json", scope: "project" },
+  ]);
+});
+
+test("settingsFileCandidates dedupes when global and project paths collide", () => {
+  // Force the project path to equal the global one so the dedup guard fires.
+  const candidates = settingsFileCandidates({ env: { PI_CODING_AGENT_DIR: "/work/.pi" }, cwd: "/work" });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].scope, "global"); // first add wins
+});
+
+test("hasTrueDefaults detects namespaced/legacy config and ignores invalid-only thinking level", () => {
+  assert.equal(hasTrueDefaults({ agentUtils: { trueDefaults: { model: "x" } } }), true);
+  assert.equal(hasTrueDefaults({ trueDefaultProvider: "p" }), true); // legacy shape
+  assert.equal(hasTrueDefaults({ agentUtils: { trueDefaults: { thinkingLevel: "high" } } }), true);
+  assert.equal(hasTrueDefaults({}), false);
+  // An invalid thinking level is normalized away, so it does not count.
+  assert.equal(hasTrueDefaults({ agentUtils: { trueDefaults: { thinkingLevel: "bogus" } } }), false);
+});
 
 function makeTempSettings(settings) {
   const dir = mkdtempSync(join(tmpdir(), "agent-utils-true-defaults-"));
