@@ -352,6 +352,54 @@ mod tests {
         assert_eq!(responses[2]["result"]["isError"], false);
     }
 
+    #[test]
+    fn stdio_server_handles_ping_notifications_and_error_paths() {
+        let server = McpServer::new(
+            StdioServerConfig {
+                server_name: "sample-mcp".to_string(),
+                server_version: "0.0.1".to_string(),
+            },
+            build_math_router(),
+        );
+
+        let input = [
+            // ping -> empty result object.
+            frame_request(&json!({ "jsonrpc": "2.0", "id": 1, "method": "ping", "params": {} })),
+            // A notification (no id) must NOT produce a response.
+            frame_request(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })),
+            // Unsupported method -> JSON-RPC method-not-found error.
+            frame_request(
+                &json!({ "jsonrpc": "2.0", "id": 2, "method": "bogus/method", "params": {} }),
+            ),
+            // tools/call to a missing tool -> structured error envelope with isError:true.
+            frame_request(&json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": { "name": "does_not_exist", "arguments": {} }
+            })),
+        ]
+        .concat();
+
+        let mut output = Vec::new();
+        server
+            .serve_transport(&(), std::io::Cursor::new(input), &mut output)
+            .expect("stdio server should handle framed messages");
+
+        let responses = parse_framed_responses(&output);
+        // The notification yields no response, so only 3 of the 4 inputs reply.
+        assert_eq!(responses.len(), 3);
+        // ping
+        assert_eq!(responses[0]["id"], 1);
+        assert_eq!(responses[0]["result"], json!({}));
+        // unsupported method
+        assert_eq!(responses[1]["id"], 2);
+        assert_eq!(responses[1]["error"]["code"], -32601);
+        // unknown tool surfaces as a structured error, not a transport failure.
+        assert_eq!(responses[2]["id"], 3);
+        assert_eq!(responses[2]["result"]["isError"], true);
+    }
+
     fn frame_request(value: &Value) -> Vec<u8> {
         let mut message = serde_json::to_vec(value).expect("request should serialize");
         message.push(b'\n');
