@@ -119,8 +119,10 @@ internals. Configure PNG source-cell metrics with `piGraphics.cell.widthPx`,
 vars `PI_GRAPHICS_CELL_WIDTH_PX`, `PI_GRAPHICS_CELL_HEIGHT_PX`, and
 `PI_GRAPHICS_LINE_HEIGHT_SCALE`). If `cellHeightPx` is omitted, the renderer uses
 `16 * lineHeightScale`; the default line-height scale is `1.2` to match Pi's
-120% line spacing. Tune the opt-in ambient APNG with `PI_GRAPHICS_AMBIENT_FRAMES`
-and `PI_GRAPHICS_AMBIENT_DELAY_MS`. Use
+120% line spacing. Tune the opt-in APNG animation's frame count and inter-frame delay with
+`PI_GRAPHICS_EDITOR_FRAMES` (default 24, max 256) and `PI_GRAPHICS_EDITOR_DELAY_MS`
+(default 17ms); the separate ambient chrome is toggled with
+`PI_GRAPHICS_AUTO_AMBIENT_CHROME`. Use
 `/pi-graphics-tui-surface-scene` or `pi_graphics_render_tui_surface_scene` to
 force the full TypeScript-rendered Pi TUI scene manually. For an inspectable file
 artefact outside Pi, run `npm run pi-graphics:smoke -- --out=artifacts/pi-graphics-smoke.png`.
