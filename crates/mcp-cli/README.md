@@ -14,6 +14,13 @@ JSON schema generation, MCP framing, tool listing, and tool calls.
 - `ToolRouter` and typed `Tool` registration backed by `schemars` input schemas.
 - A minimal `McpServer` that speaks MCP over stdio using newline-delimited JSON
   (NDJSON) framing — one compact JSON-RPC object per line, `\n`-terminated.
+- A resilient stdio serve loop: a single malformed frame or a single
+  per-request handler error is answered with a JSON-RPC error frame (`-32700`
+  parse error / `-32603` internal error, preserving the request id) and the
+  connection **keeps serving** instead of tearing down. Only a genuine reader
+  EOF or a broken read/write stream ends the session, so a transient "erroring
+  MCP" no longer drops the client connection. Re-`initialize` is idempotent, so
+  a reconnecting client is cleanly re-acknowledged.
 - Generic tests that prove a CLI command surface and MCP tool surface can share
   the same command contracts without hard-coding any one application.
 
