@@ -155,6 +155,40 @@ test("safe run manifests omit command output while preserving useful status", ()
   assert.equal("stderr" in manifest.results[0], false);
 });
 
+test("safe run manifests preserve all diagnostic result fields and default safely (bd-8e9fb8)", () => {
+  // Full population: every optional summarized field must survive into the persisted manifest.
+  const manifest = buildSafeRunManifest({
+    plan: { app: { id: "slack" }, action: { id: "notifications.snapshot" } },
+    run: {
+      status: "error",
+      reason: "boom",
+      results: [{
+        index: 0, kind: "dom.extract", status: "error", code: 2,
+        authRequired: true, authRequiredPath: "/login", snapshotStatus: "stale", syncStatus: "behind",
+        count: 5, counts: { a: 1 }, outputs: ["o"], outputPath: "/o.json", extractionError: "xerr", reason: "rsn",
+        stdout: "secret", stderr: "token=abc",
+      }],
+    },
+    now: new Date("2020-01-02T03:04:05Z"),
+  });
+  assert.equal(manifest.reason, "boom");
+  assert.equal(manifest.writtenAt, "2020-01-02T03:04:05.000Z");
+  // All diagnostic fields preserved; raw stdout/stderr still dropped.
+  assert.deepEqual(manifest.results[0], {
+    index: 0, kind: "dom.extract", status: "error", code: 2,
+    authRequired: true, authRequiredPath: "/login", snapshotStatus: "stale", syncStatus: "behind",
+    count: 5, counts: { a: 1 }, outputs: ["o"], outputPath: "/o.json", extractionError: "xerr", reason: "rsn",
+  });
+  // Absent plan/run -> safe defaults (no app/action, status unknown, empty results).
+  const empty = buildSafeRunManifest();
+  assert.equal(empty.status, "unknown");
+  assert.deepEqual(empty.results, []);
+  assert.equal(empty.app, undefined);
+  assert.equal(empty.action, undefined);
+  // An empty results array is a non-failure.
+  assert.equal(runStatusFromResults([]), "ok");
+});
+
 test("auth-required diagnostics redact sessions and secrets", () => {
   const diagnostic = buildAuthRequiredDiagnostic({
     app: "slack",
