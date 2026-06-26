@@ -52,8 +52,8 @@ extensions don't have to.
     getArgumentCompletions: (prefix) => {
       // uses completionRegistry captured above, not a ctx arg
     },
-    async execute(_id, args, ctx) {
-      // execute() DOES get ctx, so the live ctx.modelRegistry is used here
+    async execute(_id, args, _signal, _onUpdate, ctx) {
+      // execute() DOES get ctx (as the 5th arg), so the live ctx.modelRegistry is used here
     },
   });
   ```
@@ -70,7 +70,7 @@ extensions don't have to.
 
 | Surface | Gets `ctx`? | Notes |
 | --- | --- | --- |
-| `execute(id, args, ctx)` | Yes | Use `ctx.modelRegistry` etc. directly. |
+| `execute(id, args, signal, onUpdate, ctx)` | Yes | `ctx` is the **5th** arg; use `ctx.modelRegistry` etc. directly. |
 | `getArgumentCompletions(prefix)` | No | Capture needed state at `session_start`. |
 | `pi.on("session_start", (e, ctx) => …)` | Yes | Re-fires after reload; refresh captured state here. |
 | Overriding a builtin slash command (e.g. `/model`) | n/a | Not possible; the TUI consumes builtins before the extension `input` event. Register a new command name instead. |
