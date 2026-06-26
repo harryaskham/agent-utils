@@ -335,6 +335,8 @@ npm run test:coverage:summary  # ranked report of the lowest-covered modules
 
 `npm run test:coverage` adds Node's `--experimental-test-coverage`, printing a per-file line/branch/function coverage table plus uncovered line ranges. `npm run test:coverage:summary` builds on Node's stable lcov coverage output to print only the lowest-covered source modules (below 90% line or function coverage, worst first) plus an overall total, so you can see what to test next at a glance; pass `--threshold N` to change the cutoff or `--all` to list every file. Both are opt-in developer aids only: they are **not** wired into CI and enforce **no** coverage threshold, so they never gate a merge. CI (`.github/workflows/ci.yml`) runs `npm test` (plus the Rust suite and `npm run check`); use `test:coverage` locally to spot under-covered modules before adding tests.
 
+See [`docs/testing.md`](docs/testing.md) for the test conventions (pure-function extraction, render-smoke tests, injectable IO, determinism) and the coverage philosophy.
+
 ## GitHub Pages tool inventory
 
 This repository includes a minimal GitHub Pages site in [`docs/`](docs/) with a concise inventory of the Cacophony, Pi, UI automation, and repo-local tools available to agents/operators.
