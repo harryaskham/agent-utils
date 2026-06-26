@@ -17,6 +17,10 @@ import {
   renderEditorBox,
   renderEditorRailFrame,
   renderFooterDividerPng,
+  renderEditorBoxFrame,
+  renderEditorBoxApng,
+  renderEditorRailApng,
+  renderEditorBorderApng,
 } from "../extensions/pi-graphics/affordances.js";
 
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -82,4 +86,27 @@ test("renderGlowPanelFrames returns one frame per requested frame", () => {
   assert.ok(Array.isArray(frames));
   assert.equal(frames.length, 3);
   assert.ok(Buffer.isBuffer(pngOf(frames[0])));
+});
+
+for (const [name, fn] of [
+  ["renderEditorBoxApng", renderEditorBoxApng],
+  ["renderEditorRailApng", renderEditorRailApng],
+  ["renderEditorBorderApng", renderEditorBorderApng],
+]) {
+  test(`${name} renders a valid APNG sized columns x rows with frame metadata (bd-e5edc5)`, () => {
+    const r = fn({ columns: 8, rows: 3, frames: 4, delayMs: 100 });
+    const dims = assertPng(r, name);
+    assert.equal(dims.width, 8 * CELL_PX_W);
+    assert.equal(dims.height, 3 * CELL_PX_H);
+    assert.equal(r.frames, 4);
+    assert.equal(r.animationMs, 100 * 4); // delayMs * frames
+    // Frame count is clamped to <=256 for oversized requests.
+    assert.equal(fn({ columns: 4, rows: 2, frames: 9999 }).frames, 256);
+  });
+}
+
+test("renderEditorBoxFrame returns an RGBA pixel buffer matching its dimensions (bd-e5edc5)", () => {
+  const f = renderEditorBoxFrame({ columns: 6, rows: 2 });
+  assert.ok(f.widthPx > 0 && f.heightPx > 0);
+  assert.equal(f.pixels.length, f.widthPx * f.heightPx * 4); // RGBA, 4 bytes/pixel
 });
