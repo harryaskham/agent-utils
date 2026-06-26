@@ -353,6 +353,58 @@ mod tests {
     }
 
     #[test]
+    fn stdio_server_reacknowledges_repeated_initialize_from_same_connection() {
+        // bd-cdbf79: a reconnect from the same agent re-sends `initialize`; a
+        // stateless server must re-acknowledge it idempotently rather than fail to
+        // reacknowledge (the precursor binary's bug). This locks mcp-cli's
+        // stateless handshake as the executable reference spec for the precursor.
+        let server = McpServer::new(
+            StdioServerConfig {
+                server_name: "sample-mcp".to_string(),
+                server_version: "0.0.1".to_string(),
+            },
+            build_math_router(),
+        );
+
+        let input = [
+            frame_request(
+                &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+            ),
+            frame_request(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })),
+            // Same agent reconnects and re-initializes on the same connection.
+            frame_request(
+                &json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }),
+            ),
+            // The session must remain usable after the reconnect/re-initialize.
+            frame_request(
+                &json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {} }),
+            ),
+        ]
+        .concat();
+
+        let mut output = Vec::new();
+        server
+            .serve_transport(&(), std::io::Cursor::new(input), &mut output)
+            .expect("stdio server should re-acknowledge a repeated initialize");
+
+        let responses = parse_framed_responses(&output);
+        // notifications/initialized yields no response: init + re-init + tools/list = 3.
+        assert_eq!(responses.len(), 3);
+        // Both initializes are acknowledged identically (idempotent re-acknowledgment).
+        assert_eq!(responses[0]["id"], 1);
+        assert_eq!(responses[0]["result"]["serverInfo"]["name"], "sample-mcp");
+        assert_eq!(responses[1]["id"], 2);
+        assert_eq!(responses[1]["result"]["serverInfo"]["name"], "sample-mcp");
+        assert_eq!(
+            responses[0]["result"]["protocolVersion"],
+            responses[1]["result"]["protocolVersion"]
+        );
+        // The connection is still usable after the re-initialize.
+        assert_eq!(responses[2]["id"], 3);
+        assert!(responses[2]["result"]["tools"].as_array().is_some());
+    }
+
+    #[test]
     fn stdio_server_handles_ping_notifications_and_error_paths() {
         let server = McpServer::new(
             StdioServerConfig {
