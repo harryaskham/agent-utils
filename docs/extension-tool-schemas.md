@@ -56,6 +56,7 @@ by importing the extension module itself.
 | `android.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `pi-self-update.js` | `lib/tool-schema.js` shim | Yes |
 | `realtime-agent.js` | `lib/tool-schema.js` shim | Yes |
+| `self-compact.js` | `lib/tool-schema.js` shim | Yes |
 | `xvfb.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `app-automation.js` | `@sinclair/typebox` directly | No — peer dep not installed in this checkout |
 | `firecracker-vm.js` | `@sinclair/typebox` directly | No |
@@ -70,3 +71,9 @@ its behavior through an extracted pure module or source-surface assertions
 instead of by importing the extension. The list above is current as of writing;
 regenerate it with `grep -l '@sinclair/typebox' extensions/*.js` versus
 `grep -l 'lib/tool-schema' extensions/*.js` if it drifts.
+
+A third option also stays import-testable: some tool-registering extensions
+(`effort.js`, `m.js`, `tendril-share.js`) pass **plain JSON-schema** `parameters`
+objects and import neither the shim nor TypeBox. The real rule is therefore
+*avoid a direct `@sinclair/typebox` import* — both the shim and plain JSON-schema
+objects keep an extension loadable under `node --test`.
