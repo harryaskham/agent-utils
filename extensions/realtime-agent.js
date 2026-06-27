@@ -2569,6 +2569,7 @@ export default function realtimeAgentExtension(pi) {
       trans: v.trans ?? v.transcription ?? v.transcription_model ?? v.transcriptionmodel,
       speed: v.speed,
       thresh: v.thresh ?? v.threshold ?? v.vad_threshold ?? v.vadthreshold,
+      energy: v.energy ?? v.energy_threshold ?? v.energythreshold,
       reasoning: v.reasoning,
       summary: v.summary,
       chime: v.chime,

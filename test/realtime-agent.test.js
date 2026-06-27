@@ -1804,3 +1804,23 @@ test("/rt stt local-vad surfaces the first transcribe failure to the operator (b
     __setLocalVadHooksForTest({});
   }
 });
+
+test("/rt energy= reaches applyLocalVadEnergy through the full command path (bd-a5e1d4)", async () => {
+  // Regression: the env-args->params mapping (envArgsToRealtimeParams) must carry
+  // `energy` through, or /rt energy= is silently dropped before it is applied.
+  const prev = process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;
+  try {
+    const { pi, commands, handlers, ctx } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+    await commands.get("rt").handler("energy=0.05", ctx);
+    assert.equal(
+      process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD,
+      "0.05",
+      "/rt energy= flows handler -> envArgsToRealtimeParams -> applyLocalVadEnergy and persists the knob",
+    );
+  } finally {
+    if (prev === undefined) delete process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;
+    else process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD = prev;
+  }
+});
