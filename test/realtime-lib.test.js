@@ -12,6 +12,9 @@ import {
   parseRealtimeSpeed,
   parseVadThreshold,
   estimateRealtimeTokensForText,
+  truncateToolOutput,
+  numberEnv,
+  TOOL_OUTPUT_CAP,
 } from "../extensions/lib/realtime-helpers.js";
 
 import {
@@ -127,6 +130,32 @@ test("estimateRealtimeTokensForText is ~chars/4 plus a floor", () => {
   assert.equal(estimateRealtimeTokensForText(""), 4);
   assert.equal(estimateRealtimeTokensForText("12345678"), 6); // 8/4 + 4
   assert.equal(estimateRealtimeTokensForText(null), 4, "nullish treated as empty");
+});
+
+test("TOOL_OUTPUT_CAP is the 16k default truncation cap", () => {
+  assert.equal(TOOL_OUTPUT_CAP, 16_000);
+});
+
+test("truncateToolOutput keeps short text and truncates longer text with a suffix", () => {
+  assert.equal(truncateToolOutput("short"), "short");
+  assert.equal(truncateToolOutput("aaaaa", 5), "aaaaa", "text exactly at the cap is unchanged");
+  assert.equal(truncateToolOutput("x".repeat(20), 5), "xxxxx\n\n[truncated 15 chars]");
+  assert.equal(truncateToolOutput(null), "");
+  assert.equal(truncateToolOutput(undefined), "");
+});
+
+test("numberEnv parses a numeric env var and falls back otherwise", () => {
+  const name = "RT_TEST_NUMBER_ENV";
+  try {
+    delete process.env[name];
+    assert.equal(numberEnv(name, 7), 7, "fallback when unset");
+    process.env[name] = "42";
+    assert.equal(numberEnv(name, 7), 42);
+    process.env[name] = "not-a-number";
+    assert.equal(numberEnv(name, 7), 7, "fallback when non-numeric");
+  } finally {
+    delete process.env[name];
+  }
 });
 
 // --- realtime-audio.js ---
