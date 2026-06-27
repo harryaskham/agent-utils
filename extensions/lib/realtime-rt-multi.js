@@ -53,3 +53,62 @@ export function buildHearAndRespondEvents(pcmBuffer, { chunkBytes = DEFAULT_AUDI
   events.push(buildResponseCreateEvent(responseObj));
   return events;
 }
+
+// Realtime event types that carry a participant's OUTPUT (the GA and beta names).
+export const AUDIO_DELTA_TYPES = new Set(["response.audio.delta", "response.output_audio.delta"]);
+export const TRANSCRIPT_DELTA_TYPES = new Set(["response.audio_transcript.delta", "response.output_audio_transcript.delta"]);
+export const RESPONSE_DONE_TYPES = new Set(["response.done", "response.completed"]);
+
+/// Accumulates one realtime response's OUTPUT audio (PCM) and transcript from the
+/// session event stream — the complement to buildAudioInjectionEvents. In the
+/// audio-native /rt round we collect speaker A's output with this, then feed its
+/// `.pcm()` into the next session via buildHearAndRespondEvents and add `.text()`
+/// to context. Mirrors the single-session collection in realtime-agent.js
+/// (Buffer.from(delta, "base64") chunks + Buffer.concat). Pure over its inputs;
+/// `decode` is injectable for tests.
+export class RtOutputCollector {
+  constructor({ decode } = {}) {
+    this.decode = typeof decode === "function" ? decode : (d) => Buffer.from(String(d ?? ""), "base64");
+    this.reset();
+  }
+
+  /// Offer one realtime event. Returns true if it was an audio/transcript/done
+  /// event this collector consumed, false otherwise.
+  accept(event) {
+    const type = event?.type;
+    if (!type) return false;
+    if (AUDIO_DELTA_TYPES.has(type)) {
+      if (event.delta) {
+        const buf = this.decode(event.delta);
+        if (buf && buf.length) { this.chunks.push(buf); this.bytes += buf.length; }
+      }
+      return true;
+    }
+    if (TRANSCRIPT_DELTA_TYPES.has(type)) {
+      this.transcript += String(event.delta ?? event.transcript ?? "");
+      return true;
+    }
+    if (RESPONSE_DONE_TYPES.has(type)) {
+      this.done = true;
+      return true;
+    }
+    return false;
+  }
+
+  /// The concatenated PCM output so far (empty buffer if none).
+  pcm() {
+    return this.bytes ? Buffer.concat(this.chunks, this.bytes) : Buffer.alloc(0);
+  }
+
+  /// The trimmed transcript text so far.
+  text() {
+    return this.transcript.trim();
+  }
+
+  reset() {
+    this.chunks = [];
+    this.bytes = 0;
+    this.transcript = "";
+    this.done = false;
+  }
+}

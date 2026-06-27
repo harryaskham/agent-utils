@@ -61,3 +61,46 @@ test("buildHearAndRespondEvents chains append+commit+response.create", () => {
   // even with no audio, it still triggers a response (the agent responds to context)
   assert.deepEqual(buildHearAndRespondEvents(Buffer.alloc(0)), [{ type: "response.create" }]);
 });
+
+import { RtOutputCollector, AUDIO_DELTA_TYPES, RESPONSE_DONE_TYPES } from "../extensions/lib/realtime-rt-multi.js";
+
+test("RtOutputCollector accumulates base64 audio deltas (GA + beta event names) into PCM", () => {
+  const c = new RtOutputCollector();
+  assert.equal(c.accept({ type: "response.audio.delta", delta: Buffer.from([1, 2]).toString("base64") }), true);
+  assert.equal(c.accept({ type: "response.output_audio.delta", delta: Buffer.from([3, 4]).toString("base64") }), true);
+  assert.deepEqual(c.pcm(), Buffer.from([1, 2, 3, 4]));
+});
+
+test("RtOutputCollector accumulates transcript deltas and trims", () => {
+  const c = new RtOutputCollector();
+  c.accept({ type: "response.audio_transcript.delta", delta: "Hello " });
+  c.accept({ type: "response.output_audio_transcript.delta", delta: "world  " });
+  assert.equal(c.text(), "Hello world");
+});
+
+test("RtOutputCollector marks done and ignores unrelated events", () => {
+  const c = new RtOutputCollector();
+  assert.equal(c.accept({ type: "response.created" }), false);
+  assert.equal(c.done, false);
+  assert.equal(c.accept({ type: "response.done" }), true);
+  assert.equal(c.done, true);
+});
+
+test("RtOutputCollector pcm() is an empty buffer with no audio, and reset clears", () => {
+  const c = new RtOutputCollector();
+  assert.equal(c.pcm().length, 0);
+  c.accept({ type: "response.audio.delta", delta: Buffer.from([9]).toString("base64") });
+  c.accept({ type: "response.audio_transcript.delta", delta: "x" });
+  c.reset();
+  assert.equal(c.pcm().length, 0);
+  assert.equal(c.text(), "");
+  assert.equal(c.done, false);
+});
+
+test("RtOutputCollector uses an injectable decode and exposes the event-type sets", () => {
+  const c = new RtOutputCollector({ decode: () => Buffer.from([7, 7, 7]) });
+  c.accept({ type: "response.audio.delta", delta: "ignored-by-fake-decode" });
+  assert.deepEqual(c.pcm(), Buffer.from([7, 7, 7]));
+  assert.ok(AUDIO_DELTA_TYPES.has("response.output_audio.delta"));
+  assert.ok(RESPONSE_DONE_TYPES.has("response.done"));
+});
