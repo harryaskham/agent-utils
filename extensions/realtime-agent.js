@@ -67,7 +67,7 @@
 //   PI_RT_AZURE_ENDPOINT                          azure cognitive services endpoint
 //   PI_RT_AZURE_API_KEY                           azure key
 //   PI_RT_AZURE_DEPLOYMENT                        deployment name (defaults to model)
-//   PI_RT_AZURE_API_VERSION                       default 2025-04-01-preview
+//   PI_RT_AZURE_API_VERSION                       default 2025-04-01-preview; set "none" (or empty/"ga") to omit it from the URL for GA-only proxies
 //   PI_RT_AZURE_PROTOCOL=v1|beta                  default v1
 //   PI_RT_REASONING_EFFORT=off|minimal|low|medium|high
 //   PI_RT_SEND_REASONING=1                        explicitly send reasoning.effort through proxy

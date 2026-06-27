@@ -102,6 +102,22 @@ test("azureRealtimeUrl supports v1 and beta protocols", () => {
   );
 });
 
+test("azureRealtimeUrl omits api-version when blank/none/ga (GA-only proxies)", () => {
+  // A LiteLLM front for a GA-only realtime model rejects the dated api-version.
+  for (const ver of ["", "  ", "none", "GA", null, undefined]) {
+    assert.equal(
+      azureRealtimeUrl("https://r.azure.test/", "dep", ver, "v1"),
+      "wss://r.azure.test/openai/v1/realtime?model=dep",
+      `v1 omits api-version for ${JSON.stringify(ver)}`,
+    );
+    assert.equal(
+      azureRealtimeUrl("https://r.azure.test", "dep", ver, "beta"),
+      "wss://r.azure.test/openai/realtime?deployment=dep",
+      `beta omits api-version for ${JSON.stringify(ver)}`,
+    );
+  }
+});
+
 test("parseBooleanValue handles booleans, tokens, fallback, and throws", () => {
   assert.equal(parseBooleanValue(undefined, true), true);
   assert.equal(parseBooleanValue("", false), false);

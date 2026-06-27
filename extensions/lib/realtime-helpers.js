@@ -32,10 +32,19 @@ export function realtimeUrl(baseUrl, model) {
 
 export function azureRealtimeUrl(endpoint, deployment, apiVersion, protocol = "v1") {
   const base = String(endpoint || "").replace(/\/+$/, "").replace(/^http/, "ws");
+  // Omit api-version entirely when it is blank / "none" / "ga" — some proxies
+  // (e.g. a LiteLLM front for a GA-only realtime model) reject the dated
+  // api-version and require the unversioned GA endpoint (bd-drop-api-version).
+  const ver = String(apiVersion ?? "").trim();
+  const omitVersion = ver === "" || ver.toLowerCase() === "none" || ver.toLowerCase() === "ga";
   if (protocol === "beta") {
-    return `${base}/openai/realtime?api-version=${encodeURIComponent(apiVersion)}&deployment=${encodeURIComponent(deployment)}`;
+    return omitVersion
+      ? `${base}/openai/realtime?deployment=${encodeURIComponent(deployment)}`
+      : `${base}/openai/realtime?api-version=${encodeURIComponent(ver)}&deployment=${encodeURIComponent(deployment)}`;
   }
-  return `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}&api-version=${encodeURIComponent(apiVersion)}`;
+  return omitVersion
+    ? `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}`
+    : `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}&api-version=${encodeURIComponent(ver)}`;
 }
 
 export function parseBooleanValue(value, fallback = false) {
