@@ -196,3 +196,33 @@ test("sanitizeForSpeech leaves clean prose untouched and handles empties", () =>
   assert.equal(sanitizeForSpeech(""), "");
   assert.equal(sanitizeForSpeech(null), "");
 });
+
+import { formatCascadeTranscript } from "../extensions/lib/realtime-cascade.js";
+
+test("formatCascadeTranscript renders the last N entries as compact name: text lines", () => {
+  const entries = [
+    { name: "you", text: "hello everyone" },
+    { name: "main", text: "Hi var and cedar" },
+    { name: "var", text: "Hey  main\nand cedar" },
+  ];
+  assert.deepEqual(formatCascadeTranscript(entries), [
+    "  you: hello everyone",
+    "  main: Hi var and cedar",
+    "  var: Hey main and cedar",
+  ]);
+});
+
+test("formatCascadeTranscript caps to max entries and truncates long text", () => {
+  const entries = Array.from({ length: 10 }, (_, i) => ({ name: `p${i}`, text: `line ${i}` }));
+  const lines = formatCascadeTranscript(entries, { max: 3 });
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], "  p7: line 7");
+  const long = formatCascadeTranscript([{ name: "x", text: "a".repeat(100) }], { width: 10 });
+  assert.equal(long[0].length, "  x: ".length + 10);
+  assert.ok(long[0].endsWith("…"));
+});
+
+test("formatCascadeTranscript handles empties", () => {
+  assert.deepEqual(formatCascadeTranscript([]), []);
+  assert.deepEqual(formatCascadeTranscript(null), []);
+});

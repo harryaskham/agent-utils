@@ -150,6 +150,7 @@ import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
 import { transcribePcmBuffer, resolveBatchSttModel } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
+import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
 import {
   CascadeController,
   makeCascadeRunTurn,
@@ -2370,8 +2371,18 @@ export default function realtimeAgentExtension(pi) {
   // logic lives in the tested realtime-cascade* libs.
   const cascade = {
     controller: null, roster: null, active: false, capture: null, vadController: null,
-    cfg: null, model: null, lastError: null, lastText: null, speaking: null,
+    cfg: null, model: null, lastError: null, lastText: null, speaking: null, transcript: [],
   };
+
+  // Push one line onto the rolling cascade transcript (human or agent), capped so
+  // the widget stays small. Visible so the operator can READ the round even when
+  // the audio is unclear or muted.
+  function cascadePushTranscript(name, text) {
+    const body = String(text ?? "").trim();
+    if (!body) return;
+    cascade.transcript.push({ name: name || "?", text: body });
+    if (cascade.transcript.length > 24) cascade.transcript = cascade.transcript.slice(-24);
+  }
 
   function cascadeStatusLine() {
     if (!cascade.controller) return "cascade: idle (use /cascade start n=2 or /cascade say <text>)";
@@ -2384,7 +2395,7 @@ export default function realtimeAgentExtension(pi) {
     return parts.join(" | ");
   }
   function cascadeWidget(ctx) {
-    try { ctx.ui.setWidget("realtime-status", [cascadeStatusLine()], { placement: "belowEditor" }); } catch {}
+    try { ctx.ui.setWidget("realtime-status", [cascadeStatusLine(), ...formatCascadeTranscript(cascade.transcript)], { placement: "belowEditor" }); } catch {}
   }
 
   function ensureCascadeController(ctx, rawArgs) {
@@ -2402,7 +2413,7 @@ export default function realtimeAgentExtension(pi) {
       runTurn,
       speak,
       maxHistory: Number(values.maxhistory || values.max_history) || Number(env("PI_CASCADE_MAX_HISTORY")) || 48,
-      onTurn: ({ participant }) => { cascade.speaking = participant?.name || null; cascadeWidget(ctx); },
+      onTurn: ({ participant, text }) => { if (text) cascadePushTranscript(participant?.name, text); cascade.speaking = participant?.name || null; cascadeWidget(ctx); },
     });
     cascade.roster = roster;
     cascade.lastError = null;
@@ -2435,6 +2446,7 @@ export default function realtimeAgentExtension(pi) {
       insertPartial: (text) => { try { ctx.ui.setWidget("realtime-status", [`cascade ~ ${text}`], { placement: "belowEditor" }); } catch {} },
       sendTurn: (text) => {
         cascade.lastText = text;
+        cascadePushTranscript("you", text);
         cascadeWidget(ctx);
         Promise.resolve(cascade.controller?.handleHumanUtterance(text))
           .catch((e) => { cascade.lastError = e?.message || String(e); ctx.ui.notify(`cascade turn failed: ${cascade.lastError}`, "warning"); })
@@ -2876,14 +2888,14 @@ export default function realtimeAgentExtension(pi) {
           const text = raw.replace(/^say\s*/i, "").trim();
           if (!cascade.controller) ensureCascadeController(ctx, "");
           if (!text) { ctx.ui.notify("Usage: /cascade say <text>", "warning"); return; }
-          cascade.lastText = text; cascadeWidget(ctx);
+          cascade.lastText = text; cascadePushTranscript("you", text); cascadeWidget(ctx);
           try { await cascade.controller.handleHumanUtterance(text); }
           catch (e) { ctx.ui.notify(`cascade say failed: ${e.message}`, "error"); }
           finally { cascade.speaking = null; cascadeWidget(ctx); }
           return;
         }
         if (verb === "stop") { const was = stopCascade(); ctx.ui.notify(was ? "cascade mic stopped." : "cascade was not listening.", "info"); cascadeWidget(ctx); return; }
-        if (verb === "reset") { cascade.controller?.reset(); ctx.ui.notify("cascade conversation reset.", "info"); cascadeWidget(ctx); return; }
+        if (verb === "reset") { cascade.controller?.reset(); cascade.transcript = []; ctx.ui.notify("cascade conversation reset.", "info"); cascadeWidget(ctx); return; }
         ctx.ui.notify("Unsupported /cascade verb. Use start, say, stop, reset, or status.", "warning");
       } catch (e) {
         ctx.ui.notify(`/cascade failed: ${e.message || String(e)}`, "error");

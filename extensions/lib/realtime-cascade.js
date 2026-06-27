@@ -146,3 +146,16 @@ export function sanitizeForSpeech(text) {
   s = s.replace(/\s+/g, " ").trim();
   return s;
 }
+
+/// Format a rolling cascade transcript into compact widget lines: the last `max`
+/// entries as "  name: text" with each line truncated to `width`. Pure.
+export function formatCascadeTranscript(entries, { max = 6, width = 64 } = {}) {
+  const list = (Array.isArray(entries) ? entries : []).slice(-Math.max(1, max | 0));
+  return list.map((e) => {
+    const name = String(e?.name ?? "?");
+    const text = String(e?.text ?? "").replace(/\s+/g, " ").trim();
+    const w = Math.max(8, width | 0);
+    const shown = text.length > w ? `${text.slice(0, w - 1)}…` : text;
+    return `  ${name}: ${shown}`;
+  });
+}
