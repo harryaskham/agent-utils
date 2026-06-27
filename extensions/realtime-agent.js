@@ -143,6 +143,8 @@ import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-c
 export { buildServerVadTurnDetection };
 import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
+import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
+import { transcribePcmBuffer, DEFAULT_STT_BATCH_MODEL } from "./lib/realtime-stt-batch.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> RealtimeStateController) is preserved after extraction.
@@ -199,7 +201,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 summary=true fork=true chime=false start=vad. Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 summary=true fork=true chime=false start=vad. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_*. Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -2229,6 +2231,87 @@ export default function realtimeAgentExtension(pi) {
     return true;
   }
 
+  // --- /rt stt local-vad: self-contained local-VAD transcription (bd-9399e7) ---
+  // Opt-in and ISOLATED from the OpenAI-WebSocket session: captures local PCM,
+  // segments it with a VadSegmenter, and runs a batch `stt` over each segment,
+  // inserting provisional partials and sending committed turns to Pi. Built on
+  // the unit-tested LocalVadController + transcribePcmBuffer; validated
+  // end-to-end by the operator on mic/Pulse.
+  const localVad = { active: false, capture: null, controller: null, cfg: null, lastError: null, lastTranscript: null, startedAt: 0 };
+
+  function localVadStatusLine() {
+    if (!localVad.active && !localVad.lastTranscript && !localVad.lastError) return "local-vad: idle";
+    const parts = [`local-vad: ${localVad.active ? "listening" : "idle"}`];
+    if (localVad.cfg) parts.push(describeLocalVadConfig(localVad.cfg).replace(/^local-vad: /, ""));
+    if (localVad.lastTranscript) parts.push(`last="${String(localVad.lastTranscript).slice(0, 40)}"`);
+    if (localVad.lastError) parts.push(`err=${String(localVad.lastError).slice(0, 60)}`);
+    return parts.join(" | ");
+  }
+
+  function stopLocalVad({ flush = true } = {}) {
+    const wasActive = localVad.active;
+    localVad.active = false;
+    const ctrl = localVad.controller;
+    const cap = localVad.capture;
+    localVad.controller = null;
+    localVad.capture = null;
+    if (cap) { try { cap.kill?.(); } catch {} }
+    if (flush && ctrl) { ctrl.flush().catch((e) => { localVad.lastError = e?.message || String(e); }); }
+    return wasActive;
+  }
+
+  async function startLocalVad(ctx) {
+    // Free the mic: stop any active WSS realtime session and any prior local-vad.
+    try { await controls.disable(ctx, { restoreModel: true }); } catch {}
+    stopLocalVad({ flush: false });
+
+    const cfg = parseLocalVadConfig();
+    const model = config.transcriptionModel || DEFAULT_STT_BATCH_MODEL;
+    Object.assign(localVad, { cfg, lastError: null, lastTranscript: null, startedAt: Date.now() });
+
+    const controller = new LocalVadController({
+      config: cfg,
+      transcribe: (buf) => transcribePcmBuffer(buf, { model }),
+      insertPartial: (text) => {
+        try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${text}`], { placement: "belowEditor" }); } catch {}
+      },
+      sendTurn: (text) => {
+        localVad.lastTranscript = text;
+        try { pi.sendUserMessage(text, { deliverAs: "followUp", streamingBehavior: "followUp" }); }
+        catch (e) { localVad.lastError = `sendUserMessage failed: ${e.message}`; ctx.ui.notify(localVad.lastError, "warning"); }
+        try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
+      },
+      onError: (e) => {
+        localVad.lastError = e?.message || String(e);
+        if (config.debug) ctx.ui.notify(`local-vad: ${localVad.lastError}`, "warning");
+      },
+    });
+
+    const cmd = config.recordCommand || defaultRecordCommand();
+    let capture;
+    try { capture = runShellStream(cmd); }
+    catch (e) { ctx.ui.notify(`local-vad capture failed: ${e.message}`, "error"); return false; }
+
+    Object.assign(localVad, { controller, capture, active: true });
+
+    capture.stdout?.on("data", (chunk) => {
+      if (!localVad.active) return;
+      controller.pushFrame(chunk).catch((e) => { localVad.lastError = e?.message || String(e); });
+    });
+    capture.stderr?.on("data", (d) => { const s = String(d).trim(); if (s) localVad.lastError = truncateDiagnostic(s); });
+    capture.on?.("exit", (code, signal) => {
+      if (localVad.capture !== capture) return;
+      localVad.active = false;
+      localVad.capture = null;
+      if ((code || signal) && !localVad.lastError) localVad.lastError = `record exited ${code ?? "?"}${signal ? `/${signal}` : ""}`;
+      try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
+    });
+
+    ctx.ui.notify(`local-vad listening (${describeLocalVadConfig(cfg)}); /rt stt stop to end.`, "info");
+    try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
+    return true;
+  }
+
   function showRtUsage(ctx) {
     ctx.ui.notify(controls.usage(), "info");
   }
@@ -2383,22 +2466,24 @@ export default function realtimeAgentExtension(pi) {
     if (["help", "usage", "?"].includes(verb)) { showRtUsage(ctx); return; }
     if (["vad", "ptt", "nolisten"].includes(verb)) return startRealtime(ctx, { listenMode: verb });
     if (verb === "stt" && ["stop", "off", "cancel"].includes(value)) {
+      const hadLocalVad = stopLocalVad();
       await controls.disable(ctx, { restoreModel: true });
-      ctx.ui.notify("Realtime STT stopped", "info");
+      ctx.ui.notify(hadLocalVad ? "local-vad stopped" : "Realtime STT stopped", "info");
       return;
     }
     if (verb === "stt" && (!value || ["start", "vad", "ptt"].includes(value))) {
       return startRealtime(ctx, { sttOnly: true, listenMode: value === "ptt" ? "ptt" : "vad" });
     }
-    if (verb === "stt") { ctx.ui.notify("Unsupported realtime STT mode. Use /rt stt [vad|ptt|stop].", "warning"); return; }
+    if (verb === "stt" && value === "local-vad") { await startLocalVad(ctx); return; }
+    if (verb === "stt") { ctx.ui.notify("Unsupported realtime STT mode. Use /rt stt [vad|ptt|local-vad|stop].", "warning"); return; }
 
     if (verb === "start" || verb === "on") {
       const mode = value || "vad";
       if (!REALTIME_START_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime start mode. Use /rt start [vad|ptt|nolisten].", "warning"); return; }
       return startRealtime(ctx, { listenMode: mode });
     }
-    if (verb === "stop" || verb === "off") { await controls.disable(ctx, { restoreModel: true }); ctx.ui.notify("Realtime off", "info"); return; }
-    if (verb === "doctor") { const lines = controls.diagnostics(); ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" }); ctx.ui.notify(lines.join("\n"), "info"); return; }
+    if (verb === "stop" || verb === "off") { stopLocalVad(); await controls.disable(ctx, { restoreModel: true }); ctx.ui.notify("Realtime off", "info"); return; }
+    if (verb === "doctor") { const lines = controls.diagnostics(); if (localVad.active || localVad.lastError || localVad.lastTranscript) lines.push(localVadStatusLine()); ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" }); ctx.ui.notify(lines.join("\n"), "info"); return; }
     if (verb === "status") {
       const mode = value || "compact";
       if (!REALTIME_STATUS_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime status mode. Use /rt status [compact|full].", "warning"); return; }
