@@ -6,6 +6,7 @@ import {
   CascadeController,
   makeCascadeRunTurn,
   makeCascadeSpeak,
+  cascadeRosterFromArgs,
 } from "../extensions/lib/realtime-cascade-session.js";
 
 function roster() {
@@ -130,4 +131,32 @@ test("makeCascadeSpeak skips empty text and empty pcm without playing", async ()
   await speak({ name: "x", voice: "v" }, "   ");   // empty text: no synth, no play
   await speak({ name: "x", voice: "v" }, "real");  // empty pcm: synth but no play
   assert.equal(plays, 0);
+});
+
+// ---------------------------------------------------------------------------
+// cascadeRosterFromArgs
+// ---------------------------------------------------------------------------
+
+test("cascadeRosterFromArgs maps n/participants/order and main overrides onto a cascade roster", () => {
+  const { roster, values } = cascadeRosterFromArgs("n=3 participants=var,cedar order=fixed voice=embedding:harry model=gpt-x", { env: {} });
+  assert.equal(roster.mode, MODE_CASCADE);
+  assert.equal(roster.order, "fixed");
+  assert.equal(roster.participants.length, 3);
+  // main override applied
+  assert.equal(roster.participants[0].voice, "embedding:harry");
+  assert.equal(roster.participants[0].model, "gpt-x");
+  assert.deepEqual(roster.participants.slice(1).map((p) => p.name), ["var", "cedar"]);
+  assert.equal(values.participants, "var,cedar");
+});
+
+test("cascadeRosterFromArgs defaults to a single cascade participant on empty args", () => {
+  const { roster } = cascadeRosterFromArgs("", { env: {} });
+  assert.equal(roster.mode, MODE_CASCADE);
+  assert.equal(roster.participants.length, 1);
+});
+
+test("cascadeRosterFromArgs threads a per-main base_url and tts override", () => {
+  const { roster } = cascadeRosterFromArgs("participants=var base_url=http://p tts=azure/speech/azure-tts", { env: {} });
+  assert.equal(roster.participants[0].baseUrl, "http://p");
+  assert.equal(roster.participants[0].ttsModel, "azure/speech/azure-tts");
 });

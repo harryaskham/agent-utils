@@ -11,9 +11,34 @@
 // unit-tested with injected deps.
 
 import { runCascadeRound } from "./realtime-cascade.js";
-import { DEFAULT_ORDER } from "./realtime-participants.js";
+import { DEFAULT_ORDER, MODE_CASCADE, buildParticipantRoster } from "./realtime-participants.js";
 import { runChatCompletionTurn } from "./realtime-cascade-llm.js";
 import { synthesizeToPcm } from "./realtime-tts-batch.js";
+import { parseEnvStyleArgs } from "./env-args.js";
+
+/// Build a cascade roster from a raw `/cascade` argument string. Maps the
+/// env-style args (n=, participants=, order=, plus main overrides voice/model/
+/// base_url/tts/instructions/name) onto buildParticipantRoster. Pure given an
+/// injected `parseArgs` / `env`. Returns { roster, values }.
+export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = parseEnvStyleArgs } = {}) {
+  const { values } = parseArgs(rawArgs || "");
+  const roster = buildParticipantRoster({
+    mode: MODE_CASCADE,
+    n: values.n,
+    participants: values.participants ?? values.peers,
+    order: values.order || DEFAULT_ORDER,
+    main: {
+      name: values.name,
+      voice: values.voice,
+      model: values.model,
+      baseUrl: values.base_url ?? values.baseurl ?? values.openai_base_url,
+      ttsModel: values.tts ?? values.tts_model ?? values.ttsmodel,
+      instructions: values.instructions ?? values.persona,
+    },
+    env,
+  });
+  return { roster, values };
+}
 
 export class CascadeController {
   constructor({ roster = [], order = DEFAULT_ORDER, runTurn, speak, onTurn, humanLabel, rng } = {}) {

@@ -29,7 +29,9 @@ export function defaultCascadeSystem(participant, roster = []) {
   return (
     `You are ${participant?.name || "an assistant"}, one voice in a spoken group chat${room}. ` +
     `Reply briefly and conversationally as ${participant?.name || "yourself"}; your reply is spoken aloud, ` +
-    `so avoid lists, code, or URLs. Address the others by name when it helps the conversation flow.`
+    `so use plain spoken sentences only — no markdown, asterisks, emoji, lists, code, or URLs. ` +
+    `Stay in character as ${participant?.name || "yourself"} and do not mention being an AI assistant; ` +
+    `address the others by name when it helps the conversation flow.`
   );
 }
 

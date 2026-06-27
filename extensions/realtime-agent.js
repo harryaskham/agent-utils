@@ -145,6 +145,13 @@ import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
 import { transcribePcmBuffer, resolveBatchSttModel } from "./lib/realtime-stt-batch.js";
+import { describeRoster } from "./lib/realtime-participants.js";
+import {
+  CascadeController,
+  makeCascadeRunTurn,
+  makeCascadeSpeak,
+  cascadeRosterFromArgs,
+} from "./lib/realtime-cascade-session.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> RealtimeStateController) is preserved after extraction.
@@ -2332,6 +2339,103 @@ export default function realtimeAgentExtension(pi) {
     return true;
   }
 
+  // ---- Cascade group chat (bd-7c6790) -------------------------------------
+  // A self-contained multi-agent voice room: the human speaks (mic -> stt), then
+  // each participant takes one turn in arbitrary order, hearing the human and
+  // everyone who already spoke, and answers through its own tts voice. Reuses the
+  // local-vad mic machinery for input and playPcmBuffer for output; the round
+  // logic lives in the tested realtime-cascade* libs.
+  const cascade = {
+    controller: null, roster: null, active: false, capture: null, vadController: null,
+    cfg: null, model: null, lastError: null, lastText: null, speaking: null,
+  };
+
+  function cascadeStatusLine() {
+    if (!cascade.controller) return "cascade: idle (use /cascade start n=2 or /cascade say <text>)";
+    const state = cascade.active ? "listening" : (cascade.controller.active ? "speaking" : "ready");
+    const parts = [`cascade: ${state}`];
+    if (cascade.roster) parts.push(describeRoster(cascade.roster));
+    if (cascade.speaking) parts.push(`now: ${cascade.speaking}`);
+    if (cascade.lastText) parts.push(`heard="${String(cascade.lastText).slice(0, 32)}"`);
+    if (cascade.lastError) parts.push(`err=${String(cascade.lastError).slice(0, 60)}`);
+    return parts.join(" | ");
+  }
+  function cascadeWidget(ctx) {
+    try { ctx.ui.setWidget("realtime-status", [cascadeStatusLine()], { placement: "belowEditor" }); } catch {}
+  }
+
+  function ensureCascadeController(ctx, rawArgs) {
+    const { roster, values } = cascadeRosterFromArgs(rawArgs, { env: process.env });
+    const defaultModel = values.model || env("PI_CASCADE_MODEL", "OPENAI_CHAT_MODEL", "MAPI_MODEL_ID") || "gpt-5-mini";
+    const defaultBaseUrl = values.base_url || values.baseurl || env("PI_RT_BASE_URL", "OPENAI_BASE_URL");
+    const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl });
+    const playbackCommand = config.playbackCommand || defaultPlaybackCommand();
+    const speak = makeCascadeSpeak({
+      playImpl: (pcm) => playPcmBuffer(pcm, playbackCommand, (m, l) => ctx.ui.notify(m, l), config.debug),
+    });
+    cascade.controller = new CascadeController({
+      roster: roster.participants,
+      order: roster.order,
+      runTurn,
+      speak,
+      onTurn: ({ participant }) => { cascade.speaking = participant?.name || null; cascadeWidget(ctx); },
+    });
+    cascade.roster = roster;
+    cascade.lastError = null;
+    return roster;
+  }
+
+  function stopCascade() {
+    const wasActive = cascade.active;
+    cascade.active = false;
+    const cap = cascade.capture;
+    const ctrl = cascade.vadController;
+    cascade.capture = null;
+    cascade.vadController = null;
+    if (cap) { try { cap.kill?.(); } catch {} }
+    if (ctrl) { try { ctrl.flush?.().catch?.(() => {}); } catch {} }
+    return wasActive;
+  }
+
+  async function startCascadeMic(ctx) {
+    // Free the mic: stop any WSS realtime, prior local-vad, and prior cascade mic.
+    try { await controls.disable(ctx, { restoreModel: true }); } catch {}
+    stopLocalVad({ flush: false });
+    stopCascade();
+    const cfg = parseLocalVadConfig();
+    const model = resolveBatchSttModel();
+    cascade.cfg = cfg; cascade.model = model; cascade.lastError = null;
+    const controller = new LocalVadController({
+      config: cfg,
+      transcribe: (buf) => localVadTranscribe(buf, { model }),
+      insertPartial: (text) => { try { ctx.ui.setWidget("realtime-status", [`cascade ~ ${text}`], { placement: "belowEditor" }); } catch {} },
+      sendTurn: (text) => {
+        cascade.lastText = text;
+        cascadeWidget(ctx);
+        Promise.resolve(cascade.controller?.handleHumanUtterance(text))
+          .catch((e) => { cascade.lastError = e?.message || String(e); ctx.ui.notify(`cascade turn failed: ${cascade.lastError}`, "warning"); })
+          .finally(() => { cascade.speaking = null; cascadeWidget(ctx); });
+      },
+      onError: (e) => { cascade.lastError = e?.message || String(e); ctx.ui.notify(`cascade transcription failed: ${cascade.lastError}. Check /rt doctor.`, "warning"); },
+    });
+    const cmd = config.recordCommand || defaultRecordCommand();
+    let capture;
+    try { capture = localVadRunShellStream(cmd); }
+    catch (e) { ctx.ui.notify(`cascade capture failed: ${e.message}`, "error"); return false; }
+    cascade.vadController = controller; cascade.capture = capture; cascade.active = true;
+    capture.stdout?.on("data", (chunk) => { if (!cascade.active) return; controller.pushFrame(chunk).catch((e) => { cascade.lastError = e?.message || String(e); }); });
+    capture.stderr?.on("data", (d) => { const s = String(d).trim(); if (s) cascade.lastError = truncateDiagnostic(s); });
+    capture.on?.("exit", (code, signal) => {
+      if (cascade.capture !== capture) return;
+      cascade.active = false; cascade.capture = null;
+      if ((code || signal) && !cascade.lastError) cascade.lastError = `record exited ${code ?? "?"}${signal ? `/${signal}` : ""}`;
+      cascadeWidget(ctx);
+    });
+    ctx.ui.notify(`cascade listening (${describeRoster(cascade.roster)}); /cascade stop to end.`, "info");
+    cascadeWidget(ctx);
+    return true;
+  }
+
   function showRtUsage(ctx) {
     ctx.ui.notify(controls.usage(), "info");
   }
@@ -2719,6 +2823,44 @@ export default function realtimeAgentExtension(pi) {
       if (typeof cmd === "function") return cmd(`stt${suffix ? ` ${suffix}` : ""}`, ctx);
       // Fallback: same body inline.
       try { await controls.listen(ctx, "vad"); } catch (e) { ctx.ui.notify(`stt: ${e.message}`, "error"); }
+    },
+  });
+
+  pi.registerCommand("cascade", {
+    description: "Multi-agent voice group chat (STT in, per-agent TTS out, turn-taking). Usage: /cascade start [n=N participants=a,b order=fixed|random|round-robin voice= model= base_url=], /cascade say <text>, /cascade stop, /cascade reset, /cascade status.",
+    handler: async (args, ctx) => {
+      try {
+        const raw = String(args || "").trim();
+        const parsed = parseEnvStyleArgs(raw);
+        const verb = (parsed.positionals[0] || (Object.keys(parsed.values).length ? "start" : "status")).toLowerCase();
+        if (verb === "status") { ctx.ui.notify(cascadeStatusLine(), "info"); cascadeWidget(ctx); return; }
+        if (verb === "start") {
+          // The leading "start" positional is ignored by cascadeRosterFromArgs (it
+          // only reads key=value), so the full arg string is safe to pass.
+          ensureCascadeController(ctx, raw);
+          ctx.ui.notify(`cascade roster: ${describeRoster(cascade.roster)}`, "info");
+          if (cascade.roster.participants.length < 2) {
+            ctx.ui.notify("cascade has only one participant; add peers with n=2 or participants=var,cedar.", "warning");
+          }
+          await startCascadeMic(ctx);
+          return;
+        }
+        if (verb === "say") {
+          const text = raw.replace(/^say\s*/i, "").trim();
+          if (!cascade.controller) ensureCascadeController(ctx, "");
+          if (!text) { ctx.ui.notify("Usage: /cascade say <text>", "warning"); return; }
+          cascade.lastText = text; cascadeWidget(ctx);
+          try { await cascade.controller.handleHumanUtterance(text); }
+          catch (e) { ctx.ui.notify(`cascade say failed: ${e.message}`, "error"); }
+          finally { cascade.speaking = null; cascadeWidget(ctx); }
+          return;
+        }
+        if (verb === "stop") { const was = stopCascade(); ctx.ui.notify(was ? "cascade mic stopped." : "cascade was not listening.", "info"); cascadeWidget(ctx); return; }
+        if (verb === "reset") { cascade.controller?.reset(); ctx.ui.notify("cascade conversation reset.", "info"); cascadeWidget(ctx); return; }
+        ctx.ui.notify("Unsupported /cascade verb. Use start, say, stop, reset, or status.", "warning");
+      } catch (e) {
+        ctx.ui.notify(`/cascade failed: ${e.message || String(e)}`, "error");
+      }
     },
   });
 
