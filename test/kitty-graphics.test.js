@@ -485,6 +485,7 @@ test("auto transfer uses inline transmission over SSH, tmux, and native kitty te
 test("firecracker VM extension is packaged and exposes lifecycle, screen, and Tendril manifest controls", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/firecracker-vm.js", import.meta.url), "utf8");
+  const coreSource = await readFile(new URL("../extensions/lib/firecracker-vm-core.js", import.meta.url), "utf8");
 
   assert.ok(packageJson.pi.extensions.includes("./extensions/firecracker-vm.js"));
   assert.match(source, /name: "firecracker_vm_start"/);
@@ -493,7 +494,8 @@ test("firecracker VM extension is packaged and exposes lifecycle, screen, and Te
   assert.match(source, /name: "firecracker_vm_screen"/);
   assert.match(source, /name: "firecracker_vm_stop"/);
   assert.match(source, /tendril-firecracker-manifest\.json/);
-  assert.match(source, /serial-console-log/);
+  assert.match(source, /from "\.\/lib\/firecracker-vm-core\.js"/);
+  assert.match(coreSource, /serial-console-log/);
   assert.match(source, /firecracker --api-sock/);
   assert.match(source, /pi\.registerCommand\("firecracker-vms"/);
 });
