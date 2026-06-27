@@ -144,7 +144,7 @@ export { buildServerVadTurnDetection };
 import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
-import { transcribePcmBuffer, DEFAULT_STT_BATCH_MODEL } from "./lib/realtime-stt-batch.js";
+import { transcribePcmBuffer, resolveBatchSttModel } from "./lib/realtime-stt-batch.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> RealtimeStateController) is preserved after extraction.
@@ -2237,11 +2237,12 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
-  const localVad = { active: false, capture: null, controller: null, cfg: null, lastError: null, lastTranscript: null, startedAt: 0 };
+  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, startedAt: 0 };
 
   function localVadStatusLine() {
     if (!localVad.active && !localVad.lastTranscript && !localVad.lastError) return "local-vad: idle";
     const parts = [`local-vad: ${localVad.active ? "listening" : "idle"}`];
+    if (localVad.model) parts.push(`model=${localVad.model}`);
     if (localVad.cfg) parts.push(describeLocalVadConfig(localVad.cfg).replace(/^local-vad: /, ""));
     if (localVad.lastTranscript) parts.push(`last="${String(localVad.lastTranscript).slice(0, 40)}"`);
     if (localVad.lastError) parts.push(`err=${String(localVad.lastError).slice(0, 60)}`);
@@ -2266,8 +2267,8 @@ export default function realtimeAgentExtension(pi) {
     stopLocalVad({ flush: false });
 
     const cfg = parseLocalVadConfig();
-    const model = config.transcriptionModel || DEFAULT_STT_BATCH_MODEL;
-    Object.assign(localVad, { cfg, lastError: null, lastTranscript: null, startedAt: Date.now() });
+    const model = resolveBatchSttModel();
+    Object.assign(localVad, { cfg, model, lastError: null, lastTranscript: null, startedAt: Date.now() });
 
     const controller = new LocalVadController({
       config: cfg,

@@ -11,6 +11,15 @@ import { spawn } from "node:child_process";
 
 export const DEFAULT_STT_BATCH_MODEL = "mai-transcribe-1.5";
 
+/// Resolve the batch stt model for local-vad: PI_RT_LOCAL_VAD_MODEL or the batch
+/// default. Deliberately INDEPENDENT of the realtime-WebSocket transcription
+/// model (config.transcriptionModel), which may be a realtime-only model
+/// (e.g. gpt-realtime-whisper) that a batch REST `stt` call cannot use.
+export function resolveBatchSttModel(env = process.env) {
+  const raw = env.PI_RT_LOCAL_VAD_MODEL;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : DEFAULT_STT_BATCH_MODEL;
+}
+
 /// Build the `stt` argv for one-shot stdin transcription. Pure.
 export function buildSttBatchArgs({ model = DEFAULT_STT_BATCH_MODEL, language } = {}) {
   const args = ["--stdin", "--transcription-model", String(model)];

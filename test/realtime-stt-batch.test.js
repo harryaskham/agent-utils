@@ -5,8 +5,17 @@ import { EventEmitter } from "node:events";
 import {
   buildSttBatchArgs,
   transcribePcmBuffer,
+  resolveBatchSttModel,
   DEFAULT_STT_BATCH_MODEL,
 } from "../extensions/lib/realtime-stt-batch.js";
+
+test("resolveBatchSttModel reads PI_RT_LOCAL_VAD_MODEL or the batch default, decoupled from the realtime model (bd-84bbf7)", () => {
+  assert.equal(resolveBatchSttModel({}), DEFAULT_STT_BATCH_MODEL);
+  assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "custom-batch-1" }), "custom-batch-1");
+  assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "  spaced  " }), "spaced");
+  assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "   " }), DEFAULT_STT_BATCH_MODEL);
+  assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "" }), DEFAULT_STT_BATCH_MODEL);
+});
 
 test("buildSttBatchArgs builds stdin/model argv with optional language (bd-9399e7)", () => {
   assert.deepEqual(buildSttBatchArgs(), ["--stdin", "--transcription-model", DEFAULT_STT_BATCH_MODEL]);
