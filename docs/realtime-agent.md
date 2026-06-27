@@ -180,6 +180,37 @@ STT mode keeps the current Pi model instead of switching to the realtime model. 
 
 This is useful when you want voice input but still want another model/provider to answer.
 
+### Local-VAD speech-to-text (WebSocket-free)
+
+```text
+/rt stt local-vad
+# stop with:
+/rt stt stop
+```
+
+`local-vad` is an opt-in, WebSocket-free STT mode. Instead of streaming the
+microphone to the OpenAI realtime WebSocket, it captures audio locally, runs a
+local energy VAD to segment speech, and transcribes each segment with a one-shot
+batch `stt --stdin` call. It inserts a provisional partial after a short trailing
+silence and sends the whole turn into Pi as a user message after a longer silence.
+It is fully isolated from the WebSocket modes (`/rt stt [vad|ptt]`, `/rt start`),
+so enabling it never disturbs them.
+
+The batch transcription model is independent of the realtime `trans` model: it
+defaults to `mai-transcribe-1.5` and is overridden with `PI_RT_LOCAL_VAD_MODEL`
+(a realtime-only model such as `gpt-realtime-whisper` is not valid for the batch
+REST `stt` call). `/rt doctor` shows the active local-vad model and thresholds.
+
+Tuning knobs (all optional):
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `PI_RT_LOCAL_VAD_MODEL` | `mai-transcribe-1.5` | batch `stt` transcription model |
+| `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` | `0.012` | normalized RMS (0..1) at/above which a frame is speech |
+| `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` | `1000` | trailing silence (ms) that inserts a provisional partial |
+| `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS` | `3000` | trailing silence (ms) that finalizes/sends the turn |
+| `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS` | `200` | minimum speech (ms) before a turn can insert/commit |
+
 ### Replay the latest spoken response
 
 ```text
@@ -225,7 +256,7 @@ Unified `/rt` controls:
 /rt listen [vad|ptt|continuous]
                               start microphone capture using listen API modes
 /rt audio [on|off|toggle]      control audio output
-/rt stt [vad|ptt|stop]         speech-to-text into the current model, or stop STT mode
+/rt stt [vad|ptt|local-vad|stop]  speech-to-text into the current model (local-vad = WebSocket-free local capture + batch stt), or stop STT mode
 /rt widget [show|hide]         show or hide the realtime widget
 /rt status [compact|full]      compact or full status
 /rt doctor                     diagnostics
