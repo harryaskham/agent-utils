@@ -490,6 +490,12 @@ export PI_RT_AZURE_API_VERSION=2025-04-01-preview
 export PI_RT_AZURE_PROTOCOL=v1
 ```
 
+`PI_RT_AZURE_API_VERSION` defaults to `2025-04-01-preview`. Set it to **`none`**
+(or empty / `ga`) to omit `api-version` from the realtime URL entirely — required
+when the endpoint is a GA-only proxy (e.g. a LiteLLM front for a GA realtime model
+like `gpt-realtime-2`) that rejects the dated api-version with *"Model ... is only
+available on the GA API"*. Then reconnect realtime.
+
 Reasoning effort is only sent through the proxy when explicitly enabled, or in direct-Azure modes that support it:
 
 ```bash
