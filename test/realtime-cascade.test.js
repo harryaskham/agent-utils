@@ -1,0 +1,174 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { buildParticipantRoster, MODE_CASCADE, ORDER_FIXED } from "../extensions/lib/realtime-participants.js";
+import {
+  DEFAULT_HUMAN_LABEL,
+  defaultCascadeSystem,
+  buildCascadeTurnMessages,
+  runCascadeRound,
+} from "../extensions/lib/realtime-cascade.js";
+
+// ---------------------------------------------------------------------------
+// defaultCascadeSystem
+// ---------------------------------------------------------------------------
+
+test("defaultCascadeSystem names the participant and the other room members", () => {
+  const roster = [{ name: "Harry-bot" }, { name: "Var" }, { name: "Cedar" }];
+  const s = defaultCascadeSystem(roster[1], roster);
+  assert.match(s, /You are Var,/);
+  assert.match(s, /group chat with Harry-bot, Cedar/);
+  assert.match(s, /spoken aloud/);
+});
+
+test("defaultCascadeSystem handles a lone participant (no others)", () => {
+  const s = defaultCascadeSystem({ name: "Solo" }, [{ name: "Solo" }]);
+  assert.match(s, /You are Solo,/);
+  assert.doesNotMatch(s, /group chat with/);
+});
+
+// ---------------------------------------------------------------------------
+// buildCascadeTurnMessages
+// ---------------------------------------------------------------------------
+
+test("buildCascadeTurnMessages labels the human and other speakers as user, self as assistant", () => {
+  const roster = [{ name: "Var" }, { name: "Cedar" }];
+  const conversation = [
+    { speaker: "Human", text: "what's the weather like?" },
+    { speaker: "Var", text: "sunny here" },
+  ];
+  const msgs = buildCascadeTurnMessages({ participant: roster[1], conversation, roster });
+  assert.equal(msgs[0].role, "system");
+  assert.match(msgs[0].content, /You are Cedar,/);
+  assert.deepEqual(msgs[1], { role: "user", content: "Human: what's the weather like?" });
+  assert.deepEqual(msgs[2], { role: "user", content: "Var: sunny here" });
+});
+
+test("buildCascadeTurnMessages renders the participant's own prior turns as assistant", () => {
+  const roster = [{ name: "Var" }, { name: "Cedar" }];
+  const conversation = [
+    { speaker: "Human", text: "hi all" },
+    { speaker: "Cedar", text: "hello Human" },
+    { speaker: "Var", text: "hey Cedar" },
+  ];
+  const msgs = buildCascadeTurnMessages({ participant: roster[1], conversation, roster });
+  // Cedar's own line is assistant; Human + Var are labelled user
+  assert.deepEqual(msgs.slice(1), [
+    { role: "user", content: "Human: hi all" },
+    { role: "assistant", content: "hello Human" },
+    { role: "user", content: "Var: hey Cedar" },
+  ]);
+});
+
+test("buildCascadeTurnMessages appends participant instructions and an optional systemPrefix, and skips empty entries", () => {
+  const participant = { name: "Var", instructions: "Be witty." };
+  const msgs = buildCascadeTurnMessages({
+    participant,
+    roster: [participant],
+    conversation: [{ speaker: "Human", text: "" }, { speaker: "Human", text: "go" }],
+    systemPrefix: "SYSTEM-PREFIX.",
+  });
+  assert.match(msgs[0].content, /^SYSTEM-PREFIX\. /);
+  assert.match(msgs[0].content, /Be witty\.$/);
+  // empty human entry skipped; only the "go" survives
+  assert.equal(msgs.length, 2);
+  assert.deepEqual(msgs[1], { role: "user", content: "Human: go" });
+});
+
+// ---------------------------------------------------------------------------
+// runCascadeRound
+// ---------------------------------------------------------------------------
+
+function cascadeRoster() {
+  // main + 2 peers, fixed order for determinism
+  return buildParticipantRoster({ mode: MODE_CASCADE, participants: "var,cedar", main: { name: "main" }, env: {} }).participants;
+}
+
+test("runCascadeRound runs one turn per participant in order and accumulates the conversation", async () => {
+  const roster = cascadeRoster();
+  const seen = [];
+  const spoken = [];
+  const replies = { main: "main reply", var: "var reply", cedar: "cedar reply" };
+  const res = await runCascadeRound({
+    participants: roster,
+    humanText: "hello everyone",
+    order: ORDER_FIXED,
+    runTurn: (p, messages) => { seen.push({ name: p.name, messages }); return replies[p.id]; },
+    speak: (p, text) => { spoken.push({ name: p.name, text }); },
+  });
+  assert.deepEqual(res.order, [0, 1, 2]);
+  assert.deepEqual(res.turns.map((t) => t.name), ["main", "var", "cedar"]);
+  assert.deepEqual(res.turns.map((t) => t.text), ["main reply", "var reply", "cedar reply"]);
+  // conversation = human + 3 replies
+  assert.deepEqual(res.conversation.map((c) => c.text), [
+    "hello everyone", "main reply", "var reply", "cedar reply",
+  ]);
+  // speak called once per participant with the reply
+  assert.deepEqual(spoken, [
+    { name: "main", text: "main reply" },
+    { name: "var", text: "var reply" },
+    { name: "cedar", text: "cedar reply" },
+  ]);
+});
+
+test("runCascadeRound makes each agent hear the human and everyone who already spoke", async () => {
+  const roster = cascadeRoster();
+  const seen = {};
+  await runCascadeRound({
+    participants: roster,
+    humanText: "kick off",
+    order: ORDER_FIXED,
+    runTurn: (p, messages) => { seen[p.name] = messages; return `${p.name} says hi`; },
+  });
+  // the FIRST speaker (main) hears only the human
+  const mainUser = seen.main.filter((m) => m.role === "user").map((m) => m.content);
+  assert.deepEqual(mainUser, ["Human: kick off"]);
+  // the SECOND speaker (var) hears the human + main's reply (speaker-labelled)
+  const varUser = seen.var.filter((m) => m.role === "user").map((m) => m.content);
+  assert.deepEqual(varUser, ["Human: kick off", "main: main says hi"]);
+  // the THIRD speaker (cedar) hears the human + main + var
+  const cedarUser = seen.cedar.filter((m) => m.role === "user").map((m) => m.content);
+  assert.deepEqual(cedarUser, ["Human: kick off", "main: main says hi", "var: var says hi"]);
+});
+
+test("runCascadeRound skips speaking and recording an empty reply", async () => {
+  const roster = cascadeRoster();
+  const spoken = [];
+  const res = await runCascadeRound({
+    participants: roster,
+    humanText: "hi",
+    order: ORDER_FIXED,
+    runTurn: (p) => (p.id === "var" ? "   " : `${p.name} ok`),
+    speak: (p, text) => spoken.push({ name: p.name, text }),
+  });
+  // var produced empty -> not spoken, not in conversation
+  assert.deepEqual(spoken.map((s) => s.name), ["main", "cedar"]);
+  assert.ok(!res.conversation.some((c) => c.speaker === "var"));
+  // cedar (after the empty var) heard human + main only
+  assert.equal(res.turns.find((t) => t.name === "var").text, "");
+});
+
+test("runCascadeRound carries a prior conversation across rounds", async () => {
+  const roster = cascadeRoster();
+  const prior = [{ speaker: "Human", text: "round one" }, { speaker: "main", text: "earlier reply" }];
+  const seen = {};
+  const res = await runCascadeRound({
+    participants: roster,
+    humanText: "round two",
+    order: ORDER_FIXED,
+    conversation: prior,
+    runTurn: (p, messages) => { seen[p.name] = messages; return `${p.name} r2`; },
+  });
+  // main sees its earlier reply as assistant, plus both human turns
+  const mainRoles = seen.main.slice(1).map((m) => `${m.role}:${m.content}`);
+  assert.deepEqual(mainRoles, ["user:Human: round one", "assistant:earlier reply", "user:Human: round two"]);
+  assert.equal(res.conversation[0].text, "round one");
+});
+
+test("runCascadeRound throws without a runTurn dep", async () => {
+  await assert.rejects(runCascadeRound({ participants: cascadeRoster(), humanText: "x" }), /requires a runTurn/);
+});
+
+test("DEFAULT_HUMAN_LABEL is used when no humanLabel is given", async () => {
+  assert.equal(DEFAULT_HUMAN_LABEL, "Human");
+});
