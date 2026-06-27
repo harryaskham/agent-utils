@@ -8,7 +8,9 @@ import realtimeAgentExtension, {
   RealtimeStateController,
   buildServerVadTurnDetection,
   setRealtimeWebSocketConstructor,
+  __setLocalVadHooksForTest,
 } from "../extensions/realtime-agent.js";
+import { EventEmitter } from "node:events";
 import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
 
 class FakeWebSocket {
@@ -1705,4 +1707,58 @@ test("realtime forwarding replays full history after a cursor reset", async () =
   const items = itemsOf();
   assert.equal(items.length, 2, "full history replays after a cursor reset");
   assert.deepEqual(items.map((m) => m.item.content[0].text), ["first", "second"]);
+});
+
+test("/rt stt local-vad captures, segments, batch-transcribes, and sends a committed turn (bd-9399e7)", async () => {
+  // Inject a fake capture (an EventEmitter we drive with PCM chunks) and a fake
+  // batch transcribe, mirroring the FakeWebSocket seam for the WSS path, so the
+  // whole /rt stt local-vad wiring runs without a mic or the stt binary.
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  const transcribeCalls = [];
+  const transcribeFn = async (buf, opts) => {
+    transcribeCalls.push({ len: buf.length, model: opts?.model });
+    return "hello there";
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: transcribeFn });
+
+  try {
+    const { pi, commands, handlers, ctx, sentUserMessages } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+    await commands.get("rt").handler("stt local-vad", ctx);
+    const cap = captures.at(-1);
+    assert.ok(cap, "local-vad capture was started");
+
+    const pcm = (ms, speech) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+      return b;
+    };
+    // 500 ms speech then 3000 ms silence -> one committed turn -> sendUserMessage.
+    cap.stdout.emit("data", pcm(500, true));
+    for (let i = 0; i < 30; i++) cap.stdout.emit("data", pcm(100, false));
+
+    await waitFor(() => sentUserMessages.length > 0, { timeoutMs: 2000 });
+    assert.equal(sentUserMessages.length, 1, "the committed turn was sent as a user message");
+    assert.equal(sentUserMessages[0].content, "hello there");
+    assert.equal(sentUserMessages[0].options?.deliverAs, "followUp");
+    assert.ok(transcribeCalls.length >= 1, "batch transcribe ran over the segment audio");
+    assert.equal(transcribeCalls.at(-1).model, "mai-transcribe-1.5", "uses the decoupled batch model, not the realtime model");
+
+    // /rt stt stop ends the capture.
+    await commands.get("rt").handler("stt stop", ctx);
+    assert.ok(cap.killed, "stop killed the local-vad capture");
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
 });

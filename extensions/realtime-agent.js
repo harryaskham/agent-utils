@@ -215,6 +215,18 @@ export function setRealtimeWebSocketConstructor(ctor) {
   return realtimeWebSocketConstructor;
 }
 
+// Test seam for the /rt stt local-vad capture + batch transcribe (parallel to
+// setRealtimeWebSocketConstructor for the WSS path), so the wiring can be
+// exercised without a real microphone or `stt` binary. Production always uses the
+// imported runShellStream / transcribePcmBuffer.
+let localVadRunShellStream = runShellStream;
+let localVadTranscribe = transcribePcmBuffer;
+
+export function __setLocalVadHooksForTest({ capture, transcribe } = {}) {
+  localVadRunShellStream = capture || runShellStream;
+  localVadTranscribe = transcribe || transcribePcmBuffer;
+}
+
 async function getRealtimeWebSocketConstructor() {
   if (realtimeWebSocketConstructor) return realtimeWebSocketConstructor;
   const mod = await import("ws");
@@ -2272,7 +2284,7 @@ export default function realtimeAgentExtension(pi) {
 
     const controller = new LocalVadController({
       config: cfg,
-      transcribe: (buf) => transcribePcmBuffer(buf, { model }),
+      transcribe: (buf) => localVadTranscribe(buf, { model }),
       insertPartial: (text) => {
         try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${text}`], { placement: "belowEditor" }); } catch {}
       },
@@ -2290,7 +2302,7 @@ export default function realtimeAgentExtension(pi) {
 
     const cmd = config.recordCommand || defaultRecordCommand();
     let capture;
-    try { capture = runShellStream(cmd); }
+    try { capture = localVadRunShellStream(cmd); }
     catch (e) { ctx.ui.notify(`local-vad capture failed: ${e.message}`, "error"); return false; }
 
     Object.assign(localVad, { controller, capture, active: true });
