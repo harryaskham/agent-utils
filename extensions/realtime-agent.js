@@ -39,6 +39,10 @@
 //   /rt-reasoning <effort>     off|minimal|low|medium|high (only sent through proxy
 //                              when PI_RT_SEND_REASONING=1, or when in direct-Azure mode).
 //   /rt-hide-status            Hide status widget.
+//   /cascade [start|say|stop|reset|status]
+//                              Multi-agent voice group chat (stt in, per-agent
+//                              tts out, turn-taking; agents hear each other).
+//                              `/cascade say <text>` runs a round without a mic.
 //
 // Env
 // ---
