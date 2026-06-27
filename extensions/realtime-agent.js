@@ -2249,7 +2249,7 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
-  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, startedAt: 0 };
+  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0 };
 
   function localVadStatusLine() {
     if (!localVad.active && !localVad.lastTranscript && !localVad.lastError) return "local-vad: idle";
@@ -2280,7 +2280,7 @@ export default function realtimeAgentExtension(pi) {
 
     const cfg = parseLocalVadConfig();
     const model = resolveBatchSttModel();
-    Object.assign(localVad, { cfg, model, lastError: null, lastTranscript: null, startedAt: Date.now() });
+    Object.assign(localVad, { cfg, model, lastError: null, lastTranscript: null, warnedError: false, startedAt: Date.now() });
 
     const controller = new LocalVadController({
       config: cfg,
@@ -2296,7 +2296,14 @@ export default function realtimeAgentExtension(pi) {
       },
       onError: (e) => {
         localVad.lastError = e?.message || String(e);
-        if (config.debug) ctx.ui.notify(`local-vad: ${localVad.lastError}`, "warning");
+        if (!localVad.warnedError) {
+          // Surface the first failure to the operator (the common first-run mode
+          // is a missing stt binary / unavailable model); stay quiet afterwards.
+          localVad.warnedError = true;
+          ctx.ui.notify(`local-vad transcription failed: ${localVad.lastError}. Check /rt doctor; ensure the 'stt' binary and model are available.`, "warning");
+        } else if (config.debug) {
+          ctx.ui.notify(`local-vad: ${localVad.lastError}`, "warning");
+        }
       },
     });
 

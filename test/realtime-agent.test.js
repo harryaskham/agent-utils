@@ -1762,3 +1762,45 @@ test("/rt stt local-vad captures, segments, batch-transcribes, and sends a commi
     __setLocalVadHooksForTest({});
   }
 });
+
+test("/rt stt local-vad surfaces the first transcribe failure to the operator (bd-43512a)", async () => {
+  let captured;
+  const captureFn = () => {
+    captured = new EventEmitter();
+    captured.stdout = new EventEmitter();
+    captured.stderr = new EventEmitter();
+    captured.kill = () => { captured.killed = true; };
+    return captured;
+  };
+  const failingTranscribe = async () => { throw new Error("stt: command not found"); };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: failingTranscribe });
+
+  try {
+    const { pi, commands, handlers, ctx, notifications } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+    await commands.get("rt").handler("stt local-vad", ctx);
+
+    const pcm = (ms, speech) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+      return b;
+    };
+    captured.stdout.emit("data", pcm(500, true));
+    for (let i = 0; i < 30; i++) captured.stdout.emit("data", pcm(100, false));
+
+    // A failing batch transcribe must surface to the operator exactly once
+    // (not stay silent, and not spam on every subsequent failure).
+    await waitFor(
+      () => notifications.some((n) => /local-vad transcription failed/.test(n.message)),
+      { timeoutMs: 2000 },
+    );
+    const warns = notifications.filter((n) => /local-vad transcription failed/.test(n.message));
+    assert.equal(warns.length, 1, "first transcribe failure surfaced once");
+    assert.match(warns[0].message, /stt: command not found/);
+    assert.equal(warns[0].level, "warning");
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
