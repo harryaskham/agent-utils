@@ -1,0 +1,133 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { buildParticipantRoster, MODE_CASCADE, ORDER_FIXED } from "../extensions/lib/realtime-participants.js";
+import {
+  CascadeController,
+  makeCascadeRunTurn,
+  makeCascadeSpeak,
+} from "../extensions/lib/realtime-cascade-session.js";
+
+function roster() {
+  return buildParticipantRoster({ mode: MODE_CASCADE, participants: "var,cedar", main: { name: "main" }, env: {} }).participants;
+}
+
+// ---------------------------------------------------------------------------
+// CascadeController
+// ---------------------------------------------------------------------------
+
+test("CascadeController requires a runTurn dep", () => {
+  assert.throws(() => new CascadeController({ roster: roster() }), /requires a runTurn/);
+});
+
+test("handleHumanUtterance runs a round, accumulates conversation, and advances the round counter", async () => {
+  const c = new CascadeController({
+    roster: roster(),
+    order: ORDER_FIXED,
+    runTurn: (p) => `${p.name} reply`,
+  });
+  const r1 = await c.handleHumanUtterance("hello");
+  assert.deepEqual(r1.turns.map((t) => t.name), ["main", "var", "cedar"]);
+  assert.equal(c.round, 1);
+  assert.deepEqual(c.conversation.map((e) => e.text), ["hello", "main reply", "var reply", "cedar reply"]);
+
+  const r2 = await c.handleHumanUtterance("again");
+  assert.equal(c.round, 2);
+  // second round sees the first round's conversation as history
+  assert.equal(r2.conversation[0].text, "hello");
+  assert.ok(r2.conversation.some((e) => e.text === "again"));
+});
+
+test("handleHumanUtterance ignores empty text", async () => {
+  let ran = 0;
+  const c = new CascadeController({ roster: roster(), order: ORDER_FIXED, runTurn: () => { ran += 1; return "x"; } });
+  assert.equal(await c.handleHumanUtterance("   "), null);
+  assert.equal(await c.handleHumanUtterance(""), null);
+  assert.equal(ran, 0);
+  assert.equal(c.round, 0);
+});
+
+test("handleHumanUtterance drops an overlapping human turn while a round is in flight (one at a time)", async () => {
+  let resolveTurn;
+  const gate = new Promise((res) => { resolveTurn = res; });
+  let calls = 0;
+  const c = new CascadeController({
+    roster: roster(),
+    order: ORDER_FIXED,
+    runTurn: async () => { calls += 1; await gate; return "ok"; },
+  });
+  const first = c.handleHumanUtterance("one");
+  // while the first round is awaiting its first turn, a second utterance arrives
+  const second = await c.handleHumanUtterance("two");
+  assert.equal(second, null, "overlapping utterance dropped");
+  resolveTurn();
+  await first;
+  assert.equal(c.round, 1);
+});
+
+test("reset clears the conversation and round counter", async () => {
+  const c = new CascadeController({ roster: roster(), order: ORDER_FIXED, runTurn: (p) => `${p.name} r` });
+  await c.handleHumanUtterance("hi");
+  c.reset();
+  assert.equal(c.round, 0);
+  assert.deepEqual(c.conversation, []);
+});
+
+test("handleHumanUtterance records lastError and clears busy when a turn throws", async () => {
+  const c = new CascadeController({ roster: roster(), order: ORDER_FIXED, runTurn: () => { throw new Error("llm boom"); } });
+  await assert.rejects(c.handleHumanUtterance("hi"), /llm boom/);
+  assert.equal(c.busy, false);
+  assert.match(c.lastError, /llm boom/);
+});
+
+// ---------------------------------------------------------------------------
+// makeCascadeRunTurn
+// ---------------------------------------------------------------------------
+
+test("makeCascadeRunTurn calls chat-completions with per-participant model/base-url over defaults", async () => {
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, body: JSON.parse(init.body) });
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "hi" } }] }), text: async () => "" };
+  };
+  const runTurn = makeCascadeRunTurn({ defaultModel: "default-model", defaultBaseUrl: "http://default:1", fetchImpl, envRead: () => undefined });
+
+  await runTurn({ name: "var", model: "peer-model", baseUrl: "http://peer:2" }, [{ role: "user", content: "x" }]);
+  await runTurn({ name: "main" }, [{ role: "user", content: "y" }]);
+
+  assert.equal(seen[0].url, "http://peer:2/v1/chat/completions");
+  assert.equal(seen[0].body.model, "peer-model");
+  assert.equal(seen[1].url, "http://default:1/v1/chat/completions");
+  assert.equal(seen[1].body.model, "default-model");
+});
+
+// ---------------------------------------------------------------------------
+// makeCascadeSpeak
+// ---------------------------------------------------------------------------
+
+test("makeCascadeSpeak requires a playImpl", () => {
+  assert.throws(() => makeCascadeSpeak({}), /requires a playImpl/);
+});
+
+test("makeCascadeSpeak synthesises with the participant voice and plays the pcm", async () => {
+  const synthCalls = [];
+  const played = [];
+  const synthImpl = async (text, opts) => { synthCalls.push({ text, opts }); return Buffer.from([1, 2, 3]); };
+  const playImpl = async (pcm, p) => { played.push({ bytes: pcm.length, name: p?.name }); };
+  const speak = makeCascadeSpeak({ synthImpl, playImpl });
+
+  await speak({ name: "cedar", voice: "cedar", ttsModel: "tm", baseUrl: "http://v" }, "hello");
+  assert.equal(synthCalls.length, 1);
+  assert.equal(synthCalls[0].text, "hello");
+  assert.equal(synthCalls[0].opts.voice, "cedar");
+  assert.equal(synthCalls[0].opts.model, "tm");
+  assert.deepEqual(played, [{ bytes: 3, name: "cedar" }]);
+});
+
+test("makeCascadeSpeak skips empty text and empty pcm without playing", async () => {
+  let plays = 0;
+  const speak = makeCascadeSpeak({ synthImpl: async () => Buffer.alloc(0), playImpl: async () => { plays += 1; } });
+  await speak({ name: "x", voice: "v" }, "   ");   // empty text: no synth, no play
+  await speak({ name: "x", voice: "v" }, "real");  // empty pcm: synth but no play
+  assert.equal(plays, 0);
+});
