@@ -71,7 +71,7 @@ test("LocalVadController requires a transcribe function (bd-9399e7)", () => {
   assert.throws(() => new LocalVadController({}), /requires a transcribe/);
 });
 
-test("insert transcribes the delta; commit re-transcribes the whole turn (bd-9399e7)", async () => {
+test("insert re-drafts the whole turn; commit re-transcribes and sends (bd-9399e7)", async () => {
   const transcribedLengths = [];
   const inserted = [];
   const sent = [];
@@ -89,14 +89,16 @@ test("insert transcribes the delta; commit re-transcribes the whole turn (bd-939
   for (let pushed = 0; pushed < 3000; pushed += 100) {
     await controller.pushFrame(frame(100, { speech: false }));
   }
+  await controller.flush(); // drain the async (off-ingestion) transcription pump
 
   assert.equal(inserted.length, 1, "exactly one provisional partial inserted");
   assert.equal(sent.length, 1, "exactly one turn sent");
   assert.equal(inserted[0].type, "insert");
   assert.equal(sent[0].type, "commit");
-  // transcribe ran twice: delta on insert, whole-turn audio on commit.
+  // transcribe ran twice, BOTH over the whole turn-so-far (re-draft, not delta);
+  // the commit carries more trailing silence so its audio is >= the insert's.
   assert.equal(transcribedLengths.length, 2);
-  assert.ok(transcribedLengths[1] >= transcribedLengths[0], "commit transcribes >= the insert delta");
+  assert.ok(transcribedLengths[1] >= transcribedLengths[0], "commit re-draft >= the insert re-draft");
 });
 
 test("blank transcripts insert/send nothing; transcribe errors go to onError (bd-9399e7)", async () => {
@@ -153,6 +155,7 @@ test("pushFrame re-frames arbitrary-size capture chunks into fixed VAD frames (b
   for (const ms of [250, 137, 313, 200, 400, 100, 350, 250, 500, 600, 300]) {
     await controller.pushFrame(frame(ms, { speech: false }));
   }
+  await controller.flush(); // drain the async transcription pump
   assert.equal(inserted.length, 1, "one insert despite unaligned chunk sizes");
   assert.equal(sent.length, 1, "one commit despite unaligned chunk sizes");
 });
@@ -214,5 +217,48 @@ test("a custom segmenter config (faster commit) is honored end-to-end (bd-9399e7
   for (let pushed = 0; pushed < 600; pushed += 100) {
     await controller.pushFrame(frame(100, { speech: false }));
   }
+  await controller.flush(); // drain the async transcription pump
   assert.deepEqual(sent, ["quick"], "commit fires at the custom 500 ms silence");
+});
+
+test("multi-segment turn with a slow transcribe still commits — re-draft pump never stalls segmentation (bd-9399e7)", async () => {
+  // Regression for the bug live mic testing surfaced: provisional transcribes ran
+  // INSIDE the frame-ingestion path, so a slow model stalled the silence clock and
+  // a multi-segment turn grew forever without ever committing. Now segmentation is
+  // synchronous and transcription is a single-flight pump off the ingestion path.
+  const sent = [];
+  let inFlight = 0, maxConcurrent = 0, calls = 0;
+  const controller = new LocalVadController({
+    transcribe: async (buf) => {
+      calls += 1; inFlight += 1; maxConcurrent = Math.max(maxConcurrent, inFlight);
+      await new Promise((r) => setTimeout(r, 15));
+      inFlight -= 1;
+      return `t:${buf.length}`;
+    },
+    insertPartial: () => {},
+    sendTurn: (t) => sent.push(t),
+  });
+
+  // 5 speech segments separated by 1.2s gaps (each > insert 1s, < commit 3s) then a
+  // final 3s silence — fired un-awaited exactly like the live capture 'data' handler.
+  const pending = [];
+  for (let seg = 0; seg < 5; seg++) {
+    pending.push(controller.pushFrame(frame(300, { speech: true })));
+    for (let s = 0; s < 1200; s += 100) pending.push(controller.pushFrame(frame(100, { speech: false })));
+  }
+  for (let s = 0; s < 3000; s += 100) pending.push(controller.pushFrame(frame(100, { speech: false })));
+
+  // CRUX: after the synchronous un-awaited feed, segmentation has ALREADY reached
+  // the commit without waiting on the slow transcribe (the old design stalled here).
+  assert.ok(
+    controller._pendingCommit || sent.length > 0,
+    "segmentation reaches commit synchronously, not blocked by the transcribe",
+  );
+
+  await Promise.all(pending);
+  await controller.flush();
+
+  assert.equal(sent.length, 1, "the multi-segment turn commits and sends exactly once");
+  assert.equal(maxConcurrent, 1, "transcription stays single-flight");
+  assert.ok(calls <= 3, `re-drafts coalesce instead of piling up one-per-gap (got ${calls} transcribes for 6 insert gaps + 1 commit)`);
 });

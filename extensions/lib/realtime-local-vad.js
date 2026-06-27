@@ -6,9 +6,18 @@
 // callbacks, so it is unit-testable without a microphone/Pulse or a live `stt`
 // process — only the thin wiring in realtime-agent.js touches the hardware.
 //
-// Operator-signed-off semantics (bd-9399e7, 2026-06-26):
-//   - insert -> transcribe ONLY the delta chunk (cheap, provisional partial).
-//   - commit -> re-transcribe the WHOLE turn audio (accurate final send).
+// Semantics (bd-9399e7; revised 2026-06-27 after live mic validation):
+//   - Segmentation runs in REAL TIME: pushFrame only re-frames + advances the
+//     VadSegmenter (synchronous, never blocked by a transcribe), so the silence
+//     clock stays accurate and the commit fires on the operator's real pause.
+//     (The previous design awaited the transcribe inside the ingestion path, so
+//     a slow model stalled segmentation and multi-segment turns never committed.)
+//   - insert -> re-transcribe the WHOLE turn-so-far as a fresh candidate partial
+//     (re-draft, latest-wins), rather than stitching little delta chunks.
+//   - commit -> re-transcribe the whole turn and send; prioritized over drafts.
+//   - Transcription runs in a single-flight async pump OFF the ingestion path:
+//     at most one transcribe in flight, newer drafts coalesce, commit jumps the
+//     queue, so a slow model can never stall segmentation or strand a turn.
 //   - thresholds default 1s insert / 3s commit, tunable via PI_RT_LOCAL_VAD_*.
 
 import { CHANNELS, SAMPLE_RATE, SAMPLE_WIDTH } from "./realtime-audio.js";
@@ -67,7 +76,7 @@ export function describeLocalVadConfig(config = {}) {
 ///   segmenter                                    an existing VadSegmenter (optional)
 ///   config                                       VadSegmenter config when none is supplied
 export class LocalVadController {
-  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, frameBytes } = {}) {
+  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, frameBytes, placeholder } = {}) {
     if (typeof transcribe !== "function") {
       throw new Error("LocalVadController requires a transcribe(audio) function");
     }
@@ -77,75 +86,108 @@ export class LocalVadController {
     this.sendTurn = sendTurn || (() => {});
     this.onError = onError || (() => {});
     this.frameBytes = frameBytes > 0 ? Math.trunc(frameBytes) : DEFAULT_FRAME_BYTES;
+    // Optional text shown the instant a turn's first partial is pending, before
+    // the first re-draft candidate returns. Opt-in (the live wiring enables it).
+    this.placeholder = placeholder === undefined ? null : placeholder;
     this._pending = Buffer.alloc(0);
-    this._queue = Promise.resolve();
+    // Single-flight transcription pump state (kept OFF the ingestion path).
+    this._transcribing = false;
+    this._pendingDraftAudio = null;   // newest whole-turn audio wanting a draft
+    this._pendingDraftEvent = null;
+    this._pendingCommit = null;       // { audio, event } wanting a final send
+    this._current = null;             // in-flight transcribe chain (for flush drain)
+    this._hasPartial = false;         // whether this turn has shown any partial yet
   }
 
-  /// Feed PCM16 audio (an arbitrary-size capture chunk). Buffers and re-frames it
-  /// into fixed ~100 ms frames before pushing to the segmenter. The live capture
-  /// fires this WITHOUT awaiting, so calls are serialized through an internal
-  /// queue and processed in arrival order — a slow transcribe on one chunk never
-  /// lets a later chunk interleave and corrupt the shared re-frame buffer /
-  /// segmenter state.
+  /// Feed PCM16 audio (an arbitrary-size capture chunk). Re-frames into fixed
+  /// ~100 ms frames and advances the segmenter SYNCHRONOUSLY — transcription is
+  /// dispatched to an async pump and never blocks ingestion, so the live capture
+  /// can fire this WITHOUT awaiting and the silence clock stays real-time. Being
+  /// fully synchronous, concurrent un-awaited calls cannot interleave and corrupt
+  /// the shared re-frame buffer / segmenter state.
   async pushFrame(chunk) {
-    return this._enqueue(() => this._ingest(chunk));
+    this._ingest(chunk);
   }
 
-  /// Force-finalize the current turn (e.g. on stop/cancel): drains any buffered
-  /// sub-frame remainder, then handles any commit. Serialized with pushFrame.
-  async flush() {
-    return this._enqueue(() => this._flush());
-  }
-
-  // Run `task` after all previously-enqueued pushFrame/flush tasks complete. The
-  // chain is kept alive across a rejecting task so later calls still run; the
-  // rejection still propagates to this call's own returned promise.
-  _enqueue(task) {
-    const run = this._queue.then(task);
-    this._queue = run.then(() => {}, () => {});
-    return run;
-  }
-
-  async _ingest(chunk) {
+  _ingest(chunk) {
     if (!chunk || chunk.length === 0) return;
     this._pending = this._pending.length ? Buffer.concat([this._pending, chunk]) : Buffer.from(chunk);
     while (this._pending.length >= this.frameBytes) {
       const frame = this._pending.subarray(0, this.frameBytes);
       this._pending = this._pending.subarray(this.frameBytes);
-      for (const event of this.segmenter.push(frame)) {
-        // Events are emitted in order (insert before commit); handle serially.
-        await this._handle(event);
-      }
+      for (const event of this.segmenter.push(frame)) this._dispatch(event);
     }
   }
 
-  async _flush() {
+  /// Force-finalize the current turn (e.g. on stop/cancel): drains any buffered
+  /// sub-frame remainder + the segmenter's final commit, then waits for the
+  /// transcription pump to finish so the last turn is actually sent.
+  async flush() {
     if (this._pending.length) {
       const frame = this._pending;
       this._pending = Buffer.alloc(0);
-      for (const event of this.segmenter.push(frame)) {
-        await this._handle(event);
-      }
+      for (const event of this.segmenter.push(frame)) this._dispatch(event);
     }
-    for (const event of this.segmenter.flush()) {
-      // Ordered finalization (at most one commit).
-      await this._handle(event);
+    for (const event of this.segmenter.flush()) this._dispatch(event);
+    await this._drain();
+  }
+
+  // Route a segmenter event into the transcription pump WITHOUT blocking the
+  // caller. Drafts (insert) re-draft the whole turn, latest-wins; commit is
+  // prioritized and supersedes any pending draft.
+  _dispatch(event) {
+    if (event.type === "insert") {
+      if (!this._hasPartial && this.placeholder) {
+        this._hasPartial = true;
+        try { this.insertPartial(this.placeholder, event); } catch (err) { this.onError(err, event); }
+      }
+      this._pendingDraftAudio = event.audio;
+      this._pendingDraftEvent = event;
+      this._pump();
+    } else if (event.type === "commit") {
+      this._pendingCommit = { audio: event.audio, event };
+      this._pendingDraftAudio = null;
+      this._pendingDraftEvent = null;
+      this._pump();
     }
   }
 
-  async _handle(event) {
-    try {
-      if (event.type === "insert") {
-        // Cheap provisional partial from the new delta chunk only.
-        const text = String(await this.transcribe(event.delta)).trim();
-        if (text) this.insertPartial(text, event);
-      } else if (event.type === "commit") {
-        // Accurate final send: re-transcribe the whole turn.
-        const text = String(await this.transcribe(event.audio)).trim();
-        if (text) this.sendTurn(text, event);
-      }
-    } catch (err) {
-      this.onError(err, event);
+  // Single-flight transcription: at most one transcribe in flight. Commit beats
+  // a pending draft; a newer draft replaces an older one (coalesced re-draft).
+  _pump() {
+    if (this._transcribing) return;
+    let job = null;
+    if (this._pendingCommit) {
+      job = { kind: "commit", audio: this._pendingCommit.audio, event: this._pendingCommit.event };
+      this._pendingCommit = null;
+      this._pendingDraftAudio = null;
+      this._pendingDraftEvent = null;
+    } else if (this._pendingDraftAudio) {
+      job = { kind: "draft", audio: this._pendingDraftAudio, event: this._pendingDraftEvent };
+      this._pendingDraftAudio = null;
+      this._pendingDraftEvent = null;
+    }
+    if (!job) return;
+    this._transcribing = true;
+    this._current = Promise.resolve()
+      .then(() => this.transcribe(job.audio))
+      .then((raw) => {
+        const text = String(raw == null ? "" : raw).trim();
+        if (job.kind === "commit") {
+          this._hasPartial = false;
+          if (text) this.sendTurn(text, job.event);
+        } else if (text) {
+          this._hasPartial = true;
+          this.insertPartial(text, job.event);
+        }
+      })
+      .catch((err) => { this.onError(err, job.event); })
+      .finally(() => { this._transcribing = false; this._current = null; this._pump(); });
+  }
+
+  async _drain() {
+    while (this._current) {
+      try { await this._current; } catch { /* surfaced via onError */ }
     }
   }
 }

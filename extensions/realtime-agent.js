@@ -2295,6 +2295,7 @@ export default function realtimeAgentExtension(pi) {
 
     const controller = new LocalVadController({
       config: cfg,
+      placeholder: "…",
       transcribe: (buf) => localVadTranscribe(buf, { model }),
       insertPartial: (text) => {
         try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${text}`], { placement: "belowEditor" }); } catch {}
