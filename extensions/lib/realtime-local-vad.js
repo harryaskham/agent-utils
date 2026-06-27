@@ -78,13 +78,35 @@ export class LocalVadController {
     this.onError = onError || (() => {});
     this.frameBytes = frameBytes > 0 ? Math.trunc(frameBytes) : DEFAULT_FRAME_BYTES;
     this._pending = Buffer.alloc(0);
+    this._queue = Promise.resolve();
   }
 
   /// Feed PCM16 audio (an arbitrary-size capture chunk). Buffers and re-frames it
-  /// into fixed ~100 ms frames before pushing to the segmenter, so live pipe
-  /// chunks of any size segment as accurately as small fixed frames. Runs any
-  /// resulting insert/commit handlers in order.
+  /// into fixed ~100 ms frames before pushing to the segmenter. The live capture
+  /// fires this WITHOUT awaiting, so calls are serialized through an internal
+  /// queue and processed in arrival order — a slow transcribe on one chunk never
+  /// lets a later chunk interleave and corrupt the shared re-frame buffer /
+  /// segmenter state.
   async pushFrame(chunk) {
+    return this._enqueue(() => this._ingest(chunk));
+  }
+
+  /// Force-finalize the current turn (e.g. on stop/cancel): drains any buffered
+  /// sub-frame remainder, then handles any commit. Serialized with pushFrame.
+  async flush() {
+    return this._enqueue(() => this._flush());
+  }
+
+  // Run `task` after all previously-enqueued pushFrame/flush tasks complete. The
+  // chain is kept alive across a rejecting task so later calls still run; the
+  // rejection still propagates to this call's own returned promise.
+  _enqueue(task) {
+    const run = this._queue.then(task);
+    this._queue = run.then(() => {}, () => {});
+    return run;
+  }
+
+  async _ingest(chunk) {
     if (!chunk || chunk.length === 0) return;
     this._pending = this._pending.length ? Buffer.concat([this._pending, chunk]) : Buffer.from(chunk);
     while (this._pending.length >= this.frameBytes) {
@@ -97,9 +119,7 @@ export class LocalVadController {
     }
   }
 
-  /// Force-finalize the current turn (e.g. on stop/cancel): flush any buffered
-  /// sub-frame remainder, then handle any commit.
-  async flush() {
+  async _flush() {
     if (this._pending.length) {
       const frame = this._pending;
       this._pending = Buffer.alloc(0);

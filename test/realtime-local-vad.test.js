@@ -171,6 +171,37 @@ test("pushFrame buffers a sub-frame remainder until flush (bd-343617)", async ()
   assert.equal(sent.length, 1, "flush finalizes the buffered audio as one commit");
 });
 
+test("pushFrame serializes concurrent un-awaited calls so a slow transcribe cannot race (bd-e72d23)", async () => {
+  const inserted = [];
+  const sent = [];
+  let inTranscribe = 0;
+  let maxConcurrent = 0;
+  const controller = new LocalVadController({
+    // Deliberately-slow transcribe: a naive (unserialized) controller would let a
+    // later chunk's framing interleave while this awaits, corrupting shared state.
+    transcribe: async (buf) => {
+      inTranscribe += 1;
+      maxConcurrent = Math.max(maxConcurrent, inTranscribe);
+      await new Promise((r) => setTimeout(r, 5));
+      inTranscribe -= 1;
+      return `len:${buf.length}`;
+    },
+    insertPartial: () => inserted.push(1),
+    sendTurn: () => sent.push(1),
+  });
+  // Fire chunks WITHOUT awaiting (exactly as the live capture's 'data' handler
+  // does): 350 ms speech then odd-sized silence chunks summing > 3000 ms.
+  const pending = [controller.pushFrame(frame(350, { speech: true }))];
+  for (const ms of [250, 137, 313, 200, 400, 100, 350, 250, 500, 600, 300]) {
+    pending.push(controller.pushFrame(frame(ms, { speech: false })));
+  }
+  await Promise.all(pending);
+  await controller.flush();
+  assert.equal(maxConcurrent, 1, "transcribe never runs concurrently with itself");
+  assert.equal(inserted.length, 1, "exactly one insert despite overlapping un-awaited calls");
+  assert.equal(sent.length, 1, "exactly one commit despite overlapping un-awaited calls");
+});
+
 test("a custom segmenter config (faster commit) is honored end-to-end (bd-9399e7)", async () => {
   const sent = [];
   const controller = new LocalVadController({
