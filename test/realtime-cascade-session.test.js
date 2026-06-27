@@ -74,6 +74,23 @@ test("reset clears the conversation and round counter", async () => {
   assert.deepEqual(c.conversation, []);
 });
 
+test("maxHistory keeps only the most recent conversation entries across rounds", async () => {
+  const c = new CascadeController({ roster: roster(), order: ORDER_FIXED, runTurn: (p) => `${p.name} r`, maxHistory: 4 });
+  // each round adds 1 human + 3 replies = 4 entries; with cap 4, only the last round survives
+  await c.handleHumanUtterance("round one");
+  await c.handleHumanUtterance("round two");
+  assert.equal(c.conversation.length, 4);
+  assert.equal(c.conversation[0].text, "round two");
+  assert.deepEqual(c.conversation.map((e) => e.speaker), ["Human", "main", "var", "cedar"]);
+});
+
+test("maxHistory unset (0) leaves the conversation unbounded", async () => {
+  const c = new CascadeController({ roster: roster(), order: ORDER_FIXED, runTurn: (p) => `${p.name} r` });
+  await c.handleHumanUtterance("a");
+  await c.handleHumanUtterance("b");
+  assert.equal(c.conversation.length, 8); // 2 rounds * (1 human + 3 replies)
+});
+
 test("handleHumanUtterance records lastError and clears busy when a turn throws", async () => {
   const c = new CascadeController({ roster: roster(), order: ORDER_FIXED, runTurn: () => { throw new Error("llm boom"); } });
   await assert.rejects(c.handleHumanUtterance("hi"), /llm boom/);
@@ -100,6 +117,17 @@ test("makeCascadeRunTurn calls chat-completions with per-participant model/base-
   assert.equal(seen[0].body.model, "peer-model");
   assert.equal(seen[1].url, "http://default:1/v1/chat/completions");
   assert.equal(seen[1].body.model, "default-model");
+});
+
+test("makeCascadeRunTurn caps reply length by default (maxTokens) and allows override", async () => {
+  const bodies = [];
+  const fetchImpl = async (_url, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "x" } }] }), text: async () => "" }; };
+  const def = makeCascadeRunTurn({ defaultModel: "m", fetchImpl, envRead: () => undefined });
+  await def({ name: "p" }, []);
+  assert.equal(bodies[0].max_tokens, 200);
+  const wide = makeCascadeRunTurn({ defaultModel: "m", maxTokens: 1000, fetchImpl, envRead: () => undefined });
+  await wide({ name: "p" }, []);
+  assert.equal(bodies[1].max_tokens, 1000);
 });
 
 // ---------------------------------------------------------------------------

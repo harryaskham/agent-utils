@@ -2382,6 +2382,7 @@ export default function realtimeAgentExtension(pi) {
       order: roster.order,
       runTurn,
       speak,
+      maxHistory: Number(values.maxhistory || values.max_history) || Number(env("PI_CASCADE_MAX_HISTORY")) || 48,
       onTurn: ({ participant }) => { cascade.speaking = participant?.name || null; cascadeWidget(ctx); },
     });
     cascade.roster = roster;

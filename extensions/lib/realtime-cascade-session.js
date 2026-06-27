@@ -41,7 +41,7 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
 }
 
 export class CascadeController {
-  constructor({ roster = [], order = DEFAULT_ORDER, runTurn, speak, onTurn, humanLabel, rng } = {}) {
+  constructor({ roster = [], order = DEFAULT_ORDER, runTurn, speak, onTurn, humanLabel, rng, maxHistory } = {}) {
     if (typeof runTurn !== "function") throw new Error("CascadeController requires a runTurn dep");
     this.roster = Array.isArray(roster) ? roster : (roster?.participants || []);
     this.order = order;
@@ -50,6 +50,10 @@ export class CascadeController {
     this.onTurn = typeof onTurn === "function" ? onTurn : null;
     this.humanLabel = humanLabel;
     this.rng = typeof rng === "function" ? rng : Math.random;
+    // Sliding-window cap on the running conversation so a long-lived group chat
+    // does not grow context (and cost) without bound. 0/undefined = unbounded.
+    const mh = Number(maxHistory);
+    this.maxHistory = Number.isFinite(mh) && mh > 0 ? Math.floor(mh) : 0;
     this.conversation = [];
     this.round = 0;
     this.busy = false;
@@ -78,7 +82,9 @@ export class CascadeController {
         onTurn: this.onTurn || undefined,
         humanLabel: this.humanLabel,
       });
-      this.conversation = res.conversation;
+      this.conversation = this.maxHistory && res.conversation.length > this.maxHistory
+        ? res.conversation.slice(-this.maxHistory)
+        : res.conversation;
       this.round += 1;
       this.lastError = null;
       return res;
@@ -100,7 +106,8 @@ export class CascadeController {
 
 /// Build a concrete `runTurn(participant, messages)` dep backed by the
 /// chat-completions caller. Per-participant model/base-url win over `defaultModel`.
-export function makeCascadeRunTurn({ defaultModel, defaultBaseUrl, envRead, fetchImpl, temperature, maxTokens } = {}) {
+/// Defaults keep spoken replies short (maxTokens) unless overridden.
+export function makeCascadeRunTurn({ defaultModel, defaultBaseUrl, envRead, fetchImpl, temperature, maxTokens = 200 } = {}) {
   return (participant, messages) => runChatCompletionTurn({
     messages,
     model: participant?.model || defaultModel,
