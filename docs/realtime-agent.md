@@ -211,6 +211,23 @@ Tuning knobs (all optional):
 | `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS` | `3000` | trailing silence (ms) that finalizes/sends the turn |
 | `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS` | `200` | minimum speech (ms) before a turn can insert/commit |
 
+**Troubleshooting (first-run validation):**
+
+- *Nothing is transcribed.* The first transcription failure is surfaced as a
+  warning (the common cause is a missing `stt` binary or an unavailable model).
+  Run `/rt doctor` to see the active local-vad model, thresholds, and last error,
+  and confirm the `stt` binary is on `PATH` and `PI_RT_LOCAL_VAD_MODEL` resolves to
+  a batch-capable model (not a realtime-only model like `gpt-realtime-whisper`).
+- *Turns commit too early or too late.* Adjust `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS`
+  (trailing silence that finalizes/sends the turn) and
+  `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` (provisional-partial silence).
+- *Speech is missed, or ambient noise triggers turns.* Tune
+  `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` (lower to catch quieter speech, raise to
+  reject noise) and `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS`.
+- *The assistant's spoken reply is re-captured as a new turn (echo).* There is no
+  half-duplex guard yet; this only occurs if Pi replies are spoken aloud (caco TTS
+  daemon / speak-mixin). A gate is designed but pending validation.
+
 ### Replay the latest spoken response
 
 ```text
