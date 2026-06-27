@@ -117,3 +117,32 @@ export async function runCascadeRound({
 
   return { order: plan.order, turns, conversation: convo };
 }
+
+/// Clean a model reply for SPEECH: strip markdown, code, links, emoji, and list
+/// markers so a TTS voice does not read "asterisk", "backtick", URLs, or emoji
+/// aloud. Faithful textual history is kept elsewhere; this only shapes audio. Pure.
+export function sanitizeForSpeech(text) {
+  let s = String(text ?? "");
+  if (!s) return "";
+  // Fenced code blocks -> drop entirely.
+  s = s.replace(/```[\s\S]*?```/g, " ");
+  // Inline code `x` -> x.
+  s = s.replace(/`([^`]*)`/g, "$1");
+  // Markdown links [text](url) / images ![alt](url) -> the text/alt.
+  s = s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // Bare URLs -> drop.
+  s = s.replace(/\bhttps?:\/\/\S+/gi, " ");
+  // Bold/italic markers (paired) -> inner text.
+  s = s.replace(/(\*\*|__)(.*?)\1/g, "$2");
+  s = s.replace(/(\*|_)(.*?)\1/g, "$2");
+  // Leading heading hashes and blockquote marks.
+  s = s.replace(/^\s{0,3}#{1,6}\s+/gm, "");
+  s = s.replace(/^\s{0,3}>\s?/gm, "");
+  // Leading list markers (-, *, +, or "1.").
+  s = s.replace(/^\s{0,3}([-*+]|\d+\.)\s+/gm, "");
+  // Strip emoji / pictographs / dingbats / arrows / variation selectors / ZWJ.
+  s = s.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, "");
+  // Collapse whitespace.
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}

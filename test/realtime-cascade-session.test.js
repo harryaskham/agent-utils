@@ -188,3 +188,13 @@ test("cascadeRosterFromArgs threads a per-main base_url and tts override", () =>
   assert.equal(roster.participants[0].baseUrl, "http://p");
   assert.equal(roster.participants[0].ttsModel, "azure/speech/azure-tts");
 });
+
+test("makeCascadeSpeak sanitizes markdown/emoji out of the spoken text before synth", async () => {
+  let synthText = null;
+  const speak = makeCascadeSpeak({
+    synthImpl: async (t) => { synthText = t; return Buffer.from([1]); },
+    playImpl: async () => {},
+  });
+  await speak({ name: "var", voice: "v" }, "Hello **everyone** 👋 see `code`");
+  assert.equal(synthText, "Hello everyone see code");
+});

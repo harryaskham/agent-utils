@@ -11,6 +11,7 @@
 // unit-tested with injected deps.
 
 import { runCascadeRound } from "./realtime-cascade.js";
+import { sanitizeForSpeech } from "./realtime-cascade.js";
 import { DEFAULT_ORDER, MODE_CASCADE, buildParticipantRoster } from "./realtime-participants.js";
 import { runChatCompletionTurn } from "./realtime-cascade-llm.js";
 import { synthesizeToPcm } from "./realtime-tts-batch.js";
@@ -124,7 +125,7 @@ export function makeCascadeRunTurn({ defaultModel, defaultBaseUrl, envRead, fetc
 export function makeCascadeSpeak({ synthImpl = synthesizeToPcm, playImpl, speed } = {}) {
   if (typeof playImpl !== "function") throw new Error("makeCascadeSpeak requires a playImpl(pcm, participant) dep");
   return async (participant, text) => {
-    const body = String(text ?? "").trim();
+    const body = sanitizeForSpeech(text);
     if (!body) return;
     const pcm = await synthImpl(body, {
       voice: participant?.voice,

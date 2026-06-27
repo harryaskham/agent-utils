@@ -172,3 +172,27 @@ test("runCascadeRound throws without a runTurn dep", async () => {
 test("DEFAULT_HUMAN_LABEL is used when no humanLabel is given", async () => {
   assert.equal(DEFAULT_HUMAN_LABEL, "Human");
 });
+
+import { sanitizeForSpeech } from "../extensions/lib/realtime-cascade.js";
+
+test("sanitizeForSpeech strips markdown emphasis, code, links, and collapses whitespace", () => {
+  assert.equal(sanitizeForSpeech("Hello **Var** and *Cedar*"), "Hello Var and Cedar");
+  assert.equal(sanitizeForSpeech("run `npm test` now"), "run npm test now");
+  assert.equal(sanitizeForSpeech("```\ncode block\n```done"), "done");
+  assert.equal(sanitizeForSpeech("see [the docs](https://example.com/x) please"), "see the docs please");
+  assert.equal(sanitizeForSpeech("bare https://example.com/y link"), "bare link");
+  assert.equal(sanitizeForSpeech("a\n\n  b   c"), "a b c");
+});
+
+test("sanitizeForSpeech strips headings, list markers, and emoji", () => {
+  assert.equal(sanitizeForSpeech("# Title\n- one\n- two"), "Title one two");
+  assert.equal(sanitizeForSpeech("1. first\n2. second"), "first second");
+  assert.equal(sanitizeForSpeech("Hi there 👋 great ✅"), "Hi there great");
+  assert.equal(sanitizeForSpeech("> quoted line"), "quoted line");
+});
+
+test("sanitizeForSpeech leaves clean prose untouched and handles empties", () => {
+  assert.equal(sanitizeForSpeech("Hi Main and Cedar, I'm Var."), "Hi Main and Cedar, I'm Var.");
+  assert.equal(sanitizeForSpeech(""), "");
+  assert.equal(sanitizeForSpeech(null), "");
+});
