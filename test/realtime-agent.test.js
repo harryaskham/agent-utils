@@ -1824,3 +1824,46 @@ test("/rt energy= reaches applyLocalVadEnergy through the full command path (bd-
     else process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD = prev;
   }
 });
+
+test("/rt energy= applies live to a running local-vad session, changing detection (bd-a5e1d4)", async () => {
+  const prev = process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;
+  delete process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD; // start from defaults (0.012)
+  let cap;
+  const captureFn = () => {
+    cap = new EventEmitter();
+    cap.stdout = new EventEmitter();
+    cap.stderr = new EventEmitter();
+    cap.kill = () => { cap.killed = true; };
+    return cap;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "ok" });
+  try {
+    const { pi, commands, handlers, ctx, sentUserMessages } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+    await commands.get("rt").handler("stt local-vad", ctx);
+
+    // amp 983 -> normalized RMS ~0.030: above the 0.012 default, below 0.5.
+    const tone = (ms, amp) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      for (let i = 0; i < n; i++) b.writeInt16LE(amp, i * 2);
+      return b;
+    };
+    cap.stdout.emit("data", tone(500, 983));
+    for (let i = 0; i < 31; i++) cap.stdout.emit("data", tone(100, 0));
+    await waitFor(() => sentUserMessages.length >= 1, { timeoutMs: 2000 });
+    assert.equal(sentUserMessages.length, 1, "0.03-RMS speech commits at the default threshold");
+
+    // Raise the threshold live; the same speech is now sub-threshold (silence).
+    await commands.get("rt").handler("energy=0.5", ctx);
+    cap.stdout.emit("data", tone(500, 983));
+    for (let i = 0; i < 31; i++) cap.stdout.emit("data", tone(100, 0));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(sentUserMessages.length, 1, "after /rt energy=0.5 the same speech no longer commits (applied live to the running segmenter)");
+  } finally {
+    __setLocalVadHooksForTest({});
+    if (prev === undefined) delete process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;
+    else process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD = prev;
+  }
+});
