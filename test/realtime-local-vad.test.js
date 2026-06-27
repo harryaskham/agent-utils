@@ -138,6 +138,39 @@ test("flush finalizes an in-progress turn as a commit send (bd-9399e7)", async (
   assert.deepEqual(sent, ["hello world"]);
 });
 
+test("pushFrame re-frames arbitrary-size capture chunks into fixed VAD frames (bd-343617)", async () => {
+  const inserted = [];
+  const sent = [];
+  const controller = new LocalVadController({
+    transcribe: async () => "ok",
+    insertPartial: () => inserted.push(1),
+    sendTurn: () => sent.push(1),
+  });
+  // A speech chunk that is NOT a 100 ms multiple (350 ms) then odd-sized silence
+  // chunks totaling > 3000 ms -> still exactly one insert then one commit, proving
+  // segmentation is driven by re-framed 100 ms windows, not the raw chunk sizes.
+  await controller.pushFrame(frame(350, { speech: true }));
+  for (const ms of [250, 137, 313, 200, 400, 100, 350, 250, 500, 600, 300]) {
+    await controller.pushFrame(frame(ms, { speech: false }));
+  }
+  assert.equal(inserted.length, 1, "one insert despite unaligned chunk sizes");
+  assert.equal(sent.length, 1, "one commit despite unaligned chunk sizes");
+});
+
+test("pushFrame buffers a sub-frame remainder until flush (bd-343617)", async () => {
+  const sent = [];
+  const controller = new LocalVadController({
+    transcribe: async () => "x",
+    sendTurn: () => sent.push(1),
+  });
+  // 250 ms of speech delivered as five 50 ms chunks (each below the 100 ms frame
+  // size): nothing should commit until flush handles the buffered remainder.
+  for (let i = 0; i < 5; i++) await controller.pushFrame(frame(50, { speech: true }));
+  assert.equal(sent.length, 0, "no commit while only sub-frame chunks have arrived");
+  await controller.flush();
+  assert.equal(sent.length, 1, "flush finalizes the buffered audio as one commit");
+});
+
 test("a custom segmenter config (faster commit) is honored end-to-end (bd-9399e7)", async () => {
   const sent = [];
   const controller = new LocalVadController({

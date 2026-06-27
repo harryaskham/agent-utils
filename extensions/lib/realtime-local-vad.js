@@ -11,7 +11,14 @@
 //   - commit -> re-transcribe the WHOLE turn audio (accurate final send).
 //   - thresholds default 1s insert / 3s commit, tunable via PI_RT_LOCAL_VAD_*.
 
+import { CHANNELS, SAMPLE_RATE, SAMPLE_WIDTH } from "./realtime-audio.js";
 import { DEFAULT_VAD_SEGMENTER_CONFIG, VadSegmenter } from "./realtime-vad-segmenter.js";
+
+// Re-framing granularity: live capture delivers arbitrary-size pipe chunks, but
+// the VadSegmenter computes RMS + silence per push() and is designed for small
+// fixed frames, so the controller re-frames incoming audio to ~100 ms frames.
+export const DEFAULT_FRAME_MS = 100;
+export const DEFAULT_FRAME_BYTES = Math.round((DEFAULT_FRAME_MS / 1000) * SAMPLE_RATE) * CHANNELS * SAMPLE_WIDTH;
 
 // PI_RT_LOCAL_VAD_* env knobs, parallel to the server-VAD PI_RT_VAD_* ones.
 export const LOCAL_VAD_ENV_KEYS = {
@@ -60,7 +67,7 @@ export function describeLocalVadConfig(config = {}) {
 ///   segmenter                                    an existing VadSegmenter (optional)
 ///   config                                       VadSegmenter config when none is supplied
 export class LocalVadController {
-  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError } = {}) {
+  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, frameBytes } = {}) {
     if (typeof transcribe !== "function") {
       throw new Error("LocalVadController requires a transcribe(audio) function");
     }
@@ -69,18 +76,37 @@ export class LocalVadController {
     this.insertPartial = insertPartial || (() => {});
     this.sendTurn = sendTurn || (() => {});
     this.onError = onError || (() => {});
+    this.frameBytes = frameBytes > 0 ? Math.trunc(frameBytes) : DEFAULT_FRAME_BYTES;
+    this._pending = Buffer.alloc(0);
   }
 
-  /// Feed one PCM16 frame; runs any resulting insert/commit handlers in order.
-  async pushFrame(frame) {
-    for (const event of this.segmenter.push(frame)) {
-      // Events are emitted in order (insert before commit); handle serially.
-      await this._handle(event);
+  /// Feed PCM16 audio (an arbitrary-size capture chunk). Buffers and re-frames it
+  /// into fixed ~100 ms frames before pushing to the segmenter, so live pipe
+  /// chunks of any size segment as accurately as small fixed frames. Runs any
+  /// resulting insert/commit handlers in order.
+  async pushFrame(chunk) {
+    if (!chunk || chunk.length === 0) return;
+    this._pending = this._pending.length ? Buffer.concat([this._pending, chunk]) : Buffer.from(chunk);
+    while (this._pending.length >= this.frameBytes) {
+      const frame = this._pending.subarray(0, this.frameBytes);
+      this._pending = this._pending.subarray(this.frameBytes);
+      for (const event of this.segmenter.push(frame)) {
+        // Events are emitted in order (insert before commit); handle serially.
+        await this._handle(event);
+      }
     }
   }
 
-  /// Force-finalize the current turn (e.g. on stop/cancel): handles any commit.
+  /// Force-finalize the current turn (e.g. on stop/cancel): flush any buffered
+  /// sub-frame remainder, then handle any commit.
   async flush() {
+    if (this._pending.length) {
+      const frame = this._pending;
+      this._pending = Buffer.alloc(0);
+      for (const event of this.segmenter.push(frame)) {
+        await this._handle(event);
+      }
+    }
     for (const event of this.segmenter.flush()) {
       // Ordered finalization (at most one commit).
       await this._handle(event);
