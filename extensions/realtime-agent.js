@@ -212,7 +212,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 summary=true fork=true chime=false start=vad. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_*. Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false start=vad. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -2262,6 +2262,18 @@ export default function realtimeAgentExtension(pi) {
   // end-to-end by the operator on mic/Pulse.
   const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0 };
 
+  // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
+  // VAD). Updates the running segmenter immediately and persists for next start.
+  function applyLocalVadEnergy(value, ctx) {
+    const current = localVad.cfg?.energyThreshold ?? parseLocalVadConfig().energyThreshold;
+    const v = parseVadThreshold(value, current);
+    process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD = String(v);
+    if (localVad.cfg) localVad.cfg.energyThreshold = v;
+    if (localVad.controller?.segmenter?.config) localVad.controller.segmenter.config.energyThreshold = v;
+    try { ctx?.ui?.notify?.(`local-vad energy threshold = ${v}${localVad.active ? " (applied live)" : ""}`, "info"); } catch {}
+    return v;
+  }
+
   function localVadStatusLine() {
     if (!localVad.active && !localVad.lastTranscript && !localVad.lastError) return "local-vad: idle";
     const parts = [`local-vad: ${localVad.active ? "listening" : "idle"}`];
@@ -2299,6 +2311,12 @@ export default function realtimeAgentExtension(pi) {
       transcribe: (buf) => localVadTranscribe(buf, { model }),
       insertPartial: (text) => {
         try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${text}`], { placement: "belowEditor" }); } catch {}
+      },
+      onState: (state) => {
+        // Immediate listening/transcribing feedback before the first partial text
+        // (so the indicator reacts the moment VAD triggers, like the WSS modes).
+        const line = state === "listening" ? "🎤 listening…" : state === "transcribing" ? "✍️ transcribing…" : null;
+        if (line) { try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${line}`], { placement: "belowEditor" }); } catch {} }
       },
       sendTurn: (text) => {
         localVad.lastTranscript = text;
@@ -2461,6 +2479,7 @@ export default function realtimeAgentExtension(pi) {
     if (out.chime !== undefined && out.chime !== null) out.chime = parseBooleanValue(out.chime);
     if (out.speed !== undefined && out.speed !== null) out.speed = parseRealtimeSpeed(out.speed);
     if (out.thresh !== undefined && out.thresh !== null) out.thresh = parseVadThreshold(out.thresh);
+    if (out.energy !== undefined && out.energy !== null) out.energy = parseVadThreshold(out.energy);
     if (out.fork !== undefined && out.fork !== null) out.fork = parseBooleanValue(out.fork);
     return out;
   }
@@ -2494,6 +2513,7 @@ export default function realtimeAgentExtension(pi) {
     if (params.trans || params.transcription || params.transcriptionModel) controls.setTranscriptionModel(params.trans || params.transcription || params.transcriptionModel, ctx);
     if (params.speed !== undefined) controls.setSpeed(params.speed, ctx);
     if (params.thresh !== undefined) controls.setVadThreshold(params.thresh, ctx);
+    if (params.energy !== undefined) applyLocalVadEnergy(params.energy, ctx);
     if (params.reasoning) controls.setReasoningEffort(params.reasoning, ctx);
     if (params.summary !== undefined) controls.setSummaryContext(params.summary, ctx);
     if (params.chime !== undefined) controls.setChime(params.chime, ctx);

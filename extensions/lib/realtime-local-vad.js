@@ -76,7 +76,7 @@ export function describeLocalVadConfig(config = {}) {
 ///   segmenter                                    an existing VadSegmenter (optional)
 ///   config                                       VadSegmenter config when none is supplied
 export class LocalVadController {
-  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, frameBytes, placeholder } = {}) {
+  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, onState, frameBytes, placeholder } = {}) {
     if (typeof transcribe !== "function") {
       throw new Error("LocalVadController requires a transcribe(audio) function");
     }
@@ -85,6 +85,9 @@ export class LocalVadController {
     this.insertPartial = insertPartial || (() => {});
     this.sendTurn = sendTurn || (() => {});
     this.onError = onError || (() => {});
+    // Lifecycle state callback for a live UI: "listening" (speech detected),
+    // "transcribing" (a transcribe started), "idle" (turn sent). Best-effort.
+    this.onState = onState || (() => {});
     this.frameBytes = frameBytes > 0 ? Math.trunc(frameBytes) : DEFAULT_FRAME_BYTES;
     // Optional text shown the instant a turn's first partial is pending, before
     // the first re-draft candidate returns. Opt-in (the live wiring enables it).
@@ -115,7 +118,14 @@ export class LocalVadController {
     while (this._pending.length >= this.frameBytes) {
       const frame = this._pending.subarray(0, this.frameBytes);
       this._pending = this._pending.subarray(this.frameBytes);
-      for (const event of this.segmenter.push(frame)) this._dispatch(event);
+      // Surface "listening" the instant a fresh turn starts (turnSpeechMs 0 -> >0),
+      // so the live UI reacts the moment VAD triggers, before the first insert.
+      const wasIdle = this.segmenter.turnSpeechMs === 0;
+      const events = this.segmenter.push(frame);
+      if (wasIdle && this.segmenter.turnSpeechMs > 0) {
+        try { this.onState("listening"); } catch (err) { this.onError(err); }
+      }
+      for (const event of events) this._dispatch(event);
     }
   }
 
@@ -169,6 +179,7 @@ export class LocalVadController {
     }
     if (!job) return;
     this._transcribing = true;
+    try { this.onState(job.kind === "commit" ? "transcribing-final" : "transcribing", job.event); } catch { /* best-effort */ }
     this._current = Promise.resolve()
       .then(() => this.transcribe(job.audio))
       .then((raw) => {
@@ -176,6 +187,7 @@ export class LocalVadController {
         if (job.kind === "commit") {
           this._hasPartial = false;
           if (text) this.sendTurn(text, job.event);
+          try { this.onState("idle", job.event); } catch { /* best-effort */ }
         } else if (text) {
           this._hasPartial = true;
           this.insertPartial(text, job.event);

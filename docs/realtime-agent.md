@@ -201,6 +201,11 @@ defaults to `mai-transcribe-1.5` and is overridden with `PI_RT_LOCAL_VAD_MODEL`
 (a realtime-only model such as `gpt-realtime-whisper` is not valid for the batch
 REST `stt` call). `/rt doctor` shows the active local-vad model and thresholds.
 
+The energy threshold can be tuned **live** (without restarting) via `/rt energy=<0..1>`
+(higher = less sensitive), parallel to `/rt thresh=` for server VAD. While listening,
+the status widget reacts in real time: `🎤 listening…` the instant speech is detected,
+`✍️ transcribing…` while a batch runs, then your transcript firming up as you speak.
+
 Tuning knobs (all optional):
 
 | Env var | Default | Meaning |
@@ -221,9 +226,10 @@ Tuning knobs (all optional):
 - *Turns commit too early or too late.* Adjust `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS`
   (trailing silence that finalizes/sends the turn) and
   `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` (provisional-partial silence).
-- *Speech is missed, or ambient noise triggers turns.* Tune
-  `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` (lower to catch quieter speech, raise to
-  reject noise) and `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS`.
+- *Speech is missed, or ambient noise triggers turns.* Tune the energy threshold
+  live with `/rt energy=<0..1>` (lower to catch quieter speech, raise to reject
+  noise), or set `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` / `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS`
+  before starting.
 - *The assistant's spoken reply is re-captured as a new turn (echo).* There is no
   half-duplex guard yet; this only occurs if Pi replies are spoken aloud (caco TTS
   daemon / speak-mixin). A gate is designed but pending validation.

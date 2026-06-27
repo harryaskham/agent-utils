@@ -262,3 +262,22 @@ test("multi-segment turn with a slow transcribe still commits — re-draft pump 
   assert.equal(maxConcurrent, 1, "transcription stays single-flight");
   assert.ok(calls <= 3, `re-drafts coalesce instead of piling up one-per-gap (got ${calls} transcribes for 6 insert gaps + 1 commit)`);
 });
+
+test("onState surfaces listening immediately on speech, then transcribing, then idle (bd-71d4fb)", async () => {
+  const states = [];
+  const controller = new LocalVadController({
+    transcribe: async () => "hi",
+    onState: (s) => states.push(s),
+    sendTurn: () => {},
+  });
+  // 300 ms speech (3 frames) then 3000 ms silence -> listening (once) -> draft
+  // transcribe -> commit -> idle.
+  await controller.pushFrame(frame(300, { speech: true }));
+  for (let s = 0; s < 3000; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller.flush();
+
+  assert.equal(states[0], "listening", "listening fires on the first speech frame, before any insert");
+  assert.equal(states.filter((s) => s === "listening").length, 1, "listening fires once per turn, not per speech frame");
+  assert.ok(states.includes("transcribing"), "transcribing fires when a draft starts");
+  assert.equal(states.at(-1), "idle", "idle fires after the turn is sent");
+});
