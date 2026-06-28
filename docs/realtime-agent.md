@@ -239,6 +239,31 @@ Tuning knobs (all optional):
   half-duplex guard yet; this only occurs if Pi replies are spoken aloud (caco TTS
   daemon / speak-mixin). A gate is designed but pending validation.
 
+### Spoken replies (force-agent-speech)
+
+`force-agent-speech` closes the other half of the hands-free loop: with `/rt stt
+local-vad` turning your *speech* into turns, this speaks the assistant's *reply*
+aloud as a short precis (markdown/code stripped, truncated) so the conversation is
+heard, not just shown.
+
+It is opt-in and best-effort (it never blocks or breaks a turn):
+
+```text
+# enable for the session:
+export PI_FORCE_AGENT_SPEECH=1          # or true/on/yes
+export PI_FORCE_AGENT_SPEECH_MAX_CHARS=240   # optional precis length (default 240)
+# or toggle live:
+/force-speech on        # off | status | env (follow the env again)
+```
+
+The precis is spoken via `caco msg speak` (the TTS daemon). Tool-only turns with no
+text are skipped.
+
+> **Half-duplex caveat (bd-ddc391):** when this speaks while `/rt stt local-vad` is
+> listening, the assistant's own voice can echo back into the mic and be transcribed
+> as a phantom turn. The half-duplex guard is a separate follow-up; until it lands,
+> raise `/rt energy=` or pause local-vad while replies are spoken.
+
 ### Replay the latest spoken response
 
 ```text
