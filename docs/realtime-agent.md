@@ -235,9 +235,11 @@ Tuning knobs (all optional):
   usually the threshold sits below your mic's noise floor. Raise it live with
   `/rt energy=0.05` (or higher); a one-time hint also prompts you. If raising it
   changes nothing, the capture may have died — `/rt stt stop` then `/rt stt local-vad`.
-- *The assistant's spoken reply is re-captured as a new turn (echo).* There is no
-  half-duplex guard yet; this only occurs if Pi replies are spoken aloud (caco TTS
-  daemon / speak-mixin). A gate is designed but pending validation.
+- *The assistant's spoken reply is re-captured as a new turn (echo).* Only happens
+  if Pi replies are spoken aloud. With `force-agent-speech`, local-vad shares its
+  speaking signal and drops the mic while a reply plays (plus a short release tail),
+  so the echo is gated (bd-ddc391). On a slow TTS voice, raise `/rt energy=` if any
+  tail still leaks.
 
 ### Spoken replies (force-agent-speech)
 
@@ -259,10 +261,12 @@ export PI_FORCE_AGENT_SPEECH_MAX_CHARS=240   # optional precis length (default 2
 The precis is spoken via `caco msg speak` (the TTS daemon). Tool-only turns with no
 text are skipped.
 
-> **Half-duplex caveat (bd-ddc391):** when this speaks while `/rt stt local-vad` is
-> listening, the assistant's own voice can echo back into the mic and be transcribed
-> as a phantom turn. The half-duplex guard is a separate follow-up; until it lands,
-> raise `/rt energy=` or pause local-vad while replies are spoken.
+> **Half-duplex (bd-ddc391):** force-agent-speech and local-vad share an in-process
+> speaking signal, so while a reply is being spoken (its estimated duration plus a
+> short release tail) local-vad drops the mic — the assistant's own voice is not
+> captured and transcribed as a phantom turn. The window is estimated from the precis
+> length (~15 chars/s); on a slow TTS voice you can still raise `/rt energy=` if any
+> tail leaks through.
 
 ### Replay the latest spoken response
 

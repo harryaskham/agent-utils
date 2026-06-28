@@ -305,3 +305,26 @@ test("onState fires the overlong hint for gapless continuous audio, not once a t
     assert.equal(states.filter((s) => s === "overlong").length, 0, "no overlong hint once the turn has had a silence gap");
   }
 });
+
+test("isSuppressed drops mic frames while the assistant speaks, resumes after (half-duplex, bd-ddc391)", async () => {
+  const sent = [];
+  let speaking = true;
+  const controller = new LocalVadController({
+    transcribe: async () => "echo",
+    sendTurn: (t) => sent.push(t),
+    isSuppressed: () => speaking,
+  });
+  // While suppressed: a full speak+silence turn segments nothing (frames dropped).
+  await controller.pushFrame(frame(500, { speech: true }));
+  for (let s = 0; s < 3000; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller.flush();
+  assert.equal(sent.length, 0, "no turn while the assistant is speaking (mic dropped)");
+
+  // Once suppression lifts, a real turn is captured + committed normally.
+  speaking = false;
+  await controller.pushFrame(frame(500, { speech: true }));
+  for (let s = 0; s < 3000; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller.flush();
+  assert.equal(sent.length, 1, "turn captured once the release window passes");
+  assert.equal(sent[0], "echo");
+});

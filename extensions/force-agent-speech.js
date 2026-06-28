@@ -14,6 +14,7 @@
 // local-vad while using force-speech.
 
 import { spawn } from "node:child_process";
+import { markAssistantSpeaking, estimateSpeechMs } from "./lib/half-duplex-state.js";
 
 export const DEFAULT_MAX_CHARS = 240;
 
@@ -128,6 +129,10 @@ export default function forceAgentSpeechExtension(pi) {
       const text = extractAssistantText(event?.message);
       const spoken = shortSpokenSummary(text, { maxChars: forceSpeechMaxChars() });
       if (!spoken) return;
+      // Half-duplex (bd-ddc391): mark the assistant as speaking so a concurrent
+      // /rt stt local-vad drops the mic for the spoken window + a release tail,
+      // instead of transcribing the reply's echo back as a phantom turn.
+      markAssistantSpeaking(estimateSpeechMs(spoken));
       await speakRunner(spoken, { project: process.env.CACO_PROJECT || process.env.CACOPHONY_PROJECT });
     } catch {
       // best-effort: never break a turn because speech failed.

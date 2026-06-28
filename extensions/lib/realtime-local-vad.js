@@ -76,7 +76,7 @@ export function describeLocalVadConfig(config = {}) {
 ///   segmenter                                    an existing VadSegmenter (optional)
 ///   config                                       VadSegmenter config when none is supplied
 export class LocalVadController {
-  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, onState, frameBytes, placeholder, overlongHintMs } = {}) {
+  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, onState, frameBytes, placeholder, overlongHintMs, isSuppressed } = {}) {
     if (typeof transcribe !== "function") {
       throw new Error("LocalVadController requires a transcribe(audio) function");
     }
@@ -97,6 +97,9 @@ export class LocalVadController {
     // NO silence gap (i.e. never inserts) — the over-sensitive-threshold / constant
     // noise signature that otherwise sits on "listening" forever. 0 disables.
     this.overlongHintMs = Number.isFinite(overlongHintMs) ? overlongHintMs : (config?.overlongHintMs ?? 0);
+    // Half-duplex gate (bd-ddc391): when this returns true the assistant is speaking,
+    // so mic frames are dropped (the reply's echo is not captured/transcribed).
+    this.isSuppressed = typeof isSuppressed === "function" ? isSuppressed : null;
     this._pending = Buffer.alloc(0);
     // Single-flight transcription pump state (kept OFF the ingestion path).
     this._transcribing = false;
@@ -121,6 +124,12 @@ export class LocalVadController {
 
   _ingest(chunk) {
     if (!chunk || chunk.length === 0) return;
+    // Half-duplex: drop mic audio while the assistant is speaking (+ release tail)
+    // so its own spoken reply is not captured + transcribed as a phantom turn.
+    if (this.isSuppressed && this.isSuppressed()) {
+      this._pending = Buffer.alloc(0);
+      return;
+    }
     this._pending = this._pending.length ? Buffer.concat([this._pending, chunk]) : Buffer.from(chunk);
     while (this._pending.length >= this.frameBytes) {
       const frame = this._pending.subarray(0, this.frameBytes);

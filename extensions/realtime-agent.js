@@ -80,6 +80,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
+import { isAssistantSpeaking } from "./lib/half-duplex-state.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import {
   env,
@@ -2312,6 +2313,7 @@ export default function realtimeAgentExtension(pi) {
       config: cfg,
       placeholder: "…",
       overlongHintMs: 7000,
+      isSuppressed: () => isAssistantSpeaking(),
       transcribe: (buf) => localVadTranscribe(buf, { model }),
       insertPartial: (text) => {
         try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${text}`], { placement: "belowEditor" }); } catch {}
