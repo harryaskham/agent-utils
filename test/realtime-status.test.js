@@ -331,16 +331,23 @@ test("diagnosticLines hints when auto-reconnect is exhausted", () => {
   });
 });
 
-test("micCaptureSummary renders a level meter when session.inputLevel is present", () => {
+test("micCaptureSummary renders a gained level meter when session.inputLevel is present", () => {
   // No inputLevel -> byte-only summary unchanged (defensive).
   assert.equal(
     micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024 }),
     "vad active \u00b7 1024 bytes",
   );
-  // Finite level -> a "level:[bar] NN%" segment appears.
+  // session.inputLevel is raw smoothed RMS (~0.01-0.1); it is gained via
+  // rmsToLevel(12) before render so a speech-level RMS fills the bar instead of
+  // barely twitching. RMS 0.05 -> rmsToLevel = 0.6 -> 60%.
   assert.match(
-    micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024, inputLevel: 0.5 }),
-    / \u00b7 level:\[.+\] +50%$/,
+    micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024, inputLevel: 0.05 }),
+    / \u00b7 level:\[.+\] +60%$/,
+  );
+  // RMS >= ~0.083 saturates the bar (gain 12 -> clamp 1.0 -> 100%).
+  assert.match(
+    micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024, inputLevel: 0.1 }),
+    / \u00b7 level:\[.+\] +100%$/,
   );
   // Zero level still renders (active mic, currently silent/muted) -> 0%.
   assert.match(
