@@ -131,6 +131,7 @@ import {
 import {
   isAuthFailure,
   isMicPermissionFailure,
+  realtimeSessionStartFailureReason,
   stripAnsi,
   truncateDiagnostic,
   truncateVisible,
@@ -220,7 +221,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false start=vad. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -343,6 +344,7 @@ class RealtimeSession {
     this.micMode = null;
     this.lastCtx = null;
     this.lastResponseError = null;
+    this.lastConnectError = null;
     this.lastMicError = null;
     this.reasoningRejected = false;
     this.speedRejected = false;
@@ -586,7 +588,20 @@ class RealtimeSession {
       ws.once("error", (e) => { clearTimeout(timer); rejectOpen(new Error(`Realtime WebSocket error: ${e.message || "unknown"}`)); });
     });
 
-    const first = await this.recvOnce(12000);
+    let first;
+    try {
+      first = await this.recvOnce(12000);
+    } catch (e) {
+      // The WS opened but closed before the first event (often a silent 1006):
+      // the upstream GA realtime session never established. Record a clear,
+      // doctor-surfaced reason instead of the generic "WebSocket closed" (bd-d0124f).
+      if (e?.wsClosedBeforeEvent) {
+        const reason = realtimeSessionStartFailureReason(e.wsCloseCode);
+        this.lastConnectError = reason;
+        throw new Error(reason);
+      }
+      throw e;
+    }
     if (first.type === "error") throw new Error(JSON.stringify(first.error || first));
     if (first.type !== "session.created") {
       this.notify(`Expected session.created, got ${first.type}`, "warning");
@@ -597,6 +612,7 @@ class RealtimeSession {
     this.connected = true;
     this.config.reconnectAttempts = 0;
     this.config.lastDisconnectReason = null;
+    this.lastConnectError = null;
     this.clearReconnectTimer();
     this.setPhase("idle");
     // session.update happens lazily on the first streamSimple call once we have
@@ -615,7 +631,16 @@ class RealtimeSession {
         try { resolve(JSON.parse(await eventDataToString(data))); }
         catch (e) { reject(e); }
       };
-      const onClose = () => { cleanup(); reject(new Error("WebSocket closed")); };
+      const onClose = (code, reason) => {
+        cleanup();
+        // Surface that the socket closed BEFORE any event arrived (the
+        // session-start 1006 case) so connect() can classify it (bd-d0124f).
+        const err = new Error("WebSocket closed");
+        err.wsClosedBeforeEvent = true;
+        err.wsCloseCode = code;
+        err.wsCloseReason = reason ? String(reason) : "";
+        reject(err);
+      };
       const onError = (e) => { cleanup(); reject(new Error(`WebSocket error: ${e.message || "unknown"}`)); };
       const cleanup = () => {
         clearTimeout(timer);
@@ -1883,6 +1908,16 @@ export function createRealtimeControls({ pi, session, config }) {
         transcriptionModel: config.transcriptionModel,
         baseUrl: config.baseUrl,
         realtimeUrl: realtimeUrl(config.baseUrl, config.model),
+        directAzure: !!config.directAzure,
+        azureEndpoint: config.azureEndpoint || null,
+        azureDeployment: config.azureDeployment || null,
+        azureApiVersion: config.azureApiVersion ?? null,
+        azureProtocol: config.azureProtocol || null,
+        // Effective connect URL. No secret here: the Azure api key is sent as a
+        // header, never in the URL, so this is safe to echo/show.
+        effectiveUrl: config.directAzure && config.azureEndpoint
+          ? azureRealtimeUrl(config.azureEndpoint, config.azureDeployment || config.model, config.azureApiVersion, config.azureProtocol)
+          : realtimeUrl(config.baseUrl, config.model),
         audioBackend: process.env.PI_RT_AUDIO_BACKEND || "pulse",
         pulse: {
           server: process.env.PULSE_SERVER || null,
@@ -1899,6 +1934,7 @@ export function createRealtimeControls({ pi, session, config }) {
         state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled, lastInputMode: session.lastTurnInputMode || null }),
         health: {
           lastResponseError: session.lastResponseError || null,
+          lastConnectError: session.lastConnectError || null,
           lastMicError: session.lastMicError || null,
           lastPlaybackError: config.lastPlaybackError || null,
           lastPlaybackExit: config.lastPlaybackExit || null,
@@ -1949,6 +1985,55 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeBaseUrl(String(baseUrl || "").trim());
       if (!next) throw new Error("Realtime baseUrl cannot be empty");
       config.baseUrl = next;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    // Azure / model connection settings. These take effect on the NEXT connect
+    // (a running session keeps its socket); set them, then `/rt start`/`/rt stt`
+    // or reconnect. The Azure api key is never set here — it is read at connect
+    // time from PI_RT_AZURE_API_KEY / AZURE_CANADACENTRAL_API_KEY (bd-d0124f).
+    setModel(model, ctx) {
+      const next = normalizeRealtimeModelId(String(model || "").trim());
+      if (!next) throw new Error("Realtime model cannot be empty");
+      config.model = next;
+      session.audioModeApplied = null;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setDirectAzure(enabled, ctx) {
+      config.directAzure = !!enabled;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setAzureEndpoint(endpoint, ctx) {
+      config.azureEndpoint = String(endpoint || "").trim() || undefined;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setAzureDeployment(deployment, ctx) {
+      config.azureDeployment = String(deployment || "").trim() || undefined;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setAzureApiVersion(version, ctx) {
+      // Blank / "none" / "ga" => omit api-version (GA realtime path). Stored as-is;
+      // azureRealtimeUrl normalizes none/ga/blank to the unversioned GA URL.
+      config.azureApiVersion = String(version ?? "").trim();
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setAzureProtocol(protocol, ctx) {
+      const next = String(protocol || "").trim().toLowerCase();
+      if (next && next !== "v1" && next !== "beta" && next !== "ga") {
+        throw new Error(`Unsupported azure protocol: ${protocol} (use v1 or beta)`);
+      }
+      config.azureProtocol = next || "v1";
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2550,6 +2635,10 @@ export default function realtimeAgentExtension(pi) {
     if (out.thresh !== undefined && out.thresh !== null) out.thresh = parseVadThreshold(out.thresh);
     if (out.energy !== undefined && out.energy !== null) out.energy = parseVadThreshold(out.energy);
     if (out.fork !== undefined && out.fork !== null) out.fork = parseBooleanValue(out.fork);
+    if (out.directAzure !== undefined && out.directAzure !== null) out.directAzure = parseBooleanValue(out.directAzure);
+    for (const key of ["model", "azureEndpoint", "azureDeployment", "azureApiVersion", "azureProtocol"]) {
+      if (out[key] !== undefined && out[key] !== null) out[key] = String(out[key]).trim();
+    }
     return out;
   }
 
@@ -2578,6 +2667,12 @@ export default function realtimeAgentExtension(pi) {
       controls.setPulseRouting({ server: params.pulseServer, source: params.pulseSource, sink: params.pulseSink }, ctx);
     }
     if (params.baseUrl) controls.setBaseUrl(params.baseUrl, ctx);
+    if (params.model) controls.setModel(params.model, ctx);
+    if (params.directAzure !== undefined) controls.setDirectAzure(params.directAzure, ctx);
+    if (params.azureEndpoint !== undefined) controls.setAzureEndpoint(params.azureEndpoint, ctx);
+    if (params.azureDeployment !== undefined) controls.setAzureDeployment(params.azureDeployment, ctx);
+    if (params.azureApiVersion !== undefined) controls.setAzureApiVersion(params.azureApiVersion, ctx);
+    if (params.azureProtocol !== undefined) controls.setAzureProtocol(params.azureProtocol, ctx);
     if (params.voice) controls.setVoice(params.voice, ctx);
     if (params.trans || params.transcription || params.transcriptionModel) controls.setTranscriptionModel(params.trans || params.transcription || params.transcriptionModel, ctx);
     if (params.speed !== undefined) controls.setSpeed(params.speed, ctx);
@@ -2649,6 +2744,12 @@ export default function realtimeAgentExtension(pi) {
       mic: v.mic,
       listen: v.listen,
       stt: v.stt,
+      model: v.model,
+      directAzure: v.direct_azure ?? v.directazure ?? v.azure,
+      azureEndpoint: v.azure_endpoint ?? v.azureendpoint ?? v.endpoint,
+      azureDeployment: v.azure_deployment ?? v.azuredeployment ?? v.deployment,
+      azureApiVersion: v.azure_api_version ?? v.azureapiversion ?? v.api_version ?? v.apiversion,
+      azureProtocol: v.azure_protocol ?? v.azureprotocol ?? v.protocol,
     };
   }
 
@@ -2660,6 +2761,7 @@ export default function realtimeAgentExtension(pi) {
       try {
         const result = await applyRealtimeParams(envArgsToRealtimeParams(parsed), ctx);
         if (result?.lines) ctx.ui.notify(result.lines.join("\n"), "info");
+        else if (result?.effectiveUrl) ctx.ui.notify(`Realtime settings updated — ${result.directAzure ? "direct-azure" : "proxy"} ${result.model}: ${result.effectiveUrl}`, "info");
         else ctx.ui.notify("Realtime settings updated", "info");
       } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;

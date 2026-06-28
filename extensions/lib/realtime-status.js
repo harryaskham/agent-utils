@@ -196,6 +196,9 @@ export function diagnosticLines(session, config) {
   const responseError = truncateDiagnostic(session.lastResponseError || "");
   const micError = truncateDiagnostic(session.lastMicError || "");
   const playbackError = truncateDiagnostic(config.lastPlaybackError || "");
+  // The realtime WS opened but closed before session.created (often a silent
+  // 1006): surface the clear upstream-session-start reason first (bd-d0124f).
+  if (session.lastConnectError) hints.push(truncateDiagnostic(session.lastConnectError));
   if (!apiKey) hints.push(config.directAzure ? "auth: set PI_RT_AZURE_API_KEY or AZURE_OPENAI_API_KEY" : "auth: set OPENAI_API_KEY or PI_RT_API_KEY");
   if (responseError && isAuthFailure(responseError)) hints.push("auth: realtime server rejected credentials; refresh the API key/token and retry /rt-doctor");
   if (/\bparec\b/.test(record) && !commandAvailable("parec")) hints.push("audio input: install PulseAudio tools (macOS: brew install pulseaudio) or set PI_RT_RECORD_CMD");

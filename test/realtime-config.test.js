@@ -63,7 +63,12 @@ test("makeInitialConfig: stable defaults on a clean environment", () => {
     const c = makeInitialConfig();
     assert.equal(c.baseUrl, "https://api.openai.com");
     assert.equal(c.directAzure, false);
-    assert.equal(c.azureApiVersion, "2025-04-01-preview");
+    // GA realtime defaults (bd-d0124f): the direct-Azure target defaults to the
+    // gpt-realtime-2 canadacentral deployment with api-version OMITTED ("none"),
+    // since the preview api-version path was deprecated 2026-04-30.
+    assert.equal(c.azureEndpoint, "https://harryaskham-sandbox-ais-ccan.cognitiveservices.azure.com");
+    assert.equal(c.azureDeployment, "gpt-realtime-2");
+    assert.equal(c.azureApiVersion, "none");
     assert.equal(c.azureProtocol, "v1");
     assert.equal(c.speed, 1.0);
     assert.equal(c.vadThreshold, 0.7);

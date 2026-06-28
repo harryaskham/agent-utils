@@ -8,6 +8,16 @@
 import { env, envBool, numberEnv, parseRealtimeSpeed, parseVadThreshold } from "./realtime-helpers.js";
 import { normalizeRealtimeModelId, normalizeTranscriptionModel, resolveRealtimeVoice } from "./realtime-models.js";
 
+// Default direct-Azure realtime target: the gpt-realtime-2 GA deployment in the
+// canadacentral sandbox (a proven, shared endpoint — gpt-realtime-whisper lives
+// there too). GA realtime requires the unversioned path
+// (/openai/v1/realtime?model=<deployment>); the preview api-version path was
+// deprecated 2026-04-30, so the default api-version is "none" (omitted), NOT the
+// old 2025-04-01-preview. The API key is intentionally NOT hardcoded here — it is
+// read at connect time from PI_RT_AZURE_API_KEY / AZURE_CANADACENTRAL_API_KEY (sops).
+export const DEFAULT_AZURE_ENDPOINT = "https://harryaskham-sandbox-ais-ccan.cognitiveservices.azure.com";
+export const DEFAULT_AZURE_API_VERSION = "none";
+
 // Server-side VAD turn-detection descriptor sent on session.update. Options
 // override the PI_RT_VAD_* env defaults.
 export function buildServerVadTurnDetection(options = {}) {
@@ -30,9 +40,11 @@ export function makeInitialConfig() {
     // PI_RT_BETA_HEADER=1 only for a legacy/self-hosted beta realtime endpoint.
     betaHeader: envBool("PI_RT_BETA_HEADER", false),
     directAzure: envBool("PI_RT_DIRECT_AZURE", false) || (env("PI_RT_PROVIDER") || "").toLowerCase() === "azure",
-    azureEndpoint: env("PI_RT_AZURE_ENDPOINT", "AZURE_CANADACENTRAL_ENDPOINT", "AZURE_OPENAI_ENDPOINT"),
+    azureEndpoint: env("PI_RT_AZURE_ENDPOINT", "AZURE_CANADACENTRAL_ENDPOINT", "AZURE_OPENAI_ENDPOINT") || DEFAULT_AZURE_ENDPOINT,
     azureDeployment: env("PI_RT_AZURE_DEPLOYMENT", "AZURE_CANADACENTRAL_DEPLOYMENT") || normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL")),
-    azureApiVersion: env("PI_RT_AZURE_API_VERSION", "AZURE_OPENAI_API_VERSION") || "2025-04-01-preview",
+    // GA realtime models (gpt-realtime-2) must OMIT api-version (default "none");
+    // the old 2025-04-01-preview path was deprecated 2026-04-30 (bd-cb74b5).
+    azureApiVersion: env("PI_RT_AZURE_API_VERSION", "AZURE_OPENAI_API_VERSION") || DEFAULT_AZURE_API_VERSION,
     azureProtocol: env("PI_RT_AZURE_PROTOCOL") || "v1",
     transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL")),
     voice: resolveRealtimeVoice(),

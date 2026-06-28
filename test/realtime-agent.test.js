@@ -1878,3 +1878,138 @@ test("/rt energy= applies live to a running local-vad session, changing detectio
     else process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD = prev;
   }
 });
+
+// bd-d0124f: /rt k=v Azure connection + model settings, and GA Azure defaults.
+test("makeInitialConfig: Azure realtime defaults target the gpt-realtime-2 GA deployment", async () => {
+  const keys = [
+    "PI_RT_AZURE_ENDPOINT", "AZURE_CANADACENTRAL_ENDPOINT", "AZURE_OPENAI_ENDPOINT",
+    "PI_RT_AZURE_API_VERSION", "AZURE_OPENAI_API_VERSION", "PI_RT_AZURE_PROTOCOL",
+    "PI_RT_AZURE_DEPLOYMENT", "AZURE_CANADACENTRAL_DEPLOYMENT",
+    "PI_RT_DIRECT_AZURE", "PI_RT_PROVIDER", "PI_RT_MODEL", "OPENAI_REALTIME_MODEL",
+  ];
+  const saved = {};
+  for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    const { makeInitialConfig, DEFAULT_AZURE_ENDPOINT } = await import("../extensions/lib/realtime-config.js");
+    const cfg = makeInitialConfig();
+    assert.equal(cfg.azureEndpoint, DEFAULT_AZURE_ENDPOINT);
+    assert.match(cfg.azureEndpoint, /harryaskham-sandbox-ais-ccan\.cognitiveservices\.azure\.com/);
+    // GA realtime must OMIT api-version (preview path deprecated 2026-04-30).
+    assert.equal(cfg.azureApiVersion, "none");
+    assert.equal(cfg.azureProtocol, "v1");
+    // Deployment follows the gpt-realtime-2 model default.
+    assert.equal(cfg.azureDeployment, "gpt-realtime-2");
+    // Direct-azure stays opt-in by default (flip with /rt azure=true).
+    assert.equal(cfg.directAzure, false);
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+});
+
+test("/rt azure k=v setters mutate config and snapshot exposes the GA effective URL (no api-version, no secret)", async () => {
+  const { __RealtimeSessionForTest, createRealtimeControls } = await import("../extensions/realtime-agent.js");
+  const { makeInitialConfig } = await import("../extensions/lib/realtime-config.js");
+  const pi = { sendMessage() {}, sendUserMessage() {}, on() {} };
+  const config = makeInitialConfig();
+  const session = new __RealtimeSessionForTest(pi, config);
+  const controls = createRealtimeControls({ pi, session, config });
+
+  controls.setModel("gpt-realtime-2");
+  controls.setDirectAzure(true);
+  controls.setAzureEndpoint("https://harryaskham-sandbox-ais-ccan.cognitiveservices.azure.com");
+  controls.setAzureDeployment("gpt-realtime-2");
+  controls.setAzureApiVersion("none");
+  controls.setAzureProtocol("v1");
+
+  const snap = controls.snapshot();
+  assert.equal(snap.directAzure, true);
+  assert.equal(snap.azureEndpoint, "https://harryaskham-sandbox-ais-ccan.cognitiveservices.azure.com");
+  assert.equal(snap.azureDeployment, "gpt-realtime-2");
+  assert.equal(snap.azureApiVersion, "none");
+  assert.equal(snap.azureProtocol, "v1");
+  assert.equal(snap.model, "gpt-realtime-2");
+  // GA path: wss, /openai/v1/realtime?model=<deployment>, and NO api-version query.
+  assert.ok(snap.effectiveUrl.startsWith("wss://"), `expected wss, got ${snap.effectiveUrl}`);
+  assert.match(snap.effectiveUrl, /\/openai\/v1\/realtime\?model=gpt-realtime-2$/);
+  assert.ok(!/api-version/.test(snap.effectiveUrl), "GA URL must omit api-version");
+  // The api key is a header, never in the echoed URL.
+  assert.ok(!/key|secret|api_key/i.test(snap.effectiveUrl));
+});
+
+test("/rt azure setters: invalid protocol is rejected, and proxy mode keeps the proxy URL", async () => {
+  const { __RealtimeSessionForTest, createRealtimeControls } = await import("../extensions/realtime-agent.js");
+  const { makeInitialConfig } = await import("../extensions/lib/realtime-config.js");
+  const pi = { sendMessage() {}, sendUserMessage() {}, on() {} };
+  const config = makeInitialConfig();
+  const session = new __RealtimeSessionForTest(pi, config);
+  const controls = createRealtimeControls({ pi, session, config });
+
+  assert.throws(() => controls.setAzureProtocol("grpc"), /Unsupported azure protocol/);
+  // With direct-azure off, the effective URL stays the proxy/base URL path.
+  controls.setDirectAzure(false);
+  controls.setBaseUrl("http://helsinki:4000");
+  controls.setModel("gpt-realtime-2");
+  const snap = controls.snapshot();
+  assert.equal(snap.directAzure, false);
+  assert.match(snap.effectiveUrl, /^ws:\/\/helsinki:4000\/v1\/realtime\?model=gpt-realtime-2$/);
+});
+
+test("realtimeSessionStartFailureReason / isRealtimeSessionStartFailure classify the 1006 stage (bd-d0124f)", async () => {
+  const { realtimeSessionStartFailureReason, isRealtimeSessionStartFailure } = await import("../extensions/lib/realtime-text.js");
+  const reason = realtimeSessionStartFailureReason(1006);
+  assert.match(reason, /closed before session\.created/);
+  assert.match(reason, /close code 1006/);
+  assert.match(reason, /bd-cb6625/);
+  assert.ok(isRealtimeSessionStartFailure(reason));
+  assert.ok(isRealtimeSessionStartFailure("the realtime WebSocket closed before session.created"));
+  assert.ok(!isRealtimeSessionStartFailure("auth: server rejected credentials"));
+  // No code -> still a clear reason, without a "(close code ...)" suffix.
+  assert.match(realtimeSessionStartFailureReason(), /closed before session\.created/);
+  assert.ok(!/close code/.test(realtimeSessionStartFailureReason()));
+});
+
+test("connect: WS opens then 1006-closes before session.created -> clear reason + /rt doctor hint (bd-d0124f)", async () => {
+  const { __RealtimeSessionForTest, setRealtimeWebSocketConstructor } = await import("../extensions/realtime-agent.js");
+  const { makeInitialConfig } = await import("../extensions/lib/realtime-config.js");
+  const { diagnosticLines } = await import("../extensions/lib/realtime-status.js");
+
+  // Mock WS: opens, then closes with code 1006 BEFORE any session.created event.
+  class CloseBeforeSessionWS {
+    constructor() {
+      this.readyState = 1;
+      this.handlers = new Map();
+      setTimeout(() => {
+        this.emit("open");
+        setTimeout(() => this.emit("close", 1006, ""), 0);
+      }, 0);
+    }
+    on(e, h) { const l = this.handlers.get(e) || []; l.push({ handler: h, once: false }); this.handlers.set(e, l); }
+    once(e, h) { const l = this.handlers.get(e) || []; l.push({ handler: h, once: true }); this.handlers.set(e, l); }
+    off(e, h) { this.handlers.set(e, (this.handlers.get(e) || []).filter((x) => x.handler !== h)); }
+    emit(e, ...a) { const l = this.handlers.get(e) || []; for (const x of l) x.handler(...a); this.handlers.set(e, l.filter((x) => !x.once)); }
+    send() {}
+    close() { this.readyState = 3; }
+  }
+
+  const savedKey = process.env.PI_RT_API_KEY;
+  const savedOai = process.env.OPENAI_API_KEY;
+  process.env.PI_RT_API_KEY = "sk-test";
+  try {
+    const pi = { sendMessage() {}, sendUserMessage() {}, on() {} };
+    const config = makeInitialConfig();
+    config.directAzure = false;
+    config.baseUrl = "https://api.openai.com";
+    const session = new __RealtimeSessionForTest(pi, config);
+    setRealtimeWebSocketConstructor(CloseBeforeSessionWS);
+    await assert.rejects(() => session.connect(), /closed before session\.created.*close code 1006/);
+    assert.match(session.lastConnectError || "", /closed before session\.created/);
+    // /rt doctor surfaces the clear reason (not a generic "WebSocket closed").
+    const lines = diagnosticLines(session, config).join("\n");
+    assert.match(lines, /closed before session\.created/);
+    assert.match(lines, /bd-cb6625/);
+  } finally {
+    setRealtimeWebSocketConstructor(FakeWebSocket);
+    if (savedKey === undefined) delete process.env.PI_RT_API_KEY; else process.env.PI_RT_API_KEY = savedKey;
+    if (savedOai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = savedOai;
+  }
+});
