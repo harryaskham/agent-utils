@@ -88,7 +88,10 @@ export async function runCascadeRound({
   conversation = [],
   runTurn,
   speak,
+  synth,
+  play,
   onTurn,
+  onSpeak,
 } = {}) {
   const roster = Array.isArray(participants) ? participants : (participants?.participants || []);
   if (typeof runTurn !== "function") {
@@ -99,7 +102,18 @@ export async function runCascadeRound({
   const humanBody = String(humanText ?? "").trim();
   if (humanBody) convo.push({ speaker: humanLabel, text: humanBody, isHuman: true });
 
+  // Pipelined mode: when separate `synth` (text -> audio) and `play` (audio out)
+  // deps are given, each turn's synthesis is kicked off CONCURRENTLY as soon as its
+  // text is ready, while playback is serialized in turn order. Because the LLM
+  // turns are sequential (each hears the last) but the TTS network calls are
+  // independent, this overlaps synthesis across turns and hides it under earlier
+  // playback — roughly halving a multi-agent round versus the strictly sequential
+  // speak() path. Falls back to the simple sequential `speak` dep otherwise.
+  const pipelined = typeof synth === "function" && typeof play === "function";
   const turns = [];
+  let playChain = Promise.resolve();
+  let playError = null;
+
   for (const turn of plan.turns) {
     const participant = roster[turn.index] || {};
     const messages = buildCascadeTurnMessages({ participant, conversation: convo, roster, humanLabel });
@@ -107,14 +121,29 @@ export async function runCascadeRound({
     const reply = await runTurn(participant, messages, turn);
     const text = String(reply ?? "").trim();
     if (text) convo.push({ speaker: participant.name, text });
-    if (typeof speak === "function" && text) {
+    if (typeof onTurn === "function") onTurn({ participant, text, turn });
+    turns.push({ index: turn.index, name: participant.name, voice: participant.voice, text });
+    if (!text) continue;
+
+    if (pipelined) {
+      // Kick synthesis off now (concurrent); serialize playback after prior turns.
+      const synthP = Promise.resolve().then(() => synth(participant, text, turn));
+      synthP.catch(() => {}); // chain awaits + surfaces the error; avoid unhandledRejection
+      playChain = playChain
+        .then(async () => {
+          const pcm = await synthP;
+          if (typeof onSpeak === "function") onSpeak({ participant, turn });
+          await play(participant, pcm, turn);
+        })
+        .catch((e) => { if (!playError) playError = e; });
+    } else if (typeof speak === "function") {
       // eslint-disable-next-line no-await-in-loop -- speech is sequential within a round.
       await speak(participant, text, turn);
     }
-    if (typeof onTurn === "function") onTurn({ participant, text, turn });
-    turns.push({ index: turn.index, name: participant.name, voice: participant.voice, text });
   }
 
+  await playChain;
+  if (playError) throw playError;
   return { order: plan.order, turns, conversation: convo };
 }
 

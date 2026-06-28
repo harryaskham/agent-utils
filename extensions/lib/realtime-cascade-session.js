@@ -42,13 +42,16 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
 }
 
 export class CascadeController {
-  constructor({ roster = [], order = DEFAULT_ORDER, runTurn, speak, onTurn, humanLabel, rng, maxHistory } = {}) {
+  constructor({ roster = [], order = DEFAULT_ORDER, runTurn, speak, synth, play, onTurn, onSpeak, humanLabel, rng, maxHistory } = {}) {
     if (typeof runTurn !== "function") throw new Error("CascadeController requires a runTurn dep");
     this.roster = Array.isArray(roster) ? roster : (roster?.participants || []);
     this.order = order;
     this.runTurn = runTurn;
     this.speak = typeof speak === "function" ? speak : null;
+    this.synth = typeof synth === "function" ? synth : null;
+    this.play = typeof play === "function" ? play : null;
     this.onTurn = typeof onTurn === "function" ? onTurn : null;
+    this.onSpeak = typeof onSpeak === "function" ? onSpeak : null;
     this.humanLabel = humanLabel;
     this.rng = typeof rng === "function" ? rng : Math.random;
     // Sliding-window cap on the running conversation so a long-lived group chat
@@ -80,7 +83,10 @@ export class CascadeController {
         conversation: this.conversation,
         runTurn: this.runTurn,
         speak: this.speak || undefined,
+        synth: this.synth || undefined,
+        play: this.play || undefined,
         onTurn: this.onTurn || undefined,
+        onSpeak: this.onSpeak || undefined,
         humanLabel: this.humanLabel,
       });
       this.conversation = this.maxHistory && res.conversation.length > this.maxHistory
@@ -134,6 +140,33 @@ export function makeCascadeSpeak({ synthImpl = synthesizeToPcm, playImpl, speed 
       instructions: participant?.instructions,
       speed,
     });
+    if (pcm && pcm.length) await playImpl(pcm, participant);
+  };
+}
+
+/// Build a `synth(participant, text) -> pcm` dep for PIPELINED rounds (synthesis
+/// runs concurrently with playback). Applies sanitizeForSpeech, returns a PCM
+/// buffer (empty for blank text). Pair with makeCascadePlay.
+export function makeCascadeSynth({ synthImpl = synthesizeToPcm, speed } = {}) {
+  return async (participant, text) => {
+    const body = sanitizeForSpeech(text);
+    if (!body) return Buffer.alloc(0);
+    return synthImpl(body, {
+      voice: participant?.voice,
+      model: participant?.ttsModel,
+      baseUrl: participant?.baseUrl,
+      instructions: participant?.instructions,
+      speed,
+    });
+  };
+}
+
+/// Build a `play(participant, pcm)` dep for PIPELINED rounds: plays non-empty PCM
+/// through `playImpl` in the order the orchestrator serializes it. Pair with
+/// makeCascadeSynth.
+export function makeCascadePlay({ playImpl } = {}) {
+  if (typeof playImpl !== "function") throw new Error("makeCascadePlay requires a playImpl(pcm, participant) dep");
+  return async (participant, pcm) => {
     if (pcm && pcm.length) await playImpl(pcm, participant);
   };
 }

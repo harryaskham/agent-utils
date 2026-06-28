@@ -6,6 +6,8 @@ import {
   CascadeController,
   makeCascadeRunTurn,
   makeCascadeSpeak,
+  makeCascadeSynth,
+  makeCascadePlay,
   cascadeRosterFromArgs,
 } from "../extensions/lib/realtime-cascade-session.js";
 
@@ -197,4 +199,41 @@ test("makeCascadeSpeak sanitizes markdown/emoji out of the spoken text before sy
   });
   await speak({ name: "var", voice: "v" }, "Hello **everyone** 👋 see `code`");
   assert.equal(synthText, "Hello everyone see code");
+});
+
+test("makeCascadeSynth sanitises + returns pcm; empty text -> empty buffer", async () => {
+  const calls = [];
+  const synth = makeCascadeSynth({ synthImpl: async (t, opts) => { calls.push({ t, opts }); return Buffer.from(t); } });
+  const pcm = await synth({ name: "var", voice: "cedar", ttsModel: "tm" }, "Hello **world** 👋");
+  assert.equal(calls[0].t, "Hello world");          // sanitised before synth
+  assert.equal(calls[0].opts.voice, "cedar");
+  assert.equal(pcm.toString(), "Hello world");
+  const empty = await synth({ name: "var" }, "   ");
+  assert.equal(empty.length, 0);                     // empty text -> empty buffer, no synth
+  assert.equal(calls.length, 1);
+});
+
+test("makeCascadePlay requires playImpl and skips empty pcm", async () => {
+  assert.throws(() => makeCascadePlay({}), /requires a playImpl/);
+  let plays = 0;
+  const play = makeCascadePlay({ playImpl: async () => { plays += 1; } });
+  await play({ name: "x" }, Buffer.alloc(0));
+  await play({ name: "x" }, Buffer.from([1, 2]));
+  assert.equal(plays, 1);
+});
+
+test("CascadeController drives a pipelined round when given synth+play deps", async () => {
+  const roster = buildParticipantRoster({ mode: MODE_CASCADE, participants: "var,cedar", main: { name: "main" }, env: {} }).participants;
+  const playOrder = [];
+  const c = new CascadeController({
+    roster,
+    order: ORDER_FIXED,
+    runTurn: (p) => `${p.name} hi`,
+    synth: (p) => Buffer.from(p.name),
+    play: (p) => { playOrder.push(p.name); },
+  });
+  const res = await c.handleHumanUtterance("go");
+  assert.deepEqual(res.turns.map((t) => t.name), ["main", "var", "cedar"]);
+  assert.deepEqual(playOrder, ["main", "var", "cedar"]);
+  assert.equal(c.round, 1);
 });

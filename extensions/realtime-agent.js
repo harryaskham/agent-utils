@@ -155,6 +155,8 @@ import {
   CascadeController,
   makeCascadeRunTurn,
   makeCascadeSpeak,
+  makeCascadeSynth,
+  makeCascadePlay,
   cascadeRosterFromArgs,
 } from "./lib/realtime-cascade-session.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
@@ -2413,16 +2415,22 @@ export default function realtimeAgentExtension(pi) {
     const defaultBaseUrl = values.base_url || values.baseurl || env("PI_RT_BASE_URL", "OPENAI_BASE_URL");
     const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl });
     const playbackCommand = config.playbackCommand || defaultPlaybackCommand();
-    const speak = makeCascadeSpeak({
-      playImpl: (pcm) => playPcmBuffer(pcm, playbackCommand, (m, l) => ctx.ui.notify(m, l), config.debug),
-    });
+    const playImpl = (pcm) => playPcmBuffer(pcm, playbackCommand, (m, l) => ctx.ui.notify(m, l), config.debug);
+    // Pipelined by default: synthesise each turn concurrently while playback stays
+    // ordered, ~halving a multi-agent round. Opt out with pipeline=false / PI_CASCADE_PIPELINE=0.
+    const pipelineRaw = String(values.pipeline ?? env("PI_CASCADE_PIPELINE") ?? "1").toLowerCase();
+    const usePipeline = pipelineRaw !== "0" && pipelineRaw !== "false" && pipelineRaw !== "off";
+    const speakDeps = usePipeline
+      ? { synth: makeCascadeSynth({}), play: makeCascadePlay({ playImpl }) }
+      : { speak: makeCascadeSpeak({ playImpl }) };
     cascade.controller = new CascadeController({
       roster: roster.participants,
       order: roster.order,
       runTurn,
-      speak,
+      ...speakDeps,
       maxHistory: Number(values.maxhistory || values.max_history) || Number(env("PI_CASCADE_MAX_HISTORY")) || 48,
-      onTurn: ({ participant, text }) => { if (text) cascadePushTranscript(participant?.name, text); cascade.speaking = participant?.name || null; cascadeWidget(ctx); },
+      onTurn: ({ participant, text }) => { if (text) cascadePushTranscript(participant?.name, text); if (!usePipeline) cascade.speaking = participant?.name || null; cascadeWidget(ctx); },
+      onSpeak: usePipeline ? ({ participant }) => { cascade.speaking = participant?.name || null; cascadeWidget(ctx); } : undefined,
     });
     cascade.roster = roster;
     cascade.lastError = null;

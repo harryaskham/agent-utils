@@ -226,3 +226,83 @@ test("formatCascadeTranscript handles empties", () => {
   assert.deepEqual(formatCascadeTranscript([]), []);
   assert.deepEqual(formatCascadeTranscript(null), []);
 });
+
+// --- Pipelined mode (concurrent synth, ordered play) -----------------------
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+test("pipelined runCascadeRound plays in turn order and returns the same result as sequential", async () => {
+  const roster = buildParticipantRoster({ mode: MODE_CASCADE, participants: "var,cedar", main: { name: "main" }, env: {} }).participants;
+  const playOrder = [];
+  const res = await runCascadeRound({
+    participants: roster,
+    humanText: "go",
+    order: ORDER_FIXED,
+    runTurn: (p) => Promise.resolve(`${p.name} hi`),
+    synth: (p, text) => Buffer.from(`${p.name}:${text}`),
+    play: (p, pcm) => { playOrder.push({ name: p.name, pcm: pcm.toString() }); },
+  });
+  assert.deepEqual(res.turns.map((t) => t.name), ["main", "var", "cedar"]);
+  assert.deepEqual(playOrder.map((p) => p.name), ["main", "var", "cedar"]);
+  assert.equal(playOrder[1].pcm, "var:var hi");
+  assert.deepEqual(res.conversation.map((c) => c.text), ["go", "main hi", "var hi", "cedar hi"]);
+});
+
+test("pipelined synthesis is kicked off concurrently while playback waits in order", async () => {
+  const roster = buildParticipantRoster({ mode: MODE_CASCADE, participants: "var,cedar", main: { name: "main" }, env: {} }).participants;
+  const synthCalls = [];
+  const playOrder = [];
+  const gate = deferred();
+  const round = runCascadeRound({
+    participants: roster,
+    humanText: "go",
+    order: ORDER_FIXED,
+    runTurn: (p) => Promise.resolve(`${p.name} hi`),
+    synth: (p) => { synthCalls.push(p.name); return Buffer.from(p.name); },
+    play: async (p) => { playOrder.push(p.name); if (p.name === "main") await gate.promise; },
+  });
+  // let the (sequential-LLM) loop run + synths kick off; play0 enters then blocks on the gate
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(synthCalls, ["main", "var", "cedar"], "all synths kicked off while play0 is blocked");
+  assert.deepEqual(playOrder, ["main"], "only the first play has started (ordered)");
+  gate.resolve();
+  await round;
+  assert.deepEqual(playOrder, ["main", "var", "cedar"], "remaining plays ran in order");
+});
+
+test("pipelined mode fires onSpeak at play time and onTurn at text time", async () => {
+  const roster = buildParticipantRoster({ mode: MODE_CASCADE, n: 2, main: { name: "main" }, env: {} }).participants;
+  const turnEvents = [];
+  const speakEvents = [];
+  await runCascadeRound({
+    participants: roster,
+    humanText: "go",
+    order: ORDER_FIXED,
+    runTurn: (p) => `${p.name} hi`,
+    synth: (p) => Buffer.from(p.name),
+    play: () => {},
+    onTurn: ({ participant }) => turnEvents.push(participant.name),
+    onSpeak: ({ participant }) => speakEvents.push(participant.name),
+  });
+  assert.deepEqual(turnEvents, ["main", roster[1].name]);
+  assert.deepEqual(speakEvents, ["main", roster[1].name]);
+});
+
+test("pipelined mode surfaces a synth/play error", async () => {
+  const roster = buildParticipantRoster({ mode: MODE_CASCADE, participants: "var", main: { name: "main" }, env: {} }).participants;
+  await assert.rejects(
+    runCascadeRound({
+      participants: roster,
+      humanText: "go",
+      order: ORDER_FIXED,
+      runTurn: (p) => `${p.name} hi`,
+      synth: (p) => { if (p.name === "var") throw new Error("synth boom"); return Buffer.from(p.name); },
+      play: () => {},
+    }),
+    /synth boom/,
+  );
+});
