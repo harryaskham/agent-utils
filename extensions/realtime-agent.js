@@ -49,6 +49,7 @@
 //   OPENAI_API_KEY / PI_RT_API_KEY
 //   OPENAI_BASE_URL / PI_RT_BASE_URL              (default https://api.openai.com)
 //   OPENAI_REALTIME_MODEL / PI_RT_MODEL           (default gpt-realtime-2)
+//   PI_RT_BETA_HEADER=1                           send the legacy OpenAI-Beta: realtime=v1 header (default off; OpenAI removed it for GA on 2026-05-12 and GA models reject it)
 //   OPENAI_REALTIME_TRANSCRIPTION_MODEL / PI_RT_TRANSCRIPTION_MODEL
 //   OPENAI_TTS_VOICE / PI_RT_VOICE                (default marin)
 //   TTS_REALTIME_BUFFER_MS / PI_RT_BUFFER_MS      initial playback prebuffer (default 180)
@@ -89,6 +90,7 @@ import {
   normalizeBaseUrl,
   realtimeUrl,
   azureRealtimeUrl,
+  realtimeWsHeaders,
   parseBooleanValue,
   parseRealtimeSpeed,
   parseVadThreshold,
@@ -563,15 +565,11 @@ class RealtimeSession {
     this.setPhase("connecting");
     this.notify(`Connecting realtime: ${this.config.directAzure ? "azure:" : ""}${this.config.model}`, "info");
 
-    const headers = this.config.directAzure
-      ? { "api-key": apiKey, "User-Agent": "Python/3.13 websockets/15.0.1" }
-      : {
-          Authorization: `Bearer ${apiKey}`,
-          "OpenAI-Beta": "realtime=v1",
-          // Mirror Python websockets UA — some OpenAI-compatible WS proxies
-          // are sensitive to ws' default UA.
-          "User-Agent": "Python/3.13 websockets/15.0.1",
-        };
+    const headers = realtimeWsHeaders({
+      directAzure: this.config.directAzure,
+      apiKey,
+      betaHeader: this.config.betaHeader,
+    });
 
     const WebSocketImpl = await getRealtimeWebSocketConstructor();
     const ws = new WebSocketImpl(url, {

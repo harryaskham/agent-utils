@@ -8,6 +8,7 @@ import {
   normalizeBaseUrl,
   realtimeUrl,
   azureRealtimeUrl,
+  realtimeWsHeaders,
   parseBooleanValue,
   parseRealtimeSpeed,
   parseVadThreshold,
@@ -116,6 +117,25 @@ test("azureRealtimeUrl omits api-version when blank/none/ga (GA-only proxies)", 
       `beta omits api-version for ${JSON.stringify(ver)}`,
     );
   }
+});
+
+test("realtimeWsHeaders omits the OpenAI-Beta header by default (GA), opt-in via betaHeader", () => {
+  // OpenAI removed the Realtime Beta interface + the OpenAI-Beta: realtime=v1
+  // header for GA (2026-05-12); GA models like gpt-realtime-2 reject the beta
+  // handshake, so the default OpenAI connect headers must NOT include it (bd-0b40ce).
+  const ga = realtimeWsHeaders({ directAzure: false, apiKey: "sk-test" });
+  assert.equal(ga.Authorization, "Bearer sk-test");
+  assert.equal(ga["User-Agent"], "Python/3.13 websockets/15.0.1");
+  assert.equal("OpenAI-Beta" in ga, false, "GA default omits the beta header");
+
+  const beta = realtimeWsHeaders({ directAzure: false, apiKey: "sk-test", betaHeader: true });
+  assert.equal(beta["OpenAI-Beta"], "realtime=v1", "opt-in restores the beta header for legacy endpoints");
+
+  // Azure direct mode authenticates with api-key and never sends the beta header.
+  const azure = realtimeWsHeaders({ directAzure: true, apiKey: "az-key", betaHeader: true });
+  assert.deepEqual(azure, { "api-key": "az-key", "User-Agent": "Python/3.13 websockets/15.0.1" });
+  assert.equal("OpenAI-Beta" in azure, false, "azure never sends the beta header even when opted in");
+  assert.equal("Authorization" in azure, false);
 });
 
 test("parseBooleanValue handles booleans, tokens, fallback, and throws", () => {

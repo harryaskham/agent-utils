@@ -47,6 +47,29 @@ export function azureRealtimeUrl(endpoint, deployment, apiVersion, protocol = "v
     : `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}&api-version=${encodeURIComponent(ver)}`;
 }
 
+// Build the WebSocket connect headers for the realtime API (bd-0b40ce).
+//
+// Azure direct mode authenticates with `api-key` and never used the OpenAI-Beta
+// opt-in header. For the OpenAI (non-Azure) path, OpenAI REMOVED the Realtime
+// Beta interface — and the `OpenAI-Beta: realtime=v1` opt-in header — for GA on
+// 2026-05-12. GA models (e.g. gpt-realtime-2) reject the beta handshake, so the
+// header is OMITTED by default. Re-enable it only for a legacy / self-hosted beta
+// realtime endpoint via PI_RT_BETA_HEADER=1 (config.betaHeader).
+export function realtimeWsHeaders({ directAzure = false, apiKey = "", betaHeader = false } = {}) {
+  // Mirror the Python websockets UA — some OpenAI-compatible WS proxies are
+  // sensitive to ws' default UA.
+  const userAgent = "Python/3.13 websockets/15.0.1";
+  if (directAzure) {
+    return { "api-key": apiKey, "User-Agent": userAgent };
+  }
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    "User-Agent": userAgent,
+  };
+  if (betaHeader) headers["OpenAI-Beta"] = "realtime=v1";
+  return headers;
+}
+
 export function parseBooleanValue(value, fallback = false) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;

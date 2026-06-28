@@ -25,6 +25,10 @@ export function makeInitialConfig() {
   return {
     baseUrl: env("PI_RT_BASE_URL", "OPENAI_BASE_URL") || "https://api.openai.com",
     model: normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL")),
+    // OpenAI removed the Realtime Beta opt-in header (OpenAI-Beta: realtime=v1)
+    // for GA on 2026-05-12; GA models reject it (bd-0b40ce). Default off; set
+    // PI_RT_BETA_HEADER=1 only for a legacy/self-hosted beta realtime endpoint.
+    betaHeader: envBool("PI_RT_BETA_HEADER", false),
     directAzure: envBool("PI_RT_DIRECT_AZURE", false) || (env("PI_RT_PROVIDER") || "").toLowerCase() === "azure",
     azureEndpoint: env("PI_RT_AZURE_ENDPOINT", "AZURE_CANADACENTRAL_ENDPOINT", "AZURE_OPENAI_ENDPOINT"),
     azureDeployment: env("PI_RT_AZURE_DEPLOYMENT", "AZURE_CANADACENTRAL_DEPLOYMENT") || normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL")),
