@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   realtimeNextStepHint,
+  shortReason,
   micCaptureSummary,
   realtimeContextDiagnostics,
   realtimeContextDiagnosticLine,
@@ -264,5 +265,68 @@ test("diagnosticLines renders the /rt-doctor block with auth hints", () => {
     assert.ok(lines.some((l) => l.startsWith("provider:") && l.includes("apiKey:OPENAI_API_KEY")));
     const hint = lines.find((l) => l.startsWith("hint:"));
     assert.ok(!hint.includes("set OPENAI_API_KEY or PI_RT_API_KEY"));
+  });
+});
+
+test("realtimeNextStepHint appends a doctor hint when a recent error is recorded", () => {
+  // No error -> base hint unchanged (exact match guards the no-error path).
+  assert.equal(
+    realtimeNextStepHint({ connected: true }, {}),
+    "/rt mic vad starts listening; /rt-stop closes socket; /rt-off restores text model",
+  );
+  // Mic error -> doctor suffix appended.
+  assert.match(
+    realtimeNextStepHint({ connected: true, lastMicError: "parec: No such device" }, {}),
+    / \u00b7 \/rt-doctor diagnoses the recent error$/,
+  );
+  // Response error on an otherwise-idle session also triggers the suffix.
+  assert.match(
+    realtimeNextStepHint({ lastResponseError: "boom" }, {}),
+    / \u00b7 \/rt-doctor diagnoses the recent error$/,
+  );
+});
+
+test("shortReason collapses whitespace and bounds length", () => {
+  assert.equal(shortReason("  hello   world  "), "hello world");
+  assert.equal(shortReason(""), "");
+  assert.equal(shortReason(null), "");
+  assert.equal(shortReason(undefined), "");
+  const long = "x".repeat(80);
+  const out = shortReason(long, 48);
+  assert.equal(out.length, 48);
+  assert.ok(out.endsWith("\u2026"));
+});
+
+test("statusLines surfaces in-flight reconnect attempts in the compact view", () => {
+  withStatusEnv({}, () => {
+    const line = statusLines(
+      { connecting: true, forwardedMessageCount: 0 },
+      baseConfig({ reconnectAttempts: 2, reconnectMaxAttempts: 5 }),
+    )[0];
+    assert.match(line, /^\u25d0 /);
+    assert.ok(line.includes(" \u00b7 reconnecting:2/5"), `expected reconnect segment in: ${line}`);
+    // A connected session has no reconnect segment.
+    const connected = statusLines({ connected: true, forwardedMessageCount: 0 }, baseConfig({ reconnectAttempts: 0 }))[0];
+    assert.ok(!connected.includes("reconnecting:"));
+  });
+});
+
+test("statusLines surfaces a recorded disconnect reason when fully dropped", () => {
+  withStatusEnv({}, () => {
+    const line = statusLines(
+      { connected: false, connecting: false, forwardedMessageCount: 0 },
+      baseConfig({ lastDisconnectReason: "socket closed (1006)" }),
+    )[0];
+    assert.match(line, /^\u25cb /);
+    assert.ok(line.includes(" \u00b7 dropped:socket closed (1006)"), `expected dropped segment in: ${line}`);
+  });
+});
+
+test("diagnosticLines hints when auto-reconnect is exhausted", () => {
+  const session = { pendingSpokenTranscripts: [], lastMicBytes: 0, forwardedMessageCount: 0, connected: false };
+  withStatusEnv({ OPENAI_API_KEY: "sk-xxx" }, () => {
+    const lines = diagnosticLines(session, baseConfig({ autoReconnect: true, reconnectAttempts: 5, reconnectMaxAttempts: 5 }));
+    const hint = lines.find((l) => l.startsWith("hint:"));
+    assert.ok(hint.includes("auto-reconnect exhausted after 5/5"), `expected exhausted hint in: ${hint}`);
   });
 });

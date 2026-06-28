@@ -20,7 +20,23 @@ import { normalizeBaseUrl, numberEnv } from "./realtime-helpers.js";
 import { spawnSync } from "node:child_process";
 import { truncateDiagnostic, isAuthFailure, isMicPermissionFailure } from "./realtime-text.js";
 
+// Collapse whitespace and bound a free-text reason for a compact status line so
+// a long disconnect/error string cannot blow out the single-line status render.
+export function shortReason(value, max = 48) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, Math.max(1, max - 1))}\u2026` : text;
+}
+
 export function realtimeNextStepHint(session, config) {
+  const base = realtimeNextStepBase(session, config);
+  // When a recent mic/response error is recorded, point the operator at the
+  // doctor so the next-step hint stays actionable instead of silent on failure.
+  const hasError = !!(session?.lastMicError || session?.lastResponseError);
+  return hasError ? `${base} \u00b7 /rt-doctor diagnoses the recent error` : base;
+}
+
+function realtimeNextStepBase(session, config) {
   if (session.mic) {
     const action = session.micMode === "ptt" ? "/rt-stop sends PTT audio" : "/rt-stop commits current mic buffer";
     return `${action}; /rt-cancel discards; /rt-off closes session`;
@@ -90,8 +106,21 @@ export function statusLines(session, config, { full = false } = {}) {
   const summary = config.summaryContext ? "summary:on" : "summary:off";
   const chime = config.chimeEnabled ? "chime:on" : "chime:off";
   const input = session.lastTurnInputMode ? ` · input:${session.lastTurnInputMode}` : "";
+  // Connection robustness/UX: surface an in-flight reconnect or a recorded drop
+  // reason in the compact view so a flapping socket is visible without /rt status
+  // full. Reconnect bookkeeping lives on config (see diagnosticLines); fall back
+  // to session for safety.
+  const reconnectAttempts = Number(config.reconnectAttempts ?? session.reconnectAttempts ?? 0) || 0;
+  const reconnectMax = Number(config.reconnectMaxAttempts ?? session.reconnectMaxAttempts ?? 0) || 0;
+  const disconnectReason = config.lastDisconnectReason || session.lastDisconnectReason || "";
+  const reconnecting = (session.connecting && reconnectAttempts > 0)
+    ? ` · reconnecting:${reconnectAttempts}${reconnectMax ? `/${reconnectMax}` : ""}`
+    : "";
+  const dropped = (!session.connected && !session.connecting && disconnectReason)
+    ? ` · dropped:${shortReason(disconnectReason)}`
+    : "";
   const compact = [
-    `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · backend:${outBackend}/${inBackend}${phase}`,
+    `${conn} rt ${config.model} · mode:${mode} · audio:${config.audioEnabled ? "on" : "off"} · ${mic} · backend:${outBackend}/${inBackend}${phase}${reconnecting}${dropped}`,
     `trans:${config.transcriptionModel} · voice:${config.voice}${speed} · hist:${session.forwardedMessageCount} · ${summary} · ${chime}${input} · ${provider}${reason}${clip}${restore}`,
     `mic capture: ${micCaptureSummary(session)} · next: ${realtimeNextStepHint(session, config)}`,
   ];
@@ -170,6 +199,10 @@ export function diagnosticLines(session, config) {
     ? "Pulse-first setup active; confirm phone sink/source with PULSE_SINK/PULSE_SOURCE if audio routes incorrectly"
     : "Pulse is the default backend; if using phone sink/source, set/confirm PULSE_SERVER/SINK/SOURCE, or override PI_RT_AUDIO_BACKEND for local devices");
   if (session.phase === "transcribing" && session.pendingCommitTimer) hints.push("waiting for transcription; /rt-cancel discards stuck mic input");
+  const reconnectAttempts = Number(config.reconnectAttempts || 0) || 0;
+  const reconnectMax = Number(config.reconnectMaxAttempts || 0) || 0;
+  if (config.autoReconnect && reconnectMax > 0 && reconnectAttempts >= reconnectMax) hints.push(`auto-reconnect exhausted after ${reconnectAttempts}/${reconnectMax} attempts; /rt start re-establishes the session`);
+  if (responseError && !isAuthFailure(responseError)) hints.push("realtime server returned an error (see lastResponseError); verify the model id, base URL, and provider/proxy routing, then /rt-doctor");
 
   return [
     "Realtime doctor",
