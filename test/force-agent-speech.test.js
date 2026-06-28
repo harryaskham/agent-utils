@@ -89,7 +89,7 @@ function makePi() {
   const handlers = new Map();
   const commands = new Map();
   return {
-    pi: { on: (ev, fn) => handlers.set(ev, fn), registerCommand: (def) => commands.set(def.name, def) },
+    pi: { on: (ev, fn) => handlers.set(ev, fn), registerCommand: (name, def) => commands.set(name, def) },
     handlers,
     commands,
   };

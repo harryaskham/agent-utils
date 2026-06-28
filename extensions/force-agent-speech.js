@@ -109,9 +109,8 @@ export default function forceAgentSpeechExtension(pi) {
 
   const enabled = () => (runtimeOverride === null ? isForceSpeechEnabled() : runtimeOverride);
 
-  pi.registerCommand?.({
-    name: "force-speech",
-    summary: "Toggle speaking a short precis of each assistant reply (on|off|status).",
+  pi.registerCommand?.("force-speech", {
+    description: "Toggle speaking a short precis of each assistant reply (on|off|status|env).",
     handler: async (args, ctx) => {
       const arg = String(args || "").trim().toLowerCase();
       if (arg === "on" || arg === "true") runtimeOverride = true;
