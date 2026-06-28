@@ -80,7 +80,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
-import { isAssistantSpeaking } from "./lib/half-duplex-state.js";
+import { isAssistantSpeaking, markAssistantSpeaking } from "./lib/half-duplex-state.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import {
   env,
@@ -2410,8 +2410,12 @@ export default function realtimeAgentExtension(pi) {
     const state = cascade.active ? "listening" : (cascade.controller.active ? "speaking" : "ready");
     const parts = [`cascade: ${state}`];
     if (cascade.active) {
-      const thr = rmsToLevel(cascade.cfg?.energyThreshold ?? 0.012);
-      parts.push(`mic ${formatLevelBar(cascade.inputLevel, { width: 10, threshold: thr })} ${String(Math.round(cascade.inputLevel * 100)).padStart(2, " ")}%`);
+      if (isAssistantSpeaking()) {
+        parts.push("mic muted (agent speaking)");
+      } else {
+        const thr = rmsToLevel(cascade.cfg?.energyThreshold ?? 0.012);
+        parts.push(`mic ${formatLevelBar(cascade.inputLevel, { width: 10, threshold: thr })} ${String(Math.round(cascade.inputLevel * 100)).padStart(2, " ")}%`);
+      }
     }
     if (cascade.roster) parts.push(describeRoster(cascade.roster));
     if (cascade.speaking) parts.push(`now: ${cascade.speaking}`);
@@ -2429,7 +2433,13 @@ export default function realtimeAgentExtension(pi) {
     const defaultBaseUrl = values.base_url || values.baseurl || env("PI_RT_BASE_URL", "OPENAI_BASE_URL");
     const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl });
     const playbackCommand = config.playbackCommand || defaultPlaybackCommand();
-    const playImpl = (pcm) => playPcmBuffer(pcm, playbackCommand, (m, l) => ctx.ui.notify(m, l), config.debug);
+    const playImpl = (pcm) => {
+      // Half-duplex: mark the assistant as speaking for this clip's duration so the
+      // cascade mic suppresses + the level meter mutes while an agent plays, instead
+      // of capturing the agent's own voice as a phantom human turn (echo).
+      if (pcm && pcm.length) markAssistantSpeaking(audioDurationMs(pcm));
+      return playPcmBuffer(pcm, playbackCommand, (m, l) => ctx.ui.notify(m, l), config.debug);
+    };
     // Pipelined by default: synthesise each turn concurrently while playback stays
     // ordered, ~halving a multi-agent round. Opt out with pipeline=false / PI_CASCADE_PIPELINE=0.
     const pipelineRaw = String(values.pipeline ?? env("PI_CASCADE_PIPELINE") ?? "1").toLowerCase();
@@ -2475,6 +2485,7 @@ export default function realtimeAgentExtension(pi) {
     cascade.meter = new AudioLevelMeter({ width: 10 }); cascade.inputLevel = 0; cascade.lastMeterRenderAt = 0;
     const controller = new LocalVadController({
       config: cfg,
+      isSuppressed: () => isAssistantSpeaking(),
       transcribe: (buf) => localVadTranscribe(buf, { model }),
       insertPartial: (text) => { try { ctx.ui.setWidget("realtime-status", [`cascade ~ ${text}`], { placement: "belowEditor" }); } catch {} },
       sendTurn: (text) => {
@@ -2495,7 +2506,14 @@ export default function realtimeAgentExtension(pi) {
     capture.stdout?.on("data", (chunk) => {
       if (!cascade.active) return;
       if (cascade.meter) {
-        cascade.inputLevel = cascade.meter.pushFrame(chunk);
+        // Half-duplex: while an agent is speaking, mute the input meter (don't show
+        // the agent's own playback echo as mic input).
+        if (isAssistantSpeaking()) {
+          cascade.meter.reset();
+          cascade.inputLevel = 0;
+        } else {
+          cascade.inputLevel = cascade.meter.pushFrame(chunk);
+        }
         const now = Date.now();
         if (now - cascade.lastMeterRenderAt > 150) { cascade.lastMeterRenderAt = now; cascadeWidget(ctx); }
       }
