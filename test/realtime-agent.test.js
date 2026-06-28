@@ -13,6 +13,17 @@ import realtimeAgentExtension, {
 import { EventEmitter } from "node:events";
 import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
 
+// Local-vad wiring tests drive audio through startLocalVad -> parseLocalVadConfig,
+// which reads PI_RT_LOCAL_VAD_* env. Clear those here so the audio-driven assertions
+// use the default segmenter config and stay deterministic regardless of any ambient
+// host setting (e.g. an operator's /rt energy= persisted on the box, or the gate env).
+for (const k of [
+  "PI_RT_LOCAL_VAD_ENERGY_THRESHOLD",
+  "PI_RT_LOCAL_VAD_INSERT_SILENCE_MS",
+  "PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS",
+  "PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS",
+]) delete process.env[k];
+
 class FakeWebSocket {
   static OPEN = 1;
   static instances = [];

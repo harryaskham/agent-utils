@@ -230,6 +230,11 @@ Tuning knobs (all optional):
   live with `/rt energy=<0..1>` (lower to catch quieter speech, raise to reject
   noise), or set `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` / `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS`
   before starting.
+- *Stuck on `🎤 listening` and never commits.* It is hearing continuous audio
+  above the threshold, so it never sees the silence gap it needs to commit —
+  usually the threshold sits below your mic's noise floor. Raise it live with
+  `/rt energy=0.05` (or higher); a one-time hint also prompts you. If raising it
+  changes nothing, the capture may have died — `/rt stt stop` then `/rt stt local-vad`.
 - *The assistant's spoken reply is re-captured as a new turn (echo).* There is no
   half-duplex guard yet; this only occurs if Pi replies are spoken aloud (caco TTS
   daemon / speak-mixin). A gate is designed but pending validation.

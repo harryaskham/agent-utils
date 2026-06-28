@@ -281,3 +281,27 @@ test("onState surfaces listening immediately on speech, then transcribing, then 
   assert.ok(states.includes("transcribing"), "transcribing fires when a draft starts");
   assert.equal(states.at(-1), "idle", "idle fires after the turn is sent");
 });
+
+test("onState fires the overlong hint for gapless continuous audio, not once a turn has had a pause (bd-71d4fb)", async () => {
+  // Continuous speech with NO silence gap never inserts and never commits (the
+  // over-sensitive-threshold / constant-noise "stuck on listening" signature) ->
+  // exactly one "overlong" hint once turnSpeechMs crosses overlongHintMs.
+  {
+    const states = [];
+    const c = new LocalVadController({ transcribe: async () => "x", onState: (s) => states.push(s), overlongHintMs: 1000 });
+    for (let i = 0; i < 15; i++) await c.pushFrame(frame(100, { speech: true }));
+    assert.equal(states.filter((s) => s === "overlong").length, 1, "overlong fires once for gapless continuous audio");
+  }
+  // A turn that HAS had a silence gap (it inserted) must NOT get the hint, even
+  // after it accrues more speech past the threshold — that is normal long speech.
+  {
+    const states = [];
+    const c = new LocalVadController({ transcribe: async () => "x", onState: (s) => states.push(s), insertPartial: () => {}, sendTurn: () => {}, overlongHintMs: 1000 });
+    await c.pushFrame(frame(300, { speech: true }));
+    for (let s = 0; s < 1100; s += 100) await c.pushFrame(frame(100, { speech: false })); // insert at 1000 ms silence
+    await c.pushFrame(frame(800, { speech: true })); // turnSpeechMs ~1100 > 1000, but already inserted
+    for (let s = 0; s < 3000; s += 100) await c.pushFrame(frame(100, { speech: false }));
+    await c.flush();
+    assert.equal(states.filter((s) => s === "overlong").length, 0, "no overlong hint once the turn has had a silence gap");
+  }
+});

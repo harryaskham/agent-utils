@@ -2304,11 +2304,12 @@ export default function realtimeAgentExtension(pi) {
 
     const cfg = parseLocalVadConfig();
     const model = resolveBatchSttModel();
-    Object.assign(localVad, { cfg, model, lastError: null, lastTranscript: null, warnedError: false, startedAt: Date.now() });
+    Object.assign(localVad, { cfg, model, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now() });
 
     const controller = new LocalVadController({
       config: cfg,
       placeholder: "…",
+      overlongHintMs: 7000,
       transcribe: (buf) => localVadTranscribe(buf, { model }),
       insertPartial: (text) => {
         try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${text}`], { placement: "belowEditor" }); } catch {}
@@ -2316,6 +2317,14 @@ export default function realtimeAgentExtension(pi) {
       onState: (state) => {
         // Immediate listening/transcribing feedback before the first partial text
         // (so the indicator reacts the moment VAD triggers, like the WSS modes).
+        if (state === "overlong") {
+          // Stuck on continuous audio with no pause: nudge toward /rt energy=, once.
+          if (!localVad.warnedOverlong) {
+            localVad.warnedOverlong = true;
+            try { ctx.ui.notify("local-vad: still hearing audio with no pause — if it isn't committing, raise the threshold with /rt energy=0.05 (or higher).", "warning"); } catch {}
+          }
+          return;
+        }
         const line = state === "listening" ? "🎤 listening…" : state === "transcribing" ? "✍️ transcribing…" : null;
         if (line) { try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${line}`], { placement: "belowEditor" }); } catch {} }
       },

@@ -76,7 +76,7 @@ export function describeLocalVadConfig(config = {}) {
 ///   segmenter                                    an existing VadSegmenter (optional)
 ///   config                                       VadSegmenter config when none is supplied
 export class LocalVadController {
-  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, onState, frameBytes, placeholder } = {}) {
+  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, onState, frameBytes, placeholder, overlongHintMs } = {}) {
     if (typeof transcribe !== "function") {
       throw new Error("LocalVadController requires a transcribe(audio) function");
     }
@@ -86,12 +86,17 @@ export class LocalVadController {
     this.sendTurn = sendTurn || (() => {});
     this.onError = onError || (() => {});
     // Lifecycle state callback for a live UI: "listening" (speech detected),
-    // "transcribing" (a transcribe started), "idle" (turn sent). Best-effort.
+    // "transcribing" (a transcribe started), "idle" (turn sent), "overlong" (a
+    // turn running long with continuous audio and no silence gap). Best-effort.
     this.onState = onState || (() => {});
     this.frameBytes = frameBytes > 0 ? Math.trunc(frameBytes) : DEFAULT_FRAME_BYTES;
     // Optional text shown the instant a turn's first partial is pending, before
     // the first re-draft candidate returns. Opt-in (the live wiring enables it).
     this.placeholder = placeholder === undefined ? null : placeholder;
+    // Surface an "overlong" hint once per turn when this much speech accrues with
+    // NO silence gap (i.e. never inserts) — the over-sensitive-threshold / constant
+    // noise signature that otherwise sits on "listening" forever. 0 disables.
+    this.overlongHintMs = Number.isFinite(overlongHintMs) ? overlongHintMs : (config?.overlongHintMs ?? 0);
     this._pending = Buffer.alloc(0);
     // Single-flight transcription pump state (kept OFF the ingestion path).
     this._transcribing = false;
@@ -100,6 +105,8 @@ export class LocalVadController {
     this._pendingCommit = null;       // { audio, event } wanting a final send
     this._current = null;             // in-flight transcribe chain (for flush drain)
     this._hasPartial = false;         // whether this turn has shown any partial yet
+    this._turnInserted = false;       // whether this turn ever inserted (had a gap)
+    this._hintedOverlong = false;     // whether the overlong hint fired this turn
   }
 
   /// Feed PCM16 audio (an arbitrary-size capture chunk). Re-frames into fixed
@@ -123,9 +130,23 @@ export class LocalVadController {
       const wasIdle = this.segmenter.turnSpeechMs === 0;
       const events = this.segmenter.push(frame);
       if (wasIdle && this.segmenter.turnSpeechMs > 0) {
+        this._turnInserted = false;
+        this._hintedOverlong = false;
         try { this.onState("listening"); } catch (err) { this.onError(err); }
       }
       for (const event of events) this._dispatch(event);
+      // Stuck-turn hint: lots of speech accrued with no insert (no silence gap) =>
+      // continuous audio that will never commit (threshold too low / constant
+      // noise). Surface "overlong" once so the UI can prompt raising /rt energy=.
+      if (
+        this.overlongHintMs > 0 &&
+        !this._hintedOverlong &&
+        !this._turnInserted &&
+        this.segmenter.turnSpeechMs >= this.overlongHintMs
+      ) {
+        this._hintedOverlong = true;
+        try { this.onState("overlong"); } catch (err) { this.onError(err); }
+      }
     }
   }
 
@@ -147,6 +168,7 @@ export class LocalVadController {
   // prioritized and supersedes any pending draft.
   _dispatch(event) {
     if (event.type === "insert") {
+      this._turnInserted = true; // this turn had a silence gap (not stuck/runaway)
       if (!this._hasPartial && this.placeholder) {
         this._hasPartial = true;
         try { this.insertPartial(this.placeholder, event); } catch (err) { this.onError(err, event); }
