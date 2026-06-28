@@ -152,6 +152,7 @@ import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from 
 import { transcribePcmBuffer, resolveBatchSttModel } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
+import { AudioLevelMeter, formatLevelBar, rmsToLevel } from "./lib/realtime-audio-meter.js";
 import {
   CascadeController,
   makeCascadeRunTurn,
@@ -2385,6 +2386,7 @@ export default function realtimeAgentExtension(pi) {
   const cascade = {
     controller: null, roster: null, active: false, capture: null, vadController: null,
     cfg: null, model: null, lastError: null, lastText: null, speaking: null, transcript: [],
+    meter: null, inputLevel: 0, lastMeterRenderAt: 0,
   };
 
   // Push one line onto the rolling cascade transcript (human or agent), capped so
@@ -2401,6 +2403,10 @@ export default function realtimeAgentExtension(pi) {
     if (!cascade.controller) return "cascade: idle (use /cascade start n=2 or /cascade say <text>)";
     const state = cascade.active ? "listening" : (cascade.controller.active ? "speaking" : "ready");
     const parts = [`cascade: ${state}`];
+    if (cascade.active) {
+      const thr = rmsToLevel(cascade.cfg?.energyThreshold ?? 0.012);
+      parts.push(`mic ${formatLevelBar(cascade.inputLevel, { width: 10, threshold: thr })} ${String(Math.round(cascade.inputLevel * 100)).padStart(2, " ")}%`);
+    }
     if (cascade.roster) parts.push(describeRoster(cascade.roster));
     if (cascade.speaking) parts.push(`now: ${cascade.speaking}`);
     if (cascade.lastText) parts.push(`heard="${String(cascade.lastText).slice(0, 32)}"`);
@@ -2442,6 +2448,7 @@ export default function realtimeAgentExtension(pi) {
   function stopCascade() {
     const wasActive = cascade.active;
     cascade.active = false;
+    cascade.inputLevel = 0;
     const cap = cascade.capture;
     const ctrl = cascade.vadController;
     cascade.capture = null;
@@ -2459,6 +2466,7 @@ export default function realtimeAgentExtension(pi) {
     const cfg = parseLocalVadConfig();
     const model = resolveBatchSttModel();
     cascade.cfg = cfg; cascade.model = model; cascade.lastError = null;
+    cascade.meter = new AudioLevelMeter({ width: 10 }); cascade.inputLevel = 0; cascade.lastMeterRenderAt = 0;
     const controller = new LocalVadController({
       config: cfg,
       transcribe: (buf) => localVadTranscribe(buf, { model }),
@@ -2478,7 +2486,15 @@ export default function realtimeAgentExtension(pi) {
     try { capture = localVadRunShellStream(cmd); }
     catch (e) { ctx.ui.notify(`cascade capture failed: ${e.message}`, "error"); return false; }
     cascade.vadController = controller; cascade.capture = capture; cascade.active = true;
-    capture.stdout?.on("data", (chunk) => { if (!cascade.active) return; controller.pushFrame(chunk).catch((e) => { cascade.lastError = e?.message || String(e); }); });
+    capture.stdout?.on("data", (chunk) => {
+      if (!cascade.active) return;
+      if (cascade.meter) {
+        cascade.inputLevel = cascade.meter.pushFrame(chunk);
+        const now = Date.now();
+        if (now - cascade.lastMeterRenderAt > 150) { cascade.lastMeterRenderAt = now; cascadeWidget(ctx); }
+      }
+      controller.pushFrame(chunk).catch((e) => { cascade.lastError = e?.message || String(e); });
+    });
     capture.stderr?.on("data", (d) => { const s = String(d).trim(); if (s) cascade.lastError = truncateDiagnostic(s); });
     capture.on?.("exit", (code, signal) => {
       if (cascade.capture !== capture) return;
