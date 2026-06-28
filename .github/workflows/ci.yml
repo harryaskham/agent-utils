@@ -52,12 +52,15 @@ jobs:
           components: clippy, rustfmt
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # bd-77f340: azure-ephemeral runners have no system C compiler; provide
+      # just gcc via nix-shell -p gcc (lightweight, not the 5GB devShell) so
+      # cargo can link. rustup cargo stays; only cc comes from nix.
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: nix-shell -p gcc --run "cargo clippy --workspace --all-targets -- -D warnings"
       - name: Run Rust tests
-        run: cargo test --workspace
+        run: nix-shell -p gcc --run "cargo test --workspace"
 
   audit:
     name: Dependency audit (cargo audit)
