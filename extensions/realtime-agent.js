@@ -143,6 +143,7 @@ import {
   shouldAutoRestartMicMode,
 } from "./lib/realtime-models.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
+import { InputLevelTracker } from "./lib/realtime-input-level.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> buildServerVadTurnDetection) is preserved after extraction.
 export { buildServerVadTurnDetection };
@@ -363,6 +364,8 @@ class RealtimeSession {
     this.audioTurnDeferredForCompaction = false;
     this.compactionFallbackTimer = null;
     this.lastMicBytes = 0;
+    this.inputLevel = 0;                      // smoothed mic input level 0..1 ("show audio input"); written in the mic path, read by the status/widget display
+    this.inputLevelTracker = new InputLevelTracker();
     this.micMuteUntilTs = 0;
     this.lastTurnInputMode = null;           // null|audio|transcript|text
     this.pendingTranscriptText = "";
@@ -1636,6 +1639,7 @@ class RealtimeSession {
     if (!restarted) this.micRestartAttempts = 0;
     this.micMode = mode;
     this.lastMicBytes = 0;
+    this.inputLevel = this.inputLevelTracker.reset();
     this.clearPendingCommitTimer();
     // PTT/manual VAD: client manually commits on Enter/Space/Esc or /rt-stop.
     // Experimental server VAD only if PI_RT_SERVER_VAD=1.
@@ -1658,9 +1662,10 @@ class RealtimeSession {
       // mid-turn or during a brief post-speech grace window (speakers leak into
       // mic). "thinking|speaking|replaying|transcribing" covers the whole
       // assistant turn.
-      if (this.phase === "thinking" || this.phase === "speaking" || this.phase === "replaying" || this.phase === "transcribing") return;
-      if (Date.now() < this.micMuteUntilTs) return;
+      if (this.phase === "thinking" || this.phase === "speaking" || this.phase === "replaying" || this.phase === "transcribing") { this.inputLevel = this.inputLevelTracker.push(null); return; }
+      if (Date.now() < this.micMuteUntilTs) { this.inputLevel = this.inputLevelTracker.push(null); return; }
       this.lastMicBytes += chunk.length;
+      this.inputLevel = this.inputLevelTracker.push(chunk);
       try { this.send({ type: "input_audio_buffer.append", audio: b64(chunk) }); } catch {}
     });
     proc.stderr.on("data", (d) => {
@@ -1675,6 +1680,7 @@ class RealtimeSession {
       }
       this.mic = null;
       this.micMode = null;
+      this.inputLevel = this.inputLevelTracker.reset();
       this.sendTurnDetectionUpdate();
       this.updateStatus();
       this.scheduleMicRestart(`${code ?? "?"}${signal ? `/${signal}` : ""}`);
