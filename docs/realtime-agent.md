@@ -285,6 +285,14 @@ each participant takes one turn — in arbitrary order — and every agent hears
 voice. It is built from the local `stt` + `tts` CLIs directly (no daemon round
 trip), so each agent is speech-in, think, speech-out.
 
+The widget shows the round live: a rolling **transcript** (`you: …`, then each
+agent), a **mic input-level meter** with a caret at the VAD speech threshold while
+listening, and the current speaker. It is **half-duplex** — while an agent speaks
+the mic is suppressed and the meter shows `muted (agent speaking)`, so agents do
+not capture their own playback. Synthesis is **pipelined**: each turn's TTS is
+synthesised concurrently while playback stays ordered, so a multi-agent round runs
+roughly twice as fast as strict sequential.
+
 ```text
 /cascade say hello everyone            # drive one round from typed text (no mic)
 /cascade start n=3                     # live mic room: you + 2 auto peers
@@ -302,6 +310,8 @@ Start-time arguments (env-style `key=value`):
 | `participants=a,b` | named peers beyond main (`var,cedar` or `var[voice=...,model=...]`) |
 | `order=fixed\|random\|round-robin` | turn order each round (default `random`) |
 | `voice=` / `model=` / `base_url=` | overrides for the main participant |
+| `pipeline=false` | disable concurrent-synthesis pipelining (also `PI_CASCADE_PIPELINE=0`); default on |
+| `maxhistory=<N>` | sliding-window conversation cap (default 48; also `PI_CASCADE_MAX_HISTORY`) |
 
 Per-participant overrides use a bracket form, e.g.
 `participants=var[voice=cedar,model=haiku];cedar[base_url=http://...]`.
@@ -311,10 +321,12 @@ overridden (so distinguish them by name/content, or pass distinct `voice=`); the
 peer chat model defaults to `gpt-5-mini` (override with `PI_CASCADE_MODEL` or a
 per-participant `model=`). The `say` verb is the no-microphone way to try a round.
 
-> Latency note: each turn currently cold-spawns `tts`, so a multi-agent round
-> takes a few seconds per voice. A warm resident tts path is tracked as a
-> follow-up (bd-67b916). The fully audio-native realtime version where agents
-> hear each other as *audio* over parallel `/rt` websockets is bd-07bb7f.
+> Latency note: synthesis is pipelined (concurrent TTS, ordered playback), which
+> roughly halves a multi-agent round; you can A/B it with `/cascade start
+> pipeline=false`. The remaining per-turn cost is the `tts` cold-spawn — a warm
+> resident tts path is tracked as a follow-up (bd-67b916). The fully audio-native
+> realtime version where agents hear each other as *audio* over parallel `/rt`
+> websockets is bd-07bb7f (blocked on the proxy's GA-realtime routing, bd-0b40ce).
 
 ## Status and diagnostics
 
