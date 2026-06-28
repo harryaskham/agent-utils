@@ -22,7 +22,7 @@ concurrency:
 jobs:
   changes:
     name: Detect docs changes
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, azure-ephemeral]
     timeout-minutes: 5
     outputs:
       should_deploy: ${{ steps.decide.outputs.should_deploy }}
@@ -73,10 +73,11 @@ jobs:
     name: Build static SPA
     needs: changes
     if: needs.changes.outputs.should_deploy == 'true'
-    # This static docs job does not require the managed/self-hosted agent fleet.
-    # Keep it on GitHub-hosted Linux so flaky or busy Mac/self-hosted runners do
-    # not leave Pages publication queued indefinitely.
-    runs-on: ubuntu-latest
+    # bd-37d130: routed to the azure-ephemeral self-hosted runner pool per
+    # operator directive (2026-06-28). That pool is dedicated ephemeral x86 CI
+    # capacity (not the busy Mac/managed agent fleet), so it does not leave
+    # Pages publication queued indefinitely.
+    runs-on: [self-hosted, azure-ephemeral]
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -98,7 +99,7 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, azure-ephemeral]
     timeout-minutes: 10
     environment:
       name: github-pages

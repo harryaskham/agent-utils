@@ -1,0 +1,10 @@
+# actionlint configuration.
+#
+# bd-37d130: register the custom self-hosted runner label `azure-ephemeral` so
+# actionlint accepts `runs-on: [self-hosted, azure-ephemeral]` across the
+# workflows instead of failing with "label azure-ephemeral is unknown". This is
+# the operator's ephemeral x86 self-hosted GitHub runner pool (2026-06-28);
+# `self-hosted` is a built-in actionlint label and needs no registration.
+self-hosted-runner:
+  labels:
+    - azure-ephemeral
