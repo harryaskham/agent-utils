@@ -661,7 +661,12 @@ test("legacy realtime aliases route through the unified /rt command surface", as
 
 test("/rt listen accepts the same continuous mode as direct controls", async () => {
   const originalRecordCmd = process.env.PI_RT_RECORD_CMD;
+  const originalApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_RECORD_CMD = `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 1000)"`;
+  // bd-d936b2: the listen path reaches _connect's apiKey check; set a fake key
+  // (the global FakeWebSocket handles the connect) so the test is hermetic on
+  // keyless CI runners instead of depending on an ambient OPENAI_API_KEY.
+  process.env.PI_RT_API_KEY = "test-key";
   try {
     const { pi, commands, handlers, notifications, ctx } = makeHarness();
     realtimeAgentExtension(pi);
@@ -679,6 +684,8 @@ test("/rt listen accepts the same continuous mode as direct controls", async () 
   } finally {
     if (originalRecordCmd === undefined) delete process.env.PI_RT_RECORD_CMD;
     else process.env.PI_RT_RECORD_CMD = originalRecordCmd;
+    if (originalApiKey === undefined) delete process.env.PI_RT_API_KEY;
+    else process.env.PI_RT_API_KEY = originalApiKey;
   }
 });
 
