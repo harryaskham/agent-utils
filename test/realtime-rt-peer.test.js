@@ -51,12 +51,22 @@ test("runPeerTurn with no audio still triggers a response (the agent responds to
   assert.equal(r.text, "");
 });
 
-test("runPeerTurn rejects on timeout if no completion arrives", async () => {
+test("runPeerTurn rejects on timeout if no completion arrives", async (t) => {
+  // Use node:test fake timers so the rejection is DETERMINISTIC. runPeerTurn's
+  // timeout timer is .unref()'d (correct for production: a pending peer-turn
+  // timeout must not keep the process alive), so a real timer does not keep the
+  // event loop alive — on node 20/22 the loop drains before it fires, which
+  // cancels this test (and cascades to the rest). Fake timers fire the timeout
+  // explicitly, so this passes regardless of node version / loop-drain timing
+  // (bd-33c4d3).
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const s = mockSession();
-  await assert.rejects(
+  const rejection = assert.rejects(
     runPeerTurn({ send: s.send, onEvent: s.onEvent, audioSegments: [Buffer.from([1])], encode: () => "x", timeoutMs: 20 }),
     /peer turn timed out/,
   );
+  t.mock.timers.tick(20);
+  await rejection;
 });
 
 test("runPeerTurn requires send + onEvent deps", async () => {
