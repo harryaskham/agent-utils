@@ -112,6 +112,16 @@
               # for full semantic checks, and falls back to a YAML well-formedness
               # check otherwise.
               pkgs.actionlint
+              # bd-7eb473: CI runs every job via `nix develop --command` on the
+              # azure-ephemeral runners (Nix preinstalled, but no system
+              # toolchains — e.g. `cc`/node are absent), so the devShell must
+              # provide all CI toolchains. rust (cargo/rustc/rustfmt/clippy) + cc
+              # (from stdenv) + actionlint are already above; add nodejs for the
+              # JS jobs and cargo-audit for the dependency-audit job. (CI used
+              # node 20, but nodejs_20 is EOL/insecure in nixpkgs; node 22 LTS is
+              # API-compatible for the node:test suite — validated green.)
+              pkgs.nodejs_22
+              pkgs.cargo-audit
             ];
           };
         });

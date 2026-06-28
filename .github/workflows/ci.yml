@@ -29,14 +29,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      # bd-7eb473: toolchains come from the flake devShell (the azure-ephemeral
+      # runners have Nix but no system node/rust/cc), so each step runs under
+      # `nix develop --command` instead of actions/setup-node.
       - name: Run JS test suite
-        run: npm test
+        run: nix develop --command npm test
       - name: Validate generated docs
-        run: npm run check
+        run: nix develop --command npm run check
 
   rust:
     name: Rust tests + clippy
@@ -45,19 +44,16 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        # edition 2024 requires rust >= 1.85 (see Cargo.toml rust-version).
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      # bd-7eb473: cargo/rustc/clippy/rustfmt + cc all come from the flake
+      # devShell (stdenv provides cc, fixing "linker `cc` not found" on the
+      # toolchain-less azure-ephemeral runners), so cargo runs under
+      # `nix develop --command`.
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: nix develop --command cargo fmt --all -- --check
       - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
       - name: Run Rust tests
-        run: cargo test --workspace
+        run: nix develop --command cargo test --workspace
 
   audit:
     name: Dependency audit (cargo audit)
@@ -66,15 +62,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        # Prebuilt binary install keeps this job fast and predictable.
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
+      # bd-7eb473: cargo + cargo-audit come from the flake devShell.
       - name: Audit dependencies for security advisories
-        # Verified locally clean (80 deps, 0 vulnerabilities) when added.
         # If a future advisory on an unrelated dep proves noisy, this step can
         # be made advisory with `continue-on-error: true`.
-        run: cargo audit
+        run: nix develop --command cargo audit

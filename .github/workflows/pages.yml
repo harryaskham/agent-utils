@@ -90,7 +90,9 @@ jobs:
         # that this step is a no-op read of the existing config.
         uses: actions/configure-pages@v6
       - name: Validate generated site
-        run: npm run docs:check
+        # bd-7eb473: node comes from the flake devShell on the toolchain-less
+        # azure-ephemeral runners.
+        run: nix develop --command npm run docs:check
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
