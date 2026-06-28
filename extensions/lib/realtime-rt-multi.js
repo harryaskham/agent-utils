@@ -14,6 +14,7 @@
 // already provided by planTurnRound in realtime-participants.js.
 
 import { b64 } from "./realtime-helpers.js";
+import { planTurnRound, DEFAULT_ORDER } from "./realtime-participants.js";
 
 // ~0.33s of pcm16 / 24kHz / mono per append chunk (24000 * 2 bytes * 0.33).
 export const DEFAULT_AUDIO_CHUNK_BYTES = 16000;
@@ -111,4 +112,63 @@ export class RtOutputCollector {
     this.transcript = "";
     this.done = false;
   }
+}
+
+/// Orchestrate one audio-native /rt round (bd-07bb7f). Model-agnostic ROUTING: it
+/// sequences which audio each participant hears (the human, then every earlier
+/// speaker this round) and serializes playback to the human in turn order, while
+/// delegating the actual realtime injection/response collection to an injected
+/// `injectAndRespond` dep (the live adapter built from buildHearAndRespondEvents +
+/// RtOutputCollector against a real session). Unit-tested with mock deps.
+///
+/// deps:
+///   injectAndRespond(index, audioSegments, turn) -> Promise<{ pcm, text }>
+///       inject the to-hear PCM segments into participant `index`'s session, trigger
+///       its turn, and resolve with its collected output audio + transcript.
+///   play(participant, pcm, turn) -> Promise<void>   (optional) play output to the human.
+///   onTurn({ index, participant, text, turn }) -> void   (optional) progress hook.
+///
+/// @returns { order: number[], turns: [{ index, name, voice, text, pcmBytes }] }
+export async function runRtMultiRound({
+  participants,
+  humanAudio,
+  order = DEFAULT_ORDER,
+  rng = Math.random,
+  round = 0,
+  injectAndRespond,
+  play,
+  onTurn,
+} = {}) {
+  const roster = Array.isArray(participants) ? participants : (participants?.participants || []);
+  if (typeof injectAndRespond !== "function") {
+    throw new Error("runRtMultiRound requires an injectAndRespond(index, audioSegments, turn) dep");
+  }
+  const plan = planTurnRound(roster, { order, rng, round });
+  const human = humanAudio && humanAudio.length
+    ? (Buffer.isBuffer(humanAudio) ? humanAudio : Buffer.from(humanAudio))
+    : null;
+  const priorOutputs = []; // PCM buffers of speakers earlier this round
+  const turns = [];
+  let playChain = Promise.resolve();
+  let playError = null;
+
+  for (const turn of plan.turns) {
+    const participant = roster[turn.index] || {};
+    // What this participant hears THIS round: the human, then every earlier speaker.
+    const audioSegments = [human, ...priorOutputs].filter((b) => b && b.length);
+    // eslint-disable-next-line no-await-in-loop -- turns are sequential so each hears the prior.
+    const result = await injectAndRespond(turn.index, audioSegments, turn);
+    const pcm = result?.pcm && result.pcm.length ? result.pcm : Buffer.alloc(0);
+    const text = String(result?.text ?? "").trim();
+    if (pcm.length) priorOutputs.push(pcm);
+    if (typeof onTurn === "function") onTurn({ index: turn.index, participant, text, turn });
+    turns.push({ index: turn.index, name: participant.name, voice: participant.voice, text, pcmBytes: pcm.length });
+    if (typeof play === "function" && pcm.length) {
+      const toPlay = pcm;
+      playChain = playChain.then(() => play(participant, toPlay, turn)).catch((e) => { if (!playError) playError = e; });
+    }
+  }
+  await playChain;
+  if (playError) throw playError;
+  return { order: plan.order, turns };
 }

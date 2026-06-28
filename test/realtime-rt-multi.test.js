@@ -104,3 +104,80 @@ test("RtOutputCollector uses an injectable decode and exposes the event-type set
   assert.ok(AUDIO_DELTA_TYPES.has("response.output_audio.delta"));
   assert.ok(RESPONSE_DONE_TYPES.has("response.done"));
 });
+
+import { runRtMultiRound } from "../extensions/lib/realtime-rt-multi.js";
+import { buildParticipantRoster, MODE_RT, ORDER_FIXED } from "../extensions/lib/realtime-participants.js";
+
+function rtRoster() {
+  return buildParticipantRoster({ mode: MODE_RT, n: 3, env: {} }).participants;
+}
+
+test("runRtMultiRound requires injectAndRespond", async () => {
+  await assert.rejects(runRtMultiRound({ participants: rtRoster(), humanAudio: Buffer.from([1]) }), /requires an injectAndRespond/);
+});
+
+test("runRtMultiRound routes the human + every earlier speaker's audio to each participant", async () => {
+  const roster = rtRoster();
+  const heard = [];
+  const out = { 0: Buffer.from("a0"), 1: Buffer.from("a1"), 2: Buffer.from("a2") };
+  const res = await runRtMultiRound({
+    participants: roster,
+    humanAudio: Buffer.from("H"),
+    order: ORDER_FIXED,
+    injectAndRespond: (index, segments) => {
+      heard.push({ index, segs: segments.map((s) => s.toString()) });
+      return { pcm: out[index], text: `t${index}` };
+    },
+  });
+  // turn 0 hears [human]; turn 1 hears [human, out0]; turn 2 hears [human, out0, out1]
+  assert.deepEqual(heard[0], { index: 0, segs: ["H"] });
+  assert.deepEqual(heard[1], { index: 1, segs: ["H", "a0"] });
+  assert.deepEqual(heard[2], { index: 2, segs: ["H", "a0", "a1"] });
+  assert.deepEqual(res.turns.map((t) => t.text), ["t0", "t1", "t2"]);
+  assert.deepEqual(res.turns.map((t) => t.pcmBytes), [2, 2, 2]);
+});
+
+test("runRtMultiRound plays each output to the human in turn order", async () => {
+  const roster = rtRoster();
+  const playOrder = [];
+  await runRtMultiRound({
+    participants: roster,
+    humanAudio: Buffer.from("H"),
+    order: ORDER_FIXED,
+    injectAndRespond: (index) => ({ pcm: Buffer.from(`out${index}`), text: `t${index}` }),
+    play: (p, pcm) => { playOrder.push(pcm.toString()); },
+  });
+  assert.deepEqual(playOrder, ["out0", "out1", "out2"]);
+});
+
+test("runRtMultiRound tolerates a silent turn (empty output) and a missing human", async () => {
+  const roster = rtRoster();
+  const heard = [];
+  await runRtMultiRound({
+    participants: roster,
+    humanAudio: null,
+    order: ORDER_FIXED,
+    injectAndRespond: (index, segments) => {
+      heard.push(segments.map((s) => s.toString()));
+      return index === 0 ? { pcm: Buffer.alloc(0), text: "" } : { pcm: Buffer.from(`o${index}`), text: `t${index}` };
+    },
+  });
+  // no human; turn 0 silent -> turn 1 hears nothing prior, turn 2 hears only o1
+  assert.deepEqual(heard[0], []);
+  assert.deepEqual(heard[1], []);
+  assert.deepEqual(heard[2], ["o1"]);
+});
+
+test("runRtMultiRound surfaces a play error", async () => {
+  const roster = buildParticipantRoster({ mode: MODE_RT, n: 2, env: {} }).participants;
+  await assert.rejects(
+    runRtMultiRound({
+      participants: roster,
+      humanAudio: Buffer.from("H"),
+      order: ORDER_FIXED,
+      injectAndRespond: (index) => ({ pcm: Buffer.from(`o${index}`), text: "t" }),
+      play: () => { throw new Error("play boom"); },
+    }),
+    /play boom/,
+  );
+});
