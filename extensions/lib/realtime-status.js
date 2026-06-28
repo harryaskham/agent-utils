@@ -17,6 +17,7 @@ import {
   defaultPlaybackCommand,
 } from "./realtime-audio.js";
 import { normalizeBaseUrl, numberEnv } from "./realtime-helpers.js";
+import { formatLevelLabel } from "./realtime-audio-meter.js";
 import { spawnSync } from "node:child_process";
 import { truncateDiagnostic, isAuthFailure, isMicPermissionFailure } from "./realtime-text.js";
 
@@ -50,7 +51,14 @@ export function micCaptureSummary(session) {
   if (!session.mic) return "inactive";
   const bytes = session.lastMicBytes || 0;
   const mode = session.micMode || "on";
-  return `${mode} active · ${bytes} bytes${bytes === 0 ? " · waiting for audio" : ""}`;
+  // "Show audio input": render the live smoothed input level (written in the
+  // mic-capture path as session.inputLevel, 0..1) via the shared meter
+  // formatter. Defensive: only when a finite level is present, so synthetic
+  // sessions / pre-capture states keep the byte-only summary.
+  const level = Number.isFinite(session.inputLevel)
+    ? ` · level:${formatLevelLabel(session.inputLevel, { width: 8 })}`
+    : "";
+  return `${mode} active · ${bytes} bytes${level}${bytes === 0 ? " · waiting for audio" : ""}`;
 }
 
 export function realtimeContextDiagnostics(session, config) {

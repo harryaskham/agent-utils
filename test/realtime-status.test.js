@@ -330,3 +330,26 @@ test("diagnosticLines hints when auto-reconnect is exhausted", () => {
     assert.ok(hint.includes("auto-reconnect exhausted after 5/5"), `expected exhausted hint in: ${hint}`);
   });
 });
+
+test("micCaptureSummary renders a level meter when session.inputLevel is present", () => {
+  // No inputLevel -> byte-only summary unchanged (defensive).
+  assert.equal(
+    micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024 }),
+    "vad active \u00b7 1024 bytes",
+  );
+  // Finite level -> a "level:[bar] NN%" segment appears.
+  assert.match(
+    micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024, inputLevel: 0.5 }),
+    / \u00b7 level:\[.+\] +50%$/,
+  );
+  // Zero level still renders (active mic, currently silent/muted) -> 0%.
+  assert.match(
+    micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 2048, inputLevel: 0 }),
+    / \u00b7 level:\[.+\] +0%$/,
+  );
+  // Non-finite level is ignored (defensive) -> byte-only summary.
+  assert.equal(
+    micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024, inputLevel: NaN }),
+    "vad active \u00b7 1024 bytes",
+  );
+});
