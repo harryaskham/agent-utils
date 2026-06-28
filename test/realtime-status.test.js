@@ -353,3 +353,22 @@ test("micCaptureSummary renders a level meter when session.inputLevel is present
     "vad active \u00b7 1024 bytes",
   );
 });
+
+test("diagnosticLines explains a GA-only realtime model rejection (bd-0b40ce)", () => {
+  withStatusEnv({ OPENAI_API_KEY: "sk-xxx" }, () => {
+    // GA error surfaced via lastResponseError -> specific GA hint, generic suppressed.
+    const viaResponse = diagnosticLines(
+      { pendingSpokenTranscripts: [], lastMicBytes: 0, forwardedMessageCount: 0, lastResponseError: 'Model "gpt-realtime-2-2026-05-06" is only available on the GA API' },
+      baseConfig(),
+    );
+    const h1 = viaResponse.find((l) => l.startsWith("hint:"));
+    assert.ok(h1.includes("GA-only") && h1.includes("BETA interface"), `expected GA hint: ${h1}`);
+    assert.ok(!h1.includes("verify the model id, base URL"), "generic error hint suppressed when GA hint fires");
+    // GA error surfaced via the disconnect reason also triggers the hint.
+    const viaDisconnect = diagnosticLines(
+      { pendingSpokenTranscripts: [], lastMicBytes: 0, forwardedMessageCount: 0 },
+      baseConfig({ lastDisconnectReason: "connect failed: only available on the GA API" }),
+    );
+    assert.ok(viaDisconnect.find((l) => l.startsWith("hint:")).includes("GA-only"), "GA hint from disconnect reason");
+  });
+});

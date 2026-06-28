@@ -210,7 +210,14 @@ export function diagnosticLines(session, config) {
   const reconnectAttempts = Number(config.reconnectAttempts || 0) || 0;
   const reconnectMax = Number(config.reconnectMaxAttempts || 0) || 0;
   if (config.autoReconnect && reconnectMax > 0 && reconnectAttempts >= reconnectMax) hints.push(`auto-reconnect exhausted after ${reconnectAttempts}/${reconnectMax} attempts; /rt start re-establishes the session`);
-  if (responseError && !isAuthFailure(responseError)) hints.push("realtime server returned an error (see lastResponseError); verify the model id, base URL, and provider/proxy routing, then /rt-doctor");
+  // GA-only realtime model rejected by a beta-routing endpoint/proxy. The error
+  // text is upstream-verbatim ('... is only available on the GA API'); the real
+  // fix is the proxy routing realtime via OpenAI's GA API, not a client header
+  // change (proven empirically: identical error with and without OpenAI-Beta).
+  const gaScan = `${responseError}\n${config.lastDisconnectReason || ""}`;
+  const gaOnly = /only available on the GA API/i.test(gaScan);
+  if (gaOnly) hints.push("realtime model rejected as GA-only ('... is only available on the GA API'): the model is GA but the realtime endpoint/proxy is routing via the BETA interface. Fix is upstream \u2014 the LiteLLM proxy must route realtime through OpenAI's GA API; a client-side beta-header change alone does NOT connect. For a direct Azure GA endpoint, set PI_RT_AZURE_API_VERSION=none.");
+  else if (responseError && !isAuthFailure(responseError)) hints.push("realtime server returned an error (see lastResponseError); verify the model id, base URL, and provider/proxy routing, then /rt-doctor");
 
   return [
     "Realtime doctor",
