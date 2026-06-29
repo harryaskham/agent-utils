@@ -12,7 +12,8 @@ on:
   # merge-queue prerequisite: GitHub's merge queue runs required checks on the
   # queued merge commit via merge_group events. Without this trigger, queued PRs
   # hang forever waiting for checks that never run. Inert until a merge_queue
-  # ruleset is enabled on main.
+  # ruleset is enabled on main (the ruleset's required_status_checks reference
+  # these same four job names: JS, Rust, audit, Nix flake check).
   merge_group:
   workflow_dispatch:
 
