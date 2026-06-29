@@ -78,3 +78,18 @@ jobs:
           tool: cargo-audit
       - name: Audit dependencies for security advisories
         run: cargo audit
+
+  flake:
+    name: Nix flake check
+    # Cheap eval-only baseline gate (operator suggestion 2026-06-29): catches
+    # flake.nix breakage (malformed outputs, eval errors, broken references)
+    # that the JS/Rust/audit jobs do not. --no-build keeps it fast: it
+    # instantiates the current system's flake outputs without building them.
+    # Drop --no-build if a future operator wants full build validation.
+    runs-on: [self-hosted, azure-ephemeral]
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Nix flake check (eval-only)
+        run: nix --extra-experimental-features 'nix-command flakes' flake check --no-build
