@@ -3,6 +3,19 @@
 This directory holds the repo's CI/Pages workflows. Actions only reads
 `*.yml` / `*.yaml` here; this `README.md` is ignored by Actions.
 
+## Where CI runs + how main stays green
+
+CI runs on the **azure-ephemeral** self-hosted runner pool (`runs-on:
+[self-hosted, azure-ephemeral]`): scale-to-zero, one ephemeral container per
+queued job, ~30-90s cold start. These runners have Nix but no preinstalled
+language toolchains, so jobs enter the repo dev shell (`nix develop --command
+...`) for node/cargo/cargo-audit. They also have no secrets and no tailnet, so
+the suite is kept hermetic and needs neither.
+
+Dev reintegrations land via **PR auto-merge**: GitHub CI (the `js` / `rust` /
+`audit` jobs) is the gate that keeps `main` green, not a local pre-merge gate.
+Open the PR, let the checks pass, and it auto-merges.
+
 ## Validating workflows before you push (bd-ce9baf)
 
 Workflow syntax/structure errors used to only surface after a push because no
