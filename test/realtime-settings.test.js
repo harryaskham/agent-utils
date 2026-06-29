@@ -61,3 +61,30 @@ test("baseUrl coerce is raw (preserves case/path), directAzure is boolean", () =
   assert.equal(out.baseUrl, "http://Helsinki:4000/V1");
   assert.equal(out.directAzure, true);
 });
+
+test("every non-special setting declares setter + snapshotField; specials are handled", () => {
+  for (const s of REALTIME_VALUE_SETTINGS) {
+    if (s.special) continue;
+    assert.ok(s.setter, `${s.param} has a setter`);
+    assert.ok(s.snapshotField, `${s.param} has a snapshotField`);
+  }
+});
+
+test("applyRealtimeValueParams dispatches each param to its setter; energy special; fork skipped", async () => {
+  const { applyRealtimeValueParams } = await import("../extensions/lib/realtime-settings.js");
+  const calls = [];
+  const controls = new Proxy({}, { get: (_t, name) => (v) => calls.push([name, v]) });
+  let energy = null;
+  const applied = applyRealtimeValueParams(
+    { model: "M", voice: "sage", directAzure: false, fork: true, energy: 0.1, summary: true },
+    controls, null, { applyLocalVadEnergy: (v) => { energy = v; } },
+  );
+  const byName = Object.fromEntries(calls);
+  assert.equal(byName.setModel, "M");
+  assert.equal(byName.setVoice, "sage");
+  assert.equal(byName.setDirectAzure, false); // defined-not-undefined applies
+  assert.equal(byName.setSummaryContext, true);
+  assert.equal(energy, 0.1); // energy special
+  assert.ok(!("setFork" in byName)); // fork handled by caller, not dispatched
+  assert.ok(applied.includes("model") && applied.includes("energy") && !applied.includes("fork"));
+});

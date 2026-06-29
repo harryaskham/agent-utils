@@ -147,7 +147,7 @@ import {
 } from "./lib/realtime-models.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
 import { InputLevelTracker } from "./lib/realtime-input-level.js";
-import { buildRealtimeValueParams, normalizeRealtimeValueParams } from "./lib/realtime-settings.js";
+import { buildRealtimeValueParams, normalizeRealtimeValueParams, applyRealtimeValueParams } from "./lib/realtime-settings.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> buildServerVadTurnDetection) is preserved after extraction.
 export { buildServerVadTurnDetection };
@@ -2657,25 +2657,12 @@ export default function realtimeAgentExtension(pi) {
       });
       return { forked: true, cancelled: !!result?.cancelled, snapshot: controls.snapshot() };
     }
-    if (params.backend) controls.setAudioBackend(params.backend, ctx);
     if (params.pulseServer !== undefined || params.pulseSource !== undefined || params.pulseSink !== undefined) {
       controls.setPulseRouting({ server: params.pulseServer, source: params.pulseSource, sink: params.pulseSink }, ctx);
     }
-    if (params.baseUrl) controls.setBaseUrl(params.baseUrl, ctx);
-    if (params.model) controls.setModel(params.model, ctx);
-    if (params.directAzure !== undefined) controls.setDirectAzure(params.directAzure, ctx);
-    if (params.azureEndpoint !== undefined) controls.setAzureEndpoint(params.azureEndpoint, ctx);
-    if (params.azureDeployment !== undefined) controls.setAzureDeployment(params.azureDeployment, ctx);
-    if (params.azureApiVersion !== undefined) controls.setAzureApiVersion(params.azureApiVersion, ctx);
-    if (params.azureProtocol !== undefined) controls.setAzureProtocol(params.azureProtocol, ctx);
-    if (params.voice) controls.setVoice(params.voice, ctx);
-    if (params.trans || params.transcription || params.transcriptionModel) controls.setTranscriptionModel(params.trans || params.transcription || params.transcriptionModel, ctx);
-    if (params.speed !== undefined) controls.setSpeed(params.speed, ctx);
-    if (params.thresh !== undefined) controls.setVadThreshold(params.thresh, ctx);
-    if (params.energy !== undefined) applyLocalVadEnergy(params.energy, ctx);
-    if (params.reasoning) controls.setReasoningEffort(params.reasoning, ctx);
-    if (params.summary !== undefined) controls.setSummaryContext(params.summary, ctx);
-    if (params.chime !== undefined) controls.setChime(params.chime, ctx);
+    // bd-25f291: registry drives every value-setting setter (backend/baseUrl/
+    // model/azure*/voice/trans/speed/thresh/energy/reasoning/summary/chime).
+    applyRealtimeValueParams(params, controls, ctx, { applyLocalVadEnergy });
     if (params.audio) {
       if (!REALTIME_AUDIO_MODES.has(params.audio)) throw new Error("Unsupported realtime audio mode");
       if (params.audio === "toggle") controls.toggleAudio(ctx);
