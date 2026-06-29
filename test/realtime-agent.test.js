@@ -351,9 +351,13 @@ test("/rt-doctor surfaces provider, Pulse, command, and hint diagnostics", async
   const previous = {
     openai: process.env.OPENAI_API_KEY,
     rt: process.env.PI_RT_API_KEY,
+    az: process.env.PI_RT_DIRECT_AZURE,
   };
   delete process.env.OPENAI_API_KEY;
   delete process.env.PI_RT_API_KEY;
+  // This test exercises the proxy-mode missing-key doctor; pin proxy since
+  // direct-azure is now the default (bd-8b6f12).
+  process.env.PI_RT_DIRECT_AZURE = "0";
   try {
     const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
     realtimeAgentExtension(pi);
@@ -378,6 +382,8 @@ test("/rt-doctor surfaces provider, Pulse, command, and hint diagnostics", async
     else process.env.OPENAI_API_KEY = previous.openai;
     if (previous.rt === undefined) delete process.env.PI_RT_API_KEY;
     else process.env.PI_RT_API_KEY = previous.rt;
+    if (previous.az === undefined) delete process.env.PI_RT_DIRECT_AZURE;
+    else process.env.PI_RT_DIRECT_AZURE = previous.az;
   }
 });
 
@@ -1906,8 +1912,9 @@ test("makeInitialConfig: Azure realtime defaults target the gpt-realtime-2 GA de
     assert.equal(cfg.azureProtocol, "v1");
     // Deployment follows the gpt-realtime-2 model default.
     assert.equal(cfg.azureDeployment, "gpt-realtime-2");
-    // Direct-azure stays opt-in by default (flip with /rt azure=true).
-    assert.equal(cfg.directAzure, false);
+    // Direct-azure is the DEFAULT now (bd-8b6f12); opt back to proxy with
+    // PI_RT_DIRECT_AZURE=0 or PI_RT_PROVIDER=openai.
+    assert.equal(cfg.directAzure, true);
   } finally {
     for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   }
@@ -2037,7 +2044,11 @@ test("probeConnect classifies connected / session-start-1006 / ga-only / auth (b
   }
   const orig = process.env.PI_RT_API_KEY;
   const origOai = process.env.OPENAI_API_KEY;
+  const origAz = process.env.PI_RT_DIRECT_AZURE;
   process.env.PI_RT_API_KEY = "test-key";
+  // Probe classification is provider-agnostic; pin proxy mode since direct-azure
+  // is now the default (bd-8b6f12) and this test supplies the proxy key.
+  process.env.PI_RT_DIRECT_AZURE = "0";
   try {
     // connected: default fake emits session.created
     setRealtimeWebSocketConstructor(FakeWebSocket);
@@ -2063,5 +2074,6 @@ test("probeConnect classifies connected / session-start-1006 / ga-only / auth (b
     setRealtimeWebSocketConstructor(FakeWebSocket);
     if (orig === undefined) delete process.env.PI_RT_API_KEY; else process.env.PI_RT_API_KEY = orig;
     if (origOai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = origOai;
+    if (origAz === undefined) delete process.env.PI_RT_DIRECT_AZURE; else process.env.PI_RT_DIRECT_AZURE = origAz;
   }
 });

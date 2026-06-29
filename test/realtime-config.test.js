@@ -62,7 +62,10 @@ test("makeInitialConfig: stable defaults on a clean environment", () => {
   try {
     const c = makeInitialConfig();
     assert.equal(c.baseUrl, "https://api.openai.com");
-    assert.equal(c.directAzure, false);
+    // Direct-Azure is the DEFAULT now (bd-8b6f12): the default model
+    // gpt-realtime-2 is GA-only and the proxy GA-rejects it (bd-0b40ce). Opt back
+    // to the proxy with PI_RT_DIRECT_AZURE=0 or PI_RT_PROVIDER=openai.
+    assert.equal(c.directAzure, true);
     // GA realtime defaults (bd-d0124f): the direct-Azure target defaults to the
     // gpt-realtime-2 canadacentral deployment with api-version OMITTED ("none"),
     // since the preview api-version path was deprecated 2026-04-30.
@@ -116,17 +119,21 @@ test("makeInitialConfig: env overrides are reflected", () => {
   } finally { restore(); }
 });
 
-test("makeInitialConfig: directAzure is detected from either flag", () => {
-  for (const overrides of [{ PI_RT_DIRECT_AZURE: "1" }, { PI_RT_PROVIDER: "azure" }, { PI_RT_PROVIDER: "AZURE" }]) {
+test("makeInitialConfig: directAzure defaults true, overridable to proxy (bd-8b6f12)", () => {
+  // Azure is the default now, and explicit azure flags keep it on.
+  for (const overrides of [{}, { PI_RT_DIRECT_AZURE: "1" }, { PI_RT_PROVIDER: "azure" }, { PI_RT_PROVIDER: "AZURE" }]) {
     const restore = withEnv(overrides);
     try {
       assert.equal(makeInitialConfig().directAzure, true, JSON.stringify(overrides));
     } finally { restore(); }
   }
-  const restore = withEnv({ PI_RT_PROVIDER: "openai" });
-  try {
-    assert.equal(makeInitialConfig().directAzure, false);
-  } finally { restore(); }
+  // Explicit proxy/OpenAI overrides force it off.
+  for (const overrides of [{ PI_RT_PROVIDER: "openai" }, { PI_RT_PROVIDER: "proxy" }, { PI_RT_DIRECT_AZURE: "0" }]) {
+    const restore = withEnv(overrides);
+    try {
+      assert.equal(makeInitialConfig().directAzure, false, JSON.stringify(overrides));
+    } finally { restore(); }
+  }
 });
 
 test("makeInitialConfig: audio-disable inverts audioEnabled and chime can be turned off", () => {
