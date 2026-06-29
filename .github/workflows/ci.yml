@@ -9,6 +9,11 @@ on:
     tags:
       - "v*"
   pull_request:
+  # merge-queue prerequisite: GitHub's merge queue runs required checks on the
+  # queued merge commit via merge_group events. Without this trigger, queued PRs
+  # hang forever waiting for checks that never run. Inert until a merge_queue
+  # ruleset is enabled on main.
+  merge_group:
   workflow_dispatch:
 
 permissions:
