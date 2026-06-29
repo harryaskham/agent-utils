@@ -13,6 +13,7 @@ import {
   buildAzureSpeechSsml,
   resolveAzureSpeechCreds,
   synthesizeAzureSpeechDirect,
+  resolveSpeakToolParams,
   DEFAULT_AZURE_SPEECH_ENDPOINT,
 } from "../extensions/lib/realtime-tts-batch.js";
 
@@ -236,4 +237,14 @@ test("synthesizeAzureSpeechDirect: rejects on empty text, missing endpoint/key, 
   await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "https://e", apiKey: "", fetchImpl: okFetch }), /no API key/);
   const badFetch = async () => ({ ok: false, status: 401, async text() { return "Unauthorized"; } });
   await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "https://e", apiKey: "k", fetchImpl: badFetch }), /azure-speech HTTP 401: Unauthorized/);
+});
+
+test("resolveSpeakToolParams: params win over PI_CASCADE_* env; sentinel voice -> undefined", () => {
+  const a = resolveSpeakToolParams({ text: " hi ", voice: "MAI-Voice-2", speaker: "p1", lang: "en-GB", speed: 1.5 }, { env: {} });
+  assert.deepEqual(a, { text: "hi", voice: "MAI-Voice-2", speakerProfileId: "p1", lang: "en-GB", speed: 1.5 });
+  const b = resolveSpeakToolParams({ text: "yo" }, { env: { PI_CASCADE_VOICE: "en-US-AvaMultilingualNeural", PI_CASCADE_SPEAKER: "pp", PI_CASCADE_LANG: "en-US", PI_CASCADE_SPEED: "1.2" } });
+  assert.deepEqual(b, { text: "yo", voice: "en-US-AvaMultilingualNeural", speakerProfileId: "pp", lang: "en-US", speed: 1.2 });
+  const c = resolveSpeakToolParams({ text: "x", voice: "embedding:default" }, { env: {} });
+  assert.equal(c.voice, undefined);
+  assert.equal(c.speed, undefined);
 });

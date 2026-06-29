@@ -181,6 +181,22 @@ export function resolveAzureSpeechCreds({ env = process.env } = {}) {
   return { endpoint, apiKey };
 }
 
+/// Resolve the effective `speak` tool synthesis params from a tool-call's params
+/// plus environment defaults. voice/speaker/lang/speed fall back to PI_CASCADE_*
+/// so an operator sets the cascade voice once and the agent just calls speak(text).
+/// The cascade voice sentinel resolves to undefined; the caller requires a
+/// concrete Azure voice for the direct path. Pure (env reads only).
+export function resolveSpeakToolParams(params = {}, { env = process.env } = {}) {
+  const text = String(params.text ?? "").trim();
+  const voice = resolveCascadeTtsVoice(params.voice ?? env.PI_CASCADE_SPEAK_VOICE ?? env.PI_CASCADE_VOICE);
+  const speakerProfileId = (params.speaker ?? params.speakerProfileId ?? env.PI_CASCADE_SPEAKER ?? env.PI_CASCADE_SPEAKER_PROFILE_ID) || undefined;
+  const lang = (params.lang ?? env.PI_CASCADE_LANG) || undefined;
+  const speedSrc = params.speed != null && params.speed !== "" ? params.speed : env.PI_CASCADE_SPEED;
+  const speedNum = Number(speedSrc);
+  const speed = Number.isFinite(speedNum) && speedNum > 0 ? speedNum : undefined;
+  return { text, voice, speakerProfileId, lang, speed };
+}
+
 /// Synthesize `text` to a raw PCM16/24k/mono Buffer via a DIRECT Azure Speech
 /// REST call (no subprocess): POST <endpoint>/cognitiveservices/v1 with the mstts
 /// SSML body (voice + ttsembedding speakerProfileId + lang + prosody). The

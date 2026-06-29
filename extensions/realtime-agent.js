@@ -167,6 +167,11 @@ import {
   makeCascadePlay,
   cascadeRosterFromArgs,
 } from "./lib/realtime-cascade-session.js";
+import {
+  synthesizeAzureSpeechDirect,
+  resolveAzureSpeechCreds,
+  resolveSpeakToolParams,
+} from "./lib/realtime-tts-batch.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> RealtimeStateController) is preserved after extraction.
@@ -2972,6 +2977,43 @@ export default function realtimeAgentExtension(pi) {
           content: [{ type: "text", text: Array.isArray(lines) ? lines.join("\n") : JSON.stringify(snapshot, null, 2) }],
           details: { snapshot, pulse: { server: process.env.PULSE_SERVER || null, source: process.env.PULSE_SOURCE || null, sink: process.env.PULSE_SINK || null } },
         };
+      },
+    });
+
+    // Fast direct-Azure speak tool (bd-15beec): gives the loaded Pi agent a
+    // "mouth" — synthesize a reply via the direct Azure REST path (no caco msg
+    // speak / daemon hop) in the configured cascade/MAI voice and play it
+    // locally. This is the low-latency replacement for force-agent-speech's
+    // daemon precis; pair with /rt stt local-vad so the loaded Pi agent IS the
+    // cascade brain.
+    pi.registerTool({
+      name: "speak",
+      label: "Speak (fast direct-Azure)",
+      description: "Speak text aloud immediately in the configured cascade voice via a fast direct-Azure REST call (no daemon round-trip). Use this to reply out loud when voice/cascade output is active.",
+      promptSnippet: "Use the speak tool to talk to the user out loud: call speak with your reply text and it is synthesized in the cascade voice with low latency.",
+      promptGuidelines: ["When voice/cascade mode is active, respond by calling speak with your spoken reply so the user hears you. Keep spoken text concise and natural; do not read out tool mechanics, code, or URLs."],
+      parameters: ToolSchema.object({
+        text: ToolSchema.string({ description: "The text to speak aloud." }),
+        voice: ToolSchema.optional(ToolSchema.string({ description: "Azure voice name override (e.g. MAI-Voice-2). Defaults to PI_CASCADE_VOICE." })),
+        speaker: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts ttsembedding speakerProfileId for a personal/embedding voice. Defaults to PI_CASCADE_SPEAKER." })),
+        lang: ToolSchema.optional(ToolSchema.string({ description: "xml:lang locale, e.g. en-GB." })),
+        speed: ToolSchema.optional(ToolSchema.number({ description: "Speech rate multiplier, e.g. 1.2." })),
+      }),
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        const { text, voice, speakerProfileId, lang, speed } = resolveSpeakToolParams(params, { env: process.env });
+        if (!text) return { content: [{ type: "text", text: "speak: empty text" }] };
+        if (!voice) return { content: [{ type: "text", text: "speak: no voice — pass voice= or set PI_CASCADE_VOICE to a concrete Azure voice (e.g. MAI-Voice-2)" }] };
+        const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
+        try {
+          const pcm = await synthesizeAzureSpeechDirect({ text, voice, lang, speed, speakerProfileId, endpoint, apiKey });
+          if (pcm && pcm.length) {
+            markAssistantSpeaking(audioDurationMs(pcm));
+            await playPcmBuffer(pcm, config.playbackCommand || defaultPlaybackCommand(), (m, l) => { try { ctx.ui.notify(m, l); } catch {} }, config.debug);
+          }
+          return { content: [{ type: "text", text: `spoke (${text.length} chars, ${voice})` }] };
+        } catch (e) {
+          return { content: [{ type: "text", text: `speak failed: ${e?.message || String(e)}` }] };
+        }
       },
     });
   }

@@ -270,6 +270,27 @@ text are skipped.
 > length (~15 chars/s); on a slow TTS voice you can still raise `/rt energy=` if any
 > tail leaks through.
 
+### The `speak` tool (low-latency direct-Azure agent voice)
+
+`force-agent-speech` above speaks replies through `caco msg speak` (the TTS
+daemon), which adds a daemon round-trip and uses the daemon voice. For a fast,
+per-session voice, the realtime extension also registers a `speak` **tool** the
+agent can call directly: it synthesizes via the direct Azure Speech REST path
+(no daemon) in the configured cascade voice and plays locally.
+
+- Defaults come from `PI_CASCADE_VOICE` (a concrete Azure voice such as
+  `MAI-Voice-2`), `PI_CASCADE_SPEAKER` (mstts ttsembedding speakerProfileId),
+  `PI_CASCADE_LANG`, and `PI_CASCADE_SPEED`; the agent can override any per call.
+- A concrete voice is required (the cascade embedding sentinel is not a real
+  Azure voice). Azure creds come from `AZURE_SPEECH_API_KEY` /
+  `AZURE_SPEECH_ENDPOINT` in the environment.
+
+Pair it with `/rt stt local-vad` so your speech becomes agent turns and the
+loaded Pi agent replies out loud in the configured voice with low latency — the
+Pi agent IS the cascade brain (bd-15beec). Making the agent reply *exclusively*
+via `speak` (mandatory voice mode) and wiring it into `/cascade start n=1` is the
+next slice.
+
 ### Replay the latest spoken response
 
 ```text
