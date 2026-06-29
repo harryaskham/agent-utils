@@ -163,6 +163,7 @@ import {
   makeCascadeRunTurn,
   makeCascadeSpeak,
   makeCascadeSynth,
+  makeCascadeTtsSynth,
   makeCascadePlay,
   cascadeRosterFromArgs,
 } from "./lib/realtime-cascade-session.js";
@@ -2559,7 +2560,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   function ensureCascadeController(ctx, rawArgs) {
-    const { roster, values } = cascadeRosterFromArgs(rawArgs, { env: process.env });
+    const { roster, values, directAzureSpeech } = cascadeRosterFromArgs(rawArgs, { env: process.env });
     const defaultModel = values.model || env("PI_CASCADE_MODEL", "OPENAI_CHAT_MODEL", "MAPI_MODEL_ID") || "gpt-5-mini";
     const defaultBaseUrl = values.base_url || values.baseurl || env("PI_RT_BASE_URL", "OPENAI_BASE_URL");
     const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl });
@@ -2575,9 +2576,12 @@ export default function realtimeAgentExtension(pi) {
     // ordered, ~halving a multi-agent round. Opt out with pipeline=false / PI_CASCADE_PIPELINE=0.
     const pipelineRaw = String(values.pipeline ?? env("PI_CASCADE_PIPELINE") ?? "1").toLowerCase();
     const usePipeline = pipelineRaw !== "0" && pipelineRaw !== "false" && pipelineRaw !== "off";
+    // azure=true routes cascade synthesis through the DIRECT Azure Speech REST
+    // path (no `tts` subprocess); creds come from AZURE_SPEECH_* in the env.
+    const cascadeSynthImpl = makeCascadeTtsSynth({ directAzureSpeech, env: process.env });
     const speakDeps = usePipeline
-      ? { synth: makeCascadeSynth({}), play: makeCascadePlay({ playImpl }) }
-      : { speak: makeCascadeSpeak({ playImpl }) };
+      ? { synth: makeCascadeSynth({ synthImpl: cascadeSynthImpl }), play: makeCascadePlay({ playImpl }) }
+      : { speak: makeCascadeSpeak({ synthImpl: cascadeSynthImpl, playImpl }) };
     cascade.controller = new CascadeController({
       roster: roster.participants,
       order: roster.order,
@@ -3048,7 +3052,7 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.registerCommand("cascade", {
-    description: "Multi-agent voice group chat (STT in, per-agent TTS out, turn-taking). Usage: /cascade start [n=N participants=a,b order=fixed|random|round-robin voice= model= base_url=], /cascade say <text>, /cascade stop, /cascade reset, /cascade status.",
+    description: "Multi-agent voice group chat (STT in, per-agent TTS out, turn-taking). Usage: /cascade start [n=N participants=a,b order=fixed|random|round-robin voice= model= base_url= azure=true speaker=<profileId> lang=<locale>], /cascade say <text>, /cascade stop, /cascade reset, /cascade status. azure=true synthesizes via the direct Azure Speech REST API (AZURE_SPEECH_* env) with mstts embedding voices.",
     handler: async (args, ctx) => {
       try {
         const raw = String(args || "").trim();

@@ -30,6 +30,14 @@ import { spawn } from "node:child_process";
 // provider, which in a caco env is the proxy that already fronts azure/speech.
 export const AZURE_SPEECH_PROVIDER = "azure-speech";
 
+// DEFAULT direct Azure Speech (Cognitive Services TTS) target. The eastus speech
+// TTS endpoint is a non-secret regional URL (parallel to the realtime
+// DEFAULT_AZURE_ENDPOINT); the API key is NEVER hardcoded here — it is read at
+// synth time from AZURE_SPEECH_API_KEY. Output is raw PCM16/24k/mono so it feeds
+// the cascade player (realtime-audio.js: 24kHz mono 16-bit) with no transcoding.
+export const DEFAULT_AZURE_SPEECH_ENDPOINT = "https://eastus.tts.speech.microsoft.com";
+export const DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT = "raw-24khz-16bit-mono-pcm";
+
 // Sentinel from realtime-participants.js meaning "use the provider's configured
 // default voice" (caco's azure embedding default). We translate it to "omit
 // --voice" so the tts CLI/provider picks its own default.
@@ -160,4 +168,62 @@ export function synthesizeToPcm(text, {
       }
     });
   });
+}
+
+/// Resolve direct Azure Speech endpoint + key from the environment. Endpoint
+/// defaults to the eastus speech URL; the key has NO default and is never
+/// hardcoded. Pure (env reads only).
+export function resolveAzureSpeechCreds({ env = process.env } = {}) {
+  const endpoint = String(
+    env.AZURE_SPEECH_ENDPOINT || env.PI_RT_AZURE_SPEECH_ENDPOINT || DEFAULT_AZURE_SPEECH_ENDPOINT,
+  ).trim().replace(/\/+$/, "");
+  const apiKey = String(env.AZURE_SPEECH_API_KEY || env.PI_RT_AZURE_SPEECH_API_KEY || "").trim();
+  return { endpoint, apiKey };
+}
+
+/// Synthesize `text` to a raw PCM16/24k/mono Buffer via a DIRECT Azure Speech
+/// REST call (no subprocess): POST <endpoint>/cognitiveservices/v1 with the mstts
+/// SSML body (voice + ttsembedding speakerProfileId + lang + prosody). The
+/// subscription key travels in the Ocp-Apim-Subscription-Key header and is never
+/// logged. `fetchImpl` injectable for tests. Resolves with the PCM Buffer; rejects
+/// on empty text, missing endpoint/key, or a non-2xx response.
+export async function synthesizeAzureSpeechDirect({
+  text,
+  voice,
+  lang,
+  speed,
+  speakerProfileId,
+  endpoint,
+  apiKey,
+  outputFormat = DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT,
+  fetchImpl,
+} = {}) {
+  const body = String(text ?? "");
+  if (!body.trim()) throw new Error("azure-speech: refusing to synthesize empty text");
+  const ep = String(endpoint ?? "").trim().replace(/\/+$/, "");
+  if (!ep) throw new Error("azure-speech: no endpoint (set AZURE_SPEECH_ENDPOINT)");
+  if (!apiKey) throw new Error("azure-speech: no API key (set AZURE_SPEECH_API_KEY)");
+  const doFetch = typeof fetchImpl === "function"
+    ? fetchImpl
+    : (typeof fetch === "function" ? fetch : null);
+  if (!doFetch) throw new Error("azure-speech: no fetch implementation available");
+  const ssml = buildAzureSpeechSsml({ text: body, voice, lang, speed, speakerProfileId });
+  const res = await doFetch(`${ep}/cognitiveservices/v1`, {
+    method: "POST",
+    headers: {
+      "Ocp-Apim-Subscription-Key": apiKey,
+      "Content-Type": "application/ssml+xml",
+      "X-Microsoft-OutputFormat": String(outputFormat || DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT),
+      "User-Agent": "pi-realtime-cascade",
+    },
+    body: ssml,
+  });
+  if (!res || res.ok === false) {
+    const status = res?.status ?? "??";
+    let detail = "";
+    try { detail = String(await res.text()).slice(0, 300); } catch {}
+    throw new Error(`azure-speech HTTP ${status}${detail ? `: ${detail}` : ""}`);
+  }
+  const ab = await res.arrayBuffer();
+  return Buffer.from(ab);
 }

@@ -14,7 +14,7 @@ import { runCascadeRound } from "./realtime-cascade.js";
 import { sanitizeForSpeech } from "./realtime-cascade.js";
 import { DEFAULT_ORDER, MODE_CASCADE, buildParticipantRoster } from "./realtime-participants.js";
 import { runChatCompletionTurn } from "./realtime-cascade-llm.js";
-import { synthesizeToPcm } from "./realtime-tts-batch.js";
+import { synthesizeToPcm, synthesizeAzureSpeechDirect, resolveAzureSpeechCreds, resolveCascadeTtsVoice, isAzureSpeechProvider, AZURE_SPEECH_PROVIDER } from "./realtime-tts-batch.js";
 import { parseEnvStyleArgs } from "./env-args.js";
 
 /// Build a cascade roster from a raw `/cascade` argument string. Maps the
@@ -23,6 +23,10 @@ import { parseEnvStyleArgs } from "./env-args.js";
 /// injected `parseArgs` / `env`. Returns { roster, values }.
 export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = parseEnvStyleArgs } = {}) {
   const { values } = parseArgs(rawArgs || "");
+  // azure=true (operator request): default every agent to the DIRECT Azure Speech
+  // provider and route synthesis through the direct REST path (no `tts` subprocess).
+  const directAzureSpeech = /^(1|true|yes|on)$/i.test(String(values.azure ?? "").trim());
+  const defaultProvider = values.provider ?? (directAzureSpeech ? AZURE_SPEECH_PROVIDER : undefined);
   const roster = buildParticipantRoster({
     mode: MODE_CASCADE,
     n: values.n,
@@ -34,14 +38,21 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
       model: values.model,
       baseUrl: values.base_url ?? values.baseurl ?? values.openai_base_url,
       ttsModel: values.tts ?? values.tts_model ?? values.ttsmodel,
-      provider: values.provider,
+      provider: defaultProvider,
       speakerProfileId: values.speakerprofileid ?? values.speaker_profile_id ?? values.speaker,
       lang: values.lang ?? values.xml_lang,
       instructions: values.instructions ?? values.persona,
     },
     env,
   });
-  return { roster, values };
+  // When azure=true, default any peer that didn't set its own provider to
+  // azure-speech too, so the whole room uses the direct REST path.
+  if (directAzureSpeech) {
+    for (const p of (roster?.participants || [])) {
+      if (p && !p.provider) p.provider = AZURE_SPEECH_PROVIDER;
+    }
+  }
+  return { roster, values, directAzureSpeech };
 }
 
 export class CascadeController {
@@ -167,6 +178,37 @@ export function makeCascadeSynth({ synthImpl = synthesizeToPcm, speed } = {}) {
       instructions: participant?.instructions,
       speed,
     });
+  };
+}
+
+/// Build a cascade synth `(text, opts) -> Promise<Buffer>` that routes
+/// azure-speech participants to the DIRECT Azure Speech REST API (no subprocess)
+/// when `directAzureSpeech` is set, and everything else to the `tts` subprocess.
+/// Azure endpoint/key come from the env (never hardcoded). Pass this as the
+/// `synthImpl` to makeCascadeSpeak / makeCascadeSynth. Injectable for tests.
+export function makeCascadeTtsSynth({ directAzureSpeech = false, env = process.env, fetchImpl, command, spawnImpl } = {}) {
+  return (text, opts = {}) => {
+    if (directAzureSpeech && isAzureSpeechProvider(opts?.provider)) {
+      const voice = resolveCascadeTtsVoice(opts.voice);
+      if (!voice) {
+        return Promise.reject(new Error(
+          "azure-speech direct: a concrete Azure voice is required (pass voice=<name>, "
+          + "e.g. voice=en-US-AvaMultilingualNeural or your MAI embedding voice)",
+        ));
+      }
+      const { endpoint, apiKey } = resolveAzureSpeechCreds({ env });
+      return synthesizeAzureSpeechDirect({
+        text,
+        voice,
+        lang: opts.lang,
+        speed: opts.speed,
+        speakerProfileId: opts.speakerProfileId,
+        endpoint,
+        apiKey,
+        fetchImpl,
+      });
+    }
+    return synthesizeToPcm(text, { ...opts, command, spawnImpl });
   };
 }
 

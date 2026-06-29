@@ -11,6 +11,9 @@ import {
   speedToProsodyRate,
   isAzureSpeechProvider,
   buildAzureSpeechSsml,
+  resolveAzureSpeechCreds,
+  synthesizeAzureSpeechDirect,
+  DEFAULT_AZURE_SPEECH_ENDPOINT,
 } from "../extensions/lib/realtime-tts-batch.js";
 
 test("speedToProsodyRate maps speed to azure prosody rate %", () => {
@@ -188,4 +191,49 @@ test("synthesizeToPcm rejects on a non-zero exit, carrying stderr", async () => 
 test("synthesizeToPcm rejects when spawn itself throws", async () => {
   const { spawnImpl } = fakeTts({ throwOnSpawn: true });
   await assert.rejects(synthesizeToPcm("hi", { spawnImpl }), /spawn ENOENT/);
+});
+
+// --- Direct Azure Speech REST path (azure=true cascade) ---
+
+test("resolveAzureSpeechCreds: endpoint defaults to eastus speech URL, key from env, never hardcoded", () => {
+  const a = resolveAzureSpeechCreds({ env: {} });
+  assert.equal(a.endpoint, DEFAULT_AZURE_SPEECH_ENDPOINT);
+  assert.equal(a.endpoint, "https://eastus.tts.speech.microsoft.com");
+  assert.equal(a.apiKey, ""); // no default key
+  const b = resolveAzureSpeechCreds({ env: { AZURE_SPEECH_ENDPOINT: "https://westus.tts.speech.microsoft.com/", AZURE_SPEECH_API_KEY: "k1" } });
+  assert.equal(b.endpoint, "https://westus.tts.speech.microsoft.com"); // trailing slash trimmed
+  assert.equal(b.apiKey, "k1");
+});
+
+test("synthesizeAzureSpeechDirect: POSTs mstts SSML to /cognitiveservices/v1 with the subscription-key header and returns PCM", async () => {
+  let captured = null;
+  const fetchImpl = async (url, opts) => {
+    captured = { url, opts };
+    return { ok: true, status: 200, async arrayBuffer() { return Uint8Array.from([1, 2, 3, 4]).buffer; } };
+  };
+  const buf = await synthesizeAzureSpeechDirect({
+    text: "hello", voice: "MAI-Voice-2", lang: "en-GB", speed: 1.5,
+    speakerProfileId: "abc-123", endpoint: "https://eastus.tts.speech.microsoft.com",
+    apiKey: "secret-key", fetchImpl,
+  });
+  assert.deepEqual(buf, Buffer.from([1, 2, 3, 4]));
+  assert.equal(captured.url, "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
+  assert.equal(captured.opts.method, "POST");
+  assert.equal(captured.opts.headers["Ocp-Apim-Subscription-Key"], "secret-key");
+  assert.equal(captured.opts.headers["Content-Type"], "application/ssml+xml");
+  assert.match(captured.opts.headers["X-Microsoft-OutputFormat"], /pcm/);
+  // SSML carries the embedding tag + voice + lang + prosody.
+  assert.match(captured.opts.body, /<mstts:ttsembedding speakerProfileId='abc-123'>/);
+  assert.match(captured.opts.body, /<voice name='MAI-Voice-2'/);
+  assert.match(captured.opts.body, /xml:lang='en-GB'/);
+  assert.match(captured.opts.body, /<prosody rate='\+50%'>/);
+});
+
+test("synthesizeAzureSpeechDirect: rejects on empty text, missing endpoint/key, and non-2xx", async () => {
+  const okFetch = async () => ({ ok: true, status: 200, async arrayBuffer() { return new ArrayBuffer(0); } });
+  await assert.rejects(synthesizeAzureSpeechDirect({ text: "  ", endpoint: "https://e", apiKey: "k", fetchImpl: okFetch }), /empty text/);
+  await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "", apiKey: "k", fetchImpl: okFetch }), /no endpoint/);
+  await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "https://e", apiKey: "", fetchImpl: okFetch }), /no API key/);
+  const badFetch = async () => ({ ok: false, status: 401, async text() { return "Unauthorized"; } });
+  await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "https://e", apiKey: "k", fetchImpl: badFetch }), /azure-speech HTTP 401: Unauthorized/);
 });

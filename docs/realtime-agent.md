@@ -312,6 +312,9 @@ Start-time arguments (env-style `key=value`):
 | `participants=a,b` | named peers beyond main (`var,cedar` or `var[voice=...,model=...]`) |
 | `order=fixed\|random\|round-robin` | turn order each round (default `random`) |
 | `voice=` / `model=` / `base_url=` | overrides for the main participant |
+| `azure=true` | synthesize via the DIRECT Azure Speech REST API (no `tts` subprocess); see below |
+| `speaker=<profileId>` | Azure `mstts:ttsembedding` speaker profile id (personal/embedding voice) |
+| `lang=<locale>` | `xml:lang` for the SSML (e.g. `en-GB`) |
 | `pipeline=false` | disable concurrent-synthesis pipelining (also `PI_CASCADE_PIPELINE=0`); default on |
 | `maxhistory=<N>` | sliding-window conversation cap (default 48; also `PI_CASCADE_MAX_HISTORY`) |
 
@@ -322,6 +325,32 @@ Defaults: cascade gives every agent the caco azure/speech embedding voice unless
 overridden (so distinguish them by name/content, or pass distinct `voice=`); the
 peer chat model defaults to `gpt-5-mini` (override with `PI_CASCADE_MODEL` or a
 per-participant `model=`). The `say` verb is the no-microphone way to try a round.
+
+### Direct Azure Speech voices + embeddings (`azure=true`)
+
+`azure=true` makes cascade synthesize each turn with a **direct Azure Speech REST
+call** (`POST <AZURE_SPEECH_ENDPOINT>/cognitiveservices/v1`) instead of shelling
+out to the `tts` CLI. It sends an mstts SSML body and reads credentials from the
+environment — `AZURE_SPEECH_API_KEY` and `AZURE_SPEECH_ENDPOINT` (endpoint
+defaults to the eastus speech URL). The key is never typed in chat or hardcoded.
+
+A concrete Azure `voice=` is required (the cascade embedding sentinel is not a
+real Azure voice). To use a personal/embedding voice, pass the base voice name
+plus the `speaker=` profile id, which becomes an `<mstts:ttsembedding
+speakerProfileId=...>` wrapper around the text:
+
+```text
+# one embedding voice, British English, a touch faster
+/cascade start n=1 azure=true voice=MAI-Voice-2 speaker=0daec43c-... lang=en-GB speed=1.2
+
+# a two-voice room, both direct-Azure (give each a distinct voice)
+/cascade start n=2 azure=true participants="Ava[voice=en-US-AvaMultilingualNeural];Andrew[voice=en-US-AndrewMultilingualNeural]"
+```
+
+`speaker=` / `lang=` / `speed=` map to the SSML `<mstts:ttsembedding>`,
+`xml:lang`, and `<prosody rate>` respectively; omit `speaker=` for a plain named
+Azure voice. `azure=true` defaults every agent that did not set its own
+`provider=` to `azure-speech`.
 
 > Latency note: synthesis is pipelined (concurrent TTS, ordered playback), which
 > roughly halves a multi-agent round; you can A/B it with `/cascade start
