@@ -655,6 +655,49 @@ class RealtimeSession {
     });
   }
 
+  // Non-destructive connectivity probe (bd-c3ac07): open the realtime WS, wait
+  // briefly for session.created, then close — classifying connected / ga-only /
+  // auth / session-start-1006 / config WITHOUT touching the live session or
+  // starting a mic. Powers `/rt probe`. Reuses the GA + 1006 + auth classifiers.
+  async probeConnect({ timeoutMs = 8000 } = {}) {
+    const directAzure = this.config.directAzure;
+    const apiKey = directAzure
+      ? env("PI_RT_AZURE_API_KEY", "AZURE_CANADACENTRAL_API_KEY", "AZURE_OPENAI_API_KEY")
+      : env("PI_RT_API_KEY", "OPENAI_API_KEY");
+    const url = directAzure && this.config.azureEndpoint
+      ? azureRealtimeUrl(this.config.azureEndpoint, this.config.azureDeployment || this.config.model, this.config.azureApiVersion, this.config.azureProtocol)
+      : realtimeUrl(this.config.baseUrl, this.config.model);
+    if (!apiKey) return { ok: false, kind: "auth", detail: directAzure ? "no Azure key (PI_RT_AZURE_API_KEY/AZURE_CANADACENTRAL_API_KEY)" : "no OpenAI/proxy key (OPENAI_API_KEY/PI_RT_API_KEY)", url };
+    if (directAzure && !this.config.azureEndpoint) return { ok: false, kind: "config", detail: "azure endpoint unset (PI_RT_AZURE_ENDPOINT)", url };
+    const headers = realtimeWsHeaders({ directAzure, apiKey, betaHeader: this.config.betaHeader });
+    let ws;
+    try {
+      const WS = await getRealtimeWebSocketConstructor();
+      ws = new WS(url, { perMessageDeflate: false, handshakeTimeout: timeoutMs, headers });
+      ws.binaryType = "arraybuffer";
+    } catch (e) { return { ok: false, kind: "error", detail: e?.message || String(e), url }; }
+    const result = await new Promise((resolve) => {
+      let done = false;
+      const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
+      const timer = setTimeout(() => finish({ ok: false, kind: "timeout", detail: `no session.created within ${timeoutMs}ms` }), timeoutMs);
+      ws.once("message", async (data) => {
+        try {
+          const m = JSON.parse(await eventDataToString(data));
+          if (m.type === "session.created") finish({ ok: true, kind: "connected", detail: `session.created (${m.session?.type || "?"})` });
+          else if (m.type === "error") {
+            const text = JSON.stringify(m.error || m);
+            const kind = /only available on the GA API/i.test(text) ? "ga-only" : isAuthFailure(text) ? "auth" : "server-error";
+            finish({ ok: false, kind, detail: text.slice(0, 200) });
+          } else finish({ ok: true, kind: "connected", detail: `first event ${m.type}` });
+        } catch (e) { finish({ ok: false, kind: "error", detail: e?.message || "bad event" }); }
+      });
+      ws.once("close", (code) => finish({ ok: false, kind: "session-start-1006", detail: realtimeSessionStartFailureReason(code) }));
+      ws.once("error", (e) => finish({ ok: false, kind: isAuthFailure(e?.message || "") ? "auth" : "error", detail: e?.message || "unknown" }));
+    });
+    try { ws.close(); } catch {}
+    return { ...result, url };
+  }
+
   send(obj) {
     if (!isRealtimeWebSocketOpen(this.ws)) {
       throw new Error("Realtime WebSocket is not open");
@@ -1900,6 +1943,10 @@ export function createRealtimeControls({ pi, session, config }) {
       };
     },
 
+    async probe(opts) {
+      return session.probeConnect(opts || {});
+    },
+
     snapshot() {
       return {
         model: config.model,
@@ -2685,6 +2732,12 @@ export default function realtimeAgentExtension(pi) {
       controls.showStatus(ctx);
       return { lines: full ? controls.diagnostics() : controls.statusLines(), snapshot: controls.snapshot() };
     }
+    if (action === "probe" || params.probe) {
+      const r = await controls.probe();
+      const line = `probe: ${r.ok ? "OK" : "FAIL"} [${r.kind}] ${r.detail} \u00b7 ${r.url}`;
+      controls.showStatus(ctx);
+      return { lines: [line, ...controls.statusLines()], snapshot: controls.snapshot(), probe: r };
+    }
     if (params.stt) return startRealtime(ctx, { sttOnly: true, listenMode: params.stt === "ptt" ? "ptt" : "vad" });
     if (params.mic || params.listen) return controls.listen(ctx, params.mic || params.listen);
     if (action) {
@@ -2715,6 +2768,7 @@ export default function realtimeAgentExtension(pi) {
       audio: v.audio,
       widget: v.widget,
       status: v.status,
+      probe: v.probe,
       mic: v.mic,
       listen: v.listen,
       stt: v.stt,
@@ -2742,7 +2796,7 @@ export default function realtimeAgentExtension(pi) {
       "start", "on", "stt", "status", "widget", "audio", "mic", "listen",
       "voice", "backend", "reasoning", "summary", "chime", "trans", "transcription", "speed", "thresh",
     ]);
-    const noValueVerbs = new Set(["help", "usage", "?", "stop", "off", "doctor", "vad", "ptt", "nolisten"]);
+    const noValueVerbs = new Set(["help", "usage", "?", "stop", "off", "doctor", "probe", "vad", "ptt", "nolisten"]);
     if (value && noValueVerbs.has(verb)) {
       ctx.ui.notify(`Unexpected realtime argument for /rt ${verb}: ${value}`, "warning");
       return;
@@ -2774,6 +2828,7 @@ export default function realtimeAgentExtension(pi) {
     }
     if (verb === "stop" || verb === "off") { stopLocalVad(); await controls.disable(ctx, { restoreModel: true }); ctx.ui.notify("Realtime off", "info"); return; }
     if (verb === "doctor") { const lines = controls.diagnostics(); if (localVad.active || localVad.lastError || localVad.lastTranscript) lines.push(localVadStatusLine()); ctx.ui.setWidget("realtime-status", lines.slice(0, 8), { placement: "belowEditor" }); ctx.ui.notify(lines.join("\n"), "info"); return; }
+    if (verb === "probe") { const r = await controls.probe(); const line = `probe: ${r.ok ? "OK" : "FAIL"} [${r.kind}] ${r.detail} \u00b7 ${r.url}`; controls.showStatus(ctx); ctx.ui.notify(line, r.ok ? "info" : "warning"); return; }
     if (verb === "status") {
       const mode = value || "compact";
       if (!REALTIME_STATUS_MODES.has(mode)) { ctx.ui.notify("Unsupported realtime status mode. Use /rt status [compact|full].", "warning"); return; }

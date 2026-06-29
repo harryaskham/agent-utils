@@ -2020,3 +2020,48 @@ test("connect: WS opens then 1006-closes before session.created -> clear reason 
     if (savedOai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = savedOai;
   }
 });
+
+test("probeConnect classifies connected / session-start-1006 / ga-only / auth (bd-c3ac07)", async () => {
+  const { __RealtimeSessionForTest, setRealtimeWebSocketConstructor } = await import("../extensions/realtime-agent.js");
+  const { makeInitialConfig } = await import("../extensions/lib/realtime-config.js");
+  const pi = { on() {}, sendMessage() {} };
+  const mk = () => new __RealtimeSessionForTest(pi, makeInitialConfig());
+  // Minimal mock that fires one scripted first-event, then supports once/close.
+  class Mock {
+    constructor() { setTimeout(() => this.fire(), 0); }
+    on(e, f) { (this.h ??= {})[e] = (this.h[e] || []).concat(f); }
+    once(e, f) { this.on(e, f); }
+    off() {}
+    close() {}
+    e(ev, ...a) { for (const f of (this.h?.[ev] || [])) f(...a); }
+  }
+  const orig = process.env.PI_RT_API_KEY;
+  const origOai = process.env.OPENAI_API_KEY;
+  process.env.PI_RT_API_KEY = "test-key";
+  try {
+    // connected: default fake emits session.created
+    setRealtimeWebSocketConstructor(FakeWebSocket);
+    let r = await mk().probeConnect({ timeoutMs: 500 });
+    assert.equal(r.ok, true); assert.equal(r.kind, "connected");
+    // session-start-1006: WS closes (1006) before any event
+    class C1006 extends Mock { fire() { this.e("close", 1006); } }
+    setRealtimeWebSocketConstructor(C1006);
+    r = await mk().probeConnect({ timeoutMs: 500 });
+    assert.equal(r.ok, false); assert.equal(r.kind, "session-start-1006");
+    // ga-only: error event with the GA-API rejection text
+    class Ga extends Mock { fire() { this.e("message", JSON.stringify({ type: "error", error: { message: "Model gpt-realtime-2 is only available on the GA API" } })); } }
+    setRealtimeWebSocketConstructor(Ga);
+    r = await mk().probeConnect({ timeoutMs: 500 });
+    assert.equal(r.kind, "ga-only");
+    // auth: no key
+    delete process.env.PI_RT_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    setRealtimeWebSocketConstructor(FakeWebSocket);
+    r = await mk().probeConnect({ timeoutMs: 500 });
+    assert.equal(r.kind, "auth");
+  } finally {
+    setRealtimeWebSocketConstructor(FakeWebSocket);
+    if (orig === undefined) delete process.env.PI_RT_API_KEY; else process.env.PI_RT_API_KEY = orig;
+    if (origOai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = origOai;
+  }
+});

@@ -57,6 +57,8 @@ export PI_RT_PLAYBACK_CMD='...'        # custom raw pcm16 24k mono stdin
 
 Run `/rt-doctor` inside Pi to see the resolved backend, Pulse variables, commands, API key presence, and troubleshooting hints.
 
+For a live one-shot connectivity test (no mic session), run `/rt probe`: it opens the realtime WebSocket, waits briefly for `session.created`, then closes — classifying the outcome as `connected`, `ga-only` (model needs the GA endpoint), `session-start-1006` (upstream closed before the session established — usually proxy GA-realtime routing), `auth`, or `config`. Handy for verifying a model/proxy/endpoint change without starting a call.
+
 ## Quick-start configs
 
 Use these as copy/paste starting points, then run `/rt-doctor` before starting a call to confirm the resolved backend, devices, command availability, and API key status.
