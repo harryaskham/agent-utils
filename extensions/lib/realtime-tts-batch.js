@@ -43,6 +43,41 @@ export function resolveCascadeTtsVoice(voice) {
   return v;
 }
 
+// Minimal XML escaping for SSML text/attribute values. Pure.
+function xmlEscape(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&apos;");
+}
+
+/// Map a cascade speed multiplier to an Azure SSML <prosody rate> percentage.
+/// 1.5 -> "+50%", 0.8 -> "-20%". Returns undefined for ~1.0 (omit prosody). Pure.
+export function speedToProsodyRate(speed) {
+  const s = Number(speed);
+  if (!Number.isFinite(s) || s <= 0 || Math.abs(s - 1) < 0.001) return undefined;
+  const pct = Math.round((s - 1) * 100);
+  return `${pct >= 0 ? "+" : ""}${pct}%`;
+}
+
+// Provider identifier(s) that take direct Azure SSML bodies.
+export function isAzureSpeechProvider(provider) {
+  return String(provider ?? "").trim().toLowerCase() === AZURE_SPEECH_PROVIDER;
+}
+
+/// Build a direct-Azure mstts SSML body wrapping `text`. voice -> <voice name>,
+/// lang -> xml:lang, speed -> <prosody rate>, speakerProfileId -> <mstts:ttsembedding>.
+/// speakerProfileId/lang/prosody segments are omitted when not supplied. Pure.
+export function buildAzureSpeechSsml({ text, voice, lang, speed, speakerProfileId } = {}) {
+  const langAttr = lang ? ` xml:lang='${xmlEscape(lang)}'` : "";
+  const rate = speedToProsodyRate(speed);
+  let inner = xmlEscape(text);
+  if (rate) inner = `<prosody rate='${xmlEscape(rate)}'>${inner}</prosody>`;
+  if (speakerProfileId) inner = `<mstts:ttsembedding speakerProfileId='${xmlEscape(speakerProfileId)}'>${inner}</mstts:ttsembedding>`;
+  const name = xmlEscape(voice || "");
+  return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts'${langAttr}>`
+    + `<voice name='${name}'${langAttr}>${inner}</voice></speak>`;
+}
+
 /// Build the `tts` argv for one-shot PCM synthesis. Text is passed as a
 /// positional after `--` (leading-dash safe). By default no provider/model/voice
 /// is forced, so the tts CLI inherits the env-configured caco azure defaults. Pure.
@@ -55,6 +90,8 @@ export function buildTtsBatchArgs({
   responseFormat = "pcm",
   speed,
   instructions,
+  speakerProfileId,
+  lang,
 } = {}) {
   const args = ["--stdout", "--response-format", String(responseFormat || "pcm")];
   const v = resolveCascadeTtsVoice(voice);
@@ -62,10 +99,16 @@ export function buildTtsBatchArgs({
   if (model) args.push("--model", String(model));
   if (provider) args.push("--provider", String(provider));
   if (baseUrl) args.push("--base-url", String(baseUrl));
+  const azure = isAzureSpeechProvider(provider);
   const s = Number(speed);
-  if (Number.isFinite(s) && s > 0 && s !== 1) args.push("--speed", String(speed));
+  // For azure-speech the SSML <prosody rate> carries speed; don't double-apply --speed.
+  if (!azure && Number.isFinite(s) && s > 0 && s !== 1) args.push("--speed", String(speed));
   if (instructions) args.push("--instructions", String(instructions));
-  const body = String(text ?? "");
+  // azure-speech (direct) always sends an SSML body so embedding voices /
+  // speakerProfileId / lang / prosody render; other providers get plain text.
+  const body = azure
+    ? buildAzureSpeechSsml({ text, voice: v, lang, speed, speakerProfileId })
+    : String(text ?? "");
   if (body) args.push("--", body);
   return args;
 }
@@ -80,6 +123,8 @@ export function synthesizeToPcm(text, {
   baseUrl,
   speed,
   instructions,
+  speakerProfileId,
+  lang,
   responseFormat,
   command = "tts",
   spawnImpl = spawn,
@@ -94,7 +139,7 @@ export function synthesizeToPcm(text, {
     try {
       proc = spawnImpl(
         command,
-        buildTtsBatchArgs({ text: body, voice, model, provider, baseUrl, speed, instructions, responseFormat }),
+        buildTtsBatchArgs({ text: body, voice, model, provider, baseUrl, speed, instructions, speakerProfileId, lang, responseFormat }),
         { stdio: ["ignore", "pipe", "pipe"] },
       );
     } catch (err) {

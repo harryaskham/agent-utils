@@ -8,7 +8,49 @@ import {
   resolveCascadeTtsVoice,
   buildTtsBatchArgs,
   synthesizeToPcm,
+  speedToProsodyRate,
+  isAzureSpeechProvider,
+  buildAzureSpeechSsml,
 } from "../extensions/lib/realtime-tts-batch.js";
+
+test("speedToProsodyRate maps speed to azure prosody rate %", () => {
+  assert.equal(speedToProsodyRate(1.5), "+50%");
+  assert.equal(speedToProsodyRate(2), "+100%");
+  assert.equal(speedToProsodyRate(0.8), "-20%");
+  assert.equal(speedToProsodyRate(1), undefined);
+  assert.equal(speedToProsodyRate(undefined), undefined);
+  assert.equal(speedToProsodyRate(0), undefined);
+});
+
+test("buildAzureSpeechSsml wraps voice/embedding/lang/prosody and escapes text", () => {
+  const s = buildAzureSpeechSsml({ text: "hi <b> & 'x'", voice: "MAI-Voice-2", lang: "en-GB", speed: 1.5, speakerProfileId: "0daec43c" });
+  assert.match(s, /^<speak version='1.0' xmlns='[^']+' xmlns:mstts='[^']+' xml:lang='en-GB'>/);
+  assert.match(s, /<voice name='MAI-Voice-2' xml:lang='en-GB'>/);
+  assert.match(s, /<mstts:ttsembedding speakerProfileId='0daec43c'>/);
+  assert.match(s, /<prosody rate='\+50%'>/);
+  assert.match(s, /hi &lt;b&gt; &amp; &apos;x&apos;/);
+  // omit ttsembedding + prosody when not supplied
+  const plain = buildAzureSpeechSsml({ text: "yo", voice: "en-US-Harper:MAI-Voice-2" });
+  assert.doesNotMatch(plain, /ttsembedding|prosody/);
+  assert.match(plain, /<voice name='en-US-Harper:MAI-Voice-2'>/);
+});
+
+test("isAzureSpeechProvider matches azure-speech only", () => {
+  assert.equal(isAzureSpeechProvider("azure-speech"), true);
+  assert.equal(isAzureSpeechProvider("AZURE-SPEECH"), true);
+  assert.equal(isAzureSpeechProvider("openai"), false);
+  assert.equal(isAzureSpeechProvider(undefined), false);
+});
+
+test("buildTtsBatchArgs emits SSML body for azure-speech (no --speed) and plain text otherwise", () => {
+  const az = buildTtsBatchArgs({ text: "hello", voice: "MAI-Voice-2", model: "azure/speech/azure-tts", provider: "azure-speech", speed: 1.5, speakerProfileId: "abc", lang: "en-GB" });
+  assert.equal(az[az.length - 2], "--");
+  assert.match(az[az.length - 1], /mstts:ttsembedding speakerProfileId='abc'/);
+  assert.ok(!az.includes("--speed"), "azure prosody carries speed, not --speed");
+  const plain = buildTtsBatchArgs({ text: "hello", voice: "alloy", speed: 1.5 });
+  assert.equal(plain[plain.length - 1], "hello");
+  assert.ok(plain.includes("--speed"));
+});
 
 // ---------------------------------------------------------------------------
 // resolveCascadeTtsVoice
@@ -50,7 +92,7 @@ test("buildTtsBatchArgs threads voice/model/baseUrl/instructions, a non-unity sp
       text: "be warm",
       voice: "cedar",
       model: "azure/speech/azure-tts",
-      provider: AZURE_SPEECH_PROVIDER,
+      provider: "openai",
       baseUrl: "http://x",
       speed: 1.2,
       instructions: "warm tone",
@@ -59,7 +101,7 @@ test("buildTtsBatchArgs threads voice/model/baseUrl/instructions, a non-unity sp
       "--stdout", "--response-format", "pcm",
       "--voice", "cedar",
       "--model", "azure/speech/azure-tts",
-      "--provider", "azure-speech",
+      "--provider", "openai",
       "--base-url", "http://x",
       "--speed", "1.2",
       "--instructions", "warm tone",

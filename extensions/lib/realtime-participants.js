@@ -60,6 +60,12 @@ const ATTR_ALIASES = new Map([
   ["tts", "ttsModel"],
   ["ttsmodel", "ttsModel"],
   ["tts_model", "ttsModel"],
+  ["provider", "provider"],
+  ["speakerprofileid", "speakerProfileId"],
+  ["speaker_profile_id", "speakerProfileId"],
+  ["speaker", "speakerProfileId"],
+  ["lang", "lang"],
+  ["xml_lang", "lang"],
   ["instructions", "instructions"],
   ["persona", "instructions"],
   ["prompt", "instructions"],
@@ -208,6 +214,9 @@ export function buildParticipantRoster({
     model: main.model ?? undefined,
     baseUrl: main.baseUrl ?? undefined,
     ttsModel: main.ttsModel ?? undefined,
+    provider: main.provider ?? undefined,
+    speakerProfileId: main.speakerProfileId ?? undefined,
+    lang: main.lang ?? undefined,
     instructions: main.instructions ?? undefined,
   });
 
@@ -226,6 +235,9 @@ export function buildParticipantRoster({
       model: spec.model ?? undefined,
       baseUrl: spec.baseUrl ?? undefined,
       ttsModel: spec.ttsModel ?? undefined,
+      provider: spec.provider ?? undefined,
+      speakerProfileId: spec.speakerProfileId ?? undefined,
+      lang: spec.lang ?? undefined,
       instructions: spec.instructions ?? undefined,
     });
   }
