@@ -357,6 +357,21 @@ Diagnostics include:
 - last playback error/exit details
 - actionable hints for common setup issues
 
+### Troubleshooting: `gpt-realtime-2` rejected as "only available on the GA API"
+
+If a realtime connect through a LiteLLM-style proxy fails with
+`Model "gpt-realtime-2-..." is only available on the GA API` (`invalid_model`),
+the proxy is routing the realtime WebSocket through the **beta** realtime
+interface for a model that is **GA-only**. This is a proxy-side routing issue,
+not a client bug: it reproduces identically with and without the legacy
+`OpenAI-Beta: realtime=v1` header (this extension already drops that header by
+default; set `PI_RT_BETA_HEADER=1` only to restore it).
+
+Workaround until the proxy routes GA-realtime correctly: connect directly to the
+Azure realtime deployment instead of the proxy (the direct-Azure path, e.g.
+`/rt azure=true start=vad` against a `gpt-realtime-2` deployment). Direct-Azure
+uses the GA realtime interface and connects cleanly.
+
 Unified `/rt` controls:
 
 ```text
