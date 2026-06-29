@@ -147,6 +147,7 @@ import {
 } from "./lib/realtime-models.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
 import { InputLevelTracker } from "./lib/realtime-input-level.js";
+import { buildRealtimeValueParams, normalizeRealtimeValueParams } from "./lib/realtime-settings.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> buildServerVadTurnDetection) is preserved after extraction.
 export { buildServerVadTurnDetection };
@@ -2619,25 +2620,19 @@ export default function realtimeAgentExtension(pi) {
   }
 
   function normalizeRealtimeToolParams(params = {}) {
-    const out = { ...params };
+    let out = { ...params };
     if (out.base_url !== undefined && out.baseUrl === undefined) out.baseUrl = out.base_url;
     if (out.openai_base_url !== undefined && out.baseUrl === undefined) out.baseUrl = out.openai_base_url;
     if (out.rt_base_url !== undefined && out.baseUrl === undefined) out.baseUrl = out.rt_base_url;
     if (out.server !== undefined && out.pulseServer === undefined) out.pulseServer = out.server;
     if (out.source !== undefined && out.pulseSource === undefined) out.pulseSource = out.source;
     if (out.sink !== undefined && out.pulseSink === undefined) out.pulseSink = out.sink;
-    for (const key of ["action", "start", "mic", "listen", "stt", "audio", "widget", "status", "backend", "voice", "reasoning", "trans", "transcription", "transcriptionModel"]) {
+    // bd-381522: value settings (backend/voice/trans/speed/thresh/energy/
+    // summary/chime/fork/model/azure*) alias+coerce via the declarative
+    // registry. Lifecycle keys stay bespoke (lowercased) below.
+    out = normalizeRealtimeValueParams(out, { bool: parseBooleanValue, speed: parseRealtimeSpeed, thresh: parseVadThreshold });
+    for (const key of ["action", "start", "mic", "listen", "stt", "audio", "widget", "status", "transcription", "transcriptionModel"]) {
       if (out[key] !== undefined && out[key] !== null) out[key] = String(out[key]).trim().toLowerCase();
-    }
-    if (out.summary !== undefined && out.summary !== null) out.summary = parseBooleanValue(out.summary);
-    if (out.chime !== undefined && out.chime !== null) out.chime = parseBooleanValue(out.chime);
-    if (out.speed !== undefined && out.speed !== null) out.speed = parseRealtimeSpeed(out.speed);
-    if (out.thresh !== undefined && out.thresh !== null) out.thresh = parseVadThreshold(out.thresh);
-    if (out.energy !== undefined && out.energy !== null) out.energy = parseVadThreshold(out.energy);
-    if (out.fork !== undefined && out.fork !== null) out.fork = parseBooleanValue(out.fork);
-    if (out.directAzure !== undefined && out.directAzure !== null) out.directAzure = parseBooleanValue(out.directAzure);
-    for (const key of ["model", "azureEndpoint", "azureDeployment", "azureApiVersion", "azureProtocol"]) {
-      if (out[key] !== undefined && out[key] !== null) out[key] = String(out[key]).trim();
     }
     return out;
   }
@@ -2721,35 +2716,21 @@ export default function realtimeAgentExtension(pi) {
   function envArgsToRealtimeParams(parsed) {
     const v = parsed.values || {};
     return {
+      // bd-381522: value settings (baseUrl/backend/voice/trans/reasoning/speed/
+      // thresh/energy/summary/chime/fork/model/azure*) map from the registry.
+      ...buildRealtimeValueParams(v),
       action: v.action,
       start: v.start,
       mode: v.mode,
-      backend: v.backend,
       server: v.server ?? v.pulse_server ?? v.pulseserver,
       source: v.source ?? v.pulse_source ?? v.pulsesource,
       sink: v.sink ?? v.pulse_sink ?? v.pulsesink,
-      baseUrl: v.base_url ?? v.baseurl ?? v.openai_base_url ?? v.openaibaseurl ?? v.rt_base_url ?? v.rtbaseurl,
-      voice: v.voice,
-      trans: v.trans ?? v.transcription ?? v.transcription_model ?? v.transcriptionmodel,
-      speed: v.speed,
-      thresh: v.thresh ?? v.threshold ?? v.vad_threshold ?? v.vadthreshold,
-      energy: v.energy ?? v.energy_threshold ?? v.energythreshold,
-      reasoning: v.reasoning,
-      summary: v.summary,
-      chime: v.chime,
-      fork: v.fork,
       audio: v.audio,
       widget: v.widget,
       status: v.status,
       mic: v.mic,
       listen: v.listen,
       stt: v.stt,
-      model: v.model,
-      directAzure: v.direct_azure ?? v.directazure ?? v.azure,
-      azureEndpoint: v.azure_endpoint ?? v.azureendpoint ?? v.endpoint,
-      azureDeployment: v.azure_deployment ?? v.azuredeployment ?? v.deployment,
-      azureApiVersion: v.azure_api_version ?? v.azureapiversion ?? v.api_version ?? v.apiversion,
-      azureProtocol: v.azure_protocol ?? v.azureprotocol ?? v.protocol,
     };
   }
 
