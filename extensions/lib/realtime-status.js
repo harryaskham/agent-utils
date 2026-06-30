@@ -20,6 +20,7 @@ import { normalizeBaseUrl, numberEnv } from "./realtime-helpers.js";
 import { formatLevelLabel, rmsToLevel } from "./realtime-audio-meter.js";
 import { spawnSync } from "node:child_process";
 import { truncateDiagnostic, isAuthFailure, isMicPermissionFailure } from "./realtime-text.js";
+import { getRealtimeWebSocketImplKind } from "./realtime-ws-fallback.js";
 
 // Collapse whitespace and bound a free-text reason for a compact status line so
 // a long disconnect/error string cannot blow out the single-line status render.
@@ -224,10 +225,15 @@ export function diagnosticLines(session, config) {
   if (gaOnly) hints.push("realtime model rejected as GA-only ('... is only available on the GA API'): the model is GA but the realtime endpoint/proxy is routing via the BETA interface. Fix is upstream \u2014 the LiteLLM proxy must route realtime through OpenAI's GA API; a client-side beta-header change alone does NOT connect. For a direct Azure GA endpoint, set PI_RT_AZURE_API_VERSION=none.");
   else if (responseError && !isAuthFailure(responseError)) hints.push("realtime server returned an error (see lastResponseError); verify the model id, base URL, and provider/proxy routing, then /rt-doctor");
 
+  const wsImplKind = getRealtimeWebSocketImplKind();
+  const wsImpl = wsImplKind === "ws" ? "ws (package)"
+    : wsImplKind === "global-fallback" ? "global-fallback (Node built-in WebSocket)"
+    : "<not loaded yet — connect once to resolve>";
   return [
     "Realtime doctor",
     ...statusLines(session, config, { full: true }),
     `provider: ${provider} · apiKey:${apiKey || "<missing>"}`,
+    `webSocket: ${wsImpl}`,
     `audioBackend: ${backend} · ${audioOutputBackendLabel(config)}/${audioInputBackendLabel(config)}`,
     `pulse: ${pulse}`,
     `commands: ${requirements}`,

@@ -147,7 +147,7 @@ import {
 } from "./lib/realtime-models.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
 import { persistRealtimeSetting } from "./lib/realtime-settings.js";
-import { createGlobalWebSocketAdapter } from "./lib/realtime-ws-fallback.js";
+import { createGlobalWebSocketAdapter, setRealtimeWebSocketImplKind } from "./lib/realtime-ws-fallback.js";
 import { InputLevelTracker } from "./lib/realtime-input-level.js";
 import { buildRealtimeValueParams, normalizeRealtimeValueParams, applyRealtimeValueParams } from "./lib/realtime-settings.js";
 // Re-exported so the public test/runtime contract import path
@@ -260,6 +260,7 @@ async function getRealtimeWebSocketConstructor() {
   if (realtimeWebSocketConstructor) return realtimeWebSocketConstructor;
   try {
     const mod = await import("ws");
+    setRealtimeWebSocketImplKind("ws");
     return setRealtimeWebSocketConstructor(mod.default || mod.WebSocket || mod);
   } catch (err) {
     // The 'ws' package is a peerDependency; when a Pi is loaded from a git
@@ -268,7 +269,10 @@ async function getRealtimeWebSocketConstructor() {
     // WebSocket (undici, Node >= 22) via an adapter that bridges the 'ws' API and
     // moves auth into the URL/subprotocol (bd-777edf).
     const Adapter = createGlobalWebSocketAdapter();
-    if (Adapter) return setRealtimeWebSocketConstructor(Adapter);
+    if (Adapter) {
+      setRealtimeWebSocketImplKind("global-fallback");
+      return setRealtimeWebSocketConstructor(Adapter);
+    }
     throw new Error(
       `Realtime requires the 'ws' package or a built-in global WebSocket (Node >= 22). ` +
       `Could not import 'ws' (${err?.message || err}) and globalThis.WebSocket is unavailable.`,

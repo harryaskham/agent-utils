@@ -4,6 +4,8 @@ import {
   appendQueryParam,
   globalWsAuthFromHeaders,
   createGlobalWebSocketAdapter,
+  setRealtimeWebSocketImplKind,
+  getRealtimeWebSocketImplKind,
 } from "../extensions/lib/realtime-ws-fallback.js";
 
 // Minimal fake of the WhatWG/global WebSocket for adapter tests.
@@ -121,4 +123,18 @@ test("adapter .once fires at most once (auto-removed)", () => {
   inner.dispatch("message", { data: "a" });
   inner.dispatch("message", { data: "b" });
   assert.equal(n, 1, "once handler fires a single time");
+});
+
+test("realtime WebSocket impl kind set/get round-trips for /rt-doctor (bd-828f2d)", () => {
+  const prev = getRealtimeWebSocketImplKind();
+  try {
+    assert.equal(setRealtimeWebSocketImplKind("ws"), "ws");
+    assert.equal(getRealtimeWebSocketImplKind(), "ws");
+    assert.equal(setRealtimeWebSocketImplKind("global-fallback"), "global-fallback");
+    assert.equal(getRealtimeWebSocketImplKind(), "global-fallback");
+    assert.equal(setRealtimeWebSocketImplKind(""), null, "falsy clears to null");
+    assert.equal(getRealtimeWebSocketImplKind(), null);
+  } finally {
+    setRealtimeWebSocketImplKind(prev);
+  }
 });

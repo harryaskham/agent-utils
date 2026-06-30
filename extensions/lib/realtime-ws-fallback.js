@@ -18,6 +18,20 @@
 // the global WebSocket; it is never logged or echoed (the snapshot effectiveUrl
 // is built separately and omits the key).
 
+// Which WebSocket implementation the realtime connection loaded, for /rt-doctor
+// visibility (bd-828f2d). null until the first connect attempt resolves it to
+// "ws" (the package) or "global-fallback" (Node's built-in WebSocket).
+let _realtimeWebSocketImplKind = null;
+
+export function setRealtimeWebSocketImplKind(kind) {
+  _realtimeWebSocketImplKind = kind || null;
+  return _realtimeWebSocketImplKind;
+}
+
+export function getRealtimeWebSocketImplKind() {
+  return _realtimeWebSocketImplKind;
+}
+
 export function appendQueryParam(url, key, value) {
   const u = String(url == null ? "" : url);
   const sep = u.includes("?") ? "&" : "?";
