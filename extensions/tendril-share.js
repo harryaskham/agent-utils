@@ -94,7 +94,7 @@ let completeForDescribe = null;
 
 async function getCompleteForDescribe() {
   if (completeForDescribe) return completeForDescribe;
-  const mod = await import("@mariozechner/pi-ai");
+  const mod = await import("@earendil-works/pi-ai");
   return mod.complete;
 }
 

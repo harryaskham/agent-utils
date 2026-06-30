@@ -115,7 +115,7 @@ import {
 
 import { resolveDescribeModel } from "./kitty-image-preview/describe-model.js";
 
-import { complete, StringEnum } from "@mariozechner/pi-ai";
+import { complete, StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "@sinclair/typebox";
 
 import {

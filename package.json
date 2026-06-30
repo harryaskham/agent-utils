@@ -42,8 +42,8 @@
     "kitty-image-preview:render-smoke": "node scripts/kitty-image-preview-multi-image-render-smoke.mjs"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@sinclair/typebox": "*",
     "ws": "*"
   },

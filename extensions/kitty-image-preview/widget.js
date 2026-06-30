@@ -1,6 +1,6 @@
 // Image-preview widget render core, extracted from kitty-image-preview.js so it
 // can be exercised headlessly without importing the command-registration path
-// (which pulls in @sinclair/typebox via schema.js and @mariozechner/pi-ai). This
+// (which pulls in @sinclair/typebox via schema.js and @earendil-works/pi-ai). This
 // is the "thin test seam" requested by bd-c75d9e: it lets a widget-level smoke
 // drive KittyImagePreviewWidget.render twice and assert the bd-d6fa1b
 // transmit-once / placement-only-on-repaint invariants at the widget boundary,

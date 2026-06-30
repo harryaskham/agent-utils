@@ -1,6 +1,6 @@
 // Pure, peer-dependency-free core helpers for the Firecracker VM extension.
 //
-// extensions/firecracker-vm.js imports @sinclair/typebox and @mariozechner/pi-ai
+// extensions/firecracker-vm.js imports @sinclair/typebox and @earendil-works/pi-ai
 // at module load, which are peerDependencies that are not resolvable under
 // `node --test` (ERR_MODULE_NOT_FOUND) — so the extension cannot be imported in
 // unit tests. These helpers are pure and runtime-agnostic (no typebox, no

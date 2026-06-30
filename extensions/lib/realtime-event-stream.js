@@ -1,5 +1,5 @@
 // AssistantMessageEventStream — minimal hand-rolled fallback that matches
-// pi-ai's protocol. We avoid importing @mariozechner/pi-ai because it is not
+// pi-ai's protocol. We avoid importing @earendil-works/pi-ai because it is not
 // declared in extensions/package.json; pi's loader resolves it at runtime
 // for handler arguments but not for our `import`.  Keeping a local impl is
 // also nice for stability. Extracted from realtime-agent.js (bd-e1914a) as a
