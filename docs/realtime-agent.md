@@ -281,6 +281,9 @@ agent can call directly: it synthesizes via the direct Azure Speech REST path
 - Defaults come from `PI_CASCADE_VOICE` (a concrete Azure voice such as
   `MAI-Voice-2`), `PI_CASCADE_SPEAKER` (mstts ttsembedding speakerProfileId),
   `PI_CASCADE_LANG`, and `PI_CASCADE_SPEED`; the agent can override any per call.
+  `PI_CASCADE_SPEAK_VOICE` overrides just the speak-tool voice (it wins over
+  `PI_CASCADE_VOICE`) if you want the spoken-reply voice to differ from the
+  cascade roster voice.
 - A concrete voice is required (the cascade embedding sentinel is not a real
   Azure voice). Azure creds come from `AZURE_SPEECH_API_KEY` /
   `AZURE_SPEECH_ENDPOINT` in the environment.
