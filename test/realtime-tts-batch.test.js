@@ -11,6 +11,8 @@ import {
   speedToProsodyRate,
   isAzureSpeechProvider,
   buildAzureSpeechSsml,
+  resolveAzureVoiceName,
+  DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL,
   resolveAzureSpeechCreds,
   synthesizeAzureSpeechDirect,
   resolveSpeakToolParams,
@@ -29,11 +31,13 @@ test("speedToProsodyRate maps speed to azure prosody rate %", () => {
 test("buildAzureSpeechSsml wraps voice/embedding/lang/prosody and escapes text", () => {
   const s = buildAzureSpeechSsml({ text: "hi <b> & 'x'", voice: "MAI-Voice-2", lang: "en-GB", speed: 1.5, speakerProfileId: "0daec43c" });
   assert.match(s, /^<speak version='1.0' xmlns='[^']+' xmlns:mstts='[^']+' xml:lang='en-GB'>/);
-  assert.match(s, /<voice name='MAI-Voice-2' xml:lang='en-GB'>/);
+  // personal voice (speakerProfileId set) -> base-model <voice name>, NOT the nickname (bd-dbfaa7)
+  assert.match(s, /<voice name='DragonLatestNeural' xml:lang='en-GB'>/);
+  assert.doesNotMatch(s, /<voice name='MAI-Voice-2'/);
   assert.match(s, /<mstts:ttsembedding speakerProfileId='0daec43c'>/);
   assert.match(s, /<prosody rate='\+50%'>/);
   assert.match(s, /hi &lt;b&gt; &amp; &apos;x&apos;/);
-  // omit ttsembedding + prosody when not supplied
+  // omit ttsembedding + prosody when not supplied; no speakerProfileId -> voice used verbatim
   const plain = buildAzureSpeechSsml({ text: "yo", voice: "en-US-Harper:MAI-Voice-2" });
   assert.doesNotMatch(plain, /ttsembedding|prosody/);
   assert.match(plain, /<voice name='en-US-Harper:MAI-Voice-2'>/);
@@ -41,6 +45,19 @@ test("buildAzureSpeechSsml wraps voice/embedding/lang/prosody and escapes text",
   // default to en-US when no lang is given, but do NOT force a locale on <voice>.
   assert.match(plain, /^<speak version='1.0' xmlns='[^']+' xmlns:mstts='[^']+' xml:lang='en-US'>/);
   assert.doesNotMatch(plain, /<voice name='en-US-Harper:MAI-Voice-2' xml:lang=/);
+});
+
+test("resolveAzureVoiceName: personal voice -> base model, standard voice verbatim (bd-dbfaa7)", () => {
+  // No speakerProfileId -> standard voice used as-is.
+  assert.equal(resolveAzureVoiceName({ voice: "en-US-AvaNeural" }), "en-US-AvaNeural");
+  assert.equal(resolveAzureVoiceName({ voice: "MAI-Voice-2" }), "MAI-Voice-2");
+  // speakerProfileId + nickname -> documented default base model (the nickname 400s on Azure).
+  assert.equal(resolveAzureVoiceName({ voice: "MAI-Voice-2", speakerProfileId: "p1" }), DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL);
+  assert.equal(DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL, "DragonLatestNeural");
+  // speakerProfileId + an explicitly base-model-shaped voice (…Neural) -> honored.
+  assert.equal(resolveAzureVoiceName({ voice: "PhoenixLatestNeural", speakerProfileId: "p1" }), "PhoenixLatestNeural");
+  // speakerProfileId + explicit azureBaseVoice override -> used.
+  assert.equal(resolveAzureVoiceName({ voice: "MAI-Voice-2", speakerProfileId: "p1", azureBaseVoice: "PhoenixLatestNeural" }), "PhoenixLatestNeural");
 });
 
 test("isAzureSpeechProvider matches azure-speech only", () => {
@@ -227,9 +244,10 @@ test("synthesizeAzureSpeechDirect: POSTs mstts SSML to /cognitiveservices/v1 wit
   assert.equal(captured.opts.headers["Ocp-Apim-Subscription-Key"], "secret-key");
   assert.equal(captured.opts.headers["Content-Type"], "application/ssml+xml");
   assert.match(captured.opts.headers["X-Microsoft-OutputFormat"], /pcm/);
-  // SSML carries the embedding tag + voice + lang + prosody.
+  // SSML carries the embedding tag + a base-model voice name (NOT the nickname, bd-dbfaa7) + lang + prosody.
   assert.match(captured.opts.body, /<mstts:ttsembedding speakerProfileId='abc-123'>/);
-  assert.match(captured.opts.body, /<voice name='MAI-Voice-2'/);
+  assert.match(captured.opts.body, /<voice name='DragonLatestNeural'/);
+  assert.doesNotMatch(captured.opts.body, /<voice name='MAI-Voice-2'/);
   assert.match(captured.opts.body, /xml:lang='en-GB'/);
   assert.match(captured.opts.body, /<prosody rate='\+50%'>/);
 });

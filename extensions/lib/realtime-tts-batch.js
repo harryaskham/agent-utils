@@ -67,6 +67,33 @@ export function speedToProsodyRate(speed) {
   return `${pct >= 0 ? "+" : ""}${pct}%`;
 }
 
+// Azure personal/embedding voices (mstts:ttsembedding) require <voice name> to be
+// a supported BASE MODEL, e.g. DragonLatestNeural / PhoenixLatestNeural — NOT the
+// personal-voice nickname. Passing a nickname makes Azure reject the request with
+// HTTP 400 (bd-dbfaa7). When a speakerProfileId is present we resolve <voice name>
+// to a base model. This is Azure's documented personal-voice default; override
+// per-call with `azureBaseVoice`.
+export const DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL = "DragonLatestNeural";
+
+// A real Azure neural voice name ends in "Neural" (e.g. en-US-AvaNeural,
+// DragonLatestNeural). Personal-voice nicknames (MAI-Voice-2) do not.
+function isAzureBaseModelVoiceName(v) {
+  return /neural$/i.test(String(v ?? "").trim());
+}
+
+/// Resolve the SSML <voice name> for Azure synthesis. Without a speakerProfileId
+/// the requested voice is a standard voice, used verbatim. WITH a speakerProfileId
+/// (personal voice) <voice name> must be a base model: honor an explicitly
+/// base-model-shaped voice (…Neural), otherwise fall back to azureBaseVoice / the
+/// documented default — never the nickname, which 400s on Azure (bd-dbfaa7). Pure.
+export function resolveAzureVoiceName({ voice, speakerProfileId, azureBaseVoice } = {}) {
+  const v = String(voice ?? "").trim();
+  if (!speakerProfileId) return v;
+  if (isAzureBaseModelVoiceName(v)) return v;
+  const base = String(azureBaseVoice ?? "").trim();
+  return base || DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL;
+}
+
 // Provider identifier(s) that take direct Azure SSML bodies.
 export function isAzureSpeechProvider(provider) {
   return String(provider ?? "").trim().toLowerCase() === AZURE_SPEECH_PROVIDER;
@@ -75,19 +102,21 @@ export function isAzureSpeechProvider(provider) {
 /// Build a direct-Azure mstts SSML body wrapping `text`. voice -> <voice name>,
 /// lang -> xml:lang, speed -> <prosody rate>, speakerProfileId -> <mstts:ttsembedding>.
 /// speakerProfileId/lang/prosody segments are omitted when not supplied. Pure.
-export function buildAzureSpeechSsml({ text, voice, lang, speed, speakerProfileId } = {}) {
+export function buildAzureSpeechSsml({ text, voice, lang, speed, speakerProfileId, azureBaseVoice } = {}) {
   // bd-80663f: Azure Speech REQUIRES xml:lang on <speak> or it rejects the
   // request with HTTP 400. Default to en-US when no lang is supplied so cascade
   // turns invoked without an explicit lang= still synthesize. <voice> xml:lang
   // stays optional (emitted only when lang is explicit) so custom/personal
-  // voices like MAI-Voice-2 are not forced to a default locale.
+  // voices are not forced to a default locale.
   const speakLangAttr = ` xml:lang='${xmlEscape(lang || "en-US")}'`;
   const voiceLangAttr = lang ? ` xml:lang='${xmlEscape(lang)}'` : "";
   const rate = speedToProsodyRate(speed);
   let inner = xmlEscape(text);
   if (rate) inner = `<prosody rate='${xmlEscape(rate)}'>${inner}</prosody>`;
   if (speakerProfileId) inner = `<mstts:ttsembedding speakerProfileId='${xmlEscape(speakerProfileId)}'>${inner}</mstts:ttsembedding>`;
-  const name = xmlEscape(voice || "");
+  // bd-dbfaa7: personal voices (speakerProfileId) need a base-model <voice name>,
+  // not the nickname (which Azure rejects with HTTP 400).
+  const name = xmlEscape(resolveAzureVoiceName({ voice, speakerProfileId, azureBaseVoice }));
   return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts'${speakLangAttr}>`
     + `<voice name='${name}'${voiceLangAttr}>${inner}</voice></speak>`;
 }
@@ -106,6 +135,7 @@ export function buildTtsBatchArgs({
   instructions,
   speakerProfileId,
   lang,
+  azureBaseVoice,
 } = {}) {
   const args = ["--stdout", "--response-format", String(responseFormat || "pcm")];
   const v = resolveCascadeTtsVoice(voice);
@@ -121,7 +151,7 @@ export function buildTtsBatchArgs({
   // azure-speech (direct) always sends an SSML body so embedding voices /
   // speakerProfileId / lang / prosody render; other providers get plain text.
   const body = azure
-    ? buildAzureSpeechSsml({ text, voice: v, lang, speed, speakerProfileId })
+    ? buildAzureSpeechSsml({ text, voice: v, lang, speed, speakerProfileId, azureBaseVoice })
     : String(text ?? "");
   if (body) args.push("--", body);
   return args;
@@ -139,6 +169,7 @@ export function synthesizeToPcm(text, {
   instructions,
   speakerProfileId,
   lang,
+  azureBaseVoice,
   responseFormat,
   command = "tts",
   spawnImpl = spawn,
@@ -153,7 +184,7 @@ export function synthesizeToPcm(text, {
     try {
       proc = spawnImpl(
         command,
-        buildTtsBatchArgs({ text: body, voice, model, provider, baseUrl, speed, instructions, speakerProfileId, lang, responseFormat }),
+        buildTtsBatchArgs({ text: body, voice, model, provider, baseUrl, speed, instructions, speakerProfileId, lang, azureBaseVoice, responseFormat }),
         { stdio: ["ignore", "pipe", "pipe"] },
       );
     } catch (err) {
@@ -215,6 +246,7 @@ export async function synthesizeAzureSpeechDirect({
   lang,
   speed,
   speakerProfileId,
+  azureBaseVoice,
   endpoint,
   apiKey,
   outputFormat = DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT,
@@ -229,7 +261,7 @@ export async function synthesizeAzureSpeechDirect({
     ? fetchImpl
     : (typeof fetch === "function" ? fetch : null);
   if (!doFetch) throw new Error("azure-speech: no fetch implementation available");
-  const ssml = buildAzureSpeechSsml({ text: body, voice, lang, speed, speakerProfileId });
+  const ssml = buildAzureSpeechSsml({ text: body, voice, lang, speed, speakerProfileId, azureBaseVoice });
   const res = await doFetch(`${ep}/cognitiveservices/v1`, {
     method: "POST",
     headers: {

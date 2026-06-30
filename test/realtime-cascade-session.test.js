@@ -277,7 +277,9 @@ test("makeCascadeTtsSynth: azure-speech participant routes to the direct Azure R
   assert.equal(called.url, "https://e.example/cognitiveservices/v1");
   assert.equal(called.o.headers["Ocp-Apim-Subscription-Key"], "k");
   assert.match(called.o.body, /speakerProfileId='p1'/);
-  assert.match(called.o.body, /<voice name='MAI-Voice-2'/);
+  // personal voice -> base-model voice name, not the nickname (bd-dbfaa7)
+  assert.match(called.o.body, /<voice name='DragonLatestNeural'/);
+  assert.doesNotMatch(called.o.body, /<voice name='MAI-Voice-2'/);
 });
 
 test("makeCascadeTtsSynth: azure direct requires a concrete voice (rejects the embedding sentinel)", async () => {
