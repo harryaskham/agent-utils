@@ -24,6 +24,17 @@ for (const k of [
   "PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS",
 ]) delete process.env[k];
 
+// bd-f9a4dd: bd-8b6f12 flipped the realtime default to direct-Azure
+// (resolveDirectAzureDefault -> PI_RT_DIRECT_AZURE defaults true). The proxy /
+// FakeWebSocket-path tests below do not pin a provider, so under that new default
+// they route to direct-Azure, demand an Azure key, and never construct the
+// injected WebSocket (FakeWebSocket.instances stays empty -> "reading 'emit'" of
+// undefined). Pin the proxy path here and clear ambient azure routing so these
+// tests stay deterministic regardless of the new default or the host env; the
+// azure-specific tests set their own provider/key locally and save/restore.
+delete process.env.PI_RT_PROVIDER;
+process.env.PI_RT_DIRECT_AZURE = "0";
+
 class FakeWebSocket {
   static OPEN = 1;
   static instances = [];
