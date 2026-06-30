@@ -34,6 +34,23 @@ export function probePlacementId(writerName) {
 // probe is wrapped exactly like real preview output on this host. Pure: the
 // caller supplies the writer NAMES (not bound writers) so the plan can be
 // asserted without a terminal.
+// Heuristic, pure: decide whether kitty graphics are likely forwarded to a real
+// kitty client. When no kitty client signal is present (no KITTY_WINDOW_ID and a
+// non-kitty TERM), placeholders tend to render blank, so callers should warn once
+// and fall back to ASCII rather than emitting silent blank cells (bd-bba439).
+export function recommendPassthroughFallback(env = process.env) {
+  const term = String(env.TERM || "").toLowerCase();
+  const hasKittyClient = Boolean(env.KITTY_WINDOW_ID) || term.includes("kitty") || term.includes("ghostty");
+  const inTmux = Boolean(env.TMUX);
+  return {
+    likelyForwarding: hasKittyClient,
+    fallback: !hasKittyClient,
+    reason: hasKittyClient
+      ? (inTmux ? "kitty client + tmux: passthrough-wrapped" : "kitty client detected")
+      : "no kitty client signal (KITTY_WINDOW_ID unset, non-kitty TERM): graphics likely not forwarded",
+  };
+}
+
 export function buildPassthroughProbePlan({
   writerNames = [],
   mode = "auto",

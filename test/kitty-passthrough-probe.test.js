@@ -7,6 +7,7 @@ import {
   probeImageId,
   probePlacementId,
   buildPassthroughProbePlan,
+  recommendPassthroughFallback,
 } from "../extensions/kitty-image-preview/passthrough-probe.js";
 
 // bd-15374a: a host passthrough probe emits a tiny kitty graphics test cell
@@ -82,4 +83,31 @@ test("PROBE_PNG_BASE64 is a small embedded PNG payload", () => {
   // Decodes to a valid PNG signature.
   const bytes = Buffer.from(PROBE_PNG_BASE64, "base64");
   assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+});
+
+// bd-bba439: pure heuristic recommending an ASCII fallback when no kitty client
+// signal is present, so previews warn once instead of emitting blank cells.
+test("recommendPassthroughFallback: kitty client present -> forwarding, no fallback", () => {
+  const r = recommendPassthroughFallback({ KITTY_WINDOW_ID: "1", TERM: "xterm-kitty" });
+  assert.equal(r.likelyForwarding, true);
+  assert.equal(r.fallback, false);
+});
+
+test("recommendPassthroughFallback: ghostty TERM counts as a kitty-graphics client", () => {
+  const r = recommendPassthroughFallback({ TERM: "xterm-ghostty" });
+  assert.equal(r.likelyForwarding, true);
+  assert.equal(r.fallback, false);
+});
+
+test("recommendPassthroughFallback: no kitty signal -> recommends fallback with a reason", () => {
+  const r = recommendPassthroughFallback({ TERM: "xterm-256color" });
+  assert.equal(r.likelyForwarding, false);
+  assert.equal(r.fallback, true);
+  assert.match(r.reason, /not forwarded/);
+});
+
+test("recommendPassthroughFallback: kitty client + tmux notes the passthrough wrapping", () => {
+  const r = recommendPassthroughFallback({ KITTY_WINDOW_ID: "1", TERM: "xterm-kitty", TMUX: "/tmp/tmux" });
+  assert.equal(r.fallback, false);
+  assert.match(r.reason, /tmux/);
 });
