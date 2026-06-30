@@ -45,6 +45,8 @@ At runtime, the unified `/rt` command also accepts env-style key/value arguments
 
 Order does not matter. Values may be quoted with shell-like single or double quotes. Empty runtime values unset the corresponding Pulse variable for future spawns. If a mic capture or playback process is already running, stop/cancel it and start again so the new Pulse environment is used.
 
+**Runtime value settings persist across restarts.** When you change a connection/tuning value setting at runtime — `voice`, `speed`, `thresh`, `model`, `baseUrl`, `trans`, or the Azure settings (`azure`, `endpoint`, `deployment`, `api_version`, `protocol`) — the new value is saved to the Pi agent `settings.json` (under `agentUtils.realtime.*`) and restored on the next `/rt` start, so you do not have to re-set it every session. Precedence is env (`PI_RT_*` / `OPENAI_*` / `AZURE_*`) > persisted settings > built-in default, so an explicit env override always wins. Audio `backend` and Pulse routing (`server`/`source`/`sink`) are process-environment only and are **not** persisted — set them via env or per-`/rt` k=v each session.
+
 You can override the backend for local-device testing:
 
 ```bash
