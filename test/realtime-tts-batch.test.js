@@ -37,6 +37,10 @@ test("buildAzureSpeechSsml wraps voice/embedding/lang/prosody and escapes text",
   const plain = buildAzureSpeechSsml({ text: "yo", voice: "en-US-Harper:MAI-Voice-2" });
   assert.doesNotMatch(plain, /ttsembedding|prosody/);
   assert.match(plain, /<voice name='en-US-Harper:MAI-Voice-2'>/);
+  // bd-80663f: <speak> must always carry xml:lang (Azure 400s without it);
+  // default to en-US when no lang is given, but do NOT force a locale on <voice>.
+  assert.match(plain, /^<speak version='1.0' xmlns='[^']+' xmlns:mstts='[^']+' xml:lang='en-US'>/);
+  assert.doesNotMatch(plain, /<voice name='en-US-Harper:MAI-Voice-2' xml:lang=/);
 });
 
 test("isAzureSpeechProvider matches azure-speech only", () => {

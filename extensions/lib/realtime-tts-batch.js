@@ -76,14 +76,20 @@ export function isAzureSpeechProvider(provider) {
 /// lang -> xml:lang, speed -> <prosody rate>, speakerProfileId -> <mstts:ttsembedding>.
 /// speakerProfileId/lang/prosody segments are omitted when not supplied. Pure.
 export function buildAzureSpeechSsml({ text, voice, lang, speed, speakerProfileId } = {}) {
-  const langAttr = lang ? ` xml:lang='${xmlEscape(lang)}'` : "";
+  // bd-80663f: Azure Speech REQUIRES xml:lang on <speak> or it rejects the
+  // request with HTTP 400. Default to en-US when no lang is supplied so cascade
+  // turns invoked without an explicit lang= still synthesize. <voice> xml:lang
+  // stays optional (emitted only when lang is explicit) so custom/personal
+  // voices like MAI-Voice-2 are not forced to a default locale.
+  const speakLangAttr = ` xml:lang='${xmlEscape(lang || "en-US")}'`;
+  const voiceLangAttr = lang ? ` xml:lang='${xmlEscape(lang)}'` : "";
   const rate = speedToProsodyRate(speed);
   let inner = xmlEscape(text);
   if (rate) inner = `<prosody rate='${xmlEscape(rate)}'>${inner}</prosody>`;
   if (speakerProfileId) inner = `<mstts:ttsembedding speakerProfileId='${xmlEscape(speakerProfileId)}'>${inner}</mstts:ttsembedding>`;
   const name = xmlEscape(voice || "");
-  return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts'${langAttr}>`
-    + `<voice name='${name}'${langAttr}>${inner}</voice></speak>`;
+  return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts'${speakLangAttr}>`
+    + `<voice name='${name}'${voiceLangAttr}>${inner}</voice></speak>`;
 }
 
 /// Build the `tts` argv for one-shot PCM synthesis. Text is passed as a
