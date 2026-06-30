@@ -328,3 +328,46 @@ test("isSuppressed drops mic frames while the assistant speaks, resumes after (h
   assert.equal(sent.length, 1, "turn captured once the release window passes");
   assert.equal(sent[0], "echo");
 });
+
+test("bd-7b43b2: suppression opening during the human's trailing silence still commits (not stranded)", async () => {
+  const sent = [];
+  const transcribed = [];
+  let speaking = false;
+  const controller = new LocalVadController({
+    transcribe: async (buf) => { transcribed.push(buf.length); return "human turn"; },
+    sendTurn: (t) => sent.push(t),
+    isSuppressed: () => speaking,
+  });
+  // Human speaks while NOT suppressed -> a turn is open in the segmenter.
+  await controller.pushFrame(frame(800, { speech: true }));
+  assert.ok(controller.segmenter.turnSpeechMs > 0, "human turn is open before suppression");
+  // The half-duplex window opens right as the human goes silent (cascade: a peer
+  // TTS window or a stale assistant-speaking mark overlapping the trailing silence).
+  // Pre-fix, every trailing-silence frame was dropped and the open turn was stranded
+  // (never reached commitSilenceMs) -> "only /cascade say works".
+  speaking = true;
+  for (let s = 0; s < 4000; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller._drain(); // pump only; do NOT flush (flush would force-commit and mask the bug)
+  assert.equal(sent.length, 1, "suppressed silence advances the clock so the open turn commits");
+  assert.equal(sent[0], "human turn");
+  // The committed audio is the pre-suppression speech; zeroed silence carries no
+  // echo, so the assistant's own audio is still never transcribed.
+  assert.ok(transcribed.length >= 1, "the human's captured speech was transcribed and sent");
+});
+
+test("bd-7b43b2: suppressed-with-no-open-turn stays silent (assistant echo never starts a turn)", async () => {
+  const sent = [];
+  let speaking = true; // suppressed from the very start (pure echo, no human turn open)
+  const controller = new LocalVadController({
+    transcribe: async () => "echo",
+    sendTurn: (t) => sent.push(t),
+    isSuppressed: () => speaking,
+  });
+  // A full speak+silence run while suppressed must segment nothing: with no open
+  // turn (turnSpeechMs stays 0) the fix injects no synthetic silence either.
+  await controller.pushFrame(frame(500, { speech: true }));
+  for (let s = 0; s < 4000; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller._drain();
+  assert.equal(sent.length, 0, "no turn is ever started or committed from suppressed audio alone");
+  assert.equal(controller.segmenter.turnSpeechMs, 0, "no open turn accrued while suppressed");
+});

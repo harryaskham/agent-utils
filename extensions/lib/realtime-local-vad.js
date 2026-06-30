@@ -128,6 +128,21 @@ export class LocalVadController {
     // so its own spoken reply is not captured + transcribed as a phantom turn.
     if (this.isSuppressed && this.isSuppressed()) {
       this._pending = Buffer.alloc(0);
+      // But if a human turn is already mid-flight when suppression opens, feed the
+      // segmenter synthetic SILENCE for the dropped chunk's duration so its silence
+      // clock keeps advancing and the turn still reaches commitSilenceMs. Otherwise
+      // a suppression window that opens during the human's trailing silence (a peer
+      // TTS window or a stale assistant-speaking mark overlapping it) drops every
+      // trailing-silence frame, so the open turn is stranded and NEVER auto-commits
+      // (bd-7b43b2). We feed zeroed (silence) frames, never the suppressed audio
+      // itself, so the assistant's echo is still never transcribed.
+      if (this.segmenter.turnSpeechMs > 0) {
+        const silence = Buffer.alloc(this.frameBytes);
+        const frames = Math.max(1, Math.round(chunk.length / this.frameBytes));
+        for (let i = 0; i < frames; i++) {
+          for (const event of this.segmenter.push(silence)) this._dispatch(event);
+        }
+      }
       return;
     }
     this._pending = this._pending.length ? Buffer.concat([this._pending, chunk]) : Buffer.from(chunk);
