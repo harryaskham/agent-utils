@@ -146,6 +146,7 @@ import {
   shouldAutoRestartMicMode,
 } from "./lib/realtime-models.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
+import { persistRealtimeSetting } from "./lib/realtime-settings.js";
 import { InputLevelTracker } from "./lib/realtime-input-level.js";
 import { buildRealtimeValueParams, normalizeRealtimeValueParams, applyRealtimeValueParams } from "./lib/realtime-settings.js";
 // Re-exported so the public test/runtime contract import path
@@ -2039,6 +2040,7 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeBaseUrl(String(baseUrl || "").trim());
       if (!next) throw new Error("Realtime baseUrl cannot be empty");
       config.baseUrl = next;
+      persistRealtimeSetting("baseUrl", config.baseUrl);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2051,6 +2053,7 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeRealtimeModelId(String(model || "").trim());
       if (!next) throw new Error("Realtime model cannot be empty");
       config.model = next;
+      persistRealtimeSetting("model", config.model);
       session.audioModeApplied = null;
       session.updateStatus(ctx);
       return this.snapshot();
@@ -2058,18 +2061,21 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setDirectAzure(enabled, ctx) {
       config.directAzure = !!enabled;
+      persistRealtimeSetting("directAzure", config.directAzure);
       session.updateStatus(ctx);
       return this.snapshot();
     },
 
     setAzureEndpoint(endpoint, ctx) {
       config.azureEndpoint = String(endpoint || "").trim() || undefined;
+      persistRealtimeSetting("azureEndpoint", config.azureEndpoint);
       session.updateStatus(ctx);
       return this.snapshot();
     },
 
     setAzureDeployment(deployment, ctx) {
       config.azureDeployment = String(deployment || "").trim() || undefined;
+      persistRealtimeSetting("azureDeployment", config.azureDeployment);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2078,6 +2084,7 @@ export function createRealtimeControls({ pi, session, config }) {
       // Blank / "none" / "ga" => omit api-version (GA realtime path). Stored as-is;
       // azureRealtimeUrl normalizes none/ga/blank to the unversioned GA URL.
       config.azureApiVersion = String(version ?? "").trim();
+      persistRealtimeSetting("azureApiVersion", config.azureApiVersion);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2088,6 +2095,7 @@ export function createRealtimeControls({ pi, session, config }) {
         throw new Error(`Unsupported azure protocol: ${protocol} (use v1 or beta)`);
       }
       config.azureProtocol = next || "v1";
+      persistRealtimeSetting("azureProtocol", config.azureProtocol);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2096,6 +2104,7 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeTranscriptionModel(String(model || "").trim());
       if (!next) throw new Error("Realtime transcription model cannot be empty");
       config.transcriptionModel = next;
+      persistRealtimeSetting("transcriptionModel", config.transcriptionModel);
       session.systemPromptApplied = null;
       session.toolsAppliedKey = null;
       session.audioModeApplied = null;
@@ -2105,6 +2114,7 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setSpeed(speed, ctx) {
       config.speed = parseRealtimeSpeed(speed, config.speed || 1.0);
+      persistRealtimeSetting("speed", config.speed);
       session.speedRejected = false;
       session.audioModeApplied = null;
       session.updateStatus(ctx);
@@ -2113,6 +2123,7 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setVadThreshold(threshold, ctx) {
       config.vadThreshold = parseVadThreshold(threshold, config.vadThreshold ?? 0.7);
+      persistRealtimeSetting("vadThreshold", config.vadThreshold);
       process.env.PI_RT_VAD_THRESHOLD = String(config.vadThreshold);
       session.sendTurnDetectionUpdate();
       session.updateStatus(ctx);
@@ -2123,6 +2134,7 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = String(voice || "").trim().toLowerCase();
       if (!REALTIME_VOICES.has(next)) throw new Error(`Unsupported realtime voice: ${voice}`);
       config.voice = next;
+      persistRealtimeSetting("voice", config.voice);
       // Voice is part of session.update but not part of the old update cache key;
       // force the next turn/listen setup to refresh session config.
       session.audioModeApplied = null;

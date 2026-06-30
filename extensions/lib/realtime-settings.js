@@ -9,6 +9,9 @@
 // fork) and pulse routing remain bespoke in realtime-agent.js; this registry
 // covers the simple value settings only.
 
+import { writeFileSync } from "node:fs";
+import { readJsonIfExists, agentSettingsPath } from "../pi-graphics/agent-io.js";
+
 // coerce tags map to coercer fns supplied by the caller (realtime-agent.js owns
 // parseBooleanValue/parseRealtimeSpeed/parseVadThreshold), keeping this lib pure.
 export const REALTIME_VALUE_SETTINGS = [
@@ -94,4 +97,65 @@ export function applyRealtimeValueParams(params = {}, controls = {}, ctx, { appl
     }
   }
   return applied;
+}
+
+// --- Persistence (bd-7217db): runtime /rt value changes survive a restart ---
+//
+// Runtime /rt k=v value changes are otherwise lost on restart because
+// makeInitialConfig (realtime-config.js) reads env only. The fields below are
+// persisted to the Pi agent settings.json under `agentUtils.realtime.<field>`
+// (config-field names) and read back by makeInitialConfig with env precedence
+// (env > persisted > default) — each is a complete set->persist->restart->restore
+// round-trip. Reuses pi-graphics' agentSettingsPath/readJsonIfExists so both
+// extensions share one settings.json; writes touch ONLY the agentUtils.realtime
+// slice and never clobber pi-graphics' or any other slice.
+export const PERSISTED_REALTIME_FIELDS = [
+  "baseUrl",
+  "model",
+  "voice",
+  "transcriptionModel",
+  "speed",
+  "vadThreshold",
+  "directAzure",
+  "azureEndpoint",
+  "azureDeployment",
+  "azureApiVersion",
+  "azureProtocol",
+];
+
+const PERSISTED_FIELD_SET = new Set(PERSISTED_REALTIME_FIELDS);
+
+// Read the persisted realtime settings slice (agentUtils.realtime). Returns {}
+// when the file or slice is missing/malformed, so callers treat it as a plain
+// precedence layer.
+export function readPersistedRealtimeSettings(path = agentSettingsPath()) {
+  const all = readJsonIfExists(path);
+  const rt = all && all.agentUtils && all.agentUtils.realtime;
+  return rt && typeof rt === "object" && !Array.isArray(rt) ? rt : {};
+}
+
+// Persist one realtime value setting to settings.json via read-merge-write,
+// touching only agentUtils.realtime.<field>. Returns true on write. Non-fatal:
+// returns false (never throws) on an unknown field or IO error, so a setter is
+// never broken by a settings-write failure.
+export function persistRealtimeSetting(field, value, path = agentSettingsPath()) {
+  if (!PERSISTED_FIELD_SET.has(field)) return false;
+  try {
+    const all = readJsonIfExists(path) || {};
+    if (!all.agentUtils || typeof all.agentUtils !== "object" || Array.isArray(all.agentUtils)) {
+      all.agentUtils = {};
+    }
+    if (
+      !all.agentUtils.realtime ||
+      typeof all.agentUtils.realtime !== "object" ||
+      Array.isArray(all.agentUtils.realtime)
+    ) {
+      all.agentUtils.realtime = {};
+    }
+    all.agentUtils.realtime[field] = value;
+    writeFileSync(path, JSON.stringify(all, null, 2) + "\n");
+    return true;
+  } catch {
+    return false;
+  }
 }

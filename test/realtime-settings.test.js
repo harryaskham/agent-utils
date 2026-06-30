@@ -1,11 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   REALTIME_VALUE_SETTINGS,
   realtimeValueParamFor,
   buildRealtimeValueParams,
   normalizeRealtimeValueParams,
+  PERSISTED_REALTIME_FIELDS,
+  persistRealtimeSetting,
+  readPersistedRealtimeSettings,
 } from "../extensions/lib/realtime-settings.js";
+import { makeInitialConfig } from "../extensions/lib/realtime-config.js";
 
 test("every alias (and the param itself) resolves to its param, with no cross-param collisions", () => {
   const seen = new Map();
@@ -87,4 +94,76 @@ test("applyRealtimeValueParams dispatches each param to its setter; energy speci
   assert.equal(energy, 0.1); // energy special
   assert.ok(!("setFork" in byName)); // fork handled by caller, not dispatched
   assert.ok(applied.includes("model") && applied.includes("energy") && !applied.includes("fork"));
+});
+
+// --- Persistence (bd-7217db) ---
+
+test("persistRealtimeSetting round-trips via settings.json and reads back (0 + false safe)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
+  const path = join(dir, "settings.json");
+  try {
+    assert.deepEqual(readPersistedRealtimeSettings(path), {}, "missing file -> {}");
+    assert.equal(persistRealtimeSetting("voice", "cedar", path), true);
+    assert.equal(persistRealtimeSetting("vadThreshold", 0, path), true); // 0 is a valid threshold
+    assert.equal(persistRealtimeSetting("directAzure", false, path), true);
+    const got = readPersistedRealtimeSettings(path);
+    assert.equal(got.voice, "cedar");
+    assert.equal(got.vadThreshold, 0);
+    assert.equal(got.directAzure, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("persistRealtimeSetting never clobbers other settings.json slices + rejects unknown fields", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
+  const path = join(dir, "settings.json");
+  try {
+    // Pre-existing pi-graphics slice + a top-level key must survive a realtime write.
+    writeFileSync(path, JSON.stringify({ agentUtils: { graphics: { eink: true } }, theme: "nord" }, null, 2));
+    assert.equal(persistRealtimeSetting("model", "gpt-realtime-2", path), true);
+    const all = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(all.agentUtils.graphics.eink, true, "pi-graphics slice preserved");
+    assert.equal(all.theme, "nord", "top-level key preserved");
+    assert.equal(all.agentUtils.realtime.model, "gpt-realtime-2");
+    // Unknown field rejected (not in PERSISTED_REALTIME_FIELDS).
+    assert.equal(persistRealtimeSetting("notAField", "x", path), false);
+    assert.ok(!PERSISTED_REALTIME_FIELDS.includes("notAField"));
+    const after = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(after.agentUtils.realtime.notAField, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("makeInitialConfig precedence: env > persisted > default", () => {
+  const keys = [
+    "PI_RT_MODEL", "OPENAI_REALTIME_MODEL", "PI_RT_SPEED", "OPENAI_REALTIME_SPEED",
+    "PI_RT_VAD_THRESHOLD", "PI_RT_AZURE_PROTOCOL", "PI_RT_DIRECT_AZURE", "PI_RT_PROVIDER",
+  ];
+  const saved = {};
+  for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    // persisted wins over default when no env.
+    const c1 = makeInitialConfig({ persisted: { speed: 1.3, azureProtocol: "beta", vadThreshold: 0.42, directAzure: false } });
+    assert.equal(c1.speed, 1.3);
+    assert.equal(c1.azureProtocol, "beta");
+    assert.equal(c1.vadThreshold, 0.42);
+    assert.equal(c1.directAzure, false, "persisted directAzure=false overrides default-true");
+    // env wins over persisted.
+    process.env.PI_RT_SPEED = "0.8";
+    process.env.PI_RT_AZURE_PROTOCOL = "v1";
+    const c2 = makeInitialConfig({ persisted: { speed: 1.3, azureProtocol: "beta" } });
+    assert.equal(c2.speed, 0.8, "env speed overrides persisted");
+    assert.equal(c2.azureProtocol, "v1", "env protocol overrides persisted");
+    delete process.env.PI_RT_SPEED;
+    delete process.env.PI_RT_AZURE_PROTOCOL;
+    // empty persisted -> defaults.
+    const c3 = makeInitialConfig({ persisted: {} });
+    assert.equal(c3.azureProtocol, "v1");
+    assert.equal(c3.vadThreshold, 0.7);
+    assert.equal(c3.directAzure, true, "default direct-azure (bd-8b6f12)");
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
 });

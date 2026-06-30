@@ -60,7 +60,7 @@ test("buildServerVadTurnDetection: fixed fields, env defaults, and option overri
 test("makeInitialConfig: stable defaults on a clean environment", () => {
   const restore = withEnv();
   try {
-    const c = makeInitialConfig();
+    const c = makeInitialConfig({ persisted: {} });
     assert.equal(c.baseUrl, "https://api.openai.com");
     // Direct-Azure is the DEFAULT now (bd-8b6f12): the default model
     // gpt-realtime-2 is GA-only and the proxy GA-rejects it (bd-0b40ce). Opt back
@@ -106,7 +106,7 @@ test("makeInitialConfig: env overrides are reflected", () => {
     PI_RT_RECORD_CMD: "rec-cmd",
   });
   try {
-    const c = makeInitialConfig();
+    const c = makeInitialConfig({ persisted: {} });
     assert.equal(c.baseUrl, "http://localhost:9999");
     assert.equal(c.reasoningEffort, "high");
     assert.equal(c.bufferMs, 250);
@@ -124,14 +124,14 @@ test("makeInitialConfig: directAzure defaults true, overridable to proxy (bd-8b6
   for (const overrides of [{}, { PI_RT_DIRECT_AZURE: "1" }, { PI_RT_PROVIDER: "azure" }, { PI_RT_PROVIDER: "AZURE" }]) {
     const restore = withEnv(overrides);
     try {
-      assert.equal(makeInitialConfig().directAzure, true, JSON.stringify(overrides));
+      assert.equal(makeInitialConfig({ persisted: {} }).directAzure, true, JSON.stringify(overrides));
     } finally { restore(); }
   }
   // Explicit proxy/OpenAI overrides force it off.
   for (const overrides of [{ PI_RT_PROVIDER: "openai" }, { PI_RT_PROVIDER: "proxy" }, { PI_RT_DIRECT_AZURE: "0" }]) {
     const restore = withEnv(overrides);
     try {
-      assert.equal(makeInitialConfig().directAzure, false, JSON.stringify(overrides));
+      assert.equal(makeInitialConfig({ persisted: {} }).directAzure, false, JSON.stringify(overrides));
     } finally { restore(); }
   }
 });

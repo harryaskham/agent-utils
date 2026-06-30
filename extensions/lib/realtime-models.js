@@ -33,8 +33,8 @@ export function normalizeTranscriptionModel(raw) {
   return raw;
 }
 
-export function resolveRealtimeVoice() {
-  const raw = env("PI_RT_VOICE", "OPENAI_TTS_VOICE", "TTS_VOICE") || DEFAULT_VOICE;
+export function resolveRealtimeVoice(fallback) {
+  const raw = env("PI_RT_VOICE", "OPENAI_TTS_VOICE", "TTS_VOICE") || fallback || DEFAULT_VOICE;
   return REALTIME_VOICES.has(raw) ? raw : DEFAULT_VOICE;
 }
 

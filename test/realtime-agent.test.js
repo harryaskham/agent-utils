@@ -1915,7 +1915,7 @@ test("makeInitialConfig: Azure realtime defaults target the gpt-realtime-2 GA de
   for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; }
   try {
     const { makeInitialConfig, DEFAULT_AZURE_ENDPOINT } = await import("../extensions/lib/realtime-config.js");
-    const cfg = makeInitialConfig();
+    const cfg = makeInitialConfig({ persisted: {} });
     assert.equal(cfg.azureEndpoint, DEFAULT_AZURE_ENDPOINT);
     assert.match(cfg.azureEndpoint, /harryaskham-sandbox-ais-ccan\.cognitiveservices\.azure\.com/);
     // GA realtime must OMIT api-version (preview path deprecated 2026-04-30).

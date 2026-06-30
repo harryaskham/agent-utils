@@ -7,6 +7,7 @@
 
 import { env, envBool, numberEnv, parseRealtimeSpeed, parseVadThreshold } from "./realtime-helpers.js";
 import { normalizeRealtimeModelId, normalizeTranscriptionModel, resolveRealtimeVoice } from "./realtime-models.js";
+import { readPersistedRealtimeSettings } from "./realtime-settings.js";
 
 // Default direct-Azure realtime target: the gpt-realtime-2 GA deployment in the
 // canadacentral sandbox (a proven, shared endpoint — gpt-realtime-whisper lives
@@ -26,10 +27,15 @@ export const DEFAULT_AZURE_API_VERSION = "none";
 //   PI_RT_PROVIDER=openai|proxy     -> force the proxy/OpenAI path
 //   PI_RT_DIRECT_AZURE=0|1          -> force either
 // Otherwise default to direct-Azure.
-export function resolveDirectAzureDefault({ env: read = env } = {}) {
+export function resolveDirectAzureDefault({ env: read = env, persistedDirectAzure } = {}) {
   const provider = (read("PI_RT_PROVIDER") || "").toLowerCase();
   if (provider === "azure") return true;
   if (provider === "openai" || provider === "proxy") return false;
+  // env PI_RT_DIRECT_AZURE wins; else the persisted settings.json value
+  // (bd-7217db); else default to direct-Azure.
+  if (read("PI_RT_DIRECT_AZURE") === undefined && typeof persistedDirectAzure === "boolean") {
+    return persistedDirectAzure;
+  }
   return envBool("PI_RT_DIRECT_AZURE", true);
 }
 
@@ -46,25 +52,30 @@ export function buildServerVadTurnDetection(options = {}) {
   };
 }
 
-export function makeInitialConfig() {
+export function makeInitialConfig(options = {}) {
+  // Persisted runtime /rt value settings (bd-7217db). Precedence is
+  // env (PI_RT_*/OPENAI_*/AZURE_*) > persisted settings.json > default, so an
+  // explicit env override always wins and persistence only fills the gap.
+  // Tests pass options.persisted to stay deterministic regardless of host state.
+  const persisted = options.persisted ?? readPersistedRealtimeSettings();
   return {
-    baseUrl: env("PI_RT_BASE_URL", "OPENAI_BASE_URL") || "https://api.openai.com",
-    model: normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL")),
+    baseUrl: (env("PI_RT_BASE_URL", "OPENAI_BASE_URL") ?? persisted.baseUrl) || "https://api.openai.com",
+    model: normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL") ?? persisted.model),
     // OpenAI removed the Realtime Beta opt-in header (OpenAI-Beta: realtime=v1)
     // for GA on 2026-05-12; GA models reject it (bd-0b40ce). Default off; set
     // PI_RT_BETA_HEADER=1 only for a legacy/self-hosted beta realtime endpoint.
     betaHeader: envBool("PI_RT_BETA_HEADER", false),
-    directAzure: resolveDirectAzureDefault(),
-    azureEndpoint: env("PI_RT_AZURE_ENDPOINT", "AZURE_CANADACENTRAL_ENDPOINT", "AZURE_OPENAI_ENDPOINT") || DEFAULT_AZURE_ENDPOINT,
-    azureDeployment: env("PI_RT_AZURE_DEPLOYMENT", "AZURE_CANADACENTRAL_DEPLOYMENT") || normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL")),
+    directAzure: resolveDirectAzureDefault({ persistedDirectAzure: persisted.directAzure }),
+    azureEndpoint: (env("PI_RT_AZURE_ENDPOINT", "AZURE_CANADACENTRAL_ENDPOINT", "AZURE_OPENAI_ENDPOINT") ?? persisted.azureEndpoint) || DEFAULT_AZURE_ENDPOINT,
+    azureDeployment: (env("PI_RT_AZURE_DEPLOYMENT", "AZURE_CANADACENTRAL_DEPLOYMENT") ?? persisted.azureDeployment) || normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL") ?? persisted.model),
     // GA realtime models (gpt-realtime-2) must OMIT api-version (default "none");
     // the old 2025-04-01-preview path was deprecated 2026-04-30 (bd-cb74b5).
-    azureApiVersion: env("PI_RT_AZURE_API_VERSION", "AZURE_OPENAI_API_VERSION") || DEFAULT_AZURE_API_VERSION,
-    azureProtocol: env("PI_RT_AZURE_PROTOCOL") || "v1",
-    transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL")),
-    voice: resolveRealtimeVoice(),
-    speed: parseRealtimeSpeed(env("PI_RT_SPEED", "OPENAI_REALTIME_SPEED"), 1.0),
-    vadThreshold: parseVadThreshold(env("PI_RT_VAD_THRESHOLD"), 0.7),
+    azureApiVersion: (env("PI_RT_AZURE_API_VERSION", "AZURE_OPENAI_API_VERSION") ?? persisted.azureApiVersion) || DEFAULT_AZURE_API_VERSION,
+    azureProtocol: (env("PI_RT_AZURE_PROTOCOL") ?? persisted.azureProtocol) || "v1",
+    transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL") ?? persisted.transcriptionModel),
+    voice: resolveRealtimeVoice(persisted.voice),
+    speed: parseRealtimeSpeed(env("PI_RT_SPEED", "OPENAI_REALTIME_SPEED") ?? persisted.speed, 1.0),
+    vadThreshold: parseVadThreshold(env("PI_RT_VAD_THRESHOLD") ?? persisted.vadThreshold, 0.7),
     bufferMs: Number(env("PI_RT_BUFFER_MS", "TTS_REALTIME_BUFFER_MS") || 180),
     playbackChunkMs: Number(env("PI_RT_PLAYBACK_CHUNK_MS") || 80),
     reasoningEffort: env("PI_RT_REASONING_EFFORT") || "off",
