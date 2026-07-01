@@ -25,6 +25,8 @@ export const REALTIME_VALUE_SETTINGS = [
   { param: "energy", keys: ["energy", "energy_threshold", "energythreshold"], coerce: "thresh", special: "localVadEnergy" },
   { param: "summary", keys: ["summary"], coerce: "bool", setter: "setSummaryContext", snapshotField: "summaryContext" },
   { param: "chime", keys: ["chime"], coerce: "bool", setter: "setChime", snapshotField: "chimeEnabled" },
+  { param: "speakReplies", keys: ["speak_replies", "speakreplies", "replies"], coerce: "bool", setter: "setSpeakReplies", snapshotField: "speakReplies" },
+  { param: "speakThinking", keys: ["speak_thinking", "speakthinking", "thinking"], coerce: "bool", setter: "setSpeakThinking", snapshotField: "speakThinking" },
   { param: "fork", keys: ["fork"], coerce: "bool", special: "fork" },
   { param: "model", keys: ["model"], coerce: "trim", setter: "setModel", snapshotField: "model" },
   { param: "directAzure", keys: ["direct_azure", "directazure", "azure"], coerce: "bool", setter: "setDirectAzure", snapshotField: "directAzure" },
@@ -121,6 +123,8 @@ export const PERSISTED_REALTIME_FIELDS = [
   "azureDeployment",
   "azureApiVersion",
   "azureProtocol",
+  "speakReplies",
+  "speakThinking",
 ];
 
 const PERSISTED_FIELD_SET = new Set(PERSISTED_REALTIME_FIELDS);

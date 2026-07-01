@@ -253,6 +253,28 @@ test("cascade/stt/realtime slice writes never clobber each other or other settin
   }
 });
 
+test("makeInitialConfig speakReplies/speakThinking: env > persisted > default (bd-095b3d)", () => {
+  const keys = ["PI_RT_SPEAK_REPLIES", "PI_RT_SPEAK_THINKING"];
+  const saved = {};
+  for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    const c0 = makeInitialConfig({ persisted: {} });
+    assert.equal(c0.speakReplies, false);
+    assert.equal(c0.speakThinking, false);
+    const c1 = makeInitialConfig({ persisted: { speakReplies: true, speakThinking: true } });
+    assert.equal(c1.speakReplies, true);
+    assert.equal(c1.speakThinking, true);
+    process.env.PI_RT_SPEAK_REPLIES = "0";
+    const c2 = makeInitialConfig({ persisted: { speakReplies: true } });
+    assert.equal(c2.speakReplies, false, "env PI_RT_SPEAK_REPLIES=0 overrides persisted true");
+    delete process.env.PI_RT_SPEAK_REPLIES;
+    assert.ok(PERSISTED_REALTIME_FIELDS.includes("speakReplies"));
+    assert.ok(PERSISTED_REALTIME_FIELDS.includes("speakThinking"));
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+});
+
 test("makeInitialConfig falls back stt fields to the agentUtils.stt slice below realtime (bd-b45224)", () => {
   const keys = ["PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL", "PI_RT_VAD_THRESHOLD"];
   const saved = {};

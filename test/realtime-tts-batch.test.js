@@ -17,7 +17,49 @@ import {
   synthesizeAzureSpeechDirect,
   resolveSpeakToolParams,
   DEFAULT_AZURE_SPEECH_ENDPOINT,
+  assistantReplyText,
+  pickLastAssistantReply,
+  thinkingSummaryText,
 } from "../extensions/lib/realtime-tts-batch.js";
+
+// --- Auto-speak agent replies (bd-095b3d) ---
+
+test("assistantReplyText extracts text from string + array-of-parts content, ignores non-text", () => {
+  assert.equal(assistantReplyText({ role: "assistant", content: "  hi there " }), "hi there");
+  assert.equal(
+    assistantReplyText({ role: "assistant", content: [{ type: "text", text: "a" }, { type: "thinking", text: "secret" }, { type: "text", text: "b" }] }),
+    "ab",
+  );
+  assert.equal(assistantReplyText({ role: "user", content: "nope" }), "", "non-assistant -> ''");
+  assert.equal(assistantReplyText({ role: "assistant", content: [{ type: "tool_call" }] }), "", "tool-call-only -> ''");
+  assert.equal(assistantReplyText(null), "");
+});
+
+test("pickLastAssistantReply returns the most recent assistant text + a dedupe key", () => {
+  const messages = [
+    { role: "user", content: "q" },
+    { role: "assistant", content: "old", timestamp: 1 },
+    { role: "user", content: "q2" },
+    { role: "assistant", content: [{ type: "text", text: "new reply" }], timestamp: 2 },
+  ];
+  const { text, key } = pickLastAssistantReply(messages);
+  assert.equal(text, "new reply");
+  assert.equal(key, "2:new reply");
+  // No assistant / empty -> empty text + empty key (caller skips).
+  assert.deepEqual(pickLastAssistantReply([{ role: "user", content: "x" }]), { text: "", key: "" });
+  assert.deepEqual(pickLastAssistantReply([{ role: "assistant", content: [{ type: "tool_call" }], timestamp: 3 }]), { text: "", key: "" });
+});
+
+test("thinkingSummaryText extracts reasoning/thinking parts or a top-level field, else ''", () => {
+  assert.equal(
+    thinkingSummaryText({ role: "assistant", content: [{ type: "thinking", text: "let me think" }, { type: "text", text: "answer" }] }),
+    "let me think",
+  );
+  assert.equal(thinkingSummaryText({ role: "assistant", content: [{ type: "reasoning", summary: "weighed options" }] }), "weighed options");
+  assert.equal(thinkingSummaryText({ role: "assistant", content: "plain", reasoning: "top-level reason" }), "top-level reason");
+  assert.equal(thinkingSummaryText({ role: "assistant", content: [{ type: "text", text: "just an answer" }] }), "", "no thinking -> ''");
+  assert.equal(thinkingSummaryText({ role: "user", content: "x" }), "");
+});
 
 test("speedToProsodyRate maps speed to azure prosody rate %", () => {
   assert.equal(speedToProsodyRate(1.5), "+50%");

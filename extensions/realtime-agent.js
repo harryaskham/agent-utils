@@ -174,6 +174,8 @@ import {
   synthesizeAzureSpeechDirect,
   resolveAzureSpeechCreds,
   resolveSpeakToolParams,
+  assistantReplyText,
+  pickLastAssistantReply,
 } from "./lib/realtime-tts-batch.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
 // Re-exported so the public test/runtime contract import path
@@ -249,7 +251,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -2022,6 +2024,8 @@ export function createRealtimeControls({ pi, session, config }) {
         vadThreshold: config.vadThreshold,
         summaryContext: !!config.summaryContext,
         chimeEnabled: !!config.chimeEnabled,
+        speakReplies: !!config.speakReplies,
+        speakThinking: !!config.speakThinking,
         lastInputMode: session.lastTurnInputMode || null,
         previousModel: config.previousModel || null,
         state: session.state.snapshot({ sttOnly: !!config.sttOnly, audioEnabled: !!config.audioEnabled, lastInputMode: session.lastTurnInputMode || null }),
@@ -2070,6 +2074,23 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setChime(enabled, ctx) {
       config.chimeEnabled = !!enabled;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    // bd-095b3d: auto-speak the REAL agent's replies (and, opt-in, its thinking
+    // summaries) aloud. Persisted (agentUtils.realtime) so they are durable in
+    // settings.json and survive restarts, like voice/speed.
+    setSpeakReplies(enabled, ctx) {
+      config.speakReplies = !!enabled;
+      persistRealtimeSetting("speakReplies", config.speakReplies);
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    setSpeakThinking(enabled, ctx) {
+      config.speakThinking = !!enabled;
+      persistRealtimeSetting("speakThinking", config.speakThinking);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2340,6 +2361,46 @@ export default function realtimeAgentExtension(pi) {
       }
       return undefined;
     });
+  });
+
+  // bd-095b3d: auto-speak the REAL Pi agent's replies aloud when speak-replies
+  // mode is on. Pairs with `/rt stt local-vad` (operator speech -> the real agent
+  // via sendUserMessage) to make n=1 a genuine voiced agent loop with the
+  // operator's own tools/history/MCP. Reuses the same direct-Azure synth+play as
+  // the `speak` tool; env supplies the cascade voice/speaker. speakThinking
+  // additionally voices a reasoning/thinking summary before the reply.
+  let lastSpokenReplyKey = null;
+  async function speakTextDirect(text, ctx) {
+    const body = String(text || "").trim();
+    if (!body) return;
+    const { voice, speakerProfileId, lang, speed } = resolveSpeakToolParams({ text: body }, { env: process.env });
+    if (!voice) return; // no concrete Azure voice configured; stay silent rather than throw
+    const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
+    try {
+      const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, endpoint, apiKey });
+      if (pcm && pcm.length) {
+        markAssistantSpeaking(audioDurationMs(pcm));
+        await playPcmBuffer(pcm, config.playbackCommand || defaultPlaybackCommand(), (m, l) => { try { ctx?.ui?.notify?.(m, l); } catch {} }, config.debug);
+      }
+    } catch (e) {
+      try { ctx?.ui?.notify?.(`speak-replies failed: ${e?.message || String(e)}`, "warning"); } catch {}
+    }
+  }
+
+  pi.on("agent_end", async (event, ctx) => {
+    if (!config.speakReplies || !config.audioEnabled) return;
+    const messages = Array.isArray(event?.messages) ? event.messages : [];
+    const { text, key } = pickLastAssistantReply(messages);
+    if (!text) return; // tool-call-only / empty turn: nothing to speak
+    if (key && key === lastSpokenReplyKey) return; // dedupe: agent_end can re-fire
+    lastSpokenReplyKey = key;
+    const speakCtx = ctx || session.lastCtx;
+    if (config.speakThinking) {
+      const last = [...messages].reverse().find((m) => m && m.role === "assistant");
+      const think = thinkingSummaryText(last);
+      if (think && think !== text) { try { await speakTextDirect(think, speakCtx); } catch {} }
+    }
+    await speakTextDirect(text, speakCtx);
   });
 
   pi.on("session_shutdown", async () => {
@@ -2977,6 +3038,24 @@ export default function realtimeAgentExtension(pi) {
         const enabled = parseBooleanValue(value);
         controls.setSummaryContext(enabled, ctx);
         ctx.ui.notify(`Realtime summary context ${enabled ? "true" : "false"}`, "info");
+      } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    if (verb === "speak-replies" || verb === "speak_replies" || verb === "replies") {
+      if (!value) { ctx.ui.notify(`Realtime speak-replies ${controls.snapshot().speakReplies ? "on" : "off"}. Use /rt speak-replies [on|off] to auto-speak the agent's replies aloud.`, "info"); return; }
+      try {
+        const enabled = parseBooleanValue(value);
+        controls.setSpeakReplies(enabled, ctx);
+        ctx.ui.notify(`Realtime speak-replies ${enabled ? "on" : "off"}`, "info");
+      } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    if (verb === "speak-thinking" || verb === "speak_thinking" || verb === "thinking") {
+      if (!value) { ctx.ui.notify(`Realtime speak-thinking ${controls.snapshot().speakThinking ? "on" : "off"}. Use /rt speak-thinking [on|off] to also voice reasoning summaries.`, "info"); return; }
+      try {
+        const enabled = parseBooleanValue(value);
+        controls.setSpeakThinking(enabled, ctx);
+        ctx.ui.notify(`Realtime speak-thinking ${enabled ? "on" : "off"}`, "info");
       } catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }

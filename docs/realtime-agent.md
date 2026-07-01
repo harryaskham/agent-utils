@@ -297,10 +297,35 @@ agent can call directly: it synthesizes via the direct Azure Speech REST path
 
 Pair it with `/rt stt local-vad` so your speech becomes agent turns and the
 loaded Pi agent replies out loud in the configured voice with low latency — the
-Pi agent IS the cascade brain (bd-15beec). The cascade peer routing now runs an
-unpinned `n=1` peer through Pi's own inference on the loaded model (see Cascade
-below); making the agent reply *exclusively* via `speak` (mandatory voice mode)
-and wiring it into `/cascade start n=1` is the remaining slice.
+Pi agent IS the cascade brain (bd-15beec).
+
+### Spoken replies, the fast way (`/rt speak-replies`, bd-095b3d)
+
+`speak-replies` is the low-latency completion of the hands-free loop: it auto-
+speaks the **real** Pi agent's replies through the direct-Azure path (no daemon
+round-trip, the configured cascade voice), so `/rt stt local-vad` + `speak-replies`
+gives you a genuine voiced agent — your speech drives your actual agent (with your
+tools, MCP, and session history via `sendUserMessage`), and its reply is spoken
+back. Unlike `force-agent-speech` (which speaks a truncated precis via the TTS
+daemon), this speaks the full reply via the fast direct-Azure REST path.
+
+```text
+/rt speak-replies on        # off | on ; or env-style: /rt speak_replies=on
+/rt speak-thinking on       # opt-in: also voice reasoning/thinking summaries (default off)
+```
+
+- Off by default. Both are **durable in `settings.json`** (`agentUtils.realtime.speakReplies`
+  / `.speakThinking`) and toggleable at runtime, with env > persisted > default
+  (`PI_RT_SPEAK_REPLIES` / `PI_RT_SPEAK_THINKING`); env is never written back.
+- Voice/speaker/lang/speed come from the same `PI_CASCADE_*` / `speak`-tool creds
+  above; speed is applied as an Azure SSML `<prosody rate>` (speed 1.2 → `+20%`).
+- Fired on the `agent_end` event; tool-call-only / empty turns are skipped and a
+  reply is de-duplicated so it is never spoken twice. Requires audio enabled.
+
+**Architecture:** a single-agent voice loop (`n=1`) is just `stt local-vad` +
+`speak-replies` — both hit your real agent. `/cascade` is the multi-participant
+group-chat layer (`n>=2`, per-participant voices/models) built over the same
+primitives.
 
 ### Replay the latest spoken response
 

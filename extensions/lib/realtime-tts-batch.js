@@ -234,6 +234,63 @@ export function resolveSpeakToolParams(params = {}, { env = process.env } = {}) 
   return { text, voice, speakerProfileId, lang, speed };
 }
 
+// --- Auto-speak agent replies (bd-095b3d) ---
+//
+// When the operator is in a voice session (/rt stt local-vad feeds their speech
+// to the REAL Pi agent via sendUserMessage), "speak-replies" mode auto-speaks the
+// agent's own reply so n=1 is genuinely the operator's agent (tools/history/MCP)
+// with voice I/O, not a stateless completion. These pure helpers extract the
+// spoken text from an agent_end message list; the extension gates + synthesises.
+
+/// Extract the spoken text from one assistant message. Tolerates string content
+/// and the array-of-parts shape; returns "" for tool-call-only / empty turns. Pure.
+export function assistantReplyText(message) {
+  if (!message || message.role !== "assistant") return "";
+  const c = message.content;
+  if (typeof c === "string") return c.trim();
+  if (Array.isArray(c)) {
+    return c
+      .filter((p) => p && (p.type === "text" || typeof p === "string"))
+      .map((p) => (typeof p === "string" ? p : (p.text || "")))
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
+/// From an agent_end message list, return { text, key } for the most recent
+/// assistant reply. `key` (timestamp:textPrefix) lets the caller dedupe so a
+/// reply is never spoken twice. text is "" when the last assistant turn has no
+/// speakable text (e.g. a tool-call-only turn). Pure.
+export function pickLastAssistantReply(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  const last = [...list].reverse().find((m) => m && m.role === "assistant");
+  if (!last) return { text: "", key: "" };
+  const text = assistantReplyText(last);
+  const key = text ? `${last.timestamp ?? ""}:${text.slice(0, 64)}` : "";
+  return { text, key };
+}
+
+/// Extract a thinking/reasoning summary from an assistant message, if the model
+/// surfaced one — content parts of type thinking/reasoning/reasoning_summary, or a
+/// top-level reasoning/thinking field. Returns "" when none. Only voiced when the
+/// opt-in speakThinking mode is on (off by default); a no-op if Pi doesn't expose
+/// summaries in the message. Pure. (bd-095b3d)
+export function thinkingSummaryText(message) {
+  if (!message || message.role !== "assistant") return "";
+  const c = message.content;
+  if (Array.isArray(c)) {
+    const t = c
+      .filter((p) => p && (p.type === "thinking" || p.type === "reasoning" || p.type === "reasoning_summary"))
+      .map((p) => (typeof p === "string" ? p : (p.text || p.summary || p.thinking || "")))
+      .join("")
+      .trim();
+    if (t) return t;
+  }
+  const r = message.reasoning ?? message.reasoningText ?? message.thinking ?? message.thinkingSummary;
+  return typeof r === "string" ? r.trim() : "";
+}
+
 /// Synthesize `text` to a raw PCM16/24k/mono Buffer via a DIRECT Azure Speech
 /// REST call (no subprocess): POST <endpoint>/cognitiveservices/v1 with the mstts
 /// SSML body (voice + ttsembedding speakerProfileId + lang + prosody). The

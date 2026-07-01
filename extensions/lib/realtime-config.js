@@ -53,6 +53,16 @@ export function buildServerVadTurnDetection(options = {}) {
 }
 
 export function makeInitialConfig(options = {}) {
+  // Resolve a boolean config field with env > persisted(settings.json) > default
+  // (bd-095b3d): a non-empty env value wins; else a boolean persisted value; else
+  // the default. env is never written back (durable-settings contract, bd-b45224).
+  function boolEnvPersistedDefault(envRaw, persistedVal, dflt) {
+    if (envRaw !== undefined && envRaw !== null && String(envRaw).trim() !== "") {
+      return /^(1|true|yes|on)$/i.test(String(envRaw).trim());
+    }
+    if (typeof persistedVal === "boolean") return persistedVal;
+    return dflt;
+  }
   // Persisted runtime /rt value settings (bd-7217db). Precedence is
   // env (PI_RT_*/OPENAI_*/AZURE_*) > persisted settings.json > default, so an
   // explicit env override always wins and persistence only fills the gap.
@@ -101,6 +111,14 @@ export function makeInitialConfig(options = {}) {
     desiredListenMode: null,
     summaryContext: envBool("PI_RT_SUMMARY", false),
     chimeEnabled: envBool("PI_RT_CHIME", true),
+    // Auto-speak the REAL Pi agent's replies aloud (bd-095b3d). Off by default;
+    // toggled via `/rt speak-replies on` and durable in settings.json
+    // (agentUtils.realtime.speakReplies). Pairs with `/rt stt local-vad` (your
+    // speech -> your real agent) to make n=1 a genuine voiced agent loop.
+    // speakThinking additionally voices reasoning/thinking summaries when the
+    // model surfaces them (off by default). env > persisted > default.
+    speakReplies: boolEnvPersistedDefault(env("PI_RT_SPEAK_REPLIES"), persisted.speakReplies, false),
+    speakThinking: boolEnvPersistedDefault(env("PI_RT_SPEAK_THINKING"), persisted.speakThinking, false),
     defaultModelSnapshot: null,
   };
 }
