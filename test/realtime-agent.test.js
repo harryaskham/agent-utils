@@ -9,6 +9,7 @@ import realtimeAgentExtension, {
   buildServerVadTurnDetection,
   setRealtimeWebSocketConstructor,
   __setLocalVadHooksForTest,
+  labelUntrustedTranscript,
 } from "../extensions/realtime-agent.js";
 import { EventEmitter } from "node:events";
 import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
@@ -1023,9 +1024,13 @@ test("/rt stt shows partial transcripts and queues completed transcripts as foll
     await waitFor(() => harness.statuses.get("rt-transcript") === "◇ queue this while busy");
 
     assert.equal(harness.statuses.get("rt-transcript"), "◇ queue this while busy");
-    assert.deepEqual(harness.sentUserMessages, [
-      { content: "queue this while busy", options: { deliverAs: "followUp", streamingBehavior: "followUp" } },
-    ]);
+    assert.equal(harness.sentUserMessages.length, 1);
+    assert.match(harness.sentUserMessages[0].content, /queue this while busy$/);
+    assert.ok(
+      harness.sentUserMessages[0].content.includes("untrusted audio transcript"),
+      "STT-only transcript is labelled as untrusted before injection (bd-caed3f)",
+    );
+    assert.deepEqual(harness.sentUserMessages[0].options, { deliverAs: "followUp", streamingBehavior: "followUp" });
     assert.equal(harness.pi.realtime.snapshot().state.lastInputMode, "transcript");
   } finally {
     await harness.commands.get("rt-off").handler("", harness.ctx);
@@ -1785,7 +1790,11 @@ test("/rt stt local-vad captures, segments, batch-transcribes, and sends a commi
 
     await waitFor(() => sentUserMessages.length > 0, { timeoutMs: 2000 });
     assert.equal(sentUserMessages.length, 1, "the committed turn was sent as a user message");
-    assert.equal(sentUserMessages[0].content, "hello there");
+    assert.match(sentUserMessages[0].content, /hello there$/);
+    assert.ok(
+      sentUserMessages[0].content.includes("untrusted audio transcript"),
+      "local-vad transcript is labelled as untrusted before injection (bd-caed3f)",
+    );
     assert.equal(sentUserMessages[0].options?.deliverAs, "followUp");
     assert.ok(transcribeCalls.length >= 1, "batch transcribe ran over the segment audio");
     assert.equal(transcribeCalls.at(-1).model, "mai-transcribe-1.5", "uses the decoupled batch model, not the realtime model");
@@ -2086,5 +2095,25 @@ test("probeConnect classifies connected / session-start-1006 / ga-only / auth (b
     if (orig === undefined) delete process.env.PI_RT_API_KEY; else process.env.PI_RT_API_KEY = orig;
     if (origOai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = origOai;
     if (origAz === undefined) delete process.env.PI_RT_DIRECT_AZURE; else process.env.PI_RT_DIRECT_AZURE = origAz;
+  }
+});
+
+test("labelUntrustedTranscript prefixes STT transcripts with an untrusted-content warning (bd-caed3f)", () => {
+  const prev = process.env.PI_RT_STT_UNTRUSTED_LABEL;
+  try {
+    delete process.env.PI_RT_STT_UNTRUSTED_LABEL;
+    const labelled = labelUntrustedTranscript("open the pod bay doors");
+    assert.ok(labelled.includes("untrusted audio transcript"), "adds the untrusted-content label");
+    assert.match(labelled, /open the pod bay doors$/, "keeps the original transcript at the end");
+    // Empty input is passed through unchanged (no bare label on nothing).
+    assert.equal(labelUntrustedTranscript(""), "");
+    // Opt-out returns the raw transcript.
+    process.env.PI_RT_STT_UNTRUSTED_LABEL = "0";
+    assert.equal(labelUntrustedTranscript("raw please"), "raw please");
+    process.env.PI_RT_STT_UNTRUSTED_LABEL = "false";
+    assert.equal(labelUntrustedTranscript("raw please"), "raw please");
+  } finally {
+    if (prev === undefined) delete process.env.PI_RT_STT_UNTRUSTED_LABEL;
+    else process.env.PI_RT_STT_UNTRUSTED_LABEL = prev;
   }
 });
