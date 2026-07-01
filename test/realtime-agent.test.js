@@ -1807,6 +1807,33 @@ test("/rt stt local-vad captures, segments, batch-transcribes, and sends a commi
   }
 });
 
+test("/rt stt=local-vad (k=v form) routes to local-vad, not regular stt-vad (bd-8e46eb)", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "x" });
+  try {
+    const { pi, commands, handlers, ctx } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+    // The env-style k=v form must spawn the local capture proc (startLocalVad) —
+    // regular stt-vad takes the WebSocket path and spawns no capture, so a capture
+    // proc existing proves the fix routed correctly.
+    await commands.get("rt").handler("stt=local-vad", ctx);
+    assert.ok(captures.at(-1), "k=v stt=local-vad started the local-vad capture");
+    await commands.get("rt").handler("stt stop", ctx);
+    assert.ok(captures.at(-1).killed, "stop killed the k=v-started local-vad capture");
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
+
 test("/rt stt local-vad surfaces the first transcribe failure to the operator (bd-43512a)", async () => {
   let captured;
   const captureFn = () => {

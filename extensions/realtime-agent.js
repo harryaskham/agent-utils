@@ -2865,7 +2865,13 @@ export default function realtimeAgentExtension(pi) {
       controls.showStatus(ctx);
       return { lines: [line, ...controls.statusLines()], snapshot: controls.snapshot(), probe: r };
     }
-    if (params.stt) return startRealtime(ctx, { sttOnly: true, listenMode: params.stt === "ptt" ? "ptt" : "vad" });
+    if (params.stt) {
+      // bd-8e46eb: the k=v form stt=local-vad must route to the local capture +
+      // batch-stt path (like the positional `/rt stt local-vad`), not silently
+      // fall through to regular server-VAD stt.
+      if (params.stt === "local-vad" || params.stt === "localvad" || params.stt === "local_vad") return startLocalVad(ctx);
+      return startRealtime(ctx, { sttOnly: true, listenMode: params.stt === "ptt" ? "ptt" : "vad" });
+    }
     if (params.mic || params.listen) return controls.listen(ctx, params.mic || params.listen);
     if (action) {
       if (action === "stop" || action === "off") return controls.disable(ctx, { restoreModel: true });
