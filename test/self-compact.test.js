@@ -6,27 +6,42 @@ import selfCompactExtension, {
   sanitizeInstructions,
 } from "../extensions/self-compact.js";
 
+// bd-d71947: self_compact triggers compaction via the ExtensionContext's
+// `ctx.compact({ customInstructions })` (the 5th arg to a tool's execute), NOT
+// via pi.sendUserMessage("/compact") (which only replays text, never dispatches
+// the slash command, so no compaction ran).
 function makeHarness({ now } = {}) {
   const tools = new Map();
-  const userMessages = [];
+  const compactCalls = [];
   const handlers = new Map();
   const pi = {
     registerTool(definition) { tools.set(definition.name, definition); },
-    sendUserMessage(message, options) { userMessages.push({ message, options }); },
     on(event, handler) {
       const arr = handlers.get(event) || [];
       arr.push(handler);
       handlers.set(event, arr);
     },
   };
+  // The ExtensionContext handed to a tool's execute (5th arg). compact() is the
+  // documented fire-and-forget compaction trigger.
+  const ctx = {
+    hasUI: false,
+    compact(options) { compactCalls.push(options); },
+  };
   const emit = (event, payload) => {
     for (const h of handlers.get(event) || []) h(payload);
   };
-  return { pi, tools, userMessages, handlers, emit };
+  return { pi, ctx, tools, compactCalls, handlers, emit };
 }
 
 function load(pi, opts) {
   return selfCompactExtension(pi, opts);
+}
+
+// Invoke the tool with the ctx as the 5th execute arg, matching Pi's real
+// ToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx) signature.
+function run(h, toolCallId, params) {
+  return h.tools.get("self_compact").execute(toolCallId, params, null, null, h.ctx);
 }
 
 test("registers a self_compact agent-visible tool", () => {
@@ -40,94 +55,91 @@ test("registers a self_compact agent-visible tool", () => {
   assert.ok(tool.parameters?.properties?.dryRun, "should accept dryRun param");
 });
 
-test("execute queues /compact as a follow-up user message", async () => {
+test("execute triggers ctx.compact (real compaction, no user-message replay)", async () => {
   const h = makeHarness();
   load(h.pi);
-  const result = await h.tools.get("self_compact").execute("tool-1", {}, null, null, {});
-  assert.equal(h.userMessages.length, 1);
-  assert.equal(h.userMessages[0].message, "/compact");
-  assert.equal(h.userMessages[0].options.deliverAs, "followUp");
-  assert.equal(h.userMessages[0].options.streamingBehavior, "followUp");
+  const result = await run(h, "tool-1", {});
+  assert.equal(h.compactCalls.length, 1, "ctx.compact should be called once");
+  assert.equal(h.compactCalls[0].customInstructions, undefined, "no instructions -> undefined");
+  assert.equal(typeof h.compactCalls[0].onError, "function", "should pass an onError handler");
   assert.equal(result.details.queued, true);
   assert.equal(result.details.command, "/compact");
 });
 
-test("execute with instructions queues /compact <instructions>", async () => {
+test("execute with instructions passes sanitized customInstructions to ctx.compact", async () => {
   const h = makeHarness();
   load(h.pi);
-  const result = await h.tools
-    .get("self_compact")
-    .execute("tool-1", { instructions: "focus on the current bead implementation" }, null, null, {});
-  assert.equal(h.userMessages[0].message, "/compact focus on the current bead implementation");
+  const result = await run(h, "tool-1", { instructions: "focus on the current bead implementation" });
+  assert.equal(h.compactCalls.length, 1);
+  assert.equal(h.compactCalls[0].customInstructions, "focus on the current bead implementation");
+  assert.equal(result.details.command, "/compact focus on the current bead implementation");
   assert.equal(result.details.queued, true);
 });
 
-test("dry-run reports the command without queuing", async () => {
+test("dry-run reports the command without triggering compaction", async () => {
   const h = makeHarness();
   load(h.pi);
-  const result = await h.tools.get("self_compact").execute("tool-1", { dryRun: true }, null, null, {});
-  assert.equal(h.userMessages.length, 0);
+  const result = await run(h, "tool-1", { dryRun: true });
+  assert.equal(h.compactCalls.length, 0, "dry-run must not compact");
   assert.equal(result.details.queued, false);
   assert.equal(result.details.dryRun, true);
-  assert.match(result.content[0].text, /Would queue `\/compact`/);
+  assert.match(result.content[0].text, /Would trigger compaction \(`\/compact`\)/);
 });
 
 test("rate-limit skips a second self-compaction within the minimum interval", async () => {
   let clock = 1_000_000;
   const h = makeHarness();
   load(h.pi, { now: () => clock });
-  const tool = h.tools.get("self_compact");
 
-  const first = await tool.execute("t1", {}, null, null, {});
+  const first = await run(h, "t1", {});
   assert.equal(first.details.queued, true);
-  assert.equal(h.userMessages.length, 1);
+  assert.equal(h.compactCalls.length, 1);
 
   clock += 5_000; // 5s later — within the 30s default window
-  const second = await tool.execute("t2", {}, null, null, {});
+  const second = await run(h, "t2", {});
   assert.equal(second.details.queued, false);
   assert.equal(second.details.reason, "rate_limited");
-  assert.equal(h.userMessages.length, 1, "no second /compact should be queued");
+  assert.equal(h.compactCalls.length, 1, "no second compaction should fire");
 
   clock += 30_000; // now well past the window
-  const third = await tool.execute("t3", {}, null, null, {});
+  const third = await run(h, "t3", {});
   assert.equal(third.details.queued, true);
-  assert.equal(h.userMessages.length, 2);
+  assert.equal(h.compactCalls.length, 2);
 });
 
 test("dry-run is not rate-limited and does not consume the window", async () => {
   let clock = 0;
   const h = makeHarness();
   load(h.pi, { now: () => clock });
-  const tool = h.tools.get("self_compact");
-  await tool.execute("t1", { dryRun: true }, null, null, {});
-  await tool.execute("t2", { dryRun: true }, null, null, {});
-  // A real queue right after dry-runs must still succeed.
-  const real = await tool.execute("t3", {}, null, null, {});
+  await run(h, "t1", { dryRun: true });
+  await run(h, "t2", { dryRun: true });
+  // A real compaction right after dry-runs must still succeed.
+  const real = await run(h, "t3", {});
   assert.equal(real.details.queued, true);
-  assert.equal(h.userMessages.length, 1);
+  assert.equal(h.compactCalls.length, 1);
 });
 
 test("session_compact event advances the rate-limit reference point", async () => {
   let clock = 0;
   const h = makeHarness();
   load(h.pi, { now: () => clock });
-  const tool = h.tools.get("self_compact");
 
   clock = 10_000;
   h.emit("session_compact", {}); // a real compaction happened at t=10s
   clock = 20_000; // 10s after the compaction — still within the 30s window
-  const blocked = await tool.execute("t1", {}, null, null, {});
+  const blocked = await run(h, "t1", {});
   assert.equal(blocked.details.queued, false, "should be rate-limited relative to the actual compaction");
-  assert.equal(h.userMessages.length, 0);
+  assert.equal(h.compactCalls.length, 0);
 });
 
-test("missing sendUserMessage is reported, not thrown", async () => {
+test("missing ctx.compact is reported, not thrown", async () => {
   const h = makeHarness();
-  delete h.pi.sendUserMessage;
   load(h.pi);
-  const result = await h.tools.get("self_compact").execute("t1", {}, null, null, {});
+  // Simulate a runtime whose ExtensionContext has no compact().
+  const result = await h.tools.get("self_compact").execute("t1", {}, null, null, { hasUI: false });
   assert.equal(result.details.queued, false);
   assert.equal(result.details.reason, "unsupported");
+  assert.equal(h.compactCalls.length, 0);
 });
 
 test("disabled via PI_SELF_COMPACT_TOOL=0 registers no tool", () => {

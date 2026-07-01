@@ -1,13 +1,16 @@
-// Pi extension: agent-visible `self_compact` tool (bd-94599a).
+// Pi extension: agent-visible `self_compact` tool (bd-94599a, bd-d71947).
 //
 // Lets a long-running agent autonomously trigger compaction of its OWN
 // conversation/context — equivalent to a user-issued `/compact` — without
-// requiring operator intervention. This mirrors the queue-a-follow-up pattern
-// used by pi-self-update's `pi_restart` tool: the tool queues the `/compact`
-// slash command as a follow-up user message, so it has the same effect as the
-// user typing `/compact [instructions]`. Pi's `session_before_compact` event
-// documents `source: "extension"` for compaction triggered this way, confirming
-// sendUserMessage("/compact") is the supported user-equivalent trigger.
+// requiring operator intervention. It calls the documented extension
+// compaction API `ctx.compact({ customInstructions })` (the 5th argument to a
+// tool's `execute` is the `ExtensionContext`), which is the fire-and-forget
+// trigger Pi provides for exactly this (see examples/extensions/trigger-compact.ts).
+//
+// bd-d71947: the previous implementation used
+// `pi.sendUserMessage("/compact", { deliverAs: "followUp" })`, but that only
+// REPLAYS "/compact" as a follow-up user message — it is never dispatched as a
+// slash command, so no compaction actually ran.
 //
 // A rate-limit guard prevents duplicate/recursive compaction (no second
 // self-compaction within a minimum interval), matching the pi-self-compact
@@ -88,12 +91,13 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
         }),
       ),
     }),
-    async execute(_toolCallId, params = {}) {
+    async execute(_toolCallId, params = {}, _signal, _onUpdate, ctx) {
       const command = buildCompactCommand(params.instructions);
+      const customInstructions = sanitizeInstructions(params.instructions) || undefined;
 
       if (params.dryRun) {
         return {
-          content: [{ type: "text", text: `Would queue \`${command}\` as a follow-up to compact this agent's own context.` }],
+          content: [{ type: "text", text: `Would trigger compaction (\`${command}\`) of this agent's own context.` }],
           details: { command, queued: false, dryRun: true, minIntervalMs },
         };
       }
@@ -115,20 +119,30 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
         };
       }
 
-      if (typeof pi.sendUserMessage !== "function") {
+      if (!ctx || typeof ctx.compact !== "function") {
         return {
-          content: [{ type: "text", text: "Cannot self-compact: pi.sendUserMessage is unavailable in this runtime." }],
+          content: [{ type: "text", text: "Cannot self-compact: the compaction API (ctx.compact) is unavailable in this runtime." }],
           details: { command, queued: false, reason: "unsupported" },
         };
       }
 
       lastQueuedAt = t;
-      pi.sendUserMessage(command, { deliverAs: "followUp", streamingBehavior: "followUp" });
+      // Real, fire-and-forget compaction trigger (bd-d71947). ctx.compact()
+      // actually runs compaction; the old pi.sendUserMessage("/compact") only
+      // replayed the text and never dispatched the command.
+      ctx.compact({
+        customInstructions,
+        onError: (err) => {
+          if (ctx.hasUI && typeof ctx.ui?.notify === "function") {
+            ctx.ui.notify(`self-compact failed: ${err?.message || err}`, "error");
+          }
+        },
+      });
       return {
         content: [
           {
             type: "text",
-            text: `Queued \`${command}\` — this agent will compact its own context on the next turn, equivalent to a user-issued /compact.`,
+            text: `Triggering compaction (\`${command}\`) — this agent will compact its own context, equivalent to a user-issued /compact.`,
           },
         ],
         details: { command, queued: true, minIntervalMs },
