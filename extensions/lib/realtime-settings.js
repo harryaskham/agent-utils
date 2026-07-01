@@ -159,3 +159,69 @@ export function persistRealtimeSetting(field, value, path = agentSettingsPath())
     return false;
   }
 }
+
+// --- Durable cascade + STT defaults (bd-b45224) ---
+//
+// Harry's contract: env WINS at runtime, but an env-derived value must NEVER be
+// written back into settings.json (env is a runtime-only override; only explicit
+// user changes persist). makeInitialConfig / cascadeRosterFromArgs read these
+// persisted slices as a precedence layer BELOW env and above hardcoded defaults,
+// and never write during resolution. Cascade previously had no persisted slice
+// at all (env + /cascade args only); STT fields (transcriptionModel/vadThreshold)
+// were only under agentUtils.realtime — agentUtils.stt is an explicit alias slice
+// so an operator can put durable stt defaults in their own block. Same
+// read-merge-write model as realtime: writes touch ONLY the named slice.
+export const PERSISTED_CASCADE_FIELDS = [
+  "voice", "model", "baseUrl", "ttsModel", "provider",
+  "speakerProfileId", "lang", "speed", "azure",
+];
+export const PERSISTED_STT_FIELDS = [
+  "transcriptionModel", "vadThreshold", "backend",
+];
+
+const PERSISTED_CASCADE_SET = new Set(PERSISTED_CASCADE_FIELDS);
+const PERSISTED_STT_SET = new Set(PERSISTED_STT_FIELDS);
+
+// Read an agentUtils.<slice> object, or {} when missing/malformed.
+function readPersistedSlice(sliceKey, path) {
+  const all = readJsonIfExists(path);
+  const s = all && all.agentUtils && all.agentUtils[sliceKey];
+  return s && typeof s === "object" && !Array.isArray(s) ? s : {};
+}
+
+// Persist one field into agentUtils.<slice>.<field> via read-merge-write,
+// touching only that slice. Non-fatal: false on unknown field or IO error.
+function persistSliceSetting(sliceKey, fieldSet, field, value, path) {
+  if (!fieldSet.has(field)) return false;
+  try {
+    const all = readJsonIfExists(path) || {};
+    if (!all.agentUtils || typeof all.agentUtils !== "object" || Array.isArray(all.agentUtils)) {
+      all.agentUtils = {};
+    }
+    if (
+      !all.agentUtils[sliceKey] ||
+      typeof all.agentUtils[sliceKey] !== "object" ||
+      Array.isArray(all.agentUtils[sliceKey])
+    ) {
+      all.agentUtils[sliceKey] = {};
+    }
+    all.agentUtils[sliceKey][field] = value;
+    writeFileSync(path, JSON.stringify(all, null, 2) + "\n");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function readPersistedCascadeSettings(path = agentSettingsPath()) {
+  return readPersistedSlice("cascade", path);
+}
+export function readPersistedSttSettings(path = agentSettingsPath()) {
+  return readPersistedSlice("stt", path);
+}
+export function persistCascadeSetting(field, value, path = agentSettingsPath()) {
+  return persistSliceSetting("cascade", PERSISTED_CASCADE_SET, field, value, path);
+}
+export function persistSttSetting(field, value, path = agentSettingsPath()) {
+  return persistSliceSetting("stt", PERSISTED_STT_SET, field, value, path);
+}

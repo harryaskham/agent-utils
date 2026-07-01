@@ -7,7 +7,7 @@
 
 import { env, envBool, numberEnv, parseRealtimeSpeed, parseVadThreshold } from "./realtime-helpers.js";
 import { normalizeRealtimeModelId, normalizeTranscriptionModel, resolveRealtimeVoice } from "./realtime-models.js";
-import { readPersistedRealtimeSettings } from "./realtime-settings.js";
+import { readPersistedRealtimeSettings, readPersistedSttSettings } from "./realtime-settings.js";
 
 // Default direct-Azure realtime target: the gpt-realtime-2 GA deployment in the
 // canadacentral sandbox (a proven, shared endpoint — gpt-realtime-whisper lives
@@ -58,6 +58,11 @@ export function makeInitialConfig(options = {}) {
   // explicit env override always wins and persistence only fills the gap.
   // Tests pass options.persisted to stay deterministic regardless of host state.
   const persisted = options.persisted ?? readPersistedRealtimeSettings();
+  // Durable STT defaults (bd-b45224): the stt-specific fields (transcriptionModel,
+  // vadThreshold) also read from the explicit agentUtils.stt slice as a fallback
+  // BELOW the realtime slice, so an operator can keep durable stt defaults in
+  // their own block. env still wins at runtime and is never written back.
+  const persistedStt = options.persistedStt ?? readPersistedSttSettings();
   return {
     baseUrl: (env("PI_RT_BASE_URL", "OPENAI_BASE_URL") ?? persisted.baseUrl) || "https://api.openai.com",
     model: normalizeRealtimeModelId(env("PI_RT_MODEL", "OPENAI_REALTIME_MODEL") ?? persisted.model),
@@ -72,10 +77,10 @@ export function makeInitialConfig(options = {}) {
     // the old 2025-04-01-preview path was deprecated 2026-04-30 (bd-cb74b5).
     azureApiVersion: (env("PI_RT_AZURE_API_VERSION", "AZURE_OPENAI_API_VERSION") ?? persisted.azureApiVersion) || DEFAULT_AZURE_API_VERSION,
     azureProtocol: (env("PI_RT_AZURE_PROTOCOL") ?? persisted.azureProtocol) || "v1",
-    transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL") ?? persisted.transcriptionModel),
+    transcriptionModel: normalizeTranscriptionModel(env("PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL") ?? persisted.transcriptionModel ?? persistedStt.transcriptionModel),
     voice: resolveRealtimeVoice(persisted.voice),
     speed: parseRealtimeSpeed(env("PI_RT_SPEED", "OPENAI_REALTIME_SPEED") ?? persisted.speed, 1.0),
-    vadThreshold: parseVadThreshold(env("PI_RT_VAD_THRESHOLD") ?? persisted.vadThreshold, 0.7),
+    vadThreshold: parseVadThreshold(env("PI_RT_VAD_THRESHOLD") ?? persisted.vadThreshold ?? persistedStt.vadThreshold, 0.7),
     bufferMs: Number(env("PI_RT_BUFFER_MS", "TTS_REALTIME_BUFFER_MS") || 180),
     playbackChunkMs: Number(env("PI_RT_PLAYBACK_CHUNK_MS") || 80),
     reasoningEffort: env("PI_RT_REASONING_EFFORT") || "off",

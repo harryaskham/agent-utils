@@ -11,6 +11,12 @@ import {
   PERSISTED_REALTIME_FIELDS,
   persistRealtimeSetting,
   readPersistedRealtimeSettings,
+  PERSISTED_CASCADE_FIELDS,
+  PERSISTED_STT_FIELDS,
+  persistCascadeSetting,
+  readPersistedCascadeSettings,
+  persistSttSetting,
+  readPersistedSttSettings,
 } from "../extensions/lib/realtime-settings.js";
 import { makeInitialConfig } from "../extensions/lib/realtime-config.js";
 
@@ -163,6 +169,102 @@ test("makeInitialConfig precedence: env > persisted > default", () => {
     assert.equal(c3.azureProtocol, "v1");
     assert.equal(c3.vadThreshold, 0.7);
     assert.equal(c3.directAzure, true, "default direct-azure (bd-8b6f12)");
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+});
+
+// --- Durability: env wins at runtime but is NEVER written to settings.json (bd-b45224) ---
+
+test("config resolution honors env at runtime but NEVER writes env values back to settings.json (bd-b45224)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
+  const path = join(dir, "settings.json");
+  const keys = ["PI_RT_SPEED", "PI_RT_DIRECT_AZURE", "PI_RT_MODEL", "OPENAI_REALTIME_MODEL", "PI_RT_PROVIDER"];
+  const saved = {};
+  for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    // Operator's hand-edited durable settings.json.
+    writeFileSync(path, JSON.stringify({ agentUtils: { realtime: { voice: "marin", speed: 1, directAzure: true } } }, null, 2) + "\n");
+    const before = readFileSync(path, "utf8");
+    // Env provides overrides for THIS run.
+    process.env.PI_RT_SPEED = "1.2";
+    process.env.PI_RT_DIRECT_AZURE = "0";
+    const persisted = readPersistedRealtimeSettings(path);
+    const cfg = makeInitialConfig({ persisted });
+    // env wins for the running config...
+    assert.equal(cfg.speed, 1.2, "env speed overrides persisted at runtime");
+    assert.equal(cfg.directAzure, false, "env directAzure overrides persisted at runtime");
+    assert.equal(cfg.voice, "marin", "persisted voice honored where no env override");
+    // ...but the settings.json file is byte-for-byte unchanged: env is runtime-only.
+    assert.equal(readFileSync(path, "utf8"), before, "config resolution never writes env values into settings.json");
+    // ...and the persisted slice object was not mutated.
+    assert.equal(persisted.speed, 1, "persisted slice not mutated by resolution");
+    assert.equal(persisted.directAzure, true);
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Durable cascade + STT slices (bd-b45224) ---
+
+test("persistCascadeSetting / persistSttSetting round-trip their own agentUtils slice, reject unknown fields", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
+  const path = join(dir, "settings.json");
+  try {
+    assert.deepEqual(readPersistedCascadeSettings(path), {}, "missing -> {}");
+    assert.deepEqual(readPersistedSttSettings(path), {}, "missing -> {}");
+    assert.equal(persistCascadeSetting("voice", "embedding:default", path), true);
+    assert.equal(persistCascadeSetting("speakerProfileId", "0daec43c", path), true);
+    assert.equal(persistSttSetting("transcriptionModel", "whisper-1", path), true);
+    assert.equal(persistSttSetting("vadThreshold", 0, path), true); // 0 is valid
+    const cascade = readPersistedCascadeSettings(path);
+    const stt = readPersistedSttSettings(path);
+    assert.equal(cascade.voice, "embedding:default");
+    assert.equal(cascade.speakerProfileId, "0daec43c");
+    assert.equal(stt.transcriptionModel, "whisper-1");
+    assert.equal(stt.vadThreshold, 0);
+    // Unknown fields rejected.
+    assert.equal(persistCascadeSetting("notAField", "x", path), false);
+    assert.equal(persistSttSetting("notAField", "x", path), false);
+    assert.ok(!PERSISTED_CASCADE_FIELDS.includes("notAField"));
+    assert.ok(!PERSISTED_STT_FIELDS.includes("notAField"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cascade/stt/realtime slice writes never clobber each other or other settings.json slices", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
+  const path = join(dir, "settings.json");
+  try {
+    writeFileSync(path, JSON.stringify({ agentUtils: { graphics: { eink: true } }, theme: "nord" }, null, 2));
+    persistRealtimeSetting("voice", "marin", path);
+    persistCascadeSetting("voice", "embedding:default", path);
+    persistSttSetting("transcriptionModel", "whisper-1", path);
+    const all = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(all.agentUtils.graphics.eink, true, "graphics slice preserved");
+    assert.equal(all.theme, "nord", "top-level preserved");
+    assert.equal(all.agentUtils.realtime.voice, "marin");
+    assert.equal(all.agentUtils.cascade.voice, "embedding:default");
+    assert.equal(all.agentUtils.stt.transcriptionModel, "whisper-1");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("makeInitialConfig falls back stt fields to the agentUtils.stt slice below realtime (bd-b45224)", () => {
+  const keys = ["PI_RT_TRANSCRIPTION_MODEL", "OPENAI_REALTIME_TRANSCRIPTION_MODEL", "PI_RT_VAD_THRESHOLD"];
+  const saved = {};
+  for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    // stt slice fills in when realtime slice + env are absent.
+    const c1 = makeInitialConfig({ persisted: {}, persistedStt: { transcriptionModel: "whisper-1", vadThreshold: 0.55 } });
+    assert.equal(c1.transcriptionModel, "whisper-1", "stt slice supplies transcriptionModel");
+    assert.equal(c1.vadThreshold, 0.55, "stt slice supplies vadThreshold");
+    // realtime slice wins over stt slice.
+    const c2 = makeInitialConfig({ persisted: { transcriptionModel: "gpt-realtime-whisper" }, persistedStt: { transcriptionModel: "whisper-1" } });
+    assert.equal(c2.transcriptionModel, "gpt-realtime-whisper", "realtime slice outranks stt slice");
   } finally {
     for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   }

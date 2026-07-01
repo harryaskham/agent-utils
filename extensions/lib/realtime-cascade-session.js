@@ -16,17 +16,23 @@ import { DEFAULT_ORDER, MODE_CASCADE, buildParticipantRoster } from "./realtime-
 import { runChatCompletionTurn, runPiInferenceTurn } from "./realtime-cascade-llm.js";
 import { synthesizeToPcm, synthesizeAzureSpeechDirect, resolveAzureSpeechCreds, resolveCascadeTtsVoice, isAzureSpeechProvider, AZURE_SPEECH_PROVIDER } from "./realtime-tts-batch.js";
 import { parseEnvStyleArgs } from "./env-args.js";
+import { readPersistedCascadeSettings } from "./realtime-settings.js";
 
 /// Build a cascade roster from a raw `/cascade` argument string. Maps the
 /// env-style args (n=, participants=, order=, plus main overrides voice/model/
 /// base_url/tts/instructions/name) onto buildParticipantRoster. Pure given an
 /// injected `parseArgs` / `env`. Returns { roster, values }.
-export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = parseEnvStyleArgs } = {}) {
+export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = parseEnvStyleArgs, persisted } = {}) {
   const { values } = parseArgs(rawArgs || "");
+  // Durable cascade defaults (bd-b45224): a /cascade arg wins; otherwise fall
+  // back to the persisted agentUtils.cascade slice in settings.json; otherwise
+  // buildParticipantRoster's env/hardcoded default applies. So an operator can
+  // move PI_CASCADE_VOICE etc. into settings.json and drop the env var.
+  const p = persisted ?? readPersistedCascadeSettings();
   // azure=true (operator request): default every agent to the DIRECT Azure Speech
   // provider and route synthesis through the direct REST path (no `tts` subprocess).
-  const directAzureSpeech = /^(1|true|yes|on)$/i.test(String(values.azure ?? "").trim());
-  const defaultProvider = values.provider ?? (directAzureSpeech ? AZURE_SPEECH_PROVIDER : undefined);
+  const directAzureSpeech = /^(1|true|yes|on)$/i.test(String(values.azure ?? p.azure ?? "").trim());
+  const defaultProvider = values.provider ?? p.provider ?? (directAzureSpeech ? AZURE_SPEECH_PROVIDER : undefined);
   const roster = buildParticipantRoster({
     mode: MODE_CASCADE,
     n: values.n,
@@ -34,13 +40,13 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
     order: values.order || DEFAULT_ORDER,
     main: {
       name: values.name,
-      voice: values.voice,
-      model: values.model,
-      baseUrl: values.base_url ?? values.baseurl ?? values.openai_base_url,
-      ttsModel: values.tts ?? values.tts_model ?? values.ttsmodel,
+      voice: values.voice ?? p.voice,
+      model: values.model ?? p.model,
+      baseUrl: values.base_url ?? values.baseurl ?? values.openai_base_url ?? p.baseUrl,
+      ttsModel: values.tts ?? values.tts_model ?? values.ttsmodel ?? p.ttsModel,
       provider: defaultProvider,
-      speakerProfileId: values.speakerprofileid ?? values.speaker_profile_id ?? values.speaker,
-      lang: values.lang ?? values.xml_lang,
+      speakerProfileId: values.speakerprofileid ?? values.speaker_profile_id ?? values.speaker ?? p.speakerProfileId,
+      lang: values.lang ?? values.xml_lang ?? p.lang,
       instructions: values.instructions ?? values.persona,
     },
     env,

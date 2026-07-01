@@ -251,6 +251,21 @@ test("cascadeRosterFromArgs threads a per-main base_url and tts override", () =>
   assert.equal(roster.participants[0].ttsModel, "azure/speech/azure-tts");
 });
 
+test("cascadeRosterFromArgs falls back main fields to the persisted agentUtils.cascade slice; args win (bd-b45224)", () => {
+  const persisted = { voice: "embedding:default", model: "gpt-5-mini", speakerProfileId: "0daec43c", lang: "en-GB", azure: "true" };
+  // No /cascade args for these -> persisted slice supplies them, and azure=true from the slice.
+  const { roster, directAzureSpeech } = cascadeRosterFromArgs("n=1", { env: {}, persisted });
+  assert.equal(roster.participants[0].voice, "embedding:default");
+  assert.equal(roster.participants[0].model, "gpt-5-mini");
+  assert.equal(roster.participants[0].speakerProfileId, "0daec43c");
+  assert.equal(roster.participants[0].lang, "en-GB");
+  assert.equal(directAzureSpeech, true, "azure=true from the persisted cascade slice");
+  // An explicit /cascade arg overrides the persisted slice.
+  const { roster: r2 } = cascadeRosterFromArgs("n=1 voice=cedar model=haiku", { env: {}, persisted });
+  assert.equal(r2.participants[0].voice, "cedar", "arg voice overrides persisted");
+  assert.equal(r2.participants[0].model, "haiku", "arg model overrides persisted");
+});
+
 test("makeCascadeSpeak sanitizes markdown/emoji out of the spoken text before synth", async () => {
   let synthText = null;
   const speak = makeCascadeSpeak({
