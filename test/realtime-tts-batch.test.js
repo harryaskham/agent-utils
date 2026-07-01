@@ -10,6 +10,8 @@ import {
   synthesizeToPcm,
   speedToProsodyRate,
   isAzureSpeechProvider,
+  isAzureEmbeddingBaseModel,
+  azureEmbeddingVoiceError,
   buildAzureSpeechSsml,
   resolveAzureVoiceName,
   DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL,
@@ -107,6 +109,44 @@ test("isAzureSpeechProvider matches azure-speech only", () => {
   assert.equal(isAzureSpeechProvider("AZURE-SPEECH"), true);
   assert.equal(isAzureSpeechProvider("openai"), false);
   assert.equal(isAzureSpeechProvider(undefined), false);
+});
+
+test("isAzureEmbeddingBaseModel recognizes Dragon/Phoenix base models (bd-5d4784)", () => {
+  assert.equal(isAzureEmbeddingBaseModel("DragonLatestNeural"), true);
+  assert.equal(isAzureEmbeddingBaseModel("PhoenixLatestNeural"), true);
+  assert.equal(isAzureEmbeddingBaseModel("en-US-DragonLatestNeural"), true);
+  assert.equal(isAzureEmbeddingBaseModel("MAI-Voice-2"), false);
+  assert.equal(isAzureEmbeddingBaseModel(""), false);
+  assert.equal(isAzureEmbeddingBaseModel(undefined), false);
+});
+
+test("azureEmbeddingVoiceError fails fast only for non-base-model embedding voices (bd-5d4784)", () => {
+  // not azure-speech, or no speaker profile -> no error
+  assert.equal(azureEmbeddingVoiceError({ provider: "openai", voice: "MAI-Voice-2", speakerProfileId: "abc" }), null);
+  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "MAI-Voice-2" }), null);
+  // base model (incl. locale-prefixed) -> no error
+  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "DragonLatestNeural", speakerProfileId: "abc" }), null);
+  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "en-US-PhoenixLatestNeural", speakerProfileId: "abc" }), null);
+  // sentinel/empty default voice -> defer to provider default, no error
+  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: CASCADE_DEFAULT_VOICE_SENTINEL, speakerProfileId: "abc" }), null);
+  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "", speakerProfileId: "abc" }), null);
+  // explicit non-base-model voice + speaker profile -> actionable error
+  const err = azureEmbeddingVoiceError({ provider: "azure-speech", voice: "MAI-Voice-2", speakerProfileId: "ee6ff3bb" });
+  assert.ok(err, "returns an error message");
+  assert.match(err, /DragonLatestNeural/);
+  assert.match(err, /PhoenixLatestNeural/);
+  assert.match(err, /HTTP 400/);
+  assert.match(err, /speaker=ee6ff3bb/);
+});
+
+test("synthesizeToPcm rejects a bad azure embedding voice WITHOUT spawning tts (bd-5d4784)", async () => {
+  let spawned = false;
+  const spawnImpl = () => { spawned = true; throw new Error("should not spawn"); };
+  await assert.rejects(
+    () => synthesizeToPcm("hello", { provider: "azure-speech", voice: "MAI-Voice-2", speakerProfileId: "ee6ff3bb", spawnImpl }),
+    /not an Azure base model/,
+  );
+  assert.equal(spawned, false, "must fail fast before spawning tts");
 });
 
 test("buildTtsBatchArgs emits SSML body for azure-speech (no --speed) and plain text otherwise", () => {

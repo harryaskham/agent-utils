@@ -99,6 +99,36 @@ export function isAzureSpeechProvider(provider) {
   return String(provider ?? "").trim().toLowerCase() === AZURE_SPEECH_PROVIDER;
 }
 
+// bd-5d4784: Azure personal/embedding voices (mstts ttsembedding, i.e. a
+// speakerProfileId is set) REQUIRE the <voice name> to be a base model --
+// DragonLatestNeural (higher quality) or PhoenixLatestNeural (lower latency) --
+// NOT the custom/personal voice name. A non-base-model name (e.g. MAI-Voice-2)
+// with a speaker profile makes Azure reject the request with HTTP 400.
+export const AZURE_EMBEDDING_BASE_MODELS = ["DragonLatestNeural", "PhoenixLatestNeural"];
+
+// True when `voice` ends in a known Azure embedding base model (locale-prefixed
+// forms like en-US-DragonLatestNeural also match). Pure.
+export function isAzureEmbeddingBaseModel(voice) {
+  return /(?:Dragon|Phoenix)LatestNeural$/i.test(String(voice ?? "").trim());
+}
+
+/// Fail-fast validator for the direct azure-speech embedding path (bd-5d4784,
+/// operator-directed): when the azure-speech provider is used WITH a
+/// speakerProfileId but the resolved <voice name> is an explicit NON-base-model
+/// voice, Azure will 400. Return a clear, actionable error MESSAGE telling the
+/// operator to set a base-model voice and how; return null when the config is
+/// fine (not azure-speech, no embedding, no explicit voice/sentinel-default, or
+/// already a base model). Preferred over silently auto-substituting a base model,
+/// which could pick the wrong base for the operator's setup. Pure.
+export function azureEmbeddingVoiceError({ provider, voice, speakerProfileId } = {}) {
+  if (!isAzureSpeechProvider(provider)) return null;
+  if (!speakerProfileId) return null;
+  const v = resolveCascadeTtsVoice(voice);
+  if (!v) return null; // sentinel/default -> defer to the provider's configured default voice
+  if (isAzureEmbeddingBaseModel(v)) return null;
+  return `azure-speech embedding voice misconfigured: a speaker profile is set (speaker=${speakerProfileId}) but voice='${v}' is not an Azure base model, so Azure rejects it with HTTP 400. Personal/embedding voices require the <voice name> to be a base model. Fix: set voice=DragonLatestNeural (higher quality) or voice=PhoenixLatestNeural (lower latency) and keep speaker=${speakerProfileId} for the actual voice -- e.g. in /cascade or /rt pass 'voice=DragonLatestNeural speaker=${speakerProfileId}', or set the base-model voice field in your realtime/cascade settings.`;
+}
+
 /// Build a direct-Azure mstts SSML body wrapping `text`. voice -> <voice name>,
 /// lang -> xml:lang, speed -> <prosody rate>, speakerProfileId -> <mstts:ttsembedding>.
 /// speakerProfileId/lang/prosody segments are omitted when not supplied. Pure.
@@ -178,6 +208,13 @@ export function synthesizeToPcm(text, {
     const body = String(text ?? "");
     if (!body.trim()) {
       reject(new Error("tts: refusing to synthesize empty text"));
+      return;
+    }
+    // bd-5d4784: fail fast with an actionable notice instead of letting Azure
+    // reject an embedding voice + non-base-model <voice name> with a cryptic 400.
+    const embErr = azureEmbeddingVoiceError({ provider, voice, speakerProfileId });
+    if (embErr) {
+      reject(new Error(embErr));
       return;
     }
     let proc;
