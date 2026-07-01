@@ -6,6 +6,7 @@ import { buildParticipantRoster, MODE_CASCADE, ORDER_FIXED } from "../extensions
 import {
   CascadeController,
   makeCascadeRunTurn,
+  makeCascadePiInferenceTurn,
   makeCascadeSpeak,
   makeCascadeSynth,
   makeCascadeTtsSynth,
@@ -132,6 +133,63 @@ test("makeCascadeRunTurn caps reply length by default (maxTokens) and allows ove
   const wide = makeCascadeRunTurn({ defaultModel: "m", maxTokens: 1000, fetchImpl, envRead: () => undefined });
   await wide({ name: "p" }, []);
   assert.equal(bodies[1].max_tokens, 1000);
+});
+
+test("makeCascadeRunTurn routes unpinned peers through piInferenceTurn, pinned peers through chat-completions (bd-15beec)", async () => {
+  const piCalls = [];
+  const fetchCalls = [];
+  const piInferenceTurn = async (participant) => { piCalls.push(participant); return `pi:${participant.name}`; };
+  const fetchImpl = async (url, init) => { fetchCalls.push({ url, body: JSON.parse(init.body) }); return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "chat" } }] }), text: async () => "" }; };
+  const runTurn = makeCascadeRunTurn({ defaultModel: "default-model", defaultBaseUrl: "http://d:1", fetchImpl, piInferenceTurn, envRead: () => undefined });
+
+  const unpinned = await runTurn({ name: "peerA" }, [{ role: "user", content: "hi" }]);
+  const pinned = await runTurn({ name: "peerB", model: "gpt-x" }, [{ role: "user", content: "hi" }]);
+
+  assert.equal(unpinned, "pi:peerA"); // unpinned -> loaded model via Pi inference
+  assert.equal(piCalls.length, 1);
+  assert.equal(pinned, "chat"); // pinned model= -> direct chat-completions
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].body.model, "gpt-x");
+});
+
+test("makeCascadeRunTurn without a piInferenceTurn keeps chat-completions for unpinned peers (backward compatible)", async () => {
+  const fetchCalls = [];
+  const fetchImpl = async (_url, init) => { fetchCalls.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "x" } }] }), text: async () => "" }; };
+  const runTurn = makeCascadeRunTurn({ defaultModel: "m", fetchImpl, envRead: () => undefined });
+  await runTurn({ name: "peer" }, []);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].model, "m");
+});
+
+// ---------------------------------------------------------------------------
+// makeCascadePiInferenceTurn (bd-15beec)
+// ---------------------------------------------------------------------------
+
+test("makeCascadePiInferenceTurn authenticates the loaded ctx model and runs it through complete", async () => {
+  const authCalls = [];
+  const completeCalls = [];
+  const ctx = {
+    model: { provider: "github-copilot", id: "claude-opus" },
+    modelRegistry: {
+      getApiKeyAndHeaders: async (model) => { authCalls.push(model); return { ok: true, apiKey: "k", headers: { A: "1" } }; },
+    },
+  };
+  const completeImpl = async (model, req, opts) => { completeCalls.push({ model, req, opts }); return { content: [{ type: "text", text: "loaded-model reply" }] }; };
+  const turn = makeCascadePiInferenceTurn({ ctx, completeImpl });
+  assert.equal(typeof turn, "function");
+  const reply = await turn({ name: "peer", instructions: "be terse" }, [{ role: "user", content: "hey" }]);
+  assert.equal(reply, "loaded-model reply");
+  assert.deepEqual(authCalls[0], { provider: "github-copilot", id: "claude-opus" });
+  assert.deepEqual(completeCalls[0].model, { provider: "github-copilot", id: "claude-opus" });
+  assert.equal(completeCalls[0].req.systemPrompt, "be terse");
+  assert.equal(completeCalls[0].req.messages[0].content[0].text, "hey");
+  assert.equal(completeCalls[0].opts.apiKey, "k");
+});
+
+test("makeCascadePiInferenceTurn returns null when ctx lacks a loaded model or auth accessor", () => {
+  assert.equal(makeCascadePiInferenceTurn({ ctx: { modelRegistry: { getApiKeyAndHeaders: async () => ({}) } } }), null);
+  assert.equal(makeCascadePiInferenceTurn({ ctx: { model: { provider: "p", id: "m" } } }), null);
+  assert.equal(makeCascadePiInferenceTurn({}), null);
 });
 
 // ---------------------------------------------------------------------------

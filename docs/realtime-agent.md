@@ -292,9 +292,10 @@ agent can call directly: it synthesizes via the direct Azure Speech REST path
 
 Pair it with `/rt stt local-vad` so your speech becomes agent turns and the
 loaded Pi agent replies out loud in the configured voice with low latency — the
-Pi agent IS the cascade brain (bd-15beec). Making the agent reply *exclusively*
-via `speak` (mandatory voice mode) and wiring it into `/cascade start n=1` is the
-next slice.
+Pi agent IS the cascade brain (bd-15beec). The cascade peer routing now runs an
+unpinned `n=1` peer through Pi's own inference on the loaded model (see Cascade
+below); making the agent reply *exclusively* via `speak` (mandatory voice mode)
+and wiring it into `/cascade start n=1` is the remaining slice.
 
 ### Replay the latest spoken response
 
@@ -348,9 +349,15 @@ Per-participant overrides use a bracket form, e.g.
 `participants=var[voice=cedar,model=haiku];cedar[base_url=http://...]`.
 
 Defaults: cascade gives every agent the caco azure/speech embedding voice unless
-overridden (so distinguish them by name/content, or pass distinct `voice=`); the
-peer chat model defaults to `gpt-5-mini` (override with `PI_CASCADE_MODEL` or a
-per-participant `model=`). The `say` verb is the no-microphone way to try a round.
+overridden (so distinguish them by name/content, or pass distinct `voice=`). For
+the **peer chat model**, an unpinned peer (no `model=`) now runs through Pi's own
+inference engine on the model already loaded in Pi (bd-15beec) — so `n=1` behaves
+like talking to the loaded Pi model and never hits the proxy's "no healthy
+deployments" 400 for a stale default chat model. A peer that pins its own
+`model=` still uses the direct chat-completions path against that model (the
+chat-completions default is `gpt-5-mini`, override with `PI_CASCADE_MODEL`; it is
+also the fallback for every peer when no Pi model/auth is available). The `say`
+verb is the no-microphone way to try a round.
 
 ### Direct Azure Speech voices + embeddings (`azure=true`)
 

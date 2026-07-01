@@ -94,3 +94,82 @@ export async function runChatCompletionTurn({
     if (timer) clearTimeout(timer);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Pi built-in inference path (bd-15beec)
+//
+// For an UNPINNED cascade peer (n=1 = "just talk to the model loaded in Pi"),
+// route the turn through Pi's own inference engine (`complete`) on the loaded
+// ctx model instead of a raw chat-completions POST to a possibly-unservable
+// default model (which produced `chat completions 400: no healthy deployments
+// for ...`). Auth is Pi's own: ctx.modelRegistry.getApiKeyAndHeaders(model), so
+// e.g. github-copilot models reuse Pi's Copilot token. Pure helpers below are
+// unit-tested; `complete` is injected for tests.
+// ---------------------------------------------------------------------------
+
+/// Convert OpenAI chat-completions messages ({role, content:string|parts}) into
+/// Pi inference messages ({role, timestamp, content:[{type:"text", text}]}).
+/// Non-assistant/system roles collapse to "user"; array content is flattened to
+/// text. Pure.
+export function piMessagesFromChat(messages, now = Date.now) {
+  const at = typeof now === "function" ? now : () => now;
+  return (Array.isArray(messages) ? messages : []).map((m) => {
+    const role = m?.role === "assistant" || m?.role === "system" ? m.role : "user";
+    let text;
+    if (typeof m?.content === "string") {
+      text = m.content;
+    } else if (Array.isArray(m?.content)) {
+      text = m.content
+        .map((p) => (typeof p === "string" ? p : (p?.text || p?.content || "")))
+        .join("");
+    } else {
+      text = "";
+    }
+    return { role, timestamp: at(), content: [{ type: "text", text: String(text) }] };
+  });
+}
+
+/// Extract the assistant reply text from a Pi `complete` response
+/// ({content:[{type:"text", text}]}). Pure.
+export function extractPiReplyText(response) {
+  const parts = response?.content;
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .filter((c) => c?.type === "text")
+    .map((c) => c?.text || "")
+    .join("\n")
+    .trim();
+}
+
+/// Run one cascade peer turn through Pi's built-in inference and resolve with the
+/// reply text. Rejects if no loaded model / no auth key, or if the turn aborts.
+/// `completeImpl` is injectable for tests; defaults to pi-ai `complete`.
+export async function runPiInferenceTurn({
+  messages,
+  model,
+  auth,
+  completeImpl,
+  systemPrompt,
+  maxTokens = 200,
+  signal,
+} = {}) {
+  let run = completeImpl;
+  if (typeof run !== "function") {
+    // pi-ai `complete` is a peer dep provided by the Pi host at runtime and is
+    // not resolvable from bare unit tests, so load it lazily. Tests always
+    // inject `completeImpl`, so this dynamic import is never hit under test.
+    ({ complete: run } = await import("@earendil-works/pi-ai"));
+  }
+  if (typeof run !== "function") throw new Error("runPiInferenceTurn: no complete implementation available");
+  if (!model) throw new Error("runPiInferenceTurn: no loaded model available");
+  if (!auth || !auth.apiKey) throw new Error(auth?.error || `runPiInferenceTurn: no API key for ${model?.provider || "model"}`);
+  const opts = { apiKey: auth.apiKey, headers: auth.headers };
+  if (signal) opts.signal = signal;
+  const mt = Number(maxTokens);
+  if (Number.isFinite(mt) && mt > 0) opts.maxTokens = mt;
+  const req = { messages: piMessagesFromChat(messages) };
+  if (systemPrompt) req.systemPrompt = String(systemPrompt);
+  const response = await run(model, req, opts);
+  if (response?.stopReason === "aborted") throw new Error("cascade Pi inference turn aborted");
+  return extractPiReplyText(response);
+}

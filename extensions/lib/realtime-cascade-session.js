@@ -13,7 +13,7 @@
 import { runCascadeRound } from "./realtime-cascade.js";
 import { sanitizeForSpeech } from "./realtime-cascade.js";
 import { DEFAULT_ORDER, MODE_CASCADE, buildParticipantRoster } from "./realtime-participants.js";
-import { runChatCompletionTurn } from "./realtime-cascade-llm.js";
+import { runChatCompletionTurn, runPiInferenceTurn } from "./realtime-cascade-llm.js";
 import { synthesizeToPcm, synthesizeAzureSpeechDirect, resolveAzureSpeechCreds, resolveCascadeTtsVoice, isAzureSpeechProvider, AZURE_SPEECH_PROVIDER } from "./realtime-tts-batch.js";
 import { parseEnvStyleArgs } from "./env-args.js";
 
@@ -128,16 +128,48 @@ export class CascadeController {
 /// Build a concrete `runTurn(participant, messages)` dep backed by the
 /// chat-completions caller. Per-participant model/base-url win over `defaultModel`.
 /// Defaults keep spoken replies short (maxTokens) unless overridden.
-export function makeCascadeRunTurn({ defaultModel, defaultBaseUrl, envRead, fetchImpl, temperature, maxTokens = 200 } = {}) {
-  return (participant, messages) => runChatCompletionTurn({
-    messages,
-    model: participant?.model || defaultModel,
-    baseUrl: participant?.baseUrl || defaultBaseUrl,
-    temperature,
-    maxTokens,
-    fetchImpl,
-    envRead,
-  });
+export function makeCascadeRunTurn({ defaultModel, defaultBaseUrl, envRead, fetchImpl, temperature, maxTokens = 200, piInferenceTurn } = {}) {
+  return (participant, messages) => {
+    // bd-15beec: an UNPINNED peer (no explicit model=) is "just the model loaded
+    // in Pi" — route it through Pi's built-in inference on the loaded ctx model
+    // (piInferenceTurn) instead of a raw chat-completions call to a possibly-
+    // unservable default model (the n=1 "no healthy deployments" 400). A peer
+    // that pins its own model= keeps the direct chat-completions path.
+    if (typeof piInferenceTurn === "function" && !participant?.model) {
+      return piInferenceTurn(participant, messages);
+    }
+    return runChatCompletionTurn({
+      messages,
+      model: participant?.model || defaultModel,
+      baseUrl: participant?.baseUrl || defaultBaseUrl,
+      temperature,
+      maxTokens,
+      fetchImpl,
+      envRead,
+    });
+  };
+}
+
+/// Build a `runTurn(participant, messages)` dep backed by Pi's built-in inference
+/// (`complete`) on the loaded ctx model (bd-15beec), so an unpinned cascade peer
+/// (n=1) behaves like talking to the model already loaded in Pi. Returns null
+/// when the ctx cannot provide a loaded model + auth accessor, so the caller can
+/// fall back to the chat-completions path. `completeImpl` is injectable for tests.
+export function makeCascadePiInferenceTurn({ ctx, model, completeImpl, maxTokens = 200 } = {}) {
+  const loaded = model || ctx?.model;
+  const getAuth = ctx?.modelRegistry?.getApiKeyAndHeaders;
+  if (!loaded || typeof getAuth !== "function") return null;
+  return async (participant, messages) => {
+    const auth = await getAuth.call(ctx.modelRegistry, loaded);
+    return runPiInferenceTurn({
+      messages,
+      model: loaded,
+      auth,
+      completeImpl,
+      maxTokens,
+      systemPrompt: participant?.instructions,
+    });
+  };
 }
 
 /// Build a concrete `speak(participant, text)` dep: synthesise the reply to PCM

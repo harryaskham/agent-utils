@@ -7,6 +7,9 @@ import {
   buildChatCompletionBody,
   extractReplyText,
   runChatCompletionTurn,
+  piMessagesFromChat,
+  extractPiReplyText,
+  runPiInferenceTurn,
 } from "../extensions/lib/realtime-cascade-llm.js";
 
 // ---------------------------------------------------------------------------
@@ -122,4 +125,108 @@ test("runChatCompletionTurn omits the Authorization header when no key is availa
   const fetchImpl = async (_url, init) => { authPresent = "Authorization" in init.headers; return okResponse({ choices: [{ message: { content: "x" } }] }); };
   await runChatCompletionTurn({ messages: [], model: "m", baseUrl: "http://x", apiKey: "", fetchImpl, envRead: () => undefined });
   assert.equal(authPresent, false);
+});
+
+// ---------------------------------------------------------------------------
+// piMessagesFromChat (bd-15beec)
+// ---------------------------------------------------------------------------
+
+test("piMessagesFromChat maps chat messages to Pi text-part messages with a timestamp", () => {
+  const out = piMessagesFromChat(
+    [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "yo" },
+      { role: "system", content: "be nice" },
+    ],
+    () => 1234,
+  );
+  assert.deepEqual(out, [
+    { role: "user", timestamp: 1234, content: [{ type: "text", text: "hi" }] },
+    { role: "assistant", timestamp: 1234, content: [{ type: "text", text: "yo" }] },
+    { role: "system", timestamp: 1234, content: [{ type: "text", text: "be nice" }] },
+  ]);
+});
+
+test("piMessagesFromChat collapses unknown roles to user and flattens array content", () => {
+  const out = piMessagesFromChat(
+    [
+      { role: "tool", content: "result" },
+      { role: "user", content: [{ text: "a" }, "b", { content: "c" }] },
+    ],
+    () => 0,
+  );
+  assert.equal(out[0].role, "user");
+  assert.equal(out[0].content[0].text, "result");
+  assert.equal(out[1].content[0].text, "abc");
+});
+
+test("piMessagesFromChat tolerates non-array input and missing content", () => {
+  assert.deepEqual(piMessagesFromChat(null), []);
+  const out = piMessagesFromChat([{ role: "user" }], () => 0);
+  assert.equal(out[0].content[0].text, "");
+});
+
+// ---------------------------------------------------------------------------
+// extractPiReplyText (bd-15beec)
+// ---------------------------------------------------------------------------
+
+test("extractPiReplyText joins text parts, ignores non-text, trims, and tolerates missing", () => {
+  assert.equal(
+    extractPiReplyText({ content: [{ type: "text", text: "  hello" }, { type: "image", data: "x" }, { type: "text", text: "world  " }] }),
+    "hello\nworld",
+  );
+  assert.equal(extractPiReplyText({ content: [] }), "");
+  assert.equal(extractPiReplyText({}), "");
+  assert.equal(extractPiReplyText(null), "");
+});
+
+// ---------------------------------------------------------------------------
+// runPiInferenceTurn (injected complete)
+// ---------------------------------------------------------------------------
+
+test("runPiInferenceTurn calls complete with the loaded model, converted messages, auth, and returns the reply", async () => {
+  const calls = [];
+  const completeImpl = async (model, req, opts) => {
+    calls.push({ model, req, opts });
+    return { content: [{ type: "text", text: "pi reply" }], stopReason: "stop" };
+  };
+  const text = await runPiInferenceTurn({
+    messages: [{ role: "user", content: "hi" }],
+    model: { provider: "github-copilot", id: "claude" },
+    auth: { ok: true, apiKey: "k", headers: { "X-H": "1" } },
+    completeImpl,
+    systemPrompt: "be a peer",
+    maxTokens: 123,
+  });
+  assert.equal(text, "pi reply");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].model, { provider: "github-copilot", id: "claude" });
+  assert.equal(calls[0].req.systemPrompt, "be a peer");
+  assert.equal(calls[0].req.messages[0].content[0].text, "hi");
+  assert.equal(calls[0].opts.apiKey, "k");
+  assert.deepEqual(calls[0].opts.headers, { "X-H": "1" });
+  assert.equal(calls[0].opts.maxTokens, 123);
+});
+
+test("runPiInferenceTurn rejects with no model, no auth key, or an aborted turn", async () => {
+  const ok = async () => ({ content: [{ type: "text", text: "x" }] });
+  await assert.rejects(
+    runPiInferenceTurn({ messages: [], auth: { apiKey: "k" }, completeImpl: ok }),
+    /no loaded model/,
+  );
+  await assert.rejects(
+    runPiInferenceTurn({ messages: [], model: { provider: "p" }, auth: { ok: false, error: "nope" }, completeImpl: ok }),
+    /nope/,
+  );
+  await assert.rejects(
+    runPiInferenceTurn({ messages: [], model: { provider: "p" }, auth: { apiKey: "k" }, completeImpl: async () => ({ stopReason: "aborted", content: [] }) }),
+    /aborted/,
+  );
+});
+
+test("runPiInferenceTurn omits maxTokens when non-positive", async () => {
+  let seen;
+  const completeImpl = async (_m, _r, opts) => { seen = opts; return { content: [{ type: "text", text: "x" }] }; };
+  await runPiInferenceTurn({ messages: [], model: { provider: "p" }, auth: { apiKey: "k" }, completeImpl, maxTokens: 0 });
+  assert.ok(!("maxTokens" in seen));
 });

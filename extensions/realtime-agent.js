@@ -163,6 +163,7 @@ import { AudioLevelMeter, formatLevelBar, rmsToLevel } from "./lib/realtime-audi
 import {
   CascadeController,
   makeCascadeRunTurn,
+  makeCascadePiInferenceTurn,
   makeCascadeSpeak,
   makeCascadeSynth,
   makeCascadeTtsSynth,
@@ -2599,7 +2600,14 @@ export default function realtimeAgentExtension(pi) {
     const { roster, values, directAzureSpeech } = cascadeRosterFromArgs(rawArgs, { env: process.env });
     const defaultModel = values.model || env("PI_CASCADE_MODEL", "OPENAI_CHAT_MODEL", "MAPI_MODEL_ID") || "gpt-5-mini";
     const defaultBaseUrl = values.base_url || values.baseurl || env("PI_RT_BASE_URL", "OPENAI_BASE_URL");
-    const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl });
+    // bd-15beec: unpinned cascade peers (n=1 = "the model loaded in Pi") run
+    // through Pi's own inference engine on ctx.model, so they never hit the
+    // proxy's "no healthy deployments" 400 for a stale default chat model. A
+    // peer that pins model= still uses the direct chat-completions path. Null
+    // when ctx has no loaded model/auth, in which case makeCascadeRunTurn falls
+    // back to chat-completions for everyone.
+    const piInferenceTurn = makeCascadePiInferenceTurn({ ctx });
+    const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl, piInferenceTurn });
     const playbackCommand = config.playbackCommand || defaultPlaybackCommand();
     const playImpl = (pcm) => {
       // Half-duplex: mark the assistant as speaking for this clip's duration so the
