@@ -477,6 +477,7 @@ Unified `/rt` controls:
 /rt widget [show|hide]         show or hide the realtime widget
 /rt status [compact|full]      compact or full status
 /rt doctor                     diagnostics
+/rt probe                      one-shot connect probe (opens the WS, waits for session.created, then closes) classifying connected/ga-only/session-start-1006/auth/config — no mic session
 /rt voice <voice>              set realtime output voice
 /rt trans <model>              set realtime input transcription model
 /rt speed <0.25..1.5>          set spoken response speed (default 1.0)
@@ -484,7 +485,7 @@ Unified `/rt` controls:
 /rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high
 /rt summary [true|false]       use compact summary context instead of full history (default false)
 /rt chime [true|false]         enable/disable VAD state chimes (default true)
-/rt backend=pulse source=...    env-style key/value form; supports base_url/server/source/sink/start/mic/stt/audio/widget/status/voice/trans/speed/reasoning/summary/chime/fork
+/rt backend=pulse source=...    env-style key/value form; supports base_url/server/source/sink/start/mic/stt/audio/widget/status/voice/trans/speed/reasoning/summary/chime/fork, plus the direct-Azure connection keys azure/model/endpoint/deployment/api_version/protocol (e.g. `/rt azure=true start=vad` connects direct-Azure to the preset gpt-realtime-2 GA deployment; api_version=none uses the GA path)
 /rt help                       show the unified command usage
 ```
 
