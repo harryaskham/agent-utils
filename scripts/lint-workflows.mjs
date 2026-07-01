@@ -15,6 +15,17 @@
 // exits 0 (skip) rather than failing, so `npm run check` does not regress in a
 // parser-less environment. When a validator is available it is strict and any
 // malformed workflow fails the check.
+//
+// bd-c2eb33: when actionlint specifically is absent but a YAML-only fallback
+// (ruby/python) runs, the check previously passed *silently*, so a local
+// `npm run check` could go green while CI's actionlint gate (which also checks
+// Actions semantics: runner labels, expression syntax, ...) fails. To close
+// that "local green != CI gate" gap, `lintWorkflows` now reports whether the
+// actionlint semantic layer actually ran (`usedActionlint`), `main()` prints a
+// loud, non-silent warning whenever it falls back to YAML-only, and setting
+// `LINT_WORKFLOWS_STRICT=1` (the `strict` option) turns an actionlint-absent
+// run into a hard, non-zero failure for callers that want strict local/CI
+// parity. actionlint ships in the repo's nix devShell.
 
 import { existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -85,17 +96,36 @@ function pythonYamlCheck(file) {
  * `ok` is true) when no validator is available, so callers can treat a
  * parser-less environment as a soft pass.
  */
-export function lintWorkflows({ dir = join(repoRoot, ".github", "workflows"), useActionlint = true } = {}) {
+export function lintWorkflows({ dir = join(repoRoot, ".github", "workflows"), useActionlint = true, strict = false } = {}) {
   const files = listWorkflowFiles(dir);
   if (files.length === 0) {
-    return { ok: true, skipped: false, validator: "none", files, errors: [] };
+    return { ok: true, skipped: false, validator: "none", usedActionlint: false, files, errors: [] };
   }
 
   const validator = resolveValidator({ useActionlint });
   if (!validator) {
-    return { ok: true, skipped: true, validator: "none", files, errors: [] };
+    // No validator at all. Soft-pass by default so a parser-less environment
+    // does not regress `npm run check`; under strict mode this is a hard fail.
+    if (strict) {
+      return {
+        ok: false,
+        skipped: false,
+        validator: "none",
+        usedActionlint: false,
+        files,
+        errors: [
+          {
+            file: "(actionlint)",
+            reason:
+              "strict mode: no workflow validator available (actionlint required for Actions-semantic checks)",
+          },
+        ],
+      };
+    }
+    return { ok: true, skipped: true, validator: "none", usedActionlint: false, files, errors: [] };
   }
 
+  const usedActionlint = validator.name === "actionlint";
   const errors = [];
   if (validator.lintAll) {
     errors.push(...validator.lintAll(files));
@@ -106,11 +136,21 @@ export function lintWorkflows({ dir = join(repoRoot, ".github", "workflows"), us
     }
   }
 
-  return { ok: errors.length === 0, skipped: false, validator: validator.name, files, errors };
+  // strict: a YAML-only fallback validated well-formedness but NOT actionlint's
+  // Actions semantics, so treat the missing semantic layer as a failure.
+  if (strict && !usedActionlint) {
+    errors.push({
+      file: "(actionlint)",
+      reason: `strict mode: actionlint required but only '${validator.name}' (YAML well-formedness) is available; GitHub Actions semantics were not checked`,
+    });
+  }
+
+  return { ok: errors.length === 0, skipped: false, validator: validator.name, usedActionlint, files, errors };
 }
 
 function main() {
-  const result = lintWorkflows();
+  const strict = process.env.LINT_WORKFLOWS_STRICT === "1";
+  const result = lintWorkflows({ strict });
   const rel = (file) => file.replace(`${repoRoot}/`, "");
 
   if (result.files.length === 0) {
@@ -124,6 +164,23 @@ function main() {
         `${result.files.length} file(s) left unchecked.`,
     );
     return 0;
+  }
+
+  // Loud, non-silent signal when the actionlint semantic layer did NOT run but
+  // a YAML-only fallback did: it proves well-formedness, not Actions semantics
+  // (runner labels, expression syntax, ...), so a local pass here does not
+  // guarantee CI's actionlint gate passes (bd-c2eb33). The no-validator-at-all
+  // case is covered by the skipped branch (non-strict) or the FAILED strict
+  // error (strict), so only warn when a real YAML fallback ran.
+  if (!result.usedActionlint && result.validator !== "none") {
+    console.warn(
+      "lint-workflows: WARNING actionlint not found -- validated YAML well-formedness " +
+        `only (via ${result.validator}), NOT GitHub Actions semantics (runner labels, ` +
+        "expression syntax, etc.). CI runs actionlint, so a local pass here does NOT " +
+        "guarantee the CI workflow-lint gate passes. Install actionlint (it ships in the " +
+        "repo's nix devShell) for local/CI parity" +
+        (strict ? "." : ", or set LINT_WORKFLOWS_STRICT=1 to make this a hard failure."),
+    );
   }
 
   if (result.ok) {

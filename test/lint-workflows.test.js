@@ -61,3 +61,23 @@ test("a malformed workflow is rejected when a YAML parser is available", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("usedActionlint is false on the YAML-only fallback path (bd-c2eb33)", () => {
+  // Forcing useActionlint:false always selects a YAML fallback (or none),
+  // never the actionlint semantic layer, so the missing-semantics signal must
+  // report false regardless of whether actionlint is installed on this host.
+  const result = lintWorkflows({ dir: repoWorkflowsDir, useActionlint: false });
+  assert.equal(result.usedActionlint, false, "fallback path must report usedActionlint=false");
+});
+
+test("strict mode fails when actionlint is unavailable (bd-c2eb33)", () => {
+  // useActionlint:false guarantees actionlint is not the validator, so strict
+  // mode must turn the missing Actions-semantic layer into a hard failure,
+  // whether or not a YAML fallback parser is present in this environment.
+  const result = lintWorkflows({ dir: repoWorkflowsDir, useActionlint: false, strict: true });
+  assert.equal(result.ok, false, "strict + no actionlint should fail");
+  assert.ok(
+    result.errors.some((e) => e.file === "(actionlint)"),
+    "strict failure should be attributed to the missing actionlint layer",
+  );
+});
