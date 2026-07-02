@@ -70,6 +70,7 @@
 //   PI_RT_AZURE_DEPLOYMENT                        deployment name (defaults to model)
 //   PI_RT_AZURE_API_VERSION                       default 2025-04-01-preview; set "none" (or empty/"ga") to omit it from the URL for GA-only proxies
 //   PI_RT_AZURE_PROTOCOL=v1|beta                  default v1
+//   PI_RT_CONNECT_AUTOFALLBACK=0                  disable the auto-fallback that retries a 1006 proxy-drop via the direct-Azure GA path (bd-0b255f; default on when an Azure key is configured)
 //   PI_RT_REASONING_EFFORT=off|minimal|low|medium|high
 //   PI_RT_SEND_REASONING=1                        explicitly send reasoning.effort through proxy
 //   PI_RT_VAD_THRESHOLD                           server VAD sensitivity threshold (default 0.7)
@@ -578,6 +579,21 @@ class RealtimeSession {
   // Connection
   // -------------------------------------------------------------------------
 
+  // bd-0b255f: decide whether a session-start 1006 proxy-drop on the proxy path
+  // should auto-retry via the direct-Azure GA path. Only fires when: we are not
+  // already on Azure (loop-safe: proxy->azure only, never azure->azure), the
+  // auto-fallback is not opted out (PI_RT_CONNECT_AUTOFALLBACK=0), the close was
+  // the 1006 abnormal-closure signature (the silent proxy drop bd-d0124f classifies),
+  // and Azure is actually configured (key + endpoint) so the retry can succeed
+  // instead of failing differently.
+  shouldAutoFallbackToAzure(closeCode) {
+    if (this.config.directAzure) return false;
+    if (!envBool("PI_RT_CONNECT_AUTOFALLBACK", true)) return false;
+    if (closeCode !== 1006) return false;
+    const azureKey = env("PI_RT_AZURE_API_KEY", "AZURE_CANADACENTRAL_API_KEY", "AZURE_OPENAI_API_KEY");
+    return Boolean(azureKey && this.config.azureEndpoint);
+  }
+
   async connect(ctx) {
     this.lastCtx = ctx || this.lastCtx;
     this.updateStatus();
@@ -645,6 +661,18 @@ class RealtimeSession {
       // doctor-surfaced reason instead of the generic "WebSocket closed" (bd-d0124f).
       if (e?.wsClosedBeforeEvent) {
         const reason = realtimeSessionStartFailureReason(e.wsCloseCode);
+        // bd-0b255f: a 1006 proxy-drop before session.created on the proxy path
+        // auto-retries once via the direct-Azure GA path when Azure is configured,
+        // so realtime connects without a manual azure=true. The !directAzure guard
+        // in shouldAutoFallbackToAzure makes it loop-safe; opt out with
+        // PI_RT_CONNECT_AUTOFALLBACK=0.
+        if (this.shouldAutoFallbackToAzure(e.wsCloseCode)) {
+          this.notify(`Realtime proxy drop (${reason}); auto-falling back to direct-Azure GA`, "warning");
+          try { this.ws?.close(); } catch {}
+          this.ws = null;
+          this.config.directAzure = true;
+          return this._connect(ctx);
+        }
         this.lastConnectError = reason;
         throw new Error(reason);
       }

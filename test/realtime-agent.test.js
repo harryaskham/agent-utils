@@ -2144,3 +2144,131 @@ test("labelUntrustedTranscript prefixes STT transcripts with an untrusted-conten
     else process.env.PI_RT_STT_UNTRUSTED_LABEL = prev;
   }
 });
+
+test("connect auto-falls back to direct-Azure GA on a 1006 proxy drop (bd-0b255f)", async () => {
+  const prev = {
+    PI_RT_API_KEY: process.env.PI_RT_API_KEY,
+    PI_RT_AZURE_API_KEY: process.env.PI_RT_AZURE_API_KEY,
+    PI_RT_DIRECT_AZURE: process.env.PI_RT_DIRECT_AZURE,
+    PI_RT_CONNECT_AUTOFALLBACK: process.env.PI_RT_CONNECT_AUTOFALLBACK,
+  };
+  // First (proxy) socket opens then silently drops with a 1006 abnormal closure
+  // before session.created; the second (azure retry) socket establishes.
+  class FallbackFake {
+    static OPEN = 1;
+    static instances = [];
+    constructor(url) {
+      this.readyState = 1;
+      this.handlers = new Map();
+      this.sent = [];
+      this.url = url;
+      const idx = FallbackFake.instances.length;
+      FallbackFake.instances.push(this);
+      setTimeout(() => {
+        this.emit("open");
+        if (idx === 0) {
+          setTimeout(() => this.emit("close", 1006, ""), 0);
+        } else {
+          setTimeout(() => this.emit("message", JSON.stringify({
+            type: "session.created",
+            session: { type: "realtime", output_modalities: ["text"] },
+          })), 0);
+        }
+      }, 0);
+    }
+    on(e, h) { const l = this.handlers.get(e) || []; l.push({ handler: h, once: false }); this.handlers.set(e, l); }
+    once(e, h) { const l = this.handlers.get(e) || []; l.push({ handler: h, once: true }); this.handlers.set(e, l); }
+    off(e, h) { this.handlers.set(e, (this.handlers.get(e) || []).filter((x) => x.handler !== h)); }
+    emit(e, ...a) { const l = this.handlers.get(e) || []; for (const x of l) x.handler(...a); this.handlers.set(e, l.filter((x) => !x.once)); }
+    send(d) { this.sent.push(JSON.parse(d)); }
+    close() { this.readyState = 3; this.emit("close"); }
+  }
+  let harness;
+  try {
+    process.env.PI_RT_API_KEY = "proxy-key";
+    process.env.PI_RT_AZURE_API_KEY = "azure-key";
+    process.env.PI_RT_DIRECT_AZURE = "0";
+    delete process.env.PI_RT_CONNECT_AUTOFALLBACK;
+    setRealtimeWebSocketConstructor(FallbackFake);
+
+    harness = makeHarness();
+    realtimeAgentExtension(harness.pi);
+    harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+    await harness.commands.get("rt").handler("stt vad", harness.ctx);
+    await waitFor(() => harness.pi.realtime.snapshot().state.connected === true, { timeoutMs: 2000 });
+
+    assert.equal(harness.pi.realtime.snapshot().state.connected, true, "connected after the azure fallback");
+    assert.equal(harness.pi.realtime.snapshot().directAzure, true, "fell back to the direct-Azure path");
+    assert.ok(FallbackFake.instances.length >= 2, "retried with a second (azure) socket after the 1006");
+    assert.ok(
+      harness.notifications.some((n) => /auto-falling back to direct-Azure/i.test(n.message)),
+      "notified the operator about the auto-fallback",
+    );
+  } finally {
+    try { await harness?.commands?.get("rt-off")?.handler("", harness.ctx); } catch {}
+    setRealtimeWebSocketConstructor(FakeWebSocket);
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test("connect does NOT auto-fall back when PI_RT_CONNECT_AUTOFALLBACK=0 (bd-0b255f)", async () => {
+  const prev = {
+    PI_RT_API_KEY: process.env.PI_RT_API_KEY,
+    PI_RT_AZURE_API_KEY: process.env.PI_RT_AZURE_API_KEY,
+    PI_RT_DIRECT_AZURE: process.env.PI_RT_DIRECT_AZURE,
+    PI_RT_CONNECT_AUTOFALLBACK: process.env.PI_RT_CONNECT_AUTOFALLBACK,
+  };
+  class OneShot1006Fake {
+    static OPEN = 1;
+    static instances = [];
+    constructor(url) {
+      this.readyState = 1;
+      this.handlers = new Map();
+      this.sent = [];
+      this.url = url;
+      OneShot1006Fake.instances.push(this);
+      setTimeout(() => {
+        this.emit("open");
+        setTimeout(() => this.emit("close", 1006, ""), 0);
+      }, 0);
+    }
+    on(e, h) { const l = this.handlers.get(e) || []; l.push({ handler: h, once: false }); this.handlers.set(e, l); }
+    once(e, h) { const l = this.handlers.get(e) || []; l.push({ handler: h, once: true }); this.handlers.set(e, l); }
+    off(e, h) { this.handlers.set(e, (this.handlers.get(e) || []).filter((x) => x.handler !== h)); }
+    emit(e, ...a) { const l = this.handlers.get(e) || []; for (const x of l) x.handler(...a); this.handlers.set(e, l.filter((x) => !x.once)); }
+    send(d) { this.sent.push(JSON.parse(d)); }
+    close() { this.readyState = 3; this.emit("close"); }
+  }
+  let harness;
+  try {
+    process.env.PI_RT_API_KEY = "proxy-key";
+    process.env.PI_RT_AZURE_API_KEY = "azure-key";
+    process.env.PI_RT_DIRECT_AZURE = "0";
+    process.env.PI_RT_CONNECT_AUTOFALLBACK = "0";
+    setRealtimeWebSocketConstructor(OneShot1006Fake);
+
+    harness = makeHarness();
+    realtimeAgentExtension(harness.pi);
+    harness.handlers.get("session_start")?.({ reason: "startup" }, harness.ctx);
+
+    try { await harness.commands.get("rt").handler("stt vad", harness.ctx); } catch {}
+    // Give the (failing) connect a moment to settle.
+    await waitFor(() => OneShot1006Fake.instances.length >= 1, { timeoutMs: 1000 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.equal(harness.pi.realtime.snapshot().state.connected, false, "stays disconnected without fallback");
+    assert.equal(harness.pi.realtime.snapshot().directAzure, false, "did not switch to azure");
+    assert.equal(OneShot1006Fake.instances.length, 1, "did not retry a second socket");
+  } finally {
+    try { await harness?.commands?.get("rt-off")?.handler("", harness.ctx); } catch {}
+    setRealtimeWebSocketConstructor(FakeWebSocket);
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
