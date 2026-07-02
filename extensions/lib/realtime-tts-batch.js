@@ -328,6 +328,28 @@ export function thinkingSummaryText(message) {
   return typeof r === "string" ? r.trim() : "";
 }
 
+/// Bound a (possibly long) thinking/reasoning string to a listenable spoken gist:
+/// return it whole when short, else cut at the last sentence end within maxChars
+/// (falling back to a word boundary) with a trailing ellipsis. A raw claude
+/// thinking trace can be thousands of chars — voicing all of it is an unlistenable
+/// monologue, so speak-thinking voices only this gist. Pure. (bd-551e93)
+export function boundThinkingForSpeech(text, maxChars = 320) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  if (s.length <= maxChars) return s;
+  const window = s.slice(0, maxChars);
+  // Prefer the longest run ending at sentence punctuation within the window.
+  const sentence = window.match(/^[\s\S]*[.!?](?=\s|$)/);
+  let cut = sentence ? sentence[0] : window;
+  if (!sentence) {
+    // No sentence end: fall back to the last word boundary so we don't slice mid-word.
+    const lastSpace = cut.lastIndexOf(" ");
+    if (lastSpace > 40) cut = cut.slice(0, lastSpace);
+  }
+  cut = cut.trim().replace(/[\s,;:\u2013-]+$/, "");
+  return `${cut}\u2026`;
+}
+
 /// Synthesize `text` to a raw PCM16/24k/mono Buffer via a DIRECT Azure Speech
 /// REST call (no subprocess): POST <endpoint>/cognitiveservices/v1 with the mstts
 /// SSML body (voice + ttsembedding speakerProfileId + lang + prosody). The

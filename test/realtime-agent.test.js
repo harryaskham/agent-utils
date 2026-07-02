@@ -1834,6 +1834,50 @@ test("/rt stt=local-vad (k=v form) routes to local-vad, not regular stt-vad (bd-
   }
 });
 
+test("agent_end with speak-thinking on does not throw (bd-551e93: thinkingSummaryText import regression)", async () => {
+  // speakThinking called thinkingSummaryText, which was NOT imported into
+  // realtime-agent.js — enabling it threw ReferenceError and broke speak-replies
+  // too (it runs just before the reply speak). Lock that the hook resolves both
+  // thinkingSummaryText and boundThinkingForSpeech and never throws.
+  const saved = {
+    replies: process.env.PI_RT_SPEAK_REPLIES,
+    thinking: process.env.PI_RT_SPEAK_THINKING,
+    disable: process.env.PI_RT_DISABLE_AUDIO,
+    voice: process.env.PI_CASCADE_VOICE,
+    speakVoice: process.env.PI_CASCADE_SPEAK_VOICE,
+  };
+  process.env.PI_RT_SPEAK_REPLIES = "1";
+  process.env.PI_RT_SPEAK_THINKING = "1";
+  delete process.env.PI_RT_DISABLE_AUDIO; // keep audioEnabled true so the hook proceeds
+  // No cascade voice -> speakTextDirect no-ops (no real Azure synth), but the hook
+  // still runs thinkingSummaryText + boundThinkingForSpeech, proving they resolve.
+  delete process.env.PI_CASCADE_VOICE;
+  delete process.env.PI_CASCADE_SPEAK_VOICE;
+  try {
+    const { pi, handlers } = makeHarness();
+    realtimeAgentExtension(pi);
+    const onAgentEnd = handlers.get("agent_end");
+    assert.equal(typeof onAgentEnd, "function", "agent_end hook is registered");
+    const messages = [{
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "a reasoning trace" }, { type: "text", text: "the reply" }],
+      timestamp: 7,
+    }];
+    await assert.doesNotReject(async () => { await onAgentEnd({ messages }, null); });
+  } finally {
+    const restore = {
+      PI_RT_SPEAK_REPLIES: saved.replies,
+      PI_RT_SPEAK_THINKING: saved.thinking,
+      PI_RT_DISABLE_AUDIO: saved.disable,
+      PI_CASCADE_VOICE: saved.voice,
+      PI_CASCADE_SPEAK_VOICE: saved.speakVoice,
+    };
+    for (const [k, v] of Object.entries(restore)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+});
+
 test("/rt stt local-vad surfaces the first transcribe failure to the operator (bd-43512a)", async () => {
   let captured;
   const captureFn = () => {

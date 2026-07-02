@@ -177,6 +177,8 @@ import {
   resolveSpeakToolParams,
   assistantReplyText,
   pickLastAssistantReply,
+  thinkingSummaryText,
+  boundThinkingForSpeech,
 } from "./lib/realtime-tts-batch.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
 // Re-exported so the public test/runtime contract import path
@@ -2425,7 +2427,7 @@ export default function realtimeAgentExtension(pi) {
     const speakCtx = ctx || session.lastCtx;
     if (config.speakThinking) {
       const last = [...messages].reverse().find((m) => m && m.role === "assistant");
-      const think = thinkingSummaryText(last);
+      const think = boundThinkingForSpeech(thinkingSummaryText(last));
       if (think && think !== text) { try { await speakTextDirect(think, speakCtx); } catch {} }
     }
     await speakTextDirect(text, speakCtx);

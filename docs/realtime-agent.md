@@ -311,8 +311,13 @@ daemon), this speaks the full reply via the fast direct-Azure REST path.
 
 ```text
 /rt speak-replies on        # off | on ; or env-style: /rt speak_replies=on
-/rt speak-thinking on       # opt-in: also voice reasoning/thinking summaries (default off)
+/rt speak-thinking on       # opt-in: also voice a short reasoning/thinking gist (default off)
 ```
+
+- `speak-thinking` voices only a **bounded gist** of the model's thinking (the
+  leading sentence(s), capped for listenability) — not the full raw reasoning
+  trace — and only when the loaded model/provider actually surfaces thinking
+  content in the turn (thinking-enabled models; nothing is spoken otherwise).
 
 - Off by default. Both are **durable in `settings.json`** (`agentUtils.realtime.speakReplies`
   / `.speakThinking`) and toggleable at runtime, with env > persisted > default

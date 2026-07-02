@@ -22,6 +22,7 @@ import {
   assistantReplyText,
   pickLastAssistantReply,
   thinkingSummaryText,
+  boundThinkingForSpeech,
 } from "../extensions/lib/realtime-tts-batch.js";
 
 // --- Auto-speak agent replies (bd-095b3d) ---
@@ -58,9 +59,34 @@ test("thinkingSummaryText extracts reasoning/thinking parts or a top-level field
     "let me think",
   );
   assert.equal(thinkingSummaryText({ role: "assistant", content: [{ type: "reasoning", summary: "weighed options" }] }), "weighed options");
+  // The REAL pi-ai shape: ThinkingContent = { type: "thinking", thinking: string } (bd-551e93).
+  assert.equal(
+    thinkingSummaryText({ role: "assistant", content: [{ type: "thinking", thinking: "reasoning trace" }, { type: "text", text: "answer" }] }),
+    "reasoning trace",
+    "extracts the pi-ai ThinkingContent.thinking field, not just .text",
+  );
   assert.equal(thinkingSummaryText({ role: "assistant", content: "plain", reasoning: "top-level reason" }), "top-level reason");
   assert.equal(thinkingSummaryText({ role: "assistant", content: [{ type: "text", text: "just an answer" }] }), "", "no thinking -> ''");
   assert.equal(thinkingSummaryText({ role: "user", content: "x" }), "");
+});
+
+test("boundThinkingForSpeech returns a listenable gist: whole when short, sentence-cut + ellipsis when long (bd-551e93)", () => {
+  assert.equal(boundThinkingForSpeech(""), "");
+  assert.equal(boundThinkingForSpeech(null), "");
+  // Short -> whole (whitespace collapsed).
+  assert.equal(boundThinkingForSpeech("  first thought.  second.  "), "first thought. second.");
+  // Long -> cut at the last sentence end within the window, trailing ellipsis.
+  const long = "First sentence is short. " + "word ".repeat(200) + "end.";
+  const gist = boundThinkingForSpeech(long, 80);
+  assert.ok(gist.length <= 81, `gist within bound (+ellipsis): got ${gist.length}`);
+  assert.ok(gist.endsWith("\u2026"), "trailing ellipsis when truncated");
+  assert.ok(gist.startsWith("First sentence is short."), "keeps the leading sentence");
+  // No sentence end within the window -> word-boundary cut, no mid-word slice.
+  const noStop = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima";
+  const g2 = boundThinkingForSpeech(noStop, 30);
+  assert.ok(g2.endsWith("\u2026"));
+  assert.ok(!/\s$/.test(g2.slice(0, -1)), "no trailing space before ellipsis");
+  assert.ok(noStop.startsWith(g2.slice(0, -1)), "cut is a clean prefix (no mid-word slice)");
 });
 
 test("speedToProsodyRate maps speed to azure prosody rate %", () => {
