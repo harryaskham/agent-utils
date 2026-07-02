@@ -24,6 +24,10 @@ function makeFakeGlobalWS() {
     addEventListener(type, cb, opts) {
       (this._listeners[type] ||= []).push({ cb, once: !!(opts && opts.once) });
     }
+    removeEventListener(type, cb) {
+      const ls = this._listeners[type];
+      if (ls) this._listeners[type] = ls.filter((l) => l.cb !== cb);
+    }
     dispatch(type, event) {
       const ls = this._listeners[type] || [];
       this._listeners[type] = ls.filter((l) => !l.once);
@@ -58,6 +62,37 @@ test("globalWsAuthFromHeaders: no auth headers -> unchanged", () => {
   const r = globalWsAuthFromHeaders("wss://h/p", { "User-Agent": "x" });
   assert.equal(r.url, "wss://h/p");
   assert.equal(r.protocols, undefined);
+});
+
+test("adapter .off/.removeListener remove a registered listener (bd-5b816a: no ws.off crash)", () => {
+  const FakeWS = makeFakeGlobalWS();
+  const Adapter = createGlobalWebSocketAdapter(FakeWS);
+  const ws = new Adapter("wss://h/p", {});
+  const inner = FakeWS._instances[0];
+  // The absence of these threw "ws.off is not a function" and crashed pi.
+  assert.equal(typeof ws.off, "function");
+  assert.equal(typeof ws.removeListener, "function");
+
+  // off() before dispatch removes the exact wrapper so the cb never fires.
+  let msgCalls = 0;
+  const onMsg = () => { msgCalls++; };
+  ws.once("message", onMsg);
+  ws.off("message", onMsg);
+  inner.dispatch("message", { data: "x" });
+  assert.equal(msgCalls, 0, "off removed the once listener before it could fire");
+
+  // A live once listener still fires and unwraps event.data like 'ws'.
+  let got = null;
+  ws.once("message", (d) => { got = d; });
+  inner.dispatch("message", { data: "hello" });
+  assert.equal(got, "hello");
+
+  // recvOnce's exact shape: once(message/close/error) + off(all three) must not throw.
+  const closeCb = () => {};
+  const errCb = () => {};
+  ws.once("close", closeCb);
+  ws.once("error", errCb);
+  assert.doesNotThrow(() => { ws.off("message", onMsg); ws.off("close", closeCb); ws.off("error", errCb); });
 });
 
 test("createGlobalWebSocketAdapter returns null without a global WebSocket", () => {

@@ -84,6 +84,11 @@ export function createGlobalWebSocketAdapter(GlobalWS = globalThis.WebSocket) {
       this._ws = protocols && protocols.length
         ? new GlobalWS(authedUrl, protocols)
         : new GlobalWS(authedUrl);
+      // Track { type, cb, installed } so .off/.removeListener can remove the exact
+      // wrapper we registered: _wrap builds a fresh function each on/once call and
+      // EventTarget removeEventListener is identity-based. Without a working .off,
+      // recvOnce cleanup threw "ws.off is not a function" and crashed pi (bd-5b816a).
+      this._listeners = [];
     }
 
     _wrap(type, cb) {
@@ -94,14 +99,43 @@ export function createGlobalWebSocketAdapter(GlobalWS = globalThis.WebSocket) {
       return () => cb();
     }
 
-    on(type, cb) {
-      this._ws.addEventListener(type, this._wrap(type, cb));
+    _addListener(type, cb, once) {
+      const inner = this._wrap(type, cb);
+      const entry = { type, cb };
+      // For `once`, forget the entry after it fires so the registry stays clean
+      // (addEventListener's { once: true } already detaches the DOM listener).
+      entry.installed = once ? (event) => { this._forget(entry); inner(event); } : inner;
+      this._listeners.push(entry);
+      this._ws.addEventListener(type, entry.installed, once ? { once: true } : undefined);
       return this;
     }
 
+    _forget(entry) {
+      const i = this._listeners.indexOf(entry);
+      if (i >= 0) this._listeners.splice(i, 1);
+    }
+
+    on(type, cb) {
+      return this._addListener(type, cb, false);
+    }
+
     once(type, cb) {
-      this._ws.addEventListener(type, this._wrap(type, cb), { once: true });
+      return this._addListener(type, cb, true);
+    }
+
+    off(type, cb) {
+      for (let i = this._listeners.length - 1; i >= 0; i--) {
+        const e = this._listeners[i];
+        if (e.type === type && e.cb === cb) {
+          try { this._ws.removeEventListener(type, e.installed); } catch {}
+          this._listeners.splice(i, 1);
+        }
+      }
       return this;
+    }
+
+    removeListener(type, cb) {
+      return this.off(type, cb);
     }
 
     send(data) {
