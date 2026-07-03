@@ -157,7 +157,7 @@ export { buildServerVadTurnDetection };
 import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
-import { transcribePcmBuffer, resolveBatchSttModel } from "./lib/realtime-stt-batch.js";
+import { transcribePcmBuffer, resolveBatchSttModel, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
 import { AudioLevelMeter, formatLevelBar, rmsToLevel } from "./lib/realtime-audio-meter.js";
@@ -273,11 +273,24 @@ export function setRealtimeWebSocketConstructor(ctor) {
 // exercised without a real microphone or `stt` binary. Production always uses the
 // imported runShellStream / transcribePcmBuffer.
 let localVadRunShellStream = runShellStream;
-let localVadTranscribe = transcribePcmBuffer;
+
+// bd-adde03: local-vad already has the COMPLETE VAD-segmented turn, so transcribe
+// it with a single first-party HTTP call we fully control (one-shot multipart
+// POST to <base>/v1/audio/transcriptions) instead of the opaque `stt --stdin`
+// subprocess that could stall and hang "transcribing" forever. The old CLI path
+// stays available as an escape hatch via PI_RT_LOCAL_VAD_USE_STT_CLI=1.
+function defaultLocalVadTranscribe(buffer, opts = {}) {
+  const e = process.env;
+  if (e.PI_RT_LOCAL_VAD_USE_STT_CLI === "1") return transcribePcmBuffer(buffer, opts);
+  const baseUrl = e.PI_RT_BASE_URL || e.OPENAI_BASE_URL || "https://api.openai.com";
+  const apiKey = e.PI_RT_API_KEY || e.OPENAI_API_KEY || "";
+  return transcribeAudioDirect({ pcm: buffer, model: opts.model, language: opts.language, baseUrl, apiKey });
+}
+let localVadTranscribe = defaultLocalVadTranscribe;
 
 export function __setLocalVadHooksForTest({ capture, transcribe } = {}) {
   localVadRunShellStream = capture || runShellStream;
-  localVadTranscribe = transcribe || transcribePcmBuffer;
+  localVadTranscribe = transcribe || defaultLocalVadTranscribe;
 }
 
 async function getRealtimeWebSocketConstructor() {

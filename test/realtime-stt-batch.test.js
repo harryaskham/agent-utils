@@ -7,6 +7,11 @@ import {
   transcribePcmBuffer,
   resolveBatchSttModel,
   DEFAULT_STT_BATCH_MODEL,
+  resolveBatchSttTimeoutMs,
+  DEFAULT_STT_BATCH_TIMEOUT_MS,
+  pcmToWav,
+  resolveTranscriptionUrl,
+  transcribeAudioDirect,
 } from "../extensions/lib/realtime-stt-batch.js";
 
 test("resolveBatchSttModel reads PI_RT_LOCAL_VAD_MODEL or the batch default, decoupled from the realtime model (bd-84bbf7)", () => {
@@ -72,4 +77,106 @@ test("transcribePcmBuffer rejects on a non-zero exit, carrying stderr (bd-9399e7
 test("transcribePcmBuffer rejects when spawn itself throws (bd-9399e7)", async () => {
   const { spawnImpl } = fakeStt({ throwOnSpawn: true });
   await assert.rejects(transcribePcmBuffer(Buffer.alloc(0), { spawnImpl }), /spawn ENOENT/);
+});
+
+// --- bd-adde03: batch stt timeout + direct one-shot HTTP transcription ---
+
+test("resolveBatchSttTimeoutMs reads PI_RT_LOCAL_VAD_TIMEOUT_MS, else default; 0 disables (bd-adde03)", () => {
+  assert.equal(resolveBatchSttTimeoutMs({}), DEFAULT_STT_BATCH_TIMEOUT_MS);
+  assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "5000" }), 5000);
+  assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "0" }), 0);
+  assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "-1" }), DEFAULT_STT_BATCH_TIMEOUT_MS);
+  assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "abc" }), DEFAULT_STT_BATCH_TIMEOUT_MS);
+});
+
+test("transcribePcmBuffer times out + kills a stalled subprocess instead of hanging (bd-adde03)", async () => {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { end() {} };
+  let killed = null;
+  proc.kill = (sig) => { killed = sig; };
+  const spawnImpl = () => proc; // never emits "close" -> would hang without the timeout
+  await assert.rejects(
+    transcribePcmBuffer(Buffer.from([0]), { spawnImpl, timeoutMs: 20 }),
+    /stt timed out after 20ms/,
+  );
+  assert.equal(killed, "SIGTERM");
+});
+
+test("pcmToWav wraps PCM in a valid 44-byte WAV header (bd-adde03)", () => {
+  const pcm = Buffer.from([1, 2, 3, 4]);
+  const wav = pcmToWav(pcm, { sampleRate: 24000, channels: 1, bitsPerSample: 16 });
+  assert.equal(wav.length, 44 + 4);
+  assert.equal(wav.toString("ascii", 0, 4), "RIFF");
+  assert.equal(wav.toString("ascii", 8, 12), "WAVE");
+  assert.equal(wav.toString("ascii", 12, 16), "fmt ");
+  assert.equal(wav.toString("ascii", 36, 40), "data");
+  assert.equal(wav.readUInt32LE(4), 36 + 4); // RIFF chunk size
+  assert.equal(wav.readUInt16LE(20), 1); // PCM
+  assert.equal(wav.readUInt16LE(22), 1); // channels
+  assert.equal(wav.readUInt32LE(24), 24000); // sample rate
+  assert.equal(wav.readUInt16LE(34), 16); // bits per sample
+  assert.equal(wav.readUInt32LE(40), 4); // data size
+  assert.deepEqual(wav.subarray(44), pcm);
+});
+
+test("resolveTranscriptionUrl normalizes the /v1 suffix (bd-adde03)", () => {
+  assert.equal(resolveTranscriptionUrl("http://p:4000"), "http://p:4000/v1/audio/transcriptions");
+  assert.equal(resolveTranscriptionUrl("http://p:4000/"), "http://p:4000/v1/audio/transcriptions");
+  assert.equal(resolveTranscriptionUrl("http://p:4000/v1"), "http://p:4000/v1/audio/transcriptions");
+  assert.equal(resolveTranscriptionUrl("http://p:4000/v1/"), "http://p:4000/v1/audio/transcriptions");
+  assert.equal(resolveTranscriptionUrl(""), "");
+});
+
+function fakeRes({ ok = true, status = 200, json, text, contentType = "application/json" } = {}) {
+  return {
+    ok,
+    status,
+    headers: { get: (k) => (String(k).toLowerCase() === "content-type" ? contentType : null) },
+    json: async () => json,
+    text: async () => (text != null ? text : JSON.stringify(json)),
+  };
+}
+
+test("transcribeAudioDirect POSTs one WAV to /v1/audio/transcriptions and returns {text} (bd-adde03)", async () => {
+  let captured;
+  const fetchImpl = async (url, opts) => { captured = { url, opts }; return fakeRes({ json: { text: "  hello world " } }); };
+  const out = await transcribeAudioDirect({
+    pcm: Buffer.from([1, 2, 3, 4]),
+    model: "mai-transcribe-1.5",
+    baseUrl: "http://proxy:4000",
+    apiKey: "sk-xyz",
+    fetchImpl,
+  });
+  assert.equal(out, "hello world");
+  assert.equal(captured.url, "http://proxy:4000/v1/audio/transcriptions");
+  assert.equal(captured.opts.method, "POST");
+  assert.equal(captured.opts.headers.Authorization, "Bearer sk-xyz");
+  assert.ok(captured.opts.body instanceof FormData, "body is multipart FormData");
+});
+
+test("transcribeAudioDirect throws on a non-2xx response (bd-adde03)", async () => {
+  const fetchImpl = async () => fakeRes({ ok: false, status: 500, text: "boom", contentType: "text/plain" });
+  await assert.rejects(
+    transcribeAudioDirect({ pcm: Buffer.from([0]), baseUrl: "http://p:1", apiKey: "k", fetchImpl }),
+    /transcribe HTTP 500: boom/,
+  );
+});
+
+test("transcribeAudioDirect aborts + throws a clear error on timeout (bd-adde03)", async () => {
+  const fetchImpl = (_url, opts) => new Promise((_resolve, reject) => {
+    opts.signal?.addEventListener?.("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  });
+  await assert.rejects(
+    transcribeAudioDirect({ pcm: Buffer.from([0]), baseUrl: "http://p:1", apiKey: "k", timeoutMs: 20, fetchImpl }),
+    /transcribe timed out after 20ms/,
+  );
+});
+
+test("transcribeAudioDirect throws when no base URL is configured (bd-adde03)", async () => {
+  await assert.rejects(
+    transcribeAudioDirect({ pcm: Buffer.from([0]), baseUrl: "", apiKey: "k", fetchImpl: async () => fakeRes({ json: { text: "x" } }) }),
+    /no base URL/,
+  );
 });

@@ -199,16 +199,24 @@ This is useful when you want voice input but still want another model/provider t
 
 `local-vad` is an opt-in, WebSocket-free STT mode. Instead of streaming the
 microphone to the OpenAI realtime WebSocket, it captures audio locally, runs a
-local energy VAD to segment speech, and transcribes each segment with a one-shot
-batch `stt --stdin` call. It inserts a provisional partial after a short trailing
-silence and sends the whole turn into Pi as a user message after a longer silence.
-It is fully isolated from the WebSocket modes (`/rt stt [vad|ptt]`, `/rt start`),
-so enabling it never disturbs them.
+local energy VAD to segment speech, and transcribes each complete turn with a
+single first-party HTTP call: the committed PCM is wrapped as a WAV and POSTed
+as one file to `<base>/v1/audio/transcriptions` (the OpenAI-compatible endpoint
+on `OPENAI_BASE_URL`). Because local-vad already has the whole turn, this one-shot
+request — which the extension fully controls (bounded timeout, explicit errors) —
+replaces the older opaque `stt --stdin` subprocess that could stall and hang
+"transcribing" forever (bd-adde03). It inserts a provisional partial after a short
+trailing silence and sends the whole turn into Pi as a user message after a longer
+silence. It is fully isolated from the WebSocket modes (`/rt stt [vad|ptt]`,
+`/rt start`), so enabling it never disturbs them.
 
-The batch transcription model is independent of the realtime `trans` model: it
+The transcription model is independent of the realtime `trans` model: it
 defaults to `mai-transcribe-1.5` and is overridden with `PI_RT_LOCAL_VAD_MODEL`
 (a realtime-only model such as `gpt-realtime-whisper` is not valid for the batch
-REST `stt` call). `/rt doctor` shows the active local-vad model and thresholds.
+transcription endpoint). The request is bounded by `PI_RT_LOCAL_VAD_TIMEOUT_MS`
+(default 30000; `0` disables) so a stalled endpoint surfaces a clear error and
+returns to listening instead of hanging. `/rt doctor` shows the active local-vad
+model and thresholds.
 
 The energy threshold can be tuned **live** (without restarting) via `/rt energy=<0..1>`
 (higher = less sensitive), parallel to `/rt thresh=` for server VAD. While listening,
@@ -219,7 +227,9 @@ Tuning knobs (all optional):
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `PI_RT_LOCAL_VAD_MODEL` | `mai-transcribe-1.5` | batch `stt` transcription model |
+| `PI_RT_LOCAL_VAD_MODEL` | `mai-transcribe-1.5` | batch transcription model (POSTed to `/v1/audio/transcriptions`) |
+| `PI_RT_LOCAL_VAD_TIMEOUT_MS` | `30000` | per-turn transcription timeout in ms (`0` disables) |
+| `PI_RT_LOCAL_VAD_USE_STT_CLI` | _(unset)_ | set `1` to fall back to the legacy `stt --stdin` subprocess instead of the direct HTTP call |
 | `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` | `0.012` | normalized RMS (0..1) at/above which a frame is speech |
 | `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` | `1000` | trailing silence (ms) that inserts a provisional partial |
 | `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS` | `3000` | trailing silence (ms) that finalizes/sends the turn |
@@ -228,10 +238,12 @@ Tuning knobs (all optional):
 **Troubleshooting (first-run validation):**
 
 - *Nothing is transcribed.* The first transcription failure is surfaced as a
-  warning (the common cause is a missing `stt` binary or an unavailable model).
-  Run `/rt doctor` to see the active local-vad model, thresholds, and last error,
-  and confirm the `stt` binary is on `PATH` and `PI_RT_LOCAL_VAD_MODEL` resolves to
-  a batch-capable model (not a realtime-only model like `gpt-realtime-whisper`).
+  warning. With the default direct-HTTP path the common causes are an
+  unreachable/slow `/v1/audio/transcriptions` endpoint (bounded by
+  `PI_RT_LOCAL_VAD_TIMEOUT_MS`, then surfaced) or a bad `OPENAI_BASE_URL` /
+  `OPENAI_API_KEY`. Run `/rt doctor` to see the active local-vad model, thresholds,
+  and last error, and confirm `PI_RT_LOCAL_VAD_MODEL` resolves to a
+  batch-capable model (not a realtime-only model like `gpt-realtime-whisper`).
 - *Turns commit too early or too late.* Adjust `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS`
   (trailing silence that finalizes/sends the turn) and
   `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` (provisional-partial silence).
