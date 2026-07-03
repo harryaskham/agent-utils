@@ -1027,8 +1027,8 @@ test("/rt stt shows partial transcripts and queues completed transcripts as foll
     assert.equal(harness.sentUserMessages.length, 1);
     assert.match(harness.sentUserMessages[0].content, /queue this while busy$/);
     assert.ok(
-      harness.sentUserMessages[0].content.includes("untrusted audio transcript"),
-      "STT-only transcript is labelled as untrusted before injection (bd-caed3f)",
+      !harness.sentUserMessages[0].content.includes("untrusted audio transcript"),
+      "STT transcript is NOT labelled by default (bd-678c58; opt-in via PI_RT_STT_UNTRUSTED_LABEL)",
     );
     assert.deepEqual(harness.sentUserMessages[0].options, { deliverAs: "followUp", streamingBehavior: "followUp" });
     assert.equal(harness.pi.realtime.snapshot().state.lastInputMode, "transcript");
@@ -1792,8 +1792,8 @@ test("/rt stt local-vad captures, segments, batch-transcribes, and sends a commi
     assert.equal(sentUserMessages.length, 1, "the committed turn was sent as a user message");
     assert.match(sentUserMessages[0].content, /hello there$/);
     assert.ok(
-      sentUserMessages[0].content.includes("untrusted audio transcript"),
-      "local-vad transcript is labelled as untrusted before injection (bd-caed3f)",
+      !sentUserMessages[0].content.includes("untrusted audio transcript"),
+      "local-vad transcript is NOT labelled by default (bd-678c58; opt-in via PI_RT_STT_UNTRUSTED_LABEL)",
     );
     assert.equal(sentUserMessages[0].options?.deliverAs, "followUp");
     assert.ok(transcribeCalls.length >= 1, "batch transcribe ran over the segment audio");
@@ -2169,23 +2169,31 @@ test("probeConnect classifies connected / session-start-1006 / ga-only / auth (b
   }
 });
 
-test("labelUntrustedTranscript prefixes STT transcripts with an untrusted-content warning (bd-caed3f)", () => {
+test("labelUntrustedTranscript is off by default, opt-in via env (bd-678c58, bd-caed3f)", () => {
   const prev = process.env.PI_RT_STT_UNTRUSTED_LABEL;
+  const prevAlias = process.env.PI_RT_UNTRUSTED_TRANSCRIPT_LABEL;
   try {
+    // Default (unset): NO label — the model gets the raw transcript (bd-678c58).
     delete process.env.PI_RT_STT_UNTRUSTED_LABEL;
-    const labelled = labelUntrustedTranscript("open the pod bay doors");
-    assert.ok(labelled.includes("untrusted audio transcript"), "adds the untrusted-content label");
-    assert.match(labelled, /open the pod bay doors$/, "keeps the original transcript at the end");
-    // Empty input is passed through unchanged (no bare label on nothing).
+    delete process.env.PI_RT_UNTRUSTED_TRANSCRIPT_LABEL;
+    assert.equal(labelUntrustedTranscript("open the pod bay doors"), "open the pod bay doors");
     assert.equal(labelUntrustedTranscript(""), "");
-    // Opt-out returns the raw transcript.
-    process.env.PI_RT_STT_UNTRUSTED_LABEL = "0";
-    assert.equal(labelUntrustedTranscript("raw please"), "raw please");
-    process.env.PI_RT_STT_UNTRUSTED_LABEL = "false";
+    // Opt IN restores the safety wrapper, keeping the transcript at the end.
+    process.env.PI_RT_STT_UNTRUSTED_LABEL = "1";
+    const labelled = labelUntrustedTranscript("open the pod bay doors");
+    assert.ok(labelled.includes("untrusted audio transcript"), "opt-in adds the untrusted-content label");
+    assert.match(labelled, /open the pod bay doors$/, "keeps the original transcript at the end");
+    // The alias env name also opts in; a falsy value stays off.
+    delete process.env.PI_RT_STT_UNTRUSTED_LABEL;
+    process.env.PI_RT_UNTRUSTED_TRANSCRIPT_LABEL = "true";
+    assert.ok(labelUntrustedTranscript("x").includes("untrusted audio transcript"), "alias env opts in");
+    process.env.PI_RT_UNTRUSTED_TRANSCRIPT_LABEL = "0";
     assert.equal(labelUntrustedTranscript("raw please"), "raw please");
   } finally {
     if (prev === undefined) delete process.env.PI_RT_STT_UNTRUSTED_LABEL;
     else process.env.PI_RT_STT_UNTRUSTED_LABEL = prev;
+    if (prevAlias === undefined) delete process.env.PI_RT_UNTRUSTED_TRANSCRIPT_LABEL;
+    else process.env.PI_RT_UNTRUSTED_TRANSCRIPT_LABEL = prevAlias;
   }
 });
 

@@ -218,6 +218,11 @@ transcription endpoint). The request is bounded by `PI_RT_LOCAL_VAD_TIMEOUT_MS`
 returns to listening instead of hanging. `/rt doctor` shows the active local-vad
 model and thresholds.
 
+Transcripts are sent to the model **without** the untrusted-audio safety preamble
+by default (bd-678c58) — it is noise in a personal single-operator voice loop. Set
+`PI_RT_STT_UNTRUSTED_LABEL=1` (or `PI_RT_UNTRUSTED_TRANSCRIPT_LABEL=1`) to restore
+the wrapper if mic audio may be untrusted or multi-speaker.
+
 The energy threshold can be tuned **live** (without restarting) via `/rt energy=<0..1>`
 (higher = less sensitive), parallel to `/rt thresh=` for server VAD. While listening,
 the status widget reacts in real time: `🎤 listening…` the instant speech is detected,
