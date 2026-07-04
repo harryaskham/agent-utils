@@ -155,3 +155,20 @@ export function playPcmBuffer(buffer, command, notify, debug = false) {
     }
   });
 }
+
+/// Append a PulseAudio `--stream-name` to a pacat/parec command so individual pi
+/// audio streams are addressable (mute/route) on the pulse server host
+/// (bd-c201e6 realtime `pi-rt-<id>`, bd-4e1182 cascade/TTS `pi-tts-<id>`). No-op
+/// for non-pulse commands (ffplay/sox/ffmpeg), when a stream name is already
+/// present, or when `streamName` is empty. The name is sanitized to a safe
+/// pulse/shell token. Pure.
+export function applyPulseStreamName(command, streamName) {
+  const cmd = String(command || "");
+  const name = String(streamName || "").trim();
+  if (!cmd || !name) return cmd;
+  if (!/^\s*(pacat|parec)\b/.test(cmd)) return cmd; // only pulse client commands
+  if (/(^|\s)(--stream-name(=|\s)|-n(=|\s))/.test(cmd)) return cmd; // already named
+  const safe = name.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 60);
+  if (!safe) return cmd;
+  return `${cmd} --stream-name=${safe}`;
+}

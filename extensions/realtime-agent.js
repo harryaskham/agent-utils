@@ -115,6 +115,7 @@ import {
   defaultPlaybackCommand,
   runShellStream,
   playPcmBuffer,
+  applyPulseStreamName,
 } from "./lib/realtime-audio.js";
 import {
   REALTIME_CONTEXT_WINDOW_TOKENS,
@@ -229,6 +230,18 @@ export function labelUntrustedTranscript(text) {
   if (!optIn) return raw;
   return `${UNTRUSTED_TRANSCRIPT_PREFIX}\n${raw}`;
 }
+
+// bd-c201e6 / bd-4e1182: name this pi session's PulseAudio streams so they are
+// individually addressable on the pulse server host. Realtime record/playback
+// streams get `pi-rt-<id>`, cascade/TTS playback gets `pi-tts-<id>`. Seeded with
+// a stable process id and refined to the Pi session/branch id at session_start.
+let piAudioSessionId = `p${process.pid}`;
+function capturePiAudioSessionId(ctx) {
+  const id = ctx?.sessionManager?.getLeafId?.() || ctx?.sessionManager?.getBranch?.()?.at?.(-1)?.id;
+  if (id) piAudioSessionId = String(id);
+}
+const rtStream = (command) => applyPulseStreamName(command, `pi-rt-${piAudioSessionId}`);
+const ttsStream = (command) => applyPulseStreamName(command, `pi-tts-${piAudioSessionId}`);
 
 // Sensible defaults for this extension. Anything already set in the env wins,
 // so users can still override per-launch. These match the recommended config
@@ -547,7 +560,7 @@ class RealtimeSession {
   playChime(kind) {
     if (!this.config.chimeEnabled || !this.config.audioEnabled) return;
     const pcm = chimePcm(kind);
-    const command = this.config.playbackCommand || defaultPlaybackCommand();
+    const command = rtStream(this.config.playbackCommand || defaultPlaybackCommand());
     this.chimeChain = this.chimeChain
       .catch(() => {})
       .then(() => playPcmBuffer(pcm, command, undefined, false).catch(() => {}));
@@ -1714,7 +1727,7 @@ class RealtimeSession {
     if (!clip) throw new Error(`No RT audio clip found for ${id || "latest"}`);
     this.setPhase("replaying");
     try {
-      await playPcmBuffer(clip.pcm, this.config.playbackCommand || defaultPlaybackCommand(), (m, l) => this.notify(m, l), this.config.debug);
+      await playPcmBuffer(clip.pcm, rtStream(this.config.playbackCommand || defaultPlaybackCommand()), (m, l) => this.notify(m, l), this.config.debug);
     } finally {
       this.setPhase("idle");
     }
@@ -1809,7 +1822,7 @@ class RealtimeSession {
     // Experimental server VAD only if PI_RT_SERVER_VAD=1.
     // Force an audio session update now because no provider turn may have run yet.
 
-    const cmd = this.config.recordCommand || defaultRecordCommand();
+    const cmd = rtStream(this.config.recordCommand || defaultRecordCommand());
     const proc = runShellStream(cmd);
     // Assign this.mic BEFORE applying session so currentTurnDetection() reflects
     // VAD mode in the session.update we are about to send.
@@ -2389,6 +2402,7 @@ export default function realtimeAgentExtension(pi) {
 
   pi.on("session_start", (_event, ctx) => {
     session.lastCtx = ctx;
+    capturePiAudioSessionId(ctx); // bd-c201e6/bd-4e1182: name pulse streams per session
     if (isRealtimeModel(ctx.model)) {
       config.model = normalizeRealtimeModelId(ctx.model.id);
       session.showStatusWidget(ctx);
@@ -2430,7 +2444,7 @@ export default function realtimeAgentExtension(pi) {
       const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, endpoint, apiKey });
       if (pcm && pcm.length) {
         markAssistantSpeaking(audioDurationMs(pcm));
-        await playPcmBuffer(pcm, config.playbackCommand || defaultPlaybackCommand(), (m, l) => { try { ctx?.ui?.notify?.(m, l); } catch {} }, config.debug);
+        await playPcmBuffer(pcm, ttsStream(config.playbackCommand || defaultPlaybackCommand()), (m, l) => { try { ctx?.ui?.notify?.(m, l); } catch {} }, config.debug);
       }
     } catch (e) {
       try { ctx?.ui?.notify?.(`speak-replies failed: ${e?.message || String(e)}`, "warning"); } catch {}
@@ -2656,7 +2670,7 @@ export default function realtimeAgentExtension(pi) {
       },
     });
 
-    const cmd = config.recordCommand || defaultRecordCommand();
+    const cmd = rtStream(config.recordCommand || defaultRecordCommand());
     let capture;
     try { capture = localVadRunShellStream(cmd); }
     catch (e) { ctx.ui.notify(`local-vad capture failed: ${e.message}`, "error"); return false; }
@@ -2737,7 +2751,7 @@ export default function realtimeAgentExtension(pi) {
     // back to chat-completions for everyone.
     const piInferenceTurn = makeCascadePiInferenceTurn({ ctx });
     const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl, piInferenceTurn });
-    const playbackCommand = config.playbackCommand || defaultPlaybackCommand();
+    const playbackCommand = ttsStream(config.playbackCommand || defaultPlaybackCommand());
     const playImpl = (pcm) => {
       // Half-duplex: mark the assistant as speaking for this clip's duration so the
       // cascade mic suppresses + the level meter mutes while an agent plays, instead
@@ -2806,7 +2820,7 @@ export default function realtimeAgentExtension(pi) {
       },
       onError: (e) => { cascade.lastError = e?.message || String(e); ctx.ui.notify(`cascade transcription failed: ${cascade.lastError}. Check /rt doctor.`, "warning"); },
     });
-    const cmd = config.recordCommand || defaultRecordCommand();
+    const cmd = ttsStream(config.recordCommand || defaultRecordCommand());
     let capture;
     try { capture = localVadRunShellStream(cmd); }
     catch (e) { ctx.ui.notify(`cascade capture failed: ${e.message}`, "error"); return false; }
@@ -3200,7 +3214,7 @@ export default function realtimeAgentExtension(pi) {
           const pcm = await synthesizeAzureSpeechDirect({ text, voice, lang, speed, speakerProfileId, endpoint, apiKey });
           if (pcm && pcm.length) {
             markAssistantSpeaking(audioDurationMs(pcm));
-            await playPcmBuffer(pcm, config.playbackCommand || defaultPlaybackCommand(), (m, l) => { try { ctx.ui.notify(m, l); } catch {} }, config.debug);
+            await playPcmBuffer(pcm, ttsStream(config.playbackCommand || defaultPlaybackCommand()), (m, l) => { try { ctx.ui.notify(m, l); } catch {} }, config.debug);
           }
           return { content: [{ type: "text", text: `spoke (${text.length} chars, ${voice})` }] };
         } catch (e) {

@@ -6,6 +6,7 @@ import {
   audioOutputBackendLabel,
   defaultRecordCommand,
   defaultPlaybackCommand,
+  applyPulseStreamName,
 } from "../extensions/lib/realtime-audio.js";
 
 // Drive PI_RT_AUDIO_BACKEND / PULSE_SERVER to known values (or clear them) with
@@ -190,4 +191,27 @@ test("defaultPlaybackCommand maps explicit cmd, backend, device, and defaults", 
   }
   withCmdEnv({ PULSE_SERVER: "/run/pulse" }, () => assert.equal(defaultPlaybackCommand(), PACAT));
   withCmdEnv({}, () => assert.equal(defaultPlaybackCommand(), FFPLAY));
+});
+
+test("applyPulseStreamName appends --stream-name to pacat/parec and no-ops otherwise (bd-c201e6, bd-4e1182)", () => {
+  // pacat/parec get a sanitized --stream-name appended.
+  assert.equal(
+    applyPulseStreamName("pacat --playback --raw --format=s16le --rate=24000 --channels=1", "pi-tts-abc"),
+    "pacat --playback --raw --format=s16le --rate=24000 --channels=1 --stream-name=pi-tts-abc",
+  );
+  assert.equal(
+    applyPulseStreamName("parec --raw --format=s16le --rate=24000 --channels=1", "pi-rt-abc"),
+    "parec --raw --format=s16le --rate=24000 --channels=1 --stream-name=pi-rt-abc",
+  );
+  // Non-pulse commands are unchanged.
+  assert.equal(applyPulseStreamName("ffplay -nodisp -autoexit -i -", "pi-rt-x"), "ffplay -nodisp -autoexit -i -");
+  assert.equal(applyPulseStreamName("rec -q -t raw -", "pi-rt-x"), "rec -q -t raw -");
+  // Already-named commands are left alone (idempotent).
+  assert.equal(applyPulseStreamName("pacat --playback --stream-name=existing", "pi-rt-x"), "pacat --playback --stream-name=existing");
+  assert.equal(applyPulseStreamName("pacat --playback -n existing", "pi-rt-x"), "pacat --playback -n existing");
+  // Empty name / command -> unchanged.
+  assert.equal(applyPulseStreamName("pacat --playback", ""), "pacat --playback");
+  assert.equal(applyPulseStreamName("", "pi-rt-x"), "");
+  // Unsafe characters in the name are sanitized to a pulse/shell-safe token.
+  assert.equal(applyPulseStreamName("pacat --playback", "pi-rt-a b/c;d"), "pacat --playback --stream-name=pi-rt-a-b-c-d");
 });
