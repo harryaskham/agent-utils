@@ -2742,7 +2742,7 @@ export default function realtimeAgentExtension(pi) {
           try { ctx.ui.notify("PTT canceled — held transcript discarded.", "info"); } catch {}
           return { consume: true };
         }
-        if (data === "\r" || data === "\n" || data === " " || data === "\u001b") { // release: send
+        if (data === "\r" || data === "\n" || data === " ") { // release: send now
           const ctrl = localVad.controller;
           // Stop capture first (no more frames), then commitHeld flushes the
           // already-buffered audio and sends the whole turn once. stopLocalVad
@@ -2752,13 +2752,23 @@ export default function realtimeAgentExtension(pi) {
           try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
           return { consume: true };
         }
+        if (data === "\u001b") { // Esc: early exit — finalize into the editor, do NOT send (bd-4daaf5)
+          const ctrl = localVad.controller;
+          stopLocalVad({ flush: false });
+          ctrl?.finalizeHeldToEditor()
+            .then(() => { try { editorMirror.release(); } catch {} })
+            .catch((e) => { localVad.lastError = e?.message || String(e); });
+          try { ctx.ui.notify("PTT released to editor — edit the text and press Enter to send (nothing sent yet).", "info"); } catch {}
+          try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
+          return { consume: true };
+        }
         return undefined;
       }) || null;
     }
 
     ctx.ui.notify(
       hold
-        ? `local-vad PTT (${describeLocalVadConfig(cfg)}); speak, then Enter/Space/Esc to send, Ctrl-C to cancel; /rt stt stop to end.`
+        ? `local-vad PTT (${describeLocalVadConfig(cfg)}); speak, then Enter/Space to send, Esc to keep in editor for editing, Ctrl-C to cancel; /rt stt stop to end.`
         : `local-vad listening (${describeLocalVadConfig(cfg)}); /rt stt stop to end.`,
       "info",
     );

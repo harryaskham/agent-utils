@@ -401,6 +401,34 @@ test("holdCommits accumulates per-segment VAD commits and sends once on commitHe
   assert.equal(sent[0], "seg1 seg2", "the combined turn joins the accumulated segments in order");
 });
 
+test("finalizeHeldToEditor writes the accrued turn to the editor without sending (bd-4daaf5)", async () => {
+  const sent = [];
+  const inserted = [];
+  let seg = 0;
+  const controller = new LocalVadController({
+    holdCommits: true,
+    config: { insertSilenceMs: 100000, commitSilenceMs: 500 },
+    transcribe: async () => `seg${++seg}`,
+    insertPartial: (t) => inserted.push(t),
+    sendTurn: (t) => sent.push(t),
+  });
+  // Two committed segments accrue in PTT-hold mode.
+  for (let n = 0; n < 2; n++) {
+    await controller.pushFrame(frame(300, { speech: true }));
+    for (let s = 0; s < 600; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+    await controller._drain();
+  }
+  // Early exit (Esc): finalize the accrual INTO the editor, do NOT send.
+  const text = await controller.finalizeHeldToEditor();
+  assert.equal(text, "seg1 seg2");
+  assert.deepEqual(sent, [], "early-exit does NOT dispatch a message");
+  assert.equal(inserted.at(-1), "seg1 seg2", "the accrued turn is written to the editor via insertPartial");
+  // The accrual is cleared, so a later commitHeld sends nothing.
+  const after = await controller.commitHeld();
+  assert.equal(after, "", "held accrual cleared after finalizeHeldToEditor");
+  assert.deepEqual(sent, [], "still nothing sent after early exit");
+});
+
 test("holdCommits renders incremental partials but defers the send to commitHeld (bd-9e06ae)", async () => {
   const partials = [];
   const sent = [];

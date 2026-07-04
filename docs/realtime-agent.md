@@ -299,6 +299,26 @@ text are skipped.
 > length (~15 chars/s); on a slow TTS voice you can still raise `/rt energy=` if any
 > tail leaks through.
 
+### Push-to-talk hold mode (`/rt stt local-vad-ptt`)
+
+`local-vad-ptt` is the push-to-talk variant of local-vad (bd-9e06ae): VAD still runs
+and transcribes incrementally into the input editor as you speak, but per-segment
+silence does **not** send. Instead segments accumulate and the whole turn is
+controlled by a key when you finish:
+
+- **`Enter` / `Space`** — send the accumulated turn now (the editor's text, honoring
+  any edits), then clear the editor.
+- **`Esc`** — early exit (bd-4daaf5): finalize the accrued transcript **into the
+  editor without sending**. The text stays there, fully editable; press `Enter` to
+  send it manually. Nothing is lost if you release before you meant to send.
+- **`Ctrl-C`** — cancel and discard the held transcript.
+- `/rt stt stop` ends the mode.
+
+Because partials mirror into the editor throughout (see bd-0c008d above), you can
+edit at any point; a manual edit is never clobbered by a later partial, and whatever
+is in the editor is what sends. `hchat-ptt` launches this mode with the full voiced
+loop (`/rt stt local-vad-ptt` + speak-replies).
+
 ### The `speak` tool (low-latency direct-Azure agent voice)
 
 `force-agent-speech` above speaks replies through `caco msg speak` (the TTS

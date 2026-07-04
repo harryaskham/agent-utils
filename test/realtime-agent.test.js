@@ -162,6 +162,8 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const statuses = new Map();
   const notifications = [];
   const editorText = { value: "" };
+  const terminalInputHandlers = [];
+  const sendTerminalInput = (data) => { for (const cb of [...terminalInputHandlers]) { try { cb(data); } catch {} } };
   const editorTextSets = [];
   const setModelCalls = [];
   const forkCalls = [];
@@ -188,7 +190,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
       // bd-0c008d: in-memory core input editor for the transcript-mirror path.
       setEditorText(text) { editorText.value = String(text ?? ""); editorTextSets.push(editorText.value); },
       getEditorText() { return editorText.value; },
-      onTerminalInput() { return () => {}; },
+      onTerminalInput(cb) { if (typeof cb === "function") terminalInputHandlers.push(cb); return () => { const i = terminalInputHandlers.indexOf(cb); if (i >= 0) terminalInputHandlers.splice(i, 1); }; },
     },
   };
 
@@ -220,7 +222,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     return { cancelled: false };
   };
 
-  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, editorText, editorTextSets, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
+  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, editorText, editorTextSets, sendTerminalInput, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -1915,6 +1917,49 @@ test("local-vad streams partials into the editor and sends the editor content on
     assert.match(h.sentUserMessages[0].content, /hello world$/);
     assert.equal(h.editorText.value, "", "editor cleared after the turn is sent");
     await h.commands.get("rt").handler("stt stop", h.ctx);
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
+
+test("local-vad-ptt Esc releases the held transcript to the editor without sending (bd-4daaf5)", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "hold this thought" });
+  try {
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+    await h.commands.get("rt").handler("stt local-vad-ptt", h.ctx);
+    const cap = captures.at(-1);
+    const pcm = (ms, speech) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+      return b;
+    };
+    // Speak a segment then a short silence: in PTT-hold mode the VAD commit
+    // accrues (does NOT send) and the draft reaches the editor.
+    cap.stdout.emit("data", pcm(500, true));
+    for (let i = 0; i < 12; i++) cap.stdout.emit("data", pcm(100, false));
+    await waitFor(() => h.editorTextSets.includes("hold this thought"), { timeoutMs: 2000 });
+    assert.equal(h.sentUserMessages.length, 0, "hold-mode VAD silence does not send");
+    // Esc: early exit -> finalize the accrual INTO the editor, do NOT send (bd-4daaf5).
+    h.sendTerminalInput("\u001b");
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(h.sentUserMessages.length, 0, "Esc early-exit dispatches no message");
+    assert.equal(h.editorText.value, "hold this thought", "held transcript stays in the editor for manual edit/send");
+    // Enter after an Esc early-exit must not resurrect a send (capture already stopped).
+    h.sendTerminalInput("\r");
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(h.sentUserMessages.length, 0, "no send after early-exit + Enter (capture stopped)");
   } finally {
     __setLocalVadHooksForTest({});
   }

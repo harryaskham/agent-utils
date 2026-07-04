@@ -144,6 +144,22 @@ export class LocalVadController {
     this._held = [];
   }
 
+  /// PTT early-exit (bd-4daaf5): finalize the in-progress segment + accrued held
+  /// transcript INTO the editor (via insertPartial) WITHOUT sending, then clear
+  /// the accrual. The caller relinquishes the editor mirror so the operator can
+  /// edit the text and send it manually. Returns the finalized text ("" when
+  /// nothing was captured). No sendTurn is called, so no message is dispatched.
+  async finalizeHeldToEditor() {
+    await this.flush();
+    const text = this._held.join(" ").replace(/\s+/g, " ").trim();
+    this._held = [];
+    if (text) {
+      try { this.insertPartial(text); } catch (err) { this.onError(err); }
+    }
+    try { this.onState("idle"); } catch { /* best-effort */ }
+    return text;
+  }
+
   /// Feed PCM16 audio (an arbitrary-size capture chunk). Re-frames into fixed
   /// ~100 ms frames and advances the segmenter SYNCHRONOUSLY — transcription is
   /// dispatched to an async pump and never blocks ingestion, so the live capture
