@@ -319,6 +319,11 @@ edit at any point; a manual edit is never clobbered by a later partial, and what
 is in the editor is what sends. `hchat-ptt` launches this mode with the full voiced
 loop (`/rt stt local-vad-ptt` + speak-replies).
 
+A color-coded state indicator (bd-081267) renders a truecolor bar under the input
+box and tracks the live state: **orange** while listening/recording, **magenta**
+while transcribing, a **yellow** flash when a transcription chunk completes, and a
+**green** flash when a turn is committed/sent. It needs a 24-bit-color terminal.
+
 ### The `speak` tool (low-latency direct-Azure agent voice)
 
 `force-agent-speech` above speaks replies through `caco msg speak` (the TTS

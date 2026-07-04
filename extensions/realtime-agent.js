@@ -159,6 +159,7 @@ import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
 import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
+import { makePttIndicator } from "./lib/realtime-ptt-indicator.js";
 import { transcribePcmBuffer, resolveBatchSttModel, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
@@ -2603,7 +2604,7 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
-  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, releaseUnsub: null };
+  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null };
 
   // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
   // VAD). Updates the running segmenter immediately and persists for next start.
@@ -2639,6 +2640,11 @@ export default function realtimeAgentExtension(pi) {
     localVad.controller = null;
     localVad.capture = null;
     if (cap) { try { cap.kill?.(); } catch {} }
+    // bd-081267: tear down the color-coded state indicator.
+    try { localVad.pttIndicator?.stop(); } catch {}
+    try { localVad.clearPttIndicator?.(); } catch {}
+    localVad.pttIndicator = null;
+    localVad.clearPttIndicator = null;
     if (flush && ctrl) { ctrl.flush().catch((e) => { localVad.lastError = e?.message || String(e); }); }
     return wasActive;
   }
@@ -2656,6 +2662,17 @@ export default function realtimeAgentExtension(pi) {
     // editing) instead of only a status widget; commit sends the editor's text
     // so operator edits are honored.
     const editorMirror = makeEditorTranscriptMirror(ctx.ui);
+
+    // bd-081267: color-coded UI state indicator — a truecolor bar under the input
+    // box that turns orange (listening), magenta (transcribing), and flashes
+    // yellow (chunk complete) / green (turn committed). Rendered to its own
+    // belowEditor widget so it coexists with the realtime-status text line.
+    const barWidth = Math.max(16, Math.min((((typeof process !== "undefined" && process.stdout && process.stdout.columns) || 48) - 2), 200));
+    localVad.pttIndicator = makePttIndicator({
+      width: barWidth,
+      render: (lines) => { try { ctx.ui.setWidget("realtime-ptt-indicator", lines, { placement: "belowEditor" }); } catch {} },
+    });
+    localVad.clearPttIndicator = () => { try { ctx.ui.setWidget("realtime-ptt-indicator", undefined); } catch {} };
 
     const controller = new LocalVadController({
       config: cfg,
@@ -2681,6 +2698,18 @@ export default function realtimeAgentExtension(pi) {
         }
         const line = state === "listening" ? "🎤 listening…" : state === "transcribing" ? "✍️ transcribing…" : state === "held" ? "⏸️ held — release (Enter/Space/Esc) to send" : null;
         if (line) { try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${line}`], { placement: "belowEditor" }); } catch {} }
+        // bd-081267: drive the color-coded state indicator. 'held' (a finalized
+        // segment in hold mode) flashes yellow (chunk complete); listening/
+        // transcribing set the steady color; idle resets to neutral.
+        try {
+          const ind = localVad.pttIndicator;
+          if (ind) {
+            if (state === "held") ind.flash("chunk");
+            else if (state === "listening") ind.setState("listening");
+            else if (state === "transcribing" || state === "transcribing-final") ind.setState("transcribing");
+            else if (state === "idle") ind.setState("idle");
+          }
+        } catch {}
       },
       sendTurn: (text) => {
         // bd-0c008d: send the editor's current text (honoring any operator edits),
@@ -2690,6 +2719,8 @@ export default function realtimeAgentExtension(pi) {
         if (!finalText) { try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {} return; }
         try { pi.sendUserMessage(labelUntrustedTranscript(finalText), { deliverAs: "followUp", streamingBehavior: "followUp" }); }
         catch (e) { localVad.lastError = `sendUserMessage failed: ${e.message}`; ctx.ui.notify(localVad.lastError, "warning"); }
+        // bd-081267: green flash on commit (the turn was sent).
+        try { localVad.pttIndicator?.flash("commit"); } catch {}
         try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
       },
       onError: (e) => {

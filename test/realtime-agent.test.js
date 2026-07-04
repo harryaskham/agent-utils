@@ -1965,6 +1965,44 @@ test("local-vad-ptt Esc releases the held transcript to the editor without sendi
   }
 });
 
+test("local-vad drives the color-coded state indicator widget and clears it on stop (bd-081267)", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "hi" });
+  try {
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+    await h.commands.get("rt").handler("stt local-vad", h.ctx);
+    const cap = captures.at(-1);
+    const pcm = (ms, speech) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+      return b;
+    };
+    // Drive a turn; the indicator widget should carry a truecolor bar at some point.
+    cap.stdout.emit("data", pcm(500, true));
+    for (let i = 0; i < 12; i++) cap.stdout.emit("data", pcm(100, false));
+    await waitFor(() => {
+      const w = h.widgets.get("realtime-ptt-indicator");
+      return Array.isArray(w) && String(w[0]).includes("38;2;") && String(w[0]).includes("▁");
+    }, { timeoutMs: 2000 });
+    // Stop tears the indicator down.
+    await h.commands.get("rt").handler("stt stop", h.ctx);
+    assert.equal(h.widgets.get("realtime-ptt-indicator"), undefined, "indicator cleared on stop");
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
+
 test("/rt stt local-vad surfaces the first transcribe failure to the operator (bd-43512a)", async () => {
   let captured;
   const captureFn = () => {
