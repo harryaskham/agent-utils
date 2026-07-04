@@ -95,6 +95,56 @@ test("adapter .off/.removeListener remove a registered listener (bd-5b816a: no w
   assert.doesNotThrow(() => { ws.off("message", onMsg); ws.off("close", closeCb); ws.off("error", errCb); });
 });
 
+// bd-72c993: ws-surface contract. realtime-agent.js drives the WebSocket through this
+// exact EventEmitter-style surface (recvOnce/connect/send/close). The undici fallback
+// adapter MUST provide every method the real 'ws' package would, or cleanup crashes pi
+// on git-checkout hosts where 'ws' is unresolvable (bd-5b816a: the missing .off). The
+// real 'ws' inherits on/once/off/removeListener from EventEmitter, so only the shim can
+// drift; keep this list in sync with the ws.<method>( call sites in realtime-agent.js.
+const REQUIRED_WS_SURFACE = ["on", "once", "off", "removeListener", "send", "close"];
+
+test("ws-surface contract: fallback adapter provides every method the realtime code calls (bd-72c993)", () => {
+  const FakeWS = makeFakeGlobalWS();
+  const Adapter = createGlobalWebSocketAdapter(FakeWS);
+  const ws = new Adapter("wss://h/p", { headers: { "api-key": "k" } });
+  for (const method of REQUIRED_WS_SURFACE) {
+    assert.equal(typeof ws[method], "function", `fallback adapter is missing ws.${method}() — realtime code calls it`);
+  }
+});
+
+test("ws-surface contract: the recvOnce register-then-cleanup lifecycle never throws and removes all listeners (bd-72c993)", () => {
+  const FakeWS = makeFakeGlobalWS();
+  const Adapter = createGlobalWebSocketAdapter(FakeWS);
+  const ws = new Adapter("wss://h/p", { headers: { "api-key": "k" } });
+  const inner = FakeWS._instances[0];
+
+  // Exactly recvOnce's shape: one-shot listeners on message/close/error, then off()
+  // all three in cleanup (bd-5b816a's missing .off crashed pi right here).
+  let msg = 0, close = 0, err = 0;
+  const onMessage = () => { msg++; };
+  const onClose = () => { close++; };
+  const onError = () => { err++; };
+  ws.once("message", onMessage);
+  ws.once("close", onClose);
+  ws.once("error", onError);
+  assert.doesNotThrow(() => {
+    ws.off("message", onMessage);
+    ws.off("close", onClose);
+    ws.off("error", onError);
+  }, "recvOnce cleanup (off message/close/error) must not throw");
+  inner.dispatch("message", { data: "x" });
+  inner.dispatch("close", { code: 1000 });
+  inner.dispatch("error", { message: "e" });
+  assert.deepEqual([msg, close, err], [0, 0, 0], "off() removed every recvOnce listener before it could fire");
+
+  // The persistent listeners connect() installs (on message/close) keep firing.
+  const seen = [];
+  ws.on("message", (d) => seen.push(d));
+  inner.dispatch("message", { data: "a" });
+  inner.dispatch("message", { data: "b" });
+  assert.deepEqual(seen, ["a", "b"], "on(message) persists across dispatches");
+});
+
 test("createGlobalWebSocketAdapter returns null without a global WebSocket", () => {
   // Pass an explicit non-function (undefined would trigger the globalThis.WebSocket default).
   assert.equal(createGlobalWebSocketAdapter(null), null);
