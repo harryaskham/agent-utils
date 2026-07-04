@@ -161,7 +161,7 @@ import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from 
 import { transcribePcmBuffer, resolveBatchSttModel, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
-import { AudioLevelMeter, formatLevelBar, rmsToLevel } from "./lib/realtime-audio-meter.js";
+import { AudioLevelMeter, formatLevelBar, rmsToLevel, shouldRefreshMeter, DEFAULT_METER_REFRESH_MS } from "./lib/realtime-audio-meter.js";
 import {
   CascadeController,
   makeCascadeRunTurn,
@@ -267,6 +267,12 @@ const REALTIME_AUDIO_BACKENDS = new Set([
   "auto", "coreaudio", "audiotoolbox", "sox", "rec", "play", "ffplay", "ffmpeg",
 ]);
 const REALTIME_REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "high"]);
+// Cadence for the LIVE input-level meter refresh during mic capture. The mic
+// callback fires per PCM chunk (~20-40ms); refreshing the status widget that
+// often is wasteful, so refreshes are throttled to one per METER_REFRESH_MS.
+// Env-overridable for tuning (PI_RT_METER_REFRESH_MS).
+const METER_REFRESH_MS = numberEnv("PI_RT_METER_REFRESH_MS", DEFAULT_METER_REFRESH_MS);
+
 const REALTIME_START_MODES = new Set(["vad", "ptt", "nolisten"]);
 const REALTIME_MIC_MODES = new Set(["vad", "ptt", "off", "stop", "cancel"]);
 const REALTIME_STT_MODES = new Set(["start", "vad", "ptt", "stop", "off", "cancel"]);
@@ -454,6 +460,7 @@ class RealtimeSession {
     this.lastMicBytes = 0;
     this.inputLevel = 0;                      // smoothed mic input level 0..1 ("show audio input"); written in the mic path, read by the status/widget display
     this.inputLevelTracker = new InputLevelTracker();
+    this.lastMeterRenderAt = 0;               // throttle stamp for the LIVE input-level meter refresh during mic capture (esp. PTT, where no server event drives a refresh)
     this.micMuteUntilTs = 0;
     this.lastTurnInputMode = null;           // null|audio|transcript|text
     this.pendingTranscriptText = "";
@@ -1817,6 +1824,7 @@ class RealtimeSession {
     this.micMode = mode;
     this.lastMicBytes = 0;
     this.inputLevel = this.inputLevelTracker.reset();
+    this.lastMeterRenderAt = 0;               // reset so the first captured chunk refreshes the level meter immediately
     this.clearPendingCommitTimer();
     // PTT/manual VAD: client manually commits on Enter/Space/Esc or /rt-stop.
     // Experimental server VAD only if PI_RT_SERVER_VAD=1.
@@ -1844,6 +1852,17 @@ class RealtimeSession {
       this.lastMicBytes += chunk.length;
       this.inputLevel = this.inputLevelTracker.push(chunk);
       try { this.send({ type: "input_audio_buffer.append", audio: b64(chunk) }); } catch {}
+      // LIVE input-level meter: during PTT capture the mic callback is the only
+      // signal that fires while the user holds the button (server VAD events do
+      // not arrive until release), so nothing else refreshes the status widget
+      // and the level bar would freeze. Refresh here, throttled to a bounded
+      // cadence so the bar animates smoothly without flooding setStatus on every
+      // ~20-40ms PCM chunk. Also benefits VAD/continuous capture between events.
+      const nowMeter = Date.now();
+      if (shouldRefreshMeter(nowMeter, this.lastMeterRenderAt, METER_REFRESH_MS)) {
+        this.lastMeterRenderAt = nowMeter;
+        this.updateStatus();
+      }
     });
     proc.stderr.on("data", (d) => {
       const s = String(d).trim();

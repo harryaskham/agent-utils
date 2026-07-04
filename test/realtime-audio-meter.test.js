@@ -4,9 +4,11 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_METER_GAIN,
   DEFAULT_METER_WIDTH,
+  DEFAULT_METER_REFRESH_MS,
   rmsToLevel,
   formatLevelBar,
   formatLevelLabel,
+  shouldRefreshMeter,
   AudioLevelMeter,
 } from "../extensions/lib/realtime-audio-meter.js";
 
@@ -72,4 +74,24 @@ test("AudioLevelMeter.reset clears level/peak and exposes defaults", () => {
   assert.equal(m.level, 0);
   assert.equal(m.peak, 0);
   assert.equal(m.width, DEFAULT_METER_WIDTH);
+});
+
+test("shouldRefreshMeter throttles live-meter refreshes to one per interval", () => {
+  // Never-rendered (lastAt not finite) always refreshes so the first chunk shows.
+  assert.equal(shouldRefreshMeter(1000, undefined), true);
+  assert.equal(shouldRefreshMeter(1000, NaN), true);
+  // lastAt = 0 (the reset sentinel) with now past the interval -> refresh.
+  assert.equal(shouldRefreshMeter(DEFAULT_METER_REFRESH_MS, 0), true);
+  // Within the interval since the last render -> suppress.
+  assert.equal(shouldRefreshMeter(1000, 1000, 150), false);
+  assert.equal(shouldRefreshMeter(1100, 1000, 150), false);
+  // Exactly at / past the interval boundary -> refresh.
+  assert.equal(shouldRefreshMeter(1150, 1000, 150), true);
+  assert.equal(shouldRefreshMeter(1300, 1000, 150), true);
+  // A non-finite now never refreshes (defensive: no clock -> no spam).
+  assert.equal(shouldRefreshMeter(NaN, 0), false);
+  // Non-positive / non-finite interval falls back to the default cadence.
+  assert.equal(shouldRefreshMeter(DEFAULT_METER_REFRESH_MS, 0, 0), true);
+  assert.equal(shouldRefreshMeter(10, 0, 0), false);
+  assert.equal(shouldRefreshMeter(DEFAULT_METER_REFRESH_MS, 0, NaN), true);
 });

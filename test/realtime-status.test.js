@@ -361,6 +361,27 @@ test("micCaptureSummary renders a gained level meter when session.inputLevel is 
   );
 });
 
+test("micCaptureSummary renders the live level meter in PTT mode (bd-9ff804)", () => {
+  // The bead: show a visual input-level indicator in PTT mode. The meter is
+  // mode-agnostic (rendered whenever the mic is active with a finite level), so
+  // PTT capture gets the same gained level bar as VAD. RMS 0.05 -> 60%.
+  assert.match(
+    micCaptureSummary({ mic: true, micMode: "ptt", lastMicBytes: 1024, inputLevel: 0.05 }),
+    /^ptt active \u00b7 1024 bytes \u00b7 level:\[.+\] +60%$/,
+  );
+  // Silent-but-active PTT still renders the bar at 0% (not a byte-only summary).
+  assert.match(
+    micCaptureSummary({ mic: true, micMode: "ptt", lastMicBytes: 2048, inputLevel: 0 }),
+    / \u00b7 level:\[.+\] +0%$/,
+  );
+  // The rendered bar is identical between PTT and VAD for the same level, so the
+  // meter is genuinely mode-agnostic rather than special-cased per mode.
+  const level = 0.05;
+  const pttBar = micCaptureSummary({ mic: true, micMode: "ptt", lastMicBytes: 1024, inputLevel: level }).replace(/^ptt/, "");
+  const vadBar = micCaptureSummary({ mic: true, micMode: "vad", lastMicBytes: 1024, inputLevel: level }).replace(/^vad/, "");
+  assert.equal(pttBar, vadBar);
+});
+
 test("diagnosticLines explains a GA-only realtime model rejection (bd-0b40ce)", () => {
   withStatusEnv({ OPENAI_API_KEY: "sk-xxx" }, () => {
     // GA error surfaced via lastResponseError -> specific GA hint, generic suppressed.

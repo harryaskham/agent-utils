@@ -51,6 +51,27 @@ export function formatLevelLabel(level, opts = {}) {
   return `[${formatLevelBar(lv, opts)}] ${String(Math.round(lv * 100)).padStart(2, " ")}%`;
 }
 
+// Live-meter refresh throttle. The mic-capture callback fires on every PCM
+// chunk (~20-40ms). Re-rendering the status widget that often is wasteful and
+// can flood the UI, so `shouldRefreshMeter` gates status refreshes to at most
+// one per DEFAULT_METER_REFRESH_MS. This is what makes the level bar animate
+// LIVE during PTT capture, where the mic callback is the only signal (server
+// VAD events do not fire until the PTT button is released). Pure: the caller
+// owns the `lastAtMs` timestamp; a non-finite `lastAtMs` (never rendered) always
+// refreshes so the first chunk shows immediately.
+export const DEFAULT_METER_REFRESH_MS = 150;
+
+export function shouldRefreshMeter(nowMs, lastAtMs, intervalMs = DEFAULT_METER_REFRESH_MS) {
+  const now = Number(nowMs);
+  if (!Number.isFinite(now)) return false;
+  const last = Number(lastAtMs);
+  if (!Number.isFinite(last)) return true;
+  const gap = Number.isFinite(Number(intervalMs)) && Number(intervalMs) > 0
+    ? Number(intervalMs)
+    : DEFAULT_METER_REFRESH_MS;
+  return now - last >= gap;
+}
+
 /// Stateful input-level meter with fast attack + slow decay (so the bar tracks
 /// speech responsively but does not flicker on every silent frame), fed raw RMS
 /// or PCM frames. Deterministic -> unit-tested.
