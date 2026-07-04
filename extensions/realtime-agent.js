@@ -281,7 +281,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|local-vad-ptt|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -2603,7 +2603,7 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
-  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0 };
+  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, releaseUnsub: null };
 
   // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
   // VAD). Updates the running segmenter immediately and persists for next start.
@@ -2620,6 +2620,7 @@ export default function realtimeAgentExtension(pi) {
   function localVadStatusLine() {
     if (!localVad.active && !localVad.lastTranscript && !localVad.lastError) return "local-vad: idle";
     const parts = [`local-vad: ${localVad.active ? "listening" : "idle"}`];
+    if (localVad.hold) parts.push("ptt-hold");
     if (localVad.model) parts.push(`model=${localVad.model}`);
     if (localVad.cfg) parts.push(describeLocalVadConfig(localVad.cfg).replace(/^local-vad: /, ""));
     if (localVad.lastTranscript) parts.push(`last="${String(localVad.lastTranscript).slice(0, 40)}"`);
@@ -2630,6 +2631,9 @@ export default function realtimeAgentExtension(pi) {
   function stopLocalVad({ flush = true } = {}) {
     const wasActive = localVad.active;
     localVad.active = false;
+    localVad.hold = false;
+    try { localVad.releaseUnsub?.(); } catch {}
+    localVad.releaseUnsub = null;
     const ctrl = localVad.controller;
     const cap = localVad.capture;
     localVad.controller = null;
@@ -2639,14 +2643,14 @@ export default function realtimeAgentExtension(pi) {
     return wasActive;
   }
 
-  async function startLocalVad(ctx) {
+  async function startLocalVad(ctx, { hold = false } = {}) {
     // Free the mic: stop any active WSS realtime session and any prior local-vad.
     try { await controls.disable(ctx, { restoreModel: true }); } catch {}
     stopLocalVad({ flush: false });
 
     const cfg = parseLocalVadConfig();
     const model = resolveBatchSttModel();
-    Object.assign(localVad, { cfg, model, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now() });
+    Object.assign(localVad, { cfg, model, hold, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now() });
 
     // bd-0c008d: stream partial transcripts into the input editor (live voice
     // editing) instead of only a status widget; commit sends the editor's text
@@ -2655,6 +2659,7 @@ export default function realtimeAgentExtension(pi) {
 
     const controller = new LocalVadController({
       config: cfg,
+      holdCommits: hold,
       placeholder: "…",
       overlongHintMs: 7000,
       isSuppressed: () => isAssistantSpeaking(),
@@ -2674,7 +2679,7 @@ export default function realtimeAgentExtension(pi) {
           }
           return;
         }
-        const line = state === "listening" ? "🎤 listening…" : state === "transcribing" ? "✍️ transcribing…" : null;
+        const line = state === "listening" ? "🎤 listening…" : state === "transcribing" ? "✍️ transcribing…" : state === "held" ? "⏸️ held — release (Enter/Space/Esc) to send" : null;
         if (line) { try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${line}`], { placement: "belowEditor" }); } catch {} }
       },
       sendTurn: (text) => {
@@ -2720,7 +2725,43 @@ export default function realtimeAgentExtension(pi) {
       try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
     });
 
-    ctx.ui.notify(`local-vad listening (${describeLocalVadConfig(cfg)}); /rt stt stop to end.`, "info");
+    // PTT-hold wiring (bd-9e06ae): while held, VAD segments + transcribes
+    // incrementally (drafts render live, just like normal VAD) but a per-segment
+    // silence 'commit' accumulates instead of sending. A release key (Enter /
+    // Space / Esc) finalizes + sends the whole accumulated turn ONCE; Ctrl-C
+    // discards it. Registered only in hold mode; the WSS-mic PTT handler in
+    // session_start is inert here (it keys off session.mic, which we never set).
+    if (hold) {
+      try { localVad.releaseUnsub?.(); } catch {}
+      localVad.releaseUnsub = ctx.ui.onTerminalInput?.((data) => {
+        if (!localVad.active || !localVad.hold) return undefined;
+        if (data === "\u0003") { // Ctrl-C: cancel, discard the held transcript
+          const ctrl = localVad.controller;
+          stopLocalVad({ flush: false });
+          try { ctrl?.discardHeld(); } catch {}
+          try { ctx.ui.notify("PTT canceled — held transcript discarded.", "info"); } catch {}
+          return { consume: true };
+        }
+        if (data === "\r" || data === "\n" || data === " " || data === "\u001b") { // release: send
+          const ctrl = localVad.controller;
+          // Stop capture first (no more frames), then commitHeld flushes the
+          // already-buffered audio and sends the whole turn once. stopLocalVad
+          // must NOT also flush, or the last segment would send twice.
+          stopLocalVad({ flush: false });
+          ctrl?.commitHeld().catch((e) => { localVad.lastError = e?.message || String(e); });
+          try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
+          return { consume: true };
+        }
+        return undefined;
+      }) || null;
+    }
+
+    ctx.ui.notify(
+      hold
+        ? `local-vad PTT (${describeLocalVadConfig(cfg)}); speak, then Enter/Space/Esc to send, Ctrl-C to cancel; /rt stt stop to end.`
+        : `local-vad listening (${describeLocalVadConfig(cfg)}); /rt stt stop to end.`,
+      "info",
+    );
     try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
     return true;
   }
@@ -2963,6 +3004,7 @@ export default function realtimeAgentExtension(pi) {
       // bd-8e46eb: the k=v form stt=local-vad must route to the local capture +
       // batch-stt path (like the positional `/rt stt local-vad`), not silently
       // fall through to regular server-VAD stt.
+      if (["local-vad-ptt", "local-vad-hold", "ptt-vad", "localvadptt"].includes(params.stt)) return startLocalVad(ctx, { hold: true });
       if (params.stt === "local-vad" || params.stt === "localvad" || params.stt === "local_vad") return startLocalVad(ctx);
       return startRealtime(ctx, { sttOnly: true, listenMode: params.stt === "ptt" ? "ptt" : "vad" });
     }
@@ -3045,8 +3087,9 @@ export default function realtimeAgentExtension(pi) {
     if (verb === "stt" && (!value || ["start", "vad", "ptt"].includes(value))) {
       return startRealtime(ctx, { sttOnly: true, listenMode: value === "ptt" ? "ptt" : "vad" });
     }
+    if (verb === "stt" && ["local-vad-ptt", "local-vad-hold", "ptt-vad"].includes(value)) { await startLocalVad(ctx, { hold: true }); return; }
     if (verb === "stt" && value === "local-vad") { await startLocalVad(ctx); return; }
-    if (verb === "stt") { ctx.ui.notify("Unsupported realtime STT mode. Use /rt stt [vad|ptt|local-vad|stop].", "warning"); return; }
+    if (verb === "stt") { ctx.ui.notify("Unsupported realtime STT mode. Use /rt stt [vad|ptt|local-vad|local-vad-ptt|stop].", "warning"); return; }
 
     if (verb === "start" || verb === "on") {
       const mode = value || "vad";

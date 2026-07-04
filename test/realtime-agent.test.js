@@ -818,7 +818,7 @@ test("/rt help reports unified usage and /rt stt stop exits transcription mode",
 
   await commands.get("rt").handler("help", ctx);
   assert.match(notifications.at(-1).message, /Usage: \/rt start/);
-  assert.match(notifications.at(-1).message, /\/rt stt \[vad\|ptt\|local-vad\|stop\]/);
+  assert.match(notifications.at(-1).message, /\/rt stt \[vad\|ptt\|local-vad\|local-vad-ptt\|stop\]/);
 
   pi.realtime.setSttOnly(true, ctx);
   pi.realtime.showStatus(ctx);

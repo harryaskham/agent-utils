@@ -371,3 +371,100 @@ test("bd-7b43b2: suppressed-with-no-open-turn stays silent (assistant echo never
   assert.equal(sent.length, 0, "no turn is ever started or committed from suppressed audio alone");
   assert.equal(controller.segmenter.turnSpeechMs, 0, "no open turn accrued while suppressed");
 });
+
+// --- LocalVadController hold-commits / PTT mode (bd-9e06ae) ---
+
+test("holdCommits accumulates per-segment VAD commits and sends once on commitHeld (bd-9e06ae)", async () => {
+  const sent = [];
+  let seg = 0;
+  const controller = new LocalVadController({
+    holdCommits: true,
+    config: { insertSilenceMs: 100000, commitSilenceMs: 500 }, // commit-only, no drafts
+    transcribe: async () => `seg${++seg}`,
+    insertPartial: () => {},
+    sendTurn: (t) => sent.push(t),
+  });
+
+  // Two speech-then-silence segments, each reaching the (fast) commit silence.
+  for (let n = 0; n < 2; n++) {
+    await controller.pushFrame(frame(300, { speech: true }));
+    for (let s = 0; s < 600; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+    await controller._drain();
+  }
+  // The VAD silence 'commit' of each segment must NOT send in PTT-hold mode.
+  assert.deepEqual(sent, [], "per-segment VAD silence does not send in PTT-hold mode");
+
+  // PTT release: send the whole accumulated turn as a single message.
+  const finalText = await controller.commitHeld();
+  assert.equal(sent.length, 1, "commitHeld sends exactly one combined turn");
+  assert.equal(sent[0], finalText);
+  assert.equal(sent[0], "seg1 seg2", "the combined turn joins the accumulated segments in order");
+});
+
+test("holdCommits renders incremental partials but defers the send to commitHeld (bd-9e06ae)", async () => {
+  const partials = [];
+  const sent = [];
+  const controller = new LocalVadController({
+    holdCommits: true,
+    transcribe: async () => "hello",
+    insertPartial: (t) => partials.push(t),
+    sendTurn: (t) => sent.push(t),
+  });
+  // 500 ms speech then 3 s silence -> insert (draft partial) at 1 s, commit at 3 s.
+  await controller.pushFrame(frame(500, { speech: true }));
+  for (let s = 0; s < 3000; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller._drain();
+  assert.ok(partials.length >= 1, "incremental partials still render in hold mode (just as normal VAD)");
+  assert.deepEqual(sent, [], "the segment's VAD commit accumulates instead of sending");
+  const text = await controller.commitHeld();
+  assert.equal(text, "hello");
+  assert.deepEqual(sent, ["hello"], "commitHeld sends the accumulated turn on release");
+});
+
+test("commitHeld finalizes an in-progress segment released mid-speech (no VAD-silence yet, bd-9e06ae)", async () => {
+  const sent = [];
+  const controller = new LocalVadController({
+    holdCommits: true,
+    transcribe: async () => "mid",
+    sendTurn: (t) => sent.push(t),
+  });
+  // Speech with NO trailing commit-silence: PTT released while still speaking/held.
+  await controller.pushFrame(frame(800, { speech: true }));
+  assert.deepEqual(sent, [], "nothing sent before release");
+  const text = await controller.commitHeld();
+  assert.equal(text, "mid", "flush finalizes the in-progress segment on release");
+  assert.deepEqual(sent, ["mid"]);
+});
+
+test("discardHeld drops the accumulated turn without sending (PTT cancel, bd-9e06ae)", async () => {
+  const sent = [];
+  const controller = new LocalVadController({
+    holdCommits: true,
+    config: { insertSilenceMs: 100000, commitSilenceMs: 500 },
+    transcribe: async () => "x",
+    sendTurn: (t) => sent.push(t),
+  });
+  await controller.pushFrame(frame(300, { speech: true }));
+  for (let s = 0; s < 600; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller._drain();
+  controller.discardHeld();
+  const text = await controller.commitHeld();
+  assert.equal(text, "", "nothing remains to send after discard");
+  assert.deepEqual(sent, [], "discardHeld sends nothing (PTT cancel)");
+});
+
+test("commitHeld in non-hold mode degrades to a plain flush with no duplicate send (bd-9e06ae)", async () => {
+  const sent = [];
+  const controller = new LocalVadController({
+    transcribe: async () => "normal",
+    sendTurn: (t) => sent.push(t),
+  });
+  // Normal VAD already sends on the silence commit.
+  await controller.pushFrame(frame(500, { speech: true }));
+  for (let s = 0; s < 3000; s += 100) await controller.pushFrame(frame(100, { speech: false }));
+  await controller._drain();
+  assert.deepEqual(sent, ["normal"], "non-hold VAD sends on silence as usual");
+  const extra = await controller.commitHeld();
+  assert.equal(extra, "", "commitHeld contributes nothing extra in non-hold mode");
+  assert.deepEqual(sent, ["normal"], "no duplicate send from commitHeld");
+});

@@ -75,8 +75,13 @@ export function describeLocalVadConfig(config = {}) {
 ///   onError(err, event) -> void                  surface a transcription failure
 ///   segmenter                                    an existing VadSegmenter (optional)
 ///   config                                       VadSegmenter config when none is supplied
+///   holdCommits                                  PTT-hold mode (bd-9e06ae): a VAD
+///     silence 'commit' does NOT send; its transcript is accumulated and the whole
+///     accumulated turn is sent once via commitHeld() (i.e. on PTT release). Drafts
+///     (incremental partials) still render live, so the operator sees transcription
+///     progress just like normal VAD mode; only the send trigger moves to release.
 export class LocalVadController {
-  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, onState, frameBytes, placeholder, overlongHintMs, isSuppressed } = {}) {
+  constructor({ segmenter, config, transcribe, insertPartial, sendTurn, onError, onState, frameBytes, placeholder, overlongHintMs, isSuppressed, holdCommits } = {}) {
     if (typeof transcribe !== "function") {
       throw new Error("LocalVadController requires a transcribe(audio) function");
     }
@@ -110,6 +115,33 @@ export class LocalVadController {
     this._hasPartial = false;         // whether this turn has shown any partial yet
     this._turnInserted = false;       // whether this turn ever inserted (had a gap)
     this._hintedOverlong = false;     // whether the overlong hint fired this turn
+    // PTT-hold mode (bd-9e06ae): accumulate committed segment transcripts instead
+    // of sending each; commitHeld() sends the whole accrual once on PTT release.
+    this.holdCommits = !!holdCommits;
+    this._held = [];                  // finalized segment transcripts awaiting release
+  }
+
+  /// PTT-release semantic (bd-9e06ae): finalize any in-progress segment into the
+  /// held buffer (flush drains the pump), then send the WHOLE accumulated turn as
+  /// a single sendTurn. In holdCommits mode per-segment VAD 'commit's accumulate
+  /// rather than send, so this is the ONLY path that sends. Returns the sent text
+  /// ("" when nothing was captured). Safe to call in non-hold mode too, where it
+  /// degrades to a plain flush (the last turn already sent) returning "".
+  async commitHeld() {
+    await this.flush();
+    const text = this._held.join(" ").replace(/\s+/g, " ").trim();
+    this._held = [];
+    if (text) {
+      try { this.sendTurn(text); } catch (err) { this.onError(err); }
+    }
+    try { this.onState("idle"); } catch { /* best-effort */ }
+    return text;
+  }
+
+  /// Discard any held (and in-progress) transcript without sending it — the PTT
+  /// cancel path (Ctrl-C). Clears the accrual; the caller stops capture separately.
+  discardHeld() {
+    this._held = [];
   }
 
   /// Feed PCM16 audio (an arbitrary-size capture chunk). Re-frames into fixed
@@ -232,11 +264,26 @@ export class LocalVadController {
         const text = String(raw == null ? "" : raw).trim();
         if (job.kind === "commit") {
           this._hasPartial = false;
-          if (text) this.sendTurn(text, job.event);
-          try { this.onState("idle", job.event); } catch { /* best-effort */ }
+          if (this.holdCommits) {
+            // PTT-hold: accumulate the finalized segment; do NOT send. Show the
+            // whole accrual as a partial so the operator sees running progress,
+            // and signal "held" (a distinct terminal-of-segment state) so the UI
+            // can distinguish held-accumulating from a sent/idle turn.
+            if (text) {
+              this._held.push(text);
+              try { this.insertPartial(this._held.join(" "), job.event); } catch (err) { this.onError(err, job.event); }
+            }
+            try { this.onState("held", job.event); } catch { /* best-effort */ }
+          } else {
+            if (text) this.sendTurn(text, job.event);
+            try { this.onState("idle", job.event); } catch { /* best-effort */ }
+          }
         } else if (text) {
           this._hasPartial = true;
-          this.insertPartial(text, job.event);
+          // In hold mode, prefix the live draft with the already-held segments so
+          // the partial reflects the whole turn-so-far, not just this segment.
+          const prefix = this.holdCommits && this._held.length ? this._held.join(" ") + " " : "";
+          this.insertPartial(prefix + text, job.event);
         }
       })
       .catch((err) => { this.onError(err, job.event); })
