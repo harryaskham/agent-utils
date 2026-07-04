@@ -10,6 +10,7 @@ import {
   modelCandidates,
   isModelUnavailableError,
 } from "./web-search-models.js";
+import { combineTimeoutSignal, resolveRequestTimeoutMs } from "./web-search-http.js";
 
 const DEFAULT_TOKEN_FILE = "~/.config/gh-auth-tokens/copilot.token";
 const DEFAULT_AUTH_JSON_FILE = "~/.pi/agent/auth.json";
@@ -40,6 +41,8 @@ function getConfig() {
     apiBase: (process.env.WEB_SEARCH_COPILOT_API_BASE || DEFAULT_API_BASE).replace(/\/$/, ""),
     editorVersion: process.env.WEB_SEARCH_EDITOR_VERSION || DEFAULT_EDITOR_VERSION,
     fallbackModels: parseFallbackModels(process.env.WEB_SEARCH_FALLBACK_MODELS),
+    // bd-6cf0d6: bound the /responses fetch so a stalled upstream can't hang the tool.
+    requestTimeoutMs: resolveRequestTimeoutMs(process.env.WEB_SEARCH_REQUEST_TIMEOUT_MS),
   };
 }
 
@@ -191,16 +194,29 @@ export default function webSearchExtension(pi) {
           tools: [{ type: "web_search", search_context_size: "high" }],
           max_output_tokens: params.maxOutputTokens || config.maxOutputTokens,
         };
-        response = await fetch(`${config.apiBase}/responses`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            "editor-version": config.editorVersion,
-          },
-          body: JSON.stringify(payload),
-          signal,
-        });
+        // bd-6cf0d6: bound this external await with a timeout while still honoring
+        // the incoming cancellation signal, so a stalled upstream surfaces an error
+        // instead of wedging the tool forever.
+        const attempt = combineTimeoutSignal(signal, config.requestTimeoutMs);
+        try {
+          response = await fetch(`${config.apiBase}/responses`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+              "editor-version": config.editorVersion,
+            },
+            body: JSON.stringify(payload),
+            signal: attempt.signal,
+          });
+        } catch (err) {
+          if (attempt.isTimeout()) {
+            throw new Error(`GitHub Copilot web search timed out after ${config.requestTimeoutMs}ms (model ${model})`);
+          }
+          throw err;
+        } finally {
+          attempt.cleanup();
+        }
         if (response.ok) break;
         lastStatus = response.status;
         lastErrorText = await response.text();
