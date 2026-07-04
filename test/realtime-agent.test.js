@@ -161,6 +161,8 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const widgets = new Map();
   const statuses = new Map();
   const notifications = [];
+  const editorText = { value: "" };
+  const editorTextSets = [];
   const setModelCalls = [];
   const forkCalls = [];
   const emittedEvents = [];
@@ -183,6 +185,9 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
         if (value === undefined) widgets.delete(key);
         else widgets.set(key, value);
       },
+      // bd-0c008d: in-memory core input editor for the transcript-mirror path.
+      setEditorText(text) { editorText.value = String(text ?? ""); editorTextSets.push(editorText.value); },
+      getEditorText() { return editorText.value; },
       onTerminalInput() { return () => {}; },
     },
   };
@@ -215,7 +220,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     return { cancelled: false };
   };
 
-  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
+  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, editorText, editorTextSets, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -1875,6 +1880,43 @@ test("agent_end with speak-thinking on does not throw (bd-551e93: thinkingSummar
     for (const [k, v] of Object.entries(restore)) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
+  }
+});
+
+test("local-vad streams partials into the editor and sends the editor content on commit (bd-0c008d)", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "hello world" });
+  try {
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+    await h.commands.get("rt").handler("stt local-vad", h.ctx);
+    const cap = captures.at(-1);
+    const pcm = (ms, speech) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+      return b;
+    };
+    cap.stdout.emit("data", pcm(500, true));
+    for (let i = 0; i < 30; i++) cap.stdout.emit("data", pcm(100, false));
+    await waitFor(() => h.sentUserMessages.length > 0, { timeoutMs: 2000 });
+    // The partial streamed into the editable input box (bd-0c008d), not only a widget.
+    assert.ok(h.editorTextSets.includes("hello world"), "partial written to the editor");
+    // The committed turn sends the editor's text, then clears the editor.
+    assert.match(h.sentUserMessages[0].content, /hello world$/);
+    assert.equal(h.editorText.value, "", "editor cleared after the turn is sent");
+    await h.commands.get("rt").handler("stt stop", h.ctx);
+  } finally {
+    __setLocalVadHooksForTest({});
   }
 });
 

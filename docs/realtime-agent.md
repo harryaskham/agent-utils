@@ -223,6 +223,11 @@ by default (bd-678c58) — it is noise in a personal single-operator voice loop.
 `PI_RT_STT_UNTRUSTED_LABEL=1` (or `PI_RT_UNTRUSTED_TRANSCRIPT_LABEL=1`) to restore
 the wrapper if mic audio may be untrusted or multi-speaker.
 
+Partial transcripts stream **into the input editor** as you speak (bd-0c008d), not
+just a status line — so you watch your words appear and can edit them. Manual edits
+are never clobbered by a later partial, and the committed turn sends the editor's
+current text (your edits included), then clears it.
+
 The energy threshold can be tuned **live** (without restarting) via `/rt energy=<0..1>`
 (higher = less sensitive), parallel to `/rt thresh=` for server VAD. While listening,
 the status widget reacts in real time: `🎤 listening…` the instant speech is detected,

@@ -158,6 +158,7 @@ export { buildServerVadTurnDetection };
 import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
+import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
 import { transcribePcmBuffer, resolveBatchSttModel, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
@@ -2647,6 +2648,11 @@ export default function realtimeAgentExtension(pi) {
     const model = resolveBatchSttModel();
     Object.assign(localVad, { cfg, model, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now() });
 
+    // bd-0c008d: stream partial transcripts into the input editor (live voice
+    // editing) instead of only a status widget; commit sends the editor's text
+    // so operator edits are honored.
+    const editorMirror = makeEditorTranscriptMirror(ctx.ui);
+
     const controller = new LocalVadController({
       config: cfg,
       placeholder: "…",
@@ -2654,7 +2660,8 @@ export default function realtimeAgentExtension(pi) {
       isSuppressed: () => isAssistantSpeaking(),
       transcribe: (buf) => localVadTranscribe(buf, { model }),
       insertPartial: (text) => {
-        try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${text}`], { placement: "belowEditor" }); } catch {}
+        // bd-0c008d: live partial goes into the editable input box (clobber-safe).
+        try { editorMirror.showPartial(text); } catch {}
       },
       onState: (state) => {
         // Immediate listening/transcribing feedback before the first partial text
@@ -2671,8 +2678,12 @@ export default function realtimeAgentExtension(pi) {
         if (line) { try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${line}`], { placement: "belowEditor" }); } catch {} }
       },
       sendTurn: (text) => {
-        localVad.lastTranscript = text;
-        try { pi.sendUserMessage(labelUntrustedTranscript(text), { deliverAs: "followUp", streamingBehavior: "followUp" }); }
+        // bd-0c008d: send the editor's current text (honoring any operator edits),
+        // falling back to the raw transcript; then clear the editor.
+        const finalText = editorMirror.takeFinal(text);
+        localVad.lastTranscript = finalText;
+        if (!finalText) { try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {} return; }
+        try { pi.sendUserMessage(labelUntrustedTranscript(finalText), { deliverAs: "followUp", streamingBehavior: "followUp" }); }
         catch (e) { localVad.lastError = `sendUserMessage failed: ${e.message}`; ctx.ui.notify(localVad.lastError, "warning"); }
         try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
       },
