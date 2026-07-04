@@ -1885,6 +1885,20 @@ test("agent_end with speak-thinking on does not throw (bd-551e93: thinkingSummar
   }
 });
 
+test("session_shutdown hook fires without throwing (bd-e3a282 wiring coverage)", async () => {
+  // A missing import / renamed symbol inside an event hook only throws when the
+  // hook RUNS; pure-helper coverage can't catch it (bd-551e93 lineage). This drives
+  // the last untested realtime-agent hook so every pi.on with logic is exercised.
+  const h = makeHarness();
+  realtimeAgentExtension(h.pi);
+  h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+  const shutdown = h.handlers.get("session_shutdown");
+  assert.equal(typeof shutdown, "function", "session_shutdown hook is registered");
+  await assert.doesNotReject(async () => { await shutdown({}, h.ctx); }, "session_shutdown must not throw");
+  // Idempotent: a second shutdown (e.g. double teardown) must also be safe.
+  await assert.doesNotReject(async () => { await shutdown({}, h.ctx); }, "repeat session_shutdown must not throw");
+});
+
 test("local-vad streams partials into the editor and sends the editor content on commit (bd-0c008d)", async () => {
   const captures = [];
   const captureFn = () => {
