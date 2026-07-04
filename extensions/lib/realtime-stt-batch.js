@@ -8,6 +8,7 @@
 // subprocess plumbing can be tested without the `stt` binary or audio.
 
 import { spawn } from "node:child_process";
+import { runBoundedSubprocess } from "./bounded-exec.js";
 
 export const DEFAULT_STT_BATCH_MODEL = "mai-transcribe-1.5";
 
@@ -47,58 +48,23 @@ export function buildSttBatchArgs({ model = DEFAULT_STT_BATCH_MODEL, language } 
 /// non-zero exit (carrying stderr), or a timeout (bd-adde03: a stalled stt call
 /// must not hang local-vad's "transcribing" state forever). `command`/`spawnImpl`
 /// are injectable; `timeoutMs` defaults to resolveBatchSttTimeoutMs() (0 = off).
-export function transcribePcmBuffer(buffer, { model, language, command = "stt", spawnImpl = spawn, timeoutMs } = {}) {
+export async function transcribePcmBuffer(buffer, { model, language, command = "stt", spawnImpl = spawn, timeoutMs } = {}) {
   const timeout = timeoutMs == null ? resolveBatchSttTimeoutMs() : Number(timeoutMs);
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let timer = null;
-    const finish = (fn, arg) => {
-      if (settled) return;
-      settled = true;
-      if (timer) { clearTimeout(timer); timer = null; }
-      fn(arg);
-    };
-
-    let proc;
-    try {
-      proc = spawnImpl(command, buildSttBatchArgs({ model, language }), {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-    } catch (err) {
-      reject(err);
-      return;
-    }
-
-    let stdout = "";
-    let stderr = "";
-    proc.stdout?.on?.("data", (chunk) => { stdout += String(chunk); });
-    proc.stderr?.on?.("data", (chunk) => { stderr += String(chunk); });
-    proc.on?.("error", (err) => finish(reject, err));
-    proc.on?.("close", (code) => {
-      if (code === 0) finish(resolve, stdout.trim());
-      else finish(reject, new Error(`stt exited ${code}: ${stderr.trim() || "no stderr"}`));
-    });
-
-    // bd-adde03: bound the wait so a stalled stt call surfaces an error and
-    // local-vad returns to listening instead of hanging "transcribing" forever.
-    if (Number.isFinite(timeout) && timeout > 0) {
-      timer = setTimeout(() => {
-        if (settled) return;
-        try { proc.kill?.("SIGTERM"); } catch {}
-        // Escalate to SIGKILL if SIGTERM is ignored; standalone + unref'd so it
-        // neither blocks the event loop nor is cancelled by finish().
-        const kill = setTimeout(() => { try { proc.kill?.("SIGKILL"); } catch {} }, 2000);
-        kill.unref?.();
-        finish(reject, new Error(`stt timed out after ${timeout}ms`));
-      }, timeout);
-    }
-
-    try {
-      proc.stdin?.end(buffer ?? Buffer.alloc(0));
-    } catch (err) {
-      finish(reject, err);
-    }
+  // bd-adde03/bd-29a134: bound the wait (shared runBoundedSubprocess) so a
+  // stalled stt call surfaces an error and local-vad returns to listening
+  // instead of hanging "transcribing" forever. onSpawn writes the committed PCM
+  // to stdin after the listeners/timer are attached.
+  const { code, stdout, stderr } = await runBoundedSubprocess({
+    command,
+    args: buildSttBatchArgs({ model, language }),
+    spawnImpl,
+    stdio: ["pipe", "pipe", "pipe"],
+    timeoutMs: timeout,
+    label: "stt",
+    onSpawn: (proc) => proc.stdin?.end(buffer ?? Buffer.alloc(0)),
   });
+  if (code === 0) return stdout.toString().trim();
+  throw new Error(`stt exited ${code}: ${stderr.toString().trim() || "no stderr"}`);
 }
 
 /// Wrap raw PCM (default s16le / 24 kHz / mono, the local-vad capture format) in

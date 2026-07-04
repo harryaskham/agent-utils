@@ -3473,8 +3473,8 @@ export default function realtimeAgentExtension(pi) {
     handler: async (args, ctx) => {
       if (rejectLegacyAliasArgs("/rt-devices", args, ctx)) return;
       try {
-        const av = spawnSync("ffmpeg", ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], { encoding: "utf8" });
-        const at = spawnSync("sh", ["-lc", "ffmpeg -hide_banner -nostats -loglevel info -f lavfi -i 'anullsrc=r=24000:cl=mono' -t 0.05 -f audiotoolbox -list_devices true - 2>&1 || true"], { encoding: "utf8" });
+        const av = spawnSync("ffmpeg", ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], { encoding: "utf8", timeout: 5000 });
+        const at = spawnSync("sh", ["-lc", "ffmpeg -hide_banner -nostats -loglevel info -f lavfi -i 'anullsrc=r=24000:cl=mono' -t 0.05 -f audiotoolbox -list_devices true - 2>&1 || true"], { encoding: "utf8", timeout: 5000 });
         const out = [
           "# AVFoundation input (PI_RT_INPUT_DEVICE)",
           (av.stderr || av.stdout || "").trim(),

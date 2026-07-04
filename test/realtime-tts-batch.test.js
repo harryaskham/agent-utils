@@ -378,3 +378,53 @@ test("resolveSpeakToolParams: params win over PI_CASCADE_* env; sentinel voice -
   assert.equal(c.voice, undefined);
   assert.equal(c.speed, undefined);
 });
+
+// --- bd-29a134: batch tts subprocess + direct-Azure HTTP timeouts ---
+
+test("synthesizeToPcm times out + kills a stalled tts subprocess instead of hanging (bd-29a134)", async () => {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  let killed = null;
+  proc.kill = (sig) => { killed = sig; };
+  const spawnImpl = () => proc; // never emits "close" -> would hang the speaking state without the timeout
+  await assert.rejects(
+    synthesizeToPcm("hello", { spawnImpl, timeoutMs: 20 }),
+    /tts timed out after 20ms/,
+  );
+  assert.equal(killed, "SIGTERM");
+});
+
+test("synthesizeToPcm timeoutMs=0 disables the timeout (a slow-but-successful child still resolves)", async () => {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = () => { throw new Error("must not kill when timeout disabled"); };
+  const spawnImpl = () => proc;
+  const p = synthesizeToPcm("hi", { spawnImpl, timeoutMs: 0 });
+  setTimeout(() => { proc.stdout.emit("data", Buffer.from([1, 2, 3])); proc.emit("close", 0); }, 30);
+  const buf = await p;
+  assert.deepEqual([...buf], [1, 2, 3]);
+});
+
+test("synthesizeAzureSpeechDirect aborts + throws a clear error on HTTP timeout (bd-29a134)", async () => {
+  // fetchImpl that only settles when the request signal aborts (a hung upstream).
+  const fetchImpl = (_url, opts) => new Promise((_resolve, reject) => {
+    opts?.signal?.addEventListener?.("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  await assert.rejects(
+    synthesizeAzureSpeechDirect({ text: "hi", endpoint: "http://az:1", apiKey: "k", timeoutMs: 20, fetchImpl }),
+    /azure-speech timed out after 20ms/,
+  );
+});
+
+test("synthesizeAzureSpeechDirect honors an incoming cancel distinctly from a timeout (bd-29a134)", async () => {
+  const incoming = new AbortController();
+  const fetchImpl = (_url, opts) => new Promise((_resolve, reject) => {
+    opts?.signal?.addEventListener?.("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  const p = synthesizeAzureSpeechDirect({ text: "hi", endpoint: "http://az:1", apiKey: "k", timeoutMs: 10000, signal: incoming.signal, fetchImpl });
+  incoming.abort();
+  // A user cancel is NOT reported as a timeout; the raw abort error propagates.
+  await assert.rejects(p, /aborted/);
+});

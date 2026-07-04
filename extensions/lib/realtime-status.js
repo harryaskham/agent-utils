@@ -165,7 +165,9 @@ export function realtimePanelLines(session, config) {
 }
 
 export function commandAvailable(name) {
-  const result = spawnSync("/bin/sh", ["-lc", `command -v ${name} >/dev/null 2>&1`], { encoding: "utf8" });
+  // bd-29a134: bound the synchronous probe so a wedged shell/FS cannot block the
+  // event loop; a timeout yields status !== 0 (treated as "not available").
+  const result = spawnSync("/bin/sh", ["-lc", `command -v ${name} >/dev/null 2>&1`], { encoding: "utf8", timeout: 2000 });
   return result.status === 0;
 }
 

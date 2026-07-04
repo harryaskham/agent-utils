@@ -24,6 +24,21 @@
 //     2026-06-27): cascade agents speak straight through the local `tts` CLI.
 
 import { spawn } from "node:child_process";
+import { runBoundedSubprocess, combineTimeoutSignal } from "./bounded-exec.js";
+
+// Bound the batch-TTS external calls (bd-29a134). A stalled `tts` subprocess or a
+// hung Azure Speech HTTP request must surface an error instead of hanging the
+// cascade "speaking" state forever (the bd-adde03 hang shape). Env-overridable
+// via PI_RT_TTS_TIMEOUT_MS; 0 disables. Default 30s covers long-text synthesis.
+export const DEFAULT_TTS_BATCH_TIMEOUT_MS = 30000;
+
+export function resolveBatchTtsTimeoutMs(env = process.env) {
+  const raw = env.PI_RT_TTS_TIMEOUT_MS;
+  if (raw == null || String(raw).trim() === "") return DEFAULT_TTS_BATCH_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_TTS_BATCH_TIMEOUT_MS;
+  return n;
+}
 
 // Opt-in constant for the DIRECT Azure Cognitive Services speech path (uses
 // AZURE_SPEECH_*). NOT the default: by default cascade inherits the env TTS
@@ -189,8 +204,10 @@ export function buildTtsBatchArgs({
 
 /// Synthesize `text` to a raw PCM16/24k/mono Buffer via a one-shot `tts`
 /// subprocess. Resolves with the audio Buffer; rejects on empty text, spawn
-/// error, or a non-zero exit (carrying stderr). `command`/`spawnImpl` injectable.
-export function synthesizeToPcm(text, {
+/// error, a non-zero exit (carrying stderr), or a timeout (bd-29a134: a stalled
+/// `tts` child must not hang the "speaking" state forever). `command`/`spawnImpl`
+/// injectable; `timeoutMs` defaults to resolveBatchTtsTimeoutMs() (0 = off).
+export async function synthesizeToPcm(text, {
   voice,
   model,
   provider,
@@ -203,45 +220,28 @@ export function synthesizeToPcm(text, {
   responseFormat,
   command = "tts",
   spawnImpl = spawn,
+  timeoutMs,
 } = {}) {
-  return new Promise((resolve, reject) => {
-    const body = String(text ?? "");
-    if (!body.trim()) {
-      reject(new Error("tts: refusing to synthesize empty text"));
-      return;
-    }
-    // bd-5d4784: fail fast with an actionable notice instead of letting Azure
-    // reject an embedding voice + non-base-model <voice name> with a cryptic 400.
-    const embErr = azureEmbeddingVoiceError({ provider, voice, speakerProfileId });
-    if (embErr) {
-      reject(new Error(embErr));
-      return;
-    }
-    let proc;
-    try {
-      proc = spawnImpl(
-        command,
-        buildTtsBatchArgs({ text: body, voice, model, provider, baseUrl, speed, instructions, speakerProfileId, lang, azureBaseVoice, responseFormat }),
-        { stdio: ["ignore", "pipe", "pipe"] },
-      );
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    const out = [];
-    const errChunks = [];
-    proc.stdout?.on("data", (d) => out.push(Buffer.from(d)));
-    proc.stderr?.on("data", (d) => errChunks.push(Buffer.from(d)));
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      if (code === 0) {
-        resolve(Buffer.concat(out));
-      } else {
-        const errText = Buffer.concat(errChunks).toString("utf8").trim().slice(0, 500);
-        reject(new Error(`tts exited ${code}${errText ? `: ${errText}` : ""}`));
-      }
-    });
+  const body = String(text ?? "");
+  if (!body.trim()) throw new Error("tts: refusing to synthesize empty text");
+  // bd-5d4784: fail fast with an actionable notice instead of letting Azure
+  // reject an embedding voice + non-base-model <voice name> with a cryptic 400.
+  const embErr = azureEmbeddingVoiceError({ provider, voice, speakerProfileId });
+  if (embErr) throw new Error(embErr);
+  // bd-29a134: bound the tts subprocess wait (shared runBoundedSubprocess) so a
+  // stalled child surfaces an error instead of hanging "speaking" forever.
+  const timeout = timeoutMs == null ? resolveBatchTtsTimeoutMs() : Number(timeoutMs);
+  const { code, stdout, stderr } = await runBoundedSubprocess({
+    command,
+    args: buildTtsBatchArgs({ text: body, voice, model, provider, baseUrl, speed, instructions, speakerProfileId, lang, azureBaseVoice, responseFormat }),
+    spawnImpl,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeoutMs: timeout,
+    label: "tts",
   });
+  if (code === 0) return stdout;
+  const errText = stderr.toString("utf8").trim().slice(0, 500);
+  throw new Error(`tts exited ${code}${errText ? `: ${errText}` : ""}`);
 }
 
 /// Resolve direct Azure Speech endpoint + key from the environment. Endpoint
@@ -367,6 +367,8 @@ export async function synthesizeAzureSpeechDirect({
   apiKey,
   outputFormat = DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT,
   fetchImpl,
+  timeoutMs,
+  signal,
 } = {}) {
   const body = String(text ?? "");
   if (!body.trim()) throw new Error("azure-speech: refusing to synthesize empty text");
@@ -378,16 +380,29 @@ export async function synthesizeAzureSpeechDirect({
     : (typeof fetch === "function" ? fetch : null);
   if (!doFetch) throw new Error("azure-speech: no fetch implementation available");
   const ssml = buildAzureSpeechSsml({ text: body, voice, lang, speed, speakerProfileId, azureBaseVoice });
-  const res = await doFetch(`${ep}/cognitiveservices/v1`, {
-    method: "POST",
-    headers: {
-      "Ocp-Apim-Subscription-Key": apiKey,
-      "Content-Type": "application/ssml+xml",
-      "X-Microsoft-OutputFormat": String(outputFormat || DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT),
-      "User-Agent": "pi-realtime-cascade",
-    },
-    body: ssml,
-  });
+  // bd-29a134: bound the Azure Speech HTTP await so a hung upstream surfaces an
+  // error instead of stalling the cascade; also honors an incoming cancel.
+  const timeout = timeoutMs == null ? resolveBatchTtsTimeoutMs() : Number(timeoutMs);
+  const bound = combineTimeoutSignal(signal, timeout);
+  let res;
+  try {
+    res = await doFetch(`${ep}/cognitiveservices/v1`, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": apiKey,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": String(outputFormat || DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT),
+        "User-Agent": "pi-realtime-cascade",
+      },
+      body: ssml,
+      signal: bound.signal,
+    });
+  } catch (err) {
+    if (bound.isTimeout()) throw new Error(`azure-speech timed out after ${timeout}ms`);
+    throw err;
+  } finally {
+    bound.cleanup();
+  }
   if (!res || res.ok === false) {
     const status = res?.status ?? "??";
     let detail = "";
