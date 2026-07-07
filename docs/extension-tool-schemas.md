@@ -77,3 +77,21 @@ A third option also stays import-testable: some tool-registering extensions
 objects and import neither the shim nor TypeBox. The real rule is therefore
 *avoid a direct `@sinclair/typebox` import* — both the shim and plain JSON-schema
 objects keep an extension loadable under `node --test`.
+
+## Automated guard: peer-dep imports in the test-reachable graph (bd-4c80c0)
+
+The same hazard applies to any host-provided peer dependency
+(`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
+`@sinclair/typebox`, ...): a **top-level** import of one in any module that is
+statically reachable from a `test/*.test.js` crashes the suite at module-load
+with `ERR_MODULE_NOT_FOUND`, because those packages are not installed in this
+checkout. `test/no-unresolved-peer-deps.test.js` walks the static import graph
+rooted at every test file and fails if any reachable module top-level-imports a
+specifier that does not resolve under bare `node`.
+
+Convention: if a tested (or test-reachable) module needs a peer dependency, make
+the import **lazy** (`const { x } = await import("@earendil-works/...")` inside
+the function that uses it) or inject the dependency. Dynamic imports are not
+followed by the guard, so the lazy form is the sanctioned escape hatch. Entry
+files that are only loaded via the dynamic import in
+`extensions-load-smoke.test.js` may still import peer deps at the top level.
