@@ -404,6 +404,53 @@ async function eventDataToString(data) {
 
 
 
+// ===========================================================================
+// Capture-mode map (bd-e3e410)
+// ---------------------------------------------------------------------------
+// Four distinct audio-capture / turn pipelines share this extension, with entry
+// points scattered across the class and the activation closure. This block is
+// the single index; test/realtime-capture-modes-map.test.js asserts every cited
+// symbol still exists so the map cannot silently drift.
+//
+// 1. WSS server-VAD — RealtimeSession.startMic(ctx, "vad").
+//    Transport: live realtime websocket. Mic PCM16 -> input_audio_buffer.append.
+//    Commit: server-side turn_detection auto-commits and creates the response.
+//    Terminal input: none needed to commit (the session_start handler below can
+//    still force a stopMic).
+//
+// 2. WSS PTT — RealtimeSession.startMic(ctx, "ptt").
+//    Transport: same live websocket + input_audio_buffer.append.
+//    Commit: MANUAL, via the pi.on("session_start") onTerminalInput handler
+//    (terminalInputUnsub): Enter/Space/Esc -> stopMic({commit:true}); Ctrl-C ->
+//    stopMic({commit:false}) discard. Guard: `if (!session.mic) return`.
+//
+// 3. local-vad batch-STT — startLocalVad(ctx, {hold}).
+//    Transport: NONE (websocket-free; disables the WSS first). LocalVadController
+//    VAD-segments the mic and batch-transcribes each segment.
+//    Commit: sendTurn -> pi.sendUserMessage(labelUntrustedTranscript(text)). In
+//    hold (PTT) mode the localVad.releaseUnsub onTerminalInput handler owns the
+//    keys: Enter/Space -> commitHeld (send once), Ctrl-C -> discard, Esc ->
+//    finalizeHeldToEditor (edit, no send; bd-4daaf5). Guard: `localVad.active &&
+//    localVad.hold`.
+//
+// 4. cascade group chat — startCascadeMic(ctx) + ensureCascadeController(ctx,..).
+//    Transport: NONE (reuses the local-vad LocalVadController mic machinery).
+//    Commit: VAD auto-commit -> sendTurn -> cascade.controller
+//    .handleHumanUtterance(text), driving the round-robin peers (NOT
+//    sendUserMessage). Terminal input: none (VAD-only; no PTT release).
+//
+// Shared machinery + gotchas:
+//  * startMic drives the two WSS modes; a half-duplex phase guard mutes the mic
+//    while the assistant is thinking/speaking/replaying/transcribing.
+//  * LocalVadController drives the two websocket-free modes; startLocalVad and
+//    startCascadeMic each call controls.disable()+stopLocalVad() first, so WSS
+//    and local capture are mutually exclusive.
+//  * TWO Enter/Space/Esc "PTT release" onTerminalInput handlers exist in
+//    different scopes — session_start terminalInputUnsub (WSS) and
+//    localVad.releaseUnsub (local-vad hold) — but never both fire: each guards
+//    on its own active flag (session.mic vs localVad.active && localVad.hold).
+// ===========================================================================
+
 // ---------------------------------------------------------------------------
 // RealtimeSession — owns the persistent WSS, translates events into
 // AssistantMessageEvents.  One per Pi session; `streamSimple()` is the
