@@ -115,8 +115,7 @@ import {
 
 import { resolveDescribeModel } from "./kitty-image-preview/describe-model.js";
 
-import { complete, StringEnum } from "@earendil-works/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { ToolSchema as Type, StringEnum } from "./lib/tool-schema.js";
 
 import {
   MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
@@ -879,6 +878,11 @@ async function describeImageFile(filePath, item, ctx, params = {}, signal) {
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
   const extra = params.describePrompt ? `\n\nAdditional instruction: ${params.describePrompt}` : "";
+  // Lazy-load the pi-ai `complete` entrypoint so this extension's top-level
+  // imports stay dependency-free and it loads under bare `node --test`
+  // (bd-aacc0c / bd-4c80c0). This path only runs when a description is actually
+  // requested, where the host runtime provides @earendil-works/pi-ai.
+  const { complete } = await import("@earendil-works/pi-ai");
   const response = await complete(
     model,
     {

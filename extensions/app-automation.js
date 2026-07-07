@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setInterval, clearInterval } from "node:timers";
 
-import { Type } from "@sinclair/typebox";
+import { ToolSchema as Type } from "./lib/tool-schema.js";
 
 import {
   aggregateSnapshotLinkSummaries,

@@ -1,7 +1,8 @@
 // Describe-parameter tool schemas for the kitty image preview, extracted from
-// kitty-image-preview.js (bd-e1914a). Pure typebox builders.
+// kitty-image-preview.js (bd-e1914a). Pure schema builders (tool-schema shim so
+// this submodule loads under bare `node --test`; bd-aacc0c).
 
-import { Type } from "@sinclair/typebox";
+import { ToolSchema as Type } from "../lib/tool-schema.js";
 import { DEFAULT_DESCRIBE_MODEL } from "./constants.js";
 
 export function describeParameterSchema() {

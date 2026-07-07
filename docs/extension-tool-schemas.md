@@ -58,10 +58,10 @@ by importing the extension module itself.
 | `realtime-agent.js` | `lib/tool-schema.js` shim | Yes |
 | `self-compact.js` | `lib/tool-schema.js` shim | Yes |
 | `xvfb.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
-| `app-automation.js` | `@sinclair/typebox` directly | No — peer dep not installed in this checkout |
-| `firecracker-vm.js` | `@sinclair/typebox` directly | No |
-| `kitty-image-preview.js` | `@sinclair/typebox` directly | No |
-| `pi-graphics.js` | `@sinclair/typebox` directly | No |
+| `firecracker-vm.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
+| `app-automation.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
+| `kitty-image-preview.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
+| `pi-graphics.js` | `@sinclair/typebox` directly | No — also imports `@earendil-works/pi-coding-agent` at top level, so the shim alone is insufficient; needs that import lazified too |
 | `web-search.js` | `@sinclair/typebox` directly | No |
 
 Rule of thumb: **if you want a new extension unit-tested at import level, use the
