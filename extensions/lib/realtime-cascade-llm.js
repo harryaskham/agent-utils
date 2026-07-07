@@ -10,6 +10,7 @@
 // per-agent model / base url.
 
 import { env } from "./realtime-helpers.js";
+import { extractPiText, resolvePiComplete } from "./pi-inference.js";
 
 export const DEFAULT_CASCADE_BASE_URL = "https://api.openai.com";
 
@@ -132,13 +133,7 @@ export function piMessagesFromChat(messages, now = Date.now) {
 /// Extract the assistant reply text from a Pi `complete` response
 /// ({content:[{type:"text", text}]}). Pure.
 export function extractPiReplyText(response) {
-  const parts = response?.content;
-  if (!Array.isArray(parts)) return "";
-  return parts
-    .filter((c) => c?.type === "text")
-    .map((c) => c?.text || "")
-    .join("\n")
-    .trim();
+  return extractPiText(response);
 }
 
 /// Run one cascade peer turn through Pi's built-in inference and resolve with the
@@ -153,13 +148,7 @@ export async function runPiInferenceTurn({
   maxTokens = 200,
   signal,
 } = {}) {
-  let run = completeImpl;
-  if (typeof run !== "function") {
-    // pi-ai `complete` is a peer dep provided by the Pi host at runtime and is
-    // not resolvable from bare unit tests, so load it lazily. Tests always
-    // inject `completeImpl`, so this dynamic import is never hit under test.
-    ({ complete: run } = await import("@earendil-works/pi-ai"));
-  }
+  const run = await resolvePiComplete(completeImpl);
   if (typeof run !== "function") throw new Error("runPiInferenceTurn: no complete implementation available");
   if (!model) throw new Error("runPiInferenceTurn: no loaded model available");
   if (!auth || !auth.apiKey) throw new Error(auth?.error || `runPiInferenceTurn: no API key for ${model?.provider || "model"}`);

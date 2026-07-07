@@ -15,6 +15,7 @@ import {
   tendrilSourceMachine,
 } from "./tendril-command.js";
 import { headlessDisplaySummary } from "./lib/headless-display.js";
+import { runPiTextTurn, VISION_DESCRIBE_SYSTEM_PROMPT } from "./lib/pi-inference.js";
 import {
   agentSettingsPath,
   computeDescribeModelConfig,
@@ -447,45 +448,28 @@ async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = 
 
 async function describeImageData(ctx, { kind, id, prompt, data, sourceMachine }, signal) {
   const model = resolveVisionModel(ctx);
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
-  const describeComplete = await getCompleteForDescribe();
   const machineLabel = sourceMachineLabel(sourceMachine);
   const sourceLine = sourceMachine?.remote ? `\nSource machine: ${machineLabel}` : "";
-  const response = await describeComplete(
+  // Shared Pi-inference turn (bd-f50e0f). getCompleteForDescribe() preserves the
+  // setTendrilShareCompleteForTest() injection seam; otherwise the helper lazily
+  // imports pi-ai `complete`.
+  const result = await runPiTextTurn(ctx, {
     model,
-    {
-      systemPrompt: "You are a precise visual description assistant. Return only objective visual observations.",
-      messages: [{
-        role: "user",
-        timestamp: Date.now(),
-        content: [
-          { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}\n\nTarget: Tendril ${kind} ${id}${sourceLine}${prompt ? `\nUser focus: ${prompt}` : ""}` },
-          { type: "image", data, mimeType: PNG_MIME },
-        ],
-      }],
-      // describe-only call (no kitty preview from VLM request itself)
-    },
-    {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-      signal,
-      maxTokens: clampInteger(process.env.TENDRIL_SHARE_DESCRIBE_MAX_TOKENS, 1200, 128, 8000),
-    },
-  );
-  if (response.stopReason === "aborted") throw new Error("Tendril screenshot description aborted.");
-  const text = (response.content || [])
-    .filter((item) => item.type === "text")
-    .map((item) => item.text)
-    .join("\n")
-    .trim();
-  return {
-    text,
-    model: `${model.provider}/${model.id}`,
-    usage: response.usage,
-    stopReason: response.stopReason,
-    sourceMachine: { host: machineLabel, remote: Boolean(sourceMachine?.remote) },
-  };
+    systemPrompt: VISION_DESCRIBE_SYSTEM_PROMPT,
+    messages: [{
+      role: "user",
+      timestamp: Date.now(),
+      content: [
+        { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}\n\nTarget: Tendril ${kind} ${id}${sourceLine}${prompt ? `\nUser focus: ${prompt}` : ""}` },
+        { type: "image", data, mimeType: PNG_MIME },
+      ],
+    }],
+    maxTokens: clampInteger(process.env.TENDRIL_SHARE_DESCRIBE_MAX_TOKENS, 1200, 128, 8000),
+    signal,
+    completeImpl: await getCompleteForDescribe(),
+    abortedMessage: "Tendril screenshot description aborted.",
+  });
+  return { ...result, sourceMachine: { host: machineLabel, remote: Boolean(sourceMachine?.remote) } };
 }
 
 async function describeTarget(pi, ctx, { kind, target, id, prompt, includeList = true, override }, signal) {

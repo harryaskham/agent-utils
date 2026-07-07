@@ -116,6 +116,7 @@ import {
 import { resolveDescribeModel } from "./kitty-image-preview/describe-model.js";
 
 import { ToolSchema as Type, StringEnum } from "./lib/tool-schema.js";
+import { runPiTextTurn, VISION_DESCRIBE_SYSTEM_PROMPT } from "./lib/pi-inference.js";
 
 import {
   MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
@@ -875,46 +876,25 @@ function resolveVisionModel(ctx, params = {}) {
 
 async function describeImageFile(filePath, item, ctx, params = {}, signal) {
   const model = resolveVisionModel(ctx, params);
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
   const extra = params.describePrompt ? `\n\nAdditional instruction: ${params.describePrompt}` : "";
-  // Lazy-load the pi-ai `complete` entrypoint so this extension's top-level
-  // imports stay dependency-free and it loads under bare `node --test`
-  // (bd-aacc0c / bd-4c80c0). This path only runs when a description is actually
-  // requested, where the host runtime provides @earendil-works/pi-ai.
-  const { complete } = await import("@earendil-works/pi-ai");
-  const response = await complete(
+  // Shared Pi-inference turn (bd-f50e0f): auth guard + pi-ai `complete` (lazily
+  // imported inside the helper so this extension's top level stays
+  // dependency-free, bd-aacc0c / bd-4c80c0) + response-text extraction.
+  return runPiTextTurn(ctx, {
     model,
-    {
-      systemPrompt: "You are a precise visual description assistant. Return only objective visual observations.",
-      messages: [{
-        role: "user",
-        timestamp: Date.now(),
-        content: [
-          { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}${extra}\n\nImage label: ${item?.label || path.basename(filePath)}${item?.width && item?.height ? ` (${item.width}×${item.height})` : ""}` },
-          { type: "image", data: await fileToBase64(filePath), mimeType: item?.mediaType || "image/png" },
-        ],
-      }],
-    },
-    {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-      signal,
-      maxTokens: clampInteger(params.describeMaxTokens, 1200, 128, 8000),
-    },
-  );
-  if (response.stopReason === "aborted") throw new Error("Image description aborted.");
-  const text = response.content
-    .filter((content) => content.type === "text")
-    .map((content) => content.text)
-    .join("\n")
-    .trim();
-  return {
-    text,
-    model: `${model.provider}/${model.id}`,
-    usage: response.usage,
-    stopReason: response.stopReason,
-  };
+    systemPrompt: VISION_DESCRIBE_SYSTEM_PROMPT,
+    messages: [{
+      role: "user",
+      timestamp: Date.now(),
+      content: [
+        { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}${extra}\n\nImage label: ${item?.label || path.basename(filePath)}${item?.width && item?.height ? ` (${item.width}×${item.height})` : ""}` },
+        { type: "image", data: await fileToBase64(filePath), mimeType: item?.mediaType || "image/png" },
+      ],
+    }],
+    maxTokens: clampInteger(params.describeMaxTokens, 1200, 128, 8000),
+    signal,
+    abortedMessage: "Image description aborted.",
+  });
 }
 
 async function maybeDescribeImage(item, ctx, params = {}, signal, onUpdate) {
