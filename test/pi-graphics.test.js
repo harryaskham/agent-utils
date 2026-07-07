@@ -1445,7 +1445,15 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(surface, /PI_GRAPHICS_DEBUG: gfx\.debug/);
   assert.match(surface, /PI_GRAPHICS_DEBUG_PLACEHOLDERS: gfx\.debugPlaceholders/);
   assert.match(source, /installCompactChatSpacingPatch/);
-  assert.match(source, /const chatContainerPrototype = Object\.getPrototypeOf\(AssistantMessageComponent\.prototype\)/);
+  // pi-graphics.js lazifies the @earendil-works/pi-coding-agent Component import
+  // into the async activation factory (bd-e1a23d), so the chat-spacing base
+  // prototype is derived under a `typeof AssistantMessageComponent === "function"`
+  // guard and the module top level stays dependency-free (importable + activatable
+  // under bare `node --test`). Assert both invariants.
+  assert.match(source, /const chatContainerPrototype =[\s\S]{0,160}?Object\.getPrototypeOf\(AssistantMessageComponent\.prototype\)/);
+  assert.match(source, /typeof AssistantMessageComponent === "function"/);
+  assert.doesNotMatch(source, /from "@earendil-works\/pi-coding-agent"/);
+  assert.match(source, /await import\("@earendil-works\/pi-coding-agent"\)/);
   assert.match(source, /function boxChromeComponentMap\(\)/);
   assert.match(source, /function clearBoxChromeImages\(ctx\)/);
   assert.match(source, /boxChromeRuntime\?\.ownedImageIds\?\.\(\) \|\| state\.boxChromeImageIds/);

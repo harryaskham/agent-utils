@@ -17,37 +17,17 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 
-import { Type } from "@sinclair/typebox";
+// tool-schema.js is a dependency-free local shim for the small `@sinclair/typebox`
+// `Type.*` subset used below (Object/Optional/String/Number/Boolean). Importing
+// typebox directly makes this module fail to load under bare `node --test`
+// (ERR_MODULE_NOT_FOUND); the shim keeps the live tool schemas byte-identical
+// (bd-aacc0c uppercase Type aliases preserve TypeBox `required` inference).
+import { ToolSchema as Type } from "./lib/tool-schema.js";
 
-import {
-  ArminComponent,
-  AssistantMessageComponent,
-  BashExecutionComponent,
-  BorderedLoader,
-  BranchSummaryMessageComponent,
-  CompactionSummaryMessageComponent,
-  CustomEditor,
-  CustomMessageComponent,
-  DaxnutsComponent,
-  DynamicBorder,
-  ExtensionEditorComponent,
-  ExtensionInputComponent,
-  ExtensionSelectorComponent,
-  FooterComponent,
-  LoginDialogComponent,
-  ModelSelectorComponent,
-  OAuthSelectorComponent,
-  SessionSelectorComponent,
-  SettingsSelectorComponent,
-  ShowImagesSelectorComponent,
-  SkillInvocationMessageComponent,
-  ThemeSelectorComponent,
-  ThinkingSelectorComponent,
-  ToolExecutionComponent,
-  TreeSelectorComponent,
-  UserMessageComponent,
-  UserMessageSelectorComponent,
-} from "@earendil-works/pi-coding-agent";
+// The `@earendil-works/pi-coding-agent` Component surface is loaded lazily inside
+// the activation factory (see below) rather than at the module top level, so this
+// module imports clean under `node --test` where that host-runtime peer is not
+// installed (bd-e1a23d, follow-up to bd-aacc0c).
 
 import {
   buildAnimationFrameCommand,
@@ -127,8 +107,45 @@ const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"
 const MAX_DECORATED_NOTIFICATION_LINES = 64;
 const EINK_THEME_NAME = "eink";
 
-export default function piGraphicsExtension(pi) {
-  const chatContainerPrototype = Object.getPrototypeOf(AssistantMessageComponent.prototype);
+export default async function piGraphicsExtension(pi) {
+  // Lazy-load the pi-coding-agent Component surface so the module top level is
+  // dependency-free and importable/activatable under bare `node --test`
+  // (@earendil-works/pi-coding-agent is a host-runtime peer, not installed in
+  // the unit-test env). Pi awaits this async factory before firing lifecycle
+  // hooks (see the async pi-self-update extension), so every `pi.on(...)`
+  // registration below still lands before session_start. When the package is
+  // absent the bindings stay undefined and the downstream guards degrade to
+  // no-ops: installCompactChatSpacingPatch bails on a null basePrototype,
+  // installEditorSurface returns early on `typeof CustomEditor !== "function"`,
+  // and installBoxChromeMonkeyPatch skips non-function component entries.
+  let ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader,
+    BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor,
+    CustomMessageComponent, DaxnutsComponent, DynamicBorder, ExtensionEditorComponent,
+    ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, LoginDialogComponent,
+    ModelSelectorComponent, OAuthSelectorComponent, SessionSelectorComponent,
+    SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent,
+    ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent,
+    TreeSelectorComponent, UserMessageComponent, UserMessageSelectorComponent;
+  try {
+    ({
+      ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader,
+      BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor,
+      CustomMessageComponent, DaxnutsComponent, DynamicBorder, ExtensionEditorComponent,
+      ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, LoginDialogComponent,
+      ModelSelectorComponent, OAuthSelectorComponent, SessionSelectorComponent,
+      SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent,
+      ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent,
+      TreeSelectorComponent, UserMessageComponent, UserMessageSelectorComponent,
+    } = await import("@earendil-works/pi-coding-agent"));
+  } catch {
+    // Host/optional dependency not installed (e.g. bare node --test); the
+    // component bindings stay undefined and the guards above keep activation
+    // and every fired hook safe.
+  }
+
+  const chatContainerPrototype = (typeof AssistantMessageComponent === "function")
+    ? Object.getPrototypeOf(AssistantMessageComponent.prototype)
+    : null;
   installCompactChatSpacingPatch({
     basePrototype: chatContainerPrototype,
     chatBubbleConstructors: [

@@ -61,7 +61,7 @@ by importing the extension module itself.
 | `firecracker-vm.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `app-automation.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `kitty-image-preview.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
-| `pi-graphics.js` | `@sinclair/typebox` directly | No — also imports `@earendil-works/pi-coding-agent` at top level, so the shim alone is insufficient; needs that import lazified too |
+| `pi-graphics.js` | `lib/tool-schema.js` shim (`as Type`) | Yes — the `@earendil-works/pi-coding-agent` Component import is lazified inside the async activation factory (bd-e1a23d), so the module top level is dependency-free |
 | `web-search.js` | `@sinclair/typebox` directly | No |
 
 Rule of thumb: **if you want a new extension unit-tested at import level, use the
