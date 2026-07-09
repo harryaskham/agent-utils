@@ -60,6 +60,34 @@ npm run dev            # vite dev server (http://localhost:5173)
 # -> #out contains "... CONSTRUCTS in-browser ... PASS"
 ```
 
+### Reproducible nix build / serve (S9, bd-82b969)
+
+The browser bundle is wired into the agent-utils root flake as a `pi-wasm`
+subflake (`path:./pi-wasm`), alongside `web-search` and `linear-extra`. It is a
+separate package/app and is intentionally **not** part of the root
+`default`/`all` collator (it is a web bundle, not a bin), so it does not affect
+the root build/test gate.
+
+```bash
+# from the repo root:
+nix build .#pi-wasm          # deterministic build -> static web root in ./result (index.html + assets/)
+nix run   .#pi-wasm-serve    # build + serve the bundle on http://localhost:4319
+nix run   .#pi-wasm-serve -- 8080   # ...on a custom port
+
+# from ./pi-wasm directly (self-contained subflake):
+nix build .#pi-wasm
+nix run   .#pi-wasm-serve
+```
+
+The build uses `buildNpmPackage` with the pinned `package-lock.json`
+(`npmDepsHash`), runs `npm run build` (vite), and installs `dist/` as the
+package output. If `package-lock.json` changes, recompute the deps hash:
+
+```bash
+nix run github:NixOS/nixpkgs/nixos-unstable#prefetch-npm-deps -- pi-wasm/package-lock.json
+# then update npmDepsHash in pi-wasm/flake.nix
+```
+
 The page also sets `window.__PI_WASM_SPIKE__ = { ok, detail }` for the S8
 Playwright harness to assert on.
 
@@ -87,7 +115,7 @@ the key is kept only in this browser (`localStorage`, the S6 settings-screen sea
 S2 IndexedDB VFS (`BrowserExecutionEnv`) · **S3 provider/CORS layer ✅** ·
 S4 tools over the VFS (no bash) · **S5 isomorphic-git checkout ✅** · S6
 settings/keys screen · S7 chat UI wiring the full loop (MVP) · S8 Playwright
-harness · S9 nix build/serve · S10 (stretch) bash-in-browser.
+harness · **S9 nix build/serve — done (bd-82b969)** · S10 (stretch) bash-in-browser.
 
 `node_modules/` and `dist/` are gitignored; this subproject is self-contained
 and does not affect the agent-utils root build/test gate.

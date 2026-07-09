@@ -40,9 +40,17 @@
       inputs.uv2nix.follows = "uv2nix";
       inputs.pyproject-build-systems.follows = "pyproject-build-systems";
     };
+
+    # pi-wasm: in-browser Pi agent loop subproject (epic bd-f76cee). Node/Vite
+    # subflake; only needs nixpkgs + flake-utils (no python/uv2nix toolchain).
+    pi-wasm = {
+      url = "path:./pi-wasm";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, ... }:
+  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, pi-wasm, ... }:
     let
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -73,6 +81,11 @@
           linear-extra-mcp = linear-extra.packages.${system}.linear-extra-mcp;
           skill-server = skillServer;
           skill-search = skillServer;
+          # pi-wasm browser bundle (static site) + local serve wrapper. Kept out
+          # of the `default`/`all` symlinkJoin because it is a web bundle, not a
+          # bin. Build: `nix build .#pi-wasm`. Serve: `nix run .#pi-wasm-serve`.
+          pi-wasm = pi-wasm.packages.${system}.pi-wasm;
+          pi-wasm-serve = pi-wasm.packages.${system}.pi-wasm-serve;
         });
 
       apps = forAllSystems (system: {
@@ -92,6 +105,10 @@
         skill-search = {
           type = "app";
           program = "${self.packages.${system}.skill-server}/bin/skill-search";
+        };
+        pi-wasm-serve = {
+          type = "app";
+          program = "${self.packages.${system}.pi-wasm-serve}/bin/pi-wasm-serve";
         };
       });
 
