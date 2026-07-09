@@ -31,6 +31,7 @@ const FIELD_NAMES = [
   "settingsJson",
   "relayEndpoint",
   "relayToken",
+  "microvmJson",
 ] as const;
 
 export function mountSettingsPanel(
@@ -58,6 +59,8 @@ export function mountSettingsPanel(
       <input name="relayEndpoint" type="text" placeholder="https://relay.example/exec" autocomplete="off" /></label>
     <label>Remote exec relay token (secret — this browser only)
       <input name="relayToken" type="password" autocomplete="off" /></label>
+    <label>microVM tuning — JSON, e.g. { "memoryMb": 512 } (the "microvm" backend; blank = vendored defaults)
+      <textarea name="microvmJson" rows="3" spellcheck="false" placeholder='{ "memoryMb": 256 }'></textarea></label>
     <div class="errors" role="alert"></div>
     <div class="actions">
       <button type="submit" data-act="save">Save</button>
@@ -88,6 +91,7 @@ export function mountSettingsPanel(
       settingsJson: fieldEl("settingsJson").value,
       relayEndpoint: fieldEl("relayEndpoint").value,
       relayToken: fieldEl("relayToken").value,
+      microvmJson: fieldEl("microvmJson").value,
     };
   }
 

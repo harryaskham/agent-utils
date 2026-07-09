@@ -9,16 +9,18 @@
 // one session it behaves exactly like S7, just durable across reloads.
 
 import { PiWasmSession } from "../session.js";
-import { createBrowserExecutionEnv, type BrowserExecutionEnv } from "../vfs";
+import { createBrowserExecutionEnv, LightningFsVfs, type BrowserExecutionEnv, type Vfs } from "../vfs";
 import { createBrowserAgentTools } from "../tools";
-import { SettingsStore, toRuntimeConfig, type ModelSpec } from "../settings";
+import { SettingsStore, toRuntimeConfig, type ModelSpec, type MicrovmConfig } from "../settings";
 import { DEFAULT_MODEL_ID, DEFAULT_BASE_URL } from "../provider.js";
 import {
   createExecBackend,
   isExecBackendId,
   NullExecBackend,
+  type ExecBackend,
   type ExecBackendId,
   type HttpRelayTransportOptions,
+  type MicrovmExecBackendOptions,
 } from "../exec";
 import { SessionRegistry, type SessionMeta, type PersistedSession } from "./registry.js";
 
@@ -30,6 +32,8 @@ export interface ActiveSession {
   backendId: ExecBackendId;
   /** Non-fatal notice when the selected backend could not be built (fell back to none). */
   backendNotice?: string;
+  /** The active exec backend, retained so it can be disposed on switch-away. */
+  backend?: ExecBackend;
 }
 
 export class SessionManager {
@@ -62,16 +66,30 @@ export class SessionManager {
 
   /** Make `id` the active session: build its env, tools, and restored agent. */
   async activate(id: string): Promise<ActiveSession> {
+    const prev = this.active;
     this.flush();
     this.unsub?.();
     this.unsub = undefined;
+    // Dispose the previous backend so a booted microVM guest doesn't leak when
+    // switching sessions (js-shell/remote have no-op or absent dispose).
+    if (prev?.backend?.dispose) {
+      try {
+        await prev.backend.dispose();
+      } catch {
+        /* best-effort teardown */
+      }
+    }
 
     const meta = await this.registry.get(id);
     if (!meta) throw new Error(`session ${id} not found`);
 
     const settings = await this.store.load();
     const cfg = toRuntimeConfig(settings);
+    // One shared VFS backs BOTH the file tools (via the env) and the microVM 9p
+    // bridge, so a "microvm" guest sees this session's files at /mnt.
+    const vfs = new LightningFsVfs("pi-wasm");
     const env = await createBrowserExecutionEnv({
+      vfs,
       cwd: meta.workdir,
       seedDirs: ["/home/.pi/agent", meta.workdir],
     });
@@ -83,14 +101,21 @@ export class SessionManager {
       ? (meta.backendId as ExecBackendId)
       : "none";
     const relay = (settings as { relay?: HttpRelayTransportOptions }).relay;
-    const backendResult = createExecBackend(backendId, { env, relay });
+    // Build the microVM machine only when that backend is selected (construction
+    // is cheap — v86 boots LAZILY on first exec, not here, so switching in does
+    // not block). settings.microvm is pure tuning; omitted ⇒ vendored defaults.
+    const microvm =
+      backendId === "microvm" ? await buildMicrovmOptions(vfs, meta.workdir, settings.microvm) : undefined;
+    const backendResult = createExecBackend(backendId, { env, relay, microvm });
     let backendNotice: string | undefined;
+    let backend: ExecBackend;
     if (backendResult.ok) {
-      env.setExecBackend(backendResult.value);
+      backend = backendResult.value;
     } else {
-      env.setExecBackend(new NullExecBackend());
+      backend = new NullExecBackend();
       backendNotice = backendResult.error;
     }
+    env.setExecBackend(backend);
     // The agent gets a real shell tool only when a working backend is active.
     const bashActive = backendId !== "none" && backendResult.ok;
     const tools = createBrowserAgentTools(env, { bash: bashActive });
@@ -106,7 +131,7 @@ export class SessionManager {
     });
 
     await this.registry.setActiveId(id);
-    this.active = { meta, session, env, backendId, backendNotice };
+    this.active = { meta, session, env, backendId, backendNotice, backend };
     // Persist the transcript shortly after activity settles (debounced).
     this.unsub = session.subscribe(() => this.scheduleSave());
     return this.active;
@@ -194,4 +219,35 @@ export class SessionManager {
       // best-effort cleanup; a leftover dir is harmless (orphaned bytes only).
     }
   }
+}
+
+/**
+ * Build the microVM ExecBackend options (S14): a V86Machine wired to a 9p server
+ * over the SAME session VFS, so the guest's auto-mounted /mnt IS this session's
+ * workdir. `cfg` is the optional persisted tuning (settings.microvm); omitted or
+ * empty ⇒ the vendored-asset defaults. v86 boots LAZILY on first exec (inside
+ * MicrovmExecBackend), so constructing this does not boot the guest.
+ *
+ * The v86 adapter (+ its dynamic `import('v86')`) and the 9p server are pulled in
+ * with a DYNAMIC import so they are code-split OUT of the main app bundle and
+ * only loaded when a session actually selects the microvm backend — the primary
+ * app + node/vitest graph never reference the browser-only emulator.
+ */
+async function buildMicrovmOptions(
+  vfs: Vfs,
+  root: string,
+  cfg: MicrovmConfig | undefined,
+): Promise<MicrovmExecBackendOptions> {
+  const [{ V86Machine }, { Vfs9pServer }] = await Promise.all([
+    import("../exec/v86-machine"),
+    import("../exec/ninep/server"),
+  ]);
+  const server = new Vfs9pServer({ vfs, root });
+  const machine = new V86Machine({
+    ...(cfg ?? {}),
+    handle9p: (req, reply) => {
+      void server.handle(req).then(reply);
+    },
+  });
+  return { machine };
 }

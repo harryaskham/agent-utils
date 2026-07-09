@@ -2,7 +2,7 @@
 // settings screen's parse/validate logic is unit-testable headlessly under vitest.
 
 import { normalizeSettings } from "./store";
-import type { PiWasmSettings } from "./types";
+import type { PiWasmSettings, MicrovmConfig } from "./types";
 
 /** Raw string values as they appear in the settings form. */
 export interface SettingsFormValues {
@@ -15,6 +15,8 @@ export interface SettingsFormValues {
   relayEndpoint: string;
   /** Remote exec relay (S15) token (secret) — persisted under settings.relay.token. */
   relayToken: string;
+  /** microVM (S14) tuning as a JSON object — persisted under settings.microvm. */
+  microvmJson: string;
 }
 
 /** Render persisted settings into editable form strings. */
@@ -28,6 +30,7 @@ export function settingsToForm(settings: PiWasmSettings): SettingsFormValues {
     settingsJson: JSON.stringify(s.settings, null, 2),
     relayEndpoint: s.relay?.endpoint ?? "",
     relayToken: s.relay?.token ?? "",
+    microvmJson: s.microvm ? JSON.stringify(s.microvm, null, 2) : "",
   };
 }
 
@@ -43,6 +46,10 @@ export function formToSettings(values: SettingsFormValues): FormParseResult {
   const providerKeys = parseJsonObject(values.providerKeysJson, "Provider keys", errors);
   const models = parseJsonArray(values.modelsJson, "Models", errors);
   const settings = parseJsonObject(values.settingsJson, "settings.json", errors);
+  // microVM tuning (S14) — a JSON object under settings.microvm. Empty ({} or
+  // blank) coerces to "no overrides" (the backend then uses vendored-asset
+  // defaults); invalid JSON is a form error.
+  const microvmRaw = parseJsonObject(values.microvmJson, "microVM config", errors);
   if (errors.length > 0) return { errors };
 
   const selectedModelId = values.selectedModelId.trim() || null;
@@ -64,6 +71,7 @@ export function formToSettings(values: SettingsFormValues): FormParseResult {
       selectedModelId,
       settings: settings as Record<string, unknown>,
       relay,
+      microvm: microvmRaw as unknown as MicrovmConfig | undefined,
     }),
     errors: [],
   };

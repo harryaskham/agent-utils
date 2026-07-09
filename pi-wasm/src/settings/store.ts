@@ -5,7 +5,7 @@
 // is a small dependency-free single-object-store wrapper; under vitest it runs
 // against fake-indexeddb (see test/setup.ts), so it is fully headless-testable.
 
-import { DEFAULT_SETTINGS, type PiWasmSettings, type RelayConfig } from "./types";
+import { DEFAULT_SETTINGS, type PiWasmSettings, type RelayConfig, type MicrovmConfig } from "./types";
 
 const DEFAULT_DB_NAME = "pi-wasm-settings";
 const STORE = "kv";
@@ -105,6 +105,8 @@ export function normalizeSettings(raw: Partial<PiWasmSettings> | undefined | nul
   };
   const relay = normalizeRelay(r.relay);
   if (relay) out.relay = relay;
+  const microvm = normalizeMicrovm(r.microvm);
+  if (microvm) out.microvm = microvm;
   return out;
 }
 
@@ -115,6 +117,26 @@ function normalizeRelay(raw: unknown): RelayConfig | undefined {
   if (!endpoint) return undefined;
   const token = typeof raw.token === "string" ? raw.token.trim() : "";
   return token ? { endpoint, token } : { endpoint };
+}
+
+/**
+ * Coerce a persisted microVM config into a valid MicrovmConfig, or undefined
+ * when empty/unusable — so a half-filled blob becomes "no config" (defaults),
+ * lining up 1:1 with the registry's `!ctx.microvm.machine` guard rather than a
+ * broken backend.
+ */
+function normalizeMicrovm(raw: unknown): MicrovmConfig | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  const out: MicrovmConfig = {};
+  for (const k of ["wasmUrl", "biosUrl", "vgaBiosUrl", "bzimageUrl", "cmdline"] as const) {
+    const v = raw[k];
+    if (typeof v === "string" && v.trim()) out[k] = v.trim();
+  }
+  for (const k of ["memoryMb", "bootTimeoutMs"] as const) {
+    const v = raw[k];
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

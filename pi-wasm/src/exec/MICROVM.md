@@ -120,6 +120,28 @@ v86's guest device. Implemented ops: version, attach, statfs, walk, getattr,
 lopen, read, readdir, write, lcreate, mkdir, unlinkat, setattr(size), clunk,
 flush, fsync; other ops return `Rlerror(ENOSYS)`.
 
+## Selecting + configuring the microvm backend per session (S11 + S6)
+
+The backend is chosen per session via the S11 switcher and built by ms2-0's S13
+registry. `SessionManager.activate` (src/sessions/session-manager.ts) does the
+config→machine transform so the registry stays free of the browser-only v86
+import:
+
+- one shared `LightningFsVfs` backs BOTH the file tools (`createBrowserExecutionEnv({ vfs })`)
+  and the microVM 9p bridge, so the guest's `/mnt` IS this session's workdir;
+- when `backendId === "microvm"`, it builds `V86Machine({ ...settings.microvm, handle9p })`
+  wired to a `Vfs9pServer({ vfs, root: meta.workdir })` and passes `{ machine }`
+  as `ctx.microvm`. v86 boots LAZILY on first exec (inside MicrovmExecBackend),
+  so switching into a microvm session does not block; the previous session's
+  backend is disposed on switch-away so a booted guest is not leaked.
+
+`settings.microvm` (top-level `MicrovmConfig`, edited as a JSON block in the S6
+settings panel) is PURE TUNING — asset URLs / `memoryMb` / `bootTimeoutMs`.
+Unlike the relay (whose endpoint is required), an absent/empty microvm config
+means "use the vendored-asset defaults," not "no backend": the machine is still
+built whenever microvm is selected. `normalizeMicrovm` drops empty/ill-typed
+blobs to `undefined` so a half-filled config never yields a broken backend.
+
 ## Limitations / next increments
 
 - **stdout/stderr are separated, not interleaved.** Each is captured as its own

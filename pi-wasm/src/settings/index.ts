@@ -1,6 +1,6 @@
 // pi-wasm S6 (bd-4c572a): public surface of the settings/keys layer.
 export { DEFAULT_SETTINGS } from "./types";
-export type { ModelSpec, PiWasmSettings } from "./types";
+export type { ModelSpec, PiWasmSettings, MicrovmConfig } from "./types";
 
 export { SettingsStore, normalizeSettings } from "./store";
 export type { SettingsStoreOptions } from "./store";

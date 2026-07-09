@@ -26,6 +26,7 @@ describe("settings form (pure serialization)", () => {
       settingsJson: "",
       relayEndpoint: "",
       relayToken: "",
+      microvmJson: "",
     });
     expect(parsed.errors).toEqual([]);
     expect(parsed.settings?.providerKeys).toEqual({});
@@ -42,6 +43,7 @@ describe("settings form (pure serialization)", () => {
       settingsJson: "{}",
       relayEndpoint: "",
       relayToken: "",
+      microvmJson: "",
     });
     expect(parsed.settings).toBeUndefined();
     expect(parsed.errors.join(" ")).toMatch(/Provider keys/);
@@ -56,6 +58,7 @@ describe("settings form (pure serialization)", () => {
       settingsJson: "{}",
       relayEndpoint: "",
       relayToken: "",
+      microvmJson: "",
     });
     expect(parsed.settings).toBeUndefined();
     expect(parsed.errors).toHaveLength(2);
@@ -71,6 +74,7 @@ describe("settings form — remote exec relay (S15) fields", () => {
     settingsJson: "",
     relayEndpoint: "",
     relayToken: "",
+    microvmJson: "",
   };
 
   it("surfaces top-level settings.relay as dedicated form fields", () => {
@@ -112,5 +116,54 @@ describe("settings form — remote exec relay (S15) fields", () => {
       relay: { endpoint: "https://r/exec", token: "t0" },
     };
     expect(formToSettings(settingsToForm(withRelay)).settings).toEqual(withRelay);
+  });
+});
+
+describe("settings form — microVM (S14) config field", () => {
+  const base = {
+    baseUrl: "",
+    providerKeysJson: "",
+    modelsJson: "",
+    selectedModelId: "",
+    settingsJson: "",
+    relayEndpoint: "",
+    relayToken: "",
+    microvmJson: "",
+  };
+
+  it("surfaces top-level settings.microvm as the JSON field (not the settings blob)", () => {
+    const withMicrovm: PiWasmSettings = { ...settings, microvm: { memoryMb: 512 } };
+    const form = settingsToForm(withMicrovm);
+    expect(JSON.parse(form.microvmJson)).toEqual({ memoryMb: 512 });
+    expect(JSON.parse(form.settingsJson)).toEqual({ theme: "dark" });
+  });
+
+  it("writes the JSON field to top-level settings.microvm where SessionManager reads it", () => {
+    const parsed = formToSettings({ ...base, microvmJson: '{ "memoryMb": 512, "bzimageUrl": "/x.bin" }' });
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.settings?.microvm).toEqual({ memoryMb: 512, bzimageUrl: "/x.bin" });
+  });
+
+  it("drops empty/unusable config to undefined (backend then uses vendored defaults)", () => {
+    expect(formToSettings({ ...base, microvmJson: "{}" }).settings?.microvm).toBeUndefined();
+    expect(formToSettings({ ...base, microvmJson: "" }).settings?.microvm).toBeUndefined();
+    // wrong-typed / unknown fields are coerced away, leaving nothing → undefined
+    expect(
+      formToSettings({ ...base, microvmJson: '{ "memoryMb": "big", "nope": 1 }' }).settings?.microvm,
+    ).toBeUndefined();
+  });
+
+  it("reports invalid microVM JSON with a helpful label", () => {
+    const parsed = formToSettings({ ...base, microvmJson: "{bad" });
+    expect(parsed.settings).toBeUndefined();
+    expect(parsed.errors.join(" ")).toMatch(/microVM/);
+  });
+
+  it("round-trips settings incl. microvm -> form -> settings", () => {
+    const withMicrovm: PiWasmSettings = {
+      ...settings,
+      microvm: { memoryMb: 256, bootTimeoutMs: 90000 },
+    };
+    expect(formToSettings(settingsToForm(withMicrovm)).settings).toEqual(withMicrovm);
   });
 });
