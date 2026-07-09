@@ -30,7 +30,14 @@ export type ExecBackendOptions = ShellExecOptions & { cwd: string };
 export interface ExecBackend {
   /** Stable id, e.g. "none" | "remote" | "js-shell" | "webcontainer" | "microvm". */
   readonly id: string;
-  /** Whether the backend can run now (deps loaded, endpoint reachable). */
+  /**
+   * Whether the backend can run now (deps loaded, endpoint reachable).
+   *
+   * `exec()` gates on this AT CALL TIME, so backends whose reachability changes
+   * at runtime (e.g. the remote / ssh-localhost tier) should implement this as a
+   * GETTER rather than a construction-time snapshot. The `readonly` modifier
+   * permits a getter.
+   */
   readonly available: boolean;
   exec(command: string, options: ExecBackendOptions): Promise<Result<ExecResult, ExecutionError>>;
   /** Release backend resources. Best-effort; must not throw. */

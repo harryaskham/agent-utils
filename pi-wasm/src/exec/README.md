@@ -18,6 +18,11 @@ interface ExecBackend {
 `NullExecBackend` (the default) returns `shell_unavailable` — identical to the S2
 MVP, so nothing regresses when no backend is configured.
 
+> **Dynamic tiers:** `exec()` gates on `backend.available` at call time, so a
+> backend whose reachability changes at runtime (remote / ssh-localhost
+> especially) should implement `available` as a **getter**, not a
+> construction-time snapshot. The `readonly available` field permits a getter.
+
 ## Wiring
 
 `BrowserExecutionEnv` takes an optional `execBackend` (ctor option) and exposes
