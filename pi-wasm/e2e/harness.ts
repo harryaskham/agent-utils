@@ -20,6 +20,13 @@ export function resolveKey(): string {
 }
 
 // The test-only globals the S7 chat app exposes on `window` (see src/main.ts).
+export interface SessionMeta {
+  id: string;
+  name: string;
+  createdAt: number;
+  modelId?: string;
+}
+
 export interface PiWasmGlobals {
   __PI_WASM__?: {
     ready?: boolean;
@@ -30,6 +37,17 @@ export interface PiWasmGlobals {
   };
   __PI_WASM_S3__?: { ok: boolean; text?: string; model?: string; chunks?: number; error?: string };
   __PI_WASM_SETTINGS__?: { store: { save(v: unknown): Promise<void> } };
+  // S11 keyed multi-session surface (bd-0dc0bc).
+  __PI_WASM_SESSIONS__?: {
+    list(): Promise<SessionMeta[]>;
+    current(): SessionMeta | undefined;
+    create(name?: string): Promise<SessionMeta | undefined>;
+    switchTo(id: string): Promise<SessionMeta | undefined>;
+    rename(id: string, name: string): Promise<void>;
+    remove(id: string): Promise<SessionMeta | undefined>;
+    exportSession(id: string): Promise<unknown>;
+    importSession(data: unknown): Promise<SessionMeta | undefined>;
+  };
 }
 
 export interface LiveSettings {
@@ -115,6 +133,29 @@ export async function expectAssistantReply(page: Page): Promise<void> {
     transcript.some((m) => m.role === "assistant" && m.text.trim().length > 0),
     "expected a non-empty assistant reply",
   ).toBe(true);
+}
+
+// ---- S11 keyed multi-session helpers (bd-0dc0bc surface) -------------------
+
+export async function listSessions(page: Page): Promise<SessionMeta[]> {
+  return page.evaluate(() => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.list());
+}
+
+export async function createSession(page: Page, name?: string): Promise<SessionMeta> {
+  const meta = await page.evaluate(
+    (n) => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.create(n),
+    name,
+  );
+  if (!meta) throw new Error("createSession returned no meta");
+  return meta;
+}
+
+export async function switchSession(page: Page, id: string): Promise<void> {
+  await page.evaluate((i) => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.switchTo(i), id);
+}
+
+export async function removeSession(page: Page, id: string): Promise<void> {
+  await page.evaluate((i) => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.remove(i), id);
 }
 
 export interface ToolLoopScenario {
