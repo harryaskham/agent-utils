@@ -9,5 +9,6 @@ export {
   createBrowserFileTools,
   fileToolsSmoke,
 } from "./browser-tools";
+export { createBrowserBashTool, createBrowserAgentTools } from "./bash-tool";
 export { applyEdits, type EditReplacement } from "./edit-core";
 export { globToRegExp, matchesGlob } from "./glob";

@@ -33,6 +33,7 @@ import type {
 } from "@earendil-works/pi-agent-core";
 import * as path from "./posix-path";
 import { LightningFsVfs, type Vfs, type VfsStat } from "./vfs";
+import type { ExecBackend } from "../exec/exec-backend";
 
 interface NodeLikeError {
   code?: string;
@@ -91,15 +92,32 @@ function toBytes(data: string | Uint8Array): Uint8Array {
 export interface BrowserExecutionEnvOptions {
   /** Working directory for relative paths. Defaults to `/work`. */
   cwd?: string;
+  /**
+   * Optional pluggable exec backend (pi-wasm S13/S14). When omitted, `exec()`
+   * reports `shell_unavailable` (the S2 no-bash MVP default).
+   */
+  execBackend?: ExecBackend;
 }
 
 export class BrowserExecutionEnv implements ExecutionEnv {
   cwd: string;
   private readonly vfs: Vfs;
+  private execBackend: ExecBackend | undefined;
 
   constructor(vfs: Vfs, options?: BrowserExecutionEnvOptions) {
     this.vfs = vfs;
     this.cwd = path.normalize(options?.cwd ?? "/work");
+    this.execBackend = options?.execBackend;
+  }
+
+  /** Swap the exec backend at runtime (per-session selection; pi-wasm S13/S14). */
+  setExecBackend(backend: ExecBackend | undefined): void {
+    this.execBackend = backend;
+  }
+
+  /** The currently configured exec backend, if any. */
+  getExecBackend(): ExecBackend | undefined {
+    return this.execBackend;
   }
 
   private resolve(p: string): string {
@@ -353,16 +371,21 @@ export class BrowserExecutionEnv implements ExecutionEnv {
     options?: ShellExecOptions,
   ): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
     if (options?.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
-    // No-bash MVP: the exec seam is intentionally unavailable. A real shell
+    const backend = this.execBackend;
+    if (backend && backend.available) {
+      // Delegate to the configured backend, resolving cwd against env.cwd.
+      const cwd = this.resolve(options?.cwd ?? this.cwd);
+      return backend.exec(command, { ...options, cwd });
+    }
+    // No backend configured: exec is the no-bash MVP seam. A real shell
     // (JS bash emulator / WebContainer / emscripten-busybox mounting this VFS,
-    // a wasm microVM, or an ssh-out / MCP bridge) plugs in here in pi-wasm S10
-    // without touching the Agent loop or the file tools. `command` is accepted
-    // and ignored so the signature is stable for that future backend.
-    void command;
+    // a wasm microVM, or an ssh-out / MCP bridge) plugs in via setExecBackend()
+    // or the `execBackend` option (pi-wasm S13/S14) with no change to the Agent
+    // loop or the file tools.
     return err(
       new ExecutionError(
         "shell_unavailable",
-        "exec/bash is unavailable in the browser VFS environment (pi-wasm no-bash MVP; a shell backend lands in S10)",
+        "exec/bash is unavailable in the browser VFS environment (pi-wasm no-bash MVP; configure an ExecBackend — see pi-wasm S13/S14)",
       ),
     );
   }
@@ -397,7 +420,7 @@ export async function createBrowserExecutionEnv(
   options: CreateBrowserExecutionEnvOptions = {},
 ): Promise<BrowserExecutionEnv> {
   const vfs = options.vfs ?? new LightningFsVfs(options.fsName ?? "pi-wasm", { wipe: options.wipe });
-  const env = new BrowserExecutionEnv(vfs, { cwd: options.cwd });
+  const env = new BrowserExecutionEnv(vfs, { cwd: options.cwd, execBackend: options.execBackend });
   const seedDirs = options.seedDirs ?? ["/home/.pi/agent", "/work"];
   for (const dir of seedDirs) {
     const result = await env.createDir(dir, { recursive: true });
