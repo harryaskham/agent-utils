@@ -67,50 +67,70 @@ function runToken(): string {
 }
 
 /**
- * Frame one command for the serial console. The BEGIN/END markers carry the
- * unique token as printf *arguments* (not in the format literal), so the marker
- * strings only ever appear in the command's OUTPUT — never in the shell's echo
- * of the injected source line — which is what makes output extraction robust to
- * console echo and shell prompts. `cd` into cwd and export env first.
+ * Frame one command for the serial console using three markers whose token is a
+ * printf *argument* (not in the format literal), so the marker strings only ever
+ * appear in command OUTPUT — never in the shell's echo of the injected source —
+ * which makes extraction robust to console echo and prompts:
+ *   PIWASM_OUT_<t>       stdout begins after this marker
+ *   PIWASM_ERR_<t>       stdout ends here; the stderr replay begins after it
+ *   PIWASM_END_<t>:<rc>  stderr ends here; <rc> is the captured exit code
+ * The command's stderr is redirected to a temp file and replayed between the ERR
+ * and END markers, so stdout and stderr are cleanly SEPARATED (matching Shell /
+ * Node exec semantics) rather than interleaved on one console. env + cd run in
+ * the prelude, before the OUT marker, so their output can never leak into stdout.
  */
 export function frameCommand(command: string, token: string, opts: ExecBackendOptions): string {
-  const begin = `printf 'PIWASM_BEGIN_%s\\n' ${shSingleQuote(token)}`;
-  const end = `__piwasm_rc=$?; printf 'PIWASM_END_%s:%d\\n' ${shSingleQuote(token)} "$__piwasm_rc"`;
+  const q = shSingleQuote(token);
+  const errFile = `/tmp/.piwasm_err_${token}`;
   const prelude: string[] = [];
   if (opts.env) {
     for (const [k, v] of Object.entries(opts.env)) {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) prelude.push(`export ${k}=${shSingleQuote(String(v))}`);
     }
   }
-  // cd into the resolved cwd (best-effort; a failed cd still runs the command in
-  // the previous dir, matching a permissive shell). Group the user command so a
-  // trailing background/newline can't swallow the END marker. The BEGIN marker
-  // is emitted AFTER the prelude so no cd/export output can leak into stdout.
   prelude.push(`cd ${shSingleQuote(opts.cwd)} 2>/dev/null`);
-  return `${prelude.join("\n")}\n${begin}\n${command}\n${end}\n`;
+  // Group the user command so its stderr can be redirected to the temp file and
+  // its exit code captured; then replay the temp file between the ERR/END markers.
+  return (
+    `${prelude.join("\n")}\n` +
+    `printf 'PIWASM_OUT_%s\\n' ${q}\n` +
+    `{ ${command}\n} 2>${errFile}\n` +
+    `__piwasm_rc=$?\n` +
+    `printf 'PIWASM_ERR_%s\\n' ${q}\n` +
+    `cat ${errFile} 2>/dev/null; rm -f ${errFile}\n` +
+    `printf 'PIWASM_END_%s:%d\\n' ${q} "$__piwasm_rc"\n`
+  );
 }
 
-export const BEGIN_RE = (token: string) => new RegExp(`PIWASM_BEGIN_${token}\\r?\\n`);
+export const OUT_RE = (token: string) => new RegExp(`PIWASM_OUT_${token}\\r?\\n`);
+export const ERR_RE = (token: string) => new RegExp(`PIWASM_ERR_${token}\\r?\\n`);
 export const END_RE = (token: string) => new RegExp(`PIWASM_END_${token}:(-?\\d+)\\r?\\n`);
 
 /**
- * Extract `{ stdout, exitCode }` from accumulated serial output for a token.
- * Returns undefined until the END marker has arrived. stdout is the console
- * bytes between the BEGIN marker line and the END marker line.
+ * Extract `{ stdout, stderr, exitCode }` from accumulated serial output for a
+ * token. Returns undefined until the END marker has arrived. stdout is the
+ * console bytes between the OUT and ERR markers; stderr is the replayed temp
+ * file between the ERR and END markers; the exit code is the END marker's int.
  */
 export function parseSerialResult(
   buffer: string,
   token: string,
-): { stdout: string; exitCode: number; consumedTo: number } | undefined {
+): { stdout: string; stderr: string; exitCode: number; consumedTo: number } | undefined {
   const end = END_RE(token).exec(buffer);
   if (!end) return undefined;
   const exitCode = Number.parseInt(end[1], 10);
-  const begin = BEGIN_RE(token).exec(buffer);
-  const start = begin ? begin.index + begin[0].length : 0;
-  let stdout = buffer.slice(start, end.index);
-  // Drop exactly one trailing newline that precedes the END marker's printf.
-  stdout = stdout.replace(/\r?\n$/, "");
-  return { stdout, exitCode, consumedTo: end.index + end[0].length };
+  const out = OUT_RE(token).exec(buffer);
+  const errm = ERR_RE(token).exec(buffer);
+  const outStart = out ? out.index + out[0].length : 0;
+  // stdout: OUT marker → ERR marker (falls back to END if the ERR marker is
+  // somehow absent). stderr: ERR marker → END marker (the replayed temp file).
+  const hasErr = Boolean(errm && errm.index >= outStart);
+  const outEnd = hasErr ? errm!.index : end.index;
+  const stdout = buffer.slice(outStart, outEnd).replace(/\r?\n$/, "");
+  const stderr = hasErr
+    ? buffer.slice(errm!.index + errm![0].length, end.index).replace(/\r?\n$/, "")
+    : "";
+  return { stdout, stderr, exitCode, consumedTo: end.index + end[0].length };
 }
 
 /** microVM-tier ExecBackend: runs commands in a persistent in-browser Linux guest. */
@@ -174,7 +194,7 @@ export class MicrovmExecBackend implements ExecBackend {
     const token = runToken();
     let buffer = "";
     let streamedTo = 0;
-    let sawBegin = false;
+    let sawOut = false;
 
     return await new Promise<Result<ExecResult, ExecutionError>>((resolve) => {
       let settled = false;
@@ -202,25 +222,27 @@ export class MicrovmExecBackend implements ExecBackend {
 
       const onData = (chunk: string) => {
         buffer += chunk;
-        // Stream stdout that has arrived after BEGIN and before END.
-        if (!sawBegin) {
-          const b = BEGIN_RE(token).exec(buffer);
-          if (b) {
-            sawBegin = true;
-            streamedTo = b.index + b[0].length;
+        // Stream stdout that has arrived after the OUT marker, up to the ERR
+        // marker (never streaming the stderr replay region as stdout).
+        if (!sawOut) {
+          const o = OUT_RE(token).exec(buffer);
+          if (o) {
+            sawOut = true;
+            streamedTo = o.index + o[0].length;
           }
         }
         const parsed = parseSerialResult(buffer, token);
-        if (sawBegin && options.onStdout && !parsed) {
-          // Emit the growing stdout region (not yet including the END marker).
-          const pending = buffer.slice(streamedTo);
-          if (pending) {
-            options.onStdout(pending);
-            streamedTo = buffer.length;
+        if (sawOut && options.onStdout && !parsed) {
+          const errm = ERR_RE(token).exec(buffer);
+          const upto = errm ? errm.index : buffer.length;
+          if (upto > streamedTo) {
+            options.onStdout(buffer.slice(streamedTo, upto));
+            streamedTo = upto;
           }
         }
         if (parsed) {
-          finish(ok({ stdout: parsed.stdout, stderr: "", exitCode: parsed.exitCode }));
+          if (options.onStderr && parsed.stderr) options.onStderr(parsed.stderr);
+          finish(ok({ stdout: parsed.stdout, stderr: parsed.stderr, exitCode: parsed.exitCode }));
         }
       };
 

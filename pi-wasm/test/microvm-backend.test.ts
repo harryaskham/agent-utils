@@ -4,7 +4,8 @@ import {
   createMicrovmExecBackend,
   frameCommand,
   parseSerialResult,
-  BEGIN_RE,
+  OUT_RE,
+  ERR_RE,
   END_RE,
   type MicrovmMachine,
 } from "../src/exec/microvm-backend";
@@ -14,13 +15,14 @@ const opts = (over: Partial<ExecBackendOptions> = {}): ExecBackendOptions => ({ 
 
 type Responder = (
   frame: string,
-) => { stdout: string; exitCode: number; echo?: boolean } | null;
+) => { stdout: string; stderr?: string; exitCode: number; echo?: boolean } | null;
 
 /**
  * A fake guest: on each serial write it extracts the run token from the framed
- * command, then asynchronously emits console echo (optional) + the BEGIN marker
- * + canned stdout + the END marker, mimicking a real serial console. A responder
- * returning `null` never completes (for abort/timeout tests).
+ * command, then asynchronously emits console echo (optional) + the OUT marker +
+ * canned stdout + the ERR marker + canned stderr + the END marker, mimicking a
+ * real serial console. A responder returning `null` never completes (for
+ * abort/timeout tests).
  */
 class MockMachine implements MicrovmMachine {
   readonly kind = "mock";
@@ -43,15 +45,17 @@ class MockMachine implements MicrovmMachine {
       this.interrupts += 1;
       return;
     }
-    const m = /PIWASM_BEGIN_%s\\n' '([^']+)'/.exec(data);
+    const m = /PIWASM_OUT_%s\\n' '([^']+)'/.exec(data);
     if (!m) return;
     const token = m[1];
     const res = this.responder(data);
     if (!res) return; // never completes
     queueMicrotask(() => {
       if (res.echo) this.emit(data);
-      this.emit(`PIWASM_BEGIN_${token}\n`);
+      this.emit(`PIWASM_OUT_${token}\n`);
       if (res.stdout) this.emit(res.stdout);
+      this.emit(`PIWASM_ERR_${token}\n`);
+      if (res.stderr) this.emit(res.stderr);
       this.emit(`PIWASM_END_${token}:${res.exitCode}\n`);
     });
   }
@@ -71,16 +75,20 @@ class MockMachine implements MicrovmMachine {
 }
 
 describe("frameCommand / parseSerialResult (pure)", () => {
-  it("frames cd + env exports + begin/end markers with the token as a printf arg", () => {
+  it("frames cd + env exports + OUT/ERR/END markers with the token as a printf arg", () => {
     const frame = frameCommand("echo hi", "tok123", opts({ cwd: "/work/app", env: { FOO: "bar" } }));
-    expect(frame).toContain("printf 'PIWASM_BEGIN_%s\\n' 'tok123'");
     expect(frame).toContain("export FOO='bar'");
     expect(frame).toContain("cd '/work/app'");
+    expect(frame).toContain("printf 'PIWASM_OUT_%s\\n' 'tok123'");
     expect(frame).toContain("echo hi");
+    expect(frame).toContain("2>/tmp/.piwasm_err_tok123");
+    expect(frame).toContain("printf 'PIWASM_ERR_%s\\n' 'tok123'");
+    expect(frame).toContain("cat /tmp/.piwasm_err_tok123");
     expect(frame).toContain("printf 'PIWASM_END_%s:%d\\n' 'tok123'");
-    // The concatenated marker string must NOT appear in the framed source, so a
+    // The concatenated marker strings must NOT appear in the framed source, so a
     // console echo of the frame can never be mistaken for real output.
-    expect(frame).not.toContain("PIWASM_BEGIN_tok123");
+    expect(frame).not.toContain("PIWASM_OUT_tok123");
+    expect(frame).not.toContain("PIWASM_ERR_tok123");
   });
 
   it("single-quote-escapes cwd/env values", () => {
@@ -89,33 +97,41 @@ describe("frameCommand / parseSerialResult (pure)", () => {
     expect(frame).toContain(`export X='a'\\''b'`);
   });
 
-  it("returns undefined until END arrives, then extracts stdout + exit code", () => {
+  it("returns undefined until END arrives, then extracts stdout, stderr + exit code", () => {
     const token = "abc";
     expect(parseSerialResult("partial output no end", token)).toBeUndefined();
-    const buf = `PIWASM_BEGIN_${token}\nhello world\nPIWASM_END_${token}:0\n`;
+    const buf =
+      `PIWASM_OUT_${token}\nhello world\nPIWASM_ERR_${token}\noops\nPIWASM_END_${token}:0\n`;
     const r = parseSerialResult(buf, token)!;
     expect(r.stdout).toBe("hello world");
+    expect(r.stderr).toBe("oops");
     expect(r.exitCode).toBe(0);
   });
 
-  it("strips console echo before the BEGIN marker and parses non-zero codes", () => {
+  it("strips console echo before the OUT marker and parses non-zero codes", () => {
     const token = "z9";
     const buf =
-      `printf 'PIWASM_BEGIN_%s\\n' 'z9'\nfalse\n` + // echoed source (contains marker only split)
-      `PIWASM_BEGIN_${token}\n` +
+      `printf 'PIWASM_OUT_%s\\n' 'z9'\nfalse\n` + // echoed source (marker only split by %s)
+      `PIWASM_OUT_${token}\n` +
+      `PIWASM_ERR_${token}\n` +
+      `err text\n` +
       `PIWASM_END_${token}:1\n`;
     const r = parseSerialResult(buf, token)!;
     expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("err text");
     expect(r.exitCode).toBe(1);
   });
 
-  it("BEGIN_RE/END_RE tolerate CRLF", () => {
+  it("OUT_RE/ERR_RE/END_RE tolerate CRLF", () => {
     const token = "cr";
-    const buf = `PIWASM_BEGIN_${token}\r\nout\r\nPIWASM_END_${token}:7\r\n`;
-    expect(BEGIN_RE(token).test(buf)).toBe(true);
+    const buf =
+      `PIWASM_OUT_${token}\r\nout\r\nPIWASM_ERR_${token}\r\ne\r\nPIWASM_END_${token}:7\r\n`;
+    expect(OUT_RE(token).test(buf)).toBe(true);
+    expect(ERR_RE(token).test(buf)).toBe(true);
     expect(END_RE(token).test(buf)).toBe(true);
     const r = parseSerialResult(buf, token)!;
     expect(r.stdout).toBe("out");
+    expect(r.stderr).toBe("e");
     expect(r.exitCode).toBe(7);
   });
 });
@@ -148,6 +164,20 @@ describe("MicrovmExecBackend", () => {
     expect(m.bootCount).toBe(1);
   });
 
+  it("captures stdout and stderr as separate streams with the exit code", async () => {
+    const m = new MockMachine((frame) =>
+      frame.includes("build") ? { stdout: "compiling\n", stderr: "warning: x\n", exitCode: 2 } : null,
+    );
+    const backend = new MicrovmExecBackend({ machine: m });
+    const r = await backend.exec("build", opts());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.stdout).toBe("compiling");
+      expect(r.value.stderr).toBe("warning: x");
+      expect(r.value.exitCode).toBe(2);
+    }
+  });
+
   it("propagates a non-zero exit code", async () => {
     const m = new MockMachine(() => ({ stdout: "", exitCode: 3 }));
     const backend = new MicrovmExecBackend({ machine: m });
@@ -155,13 +185,15 @@ describe("MicrovmExecBackend", () => {
     expect(r.ok && r.value.exitCode).toBe(3);
   });
 
-  it("streams stdout via onStdout", async () => {
-    const m = new MockMachine(() => ({ stdout: "streamed-out\n", exitCode: 0 }));
+  it("streams stdout via onStdout and stderr via onStderr", async () => {
+    const m = new MockMachine(() => ({ stdout: "streamed-out\n", stderr: "streamed-err\n", exitCode: 0 }));
     const backend = new MicrovmExecBackend({ machine: m });
-    const chunks: string[] = [];
-    const r = await backend.exec("cat", opts({ onStdout: (c) => chunks.push(c) }));
+    const out: string[] = [];
+    const errs: string[] = [];
+    const r = await backend.exec("cat", opts({ onStdout: (c) => out.push(c), onStderr: (c) => errs.push(c) }));
     expect(r.ok).toBe(true);
-    expect(chunks.join("")).toContain("streamed-out");
+    expect(out.join("")).toContain("streamed-out");
+    expect(errs.join("")).toContain("streamed-err");
   });
 
   it("reports shell_unavailable when the machine is not available", async () => {

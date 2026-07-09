@@ -30,15 +30,22 @@ output cannot interleave.
   tested): frames a command as
   ```sh
   <env exports>; cd <cwd> 2>/dev/null
-  printf 'PIWASM_BEGIN_%s\n' '<token>'
-  <command>
-  __piwasm_rc=$?; printf 'PIWASM_END_%s:%d\n' '<token>' "$__piwasm_rc"
+  printf 'PIWASM_OUT_%s\n' '<token>'
+  { <command>
+  } 2>/tmp/.piwasm_err_<token>
+  __piwasm_rc=$?
+  printf 'PIWASM_ERR_%s\n' '<token>'
+  cat /tmp/.piwasm_err_<token>; rm -f /tmp/.piwasm_err_<token>
+  printf 'PIWASM_END_%s:%d\n' '<token>' "$__piwasm_rc"
   ```
   The unique token is passed as a printf **argument**, so the marker strings
-  (`PIWASM_BEGIN_<token>` / `PIWASM_END_<token>:<rc>`) only ever appear in the
-  command's **output**, never in the console **echo** of the injected line —
-  making stdout extraction robust to echo and shell prompts. stdout is the bytes
-  between the two markers; the exit code is the END marker's captured integer.
+  (`PIWASM_OUT_<token>` / `PIWASM_ERR_<token>` / `PIWASM_END_<token>:<rc>`) only
+  ever appear in the command's **output**, never in the console **echo** of the
+  injected line — making extraction robust to echo and shell prompts. **stdout**
+  is the bytes between the OUT and ERR markers; the command's **stderr** is
+  redirected to a temp file and replayed between the ERR and END markers, so the
+  two streams are cleanly separated (matching Shell/Node exec semantics); the
+  exit code is the END marker's captured integer.
 - **`MicrovmExecBackend`** — boots the machine lazily on first exec, honors
   `abortSignal` (sends Ctrl-C to the guest) + `timeout`, streams via `onStdout`,
   and **never throws** — all failures map to `ExecutionError`
@@ -56,13 +63,15 @@ const backend = createMicrovmExecBackend({ machine });
 `backend.available` is `false` until the machine is loadable, so `exec()`
 degrades to the stable `shell_unavailable` error rather than throwing.
 
-## v1 limitations / next increments
+## Limitations / next increments
 
-- **stderr** is currently `""` — v1 captures the combined serial console as
-  stdout. v2 will split stderr (redirect to a temp file read back over the shared
-  VFS, or a framed guest-agent channel).
+- **stdout/stderr are separated, not interleaved.** Each is captured as its own
+  stream (stderr via the temp-file replay between the ERR/END markers), matching
+  Shell/Node exec semantics; the original console interleaving order is not
+  preserved. Requires a writable `/tmp` in the guest (any Linux guest has one).
 - **The v86 `MicrovmMachine` adapter + guest image + 9p↔`Vfs` bridge** are the
   next increment; the acceptance target is booting the image and proving
-  `bash -c 'cat /work/<file>'` sees a file written by the S4 file tools.
+  `bash -c 'cat /work/<file>'` sees a file written by the S4 file tools. It plugs
+  into the S8 Playwright harness's scenario seam for browser validation.
 - **Networking** (`relay_url` WebSocket → the S15 remote/ssh proxy) is a later
   slice, gated behind a session setting.
