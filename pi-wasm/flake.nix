@@ -33,8 +33,31 @@
             pname = "pi-wasm";
             version = "0.0.0";
             src = ./.;
-            npmDepsHash = "sha256-hN2vZ0awIKlgFVENsM2Ttc31/jQ0c3C8gJCviBeqXSs=";
+            # npmDepsHash: FOD hash of the vendored package-lock.json deps.
+            # Recompute when deps OR the pinned nixpkgs' prefetch-npm-deps change
+            # (the FOD canonicalization is nixpkgs-version-sensitive):
+            #   nix run github:NixOS/nixpkgs/nixos-unstable#prefetch-npm-deps -- pi-wasm/package-lock.json
+            # (bd-dd6419: refreshed from the stale S9 value that broke `nix build
+            # .#pi-wasm` — the very undetected-drift this gate exists to catch.)
+            npmDepsHash = "sha256-VDnEj7+f8fNbovRbCLTTk8YZacph+YdKSoWrUah6sVA=";
             npmBuildScript = "build";
+            # bd-dd6419: make `nix build .#pi-wasm` a COMPLETE gate. The build
+            # script is `vite build`, which uses esbuild — it strips types
+            # WITHOUT typechecking and never runs the vitest suite, so on its
+            # own this derivation only catches bundling breaks. Run tsc + vitest
+            # in the check phase (devDeps are present pre-install-prune, deps are
+            # vendored offline via npmDepsHash, and the suite is network-free) so
+            # a type error or a failing test fails this hermetic, nix-cached
+            # build. This lets the daemon before_reintegration gate collapse to a
+            # one-line `nix build .#pi-wasm` (only rebuilds/tests when pi-wasm
+            # inputs change; cache hit is near-instant otherwise).
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              npm run typecheck
+              npm run test
+              runHook postCheck
+            '';
             # This is a static site, not a publishable npm library: skip the
             # default `npm install`-style install and copy the vite `dist/` tree
             # so $out is a ready-to-serve web root.
