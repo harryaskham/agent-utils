@@ -4,19 +4,21 @@
 // MVP, built ADDITIVELY as its own entry (shell.html) so it never disturbs the
 // S7 chat page (index.html) or the __PI_WASM__/data-pi-wasm-ready hooks the S8
 // Playwright suite drives. Reuses every landed seam:
-//   env      createBrowserExecutionEnv (S2)   tools  createBrowserAgentTools (S4)
-//   settings SettingsStore/toRuntimeConfig (S6) session PiWasmSession (S7)
-// All heavy logic (timeline derivation, VFS sort/format) is in the pure,
+//   session mgmt  S11 SessionManager (keyed multi-session, per-session VFS/model,
+//                 persisted in IndexedDB) — drives the left session switcher
+//   settings      SettingsStore/toRuntimeConfig (S6)   session  PiWasmSession (S7)
+//   file tools    createBrowserAgentTools (S4)         env      browser VFS (S2)
+// All heavy logic (timeline/diff derivation, VFS sort/format) is in the pure,
 // unit-tested ./model. This file is the thin DOM renderer.
 //
 // Increment 1: multi-pane layout (conversation + tool timeline + VFS explorer),
-// streamed rendering, tool-call cards, steer/abort, light/dark, keyboard
-// shortcuts, live file explorer. Diff-view + tool lifecycle pairing follow.
+// streamed rendering, tool-call cards, steer/abort, light/dark, keyboard.
+// Increment 2: diff-view tab (before/after diffs for every write/edit).
+// Increment 3: keyed multi-session — a left session switcher over S11's
+// SessionManager; each session keeps its own transcript + VFS workdir + model,
+// all persisted, so switching/reload restores state. Realizes the "multi-session
+// slick shell" the S12 bead pairs with S11.
 
-import { PiWasmSession } from "../session.js";
-import { DEFAULT_BASE_URL, DEFAULT_MODEL_ID } from "../provider.js";
-import { createBrowserExecutionEnv, type BrowserExecutionEnv } from "../vfs";
-import { createBrowserAgentTools } from "../tools";
 import {
   SettingsStore,
   toRuntimeConfig,
@@ -24,6 +26,9 @@ import {
   mountSettingsPanel,
   type PiWasmSettings,
 } from "../settings";
+import { type BrowserExecutionEnv } from "../vfs";
+import type { PiWasmSession } from "../session.js";
+import { SessionRegistry, SessionManager, mountSwitcher, type ActiveSession } from "../sessions";
 import {
   deriveTimeline,
   conversationItems,
@@ -73,6 +78,7 @@ async function boot(): Promise<void> {
   const fileTree = $<HTMLElement>("file-tree");
   const fileViewer = $<HTMLElement>("file-viewer");
   const diffView = $<HTMLElement>("diff-view");
+  const switcherEl = $<HTMLElement>("session-switcher");
   const settingsPanel = $<HTMLElement>("settings-panel");
   const input = $<HTMLTextAreaElement>("composer-input");
   const sendBtn = $<HTMLButtonElement>("composer-send");
@@ -84,7 +90,7 @@ async function boot(): Promise<void> {
     applyTheme(next);
   });
 
-  // Tabs (Tools | Files).
+  // Tabs (Tools | Files | Diffs).
   const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-tab]"));
   const selectTab = (name: string) => {
     for (const t of tabs) t.classList.toggle("is-active", t.dataset.tab === name);
@@ -95,27 +101,23 @@ async function boot(): Promise<void> {
   for (const t of tabs) t.addEventListener("click", () => selectTab(t.dataset.tab ?? "tools"));
   selectTab("tools");
 
-  // --- Seams: env (S2) + tools (S4) ---
-  let env: BrowserExecutionEnv;
-  let tools: ReturnType<typeof createBrowserAgentTools>;
-  try {
-    env = await createBrowserExecutionEnv({ cwd: "/work" });
-    tools = createBrowserAgentTools(env);
-  } catch (err) {
-    shell.setAttribute("data-pi-wasm-shell-ready", "false");
-    conversation.textContent = `pi-wasm shell failed to init VFS/tools: ${String(err)}`;
-    throw err;
-  }
-
+  // --- Session management (S11) ---
   const store = new SettingsStore();
   let settings: PiWasmSettings = await store.load();
+  const registry = new SessionRegistry();
+  const manager = new SessionManager(registry, store);
+
+  // The active keyed session — session + env are re-pointed on every switch.
+  let active: ActiveSession;
   let session: PiWasmSession;
+  let env: BrowserExecutionEnv;
   let unsubscribe: (() => void) | undefined;
 
   const setStatus = () => {
     const ready = isRuntimeConfigReady(settings);
     const cfg = toRuntimeConfig(settings);
-    statusEl.textContent = ready ? `live · ${cfg.model?.id ?? "?"}` : "mock · add a key in Settings";
+    const model = active?.meta.modelId ?? cfg.model?.id ?? "?";
+    statusEl.textContent = ready ? `live · ${model}` : "mock · add a key in Settings";
     statusEl.className = `pill ${ready ? "is-live" : "is-mock"}`;
   };
 
@@ -166,7 +168,9 @@ async function boot(): Promise<void> {
       const head = document.createElement("div");
       head.className = "tool-card__head";
       head.textContent =
-        row.role === "tool-call" ? `⚙ ${row.tool ?? "tool"}` : `${row.role === "tool-error" ? "✗" : "✓"} ${row.tool ?? "tool"}`;
+        row.role === "tool-call"
+          ? `⚙ ${row.tool ?? "tool"}`
+          : `${row.role === "tool-error" ? "✗" : "✓"} ${row.tool ?? "tool"}`;
       const body = document.createElement("div");
       body.className = "tool-card__body";
       body.textContent = row.text;
@@ -218,7 +222,7 @@ async function boot(): Promise<void> {
     setStatus();
   };
 
-  // --- VFS explorer (lazy tree) ---
+  // --- VFS explorer (lazy tree over the active session's env) ---
   const openFile = async (path: string) => {
     fileViewer.hidden = false;
     fileViewer.querySelector(".viewer__path")!.textContent = path;
@@ -272,30 +276,25 @@ async function boot(): Promise<void> {
     }
   };
 
-  const refreshFiles = () => void renderDir(fileTree, "/", 0);
-  $<HTMLButtonElement>("files-refresh").addEventListener("click", refreshFiles);
-
-  // --- Session build / rebuild ---
-  const build = () => {
-    unsubscribe?.();
-    const cfg = toRuntimeConfig(settings);
-    session = new PiWasmSession({
-      modelId: cfg.model?.id ?? DEFAULT_MODEL_ID,
-      baseUrl: cfg.baseUrl || DEFAULT_BASE_URL,
-      providerId: cfg.model?.provider,
-      getApiKey: cfg.getApiKey,
-      tools,
-    });
-    unsubscribe = session.subscribe(() => render());
-    render();
-    exposeGlobals();
+  const refreshFiles = () => {
+    fileViewer.hidden = true;
+    void renderDir(fileTree, "/", 0);
   };
+  $<HTMLButtonElement>("files-refresh").addEventListener("click", refreshFiles);
 
   const exposeGlobals = () => {
     (globalThis as Record<string, unknown>).__PI_WASM_SHELL__ = {
       ready: true,
-      session,
-      env,
+      manager,
+      get session(): PiWasmSession {
+        return session;
+      },
+      get env(): BrowserExecutionEnv {
+        return env;
+      },
+      get active(): ActiveSession {
+        return active;
+      },
       render,
       refreshFiles,
       async send(text: string) {
@@ -307,20 +306,32 @@ async function boot(): Promise<void> {
     };
   };
 
-  mountSettingsPanel(settingsPanel, store, {
-    onSaved: (saved) => {
-      settings = saved;
-      build();
-      setPanelOpen(false);
-    },
-  });
+  // Re-point the shell at a newly-activated session (initial load + every switch).
+  const bindSession = (a: ActiveSession): void => {
+    unsubscribe?.();
+    active = a;
+    session = a.session;
+    env = a.env;
+    unsubscribe = session.subscribe(() => render());
+    render();
+    refreshFiles();
+    exposeGlobals();
+  };
 
+  // --- Settings panel (rebuild the active session on save to pick up key/model) ---
   let panelOpen = false;
   const setPanelOpen = (open: boolean) => {
     panelOpen = open;
     settingsPanel.hidden = !open;
     $<HTMLButtonElement>("settings-toggle").setAttribute("aria-expanded", String(open));
   };
+  mountSettingsPanel(settingsPanel, store, {
+    onSaved: async (saved) => {
+      settings = saved;
+      bindSession(await manager.activate(active.meta.id));
+      setPanelOpen(false);
+    },
+  });
   $<HTMLButtonElement>("settings-toggle").addEventListener("click", () => setPanelOpen(!panelOpen));
   setPanelOpen(false);
 
@@ -345,7 +356,6 @@ async function boot(): Promise<void> {
       session.abort();
     }
   });
-  // Global shortcut: Cmd/Ctrl+, opens Settings.
   document.addEventListener("keydown", (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === ",") {
       e.preventDefault();
@@ -353,8 +363,16 @@ async function boot(): Promise<void> {
     }
   });
 
-  build();
-  refreshFiles();
+  // --- Boot the first (persisted or fresh) session, then mount the switcher ---
+  try {
+    bindSession(await manager.init());
+  } catch (err) {
+    shell.setAttribute("data-pi-wasm-shell-ready", "false");
+    conversation.textContent = `pi-wasm shell failed to init sessions/VFS: ${String(err)}`;
+    throw err;
+  }
+  mountSwitcher(switcherEl, manager, { onChange: (a) => bindSession(a) });
+
   shell.setAttribute("data-pi-wasm-shell-ready", "true");
   input.focus();
 }
