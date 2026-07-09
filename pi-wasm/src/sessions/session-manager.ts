@@ -11,7 +11,7 @@
 import { PiWasmSession } from "../session.js";
 import { createBrowserExecutionEnv, type BrowserExecutionEnv } from "../vfs";
 import { createBrowserAgentTools } from "../tools";
-import { SettingsStore, toRuntimeConfig } from "../settings";
+import { SettingsStore, toRuntimeConfig, type ModelSpec } from "../settings";
 import { DEFAULT_MODEL_ID, DEFAULT_BASE_URL } from "../provider.js";
 import {
   createExecBackend,
@@ -116,6 +116,18 @@ export class SessionManager {
   async setBackend(id: string, backendId: ExecBackendId): Promise<ActiveSession> {
     await this.registry.update(id, { backendId });
     return this.activate(id);
+  }
+
+  /** Persist a session's per-session model (undefined ⇒ follow global) and re-activate (S11.2). */
+  async setModel(id: string, modelId: string | undefined): Promise<ActiveSession> {
+    await this.registry.setModel(id, modelId);
+    return this.activate(id);
+  }
+
+  /** The S6 model list, so the switcher can offer a per-session model dropdown. */
+  async availableModels(): Promise<ModelSpec[]> {
+    const settings = await this.store.load();
+    return settings.models ?? [];
   }
 
   async create(name?: string): Promise<ActiveSession> {

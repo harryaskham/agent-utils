@@ -9,6 +9,7 @@
 import type { SessionManager, ActiveSession } from "./session-manager.js";
 import type { SessionMeta } from "./registry.js";
 import { EXEC_BACKEND_IDS, type ExecBackendId } from "../exec";
+import type { ModelSpec } from "../settings";
 
 export interface SwitcherHandle {
   refresh(): Promise<void>;
@@ -119,13 +120,18 @@ export function mountSwitcher(
     void activateAndNotify(() => manager.activate(id));
   });
 
-  // Per-session exec-backend (shell) selection (S11.1).
+  // Per-session exec-backend (shell) + model selection (S11.1 / S11.2).
   listEl.addEventListener("change", (ev) => {
     const target = ev.target as HTMLElement;
-    if (!(target instanceof HTMLSelectElement) || !target.classList.contains("pi-sessions__backend")) return;
+    if (!(target instanceof HTMLSelectElement)) return;
     const row = target.closest<HTMLElement>("[data-session-id]");
     if (!row) return;
-    void activateAndNotify(() => manager.setBackend(row.dataset.sessionId!, target.value as ExecBackendId));
+    const id = row.dataset.sessionId!;
+    if (target.classList.contains("pi-sessions__backend")) {
+      void activateAndNotify(() => manager.setBackend(id, target.value as ExecBackendId));
+    } else if (target.classList.contains("pi-sessions__model")) {
+      void activateAndNotify(() => manager.setModel(id, target.value || undefined));
+    }
   });
 
   async function exportSession(id: string): Promise<void> {
@@ -140,7 +146,7 @@ export function mountSwitcher(
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  function renderRow(meta: SessionMeta, activeId: string | undefined): HTMLLIElement {
+  function renderRow(meta: SessionMeta, activeId: string | undefined, models: ModelSpec[]): HTMLLIElement {
     const li = document.createElement("li");
     li.className = "pi-sessions__item" + (meta.id === activeId ? " is-active" : "");
     li.dataset.sessionId = meta.id;
@@ -156,8 +162,31 @@ export function mountSwitcher(
       </div>`;
     li.querySelector(".pi-sessions__name")!.textContent = meta.name;
     li.querySelector(".pi-sessions__time")!.textContent = fmtTime(meta.updatedAt);
-    // Exec-backend (shell) picker — only on the active row where it's in use.
+    // Per-session model + exec-backend pickers — only on the active row.
     if (meta.id === activeId) {
+      const modelWrap = document.createElement("div");
+      modelWrap.className = "pi-sessions__backend-row";
+      const modelLabel = document.createElement("span");
+      modelLabel.className = "pi-sessions__backend-label";
+      modelLabel.textContent = "model";
+      const modelSel = document.createElement("select");
+      modelSel.className = "pi-sessions__backend pi-sessions__model";
+      modelSel.title = "Model for this session (‘default’ follows the global ⚙ Settings model)";
+      const defOpt = document.createElement("option");
+      defOpt.value = "";
+      defOpt.textContent = "(default)";
+      if (!meta.modelId) defOpt.selected = true;
+      modelSel.append(defOpt);
+      for (const m of models) {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.id;
+        if (meta.modelId === m.id) opt.selected = true;
+        modelSel.append(opt);
+      }
+      modelWrap.append(modelLabel, modelSel);
+      li.append(modelWrap);
+
       const wrap = document.createElement("div");
       wrap.className = "pi-sessions__backend-row";
       const label = document.createElement("span");
@@ -180,9 +209,10 @@ export function mountSwitcher(
   }
 
   async function refresh(): Promise<void> {
-    const [sessions, activeId] = await Promise.all([manager.list(), Promise.resolve(manager.current?.meta.id)]);
+    const [sessions, models] = await Promise.all([manager.list(), manager.availableModels()]);
+    const activeId = manager.current?.meta.id;
     listEl.innerHTML = "";
-    for (const meta of sessions) listEl.append(renderRow(meta, activeId));
+    for (const meta of sessions) listEl.append(renderRow(meta, activeId, models));
   }
 
   void refresh();

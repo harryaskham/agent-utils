@@ -128,6 +128,16 @@ export class SessionRegistry {
     await this.persist();
   }
 
+  /** Set (or clear, when modelId is falsy) a session's per-session model. */
+  async setModel(id: string, modelId: string | undefined): Promise<void> {
+    const idx = await this.load();
+    const meta = idx.sessions.find((s) => s.id === id);
+    if (!meta) return;
+    meta.modelId = modelId || undefined;
+    meta.updatedAt = Date.now();
+    await this.persist();
+  }
+
   async remove(id: string): Promise<void> {
     const idx = await this.load();
     idx.sessions = idx.sessions.filter((s) => s.id !== id);

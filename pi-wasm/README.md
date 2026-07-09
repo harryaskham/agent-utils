@@ -51,6 +51,11 @@ SessionManager wires `createExecBackend(id,{env,relay})` → `env.setExecBackend
 bash tool when a backend is active. Selecting `js-shell` gives the agent a real
 in-browser shell (coreutils over that session's VFS).
 
+**S11.2 (per-session model picker, bd-8a5ecc): done.** A model dropdown per
+session in the switcher (`(default)` follows the global S6 model): each session
+keeps its own `modelId`, persisted and restored across reload, so different
+sessions can run different models. `__PI_WASM_SESSIONS__.setModel(id, modelId?)`.
+
 ## Layout
 
 ```

@@ -58,8 +58,9 @@ async function boot(): Promise<void> {
     const cfg = toRuntimeConfig(settings);
     const active = manager.current;
     const name = active?.meta.name ?? "session";
+    const modelId = active?.session.modelId ?? cfg.model?.id ?? "?";
     const shell = `shell:${active?.backendId ?? "none"}`;
-    const base = ready ? `live · ${cfg.model?.id ?? "?"} · ${name}` : `mock (no key/model) · ${name}`;
+    const base = ready ? `live · ${modelId} · ${name}` : `mock (no key) · ${modelId} · ${name}`;
     statusEl.textContent = active?.backendNotice ? `${base} · ${shell} ⚠` : `${base} · ${shell}`;
     statusEl.title = active?.backendNotice ?? "";
     statusEl.className = ready ? "is-live" : "is-mock";
@@ -136,6 +137,12 @@ async function boot(): Promise<void> {
         buildChatForActive();
         await switcher?.refresh();
         return { id: manager.current?.meta.id, backendId: manager.current?.backendId, notice: manager.current?.backendNotice };
+      },
+      setModel: async (id: string, modelId?: string) => {
+        await manager.setModel(id, modelId);
+        buildChatForActive();
+        await switcher?.refresh();
+        return { id: manager.current?.meta.id, modelId: manager.current?.meta.modelId, activeModel: manager.current?.session.modelId };
       },
       importSession: async (data: unknown) => {
         await manager.importSession(data as Parameters<SessionManager["importSession"]>[0]);
