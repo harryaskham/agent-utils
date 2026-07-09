@@ -21,6 +21,13 @@ hard-coded). Validated in headless Chrome: the page streams a completion and
 sets `window.__PI_WASM_S3__ = { ok: true, text, model, baseUrl, chunks }`. See
 [**S3 — provider/network layer**](#s3--browser-providernetwork-layer) below.
 
+**S5 (isomorphic-git checkout, bd-3f7a4f): done.** Real git over the shared S2
+VFS — `clone` / `checkout` / `listFiles` / `log` plus local `init` / `add` /
+`commit`, exposed as browser-clean `git_*` `AgentTool`s. Because git drives the
+same lightning-fs store as `BrowserExecutionEnv`, a clone is instantly visible to
+the file tools. Deterministic network-free tests; the CORS-proxy contract is in
+**[src/git/README.md](./src/git/README.md)**.
+
 ## Layout
 
 ```
@@ -28,6 +35,8 @@ pi-wasm/
   index.html            # entry page; renders the spike result into #out
   src/main.ts           # construct proof (S1) + S3 streaming demo UI
   src/provider.ts       # S3 provider layer: OpenAI-compat model + injected streamFn (Path A)
+  src/vfs/              # S2 IndexedDB VFS + BrowserExecutionEnv (shared store)
+  src/git/              # S5 isomorphic-git over the shared VFS (+ git_* tools)
   scripts/construct-smoke.mjs  # Node-side construct smoke (npm run spike:node)
   vite.config.ts        # browser build; intentionally NO node polyfills (S1)
   tsconfig.json
@@ -76,9 +85,9 @@ the key is kept only in this browser (`localStorage`, the S6 settings-screen sea
 ## Roadmap (epic bd-f76cee)
 
 S2 IndexedDB VFS (`BrowserExecutionEnv`) · **S3 provider/CORS layer ✅** ·
-S4 tools over the VFS (no bash) · S5 isomorphic-git checkout · S6 settings/keys
-screen · S7 chat UI wiring the full loop (MVP) · S8 Playwright harness ·
-S9 nix build/serve · S10 (stretch) bash-in-browser.
+S4 tools over the VFS (no bash) · **S5 isomorphic-git checkout ✅** · S6
+settings/keys screen · S7 chat UI wiring the full loop (MVP) · S8 Playwright
+harness · S9 nix build/serve · S10 (stretch) bash-in-browser.
 
 `node_modules/` and `dist/` are gitignored; this subproject is self-contained
 and does not affect the agent-utils root build/test gate.

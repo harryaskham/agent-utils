@@ -16,6 +16,7 @@
     "@earendil-works/pi-agent-core": "0.80.3",
     "@earendil-works/pi-ai": "0.80.3",
     "@isomorphic-git/lightning-fs": "^4.6.2",
+    "isomorphic-git": "^1.27.0",
     "typebox": "1.1.38"
   },
   "devDependencies": {
