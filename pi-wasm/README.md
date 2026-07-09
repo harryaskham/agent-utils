@@ -65,6 +65,8 @@ npm install
 npm run typecheck      # tsc --noEmit
 npm run build          # vite build -> dist/ (index + provider-demo + settings-demo)
 npm run dev            # vite dev server (http://localhost:5173)
+npm run test           # vitest (node-side unit + integration)
+npm run test:e2e       # Playwright browser E2E (system Chrome; live tiers gated on a key)
 ```
 
 Open `index.html`, click **⚙ Settings** to enter a runtime key + model, and chat.
@@ -122,11 +124,39 @@ chromium --headless=new --disable-gpu --user-data-dir=/tmp/piwasm-chrome-s3 \
 Interactively (`npm run dev`), enter a key in **⚙ Settings**; it is kept only in
 this browser (IndexedDB, the S6 settings seam).
 
+### S8 — Playwright full-loop browser harness (bd-8a973e foundation + bd-759769 full loop)
+
+The reusable browser-E2E harness proves the whole in-browser loop with **no
+human input**. It uses the system Google Chrome (`channel:"chrome"` — no
+chromium download) and is isolated from the vitest suite (`e2e/` vs `test/`).
+
+```bash
+npm run test:e2e
+```
+
+Tiers (`e2e/s8-full-loop.spec.ts` + `e2e/s3-provider.spec.ts`):
+
+- **Tier 1 (always runs, no key):** the chat app boots
+  (`#app[data-pi-wasm-ready="true"]`), the S4 file tools run read→edit→write
+  against the S2 VFS (`window.__PI_WASM__.runToolsSmoke()`, bash blocked), and
+  the mock loop returns a streamed assistant reply. Deterministic + CI-safe.
+- **Tier 2 (key-gated):** with a real key seeded into the S6 settings store
+  (IndexedDB), a real streaming completion runs, **and** a real
+  prompt→reason→tool→reply cycle makes the model call the `write` tool — the
+  harness asserts the requested file lands in the VFS via
+  `window.__PI_WASM__.env`. Skipped without a key (`PIWASM_E2E_KEY` /
+  `OPENAI_API_KEY`), so the bare gate still passes.
+
+Keys are supplied at runtime (settings store / `window.__PI_WASM_KEY__`), never
+committed, and never rendered into the DOM.
+
 ## Roadmap (epic bd-f76cee)
 
-**S1–S7 done** (feasibility · VFS · provider · tools · git · settings · chat MVP).
-Next: S8 Playwright harness · **S9 nix build/serve ✅ (bd-82b969)** ·
-S11 keyed multi-session persistence · S13 pluggable exec backend
+**S1–S9 done** (feasibility · VFS · provider · tools · git · settings · chat MVP ·
+**S8/S8a Playwright E2E harness ✅** · **S9 nix build/serve ✅, bd-82b969**).
+The full in-browser prompt→reason→tool→reply loop is now proven by automated
+browser testing (`npm run test:e2e`, Tier 2b).
+Next: S11 keyed multi-session persistence · S13 pluggable exec backend
 (S10 JS-bash / S14 wasm-microVM / S15 remote ssh·MCP).
 
 `node_modules/` and `dist/` are gitignored; this subproject is self-contained
