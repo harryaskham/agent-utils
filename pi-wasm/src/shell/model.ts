@@ -155,3 +155,99 @@ export function formatBytes(n: number | undefined): string {
   }
   return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
+
+// --- Diff view for edits (S12 increment 2) ------------------------------
+
+export type DiffLineType = "context" | "add" | "remove";
+export interface DiffLine {
+  type: DiffLineType;
+  text: string;
+}
+
+/**
+ * Line-level diff via a longest-common-subsequence walk. Pure + deterministic.
+ * Empty text ⇒ no lines (so a fresh write diffs as all-add). Small edit/write
+ * payloads only, so the O(n·m) DP is fine.
+ */
+export function diffLines(oldText: string, newText: string): DiffLine[] {
+  const a = oldText === "" ? [] : oldText.split("\n");
+  const b = newText === "" ? [] : newText.split("\n");
+  const n = a.length;
+  const m = b.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      out.push({ type: "context", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ type: "remove", text: a[i] });
+      i++;
+    } else {
+      out.push({ type: "add", text: b[j] });
+      j++;
+    }
+  }
+  while (i < n) out.push({ type: "remove", text: a[i++] });
+  while (j < m) out.push({ type: "add", text: b[j++] });
+  return out;
+}
+
+export interface EditRecord {
+  path: string;
+  kind: "edit" | "write";
+  oldText: string;
+  newText: string;
+}
+
+/**
+ * Extract file mutations from the transcript's tool calls so the shell can
+ * render before/after diffs. Handles the S4 `write` tool ({path, content}) and
+ * `edit` tool ({path, edits:[{oldText,newText}]}, plus the legacy top-level
+ * {path, oldText, newText} form the edit tool still normalizes).
+ */
+export function deriveEdits(messages: readonly MessageLike[]): EditRecord[] {
+  const records: EditRecord[] = [];
+  for (const message of messages) {
+    const content = message.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const p = part as { type?: string; name?: string; arguments?: unknown };
+      if (p.type !== "toolCall") continue;
+      const args = (p.arguments ?? {}) as Record<string, unknown>;
+      const filePath =
+        typeof args.path === "string"
+          ? args.path
+          : typeof args.file_path === "string"
+            ? args.file_path
+            : "";
+      if (!filePath) continue;
+      if (p.name === "write" && typeof args.content === "string") {
+        records.push({ path: filePath, kind: "write", oldText: "", newText: args.content });
+      } else if (p.name === "edit") {
+        const blocks = Array.isArray(args.edits)
+          ? args.edits
+          : typeof args.oldText === "string" && typeof args.newText === "string"
+            ? [{ oldText: args.oldText, newText: args.newText }]
+            : [];
+        for (const block of blocks) {
+          if (!block || typeof block !== "object") continue;
+          const b = block as { oldText?: unknown; newText?: unknown };
+          if (typeof b.oldText === "string" && typeof b.newText === "string") {
+            records.push({ path: filePath, kind: "edit", oldText: b.oldText, newText: b.newText });
+          }
+        }
+      }
+    }
+  }
+  return records;
+}

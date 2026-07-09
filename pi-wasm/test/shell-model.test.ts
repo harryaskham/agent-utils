@@ -6,6 +6,8 @@ import {
   sortDirEntries,
   formatBytes,
   truncate,
+  diffLines,
+  deriveEdits,
   type MessageLike,
 } from "../src/shell/model";
 
@@ -90,5 +92,96 @@ describe("S12 shell model — VFS helpers", () => {
   it("truncates long strings with an ellipsis", () => {
     expect(truncate("abcdef", 3)).toBe("abc\u2026");
     expect(truncate("ab", 3)).toBe("ab");
+  });
+});
+
+describe("S12 shell model — diffLines", () => {
+  it("diffs a fresh write as all-add", () => {
+    expect(diffLines("", "a\nb")).toEqual([
+      { type: "add", text: "a" },
+      { type: "add", text: "b" },
+    ]);
+  });
+
+  it("keeps context and marks a changed middle line", () => {
+    expect(diffLines("a\nb\nc", "a\nB\nc")).toEqual([
+      { type: "context", text: "a" },
+      { type: "remove", text: "b" },
+      { type: "add", text: "B" },
+      { type: "context", text: "c" },
+    ]);
+  });
+
+  it("handles pure insertion and pure deletion", () => {
+    expect(diffLines("a\nc", "a\nb\nc")).toEqual([
+      { type: "context", text: "a" },
+      { type: "add", text: "b" },
+      { type: "context", text: "c" },
+    ]);
+    expect(diffLines("a\nb\nc", "a\nc")).toEqual([
+      { type: "context", text: "a" },
+      { type: "remove", text: "b" },
+      { type: "context", text: "c" },
+    ]);
+  });
+
+  it("returns empty for identical / both-empty", () => {
+    expect(diffLines("x", "x")).toEqual([{ type: "context", text: "x" }]);
+    expect(diffLines("", "")).toEqual([]);
+  });
+});
+
+describe("S12 shell model — deriveEdits", () => {
+  it("extracts a write as an all-new record", () => {
+    const msgs: MessageLike[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "write", arguments: { path: "/work/a.txt", content: "hello" } }],
+      },
+    ];
+    expect(deriveEdits(msgs)).toEqual([
+      { path: "/work/a.txt", kind: "write", oldText: "", newText: "hello" },
+    ]);
+  });
+
+  it("extracts edit blocks (edits[] form)", () => {
+    const msgs: MessageLike[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "edit",
+            arguments: {
+              path: "/work/a.txt",
+              edits: [
+                { oldText: "foo", newText: "bar" },
+                { oldText: "x", newText: "y" },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+    expect(deriveEdits(msgs)).toEqual([
+      { path: "/work/a.txt", kind: "edit", oldText: "foo", newText: "bar" },
+      { path: "/work/a.txt", kind: "edit", oldText: "x", newText: "y" },
+    ]);
+  });
+
+  it("extracts the legacy top-level edit form and ignores non-mutating tools", () => {
+    const msgs: MessageLike[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", name: "edit", arguments: { path: "/work/a.txt", oldText: "a", newText: "b" } },
+          { type: "toolCall", name: "read", arguments: { path: "/work/a.txt" } },
+          { type: "text", text: "done" },
+        ],
+      },
+    ];
+    expect(deriveEdits(msgs)).toEqual([
+      { path: "/work/a.txt", kind: "edit", oldText: "a", newText: "b" },
+    ]);
   });
 });

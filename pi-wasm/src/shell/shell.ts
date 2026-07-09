@@ -30,7 +30,10 @@ import {
   toolItems,
   sortDirEntries,
   formatBytes,
+  diffLines,
+  deriveEdits,
   type TimelineItem,
+  type EditRecord,
 } from "./model.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -69,6 +72,7 @@ async function boot(): Promise<void> {
   const timeline = $<HTMLElement>("tool-timeline");
   const fileTree = $<HTMLElement>("file-tree");
   const fileViewer = $<HTMLElement>("file-viewer");
+  const diffView = $<HTMLElement>("diff-view");
   const settingsPanel = $<HTMLElement>("settings-panel");
   const input = $<HTMLTextAreaElement>("composer-input");
   const sendBtn = $<HTMLButtonElement>("composer-send");
@@ -172,10 +176,41 @@ async function boot(): Promise<void> {
     timeline.scrollTop = timeline.scrollHeight;
   };
 
+  const renderDiffs = (records: EditRecord[]) => {
+    diffView.innerHTML = "";
+    if (records.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "File writes/edits will show as diffs here as the agent changes the VFS.";
+      diffView.append(empty);
+      return;
+    }
+    for (const rec of records) {
+      const card = document.createElement("div");
+      card.className = "diff-card";
+      const head = document.createElement("div");
+      head.className = "diff-card__head";
+      head.textContent = `${rec.kind === "write" ? "✎ write" : "± edit"}  ${rec.path}`;
+      const body = document.createElement("div");
+      body.className = "diff-card__body";
+      for (const line of diffLines(rec.oldText, rec.newText)) {
+        const ln = document.createElement("div");
+        ln.className = `diff-line diff-line--${line.type}`;
+        const sign = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+        ln.textContent = `${sign} ${line.text}`;
+        body.append(ln);
+      }
+      card.append(head, body);
+      diffView.append(card);
+    }
+    diffView.scrollTop = diffView.scrollHeight;
+  };
+
   const render = () => {
     const tl = deriveTimeline(session.messages, session.streamingMessage);
     renderConversation(conversationItems(tl));
     renderTimeline(toolItems(tl));
+    renderDiffs(deriveEdits(session.messages));
     const busy = session.isStreaming;
     sendBtn.disabled = busy;
     input.disabled = busy;

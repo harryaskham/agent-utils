@@ -104,6 +104,13 @@
       #file-viewer { margin-top: 0.6rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
       .viewer__path { padding: 0.3rem 0.5rem; font: 0.72rem ui-monospace, monospace; color: var(--accent); background: var(--panel-2); border-bottom: 1px solid var(--border); }
       .viewer__body { margin: 0; padding: 0.5rem; max-height: 40vh; overflow: auto; font: 0.74rem/1.5 ui-monospace, monospace; white-space: pre; color: var(--text); }
+      .diff-card { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
+      .diff-card__head { padding: 0.3rem 0.55rem; font: 0.72rem ui-monospace, monospace; color: var(--accent); background: var(--panel-2); border-bottom: 1px solid var(--border); word-break: break-all; }
+      .diff-card__body { padding: 0.2rem 0; max-height: 45vh; overflow: auto; }
+      .diff-line { white-space: pre-wrap; word-break: break-word; padding: 0 0.5rem; font: 0.73rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .diff-line--add { background: var(--ok-bg); color: var(--ok); }
+      .diff-line--remove { background: var(--err-bg); color: var(--err); }
+      .diff-line--context { color: var(--muted); }
     </style>
   </head>
   <body>
@@ -130,6 +137,7 @@
           <div class="tabbar">
             <button class="tab is-active" type="button" data-tab="tools">Tools</button>
             <button class="tab" type="button" data-tab="files">Files</button>
+            <button class="tab" type="button" data-tab="diffs">Diffs</button>
           </div>
           <div class="dock__body" data-panel="tools">
             <div id="tool-timeline"></div>
@@ -144,6 +152,9 @@
               <div class="viewer__path"></div>
               <pre class="viewer__body"></pre>
             </div>
+          </div>
+          <div class="dock__body" data-panel="diffs" hidden>
+            <div id="diff-view"></div>
           </div>
         </aside>
       </main>
