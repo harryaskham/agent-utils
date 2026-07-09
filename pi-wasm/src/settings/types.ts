@@ -17,6 +17,14 @@ export interface ModelSpec {
   baseUrl?: string;
 }
 
+/** Remote exec relay (S15) config for the "remote" backend. */
+export interface RelayConfig {
+  /** Relay endpoint URL, e.g. http://localhost:8730/exec. */
+  endpoint: string;
+  /** Bearer token presented to the relay (secret; the relay's own auth, never a model key). */
+  token?: string;
+}
+
 /** The full persisted settings blob. */
 export interface PiWasmSettings {
   /** Per-provider API keys. The user's own keys, stored only in their browser. */
@@ -29,6 +37,13 @@ export interface PiWasmSettings {
   selectedModelId: string | null;
   /** Freeform settings.json overrides loaded into the session. */
   settings: Record<string, unknown>;
+  /**
+   * Remote exec relay (S15) config for the "remote" ExecBackend. Kept TOP-LEVEL
+   * (a secret; not materialized into the VFS settings.json by seedAgentConfig).
+   * The S13 registry / S11 SessionManager read settings.relay to build the
+   * "remote" backend. Absent when no relay is configured.
+   */
+  relay?: RelayConfig;
 }
 
 export const DEFAULT_SETTINGS: PiWasmSettings = {

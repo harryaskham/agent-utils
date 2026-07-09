@@ -24,6 +24,8 @@ describe("settings form (pure serialization)", () => {
       modelsJson: "",
       selectedModelId: "",
       settingsJson: "",
+      relayEndpoint: "",
+      relayToken: "",
     });
     expect(parsed.errors).toEqual([]);
     expect(parsed.settings?.providerKeys).toEqual({});
@@ -38,6 +40,8 @@ describe("settings form (pure serialization)", () => {
       modelsJson: "[]",
       selectedModelId: "",
       settingsJson: "{}",
+      relayEndpoint: "",
+      relayToken: "",
     });
     expect(parsed.settings).toBeUndefined();
     expect(parsed.errors.join(" ")).toMatch(/Provider keys/);
@@ -50,8 +54,63 @@ describe("settings form (pure serialization)", () => {
       modelsJson: "{}",
       selectedModelId: "",
       settingsJson: "{}",
+      relayEndpoint: "",
+      relayToken: "",
     });
     expect(parsed.settings).toBeUndefined();
     expect(parsed.errors).toHaveLength(2);
+  });
+});
+
+describe("settings form — remote exec relay (S15) fields", () => {
+  const base = {
+    baseUrl: "",
+    providerKeysJson: "",
+    modelsJson: "",
+    selectedModelId: "",
+    settingsJson: "",
+    relayEndpoint: "",
+    relayToken: "",
+  };
+
+  it("surfaces top-level settings.relay as dedicated form fields", () => {
+    const withRelay: PiWasmSettings = {
+      ...settings,
+      relay: { endpoint: "https://r/exec", token: "t0" },
+    };
+    const form = settingsToForm(withRelay);
+    expect(form.relayEndpoint).toBe("https://r/exec");
+    expect(form.relayToken).toBe("t0");
+    // relay is a top-level secret, not part of the settings.json blob
+    expect(JSON.parse(form.settingsJson)).toEqual({ theme: "dark" });
+  });
+
+  it("writes the dedicated fields to top-level settings.relay where the registry reads them", () => {
+    const parsed = formToSettings({
+      ...base,
+      relayEndpoint: "https://r/exec",
+      relayToken: "t0",
+    });
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.settings?.relay).toEqual({ endpoint: "https://r/exec", token: "t0" });
+  });
+
+  it("keeps an endpoint-only relay (token optional)", () => {
+    const parsed = formToSettings({ ...base, relayEndpoint: "http://localhost:8730/exec" });
+    expect(parsed.settings?.relay).toEqual({ endpoint: "http://localhost:8730/exec" });
+  });
+
+  it("omits relay when the endpoint is empty (even if a token was typed)", () => {
+    const parsed = formToSettings({ ...base, relayEndpoint: "", relayToken: "orphan" });
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.settings?.relay).toBeUndefined();
+  });
+
+  it("round-trips settings incl. relay -> form -> settings", () => {
+    const withRelay: PiWasmSettings = {
+      ...settings,
+      relay: { endpoint: "https://r/exec", token: "t0" },
+    };
+    expect(formToSettings(settingsToForm(withRelay)).settings).toEqual(withRelay);
   });
 });

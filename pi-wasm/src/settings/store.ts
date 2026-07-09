@@ -5,7 +5,7 @@
 // is a small dependency-free single-object-store wrapper; under vitest it runs
 // against fake-indexeddb (see test/setup.ts), so it is fully headless-testable.
 
-import { DEFAULT_SETTINGS, type PiWasmSettings } from "./types";
+import { DEFAULT_SETTINGS, type PiWasmSettings, type RelayConfig } from "./types";
 
 const DEFAULT_DB_NAME = "pi-wasm-settings";
 const STORE = "kv";
@@ -96,13 +96,25 @@ export function normalizeSettings(raw: Partial<PiWasmSettings> | undefined | nul
           !!m && typeof m.id === "string" && typeof m.provider === "string",
       )
     : [];
-  return {
+  const out: PiWasmSettings = {
     providerKeys: isPlainObject(r.providerKeys) ? { ...(r.providerKeys as Record<string, string>) } : {},
     baseUrl: typeof r.baseUrl === "string" ? r.baseUrl : DEFAULT_SETTINGS.baseUrl,
     models,
     selectedModelId: typeof r.selectedModelId === "string" ? r.selectedModelId : null,
     settings: isPlainObject(r.settings) ? { ...(r.settings as Record<string, unknown>) } : {},
   };
+  const relay = normalizeRelay(r.relay);
+  if (relay) out.relay = relay;
+  return out;
+}
+
+/** Coerce a persisted relay into a valid RelayConfig, or undefined when unusable. */
+function normalizeRelay(raw: unknown): RelayConfig | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  const endpoint = typeof raw.endpoint === "string" ? raw.endpoint.trim() : "";
+  if (!endpoint) return undefined;
+  const token = typeof raw.token === "string" ? raw.token.trim() : "";
+  return token ? { endpoint, token } : { endpoint };
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

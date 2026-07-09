@@ -23,7 +23,15 @@ const NOTICE =
   "Your API keys are stored ONLY in this browser (IndexedDB) and are never sent " +
   "anywhere except directly to the model endpoint you configure. Use \"Clear all\" to wipe them.";
 
-const FIELD_NAMES = ["baseUrl", "providerKeysJson", "modelsJson", "selectedModelId", "settingsJson"] as const;
+const FIELD_NAMES = [
+  "baseUrl",
+  "providerKeysJson",
+  "modelsJson",
+  "selectedModelId",
+  "settingsJson",
+  "relayEndpoint",
+  "relayToken",
+] as const;
 
 export function mountSettingsPanel(
   container: HTMLElement,
@@ -46,6 +54,10 @@ export function mountSettingsPanel(
       <datalist id="pi-wasm-model-ids"></datalist></label>
     <label>settings.json overrides — JSON object
       <textarea name="settingsJson" rows="4" spellcheck="false"></textarea></label>
+    <label>Remote exec relay endpoint — the "remote" exec backend (S15) routes bash here
+      <input name="relayEndpoint" type="text" placeholder="https://relay.example/exec" autocomplete="off" /></label>
+    <label>Remote exec relay token (secret — this browser only)
+      <input name="relayToken" type="password" autocomplete="off" /></label>
     <div class="errors" role="alert"></div>
     <div class="actions">
       <button type="submit" data-act="save">Save</button>
@@ -74,6 +86,8 @@ export function mountSettingsPanel(
       modelsJson: fieldEl("modelsJson").value,
       selectedModelId: fieldEl("selectedModelId").value,
       settingsJson: fieldEl("settingsJson").value,
+      relayEndpoint: fieldEl("relayEndpoint").value,
+      relayToken: fieldEl("relayToken").value,
     };
   }
 

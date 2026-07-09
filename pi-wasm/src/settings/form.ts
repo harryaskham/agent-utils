@@ -11,6 +11,10 @@ export interface SettingsFormValues {
   modelsJson: string;
   selectedModelId: string;
   settingsJson: string;
+  /** Remote exec relay (S15) endpoint — persisted under settings.relay.endpoint. */
+  relayEndpoint: string;
+  /** Remote exec relay (S15) token (secret) — persisted under settings.relay.token. */
+  relayToken: string;
 }
 
 /** Render persisted settings into editable form strings. */
@@ -22,6 +26,8 @@ export function settingsToForm(settings: PiWasmSettings): SettingsFormValues {
     modelsJson: JSON.stringify(s.models, null, 2),
     selectedModelId: s.selectedModelId ?? "",
     settingsJson: JSON.stringify(s.settings, null, 2),
+    relayEndpoint: s.relay?.endpoint ?? "",
+    relayToken: s.relay?.token ?? "",
   };
 }
 
@@ -40,6 +46,16 @@ export function formToSettings(values: SettingsFormValues): FormParseResult {
   if (errors.length > 0) return { errors };
 
   const selectedModelId = values.selectedModelId.trim() || null;
+  // The remote-exec relay (S15) is a TOP-LEVEL secret field the S13 registry /
+  // S11 SessionManager read as settings.relay. The dedicated fields are
+  // authoritative; an empty endpoint means no relay is configured.
+  const relayEndpoint = values.relayEndpoint.trim();
+  const relayToken = values.relayToken.trim();
+  const relay = relayEndpoint
+    ? relayToken
+      ? { endpoint: relayEndpoint, token: relayToken }
+      : { endpoint: relayEndpoint }
+    : undefined;
   return {
     settings: normalizeSettings({
       baseUrl: values.baseUrl.trim(),
@@ -47,6 +63,7 @@ export function formToSettings(values: SettingsFormValues): FormParseResult {
       models: models as PiWasmSettings["models"],
       selectedModelId,
       settings: settings as Record<string, unknown>,
+      relay,
     }),
     errors: [],
   };

@@ -17,11 +17,10 @@ id→backend factory (bd-6ebbf6) and is selected per session by S11.
 import { createHttpRelayExecBackend } from "./exec";
 import { toRuntimeConfig, SettingsStore } from "./settings";
 
-// Read the relay endpoint/token from S6 settings (settings.json overrides):
-//   settings.settings.relay = { endpoint: "http://localhost:8730/exec", token: "…" }
-const cfg = (await new SettingsStore().load()).settings.relay as
-  | { endpoint?: string; token?: string }
-  | undefined;
+// Read the relay endpoint/token from the top-level S6 settings.relay field
+// (a secret, kept out of the VFS settings.json), set in the Settings screen:
+//   settings.relay = { endpoint: "http://localhost:8730/exec", token: "…" }
+const cfg = (await new SettingsStore().load()).relay;
 
 const backend = createHttpRelayExecBackend({
   endpoint: cfg?.endpoint ?? "",
