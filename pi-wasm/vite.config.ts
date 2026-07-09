@@ -14,10 +14,12 @@ export default defineConfig({
     rollupOptions: {
       // Multi-page build:
       //   index.html          — S7 chat app shell (primary; wires S2/S3/S4/S6)
+      //   shell.html          — S12 slick native-feeling agent GUI (additive)
       //   provider-demo.html  — S3 standalone provider demo (preserved)
       //   settings-demo.html  — S6 standalone settings demo (preserved)
       input: {
         main: "index.html",
+        shell: "shell.html",
         "provider-demo": "provider-demo.html",
         settings: "settings-demo.html",
       },

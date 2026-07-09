@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi-wasm — agent shell</title>
+    <style>
+      :root {
+        --bg: #0b0f14; --panel: #0e141b; --panel-2: #12181f; --border: #1b2530;
+        --text: #dce6f0; --muted: #7c8a9a; --accent: #3b82f6; --accent-ink: #fff;
+        --user: #10202e; --assistant: #111a22; --tool: #16130a; --tool-ink: #d9c07c;
+        --ok: #4cd964; --ok-bg: #10241a; --warn: #d9a54c; --warn-bg: #241d10;
+        --err: #ff8a8a; --err-bg: #2a1114; --radius: 10px;
+      }
+      [data-theme="light"] {
+        --bg: #f6f8fb; --panel: #ffffff; --panel-2: #f0f3f7; --border: #dde3ea;
+        --text: #1a2330; --muted: #64748b; --accent: #2563eb; --accent-ink: #fff;
+        --user: #e8f0fe; --assistant: #f3f5f9; --tool: #fdf6e3; --tool-ink: #8a6d1a;
+        --ok: #15803d; --ok-bg: #e6f5ec; --warn: #b45309; --warn-bg: #fdf1e3;
+        --err: #b91c1c; --err-bg: #fdecec; --radius: 10px;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; height: 100vh; display: flex; flex-direction: column;
+        background: var(--bg); color: var(--text);
+        font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      }
+      button { font: inherit; cursor: pointer; }
+      header {
+        display: flex; align-items: center; gap: 0.7rem;
+        padding: 0.6rem 1rem; border-bottom: 1px solid var(--border); background: var(--panel);
+      }
+      header h1 { font-size: 0.95rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+      header .sub { color: var(--muted); font-size: 0.72rem; margin-left: 0.1rem; }
+      .spacer { margin-left: auto; }
+      .pill { font-size: 0.72rem; padding: 0.18rem 0.6rem; border-radius: 999px; font-weight: 600; }
+      .pill.is-live { color: var(--ok); background: var(--ok-bg); }
+      .pill.is-mock { color: var(--warn); background: var(--warn-bg); }
+      .btn {
+        font-size: 0.8rem; padding: 0.32rem 0.7rem; border-radius: 8px;
+        background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      }
+      .btn:hover { border-color: var(--accent); }
+      #settings-panel { padding: 0.85rem 1rem; border-bottom: 1px solid var(--border); background: var(--panel); }
+      /* settings form (S6 mountSettingsPanel) */
+      .pi-wasm-settings { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.82rem; max-width: 640px; }
+      .pi-wasm-settings .notice { margin: 0 0 0.15rem; color: var(--muted); font-size: 0.75rem; }
+      .pi-wasm-settings label { display: flex; flex-direction: column; gap: 0.2rem; color: var(--muted); }
+      .pi-wasm-settings input, .pi-wasm-settings textarea {
+        font: inherit; font-size: 0.8rem; padding: 0.35rem 0.45rem; border-radius: 6px;
+        background: var(--bg); color: var(--text); border: 1px solid var(--border); width: 100%;
+      }
+      .pi-wasm-settings .actions { display: flex; gap: 0.5rem; align-items: center; }
+      .pi-wasm-settings button { font-size: 0.8rem; padding: 0.32rem 0.85rem; border-radius: 7px; background: var(--accent); color: var(--accent-ink); border: none; }
+      .pi-wasm-settings button[data-act="reset"], .pi-wasm-settings button[data-act="clear"] { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+      .pi-wasm-settings .errors { color: var(--err); font-size: 0.75rem; }
+      .pi-wasm-settings .status { color: var(--muted); font-size: 0.75rem; }
+
+      main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 22rem; gap: 0; }
+      @media (max-width: 820px) { main { grid-template-columns: 1fr; } .dock { display: none; } }
+      .pane { min-height: 0; display: flex; flex-direction: column; padding: 0.9rem; gap: 0.7rem; }
+      #conversation {
+        flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.55rem;
+      }
+      .empty { color: var(--muted); padding: 1.3rem; text-align: center; font-size: 0.85rem; }
+      .msg { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.55rem 0.7rem; border-radius: var(--radius); border: 1px solid var(--border); }
+      .msg--user { background: var(--user); }
+      .msg--assistant { background: var(--assistant); }
+      .msg--error { background: var(--err-bg); color: var(--err); border-color: transparent; }
+      .msg__who { text-transform: uppercase; font-size: 0.64rem; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; }
+      .msg--user .msg__who { color: var(--accent); }
+      .msg--assistant .msg__who { color: var(--ok); }
+      .msg__body { white-space: pre-wrap; word-break: break-word; }
+      .is-streaming .msg__body { color: var(--ok); }
+
+      .composer { display: flex; gap: 0.5rem; align-items: flex-end; }
+      #composer-input {
+        flex: 1; resize: none; font: inherit; padding: 0.6rem 0.7rem; border-radius: var(--radius);
+        background: var(--panel); color: var(--text); border: 1px solid var(--border); min-height: 2.6rem; max-height: 40vh;
+      }
+      #composer-input:focus { outline: none; border-color: var(--accent); }
+      #composer-send { padding: 0 1.1rem; height: 2.6rem; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); border: none; font-weight: 600; }
+      #composer-send:disabled { opacity: 0.5; cursor: default; }
+      #composer-abort { padding: 0 0.9rem; height: 2.6rem; border-radius: var(--radius); background: var(--err-bg); color: var(--err); border: 1px solid transparent; }
+
+      .dock { min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--panel); }
+      .tabbar { display: flex; gap: 0.2rem; padding: 0.5rem 0.6rem 0; }
+      .tab { font-size: 0.78rem; padding: 0.35rem 0.7rem; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); border: 1px solid transparent; border-bottom: none; }
+      .tab.is-active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
+      .dock__body { flex: 1; min-height: 0; overflow-y: auto; padding: 0.6rem; }
+      .tool-card { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
+      .tool-card__head { padding: 0.35rem 0.55rem; font-size: 0.76rem; font-weight: 600; background: var(--tool); color: var(--tool-ink); }
+      .tool-card--tool-result .tool-card__head { background: var(--ok-bg); color: var(--ok); }
+      .tool-card--tool-error .tool-card__head { background: var(--err-bg); color: var(--err); }
+      .tool-card__body { padding: 0.4rem 0.55rem; font: 0.74rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+
+      .files-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
+      .files-head .lbl { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+      #file-tree { font: 0.8rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .tree-row { white-space: nowrap; }
+      .tree-btn { background: none; border: none; color: var(--text); padding: 0.05rem 0.2rem; text-align: left; border-radius: 4px; width: 100%; }
+      .tree-btn:hover { background: var(--panel-2); }
+      .tree-btn--file { color: var(--muted); }
+      #file-viewer { margin-top: 0.6rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+      .viewer__path { padding: 0.3rem 0.5rem; font: 0.72rem ui-monospace, monospace; color: var(--accent); background: var(--panel-2); border-bottom: 1px solid var(--border); }
+      .viewer__body { margin: 0; padding: 0.5rem; max-height: 40vh; overflow: auto; font: 0.74rem/1.5 ui-monospace, monospace; white-space: pre; color: var(--text); }
+    </style>
+  </head>
+  <body>
+    <div id="shell" style="display: contents">
+      <header>
+        <h1>pi-wasm</h1>
+        <span class="sub">agent shell · S12 · epic bd-f76cee</span>
+        <span id="status" class="pill is-mock"></span>
+        <span class="spacer"></span>
+        <button id="theme-toggle" class="btn" type="button" title="Toggle light/dark">◐ Theme</button>
+        <button id="settings-toggle" class="btn" type="button" aria-expanded="false" aria-controls="settings-panel" title="Settings (⌘,)">⚙ Settings</button>
+      </header>
+      <div id="settings-panel" hidden></div>
+      <main>
+        <section class="pane">
+          <div id="conversation"></div>
+          <div class="composer">
+            <textarea id="composer-input" rows="1" placeholder="Ask the agent to do real work…  (Enter to send · Shift+Enter newline · Esc aborts)"></textarea>
+            <button id="composer-abort" type="button" hidden>Stop</button>
+            <button id="composer-send" type="button">Send</button>
+          </div>
+        </section>
+        <aside class="dock">
+          <div class="tabbar">
+            <button class="tab is-active" type="button" data-tab="tools">Tools</button>
+            <button class="tab" type="button" data-tab="files">Files</button>
+          </div>
+          <div class="dock__body" data-panel="tools">
+            <div id="tool-timeline"></div>
+          </div>
+          <div class="dock__body" data-panel="files" hidden>
+            <div class="files-head">
+              <span class="lbl">VFS · /</span>
+              <button id="files-refresh" class="btn" type="button" title="Refresh">⟳</button>
+            </div>
+            <div id="file-tree"></div>
+            <div id="file-viewer" hidden>
+              <div class="viewer__path"></div>
+              <pre class="viewer__body"></pre>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/shell/shell.ts"></script>
+  </body>
+</html>
