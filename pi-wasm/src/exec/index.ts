@@ -19,3 +19,16 @@ export {
   type RelayExecBackendOptions,
   type HttpRelayTransportOptions,
 } from "./relay-backend";
+
+// microVM tier (S14, bd-c6ffc3): a miniscule in-browser Linux guest (v86) as a
+// real exec backend over a serial console. See ../../MICROVM-FEASIBILITY.md.
+export {
+  MicrovmExecBackend,
+  createMicrovmExecBackend,
+  frameCommand,
+  parseSerialResult,
+  BEGIN_RE,
+  END_RE,
+  type MicrovmMachine,
+  type MicrovmExecBackendOptions,
+} from "./microvm-backend";
