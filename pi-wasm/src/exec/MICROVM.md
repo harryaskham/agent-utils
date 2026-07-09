@@ -22,10 +22,13 @@ output cannot interleave.
 
 - **`MicrovmMachine`** — the machine seam (like the relay tier's `RelayTransport`):
   `boot()` (idempotent, resolves when a serial shell is ready), `writeSerial()`,
-  `onSerialData()`, `available`, `dispose?()`. The real **v86 adapter** (boot a
-  vendored Buildroot image; bridge `/work` to the S2 `LightningFsVfs` via a 9p
-  `handle9p` handler) implements this — that is the next increment. Tests use a
-  mock guest.
+  `onSerialData()`, `available`, `dispose?()`. The real **v86 adapter**
+  (`V86Machine`, `./v86-machine.ts`) implements this over copy/v86's serial API
+  (`serial0_send` / `add_listener("serial0-output-byte")`); it boots a vendored
+  Buildroot bzimage entirely in the tab (increment 4a, landed + validated). The
+  `handle9p` bridge from `/work` to the S2 `LightningFsVfs` is increment 4b.
+  Tests use a mock guest; `V86Machine` dynamically imports `v86` so it stays
+  Node/vitest-safe.
 - **serial protocol** (`frameCommand` / `parseSerialResult`, exported + unit
   tested): frames a command as
   ```sh
@@ -51,17 +54,36 @@ output cannot interleave.
   and **never throws** — all failures map to `ExecutionError`
   (`shell_unavailable` / `aborted` / `timeout` / `spawn_error`).
 
-## Usage (once the v86 adapter lands)
+## Usage
 
 ```ts
 import { createMicrovmExecBackend } from "./exec";
-// const machine = await createV86Machine({ image, vfs });  // next increment
+import { V86Machine } from "./exec/v86-machine"; // browser only
+
+const machine = new V86Machine();               // vendored assets under /microvm/
 const backend = createMicrovmExecBackend({ machine });
 // env.setExecBackend(backend)  // wired per-session by S13 registry / S11
+const r = await backend.exec("echo hi", { cwd: "/" });
 ```
 
 `backend.available` is `false` until the machine is loadable, so `exec()`
 degrades to the stable `shell_unavailable` error rather than throwing.
+
+### Vendored guest assets (v86)
+
+`V86Machine` loads four binaries served from `/microvm/` (≈12MB total): the v86
+wasm, a Buildroot bzimage, and SeaBIOS/VGA BIOS. They are **gitignored**, fetched
+on demand by `node scripts/fetch-microvm-assets.mjs` (pinned by size + the
+bzimage by sha256). The browser demo lives at `/microvm-demo.html`
+(`src/microvm-demo.ts`) and exposes `window.__PI_WASM_MICROVM__ =
+{ ready, exec, seedWorkFile, env }` for the S8 Playwright harness.
+
+The real-v86 E2E (`e2e/microvm.spec.ts`) is **opt-in** via `PIWASM_E2E_MICROVM=1`
+(needs the vendored assets) and skips otherwise, so the bare CI gate stays green:
+
+```
+node scripts/fetch-microvm-assets.mjs && PIWASM_E2E_MICROVM=1 npm run test:e2e
+```
 
 ## Limitations / next increments
 
@@ -69,9 +91,12 @@ degrades to the stable `shell_unavailable` error rather than throwing.
   stream (stderr via the temp-file replay between the ERR/END markers), matching
   Shell/Node exec semantics; the original console interleaving order is not
   preserved. Requires a writable `/tmp` in the guest (any Linux guest has one).
-- **The v86 `MicrovmMachine` adapter + guest image + 9p↔`Vfs` bridge** are the
-  next increment; the acceptance target is booting the image and proving
-  `bash -c 'cat /work/<file>'` sees a file written by the S4 file tools. It plugs
-  into the S8 Playwright harness's scenario seam for browser validation.
+- **The v86 adapter (`V86Machine`) has landed (increment 4a)**: it boots a real
+  Buildroot Linux guest in the tab and runs shell commands through the serial
+  exec protocol — validated end-to-end by `e2e/microvm.spec.ts` (echo/stderr/exit
+  code through real v86). The remaining **increment 4b** is the `handle9p`
+  bridge from `/work` to the S2 `LightningFsVfs`; the acceptance target is proving
+  `bash -c 'cat /work/<file>'` in the guest sees a file written by the S4 file
+  tools (via `seedWorkFile`), through the S8 Playwright harness's scenario seam.
 - **Networking** (`relay_url` WebSocket → the S15 remote/ssh proxy) is a later
   slice, gated behind a session setting.

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi-wasm — S14 microVM (v86) demo (standalone)</title>
+    <style>
+      body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 60rem; }
+      h1 { font-size: 1.1rem; }
+      pre { background: #0b0f14; color: #d7e0ea; padding: 1rem; border-radius: 8px; overflow: auto; white-space: pre-wrap; min-height: 1.5rem; }
+      #status { color: #555; }
+      .hint { color: #777; font-size: .85em; }
+      code { background: #eef; padding: 0 .25rem; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>pi-wasm — S14 microVM exec backend (v86)</h1>
+    <p>Boots a miniscule Linux guest (v86 + Buildroot, entirely in the browser)
+       and runs real shell commands through the serial-console exec protocol —
+       the <code>id="microvm"</code> tier of the pluggable exec-backend seam.
+       See <code>src/exec/MICROVM.md</code>.</p>
+
+    <!-- Readiness anchor for the Playwright harness:
+         waitReady(page, '#microvm-app[data-microvm-ready="true"]'). -->
+    <div id="microvm-app">
+      <p id="status">loading…</p>
+      <pre id="out"></pre>
+    </div>
+
+    <p class="hint">Test hooks: <code>window.__PI_WASM_MICROVM__ = { ready, exec, seedWorkFile, env }</code>.
+       Guest assets are served from <code>/microvm/</code> (vendored via
+       <code>scripts/fetch-microvm-assets.mjs</code>).</p>
+
+    <script type="module" src="/src/microvm-demo.ts"></script>
+  </body>
+</html>

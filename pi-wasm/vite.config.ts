@@ -17,11 +17,13 @@ export default defineConfig({
       //   shell.html          — S12 slick native-feeling agent GUI (additive)
       //   provider-demo.html  — S3 standalone provider demo (preserved)
       //   settings-demo.html  — S6 standalone settings demo (preserved)
+      //   microvm-demo.html   — S14 standalone v86 microVM exec-backend demo
       input: {
         main: "index.html",
         shell: "shell.html",
         "provider-demo": "provider-demo.html",
         settings: "settings-demo.html",
+        "microvm-demo": "microvm-demo.html",
       },
       // Fail loudly if a node: builtin is pulled in, rather than silently
       // externalizing it (which would defer the failure to runtime in-browser).

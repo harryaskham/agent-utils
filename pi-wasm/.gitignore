@@ -5,3 +5,7 @@ dist/
 test-results/
 playwright-report/
 playwright/.cache/
+
+# S14 microVM (v86) vendored guest assets (~12MB) — fetched on demand by
+# scripts/fetch-microvm-assets.mjs, not committed. See src/exec/MICROVM.md.
+public/microvm/

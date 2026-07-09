@@ -39,7 +39,7 @@
             #   nix run github:NixOS/nixpkgs/nixos-unstable#prefetch-npm-deps -- pi-wasm/package-lock.json
             # (bd-dd6419: refreshed from the stale S9 value that broke `nix build
             # .#pi-wasm` — the very undetected-drift this gate exists to catch.)
-            npmDepsHash = "sha256-VDnEj7+f8fNbovRbCLTTk8YZacph+YdKSoWrUah6sVA=";
+            npmDepsHash = "sha256-eszdm5MjzEE1oGkLfkzeSIT9Pt22+5LO0fUbFciNUB4=";
             npmBuildScript = "build";
             # bd-dd6419: make `nix build .#pi-wasm` a COMPLETE gate. The build
             # script is `vite build`, which uses esbuild — it strips types

@@ -11,14 +11,16 @@
     "typecheck": "tsc --noEmit",
     "spike:node": "node scripts/construct-smoke.mjs",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "fetch:microvm": "node scripts/fetch-microvm-assets.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.3",
     "@earendil-works/pi-ai": "0.80.3",
     "@isomorphic-git/lightning-fs": "^4.6.2",
     "isomorphic-git": "^1.27.0",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "v86": "0.5.424"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",
