@@ -48,8 +48,16 @@ jobs:
     name: pi-wasm typecheck + tests
     # The pi-wasm subproject (epic bd-f76cee) is a self-contained Node/Vite
     # browser build with its own vitest suite + tsc typecheck that the root
-    # `npm test` (node --test) does NOT cover (bd-91362a). This job gates it so
-    # a broken pi-wasm test, type error, or dep change cannot land silently.
+    # `npm test` (node --test) does NOT cover (bd-91362a).
+    #
+    # Path-scoped (bd-38062e, Harry cost feedback): the job ALWAYS runs so it
+    # stays a valid required check on merge_group (which does not honor
+    # `paths:`), but the heavy steps (npm ci/typecheck/test/build) only run when
+    # pi-wasm/** or this workflow changed on a PR -- or unconditionally on
+    # merge_group/tag/dispatch as the final gate. Non-pi-wasm PRs no-op in
+    # seconds; pi-wasm changes get the full gate with immediate per-change
+    # detection (cheaper than tags-only, which would catch regressions only at
+    # release).
     runs-on: [self-hosted, azure-ephemeral]
     timeout-minutes: 10
     defaults:
@@ -58,17 +66,34 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+      - name: Detect pi-wasm changes
+        # Only evaluated on PRs; on merge_group/tag/dispatch the heavy steps run
+        # unconditionally (see the step `if`s below), so the filter is skipped
+        # on those events rather than run where it need not evaluate.
+        if: github.event_name == 'pull_request'
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            piwasm:
+              - 'pi-wasm/**'
+              - '.github/workflows/ci.yml'
       - name: Set up Node.js
+        if: github.event_name != 'pull_request' || steps.filter.outputs.piwasm == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Install pi-wasm dependencies
+        if: github.event_name != 'pull_request' || steps.filter.outputs.piwasm == 'true'
         run: npm ci
       - name: Typecheck (tsc --noEmit)
+        if: github.event_name != 'pull_request' || steps.filter.outputs.piwasm == 'true'
         run: npm run typecheck
       - name: Run vitest suite
+        if: github.event_name != 'pull_request' || steps.filter.outputs.piwasm == 'true'
         run: npm run test
       - name: Browser bundle build
+        if: github.event_name != 'pull_request' || steps.filter.outputs.piwasm == 'true'
         run: npm run build
 
   rust:
