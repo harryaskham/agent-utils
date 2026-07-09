@@ -36,14 +36,22 @@ S3 streaming provider (with a local **mock echo fallback** when no key), and the
 S4 file tools over the S2 VFS installed on the agent. The chat renders text
 streaming plus tool-call / tool-result rows.
 
+**S11 (keyed multi-session management, bd-0dc0bc): done.** Many named agent
+sessions in one browser, each an independent keyed instance of the single agent
+with its own transcript, its own VFS workdir scope (`/sessions/<id>/work`), and
+its own model — ALL state persisted in the browser (IndexedDB) so every session
+survives a reload. Sidebar switcher to create / rename / switch / delete /
+export / import; `src/sessions/`.
+
 ## Layout
 
 ```
 pi-wasm/
-  index.html              # S7 chat app (primary page)
+  index.html              # S11 keyed multi-session chat app (primary page)
   provider-demo.html      # S3 standalone provider demo (preserved)
   settings-demo.html      # S6 standalone settings demo (preserved)
-  src/main.ts             # S7 chat bootstrap: VFS + tools + settings + session + UI
+  src/main.ts             # shell bootstrap: SessionManager + switcher + chat + settings
+  src/sessions/           # S11: registry + IndexedDB persistence + session-manager + switcher UI
   src/session.ts          # PiWasmSession — Agent (Path A) + tools + real/mock stream seam
   src/chat-ui.ts          # framework-free chat UI (text stream + tool rows)
   src/mock-stream.ts      # no-key mock streamFn (AssistantMessageEventStream)
@@ -165,7 +173,7 @@ for the LLM prompt→tool→reply path.
 **S8/S8a Playwright E2E harness ✅** · **S9 nix build/serve ✅, bd-82b969**).
 The full in-browser prompt→reason→tool→reply loop is now proven by automated
 browser testing (`npm run test:e2e`, Tier 2b).
-Next: S11 keyed multi-session persistence · S13 pluggable exec backend
+Next: S11 keyed multi-session persistence ✅ (bd-0dc0bc) · S13 pluggable exec backend
 (S10 JS-bash / S14 wasm-microVM / S15 remote ssh·MCP).
 
 `node_modules/` and `dist/` are gitignored; this subproject is self-contained

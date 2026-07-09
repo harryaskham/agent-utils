@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>pi-wasm — in-browser Pi agent (S7 chat)</title>
+    <title>pi-wasm — in-browser Pi agent (S11 sessions)</title>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -42,6 +42,26 @@
       .pi-wasm-settings .errors { color: #ff8a8a; font-size: 0.75rem; }
       .pi-wasm-settings .status { color: #7c8a9a; font-size: 0.75rem; }
       #app { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 1rem; }
+      .workspace { flex: 1; min-height: 0; display: flex; }
+      #sessions { flex: 0 0 210px; min-width: 0; overflow-y: auto; background: #0a0e13; border-right: 1px solid #1b2530; }
+      @media (max-width: 640px) { #sessions { flex-basis: 150px; } }
+      .pi-sessions { display: flex; flex-direction: column; height: 100%; }
+      .pi-sessions__head { display: flex; align-items: center; justify-content: space-between; padding: 0.6rem 0.7rem; border-bottom: 1px solid #1b2530; }
+      .pi-sessions__title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #6f8296; }
+      .pi-sessions__new { font: inherit; font-size: 0.72rem; padding: 0.15rem 0.45rem; border-radius: 5px; cursor: pointer; background: #1f6feb; color: #fff; border: none; }
+      .pi-sessions__list { list-style: none; margin: 0; padding: 0.3rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.2rem; }
+      .pi-sessions__item { padding: 0.35rem 0.45rem; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+      .pi-sessions__item:hover { background: #0f1620; }
+      .pi-sessions__item.is-active { background: #12202e; border-color: #1f4d6b; }
+      .pi-sessions__row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.4rem; }
+      .pi-sessions__name { font-size: 0.8rem; color: #d7e0ea; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .pi-sessions__time { font-size: 0.66rem; color: #5c6b7a; flex: 0 0 auto; }
+      .pi-sessions__actions { display: flex; gap: 0.15rem; margin-top: 0.2rem; opacity: 0; transition: opacity 0.1s; }
+      .pi-sessions__item:hover .pi-sessions__actions, .pi-sessions__item.is-active .pi-sessions__actions { opacity: 1; }
+      .pi-sessions__actions button { font: inherit; font-size: 0.7rem; padding: 0 0.3rem; border-radius: 4px; cursor: pointer; background: #12181f; color: #8595a6; border: 1px solid #1b2530; }
+      .pi-sessions__actions button:hover { color: #d7e0ea; }
+      .pi-sessions__foot { padding: 0.5rem 0.7rem; border-top: 1px solid #1b2530; }
+      .pi-sessions__import { font: inherit; font-size: 0.72rem; padding: 0.2rem 0.5rem; border-radius: 5px; cursor: pointer; background: #12181f; color: #d7e0ea; border: 1px solid #1b2530; width: 100%; }
       .pi-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.75rem; }
       .pi-chat__log {
         flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem;
@@ -82,11 +102,14 @@
         <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings-panel">⚙ Settings</button>
         <span id="status"></span>
       </div>
-      <p>S7 chat shell (bd-e8949f) · epic bd-f76cee · Path A on pi-agent-core + pi-ai (zero node polyfills):
-         S6 keys · S3 streaming · S4 file tools over the S2 VFS. Keys stay in this browser only.</p>
+      <p>S11 keyed multi-session shell (bd-0dc0bc) on the S7 loop · epic bd-f76cee · Path A (zero node polyfills):
+         many named agent sessions, each with its own transcript + VFS workdir, all persisted in-browser (IndexedDB).</p>
       <div id="settings-panel" hidden></div>
     </header>
-    <main id="app"></main>
+    <main class="workspace">
+      <aside id="sessions"></aside>
+      <section id="app"></section>
+    </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

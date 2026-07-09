@@ -1,24 +1,22 @@
-// pi-wasm — fully in-browser Pi agent loop · S7 app shell (bd-e8949f).
+// pi-wasm — fully in-browser Pi agent loop · S11 keyed multi-session shell
+// (bd-0dc0bc), built on the S7 app shell (bd-e8949f).
 //
-// The demoable MVP: a real multi-turn chat that runs the FULL agent loop
-// client-side — S6 settings/keys, S3 streaming provider, and S4 file tools over
-// the S2 IndexedDB VFS. Path A only (pi-agent-core + pi-ai; NEVER the
-// pi-coding-agent barrel — the barrel trap, FEASIBILITY.md §3).
+// Runs MANY named agent sessions in one browser, each an independent keyed
+// instance of the single Pi agent with its own transcript + VFS workdir scope,
+// ALL state persisted in the browser (IndexedDB) so every session survives a
+// reload. Still Path A only (pi-agent-core + pi-ai; NEVER the pi-coding-agent
+// barrel — the barrel trap, FEASIBILITY.md §3).
 //
-// Wiring per the seam authors (msm-0 S3/S6, ms2-2 S2/S4):
-//   env   = await createBrowserExecutionEnv({ cwd: "/work" })   // S2
-//   tools = createBrowserAgentTools(env)                        // S4 (bash-free)
-//   cfg   = toRuntimeConfig(await new SettingsStore().load())   // S6
-//   session = PiWasmSession({ ...cfg, tools })  // S3 stream + mock fallback
+// Layers: S2 VFS + S4 tools (per session, via SessionManager) · S3 streaming +
+// mock fallback (PiWasmSession) · S6 settings/keys · S11 registry + switcher.
 //
 // Preserved hooks: __PI_WASM_SPIKE__ (S1), __PI_WASM_S3__ (?autorun), __PI_WASM__
-// (chat harness + fileToolsSmoke for the S8 Playwright suite), __PI_WASM_SETTINGS__ (S6).
+// (chat harness + fileToolsSmoke for the S8 Playwright suite), __PI_WASM_SETTINGS__
+// (S6). New: __PI_WASM_SESSIONS__ (S11 session-management surface for S8).
 
-import { PiWasmSession } from "./session.js";
 import { mountChat, type ChatUiHandle } from "./chat-ui.js";
 import { currentAssistantText, messageText, DEFAULT_BASE_URL, DEFAULT_MODEL_ID } from "./provider.js";
-import { createBrowserExecutionEnv, type BrowserExecutionEnv } from "./vfs";
-import { createBrowserAgentTools, fileToolsSmoke } from "./tools";
+import { fileToolsSmoke } from "./tools";
 import {
   SettingsStore,
   toRuntimeConfig,
@@ -26,6 +24,7 @@ import {
   mountSettingsPanel,
   type PiWasmSettings,
 } from "./settings";
+import { SessionManager, SessionRegistry, mountSwitcher, type SwitcherHandle } from "./sessions";
 
 const params = new URLSearchParams(location.search);
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -41,58 +40,102 @@ interface S3Result {
 
 async function boot(): Promise<void> {
   const app = el<HTMLElement>("app");
+  const sidebar = el<HTMLElement>("sessions");
   const settingsPanel = el<HTMLElement>("settings-panel");
   const settingsToggle = el<HTMLButtonElement>("settings-toggle");
   const statusEl = el<HTMLElement>("status");
 
-  let env: BrowserExecutionEnv;
-  let tools: ReturnType<typeof createBrowserAgentTools>;
-  try {
-    env = await createBrowserExecutionEnv({ cwd: "/work" }); // S2 VFS
-    tools = createBrowserAgentTools(env); // S4 file tools (bash-free)
-  } catch (err) {
-    (globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = { ok: false, error: String(err) };
-    app.setAttribute("data-pi-wasm-ready", "false");
-    app.textContent = `pi-wasm failed to init the VFS/tools: ${String(err)}`;
-    throw err;
-  }
-
   const store = new SettingsStore();
   let settings: PiWasmSettings = await store.load();
-  let session: PiWasmSession;
-  let ui: ChatUiHandle;
+  const registry = new SessionRegistry();
+  const manager = new SessionManager(registry, store);
+
+  let ui: ChatUiHandle | undefined;
+  let switcher: SwitcherHandle | undefined;
 
   const setStatus = () => {
     const ready = isRuntimeConfigReady(settings);
     const cfg = toRuntimeConfig(settings);
+    const name = manager.current?.meta.name ?? "session";
     statusEl.textContent = ready
-      ? `live · ${cfg.model?.id ?? "?"}`
-      : "mock (no key/model) · open ⚙ Settings to go live";
+      ? `live · ${cfg.model?.id ?? "?"} · ${name}`
+      : `mock (no key/model) · ${name} · open ⚙ Settings to go live`;
     statusEl.className = ready ? "is-live" : "is-mock";
   };
 
   const exposeGlobals = () => {
-    const state = session.agent.state as { messages?: unknown[]; tools?: unknown[] };
+    const active = manager.current;
+    const state = active?.session.agent.state as { messages?: unknown[]; tools?: unknown[] } | undefined;
     (globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = {
       ok: true,
-      detail: { shell: "S7", messages: state.messages?.length ?? 0, tools: state.tools?.length ?? 0 },
+      detail: {
+        shell: "S11",
+        session: active?.meta.id,
+        messages: state?.messages?.length ?? 0,
+        tools: state?.tools?.length ?? 0,
+      },
     };
     (globalThis as Record<string, unknown>).__PI_WASM__ = {
-      session,
-      ui,
-      env,
+      get session() {
+        return manager.current?.session;
+      },
+      get env() {
+        return manager.current?.env;
+      },
+      get ui() {
+        return ui;
+      },
+      manager,
       ready: true,
       async send(text: string) {
-        await session.send(text);
-        await session.agent.waitForIdle();
-        ui.render();
+        const s = manager.current?.session;
+        if (!s) return;
+        await s.send(text);
+        await s.agent.waitForIdle();
+        ui?.render();
       },
       getTranscript: () =>
-        session.messages.map((m) => ({ role: (m as { role?: string }).role ?? "?", text: messageText(m) })),
-      // S4/S8 acceptance: read→edit→write over the VFS (ms2-2's ready check).
-      runToolsSmoke: () => fileToolsSmoke(env),
+        (manager.current?.session.messages ?? []).map((m) => ({
+          role: (m as { role?: string }).role ?? "?",
+          text: messageText(m),
+        })),
+      // S4/S8 acceptance: read→edit→write over the active session's VFS.
+      runToolsSmoke: () => fileToolsSmoke(manager.current!.env),
     };
-    // S6/S8 settings hook on the chat page (matches settings-demo.ts shape).
+    // S11 session-management surface (for S8 + programmatic control).
+    (globalThis as Record<string, unknown>).__PI_WASM_SESSIONS__ = {
+      list: () => manager.list(),
+      current: () => manager.current?.meta,
+      create: async (name?: string) => {
+        await manager.create(name);
+        buildChatForActive();
+        await switcher?.refresh();
+        return manager.current?.meta;
+      },
+      switchTo: async (id: string) => {
+        await manager.activate(id);
+        buildChatForActive();
+        await switcher?.refresh();
+        return manager.current?.meta;
+      },
+      rename: async (id: string, name: string) => {
+        await manager.rename(id, name);
+        await switcher?.refresh();
+      },
+      remove: async (id: string) => {
+        await manager.remove(id);
+        buildChatForActive();
+        await switcher?.refresh();
+        return manager.current?.meta;
+      },
+      exportSession: (id: string) => manager.exportSession(id),
+      importSession: async (data: unknown) => {
+        await manager.importSession(data as Parameters<SessionManager["importSession"]>[0]);
+        buildChatForActive();
+        await switcher?.refresh();
+        return manager.current?.meta;
+      },
+    };
     (globalThis as Record<string, unknown>).__PI_WASM_SETTINGS__ = {
       store,
       current: () => settings,
@@ -100,26 +143,39 @@ async function boot(): Promise<void> {
     };
   };
 
-  const build = () => {
+  const buildChatForActive = () => {
+    const active = manager.current;
+    if (!active) return;
     ui?.dispose();
-    const cfg = toRuntimeConfig(settings); // S6 → { model, baseUrl, apiKey, getApiKey }
-    session = new PiWasmSession({
-      modelId: cfg.model?.id ?? DEFAULT_MODEL_ID,
-      baseUrl: cfg.baseUrl || DEFAULT_BASE_URL,
-      providerId: cfg.model?.provider,
-      getApiKey: cfg.getApiKey,
-      tools,
-    });
-    ui = mountChat(app, session);
+    ui = mountChat(app, active.session);
     setStatus();
     exposeGlobals();
   };
 
-  // S6 settings panel — rebuild the session when the user saves new config.
+  // Initialize the active keyed session (builds its VFS workdir + S4 tools).
+  try {
+    await manager.init();
+  } catch (err) {
+    (globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = { ok: false, error: String(err) };
+    app.setAttribute("data-pi-wasm-ready", "false");
+    app.textContent = `pi-wasm failed to init sessions/VFS: ${String(err)}`;
+    throw err;
+  }
+
+  // Session switcher sidebar — re-mount the chat against whatever it activates.
+  switcher = mountSwitcher(sidebar, manager, { onChange: () => buildChatForActive() });
+
+  // S6 settings — on save, re-activate the current session so the new
+  // model/key applies (transcript is flushed + restored across the rebuild).
   mountSettingsPanel(settingsPanel, store, {
-    onSaved: (saved) => {
+    onSaved: async (saved) => {
       settings = saved;
-      build();
+      const id = manager.current?.meta.id;
+      if (id) {
+        await manager.activate(id);
+        buildChatForActive();
+        await switcher?.refresh();
+      }
       setPanelOpen(false);
     },
   });
@@ -133,8 +189,11 @@ async function boot(): Promise<void> {
   settingsToggle.addEventListener("click", () => setPanelOpen(!panelOpen));
   setPanelOpen(false);
 
-  build();
+  buildChatForActive();
   app.setAttribute("data-pi-wasm-ready", "true");
+
+  // Persist the active transcript on tab close (belt-and-braces; turns also save).
+  window.addEventListener("beforeunload", () => manager.flush());
 
   // Scripted end-to-end check for S8 (preserves the S3 __PI_WASM_S3__ contract).
   if (params.get("autorun") === "1") {
@@ -142,15 +201,17 @@ async function boot(): Promise<void> {
   }
 
   async function runAutorun(): Promise<void> {
+    const session = manager.current!.session;
     const prompt = params.get("prompt") ?? "Say hello in exactly three words.";
     let chunks = 0;
     const unsub = session.subscribe(() => {
       chunks++;
     });
+    const cfg = toRuntimeConfig(settings);
     const result: S3Result = {
       ok: false,
-      model: toRuntimeConfig(settings).model?.id ?? DEFAULT_MODEL_ID,
-      baseUrl: toRuntimeConfig(settings).baseUrl || DEFAULT_BASE_URL,
+      model: cfg.model?.id ?? DEFAULT_MODEL_ID,
+      baseUrl: cfg.baseUrl || DEFAULT_BASE_URL,
     };
     try {
       await session.send(prompt);
@@ -168,7 +229,7 @@ async function boot(): Promise<void> {
       unsub();
       (globalThis as Record<string, unknown>).__PI_WASM_S3__ = result;
       document.title = result.ok ? "pi-wasm S7:ok" : "pi-wasm S7:fail";
-      ui.render();
+      ui?.render();
     }
   }
 }

@@ -41,6 +41,8 @@ export interface PiWasmSessionOptions {
   getApiKey: (provider: string) => string | undefined | Promise<string | undefined>;
   /** File tools (S4) over the VFS (S2). Defaults to none (text-only). */
   tools?: AgentTool[];
+  /** Restore a persisted transcript (S11 keyed-session resume). */
+  initialMessages?: AgentState["messages"];
 }
 
 const DEFAULT_SYSTEM_PROMPT =
@@ -78,6 +80,10 @@ export class PiWasmSession {
         }),
         systemPrompt: options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         tools: options.tools ?? [], // S4 tools over the S2 VFS when provided.
+        // S11: resume a persisted conversation (keyed multi-session).
+        ...(options.initialMessages && options.initialMessages.length
+          ? { messages: options.initialMessages }
+          : {}),
       },
       streamFn,
       getApiKey: options.getApiKey,
