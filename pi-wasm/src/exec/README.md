@@ -36,7 +36,8 @@ the SDK Shell contract: never throw — encode failures in the `Result` — and 
 
 ## Tiers that plug in here (separate beads)
 
-- **S10 js-bash** (bd-ef8f24): coreutils-in-JS over the shared VFS.
+- **S10 js-bash** (bd-ef8f24): coreutils-in-JS over the shared VFS. **Landed** —
+  `JsShellBackend` (id `js-shell`); see `js-shell/README.md`.
 - **S15 remote** (bd-ef14af): WS/HTTP → ssh-localhost / MCP bridge (Harry's escape hatch).
 - **S14 microvm** (bd-c6ffc3): v86 / CheerpX / container2wasm. Feasibility +
   recommendation (**v86**, smallest viable + VFS-shareable) in

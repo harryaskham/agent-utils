@@ -32,3 +32,10 @@ export {
   type MicrovmMachine,
   type MicrovmExecBackendOptions,
 } from "./microvm-backend";
+
+// JS-shell reference tier (S10, bd-ef8f24): coreutils-in-JS over the shared VFS.
+export {
+  JsShellBackend,
+  createJsShellBackend,
+  type JsShellBackendOptions,
+} from "./js-shell-backend";
