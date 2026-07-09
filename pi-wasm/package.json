@@ -9,15 +9,19 @@
     "build": "vite build",
     "preview": "vite preview --port 4319",
     "typecheck": "tsc --noEmit",
-    "spike:node": "node scripts/construct-smoke.mjs"
+    "spike:node": "node scripts/construct-smoke.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.3",
     "@earendil-works/pi-ai": "0.80.3",
+    "@isomorphic-git/lightning-fs": "^4.6.2",
     "typebox": "1.1.38"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "typescript": "^7.0.2",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
   }
 }
