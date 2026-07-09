@@ -1,0 +1,23 @@
+{
+  "name": "pi-wasm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Feasibility spike + scaffold: run the Pi agent loop entirely in the browser (subproject of agent-utils; epic bd-f76cee, S1 bd-11daa5).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4319",
+    "typecheck": "tsc --noEmit",
+    "spike:node": "node scripts/construct-smoke.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.80.3",
+    "@earendil-works/pi-ai": "0.80.3",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4"
+  }
+}
