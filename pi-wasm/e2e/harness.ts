@@ -41,7 +41,7 @@ export interface PiWasmGlobals {
         error?: unknown;
       }>;
     };
-    session?: { agent: { state: { tools: { name: string }[] } } };
+    session?: { modelId?: string; agent: { state: { tools: { name: string }[] } } };
   };
   __PI_WASM_S3__?: { ok: boolean; text?: string; model?: string; chunks?: number; error?: string };
   __PI_WASM_SETTINGS__?: { store: { save(v: unknown): Promise<void> } };
@@ -54,6 +54,7 @@ export interface PiWasmGlobals {
     rename(id: string, name: string): Promise<void>;
     remove(id: string): Promise<SessionMeta | undefined>;
     setBackend(id: string, backendId: string): Promise<{ id?: string; backendId?: string; notice?: string }>;
+    setModel(id: string, modelId?: string): Promise<unknown>;
     exportSession(id: string): Promise<unknown>;
     importSession(data: unknown): Promise<SessionMeta | undefined>;
   };
@@ -201,6 +202,21 @@ export async function sessionToolNames(page: Page): Promise<string[]> {
     const tools = (window as unknown as PiWasmGlobals).__PI_WASM__!.session?.agent.state.tools ?? [];
     return tools.map((t) => t.name);
   });
+}
+
+// ---- S11.2 per-session model-picker helpers (bd-8a5ecc surface) ------------
+
+/** Select a session's model; pass undefined to clear back to the global default. */
+export async function setSessionModel(page: Page, id: string, modelId?: string): Promise<void> {
+  await page.evaluate(
+    ([i, m]) => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.setModel(i, m ?? undefined),
+    [id, modelId] as [string, string | undefined],
+  );
+}
+
+/** The active session's current model id. */
+export async function sessionModelId(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => (window as unknown as PiWasmGlobals).__PI_WASM__!.session?.modelId);
 }
 
 export interface ToolLoopScenario {
