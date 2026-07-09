@@ -68,4 +68,70 @@ test.describe("S14 microVM (v86) exec backend — real in-browser boot", () => {
     const uname = await execInGuest(page, "uname -s");
     expect(uname.value?.stdout ?? "").toContain("Linux");
   });
+
+  test("shares the browser VFS into the guest at /mnt over 9p (round-trip)", async ({ page }) => {
+    test.setTimeout(BOOT_TIMEOUT_MS + 60_000);
+
+    await page.goto("/microvm-demo.html");
+    await page.waitForSelector(READY, { timeout: BOOT_TIMEOUT_MS });
+
+    // HOST → GUEST: write the file via the shared VFS. The guest already has
+    // host9p auto-mounted at /mnt (VFS root /work), so /mnt/hello.txt == VFS
+    // /work/hello.txt. Seed before the guest first reads it (no stale dcache).
+    const content = `pi-wasm 9p bridge ${Date.now()}`;
+    await page.evaluate(
+      (c) =>
+        (window as unknown as { __PI_WASM_MICROVM__: { seedWorkFile(p: string, c: string): Promise<void> } })
+          .__PI_WASM_MICROVM__.seedWorkFile("/work/hello.txt", c),
+      content,
+    );
+    // VFS-side sanity (mirrors msm-1's assertVfsFile): the seed is visible in the
+    // SAME VFS the 9p server reads.
+    const hostSees = await page.evaluate(() =>
+      (window as unknown as { __PI_WASM_MICROVM__: { env: { readTextFile(p: string): Promise<{ ok: boolean; value?: string; error?: string }> } } })
+        .__PI_WASM_MICROVM__.env.readTextFile("/work/hello.txt"),
+    );
+    expect(hostSees.ok, `host VFS read error: ${hostSees.error ?? "none"}`).toBe(true);
+    expect(hostSees.value ?? "", "seed must be in the host VFS the 9p server reads").toBe(content);
+
+    // host9p is auto-mounted by the guest at /mnt; read the seeded file there.
+    const cat = await execInGuest(
+      page,
+      "echo '=LS='; ls -la /mnt 2>&1; echo '=CAT='; cat /mnt/hello.txt 2>&1",
+    );
+    expect(cat.ok, `exec error: ${cat.error ?? "none"}`).toBe(true);
+    const stats = await page.evaluate(() =>
+      (window as unknown as { __PI_WASM_MICROVM__: { ninepStats(): { calls: number; ops: Record<number, number> } } })
+        .__PI_WASM_MICROVM__.ninepStats(),
+    );
+    expect(
+      cat.value?.stdout ?? "",
+      `guest diag stdout=<<<${cat.value?.stdout}>>> stderr=<<<${cat.value?.stderr}>>> 9pStats=${JSON.stringify(stats)}`,
+    ).toContain(content);
+
+    // GUEST → HOST: write from the guest at /mnt, read it back through the VFS.
+    const guestLine = `written-in-guest-${Date.now()}`;
+    const wrote = await execInGuest(page, `printf '%s' '${guestLine}' > /mnt/from-guest.txt`);
+    expect(wrote.ok, `exec error: ${wrote.error ?? "none"}`).toBe(true);
+    const readBack = await page.evaluate(() =>
+      (window as unknown as { __PI_WASM_MICROVM__: { env: { readTextFile(p: string): Promise<{ ok: boolean; value?: string; error?: string }> } } })
+        .__PI_WASM_MICROVM__.env.readTextFile("/work/from-guest.txt"),
+    );
+    expect(readBack.ok, `vfs read error: ${readBack.error ?? "none"}`).toBe(true);
+    expect(readBack.value ?? "").toBe(guestLine);
+
+    // WRITE-AFTER-MOUNT: seed a NEW file after the guest already used /mnt. The
+    // auto-mount is cache=none, so a file a tool writes mid-session is visible
+    // to the guest immediately (the real agent use case).
+    const late = `late-write-${Date.now()}`;
+    await page.evaluate(
+      (c) =>
+        (window as unknown as { __PI_WASM_MICROVM__: { seedWorkFile(p: string, c: string): Promise<void> } })
+          .__PI_WASM_MICROVM__.seedWorkFile("/work/late.txt", c),
+      late,
+    );
+    const catLate = await execInGuest(page, "cat /mnt/late.txt");
+    expect(catLate.ok, `exec error: ${catLate.error ?? "none"}`).toBe(true);
+    expect(catLate.value?.stdout ?? "", "mid-session host write should be visible in the guest").toContain(late);
+  });
 });

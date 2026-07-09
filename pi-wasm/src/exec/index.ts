@@ -34,6 +34,11 @@ export {
   type MicrovmExecBackendOptions,
 } from "./microvm-backend";
 
+// microVM v86 adapter (browser only) + the 9p2000.L bridge that shares the S2
+// LightningFsVfs into the guest (auto-mounted at /mnt). See ./MICROVM.md.
+export { V86Machine, type V86MachineOptions } from "./v86-machine";
+export { Vfs9pServer, type Vfs9pServerOptions } from "./ninep/server";
+
 // JS-shell reference tier (S10, bd-ef8f24): coreutils-in-JS over the shared VFS.
 export {
   JsShellBackend,

@@ -130,6 +130,12 @@ export class V86Machine implements MicrovmMachine {
     });
 
     await this.waitForShell();
+    // Quiet the interactive shell so each command's serial output is ONLY its
+    // real stdout: disable tty echo (so injected command lines aren't echoed
+    // back) and empty PS1/PS2 (so prompts don't print between the exec markers).
+    // Without this, captured stdout is polluted with the command echo + prompts.
+    this.emulator!.serial0_send("stty -echo 2>/dev/null; PS1=''; PS2=''; export PS1 PS2\n");
+    await delay(400);
     for (const cmd of this.postBoot ?? []) await this.runBare(cmd);
     this.booted = true;
   }
