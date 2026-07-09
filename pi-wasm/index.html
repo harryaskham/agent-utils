@@ -3,19 +3,52 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>pi-wasm — in-browser Pi agent loop (S1 spike)</title>
+    <title>pi-wasm — in-browser Pi agent loop</title>
     <style>
       body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 60rem; }
       h1 { font-size: 1.1rem; }
-      pre { background: #0b0f14; color: #d7e0ea; padding: 1rem; border-radius: 8px; overflow: auto; white-space: pre-wrap; }
+      pre { background: #0b0f14; color: #d7e0ea; padding: 1rem; border-radius: 8px; overflow: auto; white-space: pre-wrap; min-height: 1.5rem; }
       .pass { color: #4cd964; } .fail { color: #ff5b5b; }
+      form { display: grid; grid-template-columns: max-content 1fr; gap: .5rem .75rem; align-items: center; margin: 1rem 0; }
+      label { justify-self: end; color: #333; }
+      input, textarea { font: inherit; padding: .35rem .5rem; border: 1px solid #ccc; border-radius: 6px; width: 100%; box-sizing: border-box; }
+      textarea { grid-column: 2; min-height: 3rem; }
+      .row { grid-column: 1 / -1; display: flex; gap: 1rem; align-items: center; }
+      button { font: inherit; padding: .4rem 1rem; border-radius: 6px; border: 1px solid #888; background: #f3f4f6; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: default; }
+      .hint { color: #777; font-size: .85em; }
+      #status { color: #555; }
     </style>
   </head>
   <body>
-    <h1>pi-wasm — fully in-browser Pi agent loop · S1 feasibility spike (bd-11daa5)</h1>
-    <p>This page attempts to import the Pi agent SDK and construct the agent loop
-       entirely client-side, with no Node runtime. See <code>FEASIBILITY.md</code>.</p>
+    <h1>pi-wasm — fully in-browser Pi agent loop</h1>
+    <p>The Pi agent SDK, imported and run entirely client-side (no Node runtime).
+       <strong>S1</strong> proves it constructs; <strong>S3</strong> performs a real
+       streaming model call against a CORS-enabled OpenAI-compatible endpoint
+       (the LiteLLM proxy) with a runtime key. See <code>FEASIBILITY.md</code>.</p>
+
     <pre id="out"></pre>
+
+    <h2 style="font-size:1rem">S3 · streaming provider call</h2>
+    <form id="s3form" onsubmit="return false">
+      <label for="key">API key</label>
+      <input id="key" type="password" autocomplete="off" placeholder="runtime key (kept only in this browser)" />
+      <label for="model">Model</label>
+      <input id="model" type="text" />
+      <label for="baseUrl">Base URL</label>
+      <input id="baseUrl" type="text" />
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt"></textarea>
+      <div class="row">
+        <button id="run" type="button">Run</button>
+        <span id="status">idle</span>
+      </div>
+      <div class="row"><span class="hint">The key stays in this browser (localStorage) — nothing is sent anywhere except the endpoint above. Headless: append <code>?key=…&amp;autorun=1</code>.</span></div>
+    </form>
+
+    <pre id="stream"></pre>
+    <pre id="result" hidden></pre>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

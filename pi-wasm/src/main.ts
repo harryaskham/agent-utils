@@ -1,72 +1,195 @@
-// pi-wasm S1 feasibility spike (epic bd-f76cee, bd-11daa5).
+// pi-wasm — fully in-browser Pi agent loop.
 //
-// Goal: prove the Pi agent LOOP constructs in a browser with NO Node runtime.
-//
-// Approach (Path A, per S1 derisk notes pi-wasm:sdk-node-surface-findings +
-// pi-wasm-recon): build directly on the import-time browser-clean `.` entries
-// of @earendil-works/pi-agent-core (the `Agent` loop) and @earendil-works/pi-ai
-// (providers), BYPASSING the node-coupled @earendil-works/pi-coding-agent barrel
-// and its createAgentSession()/tools/*. The `Agent` constructor takes injectable
-// seams — streamFn (provider call), getApiKey (runtime keys from a settings
-// screen), and initialState.tools (reconstructed over a browser ExecutionEnv in
-// S2/S4) — so the core loop needs zero node:fs / node:child_process.
+// S1 (bd-11daa5): prove the agent loop CONSTRUCTS in the browser (Path A,
+//   pi-agent-core + pi-ai, barrel bypassed, zero node polyfills).
+// S3 (bd-cbf86f): the browser provider/network layer — a REAL streaming model
+//   call end-to-end against a CORS-enabled OpenAI-compatible endpoint (the
+//   LiteLLM proxy), rendered live, using a RUNTIME key (never hard-coded).
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import * as piAi from "@earendil-works/pi-ai";
+import {
+  createBrowserAgent,
+  currentAssistantText,
+  DEFAULT_BASE_URL,
+  DEFAULT_MODEL_ID,
+} from "./provider.js";
 
 const out = document.getElementById("out") as HTMLPreElement;
+const streamOut = document.getElementById("stream") as HTMLPreElement;
 const log = (s = "") => {
   out.textContent += s + "\n";
 };
 
-log("pi-wasm S1 feasibility spike — in-browser Pi agent loop");
-log("=".repeat(56));
-log("");
-
+// ---------------------------------------------------------------------------
+// S1 construct proof (preserved from the S1 spike; sets __PI_WASM_SPIKE__).
+// ---------------------------------------------------------------------------
 type SpikeResult = { ok: boolean; error?: string; detail?: Record<string, unknown> };
-let result: SpikeResult;
-
+let spike: SpikeResult;
 try {
-  log(`[import] @earendil-works/pi-agent-core   Agent = ${typeof Agent}`);
   const aiKeys = Object.keys(piAi);
-  log(`[import] @earendil-works/pi-ai           ${aiKeys.length} named exports`);
-  const hasProviderFactory = typeof (piAi as Record<string, unknown>).createProvider === "function";
-  const hasModelsFactory = typeof (piAi as Record<string, unknown>).createModels === "function";
-  log(`[import] pi-ai.createProvider            ${hasProviderFactory ? "present" : "absent"}`);
-  log(`[import] pi-ai.createModels              ${hasModelsFactory ? "present" : "absent"}`);
-  log("");
-
-  // Minimal in-browser construct: injectable seams only, no node deps.
-  const agent = new Agent({
-    // Runtime key resolver — in the real app this reads the settings screen.
-    getApiKey: async () => undefined,
-  });
-  const unsubscribe = agent.subscribe(() => {
-    /* no-op: proves the event bus wires up in-browser */
-  });
-
+  const agent = new Agent({ getApiKey: async () => undefined });
+  const unsubscribe = agent.subscribe(() => {});
   const stateKeys = Object.keys(agent.state ?? {});
-  const messages = (agent.state as { messages?: unknown[] })?.messages ?? [];
-  const tools = (agent.state as { tools?: unknown[] })?.tools ?? [];
-
-  log("[construct] new Agent({ getApiKey }) ......... OK");
-  log(`[state] keys: ${stateKeys.join(", ")}`);
-  log(`[state] messages=${messages.length}  tools=${tools.length}`);
-  log(`[events] agent.subscribe(...) ................ OK`);
   unsubscribe();
-  log("");
-  log("RESULT: the Pi agent loop CONSTRUCTS in-browser on");
-  log("        pi-agent-core + pi-ai (barrel bypassed, zero node polyfills). PASS");
-  out.classList.add("pass");
-  result = { ok: true, detail: { aiExports: aiKeys.length, stateKeys, tools: tools.length } };
+  log("pi-wasm — in-browser Pi agent loop");
+  log("=".repeat(48));
+  log(`[S1] pi-agent-core Agent = ${typeof Agent}`);
+  log(`[S1] pi-ai named exports = ${aiKeys.length}`);
+  log(`[S1] new Agent({...}) constructs .......... OK`);
+  log(`[S1] state keys: ${stateKeys.join(", ")}`);
+  spike = { ok: true, detail: { aiExports: aiKeys.length, stateKeys } };
 } catch (err) {
   const e = err as Error;
-  log("");
-  log(`RESULT: FAIL — ${e.message}`);
-  log(e.stack ?? "");
+  log(`[S1] construct FAILED: ${e.message}`);
   out.classList.add("fail");
-  result = { ok: false, error: String(e) };
+  spike = { ok: false, error: String(e) };
+}
+(globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = spike;
+
+// ---------------------------------------------------------------------------
+// S3 streaming provider layer.
+// ---------------------------------------------------------------------------
+type S3Result = {
+  ok: boolean;
+  text?: string;
+  model?: string;
+  baseUrl?: string;
+  error?: string;
+  chunks?: number;
+};
+
+const params = new URLSearchParams(location.search);
+const KEY_STORAGE = "pi-wasm-key";
+
+const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const keyInput = el<HTMLInputElement>("key");
+const modelInput = el<HTMLInputElement>("model");
+const baseUrlInput = el<HTMLInputElement>("baseUrl");
+const promptInput = el<HTMLTextAreaElement>("prompt");
+const runBtn = el<HTMLButtonElement>("run");
+const status = el<HTMLSpanElement>("status");
+const resultEl = el<HTMLPreElement>("result");
+
+/** Mirror the S3 result into the DOM + document.title so headless --dump-dom can read it (never includes the key). */
+function publishResult(result: S3Result): void {
+  (globalThis as Record<string, unknown>).__PI_WASM_S3__ = result;
+  resultEl.textContent = JSON.stringify(result);
+  document.title = result.ok ? "pi-wasm S3:ok" : "pi-wasm S3:fail";
 }
 
-// Expose for the Playwright harness (S8) to assert on.
-(globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = result;
+// Seed defaults (URL params override stored values; nothing is hard-coded in source).
+modelInput.value = params.get("model") ?? DEFAULT_MODEL_ID;
+baseUrlInput.value = params.get("baseUrl") ?? DEFAULT_BASE_URL;
+promptInput.value = params.get("prompt") ?? "Say hello in exactly three words.";
+
+/**
+ * Resolve the runtime key WITHOUT hard-coding it: URL `?key=`, a pre-set
+ * `window.__PI_WASM_KEY__` global (headless injection), the key input field,
+ * or a previously-saved localStorage value. This is the S6 settings-screen seam.
+ */
+function resolveKey(): string | undefined {
+  const fromUrl = params.get("key") ?? undefined;
+  const fromGlobal = (globalThis as { __PI_WASM_KEY__?: string }).__PI_WASM_KEY__;
+  const fromField = keyInput.value.trim() || undefined;
+  const fromStore = localStorage.getItem(KEY_STORAGE) ?? undefined;
+  return fromUrl || fromGlobal || fromField || fromStore;
+}
+
+// Prefill the (masked) key field from storage so a returning user keeps their key.
+{
+  const existing = localStorage.getItem(KEY_STORAGE);
+  if (existing && !keyInput.value) keyInput.value = existing;
+}
+
+let running = false;
+
+async function runStreamingCall(): Promise<void> {
+  if (running) return;
+  running = true;
+  runBtn.disabled = true;
+  streamOut.textContent = "";
+  streamOut.classList.remove("pass", "fail");
+
+  const key = resolveKey();
+  const modelId = modelInput.value.trim() || DEFAULT_MODEL_ID;
+  const baseUrl = baseUrlInput.value.trim() || DEFAULT_BASE_URL;
+  const prompt = promptInput.value.trim() || "Say hello in exactly three words.";
+
+  if (!key) {
+    status.textContent = "no key — enter a runtime API key";
+    streamOut.classList.add("fail");
+    streamOut.textContent = "No API key provided. Enter one above (kept only in this browser).";
+    publishResult({ ok: false, error: "no_api_key" });
+    running = false;
+    runBtn.disabled = false;
+    return;
+  }
+
+  // Persist as a runtime key (browser-only), mirroring the future settings screen.
+  localStorage.setItem(KEY_STORAGE, key);
+  status.textContent = `streaming from ${baseUrl} (${modelId})…`;
+
+  let chunks = 0;
+  const render = () => {
+    const text = currentAssistantText(agent);
+    streamOut.textContent = text;
+  };
+
+  const agent = createBrowserAgent({
+    modelId,
+    baseUrl,
+    getApiKey: () => resolveKey(),
+    systemPrompt: "You are a concise assistant running fully in the browser via pi-wasm.",
+  });
+  const unsubscribe = agent.subscribe(() => {
+    chunks++;
+    render();
+  });
+
+  try {
+    await agent.prompt(prompt);
+    await agent.waitForIdle();
+    unsubscribe();
+    const text = currentAssistantText(agent);
+    const errorMessage = (agent.state as { errorMessage?: string }).errorMessage;
+    const ok = !errorMessage && text.trim().length > 0;
+    render();
+    if (ok) {
+      streamOut.classList.add("pass");
+      status.textContent = `done — streamed ${chunks} update(s)`;
+    } else {
+      streamOut.classList.add("fail");
+      status.textContent = `failed: ${errorMessage ?? "empty response"}`;
+    }
+    publishResult({
+      ok,
+      text,
+      model: modelId,
+      baseUrl,
+      chunks,
+      error: ok ? undefined : errorMessage ?? "empty_response",
+    });
+  } catch (err) {
+    unsubscribe();
+    const e = err as Error;
+    streamOut.classList.add("fail");
+    streamOut.textContent = `ERROR: ${e.message}\n${e.stack ?? ""}`;
+    status.textContent = "failed (exception)";
+    publishResult({ ok: false, model: modelId, baseUrl, chunks, error: String(e) });
+  } finally {
+    running = false;
+    runBtn.disabled = false;
+  }
+}
+
+runBtn.addEventListener("click", () => void runStreamingCall());
+
+log("");
+log("[S3] provider layer ready. Enter a runtime key and press Run,");
+log("[S3] or load with ?key=…&autorun=1 for a scripted check.");
+
+// Headless / scripted end-to-end check for S8.
+if (params.get("autorun") === "1") {
+  void runStreamingCall();
+}
