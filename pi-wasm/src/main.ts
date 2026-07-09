@@ -1,195 +1,178 @@
-// pi-wasm — fully in-browser Pi agent loop.
+// pi-wasm — fully in-browser Pi agent loop · S7 app shell (bd-e8949f).
 //
-// S1 (bd-11daa5): prove the agent loop CONSTRUCTS in the browser (Path A,
-//   pi-agent-core + pi-ai, barrel bypassed, zero node polyfills).
-// S3 (bd-cbf86f): the browser provider/network layer — a REAL streaming model
-//   call end-to-end against a CORS-enabled OpenAI-compatible endpoint (the
-//   LiteLLM proxy), rendered live, using a RUNTIME key (never hard-coded).
+// The demoable MVP: a real multi-turn chat that runs the FULL agent loop
+// client-side — S6 settings/keys, S3 streaming provider, and S4 file tools over
+// the S2 IndexedDB VFS. Path A only (pi-agent-core + pi-ai; NEVER the
+// pi-coding-agent barrel — the barrel trap, FEASIBILITY.md §3).
+//
+// Wiring per the seam authors (msm-0 S3/S6, ms2-2 S2/S4):
+//   env   = await createBrowserExecutionEnv({ cwd: "/work" })   // S2
+//   tools = createBrowserAgentTools(env)                        // S4 (bash-free)
+//   cfg   = toRuntimeConfig(await new SettingsStore().load())   // S6
+//   session = PiWasmSession({ ...cfg, tools })  // S3 stream + mock fallback
+//
+// Preserved hooks: __PI_WASM_SPIKE__ (S1), __PI_WASM_S3__ (?autorun), __PI_WASM__
+// (chat harness + fileToolsSmoke for the S8 Playwright suite), __PI_WASM_SETTINGS__ (S6).
 
-import { Agent } from "@earendil-works/pi-agent-core";
-import * as piAi from "@earendil-works/pi-ai";
+import { PiWasmSession } from "./session.js";
+import { mountChat, type ChatUiHandle } from "./chat-ui.js";
+import { currentAssistantText, messageText, DEFAULT_BASE_URL, DEFAULT_MODEL_ID } from "./provider.js";
+import { createBrowserExecutionEnv, type BrowserExecutionEnv } from "./vfs";
+import { createBrowserAgentTools, fileToolsSmoke } from "./tools";
 import {
-  createBrowserAgent,
-  currentAssistantText,
-  DEFAULT_BASE_URL,
-  DEFAULT_MODEL_ID,
-} from "./provider.js";
+  SettingsStore,
+  toRuntimeConfig,
+  isRuntimeConfigReady,
+  mountSettingsPanel,
+  type PiWasmSettings,
+} from "./settings";
 
-const out = document.getElementById("out") as HTMLPreElement;
-const streamOut = document.getElementById("stream") as HTMLPreElement;
-const log = (s = "") => {
-  out.textContent += s + "\n";
-};
+const params = new URLSearchParams(location.search);
+const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-// ---------------------------------------------------------------------------
-// S1 construct proof (preserved from the S1 spike; sets __PI_WASM_SPIKE__).
-// ---------------------------------------------------------------------------
-type SpikeResult = { ok: boolean; error?: string; detail?: Record<string, unknown> };
-let spike: SpikeResult;
-try {
-  const aiKeys = Object.keys(piAi);
-  const agent = new Agent({ getApiKey: async () => undefined });
-  const unsubscribe = agent.subscribe(() => {});
-  const stateKeys = Object.keys(agent.state ?? {});
-  unsubscribe();
-  log("pi-wasm — in-browser Pi agent loop");
-  log("=".repeat(48));
-  log(`[S1] pi-agent-core Agent = ${typeof Agent}`);
-  log(`[S1] pi-ai named exports = ${aiKeys.length}`);
-  log(`[S1] new Agent({...}) constructs .......... OK`);
-  log(`[S1] state keys: ${stateKeys.join(", ")}`);
-  spike = { ok: true, detail: { aiExports: aiKeys.length, stateKeys } };
-} catch (err) {
-  const e = err as Error;
-  log(`[S1] construct FAILED: ${e.message}`);
-  out.classList.add("fail");
-  spike = { ok: false, error: String(e) };
-}
-(globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = spike;
-
-// ---------------------------------------------------------------------------
-// S3 streaming provider layer.
-// ---------------------------------------------------------------------------
-type S3Result = {
+interface S3Result {
   ok: boolean;
   text?: string;
   model?: string;
   baseUrl?: string;
-  error?: string;
   chunks?: number;
-};
-
-const params = new URLSearchParams(location.search);
-const KEY_STORAGE = "pi-wasm-key";
-
-const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const keyInput = el<HTMLInputElement>("key");
-const modelInput = el<HTMLInputElement>("model");
-const baseUrlInput = el<HTMLInputElement>("baseUrl");
-const promptInput = el<HTMLTextAreaElement>("prompt");
-const runBtn = el<HTMLButtonElement>("run");
-const status = el<HTMLSpanElement>("status");
-const resultEl = el<HTMLPreElement>("result");
-
-/** Mirror the S3 result into the DOM + document.title so headless --dump-dom can read it (never includes the key). */
-function publishResult(result: S3Result): void {
-  (globalThis as Record<string, unknown>).__PI_WASM_S3__ = result;
-  resultEl.textContent = JSON.stringify(result);
-  document.title = result.ok ? "pi-wasm S3:ok" : "pi-wasm S3:fail";
+  error?: string;
 }
 
-// Seed defaults (URL params override stored values; nothing is hard-coded in source).
-modelInput.value = params.get("model") ?? DEFAULT_MODEL_ID;
-baseUrlInput.value = params.get("baseUrl") ?? DEFAULT_BASE_URL;
-promptInput.value = params.get("prompt") ?? "Say hello in exactly three words.";
+async function boot(): Promise<void> {
+  const app = el<HTMLElement>("app");
+  const settingsPanel = el<HTMLElement>("settings-panel");
+  const settingsToggle = el<HTMLButtonElement>("settings-toggle");
+  const statusEl = el<HTMLElement>("status");
 
-/**
- * Resolve the runtime key WITHOUT hard-coding it: URL `?key=`, a pre-set
- * `window.__PI_WASM_KEY__` global (headless injection), the key input field,
- * or a previously-saved localStorage value. This is the S6 settings-screen seam.
- */
-function resolveKey(): string | undefined {
-  const fromUrl = params.get("key") ?? undefined;
-  const fromGlobal = (globalThis as { __PI_WASM_KEY__?: string }).__PI_WASM_KEY__;
-  const fromField = keyInput.value.trim() || undefined;
-  const fromStore = localStorage.getItem(KEY_STORAGE) ?? undefined;
-  return fromUrl || fromGlobal || fromField || fromStore;
-}
-
-// Prefill the (masked) key field from storage so a returning user keeps their key.
-{
-  const existing = localStorage.getItem(KEY_STORAGE);
-  if (existing && !keyInput.value) keyInput.value = existing;
-}
-
-let running = false;
-
-async function runStreamingCall(): Promise<void> {
-  if (running) return;
-  running = true;
-  runBtn.disabled = true;
-  streamOut.textContent = "";
-  streamOut.classList.remove("pass", "fail");
-
-  const key = resolveKey();
-  const modelId = modelInput.value.trim() || DEFAULT_MODEL_ID;
-  const baseUrl = baseUrlInput.value.trim() || DEFAULT_BASE_URL;
-  const prompt = promptInput.value.trim() || "Say hello in exactly three words.";
-
-  if (!key) {
-    status.textContent = "no key — enter a runtime API key";
-    streamOut.classList.add("fail");
-    streamOut.textContent = "No API key provided. Enter one above (kept only in this browser).";
-    publishResult({ ok: false, error: "no_api_key" });
-    running = false;
-    runBtn.disabled = false;
-    return;
+  let env: BrowserExecutionEnv;
+  let tools: ReturnType<typeof createBrowserAgentTools>;
+  try {
+    env = await createBrowserExecutionEnv({ cwd: "/work" }); // S2 VFS
+    tools = createBrowserAgentTools(env); // S4 file tools (bash-free)
+  } catch (err) {
+    (globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = { ok: false, error: String(err) };
+    app.setAttribute("data-pi-wasm-ready", "false");
+    app.textContent = `pi-wasm failed to init the VFS/tools: ${String(err)}`;
+    throw err;
   }
 
-  // Persist as a runtime key (browser-only), mirroring the future settings screen.
-  localStorage.setItem(KEY_STORAGE, key);
-  status.textContent = `streaming from ${baseUrl} (${modelId})…`;
+  const store = new SettingsStore();
+  let settings: PiWasmSettings = await store.load();
+  let session: PiWasmSession;
+  let ui: ChatUiHandle;
 
-  let chunks = 0;
-  const render = () => {
-    const text = currentAssistantText(agent);
-    streamOut.textContent = text;
+  const setStatus = () => {
+    const ready = isRuntimeConfigReady(settings);
+    const cfg = toRuntimeConfig(settings);
+    statusEl.textContent = ready
+      ? `live · ${cfg.model?.id ?? "?"}`
+      : "mock (no key/model) · open ⚙ Settings to go live";
+    statusEl.className = ready ? "is-live" : "is-mock";
   };
 
-  const agent = createBrowserAgent({
-    modelId,
-    baseUrl,
-    getApiKey: () => resolveKey(),
-    systemPrompt: "You are a concise assistant running fully in the browser via pi-wasm.",
-  });
-  const unsubscribe = agent.subscribe(() => {
-    chunks++;
-    render();
+  const exposeGlobals = () => {
+    const state = session.agent.state as { messages?: unknown[]; tools?: unknown[] };
+    (globalThis as Record<string, unknown>).__PI_WASM_SPIKE__ = {
+      ok: true,
+      detail: { shell: "S7", messages: state.messages?.length ?? 0, tools: state.tools?.length ?? 0 },
+    };
+    (globalThis as Record<string, unknown>).__PI_WASM__ = {
+      session,
+      ui,
+      env,
+      ready: true,
+      async send(text: string) {
+        await session.send(text);
+        await session.agent.waitForIdle();
+        ui.render();
+      },
+      getTranscript: () =>
+        session.messages.map((m) => ({ role: (m as { role?: string }).role ?? "?", text: messageText(m) })),
+      // S4/S8 acceptance: read→edit→write over the VFS (ms2-2's ready check).
+      runToolsSmoke: () => fileToolsSmoke(env),
+    };
+    // S6/S8 settings hook on the chat page (matches settings-demo.ts shape).
+    (globalThis as Record<string, unknown>).__PI_WASM_SETTINGS__ = {
+      store,
+      current: () => settings,
+      toRuntimeConfig: () => store.load().then(toRuntimeConfig),
+    };
+  };
+
+  const build = () => {
+    ui?.dispose();
+    const cfg = toRuntimeConfig(settings); // S6 → { model, baseUrl, apiKey, getApiKey }
+    session = new PiWasmSession({
+      modelId: cfg.model?.id ?? DEFAULT_MODEL_ID,
+      baseUrl: cfg.baseUrl || DEFAULT_BASE_URL,
+      providerId: cfg.model?.provider,
+      getApiKey: cfg.getApiKey,
+      tools,
+    });
+    ui = mountChat(app, session);
+    setStatus();
+    exposeGlobals();
+  };
+
+  // S6 settings panel — rebuild the session when the user saves new config.
+  mountSettingsPanel(settingsPanel, store, {
+    onSaved: (saved) => {
+      settings = saved;
+      build();
+      setPanelOpen(false);
+    },
   });
 
-  try {
-    await agent.prompt(prompt);
-    await agent.waitForIdle();
-    unsubscribe();
-    const text = currentAssistantText(agent);
-    const errorMessage = (agent.state as { errorMessage?: string }).errorMessage;
-    const ok = !errorMessage && text.trim().length > 0;
-    render();
-    if (ok) {
-      streamOut.classList.add("pass");
-      status.textContent = `done — streamed ${chunks} update(s)`;
-    } else {
-      streamOut.classList.add("fail");
-      status.textContent = `failed: ${errorMessage ?? "empty response"}`;
-    }
-    publishResult({
-      ok,
-      text,
-      model: modelId,
-      baseUrl,
-      chunks,
-      error: ok ? undefined : errorMessage ?? "empty_response",
+  let panelOpen = false;
+  const setPanelOpen = (open: boolean) => {
+    panelOpen = open;
+    settingsPanel.hidden = !open;
+    settingsToggle.setAttribute("aria-expanded", String(open));
+  };
+  settingsToggle.addEventListener("click", () => setPanelOpen(!panelOpen));
+  setPanelOpen(false);
+
+  build();
+  app.setAttribute("data-pi-wasm-ready", "true");
+
+  // Scripted end-to-end check for S8 (preserves the S3 __PI_WASM_S3__ contract).
+  if (params.get("autorun") === "1") {
+    await runAutorun();
+  }
+
+  async function runAutorun(): Promise<void> {
+    const prompt = params.get("prompt") ?? "Say hello in exactly three words.";
+    let chunks = 0;
+    const unsub = session.subscribe(() => {
+      chunks++;
     });
-  } catch (err) {
-    unsubscribe();
-    const e = err as Error;
-    streamOut.classList.add("fail");
-    streamOut.textContent = `ERROR: ${e.message}\n${e.stack ?? ""}`;
-    status.textContent = "failed (exception)";
-    publishResult({ ok: false, model: modelId, baseUrl, chunks, error: String(e) });
-  } finally {
-    running = false;
-    runBtn.disabled = false;
+    const result: S3Result = {
+      ok: false,
+      model: toRuntimeConfig(settings).model?.id ?? DEFAULT_MODEL_ID,
+      baseUrl: toRuntimeConfig(settings).baseUrl || DEFAULT_BASE_URL,
+    };
+    try {
+      await session.send(prompt);
+      await session.agent.waitForIdle();
+      const text = currentAssistantText(session.agent);
+      const error = session.errorMessage;
+      result.text = text;
+      result.chunks = chunks;
+      result.ok = !error && text.trim().length > 0;
+      result.error = result.ok ? undefined : (error ?? "empty_response");
+    } catch (err) {
+      result.error = String(err);
+      result.chunks = chunks;
+    } finally {
+      unsub();
+      (globalThis as Record<string, unknown>).__PI_WASM_S3__ = result;
+      document.title = result.ok ? "pi-wasm S7:ok" : "pi-wasm S7:fail";
+      ui.render();
+    }
   }
 }
 
-runBtn.addEventListener("click", () => void runStreamingCall());
-
-log("");
-log("[S3] provider layer ready. Enter a runtime key and press Run,");
-log("[S3] or load with ?key=…&autorun=1 for a scripted check.");
-
-// Headless / scripted end-to-end check for S8.
-if (params.get("autorun") === "1") {
-  void runStreamingCall();
-}
+void boot().catch((err) => {
+  console.error("[pi-wasm] boot failed", err);
+});

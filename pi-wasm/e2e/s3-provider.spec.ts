@@ -37,7 +37,9 @@ test.describe("S3 provider layer — real streaming call in-browser", () => {
     const prompt = "Say hello in exactly three words.";
     const params = new URLSearchParams({ autorun: "1", model: MODEL, prompt });
     if (BASE_URL) params.set("baseUrl", BASE_URL);
-    await page.goto(`/?${params.toString()}`);
+    // The S3 provider demo lives at /provider-demo.html (the primary page `/` is
+    // the S7 chat app since bd-e8949f). This test targets the standalone S3 demo.
+    await page.goto(`/provider-demo.html?${params.toString()}`);
 
     // Wait for the page's autorun to publish its result global.
     await page.waitForFunction(

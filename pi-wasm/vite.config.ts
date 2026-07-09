@@ -11,15 +11,18 @@ export default defineConfig({
   build: {
     target: "es2022",
     sourcemap: true,
-    // Fail loudly if a node: builtin is pulled in, rather than silently
-    // externalizing it (which would defer the failure to runtime in-browser).
     rollupOptions: {
-      // Multi-page build: the S1 spike page (index.html) + the S6 settings demo
-      // (settings-demo.html). The S7 app-shell entry can be added here alongside.
+      // Multi-page build:
+      //   index.html          — S7 chat app shell (primary; wires S2/S3/S4/S6)
+      //   provider-demo.html  — S3 standalone provider demo (preserved)
+      //   settings-demo.html  — S6 standalone settings demo (preserved)
       input: {
         main: "index.html",
+        "provider-demo": "provider-demo.html",
         settings: "settings-demo.html",
       },
+      // Fail loudly if a node: builtin is pulled in, rather than silently
+      // externalizing it (which would defer the failure to runtime in-browser).
       onwarn(warning, warn) {
         warn(warning);
       },

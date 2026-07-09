@@ -3,52 +3,90 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>pi-wasm — in-browser Pi agent loop</title>
+    <title>pi-wasm — in-browser Pi agent (S7 chat)</title>
     <style>
-      body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 60rem; }
-      h1 { font-size: 1.1rem; }
-      pre { background: #0b0f14; color: #d7e0ea; padding: 1rem; border-radius: 8px; overflow: auto; white-space: pre-wrap; min-height: 1.5rem; }
-      .pass { color: #4cd964; } .fail { color: #ff5b5b; }
-      form { display: grid; grid-template-columns: max-content 1fr; gap: .5rem .75rem; align-items: center; margin: 1rem 0; }
-      label { justify-self: end; color: #333; }
-      input, textarea { font: inherit; padding: .35rem .5rem; border: 1px solid #ccc; border-radius: 6px; width: 100%; box-sizing: border-box; }
-      textarea { grid-column: 2; min-height: 3rem; }
-      .row { grid-column: 1 / -1; display: flex; gap: 1rem; align-items: center; }
-      button { font: inherit; padding: .4rem 1rem; border-radius: 6px; border: 1px solid #888; background: #f3f4f6; cursor: pointer; }
-      button:disabled { opacity: .5; cursor: default; }
-      .hint { color: #777; font-size: .85em; }
-      #status { color: #555; }
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+        margin: 0; height: 100vh; display: flex; flex-direction: column;
+        background: #0b0f14; color: #d7e0ea;
+      }
+      header { padding: 0.7rem 1rem; border-bottom: 1px solid #1b2530; }
+      .titlebar { display: flex; align-items: center; gap: 0.75rem; }
+      header h1 { font-size: 0.95rem; margin: 0; font-weight: 600; }
+      header p { margin: 0.15rem 0 0; font-size: 0.72rem; color: #7c8a9a; }
+      #settings-toggle {
+        font: inherit; font-size: 0.8rem; padding: 0.2rem 0.6rem; border-radius: 6px; cursor: pointer;
+        background: #12181f; color: #d7e0ea; border: 1px solid #1b2530;
+      }
+      #status { margin-left: auto; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px; }
+      #status.is-live { color: #4cd964; background: #10241a; }
+      #status.is-mock { color: #d9a54c; background: #241d10; }
+      #settings-panel { margin-top: 0.6rem; padding: 0.75rem; background: #0d131a; border: 1px solid #1b2530; border-radius: 8px; }
+      .pi-wasm-settings { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.82rem; }
+      .pi-wasm-settings .notice { margin: 0 0 0.25rem; color: #7c8a9a; font-size: 0.75rem; }
+      .pi-wasm-settings label { display: flex; flex-direction: column; gap: 0.2rem; color: #6f8296; }
+      .pi-wasm-settings input, .pi-wasm-settings textarea {
+        font: inherit; font-size: 0.8rem; padding: 0.3rem 0.4rem; border-radius: 5px;
+        background: #0b0f14; color: #d7e0ea; border: 1px solid #1b2530; width: 100%;
+      }
+      .pi-wasm-settings .actions { display: flex; gap: 0.5rem; align-items: center; }
+      .pi-wasm-settings button {
+        font: inherit; font-size: 0.8rem; padding: 0.3rem 0.8rem; border-radius: 6px; cursor: pointer;
+        background: #1f6feb; color: #fff; border: none;
+      }
+      .pi-wasm-settings button[data-act="reset"], .pi-wasm-settings button[data-act="clear"] {
+        background: #12181f; color: #d7e0ea; border: 1px solid #1b2530;
+      }
+      .pi-wasm-settings .errors { color: #ff8a8a; font-size: 0.75rem; }
+      .pi-wasm-settings .status { color: #7c8a9a; font-size: 0.75rem; }
+      #app { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 1rem; }
+      .pi-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+      .pi-chat__log {
+        flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem;
+        padding: 0.5rem; background: #0d131a; border: 1px solid #1b2530; border-radius: 8px;
+      }
+      .pi-chat__empty { color: #5c6b7a; padding: 1rem; text-align: center; }
+      .pi-chat__msg { display: flex; gap: 0.6rem; padding: 0.4rem 0.5rem; border-radius: 6px; }
+      .pi-chat__msg--user { background: #10202e; }
+      .pi-chat__msg--assistant { background: #12181f; }
+      .pi-chat__msg--tool-call { background: #16130a; color: #d9c07c; font-size: 0.85em; }
+      .pi-chat__msg--tool-result { background: #0e1712; color: #9fd4b0; font-size: 0.85em; }
+      .pi-chat__msg--tool-error { background: #2a1114; color: #ff8a8a; font-size: 0.85em; }
+      .pi-chat__msg--error { background: #2a1114; color: #ff8a8a; }
+      .pi-chat__role {
+        flex: 0 0 5.5rem; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em;
+        color: #6f8296; padding-top: 0.1rem;
+      }
+      .pi-chat__msg--user .pi-chat__role { color: #4c9dd9; }
+      .pi-chat__msg--assistant .pi-chat__role { color: #4cd964; }
+      .pi-chat__text { white-space: pre-wrap; word-break: break-word; flex: 1; }
+      .is-streaming .pi-chat__text { color: #a9e5b6; }
+      .pi-chat__composer { display: flex; gap: 0.5rem; }
+      .pi-chat__input {
+        flex: 1; resize: vertical; font: inherit; padding: 0.5rem; border-radius: 6px;
+        background: #0d131a; color: #d7e0ea; border: 1px solid #1b2530;
+      }
+      .pi-chat__send {
+        font: inherit; padding: 0 1.1rem; border-radius: 6px; cursor: pointer;
+        background: #1f6feb; color: #fff; border: none;
+      }
+      .pi-chat__send:disabled { opacity: 0.5; cursor: default; }
     </style>
   </head>
   <body>
-    <h1>pi-wasm — fully in-browser Pi agent loop</h1>
-    <p>The Pi agent SDK, imported and run entirely client-side (no Node runtime).
-       <strong>S1</strong> proves it constructs; <strong>S3</strong> performs a real
-       streaming model call against a CORS-enabled OpenAI-compatible endpoint
-       (the LiteLLM proxy) with a runtime key. See <code>FEASIBILITY.md</code>.</p>
-
-    <pre id="out"></pre>
-
-    <h2 style="font-size:1rem">S3 · streaming provider call</h2>
-    <form id="s3form" onsubmit="return false">
-      <label for="key">API key</label>
-      <input id="key" type="password" autocomplete="off" placeholder="runtime key (kept only in this browser)" />
-      <label for="model">Model</label>
-      <input id="model" type="text" />
-      <label for="baseUrl">Base URL</label>
-      <input id="baseUrl" type="text" />
-      <label for="prompt">Prompt</label>
-      <textarea id="prompt"></textarea>
-      <div class="row">
-        <button id="run" type="button">Run</button>
-        <span id="status">idle</span>
+    <header>
+      <div class="titlebar">
+        <h1>pi-wasm — fully in-browser Pi agent loop</h1>
+        <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings-panel">⚙ Settings</button>
+        <span id="status"></span>
       </div>
-      <div class="row"><span class="hint">The key stays in this browser (localStorage) — nothing is sent anywhere except the endpoint above. Headless: append <code>?key=…&amp;autorun=1</code>.</span></div>
-    </form>
-
-    <pre id="stream"></pre>
-    <pre id="result" hidden></pre>
-
+      <p>S7 chat shell (bd-e8949f) · epic bd-f76cee · Path A on pi-agent-core + pi-ai (zero node polyfills):
+         S6 keys · S3 streaming · S4 file tools over the S2 VFS. Keys stay in this browser only.</p>
+      <div id="settings-panel" hidden></div>
+    </header>
+    <main id="app"></main>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

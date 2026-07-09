@@ -11,36 +11,50 @@ browser-automation testing. Epic **bd-f76cee**.
 constructs and runs its event bus inside a real browser with **zero Node
 polyfills**, built directly on `@earendil-works/pi-agent-core` +
 `@earendil-works/pi-ai` (bypassing the Node-coupled `pi-coding-agent` barrel).
-See **[FEASIBILITY.md](./FEASIBILITY.md)** for the full analysis, the two viable
-build paths, and the per-dependency breakdown.
+See **[FEASIBILITY.md](./FEASIBILITY.md)**.
+
+**S2 (IndexedDB VFS, bd-56130e): done** — `src/vfs/` (`BrowserExecutionEnv` over
+lightning-fs + a `node:fs` shim).
 
 **S3 (browser provider / network layer, bd-cbf86f): done.** A real streaming
-model call runs end-to-end in the browser against a CORS-enabled
-OpenAI-compatible endpoint (the LiteLLM proxy), using a **runtime** key (never
-hard-coded). Validated in headless Chrome: the page streams a completion and
-sets `window.__PI_WASM_S3__ = { ok: true, text, model, baseUrl, chunks }`. See
+model call runs end-to-end against a CORS-enabled OpenAI-compatible endpoint (the
+LiteLLM proxy) using a **runtime** key. Sets `window.__PI_WASM_S3__`. See
 [**S3 — provider/network layer**](#s3--browser-providernetwork-layer) below.
 
-**S5 (isomorphic-git checkout, bd-3f7a4f): done.** Real git over the shared S2
-VFS — `clone` / `checkout` / `listFiles` / `log` plus local `init` / `add` /
-`commit`, exposed as browser-clean `git_*` `AgentTool`s. Because git drives the
-same lightning-fs store as `BrowserExecutionEnv`, a clone is instantly visible to
-the file tools. Deterministic network-free tests; the CORS-proxy contract is in
-**[src/git/README.md](./src/git/README.md)**.
+**S4 (tools over the VFS, bd-a30bc2): done** — `src/tools/`
+(read/write/edit/ls/grep/find `AgentTool`s over the S2 VFS; bash excluded).
+
+**S5 (isomorphic-git checkout, bd-3f7a4f): done** — `src/git/` (`git_*` tools
+over the shared VFS). See **[src/git/README.md](./src/git/README.md)**.
+
+**S6 (settings/keys screen, bd-4c572a): done** — `src/settings/`
+(`SettingsStore` / `toRuntimeConfig` / `mountSettingsPanel`, persisted to IndexedDB).
+
+**S7 (app shell / chat UI, bd-e8949f): done — the demoable MVP.** A real
+multi-turn chat that runs the full loop in-browser: S6 settings for keys/model,
+S3 streaming provider (with a local **mock echo fallback** when no key), and the
+S4 file tools over the S2 VFS installed on the agent. The chat renders text
+streaming plus tool-call / tool-result rows.
 
 ## Layout
 
 ```
 pi-wasm/
-  index.html            # entry page; renders the spike result into #out
-  src/main.ts           # construct proof (S1) + S3 streaming demo UI
-  src/provider.ts       # S3 provider layer: OpenAI-compat model + injected streamFn (Path A)
-  src/vfs/              # S2 IndexedDB VFS + BrowserExecutionEnv (shared store)
-  src/git/              # S5 isomorphic-git over the shared VFS (+ git_* tools)
+  index.html              # S7 chat app (primary page)
+  provider-demo.html      # S3 standalone provider demo (preserved)
+  settings-demo.html      # S6 standalone settings demo (preserved)
+  src/main.ts             # S7 chat bootstrap: VFS + tools + settings + session + UI
+  src/session.ts          # PiWasmSession — Agent (Path A) + tools + real/mock stream seam
+  src/chat-ui.ts          # framework-free chat UI (text stream + tool rows)
+  src/mock-stream.ts      # no-key mock streamFn (AssistantMessageEventStream)
+  src/provider.ts         # S3: createBrowserAgent / streamFn / currentAssistantText
+  src/settings/           # S6: SettingsStore / toRuntimeConfig / mountSettingsPanel
+  src/vfs/                # S2: IndexedDB VFS + BrowserExecutionEnv (shared store)
+  src/tools/              # S4: read/write/edit/ls/grep/find over the VFS
+  src/git/                # S5: isomorphic-git over the shared VFS (+ git_* tools)
   scripts/construct-smoke.mjs  # Node-side construct smoke (npm run spike:node)
-  vite.config.ts        # browser build; intentionally NO node polyfills (S1)
-  tsconfig.json
-  FEASIBILITY.md        # the S1 deliverable — read this
+  vite.config.ts          # multi-page browser build; intentionally NO node polyfills
+  FEASIBILITY.md          # the S1 deliverable — read this
 ```
 
 ## Develop / build / verify
@@ -48,17 +62,20 @@ pi-wasm/
 ```bash
 cd pi-wasm
 npm install
-npm run spike:node     # Node ESM construct smoke -> "CONSTRUCT-SMOKE: PASS"
-npm run build          # vite browser build -> dist/
+npm run typecheck      # tsc --noEmit
+npm run build          # vite build -> dist/ (index + provider-demo + settings-demo)
 npm run dev            # vite dev server (http://localhost:5173)
-
-# Real-browser check (what the S1 spike used):
-( cd dist && python3 -m http.server 4321 & )
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --headless=new --disable-gpu --user-data-dir=/tmp/piwasm-chrome \
-  --virtual-time-budget=10000 --dump-dom http://localhost:4321/
-# -> #out contains "... CONSTRUCTS in-browser ... PASS"
 ```
+
+Open `index.html`, click **⚙ Settings** to enter a runtime key + model, and chat.
+With no key the chat runs a local mock echo so the page works out of the box.
+
+**Headless note:** the chat page boots asynchronously (IndexedDB VFS), so a
+single `--dump-dom` snapshot races the boot. Poll a readiness hook instead —
+`#app[data-pi-wasm-ready="true"]`, then `window.__PI_WASM_S3__` (from
+`?autorun=1&prompt=…`) — over CDP, which is what the S8 harness will do. Test
+globals: `__PI_WASM_SPIKE__` (S1), `__PI_WASM_S3__` (autorun), `__PI_WASM__`
+(`send` / `getTranscript` / `runToolsSmoke`), `__PI_WASM_SETTINGS__` (S6).
 
 ### Reproducible nix build / serve (S9, bd-82b969)
 
@@ -88,9 +105,6 @@ nix run github:NixOS/nixpkgs/nixos-unstable#prefetch-npm-deps -- pi-wasm/package
 # then update npmDepsHash in pi-wasm/flake.nix
 ```
 
-The page also sets `window.__PI_WASM_SPIKE__ = { ok, detail }` for the S8
-Playwright harness to assert on.
-
 ### S3 real-browser streaming check
 
 ```bash
@@ -99,23 +113,21 @@ npm run build
 # Provide a runtime key at load time (URL param, not committed). autorun=1 fires
 # one streaming call; the page never renders the key.
 KEY="$OPENAI_API_KEY"
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --headless=new --disable-gpu --user-data-dir=/tmp/piwasm-chrome-s3 \
+chromium --headless=new --disable-gpu --user-data-dir=/tmp/piwasm-chrome-s3 \
   --no-first-run --virtual-time-budget=15000 --dump-dom \
   "http://localhost:4321/?autorun=1&model=gpt-4.1&prompt=Say%20hi%20in%20three%20words&key=$KEY"
-# -> <title>pi-wasm S3:ok</title> and
-#    #result = {"ok":true,"text":"...","model":"gpt-4.1","baseUrl":"http://100.83.90.42:4000/v1","chunks":N}
+# -> <title>pi-wasm S7:ok</title> and window.__PI_WASM_S3__ = {"ok":true,"text":"...","chunks":N}
 ```
 
-Interactively (`npm run dev`), just enter a key in the S3 form and press **Run**;
-the key is kept only in this browser (`localStorage`, the S6 settings-screen seam).
+Interactively (`npm run dev`), enter a key in **⚙ Settings**; it is kept only in
+this browser (IndexedDB, the S6 settings seam).
 
 ## Roadmap (epic bd-f76cee)
 
-S2 IndexedDB VFS (`BrowserExecutionEnv`) · **S3 provider/CORS layer ✅** ·
-S4 tools over the VFS (no bash) · **S5 isomorphic-git checkout ✅** · S6
-settings/keys screen · S7 chat UI wiring the full loop (MVP) · S8 Playwright
-harness · **S9 nix build/serve — done (bd-82b969)** · S10 (stretch) bash-in-browser.
+**S1–S7 done** (feasibility · VFS · provider · tools · git · settings · chat MVP).
+Next: S8 Playwright harness · **S9 nix build/serve ✅ (bd-82b969)** ·
+S11 keyed multi-session persistence · S13 pluggable exec backend
+(S10 JS-bash / S14 wasm-microVM / S15 remote ssh·MCP).
 
 `node_modules/` and `dist/` are gitignored; this subproject is self-contained
 and does not affect the agent-utils root build/test gate.
@@ -137,8 +149,8 @@ and does not affect the agent-utils root build/test gate.
 - **Auth:** runtime key via the Agent's `getApiKey(provider)` seam → forwarded
   by the agent loop as `options.apiKey` → `new OpenAI({ apiKey, baseURL:
   model.baseUrl, dangerouslyAllowBrowser: true })`. Keys are entered at runtime
-  (form / `localStorage` / URL param / `window.__PI_WASM_KEY__`) and **never**
-  committed or hard-coded.
+  (settings panel / `localStorage` / URL param / `window.__PI_WASM_KEY__`) and
+  **never** committed or hard-coded.
 
 **Wiring (`src/provider.ts`, Path A):**
 
@@ -149,7 +161,8 @@ and does not affect the agent-utils root build/test gate.
   the isomorphic `openai` SDK on first stream and uses global `fetch` + SSE.
 - `createBrowserAgent()` assembles `new Agent({ initialState: { model }, streamFn,
   getApiKey })`. `agent.prompt(text)` then streams; text deltas are read from
-  `agent.state.streamingMessage` / `messages` and rendered live.
+  `agent.state.streamingMessage` / `messages` and rendered live. S7 consumes the
+  same `streamFn` behind `PiWasmSession`, adding the S4 tools + a mock fallback.
 
 **Bundle note:** the only Node builtin vite externalizes is `node:fs` (pulled by
 pi-ai's lazy `utils/provider-env.js`, guarded by `process.versions?.node` and
