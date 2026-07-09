@@ -43,6 +43,14 @@ its own model — ALL state persisted in the browser (IndexedDB) so every sessio
 survives a reload. Sidebar switcher to create / rename / switch / delete /
 export / import; `src/sessions/`.
 
+**S11.1 (per-session exec-backend selection, bd-36c379): done.** A per-session
+shell dropdown (`none` / `js-shell` / `remote` / `microvm`) on ms2-0's S13
+registry (`createExecBackend`): the choice persists per session; on activate the
+SessionManager wires `createExecBackend(id,{env,relay})` → `env.setExecBackend`
+(falling back to `none` with a notice when a tier lacks config), and adds the
+bash tool when a backend is active. Selecting `js-shell` gives the agent a real
+in-browser shell (coreutils over that session's VFS).
+
 ## Layout
 
 ```

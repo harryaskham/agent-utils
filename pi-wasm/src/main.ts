@@ -56,10 +56,12 @@ async function boot(): Promise<void> {
   const setStatus = () => {
     const ready = isRuntimeConfigReady(settings);
     const cfg = toRuntimeConfig(settings);
-    const name = manager.current?.meta.name ?? "session";
-    statusEl.textContent = ready
-      ? `live · ${cfg.model?.id ?? "?"} · ${name}`
-      : `mock (no key/model) · ${name} · open ⚙ Settings to go live`;
+    const active = manager.current;
+    const name = active?.meta.name ?? "session";
+    const shell = `shell:${active?.backendId ?? "none"}`;
+    const base = ready ? `live · ${cfg.model?.id ?? "?"} · ${name}` : `mock (no key/model) · ${name}`;
+    statusEl.textContent = active?.backendNotice ? `${base} · ${shell} ⚠` : `${base} · ${shell}`;
+    statusEl.title = active?.backendNotice ?? "";
     statusEl.className = ready ? "is-live" : "is-mock";
   };
 
@@ -129,6 +131,12 @@ async function boot(): Promise<void> {
         return manager.current?.meta;
       },
       exportSession: (id: string) => manager.exportSession(id),
+      setBackend: async (id: string, backendId: string) => {
+        await manager.setBackend(id, backendId as Parameters<SessionManager["setBackend"]>[1]);
+        buildChatForActive();
+        await switcher?.refresh();
+        return { id: manager.current?.meta.id, backendId: manager.current?.backendId, notice: manager.current?.backendNotice };
+      },
       importSession: async (data: unknown) => {
         await manager.importSession(data as Parameters<SessionManager["importSession"]>[0]);
         buildChatForActive();

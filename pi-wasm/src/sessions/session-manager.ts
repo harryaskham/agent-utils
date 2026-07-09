@@ -13,12 +13,23 @@ import { createBrowserExecutionEnv, type BrowserExecutionEnv } from "../vfs";
 import { createBrowserAgentTools } from "../tools";
 import { SettingsStore, toRuntimeConfig } from "../settings";
 import { DEFAULT_MODEL_ID, DEFAULT_BASE_URL } from "../provider.js";
+import {
+  createExecBackend,
+  isExecBackendId,
+  NullExecBackend,
+  type ExecBackendId,
+  type HttpRelayTransportOptions,
+} from "../exec";
 import { SessionRegistry, type SessionMeta, type PersistedSession } from "./registry.js";
 
 export interface ActiveSession {
   meta: SessionMeta;
   session: PiWasmSession;
   env: BrowserExecutionEnv;
+  /** Resolved exec backend id for this activation (S11.1). */
+  backendId: ExecBackendId;
+  /** Non-fatal notice when the selected backend could not be built (fell back to none). */
+  backendNotice?: string;
 }
 
 export class SessionManager {
@@ -58,12 +69,31 @@ export class SessionManager {
     const meta = await this.registry.get(id);
     if (!meta) throw new Error(`session ${id} not found`);
 
-    const cfg = toRuntimeConfig(await this.store.load());
+    const settings = await this.store.load();
+    const cfg = toRuntimeConfig(settings);
     const env = await createBrowserExecutionEnv({
       cwd: meta.workdir,
       seedDirs: ["/home/.pi/agent", meta.workdir],
     });
-    const tools = createBrowserAgentTools(env);
+
+    // S11.1: per-session exec-backend selection over ms2-0's S13 registry.
+    // Defensive vs IndexedDB-restored junk; createExecBackend never throws and
+    // returns err(...) when a tier lacks config (e.g. "remote" without a relay).
+    const backendId: ExecBackendId = isExecBackendId(meta.backendId ?? "")
+      ? (meta.backendId as ExecBackendId)
+      : "none";
+    const relay = (settings as { relay?: HttpRelayTransportOptions }).relay;
+    const backendResult = createExecBackend(backendId, { env, relay });
+    let backendNotice: string | undefined;
+    if (backendResult.ok) {
+      env.setExecBackend(backendResult.value);
+    } else {
+      env.setExecBackend(new NullExecBackend());
+      backendNotice = backendResult.error;
+    }
+    // The agent gets a real shell tool only when a working backend is active.
+    const bashActive = backendId !== "none" && backendResult.ok;
+    const tools = createBrowserAgentTools(env, { bash: bashActive });
     const initialMessages = (await this.registry.loadTranscript(id)) as ActiveSession["session"]["messages"];
 
     const session = new PiWasmSession({
@@ -76,10 +106,16 @@ export class SessionManager {
     });
 
     await this.registry.setActiveId(id);
-    this.active = { meta, session, env };
+    this.active = { meta, session, env, backendId, backendNotice };
     // Persist the transcript shortly after activity settles (debounced).
     this.unsub = session.subscribe(() => this.scheduleSave());
     return this.active;
+  }
+
+  /** Persist a session's exec-backend choice and re-activate it (S11.1). */
+  async setBackend(id: string, backendId: ExecBackendId): Promise<ActiveSession> {
+    await this.registry.update(id, { backendId });
+    return this.activate(id);
   }
 
   async create(name?: string): Promise<ActiveSession> {

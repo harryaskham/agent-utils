@@ -10,6 +10,7 @@
 // registry only tracks bookkeeping + conversation history.
 
 import { idbGet, idbSet, idbDelete } from "./idb.js";
+import type { ExecBackendId } from "../exec";
 
 export interface SessionMeta {
   id: string;
@@ -18,6 +19,8 @@ export interface SessionMeta {
   updatedAt: number;
   /** Per-session model id (falls back to the global S6 model when unset). */
   modelId?: string;
+  /** Per-session exec backend id (S11.1). Falls back to "none" when unset. */
+  backendId?: ExecBackendId;
   /** VFS working directory scope for this session's file tools. */
   workdir: string;
 }
@@ -114,12 +117,13 @@ export class SessionRegistry {
     await this.persist();
   }
 
-  /** Update mutable fields (model, touch updatedAt) after activity. */
-  async update(id: string, patch: Partial<Pick<SessionMeta, "modelId">>): Promise<void> {
+  /** Update mutable fields (model, backend, touch updatedAt) after activity. */
+  async update(id: string, patch: Partial<Pick<SessionMeta, "modelId" | "backendId">>): Promise<void> {
     const idx = await this.load();
     const meta = idx.sessions.find((s) => s.id === id);
     if (!meta) return;
     if (patch.modelId !== undefined) meta.modelId = patch.modelId;
+    if (patch.backendId !== undefined) meta.backendId = patch.backendId;
     meta.updatedAt = Date.now();
     await this.persist();
   }

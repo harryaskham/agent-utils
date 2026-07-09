@@ -8,6 +8,7 @@
 
 import type { SessionManager, ActiveSession } from "./session-manager.js";
 import type { SessionMeta } from "./registry.js";
+import { EXEC_BACKEND_IDS, type ExecBackendId } from "../exec";
 
 export interface SwitcherHandle {
   refresh(): Promise<void>;
@@ -118,6 +119,15 @@ export function mountSwitcher(
     void activateAndNotify(() => manager.activate(id));
   });
 
+  // Per-session exec-backend (shell) selection (S11.1).
+  listEl.addEventListener("change", (ev) => {
+    const target = ev.target as HTMLElement;
+    if (!(target instanceof HTMLSelectElement) || !target.classList.contains("pi-sessions__backend")) return;
+    const row = target.closest<HTMLElement>("[data-session-id]");
+    if (!row) return;
+    void activateAndNotify(() => manager.setBackend(row.dataset.sessionId!, target.value as ExecBackendId));
+  });
+
   async function exportSession(id: string): Promise<void> {
     const snapshot = await manager.exportSession(id);
     if (!snapshot) return;
@@ -146,6 +156,26 @@ export function mountSwitcher(
       </div>`;
     li.querySelector(".pi-sessions__name")!.textContent = meta.name;
     li.querySelector(".pi-sessions__time")!.textContent = fmtTime(meta.updatedAt);
+    // Exec-backend (shell) picker — only on the active row where it's in use.
+    if (meta.id === activeId) {
+      const wrap = document.createElement("div");
+      wrap.className = "pi-sessions__backend-row";
+      const label = document.createElement("span");
+      label.className = "pi-sessions__backend-label";
+      label.textContent = "shell";
+      const sel = document.createElement("select");
+      sel.className = "pi-sessions__backend";
+      sel.title = "Exec backend (shell) for this session";
+      for (const bid of EXEC_BACKEND_IDS) {
+        const opt = document.createElement("option");
+        opt.value = bid;
+        opt.textContent = bid;
+        if ((meta.backendId ?? "none") === bid) opt.selected = true;
+        sel.append(opt);
+      }
+      wrap.append(label, sel);
+      li.append(wrap);
+    }
     return li;
   }
 
