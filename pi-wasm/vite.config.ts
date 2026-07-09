@@ -14,6 +14,12 @@ export default defineConfig({
     // Fail loudly if a node: builtin is pulled in, rather than silently
     // externalizing it (which would defer the failure to runtime in-browser).
     rollupOptions: {
+      // Multi-page build: the S1 spike page (index.html) + the S6 settings demo
+      // (settings-demo.html). The S7 app-shell entry can be added here alongside.
+      input: {
+        main: "index.html",
+        settings: "settings-demo.html",
+      },
       onwarn(warning, warn) {
         warn(warning);
       },

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi-wasm — settings / keys (S6)</title>
+    <style>
+      body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 52rem; }
+      h1 { font-size: 1.1rem; }
+      label { display: block; margin: 0.7rem 0; font-weight: 600; }
+      input, textarea { width: 100%; font: inherit; padding: 0.35rem; margin-top: 0.2rem; box-sizing: border-box; }
+      .notice { background: #fffae6; border: 1px solid #e6d200; padding: 0.6rem; border-radius: 6px; font-weight: 400; }
+      .errors { color: #c0322b; min-height: 1.2em; }
+      .actions { margin: 0.8rem 0; display: flex; gap: 0.5rem; align-items: center; }
+      button { font: inherit; padding: 0.3rem 0.8rem; cursor: pointer; }
+      .status { color: #2c7; }
+      pre { background: #0b0f14; color: #d7e0ea; padding: 1rem; border-radius: 8px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>pi-wasm settings / keys · S6 (bd-4c572a)</h1>
+    <p>Configure API keys, endpoint, and model. Values persist in <em>your</em> browser and
+       survive reload; a new session picks them up as the runtime config below.</p>
+    <div id="app"></div>
+    <h2>Resolved runtime config (what a new session would use)</h2>
+    <pre id="summary"></pre>
+    <script type="module" src="/src/settings/demo.ts"></script>
+  </body>
+</html>
