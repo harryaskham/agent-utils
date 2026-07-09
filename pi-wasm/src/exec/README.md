@@ -38,7 +38,9 @@ the SDK Shell contract: never throw — encode failures in the `Result` — and 
 
 - **S10 js-bash** (bd-ef8f24): coreutils-in-JS over the shared VFS.
 - **S15 remote** (bd-ef14af): WS/HTTP → ssh-localhost / MCP bridge (Harry's escape hatch).
-- **S14 microvm** (bd-c6ffc3): v86 / CheerpX / container2wasm.
+- **S14 microvm** (bd-c6ffc3): v86 / CheerpX / container2wasm. Feasibility +
+  recommendation (**v86**, smallest viable + VFS-shareable) in
+  [`../../MICROVM-FEASIBILITY.md`](../../MICROVM-FEASIBILITY.md).
 - WebContainer (StackBlitz wasm) as a further tier.
 
 A file-operating backend (js-shell/webcontainer/microvm) should share the S2 VFS
