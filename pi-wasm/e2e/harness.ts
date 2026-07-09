@@ -33,7 +33,15 @@ export interface PiWasmGlobals {
     send(text: string): Promise<void>;
     getTranscript(): { role: string; text: string }[];
     runToolsSmoke(): Promise<{ ok: boolean; steps: string[]; error?: string }>;
-    env: { readTextFile(p: string): Promise<{ ok: boolean; value?: string; error?: unknown }> };
+    env: {
+      readTextFile(p: string): Promise<{ ok: boolean; value?: string; error?: unknown }>;
+      exec(command: string): Promise<{
+        ok: boolean;
+        value?: { stdout: string; stderr: string; exitCode: number };
+        error?: unknown;
+      }>;
+    };
+    session?: { agent: { state: { tools: { name: string }[] } } };
   };
   __PI_WASM_S3__?: { ok: boolean; text?: string; model?: string; chunks?: number; error?: string };
   __PI_WASM_SETTINGS__?: { store: { save(v: unknown): Promise<void> } };
@@ -45,6 +53,7 @@ export interface PiWasmGlobals {
     switchTo(id: string): Promise<SessionMeta | undefined>;
     rename(id: string, name: string): Promise<void>;
     remove(id: string): Promise<SessionMeta | undefined>;
+    setBackend(id: string, backendId: string): Promise<{ id?: string; backendId?: string; notice?: string }>;
     exportSession(id: string): Promise<unknown>;
     importSession(data: unknown): Promise<SessionMeta | undefined>;
   };
@@ -156,6 +165,42 @@ export async function switchSession(page: Page, id: string): Promise<void> {
 
 export async function removeSession(page: Page, id: string): Promise<void> {
   await page.evaluate((i) => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.remove(i), id);
+}
+
+/** Active session id (via the S11 sessions surface). */
+export async function currentSessionId(page: Page): Promise<string> {
+  const id = await page.evaluate(() => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.current()?.id);
+  if (!id) throw new Error("no current session id");
+  return id;
+}
+
+// ---- S11.1 per-session exec-backend helpers (bd-36c379 surface) ------------
+
+export async function setSessionBackend(
+  page: Page,
+  id: string,
+  backendId: string,
+): Promise<{ id?: string; backendId?: string; notice?: string }> {
+  return page.evaluate(
+    ([i, b]) => (window as unknown as PiWasmGlobals).__PI_WASM_SESSIONS__!.setBackend(i, b),
+    [id, backendId] as const,
+  );
+}
+
+/** Run a shell command through the active session's exec backend (returns the Result). */
+export async function execInSession(
+  page: Page,
+  command: string,
+): Promise<{ ok: boolean; value?: { stdout: string; stderr: string; exitCode: number }; error?: unknown }> {
+  return page.evaluate((cmd) => (window as unknown as PiWasmGlobals).__PI_WASM__!.env.exec(cmd), command);
+}
+
+/** Tool names on the active session's agent (e.g. to check whether "bash" is present). */
+export async function sessionToolNames(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const tools = (window as unknown as PiWasmGlobals).__PI_WASM__!.session?.agent.state.tools ?? [];
+    return tools.map((t) => t.name);
+  });
 }
 
 export interface ToolLoopScenario {
