@@ -150,6 +150,15 @@ Tiers (`e2e/s8-full-loop.spec.ts` + `e2e/s3-provider.spec.ts`):
 Keys are supplied at runtime (settings store / `window.__PI_WASM_KEY__`), never
 committed, and never rendered into the DOM.
 
+**Reusable seam (`e2e/harness.ts`, bd-caa275):** downstream exec-backend specs
+(S14 microVM, S15 remote) import the shared primitives instead of duplicating
+the harness — `waitReady(page, selector?)` / `gotoReady(page, path, selector?)`
+(the build+serve fixture is playwright.config's webServer, so a scenario just
+picks its entry page, e.g. `/microvm-demo.html` +
+`#microvm-app[data-microvm-ready="true"]`), `seedLiveSettings`, `assertVfsFile`
+(a VFS sanity check), and `runToolLoopScenario({ prompt, assert | assertFile })`
+for the LLM prompt→tool→reply path.
+
 ## Roadmap (epic bd-f76cee)
 
 **S1–S9 done** (feasibility · VFS · provider · tools · git · settings · chat MVP ·

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { resolveKey, DEFAULT_MODEL } from "./harness";
 
 // pi-wasm S8 (bd-759769) — real-browser E2E of the landed S3 provider layer
 // (bd-cbf86f). Proves, with NO human input, that a real streaming model call
@@ -20,8 +21,8 @@ type S3Result = {
   error?: string;
 };
 
-const KEY = process.env.PIWASM_E2E_KEY || process.env.OPENAI_API_KEY || "";
-const MODEL = process.env.PIWASM_E2E_MODEL || "gpt-4.1";
+const KEY = resolveKey();
+const MODEL = DEFAULT_MODEL;
 // Optional base-URL override; defaults to the page's built-in LiteLLM proxy.
 const BASE_URL = process.env.PIWASM_E2E_BASE_URL || "";
 
