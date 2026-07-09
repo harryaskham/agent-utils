@@ -39,3 +39,12 @@ export {
   createJsShellBackend,
   type JsShellBackendOptions,
 } from "./js-shell-backend";
+
+// Per-session selection registry (S13, bd-6ebbf6): id → concrete tier.
+export {
+  EXEC_BACKEND_IDS,
+  createExecBackend,
+  isExecBackendId,
+  type ExecBackendId,
+  type ExecBackendContext,
+} from "./registry";

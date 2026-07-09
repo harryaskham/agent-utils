@@ -23,7 +23,11 @@ export interface JsShellBackendOptions {
   env?: Record<string, string>;
 }
 
-type RaceOutcome<T> = { kind: "value"; value: T } | { kind: "timeout" } | { kind: "aborted" };
+type RaceOutcome<T> =
+  | { kind: "value"; value: T }
+  | { kind: "timeout" }
+  | { kind: "aborted" }
+  | { kind: "error"; error: Error };
 
 /** Race a promise against an optional timeout and abort signal. */
 async function raceRun<T>(
@@ -31,7 +35,13 @@ async function raceRun<T>(
   timeoutMs: number | undefined,
   signal: AbortSignal | undefined,
 ): Promise<RaceOutcome<T>> {
-  const racers: Array<Promise<RaceOutcome<T>>> = [work.then((value) => ({ kind: "value", value }) as RaceOutcome<T>)];
+  // Belt-and-suspenders: runCommandLine is defensively non-throwing, but a
+  // runner-level bug must still never escape as a rejection (ms2-2 review).
+  const racers: Array<Promise<RaceOutcome<T>>> = [
+    work.then((value) => ({ kind: "value", value }) as RaceOutcome<T>).catch(
+      (error): RaceOutcome<T> => ({ kind: "error", error: error instanceof Error ? error : new Error(String(error)) }),
+    ),
+  ];
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (timeoutMs !== undefined) {
     racers.push(new Promise((resolve) => {
@@ -90,6 +100,7 @@ export class JsShellBackend implements ExecBackend {
     const raced = await raceRun(work, timeoutMs, options.abortSignal);
     if (raced.kind === "timeout") return err(new ExecutionError("timeout", `timeout:${options.timeout}`));
     if (raced.kind === "aborted") return err(new ExecutionError("aborted", "aborted"));
+    if (raced.kind === "error") return err(new ExecutionError("unknown", raced.error.message, raced.error));
     return ok(raced.value);
   }
 }
