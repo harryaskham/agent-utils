@@ -13,7 +13,7 @@ on:
   # queued merge commit via merge_group events. Without this trigger, queued PRs
   # hang forever waiting for checks that never run. Inert until a merge_queue
   # ruleset is enabled on main (the ruleset's required_status_checks reference
-  # these same four job names: JS, Rust, audit, Nix flake check).
+  # these same five job names: JS, Rust, audit, Nix flake check, pi-wasm).
   merge_group:
   workflow_dispatch:
 
@@ -43,6 +43,33 @@ jobs:
         run: npm test
       - name: Validate generated docs
         run: npm run check
+
+  pi-wasm:
+    name: pi-wasm typecheck + tests
+    # The pi-wasm subproject (epic bd-f76cee) is a self-contained Node/Vite
+    # browser build with its own vitest suite + tsc typecheck that the root
+    # `npm test` (node --test) does NOT cover (bd-91362a). This job gates it so
+    # a broken pi-wasm test, type error, or dep change cannot land silently.
+    runs-on: [self-hosted, azure-ephemeral]
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pi-wasm
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install pi-wasm dependencies
+        run: npm ci
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
+      - name: Run vitest suite
+        run: npm run test
+      - name: Browser bundle build
+        run: npm run build
 
   rust:
     name: Rust tests + clippy
