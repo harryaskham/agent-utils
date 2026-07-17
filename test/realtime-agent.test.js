@@ -10,6 +10,7 @@ import realtimeAgentExtension, {
   setRealtimeWebSocketConstructor,
   __setLocalVadHooksForTest,
   labelUntrustedTranscript,
+  eventDataToString,
 } from "../extensions/realtime-agent.js";
 import { EventEmitter } from "node:events";
 import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
@@ -85,6 +86,18 @@ class FakeWebSocket {
 }
 
 setRealtimeWebSocketConstructor(FakeWebSocket);
+
+test("eventDataToString decodes Bun ws Uint8Array text frames and bounded views", async () => {
+  const json = JSON.stringify({ type: "session.created" });
+  const bytes = new TextEncoder().encode(`xx${json}yy`);
+  const frame = bytes.subarray(2, bytes.length - 2);
+
+  assert.equal(await eventDataToString(frame), json);
+  assert.deepEqual(JSON.parse(await eventDataToString(frame)), { type: "session.created" });
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset + 2, bytes.byteLength - 4);
+  assert.equal(await eventDataToString(view), json, "DataView honors byteOffset/byteLength");
+});
 
 // Bounded poll helper shared by the async WebSocket state-machine tests. Many
 // assertions below settle after one or more microtasks of async message

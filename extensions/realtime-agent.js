@@ -374,10 +374,19 @@ function isRealtimeWebSocketOpen(ws) {
 // (extracted in bd-e1914a).
 
 
-async function eventDataToString(data) {
+export async function eventDataToString(data) {
   if (typeof data === "string") return data;
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
   if (Buffer.isBuffer(data)) return data.toString("utf8");
+  // Bun's `ws` compatibility layer delivers text frames as Uint8Array even
+  // when `binaryType = "arraybuffer"`. String(Uint8Array) produces a comma-
+  // separated byte list ("123,34,116,..."), which JSON.parse rejects and made
+  // both /rt and /stt fail immediately after the socket opened. Handle every
+  // ArrayBuffer view (Uint8Array, DataView, typed-array slices) without reading
+  // bytes outside the view.
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  }
   if (data && typeof data.text === "function") return await data.text();
   return String(data);
 }
