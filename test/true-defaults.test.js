@@ -9,6 +9,7 @@ import trueDefaultsExtension, {
   restoreTrueDefaultSettings,
   settingsFileCandidates,
   hasTrueDefaults,
+  runtimeOverrides,
 } from "../extensions/true-defaults.js";
 
 test("settingsFileCandidates resolves ordered global + project paths, honoring PI_CODING_AGENT_DIR", () => {
@@ -49,14 +50,29 @@ function makeHarness({ settings, models = [] } = {}) {
   const setModelCalls = [];
   const thinkingCalls = [];
   const registry = new Map(models.map((model) => [`${model.provider}/${model.id}`, model]));
+  const persistRuntimeSettings = (patch) => {
+    const path = join(dir, "settings.json");
+    const current = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`);
+  };
   const pi = {
     on(event, handler) { handlers.set(event, handler); },
     registerCommand(name, definition) { commands.set(name, definition); },
-    async setModel(model) { setModelCalls.push(model); return true; },
-    setThinkingLevel(level) { thinkingCalls.push(level); },
+    async setModel(model) {
+      setModelCalls.push(model);
+      persistRuntimeSettings({ defaultProvider: model.provider, defaultModel: model.id });
+      return true;
+    },
+    setThinkingLevel(level) {
+      thinkingCalls.push(level);
+      persistRuntimeSettings({ defaultThinkingLevel: level });
+    },
   };
   const ctx = {
-    modelRegistry: { find(provider, id) { return registry.get(`${provider}/${id}`); } },
+    modelRegistry: {
+      find(provider, id) { return registry.get(`${provider}/${id}`); },
+      getAll() { return [...registry.values()]; },
+    },
     ui: { notify(message, level = "info") { notifications.push({ message, level }); } },
   };
   return {
@@ -72,6 +88,40 @@ function makeHarness({ settings, models = [] } = {}) {
     cleanup() { rmSync(dir, { recursive: true, force: true }); },
   };
 }
+
+test("runtimeOverrides gives native CLI model/thinking flags precedence over managed PI_* env", () => {
+  assert.deepEqual(runtimeOverrides({
+    argv: ["--provider", "github-copilot", "--model", "gpt-5.6-sol:low", "--thinking", "high"],
+    env: {
+      PI_PROVIDER: "litellm-anthropic",
+      PI_MODEL: "claude-sonnet-4-5:medium",
+      PI_REASONING_EFFORT: "xhigh",
+    },
+  }), {
+    model: "gpt-5.6-sol",
+    provider: "github-copilot",
+    thinkingLevel: "high",
+    modelSource: "cli",
+    thinkingSource: "cli",
+  });
+
+  assert.deepEqual(runtimeOverrides({
+    argv: [],
+    env: {
+      PI_PROVIDER: "litellm-anthropic",
+      PI_MODEL: "claude-sonnet-4-5:medium",
+      PI_REASONING_EFFORT: "xhigh",
+    },
+  }), {
+    model: "claude-sonnet-4-5",
+    provider: "litellm-anthropic",
+    thinkingLevel: "medium",
+    modelSource: "env",
+    thinkingSource: "env",
+  });
+
+  assert.equal(runtimeOverrides({ argv: ["--model", "openai/gpt-5.6:max"], env: {} }).thinkingLevel, "max");
+});
 
 test("extractTrueDefaults supports namespaced and legacy key shapes", () => {
   assert.deepEqual(extractTrueDefaults({
@@ -138,6 +188,110 @@ test("extension reapplies settings and runtime defaults on session_start", async
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
+    h.cleanup();
+  }
+});
+
+test("--model and its thinking suffix win over PI_* env and true defaults on fresh startup", async () => {
+  const h = makeHarness({
+    settings: {
+      defaultProvider: "old-provider",
+      defaultModel: "old-model",
+      defaultThinkingLevel: "off",
+      agentUtils: {
+        trueDefaults: { provider: "github-copilot", model: "default-model", thinkingLevel: "high" },
+      },
+    },
+    models: [
+      { provider: "github-copilot", id: "default-model" },
+      { provider: "github-copilot", id: "env-model" },
+      { provider: "github-copilot", id: "cli-model" },
+    ],
+  });
+  try {
+    trueDefaultsExtension(h.pi, {
+      argv: ["--model", "github-copilot/cli-model:low"],
+      env: {
+        PI_CODING_AGENT_DIR: h.dir,
+        PI_PROVIDER: "github-copilot",
+        PI_MODEL: "env-model",
+        PI_REASONING_EFFORT: "medium",
+      },
+    });
+    await h.handlers.get("session_start")({ reason: "startup" }, h.ctx);
+
+    // Pi core has already selected the CLI model/thinking before session_start;
+    // true-defaults must not replace either one (nor apply the lower-priority env).
+    assert.deepEqual(h.setModelCalls, []);
+    assert.deepEqual(h.thinkingCalls, []);
+    // The immutable persisted fallback is still repaired independently.
+    assert.equal(h.readSettings().defaultModel, "default-model");
+    assert.equal(h.readSettings().defaultThinkingLevel, "high");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("PI_MODEL/PI_PROVIDER and PI_REASONING_EFFORT win over true defaults on fresh startup", async () => {
+  const h = makeHarness({
+    settings: {
+      defaultProvider: "old-provider",
+      defaultModel: "old-model",
+      defaultThinkingLevel: "off",
+      agentUtils: {
+        trueDefaults: { provider: "github-copilot", model: "default-model", thinkingLevel: "high" },
+      },
+    },
+    models: [
+      { provider: "github-copilot", id: "default-model" },
+      { provider: "litellm-anthropic", id: "env-model" },
+    ],
+  });
+  try {
+    trueDefaultsExtension(h.pi, {
+      argv: [],
+      env: {
+        PI_CODING_AGENT_DIR: h.dir,
+        PI_PROVIDER: "litellm-anthropic",
+        PI_MODEL: "env-model",
+        PI_REASONING_EFFORT: "medium",
+      },
+    });
+    await h.handlers.get("session_start")({ reason: "startup" }, h.ctx);
+
+    assert.deepEqual(h.setModelCalls, [{ provider: "litellm-anthropic", id: "env-model" }]);
+    assert.deepEqual(h.thinkingCalls, ["medium"]);
+    // Pi's runtime APIs persist ordinary switches; env overrides must be repaired
+    // back to the true defaults without changing the active runtime selection.
+    assert.equal(h.readSettings().defaultProvider, "github-copilot");
+    assert.equal(h.readSettings().defaultModel, "default-model");
+    assert.equal(h.readSettings().defaultThinkingLevel, "high");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("provider/model PI_MODEL works without a separate PI_PROVIDER", async () => {
+  const h = makeHarness({
+    settings: {
+      agentUtils: { trueDefaults: { provider: "github-copilot", model: "default-model" } },
+    },
+    models: [
+      { provider: "github-copilot", id: "default-model" },
+      { provider: "litellm-openai", id: "env-model" },
+    ],
+  });
+  try {
+    trueDefaultsExtension(h.pi, {
+      argv: [],
+      env: { PI_CODING_AGENT_DIR: h.dir, PI_MODEL: "litellm-openai/env-model" },
+    });
+    await h.handlers.get("session_start")({ reason: "startup" }, h.ctx);
+
+    assert.deepEqual(h.setModelCalls, [{ provider: "litellm-openai", id: "env-model" }]);
+    assert.equal(h.readSettings().defaultProvider, "github-copilot");
+    assert.equal(h.readSettings().defaultModel, "default-model");
+  } finally {
     h.cleanup();
   }
 });

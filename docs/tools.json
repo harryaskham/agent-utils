@@ -399,7 +399,7 @@
           "name": "True-defaults persistence guard Pi extension",
           "command": "/true-defaults",
           "audience": "operators",
-          "purpose": "Persist immutable-by-convention model/provider/thinking defaults from settings.json agentUtils.trueDefaults back onto Pi's built-in defaults on startup and clean shutdown, while leaving runtime switching unchanged.",
+          "purpose": "Persist immutable-by-convention model/provider/thinking defaults from settings.json agentUtils.trueDefaults back onto Pi's built-in defaults on startup and clean shutdown, while keeping --model/--thinking and managed PI_MODEL/PI_PROVIDER/PI_REASONING_EFFORT as per-process runtime overrides.",
           "commonActions": [
             "/true-defaults status",
             "/true-defaults apply"

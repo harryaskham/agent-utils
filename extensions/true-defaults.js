@@ -4,17 +4,18 @@
 // defaultThinkingLevel in settings.json. This extension treats a namespaced set
 // of true-default settings as immutable-by-convention and copies them back onto
 // Pi's built-in default keys during extension load, FRESH session start
-// (startup/new), and clean shutdown (quit/new). Continuing sessions
-// (reload/resume/fork) deliberately preserve runtime/temp model/effort changes
-// instead of re-asserting the default, so an operator `/model` switch is not
-// yanked back mid-session. Thinking values, including adaptive, are delegated to
-// Pi core unchanged.
+// (startup/new), and clean shutdown (quit/new). Explicit process-level runtime
+// choices take precedence: Pi's --model/--thinking flags and the managed-launcher
+// PI_MODEL/PI_PROVIDER/PI_REASONING_EFFORT environment variables win over true
+// defaults. Continuing sessions (reload/resume/fork) also preserve runtime/temp
+// model/effort changes instead of re-asserting the default. Thinking values,
+// including adaptive, are delegated to Pi core unchanged.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "adaptive"]);
 
 function normalizeString(value) {
   const text = String(value ?? "").trim();
@@ -24,6 +25,60 @@ function normalizeString(value) {
 function normalizeThinkingLevel(value) {
   const level = normalizeString(value)?.toLowerCase();
   return level && THINKING_LEVELS.has(level) ? level : undefined;
+}
+
+function cliArgumentValue(argv, name) {
+  let value;
+  for (let index = 0; index < argv.length - 1; index++) {
+    if (argv[index] === name) value = normalizeString(argv[index + 1]);
+  }
+  return value;
+}
+
+function splitThinkingSuffix(modelSpec) {
+  const spec = normalizeString(modelSpec);
+  if (!spec) return { model: undefined, thinkingLevel: undefined };
+  const colon = spec.lastIndexOf(":");
+  if (colon <= 0) return { model: spec, thinkingLevel: undefined };
+  const thinkingLevel = normalizeThinkingLevel(spec.slice(colon + 1));
+  return thinkingLevel
+    ? { model: normalizeString(spec.slice(0, colon)), thinkingLevel }
+    : { model: spec, thinkingLevel: undefined };
+}
+
+// Pi itself owns CLI parsing. This small read-only mirror exists only so the
+// extension does not overwrite an explicit startup selection in session_start.
+// PI_* model variables are the managed-launcher convention used by Cacophony;
+// true-defaults also applies them directly so they remain useful when a launcher
+// does not translate them to Pi's native --model/--thinking flags.
+export function runtimeOverrides({ argv = process.argv.slice(2), env = process.env } = {}) {
+  const cliModelRaw = cliArgumentValue(argv, "--model");
+  const cliProvider = cliArgumentValue(argv, "--provider");
+  const cliThinkingRaw = cliArgumentValue(argv, "--thinking");
+  const envModelRaw = normalizeString(env.PI_MODEL);
+  const envProvider = normalizeString(env.PI_PROVIDER);
+  const envThinkingRaw = normalizeString(env.PI_REASONING_EFFORT);
+
+  const modelSource = cliModelRaw ? "cli" : envModelRaw ? "env" : undefined;
+  const selectedModel = splitThinkingSuffix(cliModelRaw || envModelRaw);
+  const cliThinkingLevel = normalizeThinkingLevel(cliThinkingRaw);
+  const envThinkingLevel = normalizeThinkingLevel(envThinkingRaw);
+  const thinkingLevel = cliThinkingLevel || selectedModel.thinkingLevel || envThinkingLevel;
+  const thinkingSource = cliThinkingLevel
+    ? "cli"
+    : selectedModel.thinkingLevel
+      ? modelSource
+      : envThinkingLevel
+        ? "env"
+        : undefined;
+
+  return {
+    model: selectedModel.model,
+    provider: modelSource === "cli" ? cliProvider : envProvider,
+    thinkingLevel,
+    modelSource,
+    thinkingSource,
+  };
 }
 
 function expandHome(path) {
@@ -128,17 +183,73 @@ function findTrueDefaultModel(ctx, defaults) {
   return ctx?.modelRegistry?.find?.(defaults.provider, defaults.model) || null;
 }
 
-async function applyRuntimeDefaults(pi, ctx, defaults) {
-  const result = { modelApplied: false, thinkingApplied: false, modelMissing: false };
-  const model = findTrueDefaultModel(ctx, defaults);
-  if (model && typeof pi.setModel === "function") {
-    result.modelApplied = Boolean(await pi.setModel(model));
-  } else if (defaults.provider && defaults.model) {
-    result.modelMissing = true;
+function findOverrideModel(ctx, overrides) {
+  if (!overrides.model) return null;
+  const models = ctx?.modelRegistry?.getAll?.() || [];
+  const modelSpec = overrides.model.toLowerCase();
+  const providerHint = overrides.provider?.toLowerCase();
+
+  if (providerHint) {
+    const prefix = `${providerHint}/`;
+    const modelId = modelSpec.startsWith(prefix) ? overrides.model.slice(prefix.length) : overrides.model;
+    return models.find((model) =>
+      model.provider.toLowerCase() === providerHint && model.id.toLowerCase() === modelId.toLowerCase()
+    ) || ctx?.modelRegistry?.find?.(overrides.provider, modelId) || null;
   }
-  if (defaults.thinkingLevel && typeof pi.setThinkingLevel === "function") {
-    pi.setThinkingLevel(defaults.thinkingLevel);
-    result.thinkingApplied = true;
+
+  const fullMatch = models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === modelSpec);
+  if (fullMatch) return fullMatch;
+
+  const idMatches = models.filter((model) => model.id.toLowerCase() === modelSpec);
+  if (idMatches.length === 1) return idMatches[0];
+  if (ctx?.model && idMatches.some((model) => model.provider === ctx.model.provider && model.id === ctx.model.id)) {
+    return ctx.model;
+  }
+  return null;
+}
+
+async function applyRuntimeDefaults(pi, ctx, defaults, overrides = {}) {
+  const result = {
+    modelApplied: false,
+    thinkingApplied: false,
+    modelMissing: false,
+    modelSource: overrides.modelSource || "true-defaults",
+    thinkingSource: overrides.thinkingSource || "true-defaults",
+  };
+
+  // Pi has already applied a native CLI model before session_start, so merely
+  // avoid replacing it. PI_MODEL is not a native Pi environment variable; when
+  // present without --model, resolve and apply it here.
+  if (overrides.modelSource !== "cli") {
+    const model = overrides.modelSource === "env"
+      ? findOverrideModel(ctx, overrides)
+      : findTrueDefaultModel(ctx, defaults);
+    const alreadyActive = overrides.modelSource === "env" && ctx?.model && model &&
+      ctx.model.provider === model.provider && ctx.model.id === model.id;
+    if (alreadyActive) {
+      result.modelApplied = true;
+    } else if (model && typeof pi.setModel === "function") {
+      result.modelApplied = Boolean(await pi.setModel(model));
+    } else if (overrides.modelSource === "env" || (defaults.provider && defaults.model)) {
+      result.modelMissing = true;
+    }
+  }
+
+  // As with model selection, Pi has already applied --thinking (including a
+  // valid :<thinking> suffix on --model). Managed PI_REASONING_EFFORT is applied
+  // here; otherwise the immutable true default remains the fallback.
+  if (overrides.thinkingSource !== "cli") {
+    const thinkingLevel = overrides.thinkingSource === "env"
+      ? overrides.thinkingLevel
+      : defaults.thinkingLevel;
+    const alreadyActive = overrides.thinkingSource === "env" &&
+      typeof pi.getThinkingLevel === "function" && pi.getThinkingLevel() === thinkingLevel;
+    if (alreadyActive) {
+      result.thinkingApplied = true;
+    } else if (thinkingLevel && typeof pi.setThinkingLevel === "function") {
+      pi.setThinkingLevel(thinkingLevel);
+      result.thinkingApplied = true;
+    }
   }
   return result;
 }
@@ -155,8 +266,9 @@ function notify(ctx, message, level = "info") {
   ctx?.ui?.notify?.(message, level);
 }
 
-export default function trueDefaultsExtension(pi) {
-  let lastRestore = restoreTrueDefaultSettings();
+export default function trueDefaultsExtension(pi, options = {}) {
+  let lastRestore = restoreTrueDefaultSettings(options);
+  const startupOverrides = runtimeOverrides(options);
 
   // Reasons that *continue* an operator's working session rather than starting a
   // fresh one. On these, true-defaults must NOT re-assert the persisted default
@@ -166,9 +278,17 @@ export default function trueDefaultsExtension(pi) {
 
   pi.on?.("session_start", async (event, ctx) => {
     if (CONTINUING_REASONS.has(event?.reason)) return;
-    lastRestore = restoreTrueDefaultSettings();
+    lastRestore = restoreTrueDefaultSettings(options);
     if (!lastRestore.defaults || !hasTrueDefaults(readSettingsFile(lastRestore.path) || {})) return;
-    await applyRuntimeDefaults(pi, ctx, lastRestore.defaults);
+    await applyRuntimeDefaults(pi, ctx, lastRestore.defaults, startupOverrides);
+
+    // pi.setModel()/setThinkingLevel() intentionally persist ordinary runtime
+    // switches. Environment overrides are process-scoped, so immediately repair
+    // the settings file after applying them while leaving the active runtime
+    // model/thinking untouched.
+    if (startupOverrides.modelSource === "env" || startupOverrides.thinkingSource === "env") {
+      lastRestore = restoreTrueDefaultSettings(options);
+    }
   });
 
   pi.on?.("session_shutdown", async (event) => {
@@ -176,7 +296,7 @@ export default function trueDefaultsExtension(pi) {
     // ends (quit) or a brand-new one begins (new). reload/resume/fork continue
     // the session and must preserve runtime/temp changes.
     if (event?.reason === "quit" || event?.reason === "new") {
-      lastRestore = restoreTrueDefaultSettings();
+      lastRestore = restoreTrueDefaultSettings(options);
     }
   });
 
@@ -192,11 +312,16 @@ export default function trueDefaultsExtension(pi) {
         notify(ctx, "Usage: /true-defaults [status|apply]", "warning");
         return;
       }
-      if (token === "apply") lastRestore = restoreTrueDefaultSettings();
+      if (token === "apply") lastRestore = restoreTrueDefaultSettings(options);
       notify(ctx, [
         `true-defaults ${token}: ${lastRestore.changed ? "restored persisted defaults" : lastRestore.reason || "already restored"}`,
         `source: ${lastRestore.scope || "unknown"} ${lastRestore.path || ""}`.trim(),
         `configured: ${formatDefaults(lastRestore.defaults || {})}`,
+        `runtime override: ${formatDefaults({
+          provider: startupOverrides.provider,
+          model: startupOverrides.modelSource ? startupOverrides.model : undefined,
+          thinkingLevel: startupOverrides.thinkingSource ? startupOverrides.thinkingLevel : undefined,
+        })}`,
       ].join("\n"), lastRestore.ok ? "info" : "error");
     },
   });
