@@ -41,6 +41,12 @@
       inputs.pyproject-build-systems.follows = "pyproject-build-systems";
     };
 
+    slick = {
+      url = "path:./slick";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
+
     # pi-wasm: in-browser Pi agent loop subproject (epic bd-f76cee). Node/Vite
     # subflake; only needs nixpkgs + flake-utils (no python/uv2nix toolchain).
     pi-wasm = {
@@ -50,7 +56,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, pi-wasm, ... }:
+  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, slick, pi-wasm, ... }:
     let
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -69,6 +75,7 @@
           allPackages = [
             web-search.packages.${system}.web-search-mcp
             linear-extra.packages.${system}.linear-extra-mcp
+            slick.packages.${system}.slick
             skillServer
           ];
         in {
@@ -79,6 +86,7 @@
           all = self.packages.${system}.default;
           web-search-mcp = web-search.packages.${system}.web-search-mcp;
           linear-extra-mcp = linear-extra.packages.${system}.linear-extra-mcp;
+          slick = slick.packages.${system}.slick;
           skill-server = skillServer;
           skill-search = skillServer;
           # pi-wasm browser bundle (static site) + local serve wrapper. Kept out
@@ -97,6 +105,10 @@
         linear-extra-mcp = {
           type = "app";
           program = "${self.packages.${system}.linear-extra-mcp}/bin/linear-extra-mcp";
+        };
+        slick = {
+          type = "app";
+          program = "${self.packages.${system}.slick}/bin/slick";
         };
         skill-server = {
           type = "app";

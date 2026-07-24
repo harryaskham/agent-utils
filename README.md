@@ -35,6 +35,7 @@ It currently provides:
 - `/eink [on|off|status]` via [`extensions/pi-graphics.js`](extensions/pi-graphics.js), a tablet/e-ink toggle that applies the packaged `eink` theme, transparent greyscale surfaces, cell cursor, static Unicode editor chrome, and minimal/no animation. `/eink off` restores the previous Pi graphics/theme settings saved before enabling e-ink mode.
 - `app_automation_*` native Pi tools plus `/tendril-app` for blessed Slack, canvas, Outlook, and Teams app automation diagnostics/overviews/freshness/plans
 - Native `slack_*` tools via [`extensions/slack-mcp.js`](extensions/slack-mcp.js). Read results default to compact, provenance-grouped payloads (`raw: false`): message text/timestamps and user names are retained while repeated channel/user metadata is normalized once, files/attachments collapse to IDs, and canvas searches include bounded Markdown converted from Slack's downloadable canvas HTML. Pass `raw: true` to recover the original Slack API response.
+- [`slick`](slick/README.md), a read-only Rust Slack TUI built on Ratatui + kittui's Ratakittui chrome. It shows cached Activity/DM/channel/file views immediately, lazy-loads selected content, renders Slack Canvas documents as rich Markdown, supports keyboard and mouse navigation, and scopes `Ctrl-R` to the visible view plus the DM list. The `slick` subflake package/app is included in the top-level default package.
 - `skill-server` / `skill-search`, a Rust CLI + MCP stdio meta-tool for dynamic skill and host MCP server discovery
 
 ## App automation Pi extension

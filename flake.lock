@@ -18,6 +18,23 @@
         "type": "github"
       }
     },
+    "kittui-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784810524,
+        "narHash": "sha256-kpWaO6VdKZZBALmCixoTz0ZHiu6bIF7fojk+oLAFntY=",
+        "ref": "refs/heads/main",
+        "rev": "c6e39675b31fa7af44d03c644a004de6ad14b371",
+        "revCount": 3159,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/kittui"
+      },
+      "original": {
+        "rev": "c6e39675b31fa7af44d03c644a004de6ad14b371",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/kittui"
+      }
+    },
     "linear-extra": {
       "inputs": {
         "flake-utils": [
@@ -135,9 +152,30 @@
         "pi-wasm": "pi-wasm",
         "pyproject-build-systems": "pyproject-build-systems",
         "pyproject-nix": "pyproject-nix",
+        "slick": "slick",
         "uv2nix": "uv2nix",
         "web-search": "web-search"
       }
+    },
+    "slick": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "kittui-src": "kittui-src",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./slick",
+        "type": "path"
+      },
+      "original": {
+        "path": "./slick",
+        "type": "path"
+      },
+      "parent": []
     },
     "systems": {
       "locked": {

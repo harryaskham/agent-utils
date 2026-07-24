@@ -1,0 +1,1124 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
+use reqwest::blocking::{Client, Response};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT};
+use serde_json::{Map, Value};
+use url::Url;
+
+use crate::model::{
+    CacheState, Conversation, ConversationKind, Message, Notification, SlackFile, User,
+};
+
+const API_ROOT: &str = "https://www.slack.com/api";
+const USER_AGENT_VALUE: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Slack/4.41.30 Slick/0.1";
+const MAX_AUTOMATIC_DMS: usize = 12;
+const MAX_HISTORY_MESSAGES: usize = 100;
+const MAX_FILE_RESULTS: usize = 100;
+const MAX_CANVAS_MARKDOWN_CHARS: usize = 24_000;
+
+#[derive(Clone, Debug)]
+struct Tokens {
+    token: String,
+    cookie: String,
+}
+
+#[derive(Clone)]
+pub struct SlackClient {
+    http: Client,
+    tokens: Tokens,
+}
+
+impl SlackClient {
+    pub fn from_environment() -> Result<Self> {
+        let tokens = load_tokens()?;
+        let http = Client::builder()
+            .timeout(Duration::from_secs(45))
+            .build()
+            .context("build Slack HTTP client")?;
+        Ok(Self { http, tokens })
+    }
+
+    pub fn call(&self, method: &str, params: &BTreeMap<String, String>) -> Result<Value> {
+        let response = self
+            .http
+            .post(format!("{API_ROOT}/{method}"))
+            .header(AUTHORIZATION, format!("Bearer {}", self.tokens.token))
+            .header(COOKIE, format!("d={}", self.tokens.cookie))
+            .header(
+                CONTENT_TYPE,
+                "application/x-www-form-urlencoded;charset=utf-8",
+            )
+            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header(ORIGIN, "https://app.slack.com")
+            .header(REFERER, "https://app.slack.com/")
+            .header(ACCEPT, "application/json")
+            .form(params)
+            .send()
+            .with_context(|| format!("call Slack {method}"))?;
+        parse_api_response(method, response)
+    }
+
+    fn get_canvas_html(&self, file: &SlackFile) -> Result<String> {
+        if file.download_url.is_empty() {
+            bail!("canvas {} has no content URL", file.id);
+        }
+        let url = Url::parse(&file.download_url).context("parse Slack canvas URL")?;
+        if url.scheme() != "https" || url.host_str() != Some("files.slack.com") {
+            bail!(
+                "refusing unexpected canvas host {}",
+                url.host_str().unwrap_or("unknown")
+            );
+        }
+        let response = self
+            .http
+            .get(url)
+            .header(AUTHORIZATION, format!("Bearer {}", self.tokens.token))
+            .header(COOKIE, format!("d={}", self.tokens.cookie))
+            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header(ACCEPT, "text/html")
+            .send()
+            .context("download Slack canvas")?;
+        if !response.status().is_success() {
+            bail!(
+                "Slack canvas download failed with HTTP {}",
+                response.status()
+            );
+        }
+        response.text().context("read Slack canvas HTML")
+    }
+
+    fn paginate(
+        &self,
+        method: &str,
+        base: &BTreeMap<String, String>,
+        key: &str,
+    ) -> Result<Vec<Value>> {
+        let mut items = Vec::new();
+        let mut cursor = String::new();
+        for _ in 0..25 {
+            let mut params = base.clone();
+            params.insert("limit".into(), "200".into());
+            if !cursor.is_empty() {
+                params.insert("cursor".into(), cursor.clone());
+            }
+            let result = self.call(method, &params)?;
+            items.extend(
+                result
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            cursor = result
+                .pointer("/response_metadata/next_cursor")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if cursor.is_empty() {
+                break;
+            }
+        }
+        Ok(items)
+    }
+}
+
+fn parse_api_response(method: &str, response: Response) -> Result<Value> {
+    let status = response.status();
+    let text = response.text().context("read Slack API response")?;
+    let value: Value = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "Slack {method} returned non-JSON HTTP {status}: {}",
+            text.chars().take(240).collect::<String>()
+        )
+    })?;
+    if !status.is_success() || value.get("ok").and_then(Value::as_bool) == Some(false) {
+        let error = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown_error");
+        if matches!(
+            error,
+            "invalid_auth" | "not_authed" | "token_revoked" | "cookie_not_found"
+        ) {
+            bail!("Slack authentication failed ({error}); refresh ~/.slack-mcp-tokens.json with /slack-refresh");
+        }
+        bail!("Slack {method} failed: {error}");
+    }
+    Ok(value)
+}
+
+fn load_tokens() -> Result<Tokens> {
+    if let (Ok(token), Ok(cookie)) = (std::env::var("SLACK_TOKEN"), std::env::var("SLACK_COOKIE")) {
+        if !token.is_empty() && !cookie.is_empty() {
+            return Ok(Tokens { token, cookie });
+        }
+    }
+    let path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".slack-mcp-tokens.json");
+    let content = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "read Slack tokens {}; run /slack-refresh first",
+            path.display()
+        )
+    })?;
+    let value: Value = serde_json::from_str(&content).context("parse Slack token file")?;
+    let token = value
+        .get("SLACK_TOKEN")
+        .or_else(|| value.get("slack_token"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let cookie = value
+        .get("SLACK_COOKIE")
+        .or_else(|| value.get("slack_cookie"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if token.is_empty() || cookie.is_empty() {
+        bail!(
+            "Slack token file {} is missing SLACK_TOKEN or SLACK_COOKIE",
+            path.display()
+        );
+    }
+    Ok(Tokens { token, cookie })
+}
+
+#[derive(Clone)]
+pub struct SlackService {
+    client: SlackClient,
+}
+
+impl SlackService {
+    pub fn from_environment() -> Result<Self> {
+        Ok(Self {
+            client: SlackClient::from_environment()?,
+        })
+    }
+
+    pub fn bootstrap(&self, state: &mut CacheState) -> Result<()> {
+        self.refresh_identity(state)?;
+        self.refresh_sidebar(state)?;
+        let notifications_error = self.refresh_notifications(state).err();
+        let files_error = self.refresh_files(state).err();
+        self.refresh_active_dms(state)?;
+        rebuild_dm_notifications(state);
+        state.normalize();
+        if let Some(error) = notifications_error {
+            state
+                .last_refresh
+                .insert("notifications_error".into(), CacheState::now());
+            if state.notifications.is_empty() {
+                return Err(error.context("refresh notifications"));
+            }
+        }
+        if files_error.is_some() && state.files.is_empty() {
+            // Files are an independent tab; keep the usable sidebar/messages even
+            // when workspace search permissions do not include files.
+        }
+        Ok(())
+    }
+
+    pub fn refresh_sidebar(&self, state: &mut CacheState) -> Result<()> {
+        let users = self
+            .client
+            .paginate("users.list", &BTreeMap::new(), "members")?;
+        state.users = users
+            .iter()
+            .filter_map(compact_user)
+            .map(|user| (user.id.clone(), user))
+            .collect();
+
+        // Slack's browser-session API can return only channel rows when all
+        // conversation kinds are mixed in one request. Fetch the Slack sidebar
+        // families separately (matching the native Pi tool) and normalize them
+        // into one ordered list.
+        let mut conversations = Vec::new();
+        for types in ["im,mpim", "public_channel,private_channel"] {
+            let mut params = BTreeMap::new();
+            params.insert("types".into(), types.into());
+            params.insert("exclude_archived".into(), "true".into());
+            conversations.extend(self.client.paginate(
+                "conversations.list",
+                &params,
+                "channels",
+            )?);
+        }
+        let mut seen = HashSet::new();
+        state.conversations = conversations
+            .into_iter()
+            .filter(|value| seen.insert(value_string(value, "id")))
+            .filter_map(|value| compact_conversation(&value, &state.users))
+            .collect();
+        state.mark_refreshed("sidebar");
+        state.normalize();
+        Ok(())
+    }
+
+    pub fn refresh_conversation(
+        &self,
+        state: &mut CacheState,
+        conversation_id: &str,
+    ) -> Result<()> {
+        let key = format!("conversation:{conversation_id}");
+        let oldest = state.since_for(&key).max(CacheState::seven_days_ago());
+        let mut params = BTreeMap::new();
+        params.insert("channel".into(), conversation_id.to_string());
+        params.insert("oldest".into(), oldest.to_string());
+        params.insert("limit".into(), MAX_HISTORY_MESSAGES.to_string());
+        let result = self.client.call("conversations.history", &params)?;
+        let conversation = state.conversation(conversation_id).cloned();
+        let messages = result
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| compact_message(value, conversation.as_ref(), &state.users))
+            .collect();
+        state.merge_messages(conversation_id, messages);
+        state.mark_refreshed(key);
+        rebuild_dm_notifications(state);
+        state.normalize();
+        Ok(())
+    }
+
+    pub fn refresh_notifications(&self, state: &mut CacheState) -> Result<()> {
+        let since = state
+            .since_for("notifications")
+            .max(CacheState::seven_days_ago());
+        let after = date_filter(since);
+        let mut queries = vec![format!("to:me after:{after}")];
+        if !state.self_username.is_empty() {
+            queries.push(format!("@{} after:{after}", state.self_username));
+        }
+        let mut notifications = Vec::new();
+        let mut any_success = false;
+        for query in queries {
+            let mut params = BTreeMap::new();
+            params.insert("query".into(), query);
+            params.insert("count".into(), "100".into());
+            if let Ok(result) = self.client.call("search.messages", &params) {
+                any_success = true;
+                let embedded_users = result
+                    .get("users")
+                    .and_then(Value::as_object)
+                    .map(compact_embedded_users)
+                    .unwrap_or_default();
+                let mut users = state.users.clone();
+                users.extend(embedded_users);
+                for value in result
+                    .pointer("/messages/matches")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(notification) =
+                        compact_search_notification(value, &users, &state.self_user_id)
+                    {
+                        notifications.push(notification);
+                    }
+                }
+            }
+        }
+        if !any_success {
+            bail!("Slack search.messages could not load mentions/DM activity");
+        }
+        state.notifications = merge_notifications(
+            std::mem::take(&mut state.notifications),
+            notifications,
+            CacheState::seven_days_ago() as f64,
+        );
+        state.mark_refreshed("notifications");
+        rebuild_dm_notifications(state);
+        state.normalize();
+        Ok(())
+    }
+
+    pub fn refresh_files(&self, state: &mut CacheState) -> Result<()> {
+        let since = state.since_for("files").max(CacheState::seven_days_ago());
+        let mut params = BTreeMap::new();
+        params.insert("query".into(), format!("after:{}", date_filter(since)));
+        params.insert("count".into(), MAX_FILE_RESULTS.to_string());
+        let result = self.client.call("search.files", &params)?;
+        let embedded_users = result
+            .get("users")
+            .and_then(Value::as_object)
+            .map(compact_embedded_users)
+            .unwrap_or_default();
+        state.users.extend(embedded_users);
+        let incoming: Vec<SlackFile> = result
+            .pointer("/files/matches")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| compact_file(value, &state.users))
+            .collect();
+        state.files = merge_files(std::mem::take(&mut state.files), incoming);
+        state.mark_refreshed("files");
+        state.normalize();
+        Ok(())
+    }
+
+    pub fn load_file_content(&self, state: &mut CacheState, file_id: &str) -> Result<()> {
+        let index = state
+            .files
+            .iter()
+            .position(|file| file.id == file_id)
+            .with_context(|| format!("unknown Slack file {file_id}"))?;
+        if !state.files[index].is_canvas() {
+            state.files[index].content_status = "metadata_only".into();
+            if state.files[index].content_markdown.is_empty() {
+                state.files[index].content_markdown = format!(
+                    "# {}\n\nThis is a `{}` Slack file. Slick's first read-only release renders full content for Slack Canvas documents; use the permalink to open this file.\n\n[Open in Slack]({})",
+                    state.files[index].title,
+                    state.files[index].file_type,
+                    state.files[index].permalink,
+                );
+            }
+            state.files[index].content_fetched_at = Some(CacheState::now());
+            return Ok(());
+        }
+        let html = self.client.get_canvas_html(&state.files[index])?;
+        let markdown = html2md::parse_html(&html);
+        let (markdown, truncated) = truncate_chars(&markdown, MAX_CANVAS_MARKDOWN_CHARS);
+        state.files[index].content_markdown = markdown;
+        state.files[index].content_status = if truncated { "truncated" } else { "ok" }.into();
+        state.files[index].content_fetched_at = Some(CacheState::now());
+        Ok(())
+    }
+
+    fn refresh_identity(&self, state: &mut CacheState) -> Result<()> {
+        let result = self.client.call("auth.test", &BTreeMap::new())?;
+        state.team_id = value_string(&result, "team_id");
+        state.team_name = value_string(&result, "team");
+        state.self_user_id = value_string(&result, "user_id");
+        state.self_username = value_string(&result, "user");
+        Ok(())
+    }
+
+    fn refresh_active_dms(&self, state: &mut CacheState) -> Result<()> {
+        let since = CacheState::seven_days_ago() as f64;
+        let mut dms: Vec<Conversation> = state
+            .conversations
+            .iter()
+            .filter(|conversation| conversation.kind.is_dm())
+            .filter(|conversation| {
+                conversation.unread_count > 0 || conversation.activity_ts() >= since
+            })
+            .cloned()
+            .collect();
+        if dms.is_empty() {
+            dms = state
+                .conversations
+                .iter()
+                .filter(|conversation| conversation.kind.is_dm())
+                .take(8)
+                .cloned()
+                .collect();
+        }
+        dms.sort_by(|left, right| {
+            right.unread_count.cmp(&left.unread_count).then_with(|| {
+                right
+                    .activity_ts()
+                    .partial_cmp(&left.activity_ts())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+        let mut first_error = None;
+        for conversation in dms.into_iter().take(MAX_AUTOMATIC_DMS) {
+            if let Err(error) = self.refresh_conversation(state, &conversation.id) {
+                first_error.get_or_insert(error);
+            }
+        }
+        if state.messages.is_empty() {
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn compact_embedded_users(values: &Map<String, Value>) -> BTreeMap<String, User> {
+    values
+        .iter()
+        .filter_map(|(id, value)| {
+            let mut user = compact_user(value)?;
+            if user.id.is_empty() {
+                user.id.clone_from(id);
+            }
+            Some((user.id.clone(), user))
+        })
+        .collect()
+}
+
+fn compact_user(value: &Value) -> Option<User> {
+    let id = value_string(value, "id");
+    if id.is_empty() {
+        return None;
+    }
+    Some(User {
+        id,
+        username: first_string(value, &["name", "username"]),
+        display_name: value_pointer_string(value, "/profile/display_name"),
+        real_name: first_pointer_string(value, &["/profile/real_name", "/real_name"]),
+        title: value_pointer_string(value, "/profile/title"),
+        is_bot: value
+            .get("is_bot")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        deleted: value
+            .get("deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn compact_conversation(value: &Value, users: &BTreeMap<String, User>) -> Option<Conversation> {
+    let id = value_string(value, "id");
+    if id.is_empty() {
+        return None;
+    }
+    let kind = if value_bool(value, "is_im") {
+        ConversationKind::Dm
+    } else if value_bool(value, "is_mpim") {
+        ConversationKind::GroupDm
+    } else if value_bool(value, "is_private") || value_bool(value, "is_group") {
+        ConversationKind::PrivateChannel
+    } else {
+        ConversationKind::Channel
+    };
+    let user_id = value
+        .get("user")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let purpose = value_pointer_string(value, "/purpose/value");
+    let raw_name = first_string(value, &["name_normalized", "name"]);
+    let name = if kind == ConversationKind::Dm {
+        user_id
+            .as_deref()
+            .and_then(|user| users.get(user))
+            .map_or_else(|| format!("DM {id}"), |user| user.label().to_string())
+    } else if kind == ConversationKind::GroupDm && raw_name.starts_with("mpdm-") {
+        purpose
+            .strip_prefix("Group messaging with:")
+            .map(|members| members.trim().replace(" @", ", ").replace('@', ""))
+            .filter(|members| !members.is_empty())
+            .unwrap_or(raw_name)
+    } else {
+        raw_name
+    };
+    Some(Conversation {
+        id,
+        name,
+        kind,
+        user_id,
+        topic: value_pointer_string(value, "/topic/value"),
+        purpose,
+        unread_count: value_u32(value, "unread_count_display")
+            .max(value_u32(value, "unread_count")),
+        mention_count: value_u32(value, "mention_count"),
+        latest_ts: value
+            .pointer("/latest/ts")
+            .or_else(|| value.get("updated"))
+            .and_then(value_as_timestamp),
+        is_member: value
+            .get("is_member")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        is_archived: value_bool(value, "is_archived"),
+    })
+}
+
+fn compact_message(
+    value: &Value,
+    conversation: Option<&Conversation>,
+    users: &BTreeMap<String, User>,
+) -> Option<Message> {
+    let ts = value_string(value, "ts");
+    if ts.is_empty() {
+        return None;
+    }
+    let user_id = first_string(value, &["user", "bot_id"]);
+    let author = users.get(&user_id).map_or_else(
+        || value_string(value, "username"),
+        |user| user.label().to_string(),
+    );
+    let raw_text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map_or_else(|| flatten_blocks(value.get("blocks")), str::to_string);
+    let text = slack_text_to_markdown(&raw_text, users);
+    Some(Message {
+        timestamp: timestamp_to_iso(&ts),
+        ts,
+        user_id,
+        author,
+        text,
+        permalink: value_string(value, "permalink"),
+        thread_ts: value
+            .get("thread_ts")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        reply_count: value_u32(value, "reply_count"),
+        file_ids: value
+            .get("files")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|file| file.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect(),
+        attachment_ids: value
+            .get("attachments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|attachment| {
+                ["id", "file_id", "callback_id"]
+                    .into_iter()
+                    .find_map(|key| attachment.get(key).and_then(value_as_id))
+            })
+            .collect(),
+    })
+    .map(|mut message| {
+        if message.permalink.is_empty() {
+            if let Some(conversation) = conversation {
+                message.permalink = format!("slack://channel?team=&id={}", conversation.id);
+            }
+        }
+        message
+    })
+}
+
+fn compact_search_notification(
+    value: &Value,
+    users: &BTreeMap<String, User>,
+    self_user_id: &str,
+) -> Option<Notification> {
+    let channel = value.get("channel")?;
+    let conversation = compact_conversation(channel, users)?;
+    let message = compact_message(value, Some(&conversation), users)?;
+    let mention = value_string(value, "text").contains(&format!("<@{self_user_id}>"));
+    Some(Notification {
+        key: format!("{}:{}", conversation.id, message.ts),
+        conversation_id: conversation.id.clone(),
+        conversation_name: conversation.name,
+        kind: conversation.kind,
+        message,
+        unread: value_bool(value, "is_unread") || value_bool(value, "unread"),
+        mention,
+    })
+}
+
+fn compact_file(value: &Value, users: &BTreeMap<String, User>) -> Option<SlackFile> {
+    let id = value_string(value, "id");
+    if id.is_empty() {
+        return None;
+    }
+    let user_id = value_string(value, "user");
+    let mut provenance = Vec::new();
+    for visibility in ["public", "private"] {
+        if let Some(shares) = value
+            .pointer(&format!("/shares/{visibility}"))
+            .and_then(Value::as_object)
+        {
+            for (channel_id, entries) in shares {
+                let name = entries
+                    .as_array()
+                    .and_then(|items| items.first())
+                    .map(|entry| value_string(entry, "channel_name"))
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| channel_id.clone());
+                if !provenance.contains(&name) {
+                    provenance.push(name);
+                }
+            }
+        }
+    }
+    Some(SlackFile {
+        id,
+        title: first_string(value, &["title", "name"]),
+        file_type: first_string(value, &["pretty_type", "filetype", "mimetype"]),
+        author: users
+            .get(&user_id)
+            .map_or_else(|| user_id.clone(), |user| user.label().to_string()),
+        user_id,
+        created_at: timestamp_to_iso(&first_string(value, &["created", "timestamp"])),
+        updated_at: timestamp_to_iso(&value_string(value, "updated")),
+        size_bytes: value.get("size").and_then(Value::as_u64).unwrap_or(0),
+        permalink: value_string(value, "permalink"),
+        provenance,
+        access: value_string(value, "access"),
+        download_url: first_string(value, &["url_private_download", "url_private"]),
+        content_markdown: String::new(),
+        content_status: "not_loaded".into(),
+        content_fetched_at: None,
+    })
+}
+
+fn flatten_blocks(blocks: Option<&Value>) -> String {
+    blocks
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .map(flatten_rich_value)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn flatten_rich_value(value: &Value) -> String {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match kind {
+        "text" => value_string(value, "text"),
+        "link" => {
+            let url = value_string(value, "url");
+            let label = value_string(value, "text");
+            if label.is_empty() {
+                url
+            } else {
+                format!("[{label}]({url})")
+            }
+        }
+        "user" => format!("<@{}>", value_string(value, "user_id")),
+        "channel" => format!("<#{}>", value_string(value, "channel_id")),
+        "emoji" => format!(":{}:", value_string(value, "name")),
+        "rich_text_list" => {
+            let marker = if value_string(value, "style") == "ordered" {
+                "1. "
+            } else {
+                "• "
+            };
+            value
+                .get("elements")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|element| format!("{marker}{}", flatten_rich_value(element)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        _ => value
+            .get("elements")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(flatten_rich_value)
+            .collect::<String>(),
+    }
+}
+
+fn slack_text_to_markdown(value: &str, users: &BTreeMap<String, User>) -> String {
+    let decoded = decode_entities(value);
+    let mut output = String::with_capacity(decoded.len());
+    let mut rest = decoded.as_str();
+    while let Some(start) = rest.find('<') {
+        output.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('>') else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let token = &after[..end];
+        let rendered = if let Some(user_id) = token.strip_prefix('@') {
+            users.get(user_id).map_or_else(
+                || format!("@{user_id}"),
+                |user| format!("@{}", user.label()),
+            )
+        } else if let Some(channel) = token.strip_prefix('#') {
+            let (_, label) = channel.split_once('|').unwrap_or((channel, channel));
+            format!("#{label}")
+        } else {
+            let (url, label) = token.split_once('|').unwrap_or((token, token));
+            if url.starts_with("http://") || url.starts_with("https://") {
+                format!("[{label}]({url})")
+            } else {
+                label.to_string()
+            }
+        };
+        output.push_str(&rendered);
+        rest = &after[end + 1..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn decode_entities(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
+fn rebuild_dm_notifications(state: &mut CacheState) {
+    let mut notifications = state.notifications.clone();
+    let since = CacheState::seven_days_ago() as f64;
+    for conversation in state
+        .conversations
+        .iter()
+        .filter(|conversation| conversation.kind.is_dm())
+    {
+        for message in state
+            .messages
+            .get(&conversation.id)
+            .into_iter()
+            .flatten()
+            .filter(|message| message.unix_ts() >= since)
+        {
+            notifications.push(Notification {
+                key: format!("{}:{}", conversation.id, message.ts),
+                conversation_id: conversation.id.clone(),
+                conversation_name: conversation.name.clone(),
+                kind: conversation.kind,
+                message: message.clone(),
+                unread: conversation.unread_count > 0,
+                mention: false,
+            });
+        }
+    }
+    dedup_notifications(&mut notifications);
+    state.notifications = notifications;
+}
+
+fn dedup_notifications(notifications: &mut Vec<Notification>) {
+    let mut seen = HashSet::new();
+    notifications.retain(|notification| seen.insert(notification.key.clone()));
+}
+
+fn merge_notifications(
+    mut cached: Vec<Notification>,
+    incoming: Vec<Notification>,
+    oldest: f64,
+) -> Vec<Notification> {
+    cached.extend(incoming);
+    cached.retain(|notification| notification.message.unix_ts() >= oldest);
+    dedup_notifications(&mut cached);
+    cached
+}
+
+fn merge_files(cached: Vec<SlackFile>, incoming: Vec<SlackFile>) -> Vec<SlackFile> {
+    let mut merged: HashMap<String, SlackFile> = cached
+        .into_iter()
+        .map(|file| (file.id.clone(), file))
+        .collect();
+    for mut file in incoming {
+        if let Some(previous) = merged.get(&file.id) {
+            file.content_markdown.clone_from(&previous.content_markdown);
+            file.content_status.clone_from(&previous.content_status);
+            file.content_fetched_at = previous.content_fetched_at;
+        }
+        merged.insert(file.id.clone(), file);
+    }
+    merged.into_values().collect()
+}
+
+fn value_string(value: &Value, key: &str) -> String {
+    value.get(key).and_then(value_as_id).unwrap_or_default()
+}
+
+fn first_string(value: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(value_as_id)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_default()
+}
+
+fn value_pointer_string(value: &Value, pointer: &str) -> String {
+    value
+        .pointer(pointer)
+        .and_then(value_as_id)
+        .unwrap_or_default()
+}
+
+fn first_pointer_string(value: &Value, pointers: &[&str]) -> String {
+    pointers
+        .iter()
+        .find_map(|pointer| {
+            value
+                .pointer(pointer)
+                .and_then(value_as_id)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_default()
+}
+
+fn value_as_id(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn value_as_timestamp(value: &Value) -> Option<String> {
+    value_as_id(value).map(|value| {
+        let mut seconds = value.parse::<f64>().unwrap_or(0.0);
+        // Slack's `updated` conversation field is milliseconds, while message
+        // `ts` and file timestamps are seconds.
+        if seconds > 100_000_000_000.0 {
+            seconds /= 1000.0;
+        }
+        format!("{seconds:.6}")
+    })
+}
+
+fn value_bool(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn value_u32(value: &Value, key: &str) -> u32 {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0)
+}
+
+fn timestamp_to_iso(value: &str) -> String {
+    value
+        .parse::<f64>()
+        .ok()
+        .and_then(|seconds| DateTime::from_timestamp(seconds as i64, 0))
+        .map_or_else(
+            || value.to_string(),
+            |date: DateTime<Utc>| date.to_rfc3339(),
+        )
+}
+
+fn date_filter(timestamp: i64) -> String {
+    DateTime::from_timestamp(timestamp, 0).map_or_else(
+        || "1970-01-01".to_string(),
+        |date: DateTime<Utc>| date.format("%Y-%m-%d").to_string(),
+    )
+}
+
+fn truncate_chars(value: &str, max: usize) -> (String, bool) {
+    if value.chars().count() <= max {
+        return (value.to_string(), false);
+    }
+    let mut result: String = value.chars().take(max.saturating_sub(1)).collect();
+    result.push('…');
+    (result, true)
+}
+
+#[must_use]
+pub fn demo_state() -> CacheState {
+    let mut state = CacheState {
+        team_id: "T_DEMO".into(),
+        team_name: "Slick Workspace".into(),
+        self_user_id: "U_ME".into(),
+        self_username: "you".into(),
+        ..CacheState::default()
+    };
+    for (id, username, display, title) in [
+        ("U_ADA", "ada", "Ada Lovelace", "Research"),
+        ("U_GRACE", "grace", "Grace Hopper", "Engineering"),
+        ("U_LINUS", "linus", "Linus", "Platform"),
+    ] {
+        state.users.insert(
+            id.into(),
+            User {
+                id: id.into(),
+                username: username.into(),
+                display_name: display.into(),
+                real_name: display.into(),
+                title: title.into(),
+                ..User::default()
+            },
+        );
+    }
+    state.conversations = vec![
+        Conversation {
+            id: "D_ADA".into(),
+            name: "Ada Lovelace".into(),
+            kind: ConversationKind::Dm,
+            user_id: Some("U_ADA".into()),
+            unread_count: 2,
+            latest_ts: Some("1784901498.0".into()),
+            ..Conversation::default()
+        },
+        Conversation {
+            id: "G_TEAM".into(),
+            name: "health-design".into(),
+            kind: ConversationKind::GroupDm,
+            unread_count: 1,
+            latest_ts: Some("1784898963.0".into()),
+            ..Conversation::default()
+        },
+        Conversation {
+            id: "C_GENERAL".into(),
+            name: "general".into(),
+            kind: ConversationKind::Channel,
+            is_member: true,
+            topic: "Company-wide announcements and work-based matters".into(),
+            latest_ts: Some("1784898000.0".into()),
+            ..Conversation::default()
+        },
+        Conversation {
+            id: "C_SLICK".into(),
+            name: "proj-slick".into(),
+            kind: ConversationKind::PrivateChannel,
+            is_member: true,
+            topic: "Building a better Slack terminal".into(),
+            latest_ts: Some("1784897000.0".into()),
+            ..Conversation::default()
+        },
+    ];
+    let messages = vec![
+        Message { ts: "1784897000.0".into(), timestamp: "2026-07-24T12:03:20Z".into(), user_id: "U_GRACE".into(), author: "Grace Hopper".into(), text: "## Welcome to Slick\n\nA **read-only** Slack TUI with:\n\n- compact message views\n- cached seven-day activity\n- rich Canvas Markdown\n- keyboard *and* mouse navigation".into(), permalink: "https://example.slack.com/demo/1".into(), ..Message::default() },
+        Message { ts: "1784898000.0".into(), timestamp: "2026-07-24T12:20:00Z".into(), user_id: "U_ADA".into(), author: "Ada Lovelace".into(), text: "The analytical engine weaves algebraic patterns just as the Jacquard loom weaves flowers and leaves.\n\n> Ctrl-R refreshes only this visible conversation and the DM list.".into(), permalink: "https://example.slack.com/demo/2".into(), ..Message::default() },
+    ];
+    state.messages.insert("D_ADA".into(), messages.clone());
+    state.messages.insert("C_GENERAL".into(), messages.clone());
+    state.notifications = vec![
+        Notification {
+            key: "D_ADA:1784898000".into(),
+            conversation_id: "D_ADA".into(),
+            conversation_name: "Ada Lovelace".into(),
+            kind: ConversationKind::Dm,
+            message: messages[1].clone(),
+            unread: true,
+            mention: false,
+        },
+        Notification {
+            key: "G_TEAM:1784897000".into(),
+            conversation_id: "G_TEAM".into(),
+            conversation_name: "health-design".into(),
+            kind: ConversationKind::GroupDm,
+            message: messages[0].clone(),
+            unread: true,
+            mention: true,
+        },
+    ];
+    state.files = vec![
+        SlackFile { id: "F_CANVAS".into(), title: "Slick Product Brief".into(), file_type: "Canvas".into(), user_id: "U_ADA".into(), author: "Ada Lovelace".into(), created_at: "2026-07-20T09:00:00Z".into(), updated_at: "2026-07-24T12:00:00Z".into(), size_bytes: 8192, permalink: "https://example.slack.com/docs/F_CANVAS".into(), provenance: vec!["proj-slick".into(), "health-design".into()], access: "read".into(), download_url: "https://files.slack.com/files-pri/T_DEMO-F_CANVAS/download/canvas".into(), content_markdown: "# Slick Product Brief\n\nSlick mirrors Slack's familiar layout while keeping the signal compact.\n\n## Interaction\n\n| Action | Shortcut |\n|---|---|\n| Refresh active view | `Ctrl-R` |\n| Move focus | `Tab` |\n| Open item | `Enter` |\n| Search locally | `/` |\n\n## Principles\n\n- **Read-only by design**\n- Cache first, then refresh incrementally\n- Canvas documents become rich Markdown\n- Ratakittui chrome uses Kitty graphics when available\n\n```rust\nfn refresh(scope: VisibleView, since: Timestamp) {\n    // no full-history redownload\n}\n```\n".into(), content_status: "ok".into(), content_fetched_at: Some(CacheState::now()) },
+        SlackFile { id: "F_PDF".into(), title: "Architecture.pdf".into(), file_type: "PDF".into(), user_id: "U_GRACE".into(), author: "Grace Hopper".into(), created_at: "2026-07-21T10:00:00Z".into(), updated_at: "2026-07-21T10:00:00Z".into(), size_bytes: 65536, permalink: "https://example.slack.com/files/F_PDF".into(), provenance: vec!["proj-slick".into()], access: "read".into(), content_markdown: "# Architecture.pdf\n\nMetadata-only in Slick 0.1. Open the permalink in Slack for binary content.".into(), content_status: "metadata_only".into(), ..SlackFile::default() },
+    ];
+    state.saved_at = Some(CacheState::now());
+    state.normalize();
+    state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rich_blocks_flatten_with_list_boundaries() {
+        let value = serde_json::json!({
+          "type": "rich_text_list", "style": "bullet", "elements": [
+            {"type":"rich_text_section","elements":[{"type":"text","text":"one"}]},
+            {"type":"rich_text_section","elements":[{"type":"text","text":"two"}]}
+          ]
+        });
+        assert_eq!(flatten_rich_value(&value), "• one\n• two");
+    }
+
+    #[test]
+    fn slack_markup_becomes_markdown_and_names() {
+        let mut users = BTreeMap::new();
+        users.insert(
+            "U1".into(),
+            User {
+                id: "U1".into(),
+                display_name: "Ada".into(),
+                ..User::default()
+            },
+        );
+        assert_eq!(
+            slack_text_to_markdown(
+                "Hi <@U1> see <https://example.com|docs> &amp; <#C1|general>",
+                &users
+            ),
+            "Hi @Ada see [docs](https://example.com) & #general"
+        );
+    }
+
+    #[test]
+    fn compact_conversation_names_dm_from_user() {
+        let mut users = BTreeMap::new();
+        users.insert(
+            "U1".into(),
+            User {
+                id: "U1".into(),
+                real_name: "Ada Lovelace".into(),
+                ..User::default()
+            },
+        );
+        let value = serde_json::json!({"id":"D1","is_im":true,"user":"U1","unread_count":2});
+        let conversation = compact_conversation(&value, &users).unwrap();
+        assert_eq!(conversation.name, "Ada Lovelace");
+        assert_eq!(conversation.kind, ConversationKind::Dm);
+        assert_eq!(conversation.unread_count, 2);
+    }
+
+    #[test]
+    fn incremental_file_refresh_keeps_cached_content() {
+        let cached = SlackFile {
+            id: "F1".into(),
+            title: "Old title".into(),
+            content_markdown: "# Cached body".into(),
+            content_status: "ok".into(),
+            content_fetched_at: Some(7),
+            ..SlackFile::default()
+        };
+        let incoming = SlackFile {
+            id: "F1".into(),
+            title: "New title".into(),
+            ..SlackFile::default()
+        };
+        let merged = merge_files(vec![cached], vec![incoming]);
+        assert_eq!(merged[0].title, "New title");
+        assert_eq!(merged[0].content_markdown, "# Cached body");
+        assert_eq!(merged[0].content_fetched_at, Some(7));
+    }
+
+    #[test]
+    fn incremental_notification_refresh_deduplicates_and_keeps_window() {
+        let notification = |key: &str, ts: &str| Notification {
+            key: key.into(),
+            message: Message {
+                ts: ts.into(),
+                ..Message::default()
+            },
+            ..Notification::default()
+        };
+        let merged = merge_notifications(
+            vec![notification("same", "10"), notification("old", "1")],
+            vec![notification("same", "10"), notification("new", "20")],
+            5.0,
+        );
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|item| item.key == "same"));
+        assert!(merged.iter().any(|item| item.key == "new"));
+    }
+
+    #[test]
+    fn demo_has_all_primary_surfaces() {
+        let demo = demo_state();
+        assert!(!demo.notifications.is_empty());
+        assert!(demo.conversations.iter().any(|item| item.kind.is_dm()));
+        assert!(demo.conversations.iter().any(|item| !item.kind.is_dm()));
+        assert!(demo.files.iter().any(SlackFile::is_canvas));
+    }
+}
