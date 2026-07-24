@@ -65,6 +65,7 @@
       "./extensions/true-defaults.js",
       "./extensions/tendril-share.js",
       "./extensions/app-automation.js",
+      "./extensions/slack-mcp.js",
       "./extensions/android.js",
       "./extensions/xvfb.js"
     ],

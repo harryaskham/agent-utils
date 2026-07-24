@@ -1,0 +1,75 @@
+{
+  "ok": true,
+  "query": "after:2026-07-20",
+  "messages": {
+    "total": 8418,
+    "pagination": { "total_count": 8418, "page": 1, "per_page": 4, "page_count": 2105, "first": 1, "last": 4 },
+    "matches": [
+      {
+        "iid": "message-1",
+        "team": "E123",
+        "channel": { "id": "C123", "is_channel": true, "is_group": false, "is_im": false, "is_mpim": false, "is_shared": true, "is_org_shared": true, "is_private": false, "is_archived": false, "name": "build-notifications", "pending_shared": [], "teams": ["T123"] },
+        "type": "message",
+        "user": "U123",
+        "username": "build bot",
+        "ts": "1784895921.609509",
+        "blocks": [{ "type": "section", "block_id": "one", "text": { "type": "mrkdwn", "text": "*Build notification*: job one completed :white_check_mark:", "verbatim": false } }],
+        "text": "",
+        "permalink": "https://example.slack.com/archives/C123/p1784895921609509",
+        "no_reactions": true
+      },
+      {
+        "iid": "message-2",
+        "team": "E123",
+        "channel": { "id": "C123", "is_channel": true, "is_group": false, "is_im": false, "is_mpim": false, "is_shared": true, "is_org_shared": true, "is_private": false, "is_archived": false, "name": "build-notifications", "pending_shared": [], "teams": ["T123"] },
+        "type": "message",
+        "user": "U123",
+        "username": "build bot",
+        "ts": "1784895919.001319",
+        "blocks": [{ "type": "section", "block_id": "two", "text": { "type": "mrkdwn", "text": "*Build notification*: job two completed :white_check_mark:", "verbatim": false } }],
+        "text": "",
+        "permalink": "https://example.slack.com/archives/C123/p1784895919001319",
+        "attachments": [{ "id": "A123", "fallback": "large duplicate fallback", "fields": [{ "title": "noise", "value": "noise" }] }],
+        "files": [{ "id": "F123", "name": "large-artifact.txt", "url_private": "https://files.slack.com/private" }]
+      },
+      {
+        "iid": "message-3",
+        "team": "E123",
+        "channel": { "id": "C123", "is_channel": true, "is_group": false, "is_im": false, "is_mpim": false, "is_shared": true, "is_org_shared": true, "is_private": false, "is_archived": false, "name": "build-notifications", "pending_shared": [], "teams": ["T123"] },
+        "type": "message",
+        "user": "U123",
+        "username": "build bot",
+        "ts": "1784895917.686399",
+        "blocks": [{ "type": "rich_text", "block_id": "three", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "Checkpoint gather succeeded for " }, { "type": "user", "user_id": "U456" }] }] }],
+        "text": "",
+        "permalink": "https://example.slack.com/archives/C123/p1784895917686399"
+      },
+      {
+        "iid": "message-4",
+        "team": "E123",
+        "channel": { "id": "C123", "is_channel": true, "is_group": false, "is_im": false, "is_mpim": false, "is_shared": true, "is_org_shared": true, "is_private": false, "is_archived": false, "name": "build-notifications", "pending_shared": [], "teams": ["T123"] },
+        "type": "message",
+        "user": "U123",
+        "username": "build bot",
+        "ts": "1784895916.256259",
+        "blocks": [{ "type": "section", "block_id": "four", "text": { "type": "mrkdwn", "text": "*Build notification*: job four completed :white_check_mark:", "verbatim": false } }],
+        "text": "",
+        "permalink": "https://example.slack.com/archives/C123/p1784895916256259"
+      }
+    ]
+  },
+  "users": {
+    "U123": {
+      "id": "U123",
+      "name": "build_bot",
+      "is_restricted": false,
+      "is_ultra_restricted": false,
+      "profile": { "avatar_hash": "hash", "image_72": "https://example.com/avatar.png", "first_name": "Build", "real_name": "Build Bot", "display_name": "", "team": "E123" },
+      "enterprise_user": { "teams": ["T123", "T456"], "enterprise_id": "E123" }
+    }
+  },
+  "teams": {},
+  "bots": {},
+  "warning": "superfluous_charset",
+  "response_metadata": { "warnings": ["superfluous_charset"] }
+}

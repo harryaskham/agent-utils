@@ -34,6 +34,7 @@ It currently provides:
 - `/git-behind [status|check|on|off|reload]` via [`extensions/git-behind-warning.js`](extensions/git-behind-warning.js), a generic, throttled advisory that warns ANY Pi agent when its checkout falls significantly behind the origin default branch (a reusable, daemon-decoupled replacement for Cacophony's lost git-check mixin). See the [Checkout-behind warning](#checkout-behind-warning-pi-extension) section below.
 - `/eink [on|off|status]` via [`extensions/pi-graphics.js`](extensions/pi-graphics.js), a tablet/e-ink toggle that applies the packaged `eink` theme, transparent greyscale surfaces, cell cursor, static Unicode editor chrome, and minimal/no animation. `/eink off` restores the previous Pi graphics/theme settings saved before enabling e-ink mode.
 - `app_automation_*` native Pi tools plus `/tendril-app` for blessed Slack, canvas, Outlook, and Teams app automation diagnostics/overviews/freshness/plans
+- Native `slack_*` tools via [`extensions/slack-mcp.js`](extensions/slack-mcp.js). Read results default to compact, provenance-grouped payloads (`raw: false`): message text/timestamps and user names are retained while repeated channel/user metadata is normalized once, files/attachments collapse to IDs, and canvas searches include bounded Markdown converted from Slack's downloadable canvas HTML. Pass `raw: true` to recover the original Slack API response.
 - `skill-server` / `skill-search`, a Rust CLI + MCP stdio meta-tool for dynamic skill and host MCP server discovery
 
 ## App automation Pi extension

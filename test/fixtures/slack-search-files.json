@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "query": "canvas after:2026-06-01",
+  "files": {
+    "total": 179,
+    "pagination": { "total_count": 179, "page": 1, "per_page": 1, "page_count": 179, "first": 1, "last": 1 },
+    "matches": [
+      {
+        "id": "F123",
+        "created": 1783701112,
+        "timestamp": 1783701112,
+        "mimetype": "application/vnd.slack-docs",
+        "filetype": "quip",
+        "pretty_type": "Canvas",
+        "user": "U123",
+        "user_team": "E123",
+        "editable": true,
+        "size": 36242,
+        "mode": "quip",
+        "is_external": false,
+        "is_public": true,
+        "name": "Convergence_Onboarding",
+        "title": "Convergence Onboarding",
+        "url_private": "https://files.slack.com/files-pri/T123-F123/canvas",
+        "url_private_download": "https://files.slack.com/files-pri/T123-F123/download/canvas",
+        "permalink": "https://example.slack.com/docs/T123/F123",
+        "updated": 1784895462,
+        "shares": {
+          "public": {
+            "C123": [
+              { "ts": "1784895429.032829", "channel_name": "health-convergence-build", "team_id": "E123", "shared_team_ids": ["T123", "T456"], "internal_team_ids": ["T123", "T456"], "access": "write", "share_user_id": "U123", "source": "UNKNOWN", "is_silent_share": false, "reply_users": ["U123", "U456"], "reply_users_count": 2, "reply_count": 42 },
+              { "ts": "1784736155.592369", "channel_name": "health-convergence-build", "team_id": "E123", "shared_team_ids": ["T123", "T456"], "internal_team_ids": ["T123", "T456"], "access": "write", "share_user_id": "U123", "source": "UNKNOWN", "is_silent_share": false, "reply_users": ["U123", "U456"], "reply_users_count": 2, "reply_count": 28 }
+            ]
+          }
+        },
+        "channels": ["C123"],
+        "groups": [],
+        "ims": [],
+        "dm_mpdm_users_with_file_access": [
+          { "user_id": "U123", "access": "write" },
+          { "user_id": "U456", "access": "read" },
+          { "user_id": "U789", "access": "read" }
+        ],
+        "title_blocks": [{ "type": "rich_text", "block_id": "title", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "channel", "channel_id": "C123" }, { "type": "text", "text": " Convergence Onboarding" }] }] }],
+        "canvas_creator_id": "U123",
+        "editors": ["U123", "U456", "U789"],
+        "editors_count": 3,
+        "access": "write"
+      }
+    ]
+  },
+  "channels": {},
+  "groups": {},
+  "ims": {},
+  "users": {},
+  "teams": {},
+  "warning": "superfluous_charset",
+  "response_metadata": { "warnings": ["superfluous_charset"] }
+}
