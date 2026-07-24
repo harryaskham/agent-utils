@@ -69,6 +69,8 @@ pub struct Conversation {
     pub purpose: String,
     pub unread_count: u32,
     pub mention_count: u32,
+    #[serde(default)]
+    pub is_favorite: bool,
     pub latest_ts: Option<String>,
     pub is_member: bool,
     pub is_archived: bool,
@@ -247,8 +249,9 @@ impl CacheState {
         self.conversations.retain(|item| !item.is_archived);
         self.conversations.sort_by(|left, right| {
             right
-                .unread_count
-                .cmp(&left.unread_count)
+                .is_favorite
+                .cmp(&left.is_favorite)
+                .then_with(|| right.unread_count.cmp(&left.unread_count))
                 .then_with(|| {
                     right
                         .activity_ts()

@@ -2,12 +2,11 @@ use std::fmt::Write as FmtWrite;
 use std::io::{self, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ratakittui::{
-    Background, Border, Chrome, EffectsSink, KittuiList, KittuiParagraph, KittuiTitle,
-    LifecycleTracker, Padding, Shadow,
+    Background, Border, Chrome, EffectsSink, LifecycleTracker, Padding, RenderEffects, Shadow,
 };
 use ratatui::backend::{CrosstermBackend, TestBackend};
 use ratatui::buffer::Buffer;
@@ -22,10 +21,11 @@ use ratatui::crossterm::terminal::{
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget, Wrap};
 use ratatui::{Frame, Terminal};
 
 use kittui::{Direction as KittuiDirection, RendererKind, Rgba, Runtime, TerminalInfo};
+use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
 use crate::markdown::{preview, render_markdown};
@@ -152,6 +152,7 @@ impl Worker {
                 match result {
                     Ok(()) => {
                         state.normalize();
+                        state.saved_at = Some(CacheState::now());
                         let save_result = store.save(&state);
                         let status = save_result.map_or_else(
                             |error| format!("{label}; cache warning: {error}"),
@@ -245,6 +246,14 @@ pub struct App {
     selected_file: usize,
     content_scroll: u16,
     detail_scroll: u16,
+    activity_offset: usize,
+    overview_offset: usize,
+    file_offset: usize,
+    content_view_height: u16,
+    content_view_width: u16,
+    detail_view_height: u16,
+    detail_view_width: u16,
+    section_overview: bool,
     filter: String,
     filter_mode: bool,
     show_help: bool,
@@ -275,7 +284,7 @@ impl App {
     fn new(state: CacheState, worker: Option<Worker>) -> Self {
         Self {
             status: if state.saved_at.is_some() {
-                format!("cache {}", state.friendly_saved_at())
+                "cached".into()
             } else {
                 "starting".into()
             },
@@ -288,6 +297,14 @@ impl App {
             selected_file: 0,
             content_scroll: 0,
             detail_scroll: 0,
+            activity_offset: 0,
+            overview_offset: 0,
+            file_offset: 0,
+            content_view_height: 1,
+            content_view_width: 1,
+            detail_view_height: 1,
+            detail_view_width: 1,
+            section_overview: false,
             filter: String::new(),
             filter_mode: false,
             show_help: false,
@@ -339,6 +356,9 @@ impl App {
             self.filtered_conversations(false).len(),
         );
         self.selected_file = clamp_index(self.selected_file, self.filtered_files().len());
+        self.ensure_selected_visible();
+        self.content_scroll = self.content_scroll.min(self.max_content_scroll());
+        self.detail_scroll = self.detail_scroll.min(self.max_detail_scroll());
     }
 
     fn filtered_conversations(&self, dms: bool) -> Vec<&Conversation> {
@@ -437,6 +457,7 @@ impl App {
             self.selected_channel = index;
         }
         self.content_scroll = 0;
+        self.section_overview = false;
         self.focus = Focus::Content;
         if self.state.messages.get(&id).is_none_or(Vec::is_empty) {
             self.send(WorkerCommand::LoadConversation(id));
@@ -455,6 +476,7 @@ impl App {
     fn refresh_visible(&mut self) {
         let target = match self.page {
             Page::Notifications => RefreshTarget::Notifications,
+            Page::Dms | Page::Channels if self.section_overview => RefreshTarget::Sidebar,
             Page::Dms | Page::Channels => self
                 .selected_conversation()
                 .map_or(RefreshTarget::Sidebar, |conversation| {
@@ -532,21 +554,22 @@ impl App {
     }
 
     fn go_top(&mut self) {
-        if self.focus == Focus::Sidebar || self.page == Page::Files && self.focus == Focus::Content
-        {
+        if self.navigates_list() {
             match self.page {
                 Page::Notifications => self.selected_notification = 0,
                 Page::Dms => self.selected_dm = 0,
                 Page::Channels => self.selected_channel = 0,
                 Page::Files => self.selected_file = 0,
             }
+            self.activity_offset = 0;
+            self.overview_offset = 0;
+            self.file_offset = 0;
         }
         self.set_scroll(0);
     }
 
     fn go_bottom(&mut self) {
-        if self.focus == Focus::Sidebar || self.page == Page::Files && self.focus == Focus::Content
-        {
+        if self.navigates_list() {
             match self.page {
                 Page::Notifications => {
                     self.selected_notification = self.state.notifications.len().saturating_sub(1);
@@ -560,19 +583,14 @@ impl App {
                 }
                 Page::Files => self.selected_file = self.filtered_files().len().saturating_sub(1),
             }
+            self.ensure_selected_visible();
         } else {
-            let rows = match self.page {
-                Page::Files => self
-                    .selected_file()
-                    .map_or(0, |file| file.content_markdown.lines().count()),
-                Page::Dms | Page::Channels => self
-                    .selected_conversation()
-                    .and_then(|conversation| self.state.messages.get(&conversation.id))
-                    .map_or(0, Vec::len)
-                    .saturating_mul(8),
-                Page::Notifications => self.state.notifications.len().saturating_mul(2),
+            let maximum = if self.focus == Focus::Detail {
+                self.max_detail_scroll()
+            } else {
+                self.max_content_scroll()
             };
-            self.set_scroll(u16::try_from(rows.saturating_sub(1)).unwrap_or(u16::MAX));
+            self.set_scroll(maximum);
         }
     }
 
@@ -580,6 +598,10 @@ impl App {
         self.page = page;
         self.content_scroll = 0;
         self.detail_scroll = 0;
+        self.activity_offset = 0;
+        self.overview_offset = 0;
+        self.file_offset = 0;
+        self.section_overview = matches!(page, Page::Dms | Page::Channels);
         self.focus = Focus::Sidebar;
         if page == Page::Files && self.state.files.is_empty() {
             self.send(WorkerCommand::Refresh(RefreshTarget::Files));
@@ -617,10 +639,21 @@ impl App {
         } else {
             order[(index + order.len() - 1) % order.len()]
         };
+        if self.focus == Focus::Sidebar && matches!(self.page, Page::Dms | Page::Channels) {
+            self.section_overview = true;
+        }
+    }
+
+    fn navigates_list(&self) -> bool {
+        match self.page {
+            Page::Notifications => true,
+            Page::Dms | Page::Channels => self.section_overview || self.focus == Focus::Sidebar,
+            Page::Files => self.focus != Focus::Detail,
+        }
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if self.focus != Focus::Sidebar && self.page != Page::Files {
+        if !self.navigates_list() {
             if delta < 0 {
                 self.scroll_up(1);
             } else {
@@ -647,11 +680,86 @@ impl App {
             }
         };
         *selected = offset_index(*selected, len, delta);
+        self.ensure_selected_visible();
         if self.page == Page::Files {
             self.detail_scroll = 0;
-        } else {
+        } else if !self.section_overview {
             self.content_scroll = 0;
         }
+    }
+
+    fn ensure_selected_visible(&mut self) {
+        match self.page {
+            Page::Notifications => keep_visible(
+                self.selected_notification,
+                &mut self.activity_offset,
+                usize::from(self.content_view_height.saturating_sub(2) / 2).max(1),
+            ),
+            Page::Dms => keep_visible(
+                self.selected_dm,
+                &mut self.overview_offset,
+                usize::from(self.content_view_height.saturating_sub(2)).max(1),
+            ),
+            Page::Channels => keep_visible(
+                self.selected_channel,
+                &mut self.overview_offset,
+                usize::from(self.content_view_height.saturating_sub(2)).max(1),
+            ),
+            Page::Files => keep_visible(
+                self.selected_file,
+                &mut self.file_offset,
+                usize::from(self.content_view_height.saturating_sub(2) / 2).max(1),
+            ),
+        }
+    }
+
+    fn conversation_markdown(&self) -> String {
+        let Some(conversation) = self.selected_conversation() else {
+            return "Select a conversation".into();
+        };
+        let mut markdown = String::new();
+        if !conversation.topic.is_empty() {
+            let _ = write!(markdown, "> {}\n\n", conversation.topic);
+        }
+        let messages = self.state.messages.get(&conversation.id);
+        if messages.is_none_or(Vec::is_empty) {
+            markdown.push_str("_Press Enter to load up to seven days of content._");
+        } else if let Some(messages) = messages {
+            for message in messages.iter().rev() {
+                let _ = write!(
+                    markdown,
+                    "### {}  ·  {}\n\n{}\n\n---\n\n",
+                    if message.author.is_empty() {
+                        &message.user_id
+                    } else {
+                        &message.author
+                    },
+                    short_time(&message.timestamp),
+                    message.text,
+                );
+            }
+        }
+        markdown
+    }
+
+    fn max_content_scroll(&self) -> u16 {
+        if self.navigates_list() {
+            return 0;
+        }
+        let rows = wrapped_markdown_rows(&self.conversation_markdown(), self.content_view_width);
+        scroll_max(rows, self.content_view_height)
+    }
+
+    fn max_detail_scroll(&self) -> u16 {
+        let rows = self.selected_file().map_or(1, |file| {
+            let markdown = if file.content_markdown.is_empty() {
+                &file.title
+            } else {
+                &file.content_markdown
+            };
+            wrapped_markdown_rows(markdown, self.detail_view_width)
+        });
+        scroll_max(rows, self.detail_view_height)
     }
 
     fn scroll_up(&mut self, amount: u16) {
@@ -663,15 +771,25 @@ impl App {
 
     fn scroll_down(&mut self, amount: u16) {
         match self.focus {
-            Focus::Detail => self.detail_scroll = self.detail_scroll.saturating_add(amount),
-            _ => self.content_scroll = self.content_scroll.saturating_add(amount),
+            Focus::Detail => {
+                self.detail_scroll = self
+                    .detail_scroll
+                    .saturating_add(amount)
+                    .min(self.max_detail_scroll());
+            }
+            _ => {
+                self.content_scroll = self
+                    .content_scroll
+                    .saturating_add(amount)
+                    .min(self.max_content_scroll());
+            }
         }
     }
 
     fn set_scroll(&mut self, value: u16) {
         match self.focus {
-            Focus::Detail => self.detail_scroll = value,
-            _ => self.content_scroll = value,
+            Focus::Detail => self.detail_scroll = value.min(self.max_detail_scroll()),
+            _ => self.content_scroll = value.min(self.max_content_scroll()),
         }
     }
 
@@ -704,8 +822,20 @@ impl App {
                     }
                 }
             }
-            MouseEventKind::ScrollUp => self.scroll_up(3),
-            MouseEventKind::ScrollDown => self.scroll_down(3),
+            MouseEventKind::ScrollUp => {
+                if self.navigates_list() {
+                    self.move_selection(-1);
+                } else {
+                    self.scroll_up(3);
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.navigates_list() {
+                    self.move_selection(1);
+                } else {
+                    self.scroll_down(3);
+                }
+            }
             _ => {}
         }
     }
@@ -716,9 +846,9 @@ impl App {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Min(8),
-                Constraint::Length(2),
+                Constraint::Length(1),
             ])
             .split(area);
         self.render_header(frame, vertical[0], graphics);
@@ -732,9 +862,15 @@ impl App {
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
                 .split(columns[1]);
+            self.content_view_height = files[0].height;
+            self.content_view_width = files[0].width;
+            self.detail_view_height = files[1].height;
+            self.detail_view_width = files[1].width;
             self.render_files(frame, files[0], graphics);
             self.render_file_detail(frame, files[1], graphics);
         } else {
+            self.content_view_height = columns[1].height;
+            self.content_view_width = columns[1].width;
             self.render_content(frame, columns[1], graphics);
         }
         self.render_footer(frame, vertical[2], graphics);
@@ -796,7 +932,20 @@ impl App {
                 format!(" {icon} "),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(self.status.clone(), Style::default().fg(MUTED)),
+            Span::styled(
+                format!(
+                    "{} · {}",
+                    snapshot_age(
+                        self.state
+                            .last_refresh
+                            .get("sidebar")
+                            .copied()
+                            .or(self.state.saved_at),
+                    ),
+                    self.status,
+                ),
+                Style::default().fg(MUTED),
+            ),
         ]));
         render_paragraph(frame, columns[2], paragraph, graphics, Tone::Dark, false);
     }
@@ -826,13 +975,13 @@ impl App {
                     .state
                     .conversations
                     .iter()
-                    .filter(|item| item.kind.is_dm() && item.unread_count > 0)
+                    .filter(|item| item.kind.is_dm())
                     .count(),
                 Page::Channels => self
                     .state
                     .conversations
                     .iter()
-                    .filter(|item| !item.kind.is_dm() && item.unread_count > 0)
+                    .filter(|item| !item.kind.is_dm())
                     .count(),
                 Page::Files => self.state.files.len(),
             };
@@ -868,7 +1017,7 @@ impl App {
         items.push(ListItem::new(""));
         row = row.saturating_add(1);
         items.push(ListItem::new(Line::from(Span::styled(
-            "  Direct messages",
+            "  Active DMs",
             Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
         ))));
         row = row.saturating_add(1);
@@ -888,7 +1037,7 @@ impl App {
             row = row.saturating_add(1);
         }
         items.push(ListItem::new(Line::from(Span::styled(
-            "  Channels",
+            "  Recent channels",
             Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
         ))));
         row = row.saturating_add(1);
@@ -938,6 +1087,9 @@ impl App {
         });
         match self.page {
             Page::Notifications => self.render_notifications(frame, area, graphics),
+            Page::Dms | Page::Channels if self.section_overview => {
+                self.render_conversation_overview(frame, area, graphics);
+            }
             Page::Dms | Page::Channels => self.render_messages(frame, area, graphics),
             Page::Files => {}
         }
@@ -951,6 +1103,15 @@ impl App {
     ) {
         let mut items = Vec::new();
         let mut row = area.y.saturating_add(1);
+        let visible = usize::from(area.height.saturating_sub(2) / 2).max(1);
+        keep_visible(
+            self.selected_notification,
+            &mut self.activity_offset,
+            visible,
+        );
+        self.activity_offset = self
+            .activity_offset
+            .min(self.state.notifications.len().saturating_sub(visible));
         if self.state.notifications.is_empty() {
             items.push(ListItem::new(Line::from(vec![
                 Span::styled("  ✓ ", Style::default().fg(GREEN)),
@@ -961,7 +1122,14 @@ impl App {
             ])));
             items.push(ListItem::new("  Mentions, unread DMs and recent DM activity from the last seven days appear here."));
         }
-        for (index, notification) in self.state.notifications.iter().enumerate() {
+        for (index, notification) in self
+            .state
+            .notifications
+            .iter()
+            .enumerate()
+            .skip(self.activity_offset)
+            .take(visible)
+        {
             let selected = index == self.selected_notification;
             let marker = if notification.mention {
                 "@"
@@ -1015,7 +1183,14 @@ impl App {
                 } else {
                     Borders::ALL
                 })
-                .title(" Activity · mentions + unread + recent DMs "),
+                .title(format!(
+                    " Activity · {} items · {}/{} ",
+                    self.state.notifications.len(),
+                    self.selected_notification
+                        .saturating_add(1)
+                        .min(self.state.notifications.len()),
+                    self.state.notifications.len().max(1),
+                )),
         );
         render_list(
             frame,
@@ -1025,6 +1200,111 @@ impl App {
             Tone::Content,
             self.focus == Focus::Content,
         );
+    }
+
+    fn render_conversation_overview(
+        &mut self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        graphics: Option<(&Runtime, &EffectsSink)>,
+    ) {
+        let dms = self.page == Page::Dms;
+        let conversations: Vec<Conversation> = self
+            .filtered_conversations(dms)
+            .into_iter()
+            .cloned()
+            .collect();
+        let selected = if dms {
+            self.selected_dm
+        } else {
+            self.selected_channel
+        };
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+            .split(area);
+        let visible = usize::from(panes[0].height.saturating_sub(2)).max(1);
+        let offset = self
+            .overview_offset
+            .min(conversations.len().saturating_sub(visible));
+        self.overview_offset = offset;
+        let mut items = Vec::new();
+        let mut row = panes[0].y.saturating_add(1);
+        for (index, conversation) in conversations.iter().enumerate().skip(offset).take(visible) {
+            let is_selected = index == selected;
+            let style = if is_selected {
+                Style::default().bg(Color::Rgb(0x31, 0x2a, 0x42))
+            } else {
+                Style::default()
+            };
+            items.push(
+                ListItem::new(conversation_line(
+                    conversation,
+                    if conversation.kind.is_dm() {
+                        "●"
+                    } else {
+                        "#"
+                    },
+                    unread_badge(conversation),
+                ))
+                .style(style),
+            );
+            self.hits.push(HitRegion {
+                rect: Rect::new(panes[0].x + 1, row, panes[0].width.saturating_sub(2), 1),
+                action: HitAction::Conversation(conversation.id.clone(), conversation.kind),
+            });
+            row = row.saturating_add(1);
+        }
+        let total = conversations.len();
+        let title = format!(
+            " {} · {total} total · {}/{} ",
+            if dms { "Direct messages" } else { "Channels" },
+            selected.saturating_add(1).min(total),
+            total.max(1),
+        );
+        let list = List::new(items).block(
+            Block::default()
+                .borders(if graphics.is_some() {
+                    Borders::NONE
+                } else {
+                    Borders::ALL
+                })
+                .title(title),
+        );
+        render_list(frame, panes[0], list, graphics, Tone::Content, true);
+
+        let detail = conversations.get(selected).map_or_else(
+            || "No matching conversations. Press `/` to change the local filter.".to_string(),
+            |conversation| {
+                let messages = self
+                    .state
+                    .messages
+                    .get(&conversation.id)
+                    .map_or(0, Vec::len);
+                format!(
+                    "# {}\n\n**{}**\n\n{}\n\n{}\n\n- ID: `{}`\n- Favorite: {}\n- Cached messages: {messages}\n- Activity: {}\n\nPress **Enter** to open. Use `/` to search this complete cached inventory.",
+                    conversation.name,
+                    conversation.kind.label(),
+                    conversation.topic,
+                    conversation.purpose,
+                    conversation.id,
+                    if conversation.is_favorite { "yes" } else { "no" },
+                    if conversation.activity_ts() > 0.0 { "recent" } else { "unknown" },
+                )
+            },
+        );
+        let paragraph = Paragraph::new(render_markdown(&detail))
+            .block(
+                Block::default()
+                    .borders(if graphics.is_some() {
+                        Borders::NONE
+                    } else {
+                        Borders::ALL
+                    })
+                    .title(" Overview "),
+            )
+            .wrap(Wrap { trim: false });
+        render_paragraph(frame, panes[1], paragraph, graphics, Tone::Detail, false);
     }
 
     fn render_messages(
@@ -1044,28 +1324,7 @@ impl App {
             );
             return;
         };
-        let mut markdown = String::new();
-        if !conversation.topic.is_empty() {
-            let _ = write!(markdown, "> {}\n\n", conversation.topic);
-        }
-        let messages = self.state.messages.get(&conversation.id);
-        if messages.is_none_or(Vec::is_empty) {
-            markdown.push_str("_Press Enter to load up to seven days of content._");
-        } else if let Some(messages) = messages {
-            for message in messages.iter().rev() {
-                let _ = write!(
-                    markdown,
-                    "### {}  ·  {}\n\n{}\n\n---\n\n",
-                    if message.author.is_empty() {
-                        &message.user_id
-                    } else {
-                        &message.author
-                    },
-                    short_time(&message.timestamp),
-                    message.text,
-                );
-            }
-        }
+        let markdown = self.conversation_markdown();
         let title = format!(
             " {} {} · {} ",
             if conversation.kind.is_dm() {
@@ -1111,12 +1370,20 @@ impl App {
         let files: Vec<SlackFile> = self.filtered_files().into_iter().cloned().collect();
         let mut items = Vec::new();
         let mut row = area.y.saturating_add(1);
+        let visible = usize::from(area.height.saturating_sub(2) / 2).max(1);
+        keep_visible(self.selected_file, &mut self.file_offset, visible);
+        self.file_offset = self.file_offset.min(files.len().saturating_sub(visible));
         if files.is_empty() {
             items.push(ListItem::new(
                 "No recent files. Ctrl-R refreshes the visible seven-day window.",
             ));
         }
-        for (index, file) in files.iter().enumerate() {
+        for (index, file) in files
+            .iter()
+            .enumerate()
+            .skip(self.file_offset)
+            .take(visible)
+        {
             let selected = index == self.selected_file;
             let style = if selected {
                 Style::default().bg(Color::Rgb(0x31, 0x2a, 0x42))
@@ -1161,7 +1428,12 @@ impl App {
                 } else {
                     Borders::ALL
                 })
-                .title(" Recent files · seven days "),
+                .title(format!(
+                    " Recent files · {} · {}/{} ",
+                    files.len(),
+                    self.selected_file.saturating_add(1).min(files.len()),
+                    files.len().max(1),
+                )),
         );
         render_list(
             frame,
@@ -1350,6 +1622,20 @@ fn chrome(tone: Tone, focused: bool) -> Chrome {
         .padding(Padding::uniform(1))
 }
 
+fn header_chrome(tone: Tone) -> Chrome {
+    let (start, end) = match tone {
+        Tone::Purple => ("#611f69ff", "#3f1447ff"),
+        _ => ("#171820ff", "#111219ff"),
+    };
+    Chrome::default()
+        .background(Background::Linear {
+            direction: KittuiDirection::Horizontal,
+            start: Rgba::parse(start).unwrap_or_else(|_| Rgba::rgb(0x17, 0x18, 0x20)),
+            end: Rgba::parse(end).unwrap_or_else(|_| Rgba::rgb(0x11, 0x12, 0x19)),
+        })
+        .padding(Padding::default())
+}
+
 fn render_title(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1357,22 +1643,27 @@ fn render_title(
     graphics: Option<(&Runtime, &EffectsSink)>,
     tone: Tone,
 ) {
-    if let Some((runtime, sink)) = graphics {
-        let mut widget = KittuiTitle::new(&title, chrome(tone, false));
-        widget.style = Style::default()
+    let paragraph = Paragraph::new(title).style(
+        Style::default()
             .fg(Color::White)
-            .add_modifier(Modifier::BOLD);
-        sink.push(widget.render_with(area, frame.buffer_mut(), runtime));
-    } else {
-        frame.render_widget(
-            Paragraph::new(title).style(
-                Style::default()
-                    .fg(Color::White)
-                    .bg(SLACK_PURPLE)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            .bg(if graphics.is_some() {
+                Color::Reset
+            } else {
+                SLACK_PURPLE
+            })
+            .add_modifier(Modifier::BOLD),
+    );
+    if let Some((runtime, sink)) = graphics {
+        render_decorated(
+            paragraph,
+            &header_chrome(tone),
             area,
+            frame.buffer_mut(),
+            runtime,
+            sink,
         );
+    } else {
+        frame.render_widget(paragraph, area);
     }
 }
 
@@ -1385,11 +1676,14 @@ fn render_list(
     focused: bool,
 ) {
     if let Some((runtime, sink)) = graphics {
-        sink.push(KittuiList::new(list, chrome(tone, focused)).render_with(
+        render_decorated(
+            list,
+            &chrome(tone, focused),
             area,
             frame.buffer_mut(),
             runtime,
-        ));
+            sink,
+        );
     } else {
         frame.render_widget(list, area);
     }
@@ -1404,16 +1698,53 @@ fn render_paragraph(
     focused: bool,
 ) {
     if let Some((runtime, sink)) = graphics {
-        sink.push(
-            KittuiParagraph::new(paragraph, chrome(tone, focused)).render_with(
-                area,
-                frame.buffer_mut(),
-                runtime,
-            ),
+        render_decorated(
+            paragraph,
+            &chrome(tone, focused),
+            area,
+            frame.buffer_mut(),
+            runtime,
+            sink,
         );
     } else {
         frame.render_widget(paragraph, area);
     }
+}
+
+fn render_decorated<W: Widget>(
+    widget: W,
+    chrome: &Chrome,
+    area: Rect,
+    buffer: &mut Buffer,
+    runtime: &Runtime,
+    sink: &EffectsSink,
+) {
+    let effects = render_chrome_underlay(area, chrome, runtime);
+    widget.render(chrome.inner_rect(area), buffer);
+    sink.push(effects);
+}
+
+fn render_chrome_underlay(area: Rect, chrome: &Chrome, runtime: &Runtime) -> RenderEffects {
+    let Some(scene) = chrome.to_scene(area) else {
+        return RenderEffects::default();
+    };
+    let id = scene.id();
+    // Ratakittui's default unicode placement uses implicit z=0 placements.
+    // In Ghostty (and especially through tmux), repeated frames can accumulate
+    // those placeholders as offset strips and they cover Ratatui text. Slick's
+    // chrome is an underlay, so use one stable absolute placement per scene at
+    // z=-1: no placeholder grid, no placement accumulation, text remains above.
+    let options = chrome_underlay_options(id.kitty_image_id());
+    runtime
+        .place_at_with_options_by_id(&scene, scene.footprint, &options, &id)
+        .map_or_else(
+            |_| RenderEffects::default(),
+            |placement| RenderEffects::from_placement(placement, id),
+        )
+}
+
+fn chrome_underlay_options(image_id: u32) -> PlacementOptions {
+    PlacementOptions::absolute_with_id(image_id).with_z_index(-1)
 }
 
 fn conversation_line(conversation: &Conversation, marker: &str, unread: String) -> Line<'static> {
@@ -1421,7 +1752,15 @@ fn conversation_line(conversation: &Conversation, marker: &str, unread: String) 
         || conversation.activity_ts() >= CacheState::seven_days_ago() as f64;
     Line::from(vec![
         Span::styled(
-            format!(" {marker} "),
+            if conversation.is_favorite {
+                " ★"
+            } else {
+                "  "
+            },
+            Style::default().fg(YELLOW),
+        ),
+        Span::styled(
+            format!("{marker} "),
             Style::default().fg(if active { GREEN } else { MUTED }),
         ),
         Span::styled(
@@ -1462,6 +1801,22 @@ fn truncate_label(value: &str, max: usize) -> String {
     value
 }
 
+fn snapshot_age(saved_at: Option<i64>) -> String {
+    let Some(saved_at) = saved_at else {
+        return "snapshot uncached".into();
+    };
+    let age = CacheState::now().saturating_sub(saved_at);
+    if age < 60 {
+        format!("snapshot {age}s stale")
+    } else if age < 3_600 {
+        format!("snapshot {}m stale", age / 60)
+    } else if age < 86_400 {
+        format!("snapshot {}h {}m stale", age / 3_600, (age % 3_600) / 60)
+    } else {
+        format!("snapshot {}d stale", age / 86_400)
+    }
+}
+
 fn short_time(value: &str) -> String {
     if let Some(time) = value.split('T').nth(1) {
         return time.chars().take(5).collect();
@@ -1490,6 +1845,27 @@ fn offset_index(index: usize, len: usize, delta: isize) -> usize {
     } else {
         index.saturating_add(delta.unsigned_abs()).min(len - 1)
     }
+}
+
+fn keep_visible(selected: usize, offset: &mut usize, visible: usize) {
+    let visible = visible.max(1);
+    if selected < *offset {
+        *offset = selected;
+    } else if selected >= offset.saturating_add(visible) {
+        *offset = selected.saturating_add(1).saturating_sub(visible);
+    }
+}
+
+fn wrapped_markdown_rows(source: &str, viewport_width: u16) -> usize {
+    Paragraph::new(render_markdown(source))
+        .wrap(Wrap { trim: false })
+        .line_count(viewport_width.saturating_sub(4).max(1))
+        .max(1)
+}
+
+fn scroll_max(rows: usize, viewport_height: u16) -> u16 {
+    let visible = usize::from(viewport_height.saturating_sub(2).max(1));
+    u16::try_from(rows.saturating_sub(visible)).unwrap_or(u16::MAX)
 }
 
 fn contains(rect: Rect, column: u16, row: u16) -> bool {
@@ -1566,8 +1942,13 @@ fn run_loop(
     mut graphics: Option<&mut Graphics>,
 ) -> Result<()> {
     let mut dirty = true;
+    let mut last_timer_tick = Instant::now();
     while !app.should_quit {
         dirty |= app.drain_worker();
+        if last_timer_tick.elapsed() >= Duration::from_secs(1) {
+            dirty = true;
+            last_timer_tick = Instant::now();
+        }
         if dirty {
             if let Some(graphics) = graphics.as_deref_mut() {
                 graphics.tracker.begin_frame();
@@ -1641,6 +2022,13 @@ mod tests {
         assert!(output.contains("Channels"));
         assert!(output.contains("Files"));
         assert!(output.contains("Ada Lovelace"));
+        assert!(
+            output
+                .lines()
+                .nth(1)
+                .is_some_and(|line| line.contains("Slack")),
+            "body begins immediately after the one-line header"
+        );
         let files = snapshot_page(crate::slack::demo_state(), 140, 40, Page::Files);
         assert!(files.contains("Slick Product Brief"));
         assert!(files.contains("Markdown"));
@@ -1686,6 +2074,60 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(app.detail_scroll, 3);
+    }
+
+    #[test]
+    fn activity_accepts_jk_in_content_focus() {
+        let mut app = App::demo(crate::slack::demo_state());
+        app.focus = Focus::Content;
+        app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert_eq!(app.selected_notification, 1);
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(app.selected_notification, 0);
+    }
+
+    #[test]
+    fn rich_scroll_is_clamped_to_document_bottom() {
+        let mut app = App::demo(crate::slack::demo_state());
+        app.set_page(Page::Files);
+        app.focus = Focus::Detail;
+        app.detail_view_height = 8;
+        app.detail_view_width = 40;
+        app.scroll_down(u16::MAX);
+        let maximum = app.max_detail_scroll();
+        assert_eq!(app.detail_scroll, maximum);
+        app.scroll_down(u16::MAX);
+        assert_eq!(app.detail_scroll, maximum);
+    }
+
+    #[test]
+    fn graphics_chrome_uses_stable_absolute_underlay() {
+        let options = chrome_underlay_options(42);
+        assert_eq!(options.placement_id, Some(42));
+        assert!(!options.unicode_placeholder);
+        assert_eq!(options.z_index, -1);
+    }
+
+    #[test]
+    fn section_headers_open_complete_inventory_overview() {
+        let mut app = App::demo(crate::slack::demo_state());
+        app.set_page(Page::Dms);
+        assert!(app.section_overview);
+        let rendered = snapshot_page(app.state.clone(), 120, 30, Page::Dms);
+        assert!(rendered.contains("total"));
+        assert!(rendered.contains("Overview"));
+    }
+
+    #[test]
+    fn snapshot_staleness_timer_is_human_readable() {
+        assert_eq!(
+            snapshot_age(Some(CacheState::now() - 42)),
+            "snapshot 42s stale"
+        );
+        assert_eq!(
+            snapshot_age(Some(CacheState::now() - 125)),
+            "snapshot 2m stale"
+        );
     }
 
     #[test]

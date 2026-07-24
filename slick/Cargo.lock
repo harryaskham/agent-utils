@@ -2191,6 +2191,7 @@ dependencies = [
  "dirs",
  "html2md",
  "kittui",
+ "kittui-kitty",
  "pulldown-cmark",
  "ratakittui",
  "ratatui",

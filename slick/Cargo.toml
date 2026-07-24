@@ -18,9 +18,10 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6"
 html2md = "0.2"
 kittui = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }
+kittui-kitty = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }
 pulldown-cmark = "0.12"
 ratakittui = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }
-ratatui = { version = "0.29", features = ["crossterm"] }
+ratatui = { version = "0.29", features = ["crossterm", "unstable-rendered-line-info"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

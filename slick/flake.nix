@@ -24,6 +24,8 @@
           substituteInPlace "$out/Cargo.toml" \
             --replace-fail 'ratakittui = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }' \
                            'ratakittui = { path = "${kittui-src}/crates/ratakittui" }' \
+            --replace-fail 'kittui-kitty = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }' \
+                           'kittui-kitty = { path = "${kittui-src}/crates/kittui-kitty" }' \
             --replace-fail 'kittui = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }' \
                            'kittui = { path = "${kittui-src}/crates/kittui" }'
           # Path dependencies have source-less lock entries. Cargo's git lock
@@ -35,7 +37,7 @@
           pname = "slick";
           version = "0.1.0";
           src = patchedSrc;
-          cargoHash = "sha256-F5+V2vx98HUNgrt/hSVYzMOV4A/aJYcHvIPH62Ui1MQ=";
+          cargoHash = "sha256-nGm8XYYljZu2hfjD2GnkaILCMXCtEbxCIFsz5sMrsAc=";
           strictDeps = true;
           buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
           doCheck = true;

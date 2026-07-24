@@ -256,6 +256,7 @@ impl SlackService {
             .filter(|value| seen.insert(value_string(value, "id")))
             .filter_map(|value| compact_conversation(&value, &state.users))
             .collect();
+        self.refresh_favorites(state);
         state.mark_refreshed("sidebar");
         state.normalize();
         Ok(())
@@ -298,6 +299,7 @@ impl SlackService {
             queries.push(format!("@{} after:{after}", state.self_username));
         }
         let mut notifications = Vec::new();
+        let mut discovered_conversations = Vec::new();
         let mut any_success = false;
         for query in queries {
             let mut params = BTreeMap::new();
@@ -321,6 +323,13 @@ impl SlackService {
                     if let Some(notification) =
                         compact_search_notification(value, &users, &state.self_user_id)
                     {
+                        discovered_conversations.push(Conversation {
+                            id: notification.conversation_id.clone(),
+                            name: notification.conversation_name.clone(),
+                            kind: notification.kind,
+                            latest_ts: Some(notification.message.ts.clone()),
+                            ..Conversation::default()
+                        });
                         notifications.push(notification);
                     }
                 }
@@ -329,6 +338,16 @@ impl SlackService {
         if !any_success {
             bail!("Slack search.messages could not load mentions/DM activity");
         }
+        let mut known_ids: HashSet<String> = state
+            .conversations
+            .iter()
+            .map(|conversation| conversation.id.clone())
+            .collect();
+        state.conversations.extend(
+            discovered_conversations
+                .into_iter()
+                .filter(|conversation| known_ids.insert(conversation.id.clone())),
+        );
         state.notifications = merge_notifications(
             std::mem::take(&mut state.notifications),
             notifications,
@@ -391,6 +410,44 @@ impl SlackService {
         state.files[index].content_status = if truncated { "truncated" } else { "ok" }.into();
         state.files[index].content_fetched_at = Some(CacheState::now());
         Ok(())
+    }
+
+    fn refresh_favorites(&self, state: &mut CacheState) {
+        let Ok(items) = self
+            .client
+            .paginate("stars.list", &BTreeMap::new(), "items")
+        else {
+            return;
+        };
+        let favorite_ids: HashSet<String> = items
+            .iter()
+            .filter_map(|item| {
+                item.get("channel")
+                    .and_then(value_as_id)
+                    .or_else(|| item.pointer("/channel/id").and_then(value_as_id))
+                    .or_else(|| item.get("group").and_then(value_as_id))
+            })
+            .collect();
+        for conversation in &mut state.conversations {
+            conversation.is_favorite |= favorite_ids.contains(&conversation.id);
+        }
+        let missing: Vec<String> = favorite_ids
+            .into_iter()
+            .filter(|id| !state.conversations.iter().any(|item| item.id == *id))
+            .collect();
+        for id in missing {
+            let mut params = BTreeMap::new();
+            params.insert("channel".into(), id);
+            if let Ok(result) = self.client.call("conversations.info", &params) {
+                if let Some(mut conversation) = result
+                    .get("channel")
+                    .and_then(|value| compact_conversation(value, &state.users))
+                {
+                    conversation.is_favorite = true;
+                    state.conversations.push(conversation);
+                }
+            }
+        }
     }
 
     fn refresh_identity(&self, state: &mut CacheState) -> Result<()> {
@@ -524,6 +581,7 @@ fn compact_conversation(value: &Value, users: &BTreeMap<String, User>) -> Option
         unread_count: value_u32(value, "unread_count_display")
             .max(value_u32(value, "unread_count")),
         mention_count: value_u32(value, "mention_count"),
+        is_favorite: value_bool(value, "is_starred") || value_bool(value, "is_favorite"),
         latest_ts: value
             .pointer("/latest/ts")
             .or_else(|| value.get("updated"))

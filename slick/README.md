@@ -26,7 +26,8 @@ expires, refresh it with `/slack-refresh` in Pi and press `Ctrl-R` in Slick.
 Slick mirrors Slack's navigation shape:
 
 - **Activity** combines mentions, unread DMs, and recent DM activity.
-- **Direct messages** and **Channels** are normalized by name and unread state.
+- **Direct messages** and **Channels** are complete, separately paginated API inventories normalized by name, favorite, recency, and unread state. Clicking either section opens a searchable, bounded overview before opening a conversation.
+- Slick mirrors Slack favorites via `stars.list`. Slack's arbitrary custom sidebar-section layout is not exposed by the supported Web API, so Slick presents Favorites/Active DMs/Channels over the complete inventory rather than pretending to reproduce private UI-only section metadata.
 - Opening a conversation lazy-loads its compact content.
 - **Files** presents recent files in the middle pane and renders selected Slack
   Canvas content as rich Markdown on the right.
@@ -54,8 +55,7 @@ wheel scrolls the focused rich-content pane.
 
 ## Refresh and cache contract
 
-The first live startup refreshes identity, the conversation/user sidebar,
-mentions/DM activity, recent files, and a bounded set of active or unread DMs.
+The first live startup refreshes identity, separately paginates every accessible DM/group-DM and public/private channel, applies favorites, then loads mentions/DM activity, recent files, and a bounded set of active or unread DMs.
 It requests no more than seven days when history is available. Responses are
 cached at `$SLICK_CACHE_DIR/state.json` or the platform cache directory.
 
@@ -68,6 +68,15 @@ then only the visible target:
 
 The client is deliberately read-only: no sends, edits, reactions, joins, read
 markers, or presence mutations.
+
+## Graphics compatibility
+
+Slick uses Ratakittui's scene/chrome/lifecycle model but places each chrome scene
+as a **stable absolute `z=-1` underlay**. Ratakittui's generic implicit Unicode
+placeholder placement (`z=0`, no placement id) accumulated offset gradient strips
+and covered all text in the tested Ghostty/tmux path. Stable underlays remove the
+placeholder grid, replace rather than accumulate placements, and keep ordinary
+Ratatui text above the graphics. `--no-graphics` remains a universal fallback.
 
 ## Development
 
