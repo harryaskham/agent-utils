@@ -534,7 +534,9 @@ Unified `/rt` controls:
 /rt trans <model>              set realtime input transcription model
 /rt speed <0.25..1.5>          set spoken response speed (default 1.0)
 /rt backend <backend>          set audio backend for new mic/playback commands
-/rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high
+/rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high (default low on gpt-realtime-2.x)
+/rt commentary [thinking|text|hidden]
+                              how 2.x commentary preambles render (default thinking)
 /rt summary [true|false]       use compact summary context instead of full history (default false)
 /rt chime [true|false]         enable/disable VAD state chimes (default true)
 /rt backend=pulse source=...    env-style key/value form; supports base_url/server/source/sink/start/mic/stt/audio/widget/status/voice/trans/speed/reasoning/summary/chime/fork, plus the direct-Azure connection keys azure/model/endpoint/deployment/api_version/protocol (e.g. `/rt azure=true start=vad` connects direct-Azure to the preset gpt-realtime-2 GA deployment; api_version=none uses the GA path)
@@ -704,12 +706,75 @@ when the endpoint is a GA-only proxy (e.g. a LiteLLM front for a GA realtime mod
 like `gpt-realtime-2`) that rejects the dated api-version with *"Model ... is only
 available on the GA API"*. Then reconnect realtime.
 
-Reasoning effort is only sent through the proxy when explicitly enabled, or in direct-Azure modes that support it:
+Reasoning effort is sent by default (`low`) on the 2.x family, on both the proxy
+and direct-Azure paths. Override or disable it:
 
 ```bash
-export PI_RT_REASONING_EFFORT=low
-export PI_RT_SEND_REASONING=1
+export PI_RT_REASONING_EFFORT=medium   # off|minimal|low|medium|high
+export PI_RT_SEND_REASONING=0          # never send response.reasoning
 ```
+
+`response.reasoning` is only attached for models that support it (`gpt-realtime-2`
+and later point releases); `gpt-realtime` never receives it. If an endpoint
+rejects the parameter anyway, the extension retries the response once without it
+and latches `reasoningRejected` (shown as `reason:low!` in the status line).
+
+## GPT Realtime 2.x: reasoning, phases, and 256k context
+
+The `gpt-realtime-2` model id is a stable alias for the GPT Realtime 2.x family
+(currently 2.1). The id is unchanged; the capabilities the extension assumes are
+not:
+
+| Capability | Effect in Pi |
+| --- | --- |
+| Adjustable `reasoning.effort` | Default `low` (`/rt reasoning`, `PI_RT_REASONING_EFFORT`), sent on proxy and Azure paths |
+| Phased output items (`commentary` / `final_answer`) | Preambles render as a thinking block, the answer as normal text (`/rt commentary`) |
+| 256,000-token context window | Registered model window + the compaction/oversize-context math in `/rt status full` |
+
+### Do preambles actually reach Pi?
+
+Yes. A 2.x turn can contain several output items, each tagged with a phase:
+`commentary` (a promptable preamble such as *"let me think about that…"*, a tool
+announcement, or a silence filler emitted while the model reasons) and
+`final_answer` (what it settles on). Both are spoken; both arrive as transcript
+deltas on their own output item.
+
+Pi keys off `response.output_item.added.item.phase` and routes each item's
+transcript separately, so a preamble is never glued onto the front of the answer:
+
+```text
+/rt commentary thinking   # default: commentary -> Pi thinking block, answer -> text block
+/rt commentary text       # one merged transcript block (pre-2.x rendering)
+/rt commentary hidden     # preamble is spoken but not transcribed into history
+```
+
+Audio playback is identical in all three modes — `hidden` only drops the text.
+Untagged items (every pre-2.x model) are treated as `final_answer`, so older
+models render exactly as before. If the model is interrupted mid-thought it
+discards that chain of thought and starts a new turn; the interrupted turn is
+closed out as aborted rather than left hanging.
+
+### One response at a time (barge-in)
+
+The realtime server allows exactly one open response per conversation. Speaking
+over the assistant commits new mic audio while the previous response is still
+closing, so a naive `response.create` gets
+*"Conversation already has an active response in progress: resp_…"*. The
+extension serializes turns against that slot:
+
+- a new turn cancels the open response and waits for its `response.done` before
+  creating its own (bounded by `PI_RT_RESPONSE_SLOT_TIMEOUT_MS`, default 5000ms,
+  so a missing `response.done` can never wedge the session);
+- the superseded turn is closed out as aborted, and its trailing deltas are
+  dropped instead of leaking into the next turn's transcript;
+- if the busy error still arrives, the turn is *retried* rather than failed
+  (`PI_RT_RESPONSE_BUSY_MAX_RETRIES`, default 2), so the model transcript keeps
+  printing and the audio-turn latch clears;
+- a mic commit that lands while another audio turn is in flight is queued and
+  replayed when that turn settles, instead of being dropped.
+
+`/rt-doctor` shows the slot state:
+`response: inFlight:resp_… · busyRetries:0 · queuedAudioTurn:no · pendingAudioTurn:no · commentary:thinking`.
 
 ## Troubleshooting quick reference
 
@@ -721,6 +786,8 @@ export PI_RT_SEND_REASONING=1
 - If VAD commits too often, raise `PI_RT_VAD_THRESHOLD` or increase `PI_RT_VAD_SILENCE_MS`.
 - If transcription hangs, use `/rt-cancel` to discard or `/rt-listen ptt` for manual control.
 - If the widget is in the way, use `/rt-hide-status`; `/rt-status` shows it again.
+- If you see *"Conversation already has an active response in progress"*, the turn is now retried automatically; check `/rt-doctor`'s `response:` line for `busyRetries` and a stuck `inFlight` id.
+- If preambles read oddly mixed into answers, set `/rt commentary thinking` (default) or `/rt commentary hidden`.
 
 ## Smoke test checklist
 

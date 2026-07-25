@@ -20,6 +20,7 @@ export const REALTIME_VALUE_SETTINGS = [
   { param: "voice", keys: ["voice"], coerce: "lowerTrim", setter: "setVoice", snapshotField: "voice" },
   { param: "trans", keys: ["trans", "transcription", "transcription_model", "transcriptionmodel"], coerce: "lowerTrim", setter: "setTranscriptionModel", snapshotField: "transcriptionModel" },
   { param: "reasoning", keys: ["reasoning"], coerce: "lowerTrim", setter: "setReasoningEffort", snapshotField: "reasoningEffort" },
+  { param: "commentary", keys: ["commentary", "preamble", "preambles", "phase", "phases"], coerce: "lowerTrim", setter: "setCommentaryMode", snapshotField: "commentaryMode" },
   { param: "speed", keys: ["speed"], coerce: "speed", setter: "setSpeed", snapshotField: "speed" },
   { param: "thresh", keys: ["thresh", "threshold", "vad_threshold", "vadthreshold"], coerce: "thresh", setter: "setVadThreshold", snapshotField: "vadThreshold" },
   { param: "energy", keys: ["energy", "energy_threshold", "energythreshold"], coerce: "thresh", special: "localVadEnergy" },

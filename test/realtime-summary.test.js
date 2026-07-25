@@ -178,7 +178,7 @@ test("splitCurrentTurn splits at the last user message", () => {
 // --- token estimators ---
 
 test("estimateRealtimeContextTokens and summary variant return positive sizes", () => {
-  assert.equal(REALTIME_CONTEXT_WINDOW_TOKENS, 128_000);
+  assert.equal(REALTIME_CONTEXT_WINDOW_TOKENS, 256_000);
   const context = {
     systemPrompt: "system",
     messages: [

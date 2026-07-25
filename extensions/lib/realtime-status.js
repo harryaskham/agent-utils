@@ -242,6 +242,10 @@ export function diagnosticLines(session, config) {
     `vad: threshold:${config.vadThreshold ?? numberEnv("PI_RT_VAD_THRESHOLD", 0.7)} · silence:${numberEnv("PI_RT_VAD_SILENCE_MS", 1100)}ms · prefix:${numberEnv("PI_RT_VAD_PREFIX_PADDING_MS", 300)}ms`,
     `state: ${JSON.stringify(session.state?.snapshot?.({ sttOnly: config.sttOnly, audioEnabled: config.audioEnabled }) || {})}`,
     `micBytes: ${session.lastMicBytes || 0} · muteFor:${Math.max(0, session.micMuteUntilTs - Date.now())}ms · pendingTranscript:${session.pendingSpokenTranscripts.length} · micRestart:${session.micRestartAttempts || 0}${session.micRestartTimer ? " pending" : ""}`,
+    // Response-slot state. The realtime server allows one open response per
+    // conversation; "Conversation already has an active response in progress"
+    // means a create raced an open response (see handleResponseBusyError).
+    `response: inFlight:${session.responseInFlight ? (session.activeResponseId || "yes") : "none"} · busyRetries:${session.responseBusyRetries || 0} · queuedAudioTurn:${session.audioTurnQueued ? "yes" : "no"} · pendingAudioTurn:${session.pendingAudioTurnPending ? "yes" : "no"} · commentary:${config.commentaryMode || "thinking"}`,
     `micError: ${micError || "<none>"}`,
     `reconnect: ${config.autoReconnect ? "on" : "off"} · attempts:${config.reconnectAttempts || 0}/${config.reconnectMaxAttempts || 0} · next:${config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0}ms · last:${config.lastDisconnectReason || "<none>"}`,
     `lastResponseError: ${responseError || "<none>"}`,

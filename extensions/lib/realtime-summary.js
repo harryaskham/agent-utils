@@ -6,8 +6,11 @@
 // unchanged from the original inline definitions.
 
 import { estimateRealtimeTokensForText, truncateToolOutput } from "./realtime-helpers.js";
+import { DEFAULT_REALTIME_CONTEXT_WINDOW } from "./realtime-models.js";
 
-export const REALTIME_CONTEXT_WINDOW_TOKENS = 128_000;
+// Fallback window when the selected model carries no contextWindow. GPT Realtime
+// 2.x is a 256k-context family (realtime-models.js owns the per-model map).
+export const REALTIME_CONTEXT_WINDOW_TOKENS = DEFAULT_REALTIME_CONTEXT_WINDOW;
 const SUMMARY_FALLBACK_MESSAGE_CAP = 40;
 const SUMMARY_FALLBACK_TEXT_CAP = 1_200;
 const REALTIME_SUMMARY_TEXT_CAP = 24_000;

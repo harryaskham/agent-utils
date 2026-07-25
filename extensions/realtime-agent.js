@@ -144,9 +144,23 @@ import {
   isRealtimeModel,
   normalizeRealtimeModelId,
   normalizeTranscriptionModel,
+  realtimeModelContextWindow,
+  realtimeModelSupportsReasoning,
   resolveRealtimeVoice,
   shouldAutoRestartMicMode,
 } from "./lib/realtime-models.js";
+import {
+  COMMENTARY_MODES,
+  isCommentaryPhase,
+  normalizeCommentaryMode,
+  realtimeItemPhase,
+} from "./lib/realtime-phases.js";
+import {
+  isNoActiveResponseError,
+  isReasoningRejectionError,
+  isResponseBusyError,
+  isSpeedRejectionError,
+} from "./lib/realtime-response-errors.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
 import { persistRealtimeSetting } from "./lib/realtime-settings.js";
 import { createGlobalWebSocketAdapter, setRealtimeWebSocketImplKind } from "./lib/realtime-ws-fallback.js";
@@ -283,7 +297,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|local-vad-ptt|quickfile|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|local-vad-ptt|quickfile|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt commentary [thinking|text|hidden], /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false commentary=thinking speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). Defaults: backend=pulse, server=sgu24:4713, listen=vad on start (same for /stt).";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -498,6 +512,21 @@ class RealtimeSession {
     this.reasoningRejected = false;
     this.speedRejected = false;
     this.current = null;                     // active per-response state
+    // Server-side response lifecycle. The realtime server allows exactly ONE
+    // open response per conversation: a second `response.create` is rejected
+    // with "Conversation already has an active response in progress". Track the
+    // in-flight response so a new Pi turn serializes behind (or cancels) it
+    // instead of firing blind and losing the turn to that error.
+    this.activeResponseId = null;
+    this.responseInFlight = false;
+    this.responseIdleWaiters = [];
+    this.responseBusyRetries = 0;
+    // Response ids whose Pi turn was superseded/retired. Their late deltas must
+    // not bleed into the transcript of the turn that replaced them.
+    this.supersededResponseIds = new Set();
+    // A mic commit that landed while another audio turn was already in flight.
+    // Remembered rather than dropped so barge-in speech still gets answered.
+    this.audioTurnQueued = false;
     this.audioClips = new Map();             // clipId -> { id, pcm, durationMs, text, timestamp }
     this.latestClipId = null;
     this.nextClipId = 1;
@@ -895,6 +924,7 @@ class RealtimeSession {
       this.connected = false;
       this.setPhase("idle");
       this.player.close();
+      this.markResponseIdle();
       this.failPending(new Error("Realtime WebSocket closed"));
       this.updateStatus();
       this.scheduleReconnect("Realtime WebSocket closed");
@@ -911,7 +941,7 @@ class RealtimeSession {
 
   failPending(err) {
     if (!this.current) {
-      this.pendingAudioTurnPending = false;
+      this.settleAudioTurn();
       if (this.phase === "speaking" || this.phase === "thinking") this.setPhase("idle");
       return;
     }
@@ -921,8 +951,143 @@ class RealtimeSession {
     stream.push({ type: "error", reason: "error", error: partial });
     stream.end(partial);
     this.current = null;
-    this.pendingAudioTurnPending = false;
+    this.settleAudioTurn();
     if (this.phase === "speaking" || this.phase === "thinking") this.setPhase("idle");
+  }
+
+  // -------------------------------------------------------------------------
+  // Server response slot (one open response per conversation)
+  // -------------------------------------------------------------------------
+
+  // Called on response.created. Everything after this point until the matching
+  // response.done would make a fresh response.create fail.
+  markResponseInFlight(responseId) {
+    this.responseInFlight = true;
+    this.activeResponseId = responseId || null;
+  }
+
+  // Called on response.done (and on close/teardown): the server can accept a
+  // new response.create again. Wakes anything waiting for the slot.
+  markResponseIdle() {
+    this.responseInFlight = false;
+    this.activeResponseId = null;
+    const waiters = this.responseIdleWaiters;
+    this.responseIdleWaiters = [];
+    for (const waiter of waiters) {
+      try { waiter(true); } catch {}
+    }
+  }
+
+  // Resolves true once the server reports the open response finished, false if
+  // the wait timed out. A timeout also force-clears the flag: a missing
+  // response.done must never wedge every later turn.
+  waitForResponseIdle(timeoutMs = Number(env("PI_RT_RESPONSE_SLOT_TIMEOUT_MS") || 5000)) {
+    if (!this.responseInFlight) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let settled = false;
+      const waiter = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => {
+        const idx = this.responseIdleWaiters.indexOf(waiter);
+        if (idx >= 0) this.responseIdleWaiters.splice(idx, 1);
+        this.responseInFlight = false;
+        this.activeResponseId = null;
+        waiter(false);
+      }, Math.max(0, timeoutMs));
+      timer.unref?.();
+      this.responseIdleWaiters.push(waiter);
+    });
+  }
+
+  // Make room for this turn's response.create. Cancels the open response (the
+  // user has spoken/typed again, so the old answer is stale) and waits for the
+  // server to confirm it closed.
+  async acquireResponseSlot({ cancel = true } = {}) {
+    if (!this.responseInFlight) return true;
+    if (cancel) {
+      try { this.send({ type: "response.cancel" }); } catch {}
+    }
+    return await this.waitForResponseIdle();
+  }
+
+  // Remember a response id whose turn is over (retired or finalized) so its
+  // trailing deltas cannot be appended to whatever turn comes next. Bounded.
+  noteStaleResponseId(responseId) {
+    if (!responseId) return;
+    this.supersededResponseIds.add(responseId);
+    while (this.supersededResponseIds.size > 8) {
+      const oldest = this.supersededResponseIds.values().next().value;
+      this.supersededResponseIds.delete(oldest);
+    }
+  }
+
+  // Retire a per-response state whose Pi turn is being replaced (barge-in +
+  // abort leaves the stream open). Ends the old stream as aborted so Pi's turn
+  // does not hang, and remembers its response id so trailing deltas are dropped
+  // rather than appended to the new turn's transcript.
+  retireCurrent(reason = "superseded by a new realtime turn") {
+    const state = this.current;
+    if (!state) return;
+    this.current = null;
+    this.noteStaleResponseId(state.responseId);
+    try {
+      state.partial.stopReason = "aborted";
+      state.partial.errorMessage = reason;
+      state.stream.push({ type: "error", reason: "aborted", error: state.partial });
+      state.stream.end(state.partial);
+    } catch {}
+  }
+
+  // "Conversation already has an active response in progress": the server is
+  // still finishing the previous response. Failing the pending turn here is what
+  // dropped the model transcript and wedged VAD, so cancel the stale response
+  // and re-issue THIS turn's response.create once the slot frees up.
+  handleResponseBusyError(msg) {
+    const maxRetries = Number(env("PI_RT_RESPONSE_BUSY_MAX_RETRIES") || 2);
+    if (!this.current || this.responseBusyRetries >= maxRetries) {
+      this.lastResponseError = msg;
+      this.failPending(new Error(msg));
+      return;
+    }
+    this.responseBusyRetries += 1;
+    // Our create was rejected, so nothing on the wire belongs to this turn until
+    // the retry is acknowledged with response.created.
+    this.current.awaitingRetry = true;
+    // We know a response is open even if we never saw its response.created
+    // (e.g. it was created before this session object started tracking).
+    if (!this.responseInFlight) this.markResponseInFlight(null);
+    const responseObj = this.lastResponseObject || this._makeResponseObject();
+    const turn = this.current;
+    if (this.config.debug) this.notify(`Realtime: previous response still open; cancelling and retrying this turn (${this.responseBusyRetries}/${maxRetries}).`, "info");
+    this.acquireResponseSlot({ cancel: true }).then((idle) => {
+      if (this.current !== turn) return;      // turn already settled or replaced
+      // idle === false means the wait timed out. The slot flag is force-cleared
+      // in that case, so try the create anyway: a still-busy server just returns
+      // another busy error, which is bounded by maxRetries.
+      if (!idle && this.config.debug) this.notify("Realtime: previous response never reported done; retrying the create anyway.", "warning");
+      try { this.send({ type: "response.create", response: responseObj }); }
+      catch (e) { this.failPending(new Error(`Realtime response retry failed: ${e.message}`)); }
+    }).catch((e) => {
+      if (this.current === turn) this.failPending(e instanceof Error ? e : new Error(String(e)));
+    });
+  }
+
+  // Clear the audio-turn latch and, if a mic commit arrived while a turn was
+  // already in flight, replay it now instead of dropping the utterance.
+  settleAudioTurn() {
+    this.pendingAudioTurnPending = false;
+    if (!this.audioTurnQueued) return;
+    this.audioTurnQueued = false;
+    const timer = setTimeout(() => {
+      if (this.current || this.pendingAudioTurnPending || this.compacting) return;
+      if (!this.connected || this.config.sttOnly) return;
+      this.triggerCommittedAudioTurn();
+    }, 0);
+    timer.unref?.();
   }
 
   // -------------------------------------------------------------------------
@@ -1117,7 +1282,16 @@ class RealtimeSession {
       this.updateStatus();
       return;
     }
-    if (this.pendingAudioTurnPending) return;
+    if (this.pendingAudioTurnPending) {
+      // A previous audio turn has not settled yet (classic barge-in: the user
+      // interrupted, spoke again, and the old response is still closing). Drop-
+      // ping this commit is why "speak over the assistant" used to look like a
+      // dead mic; remember it and re-fire from settleAudioTurn().
+      this.audioTurnQueued = true;
+      this.lastTurnInputMode = "audio";
+      this.updateStatus();
+      return;
+    }
     this.pendingAudioTurnPending = true;
     this.lastTurnInputMode = "audio";
     try {
@@ -1331,7 +1505,20 @@ class RealtimeSession {
     if (this.config.summaryContext) this.forwardSummaryMessages(context?.messages || []);
     else this.forwardNewMessages(context?.messages || []);
 
-    // 4. Build per-response state
+    // 4. Claim the server's single response slot BEFORE this turn's state
+    // exists. The realtime server keeps at most one open response per
+    // conversation, so a barge-in turn must cancel/await the previous one;
+    // otherwise response.create is rejected with "Conversation already has an
+    // active response in progress", which used to error out this turn and swallow
+    // the model transcript. Retiring first also means the old response's
+    // response.done finalizes the OLD stream, never this one.
+    this.retireCurrent("superseded by a new realtime turn");
+    // Only awaited when the slot is actually busy: an unconditional await would
+    // add a microtask before this.current is published, which loses events that
+    // arrive in the same tick as the turn start.
+    if (this.responseInFlight) await this.acquireResponseSlot({ cancel: true });
+
+    // 5. Build per-response state
     const partial = this._makeBasePartial(model);
     const state = {
       stream,
@@ -1340,20 +1527,25 @@ class RealtimeSession {
       currentTextIndex: -1,
       audioTranscriptOpen: false,        // are we streaming via audio_transcript
       plainTextOpen: false,              // ...or via output_text
+      thinkingIndex: -1,                 // open commentary/preamble thinking block
+      openBlockItemId: null,             // output item that owns the open block
+      itemPhases: new Map(),             // item_id -> "commentary" | "final_answer"
       toolBlocks: new Map(),             // call_id -> { contentIndex, argString }
       responseId: null,
+      awaitingRetry: false,             // create rejected by a busy slot; retry pending
       audioChunks: [],                   // raw PCM16 chunks for /rt-play
       audioBytes: 0,
       cancelled: false,
     };
     this.current = state;
+    this.responseBusyRetries = 0;
     this.player.resetResponse();
     this.setPhase("thinking");
 
-    // 5. Push start event
+    // 6. Push start event
     stream.push({ type: "start", partial });
 
-    // 6. Wire abort
+    // 7. Wire abort
     if (options?.signal) {
       const onAbort = () => {
         state.cancelled = true;
@@ -1363,7 +1555,7 @@ class RealtimeSession {
       else options.signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    // 7. response.create
+    // 8. response.create
     const responseObj = this._makeResponseObject();
     this.lastResponseObject = responseObj;
     this.send({ type: "response.create", response: responseObj });
@@ -1379,8 +1571,12 @@ class RealtimeSession {
 
     const sendReasoning = this.config.sendReasoning
       || (this.config.directAzure && (this.config.azureProtocol === "v1" || this.config.azureProtocol === "GA"));
+    // Only the GPT Realtime 2.x family accepts response.reasoning. Gating on the
+    // selected model keeps the reasoning-on-by-default posture from costing a
+    // rejected response (and a reasoningRejected latch) on gpt-realtime.
     if (
       sendReasoning &&
+      realtimeModelSupportsReasoning(this.config.model) &&
       !this.reasoningRejected &&
       this.config.reasoningEffort &&
       this.config.reasoningEffort !== "off"
@@ -1396,6 +1592,7 @@ class RealtimeSession {
 
   _openTextBlock(state, source) {
     if (state.currentTextIndex !== -1) return;
+    this._closeThinkingBlock(state);
     const block = { type: "text", text: "" };
     state.partial.content.push(block);
     state.currentTextIndex = state.partial.content.length - 1;
@@ -1404,7 +1601,62 @@ class RealtimeSession {
     state.stream.push({ type: "text_start", contentIndex: state.currentTextIndex, partial: state.partial });
   }
 
-  _appendText(state, delta, source) {
+  // Commentary preambles render as a Pi thinking block by default, so the
+  // "let me think about that..." filler is visibly separate from the answer
+  // while still being spoken. See lib/realtime-phases.js.
+  _openThinkingBlock(state) {
+    if (state.thinkingIndex !== -1) return;
+    this._closeTextBlock(state);
+    const block = { type: "thinking", thinking: "" };
+    state.partial.content.push(block);
+    state.thinkingIndex = state.partial.content.length - 1;
+    state.stream.push({ type: "thinking_start", contentIndex: state.thinkingIndex, partial: state.partial });
+  }
+
+  _closeThinkingBlock(state) {
+    if (state.thinkingIndex === -1) return;
+    const idx = state.thinkingIndex;
+    const block = state.partial.content[idx];
+    state.thinkingIndex = -1;
+    state.stream.push({ type: "thinking_end", contentIndex: idx, content: block.thinking, partial: state.partial });
+  }
+
+  _appendThinking(state, delta) {
+    if (!delta) return;
+    this._openThinkingBlock(state);
+    const block = state.partial.content[state.thinkingIndex];
+    block.thinking += delta;
+    state.stream.push({
+      type: "thinking_delta",
+      contentIndex: state.thinkingIndex,
+      delta,
+      partial: state.partial,
+    });
+  }
+
+  // Phase of the output item a delta belongs to. Untagged items (and every
+  // pre-2.x model) are final_answer, so behavior there is unchanged.
+  _phaseForItem(state, itemId) {
+    if (!itemId) return state.lastItemPhase || "final_answer";
+    return state.itemPhases.get(itemId) || "final_answer";
+  }
+
+  // A new output item starts: close whatever block the previous item owned so
+  // a commentary preamble and the final answer never share one block. In
+  // commentary=text mode everything is deliberately merged into one transcript
+  // block, matching pre-phase rendering.
+  _startOutputItem(state, itemId, phase) {
+    if (itemId) state.itemPhases.set(itemId, phase);
+    state.lastItemPhase = phase;
+    const merged = normalizeCommentaryMode(this.config.commentaryMode) === "text";
+    if (!merged && state.openBlockItemId && state.openBlockItemId !== itemId) {
+      this._closeTextBlock(state);
+      this._closeThinkingBlock(state);
+    }
+    state.openBlockItemId = itemId || state.openBlockItemId;
+  }
+
+  _appendText(state, delta, source, itemId) {
     if (!delta) return;
     // Decide which text stream "owns" this block.  When audio is enabled, we
     // prefer the audio_transcript stream for the user-visible text and ignore
@@ -1412,6 +1664,17 @@ class RealtimeSession {
     // emits plain text only.
     if (this.config.audioEnabled && source === "text") return;
     if (!this.config.audioEnabled && source === "audio") return;
+
+    if (isCommentaryPhase(this._phaseForItem(state, itemId))) {
+      const mode = normalizeCommentaryMode(this.config.commentaryMode);
+      // hidden: the preamble is still spoken, just not transcribed into history.
+      if (mode === "hidden") return;
+      if (mode === "thinking") {
+        this._appendThinking(state, delta);
+        return;
+      }
+      // mode === "text": fall through and inline it with the answer.
+    }
 
     this._openTextBlock(state, source);
     const block = state.partial.content[state.currentTextIndex];
@@ -1442,6 +1705,7 @@ class RealtimeSession {
     // tool calls. Without this, the buffered "I'll check..." audio can start
     // after the tool result, which sounds backwards to the operator.
     this._closeTextBlock(state);
+    this._closeThinkingBlock(state);
     this.player.flush();
     const block = { type: "toolCall", id: callId, name: item.name || "", arguments: {} };
     state.partial.content.push(block);
@@ -1646,21 +1910,52 @@ class RealtimeSession {
     // have an active turn.
     const state = this.current;
 
+    // Server response-slot bookkeeping runs even with no active Pi turn: a
+    // response can outlive the turn that created it (abort/barge-in), and the
+    // slot must free up or every later response.create is rejected.
+    const eventResponseId = event.response?.id || event.response_id || null;
     if (type === "response.created") {
+      this.markResponseInFlight(eventResponseId);
       if (state) {
-        state.responseId = event.response?.id || event.response_id || null;
+        state.responseId = eventResponseId;
         state.partial.responseId = state.responseId || undefined;
+        state.awaitingRetry = false;
       }
+      return;
+    }
+    if (type === "response.done" || type === "response.cancelled" || type === "response.incomplete") {
+      if (!eventResponseId || !this.activeResponseId || eventResponseId === this.activeResponseId) {
+        this.markResponseIdle();
+      }
+    }
+
+    // Trailing events from a response whose turn is over must not bleed into
+    // the transcript of the turn that replaced it.
+    if (eventResponseId && this.supersededResponseIds.has(eventResponseId)) return;
+
+    // Errors are handled before the active-turn guard: several of them are
+    // recoverable session-level conditions (a busy response slot, a stale
+    // cancel) that must settle even when no Pi turn is open.
+    if (type === "error") {
+      this.handleResponseError(event);
       return;
     }
 
     if (!state) return;
+    // Ownership guards. A turn only owns events from the response it created:
+    //  * a mismatched id is another response's event;
+    //  * while this turn is waiting to re-issue a rejected create
+    //    (awaitingRetry), NO id-carrying event is ours yet — in particular the
+    //    previous response's response.done, which would otherwise end this turn
+    //    early and swallow its transcript.
+    if (eventResponseId && state.responseId && eventResponseId !== state.responseId) return;
+    if (eventResponseId && !state.responseId && state.awaitingRetry) return;
 
     if (
       type === "response.audio_transcript.delta" ||
       type === "response.output_audio_transcript.delta"
     ) {
-      this._appendText(state, event.delta || "", "audio");
+      this._appendText(state, event.delta || "", "audio", event.item_id);
       return;
     }
     if (
@@ -1668,21 +1963,31 @@ class RealtimeSession {
       type === "response.output_audio_transcript.done"
     ) {
       if (state.audioTranscriptOpen) this._closeTextBlock(state);
+      this._closeThinkingBlock(state);
       return;
     }
 
     if (type === "response.text.delta" || type === "response.output_text.delta") {
-      this._appendText(state, event.delta || "", "text");
+      this._appendText(state, event.delta || "", "text", event.item_id);
       return;
     }
     if (type === "response.text.done" || type === "response.output_text.done") {
       if (state.plainTextOpen) this._closeTextBlock(state);
+      this._closeThinkingBlock(state);
       return;
     }
 
     if (type === "response.output_item.added") {
       const item = event.item;
-      if (item?.type === "function_call") this._openToolBlock(state, item);
+      // 2.x tags each output item with a phase (commentary preamble vs the final
+      // answer). Record it before any delta for that item arrives.
+      const phase = realtimeItemPhase(item, event);
+      if (item?.type === "function_call") {
+        if (item?.id) state.itemPhases.set(item.id, phase);
+        this._openToolBlock(state, item);
+      } else {
+        this._startOutputItem(state, item?.id, phase);
+      }
       return;
     }
 
@@ -1703,6 +2008,15 @@ class RealtimeSession {
         // Make sure block exists and is closed with the canonical args.
         if (!state.toolBlocks.has(callId)) this._openToolBlock(state, item);
         this._closeToolBlock(state, callId, item.arguments || "", item.name);
+      } else if (!item?.id || item.id === state.openBlockItemId) {
+        // Close this item's block so the next phase (usually final_answer after
+        // a commentary preamble) opens its own. commentary=text keeps one merged
+        // block, so leave it open there.
+        if (normalizeCommentaryMode(this.config.commentaryMode) !== "text") {
+          this._closeTextBlock(state);
+          this._closeThinkingBlock(state);
+          state.openBlockItemId = null;
+        }
       }
       return;
     }
@@ -1719,42 +2033,52 @@ class RealtimeSession {
       this._finalizeResponse(state, event);
       return;
     }
+  }
 
-    if (type === "error") {
-      const err = event.error || event;
-      const msg = err.message || JSON.stringify(err);
-      // Reasoning auto-fallback
-      if (
-        /Unknown parameter: 'response\.reasoning'/.test(msg) ||
-        /Unknown parameter: 'response\.reasoning_effort'/.test(msg)
-      ) {
-        this.reasoningRejected = true;
-        this.notify("Realtime server rejected reasoning.effort; retrying without it.", "warning");
-        try {
-          const retryObj = this._makeResponseObject();
-          delete retryObj.reasoning;
-          this.send({ type: "response.create", response: retryObj });
-        } catch (e) {
-          this.failPending(new Error(`Reasoning retry failed: ${e.message}`));
-        }
-        return;
-      }
-      if (/Unknown parameter: 'response\.speed'/.test(msg) || /Unknown parameter: 'speed'/.test(msg)) {
-        this.speedRejected = true;
-        this.notify("Realtime server rejected response speed; retrying without it.", "warning");
-        try {
-          const retryObj = this._makeResponseObject();
-          delete retryObj.speed;
-          this.send({ type: "response.create", response: retryObj });
-        } catch (e) {
-          this.failPending(new Error(`Speed retry failed: ${e.message}`));
-        }
-        return;
-      }
-      this.lastResponseError = msg;
-      this.failPending(new Error(msg));
+  handleResponseError(event) {
+    const err = event.error || event;
+    const msg = err.message || JSON.stringify(err);
+    // Server still finishing the previous response: recoverable, and fatal to
+    // the conversation if treated as a turn error (it drops the model transcript
+    // and wedges the audio-turn latch). Cancel + retry this turn instead.
+    if (isResponseBusyError(msg)) {
+      this.handleResponseBusyError(msg);
       return;
     }
+    // A response.cancel that raced response.done. Benign: note the slot is free
+    // and keep the pending turn alive.
+    if (isNoActiveResponseError(msg)) {
+      this.markResponseIdle();
+      if (this.config.debug) this.notify(`Realtime: ${msg}`, "info");
+      return;
+    }
+    // Reasoning auto-fallback
+    if (isReasoningRejectionError(msg)) {
+      this.reasoningRejected = true;
+      this.notify("Realtime server rejected reasoning.effort; retrying without it.", "warning");
+      try {
+        const retryObj = this._makeResponseObject();
+        delete retryObj.reasoning;
+        this.send({ type: "response.create", response: retryObj });
+      } catch (e) {
+        this.failPending(new Error(`Reasoning retry failed: ${e.message}`));
+      }
+      return;
+    }
+    if (isSpeedRejectionError(msg)) {
+      this.speedRejected = true;
+      this.notify("Realtime server rejected response speed; retrying without it.", "warning");
+      try {
+        const retryObj = this._makeResponseObject();
+        delete retryObj.speed;
+        this.send({ type: "response.create", response: retryObj });
+      } catch (e) {
+        this.failPending(new Error(`Speed retry failed: ${e.message}`));
+      }
+      return;
+    }
+    this.lastResponseError = msg;
+    this.failPending(new Error(msg));
   }
 
   _cacheResponseAudio(state) {
@@ -1803,6 +2127,7 @@ class RealtimeSession {
   _finalizeResponse(state, event) {
     // Make sure all open content blocks are closed.
     if (state.currentTextIndex !== -1) this._closeTextBlock(state);
+    this._closeThinkingBlock(state);
     for (const [callId, entry] of state.toolBlocks.entries()) {
       const block = state.partial.content[entry.contentIndex];
       if (block && (!block.arguments || Object.keys(block.arguments).length === 0)) {
@@ -1842,7 +2167,9 @@ class RealtimeSession {
       state.stream.end(state.partial);
     }
     this.current = null;
-    this.pendingAudioTurnPending = false;
+    this.noteStaleResponseId(state.responseId);
+    this.responseBusyRetries = 0;
+    this.settleAudioTurn();
     this.setPhase("idle");
     if (clip && !hasToolCalls) this.sendAudioControlMessage(clip);
   }
@@ -2009,6 +2336,10 @@ class RealtimeSession {
     }
     this.connected = false;
     this.pendingAudioTurnPending = false;
+    this.audioTurnQueued = false;
+    this.markResponseIdle();
+    this.supersededResponseIds.clear();
+    this.responseBusyRetries = 0;
     this.finishCompactionWindow();
     this.setPhase("idle");
     this.systemPromptApplied = null;
@@ -2042,10 +2373,12 @@ function registerRealtimeProvider(pi, session) {
     {
       id: "gpt-realtime-2",
       name: "GPT Realtime 2",
+      // GPT Realtime 2.x: reasoning with adjustable effort, phased output items
+      // (commentary preambles + final answer), 256k context.
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
+      contextWindow: realtimeModelContextWindow("gpt-realtime-2"),
       maxTokens: 4096,
     },
     {
@@ -2054,7 +2387,7 @@ function registerRealtimeProvider(pi, session) {
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
+      contextWindow: realtimeModelContextWindow("gpt-realtime"),
       maxTokens: 4096,
     },
   ];
@@ -2121,6 +2454,7 @@ export function createRealtimeControls({ pi, session, config }) {
         voices: [...REALTIME_VOICES],
         audioBackends: [...REALTIME_AUDIO_BACKENDS],
         reasoningEfforts: [...REALTIME_REASONING_EFFORTS],
+        commentaryModes: [...COMMENTARY_MODES],
         startModes: [...REALTIME_START_MODES],
         micModes: [...REALTIME_MIC_MODES],
         sttModes: [...REALTIME_STT_MODES],
@@ -2161,6 +2495,7 @@ export function createRealtimeControls({ pi, session, config }) {
           sink: process.env.PULSE_SINK || null,
         },
         reasoningEffort: config.reasoningEffort,
+        commentaryMode: normalizeCommentaryMode(config.commentaryMode),
         speed: config.speed,
         vadThreshold: config.vadThreshold,
         summaryContext: !!config.summaryContext,
@@ -2187,6 +2522,12 @@ export function createRealtimeControls({ pi, session, config }) {
           reconnectMaxAttempts: config.reconnectMaxAttempts || 0,
           nextReconnectInMs: config.nextReconnectAt ? Math.max(0, config.nextReconnectAt - Date.now()) : 0,
           lastDisconnectReason: config.lastDisconnectReason || null,
+          // Server response-slot state: a turn can only start while the slot is
+          // free, and a queued audio turn means a barge-in commit is waiting.
+          responseInFlight: !!session.responseInFlight,
+          activeResponseId: session.activeResponseId || null,
+          responseBusyRetries: session.responseBusyRetries || 0,
+          audioTurnQueued: !!session.audioTurnQueued,
         },
       };
     },
@@ -2381,6 +2722,19 @@ export function createRealtimeControls({ pi, session, config }) {
       }
       config.reasoningEffort = next;
       session.reasoningRejected = false;
+      session.updateStatus(ctx);
+      return this.snapshot();
+    },
+
+    // How gpt-realtime 2.x commentary preambles render: thinking|text|hidden.
+    setCommentaryMode(mode, ctx) {
+      const raw = String(mode || "").trim().toLowerCase();
+      if (!raw) return this.snapshot();
+      const next = normalizeCommentaryMode(raw, null);
+      if (!next) {
+        throw new Error(`Unsupported realtime commentary mode: ${mode}. Use one of: ${COMMENTARY_MODES.join(", ")}`);
+      }
+      config.commentaryMode = next;
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -3294,6 +3648,12 @@ export default function realtimeAgentExtension(pi) {
     if (verb === "reasoning") {
       if (!value) { ctx.ui.notify(`Realtime reasoning effort ${controls.snapshot().reasoningEffort}. Options: ${controls.options().reasoningEfforts.join(", ")}`, "info"); return; }
       try { controls.setReasoningEffort(value, ctx); ctx.ui.notify(`Realtime reasoning effort: ${value}`, "info"); }
+      catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
+      return;
+    }
+    if (verb === "commentary" || verb === "preamble" || verb === "preambles") {
+      if (!value) { ctx.ui.notify(`Realtime commentary rendering ${controls.snapshot().commentaryMode}. Options: ${controls.options().commentaryModes.join(", ")} (gpt-realtime-2.x preambles).`, "info"); return; }
+      try { controls.setCommentaryMode(value, ctx); ctx.ui.notify(`Realtime commentary rendering: ${controls.snapshot().commentaryMode}`, "info"); }
       catch (e) { ctx.ui.notify(e.message || String(e), "warning"); }
       return;
     }

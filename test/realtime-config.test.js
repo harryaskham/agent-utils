@@ -77,8 +77,9 @@ test("makeInitialConfig: stable defaults on a clean environment", () => {
     assert.equal(c.vadThreshold, 0.7);
     assert.equal(c.bufferMs, 180);
     assert.equal(c.playbackChunkMs, 80);
-    assert.equal(c.reasoningEffort, "off");
-    assert.equal(c.sendReasoning, false);
+    assert.equal(c.reasoningEffort, "low");
+    assert.equal(c.sendReasoning, true);
+    assert.equal(c.commentaryMode, "thinking");
     assert.equal(c.audioEnabled, true);
     assert.equal(c.chimeEnabled, true);
     assert.equal(c.summaryContext, false);

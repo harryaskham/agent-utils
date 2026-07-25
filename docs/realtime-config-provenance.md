@@ -26,8 +26,9 @@ Answers "where does each realtime config value come from, and is it written back
 | vadThreshold | PI_RT_VAD_THRESHOLD | agentUtils.realtime (+agentUtils.stt fallback) | 0.7 |  |
 | bufferMs | PI_RT_BUFFER_MS, TTS_REALTIME_BUFFER_MS | no | 180 |  |
 | playbackChunkMs | PI_RT_PLAYBACK_CHUNK_MS | no | 80 |  |
-| reasoningEffort | PI_RT_REASONING_EFFORT | no | off |  |
-| sendReasoning | PI_RT_SEND_REASONING | no | false |  |
+| reasoningEffort | PI_RT_REASONING_EFFORT | no | low | GPT Realtime 2.x supports reasoning.effort; low keeps latency down while enabling commentary preambles. /rt reasoning=off disables |
+| sendReasoning | PI_RT_SEND_REASONING | no | true | send response.reasoning on the proxy path too; auto-falls back once if the endpoint rejects it |
+| commentaryMode | PI_RT_COMMENTARY | no | thinking | phase rendering for 2.x commentary preambles: thinking|text|hidden (lib/realtime-phases.js) |
 | audioEnabled | PI_RT_DISABLE_AUDIO | no | true | inverted: audioEnabled = !PI_RT_DISABLE_AUDIO |
 | debug | PI_RT_DEBUG | no | false |  |
 | recordCommand | PI_RT_RECORD_CMD | no | (unset) |  |

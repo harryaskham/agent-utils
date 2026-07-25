@@ -94,12 +94,12 @@ test("micCaptureSummary reports inactive, waiting, and active states", () => {
   );
 });
 
-test("realtimeContextDiagnostics defaults to the 128k window with no messages", () => {
+test("realtimeContextDiagnostics defaults to the 256k gpt-realtime-2.x window with no messages", () => {
   const d = realtimeContextDiagnostics({}, {});
-  assert.equal(d.contextWindow, 128_000);
+  assert.equal(d.contextWindow, 256_000);
   assert.equal(d.reserveTokens, 16_384);
-  assert.equal(d.thresholdTokens, 128_000 - 16_384);
-  assert.equal(d.thresholdPct, "87.2%");
+  assert.equal(d.thresholdTokens, 256_000 - 16_384);
+  assert.equal(d.thresholdPct, "93.6%");
   assert.equal(d.keepRecentTokens, null);
   assert.equal(d.fullTokens, null);
   assert.equal(d.fullPct, "n/a");
@@ -124,7 +124,7 @@ test("realtimeContextDiagnostics honors a realtime model window and settings", (
 
 test("realtimeContextDiagnostics ignores a non-realtime model window", () => {
   const d = realtimeContextDiagnostics({ lastCtx: { model: { id: "gpt-4o", contextWindow: 9_999 } } }, {});
-  assert.equal(d.contextWindow, 128_000);
+  assert.equal(d.contextWindow, 256_000);
 });
 
 test("realtimeContextDiagnostics estimates tokens when messages are present", () => {
@@ -147,7 +147,7 @@ test("realtimeContextDiagnosticLine renders n/a and populated variants", () => {
   // No messages -> estimate:n/a, no keep segment.
   assert.equal(
     realtimeContextDiagnosticLine({}, {}),
-    `context: window:${num(128_000)} · compactAt:${num(111_616)} (87.2%) · reserve:${num(16_384)} · estimate:n/a`,
+    `context: window:${num(256_000)} · compactAt:${num(239_616)} (93.6%) · reserve:${num(16_384)} · estimate:n/a`,
   );
   // Populated -> full/summary tokens and a keep segment from settings.
   const session = {

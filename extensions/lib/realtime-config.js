@@ -7,6 +7,7 @@
 
 import { env, envBool, numberEnv, parseRealtimeSpeed, parseVadThreshold } from "./realtime-helpers.js";
 import { normalizeRealtimeModelId, normalizeTranscriptionModel, resolveRealtimeVoice } from "./realtime-models.js";
+import { normalizeCommentaryMode } from "./realtime-phases.js";
 import { readPersistedRealtimeSettings, readPersistedSttSettings } from "./realtime-settings.js";
 
 // Default direct-Azure realtime target: the gpt-realtime-2 GA deployment in the
@@ -93,8 +94,18 @@ export function makeInitialConfig(options = {}) {
     vadThreshold: parseVadThreshold(env("PI_RT_VAD_THRESHOLD") ?? persisted.vadThreshold ?? persistedStt.vadThreshold, 0.7),
     bufferMs: Number(env("PI_RT_BUFFER_MS", "TTS_REALTIME_BUFFER_MS") || 180),
     playbackChunkMs: Number(env("PI_RT_PLAYBACK_CHUNK_MS") || 80),
-    reasoningEffort: env("PI_RT_REASONING_EFFORT") || "off",
-    sendReasoning: envBool("PI_RT_SEND_REASONING", false),
+    // GPT Realtime 2.x supports reasoning with an adjustable effort, and low is
+    // the useful floor for a conversational agent: it buys tool/answer planning
+    // (and the commentary preambles that hide the latency) without the long
+    // silent think of medium/high. `off` remains available via /rt reasoning=off.
+    // sendReasoning defaults ON so the proxy path gets the same behavior as the
+    // direct-Azure path; a server that rejects response.reasoning auto-falls back
+    // once and remembers (session.reasoningRejected).
+    reasoningEffort: env("PI_RT_REASONING_EFFORT") || "low",
+    sendReasoning: envBool("PI_RT_SEND_REASONING", true),
+    // How phased 2.x output items render in Pi: commentary preambles as a
+    // thinking block (default), inlined into the answer text, or hidden.
+    commentaryMode: normalizeCommentaryMode(env("PI_RT_COMMENTARY")),
     audioEnabled: !envBool("PI_RT_DISABLE_AUDIO", false),
     statusWidgetVisible: false,
     debug: envBool("PI_RT_DEBUG", false),
