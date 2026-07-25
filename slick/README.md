@@ -15,6 +15,7 @@ nix run ./slick -- --demo --no-graphics
 nix run ./slick -- --sync-once  # bounded live refresh into the cache
 nix run ./slick -- --fetch-file F123  # cache one Canvas as Markdown
 nix run ./slick -- --snapshot --page files  # deterministic file/Markdown render
+nix run ./slick -- --snapshot --page dms --open  # opened conversation/thread layout
 ```
 
 Slick reads the existing `~/.slack-mcp-tokens.json` credentials used by the
@@ -26,8 +27,13 @@ expires, refresh it with `/slack-refresh` in Pi and press `Ctrl-R` in Slick.
 Slick mirrors Slack's navigation shape:
 
 - **Activity** combines mentions, unread DMs, and recent DM activity.
+- **Favorites** is a dedicated view over everything Slack has starred.
 - **Direct messages** and **Channels** are complete, separately paginated API inventories normalized by name, favorite, recency, and unread state. Clicking either section opens a searchable, bounded overview before opening a conversation.
+- The sidebar's channel list is ordered by **channels you have posted in recently** (`search.messages from:me`, seven-day window), backfilled through `conversations.info` so non-member channels still resolve to names.
 - Slick mirrors Slack favorites via `stars.list`. Slack's arbitrary custom sidebar-section layout is not exposed by the supported Web API, so Slick presents Favorites/Active DMs/Channels over the complete inventory rather than pretending to reproduce private UI-only section metadata.
+- Conversations read oldest → newest and open pinned to the newest message, like a chat client.
+- Messages carrying replies can be opened as **threads** (`conversations.replies`); threads stack and `q` pops one level at a time.
+- Permalinks render as an `open ↗` OSC 8 hyperlink rather than raw URLs, and URLs inside Markdown bodies become clickable in place.
 - Opening a conversation lazy-loads its compact content.
 - **Files** presents recent files in the middle pane and renders selected Slack
   Canvas content as rich Markdown on the right.
@@ -39,19 +45,23 @@ Slick mirrors Slack's navigation shape:
 
 | Key | Action |
 |---|---|
-| `1`…`4`, `h`/`l`, arrows | Switch Activity / DMs / Channels / Files |
-| `j`/`k`, arrows | Move selection or scroll the focused pane |
+| `1`…`5`, `h`/`l`, arrows | Switch Activity / Favorites / DMs / Channels / Files |
+| `j`/`k`, arrows | Move selection, move between messages, or scroll the focused pane |
 | `gg`, `G`, `0` | Top, bottom, home |
-| `Enter` | Open/lazy-load selected conversation or file |
-| `Tab` / `Shift-Tab` | Cycle sidebar/content/detail focus |
+| `Enter` | Open/lazy-load a conversation or file; on a reply-bearing message, open its thread |
+| `q` | Pop the thread stack, then fullscreen, then a hidden sidebar, then the conversation |
+| `\` | Toggle sidebar visibility (any view) |
+| `f` | Fullscreen the Markdown pane (messages, threads, Canvas) |
+| `Tab` / `Shift-Tab` | Cycle sidebar/content/detail focus; always restores a hidden sidebar |
 | `Ctrl-R` | Refresh the visible view plus the DM/channel list |
 | `Ctrl-U` / `Ctrl-D`, `PageUp` / `PageDown`, `Space` | Page rich content |
 | `/` | Filter cached names and files locally |
 | `?` | Help |
-| `q`, `Ctrl-C` | Quit |
+| `Ctrl-C` | Quit |
 
-Mouse clicks select navigation, conversations, notifications, and files. The
-wheel scrolls the focused rich-content pane.
+Mouse clicks select navigation, conversations, notifications, files, and
+reply-bearing messages (opening their thread). The wheel scrolls the focused
+rich-content pane. Passive mouse motion never triggers a repaint.
 
 ## Refresh and cache contract
 
@@ -77,6 +87,20 @@ placeholder placement (`z=0`, no placement id) accumulated offset gradient strip
 and covered all text in the tested Ghostty/tmux path. Stable underlays remove the
 placeholder grid, replace rather than accumulate placements, and keep ordinary
 Ratatui text above the graphics. `--no-graphics` remains a universal fallback.
+
+Two further host-side rules keep graphics stable during interaction:
+
+- **Placement diffing.** A scene is re-placed only when its image id or cell
+  footprint changes, so idle repaints (for example the one-second staleness
+  timer) emit no graphics traffic at all.
+- **Cursor preservation.** Kitty placement commands move the real cursor while
+  Ratatui still tracks its own position, which made text drift and scroll away
+  under mouse movement. Slick wraps every graphics transaction in `ESC 7` /
+  `ESC 8` so the next text diff starts from the position Ratatui expects.
+
+OSC 8 hyperlinks are emitted in two-character cell chunks, matching the
+workaround in ratatui's own hyperlink example, because `unicode-width`
+mis-measures escape bytes and would otherwise blank the following cells.
 
 ## Development
 

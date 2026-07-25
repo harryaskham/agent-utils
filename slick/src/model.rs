@@ -160,9 +160,13 @@ pub struct CacheState {
     pub users: BTreeMap<String, User>,
     pub conversations: Vec<Conversation>,
     pub messages: BTreeMap<String, Vec<Message>>,
+    #[serde(default)]
+    pub threads: BTreeMap<String, Vec<Message>>,
     pub notifications: Vec<Notification>,
     pub files: Vec<SlackFile>,
     pub last_refresh: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub self_activity: BTreeMap<String, String>,
     pub saved_at: Option<i64>,
 }
 
@@ -177,9 +181,11 @@ impl Default for CacheState {
             users: BTreeMap::new(),
             conversations: Vec::new(),
             messages: BTreeMap::new(),
+            threads: BTreeMap::new(),
             notifications: Vec::new(),
             files: Vec::new(),
             last_refresh: BTreeMap::new(),
+            self_activity: BTreeMap::new(),
             saved_at: None,
         }
     }
@@ -206,6 +212,11 @@ impl CacheState {
 
     pub fn mark_refreshed(&mut self, key: impl Into<String>) {
         self.last_refresh.insert(key.into(), Self::now());
+    }
+
+    #[must_use]
+    pub fn thread_key(conversation_id: &str, thread_ts: &str) -> String {
+        format!("{conversation_id}:{thread_ts}")
     }
 
     #[must_use]
@@ -271,7 +282,7 @@ impl CacheState {
         self.files
             .sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         self.files.truncate(200);
-        for messages in self.messages.values_mut() {
+        for messages in self.messages.values_mut().chain(self.threads.values_mut()) {
             messages.sort_by(|left, right| {
                 left.unix_ts()
                     .partial_cmp(&right.unix_ts())

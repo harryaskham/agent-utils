@@ -229,7 +229,7 @@ pub fn render_markdown(source: &str) -> Text<'static> {
             Event::Rule => {
                 flush(&mut lines, &mut spans);
                 lines.push(Line::from(Span::styled(
-                    "─".repeat(72),
+                    "─".repeat(48),
                     Style::default().fg(MUTED),
                 )));
             }
@@ -251,6 +251,48 @@ pub fn render_markdown(source: &str) -> Text<'static> {
         let _ = lines.pop();
     }
     Text::from(lines)
+}
+
+#[must_use]
+pub fn extract_urls(source: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find("http") {
+        let candidate = &rest[index..];
+        if candidate.starts_with("http://") || candidate.starts_with("https://") {
+            let end = candidate
+                .find(|character: char| {
+                    character.is_whitespace() || matches!(character, ')' | '>' | '"' | '\'')
+                })
+                .unwrap_or(candidate.len());
+            let url = candidate[..end].trim_end_matches(['.', ',', ';', ':']);
+            if url.len() > 8 && !urls.iter().any(|existing| existing == url) {
+                urls.push(url.to_string());
+            }
+            rest = &candidate[end..];
+        } else {
+            rest = &candidate[4..];
+        }
+    }
+    urls
+}
+
+/// Build OSC 8 hyperlink cell payloads for `text`.
+///
+/// Ratatui measures cell widths with `unicode-width`, which mis-measures escape
+/// bytes, so each payload carries two visible characters and is written to
+/// every second cell (the workaround used by ratatui's own hyperlink example).
+#[must_use]
+pub fn osc8_chunks(url: &str, text: &str) -> Vec<(usize, String)> {
+    let characters: Vec<char> = text.chars().collect();
+    characters
+        .chunks(2)
+        .enumerate()
+        .map(|(index, chunk)| {
+            let visible: String = chunk.iter().collect();
+            (index * 2, format!("\x1b]8;;{url}\x07{visible}\x1b]8;;\x07"))
+        })
+        .collect()
 }
 
 #[must_use]
@@ -294,6 +336,21 @@ mod tests {
         assert!(text.contains("rust"));
         assert!(text.contains("fn main() {}"));
         assert!(text.contains("site ↗https://example.com"));
+    }
+
+    #[test]
+    fn urls_and_osc8_chunks_are_extracted_and_wrapped() {
+        let urls = extract_urls(
+            "see https://example.com/a, and (http://x.test/b) plus https://example.com/a",
+        );
+        assert_eq!(urls, vec!["https://example.com/a", "http://x.test/b"]);
+        let chunks = osc8_chunks("https://example.com", "abcde");
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].0, 0);
+        assert_eq!(chunks[1].0, 2);
+        assert_eq!(chunks[2].0, 4);
+        assert_eq!(chunks[0].1, "\x1b]8;;https://example.com\x07ab\x1b]8;;\x07");
+        assert_eq!(chunks[2].1, "\x1b]8;;https://example.com\x07e\x1b]8;;\x07");
     }
 
     #[test]

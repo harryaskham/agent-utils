@@ -45,8 +45,12 @@ struct Cli {
     width: u16,
 
     /// Initial/snapshot view.
-    #[arg(long, default_value = "activity", value_parser = ["activity", "dms", "channels", "files"])]
+    #[arg(long, default_value = "activity", value_parser = ["activity", "favorites", "dms", "channels", "files"])]
     page: String,
+
+    /// With --snapshot, open the selected conversation/file instead of its overview.
+    #[arg(long)]
+    open: bool,
 
     /// Snapshot height in terminal cells.
     #[arg(long, default_value_t = 36)]
@@ -98,11 +102,12 @@ fn main() -> Result<()> {
         };
         print!(
             "{}",
-            ui::snapshot_page(
+            ui::snapshot_view(
                 state,
                 cli.width.max(60),
                 cli.height.max(20),
                 parse_page(&cli.page),
+                cli.open,
             )
         );
         return Ok(());
@@ -117,6 +122,7 @@ fn main() -> Result<()> {
 
 fn parse_page(value: &str) -> Page {
     match value {
+        "favorites" => Page::Favorites,
         "dms" => Page::Dms,
         "channels" => Page::Channels,
         "files" => Page::Files,

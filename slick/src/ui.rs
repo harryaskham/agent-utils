@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::io::{self, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -6,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ratakittui::{
-    Background, Border, Chrome, EffectsSink, LifecycleTracker, Padding, RenderEffects, Shadow,
+    Background, Border, Chrome, DrawFlush, EffectsSink, LifecycleTracker, Padding, RenderEffects,
+    Shadow,
 };
 use ratatui::backend::{CrosstermBackend, TestBackend};
 use ratatui::buffer::Buffer;
@@ -24,12 +26,12 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget, Wrap};
 use ratatui::{Frame, Terminal};
 
-use kittui::{Direction as KittuiDirection, RendererKind, Rgba, Runtime, TerminalInfo};
+use kittui::{CellRect, Direction as KittuiDirection, RendererKind, Rgba, Runtime, TerminalInfo};
 use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
-use crate::markdown::{preview, render_markdown};
-use crate::model::{CacheState, Conversation, ConversationKind, SlackFile};
+use crate::markdown::{extract_urls, osc8_chunks, preview, render_markdown};
+use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
 use crate::slack::SlackService;
 
 const PURPLE: Color = Color::Rgb(0x7c, 0x5c, 0xfc);
@@ -45,18 +47,26 @@ const MUTED: Color = Color::Rgb(0x99, 0x95, 0xa4);
 pub enum Page {
     #[default]
     Notifications,
+    Favorites,
     Dms,
     Channels,
     Files,
 }
 
 impl Page {
-    const ALL: [Self; 4] = [Self::Notifications, Self::Dms, Self::Channels, Self::Files];
+    const ALL: [Self; 5] = [
+        Self::Notifications,
+        Self::Favorites,
+        Self::Dms,
+        Self::Channels,
+        Self::Files,
+    ];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Notifications => "Activity",
+            Self::Favorites => "Favorites",
             Self::Dms => "Direct messages",
             Self::Channels => "Channels",
             Self::Files => "Files",
@@ -67,6 +77,7 @@ impl Page {
     const fn icon(self) -> &'static str {
         match self {
             Self::Notifications => "◉",
+            Self::Favorites => "★",
             Self::Dms => "◌",
             Self::Channels => "#",
             Self::Files => "▱",
@@ -87,6 +98,7 @@ enum HitAction {
     Page(Page),
     Conversation(String, ConversationKind),
     Notification(usize),
+    Message(usize),
     File(usize),
     Focus(Focus),
 }
@@ -95,6 +107,12 @@ enum HitAction {
 struct HitRegion {
     rect: Rect,
     action: HitAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ThreadView {
+    conversation_id: String,
+    root_ts: String,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +127,10 @@ enum RefreshTarget {
 enum WorkerCommand {
     Bootstrap,
     LoadConversation(String),
+    LoadThread {
+        conversation_id: String,
+        thread_ts: String,
+    },
     LoadFile(String),
     Refresh(RefreshTarget),
     Stop,
@@ -182,6 +204,7 @@ fn command_label(command: &WorkerCommand) -> String {
     match command {
         WorkerCommand::Bootstrap => "Refreshing seven-day activity".into(),
         WorkerCommand::LoadConversation(_) => "Loading visible conversation".into(),
+        WorkerCommand::LoadThread { .. } => "Loading thread replies".into(),
         WorkerCommand::LoadFile(_) => "Loading file content".into(),
         WorkerCommand::Refresh(RefreshTarget::Notifications) => {
             "Refreshing visible activity".into()
@@ -203,6 +226,10 @@ fn run_worker_command(
     match command {
         WorkerCommand::Bootstrap => service.bootstrap(state),
         WorkerCommand::LoadConversation(id) => service.refresh_conversation(state, id),
+        WorkerCommand::LoadThread {
+            conversation_id,
+            thread_ts,
+        } => service.refresh_thread(state, conversation_id, thread_ts),
         WorkerCommand::LoadFile(id) => service.load_file_content(state, id),
         WorkerCommand::Refresh(target) => {
             service.refresh_sidebar(state)?;
@@ -220,6 +247,7 @@ fn run_worker_command(
 struct Graphics {
     runtime: Runtime,
     tracker: LifecycleTracker,
+    placed: HashMap<String, (u32, CellRect)>,
 }
 
 impl Graphics {
@@ -232,6 +260,7 @@ impl Graphics {
         Ok(Self {
             runtime,
             tracker: LifecycleTracker::new(),
+            placed: HashMap::new(),
         })
     }
 }
@@ -241,6 +270,7 @@ pub struct App {
     page: Page,
     focus: Focus,
     selected_notification: usize,
+    selected_favorite: usize,
     selected_dm: usize,
     selected_channel: usize,
     selected_file: usize,
@@ -254,6 +284,9 @@ pub struct App {
     detail_view_height: u16,
     detail_view_width: u16,
     section_overview: bool,
+    sidebar_visible: bool,
+    fullscreen_content: bool,
+    osc8_links: bool,
     filter: String,
     filter_mode: bool,
     show_help: bool,
@@ -262,6 +295,8 @@ pub struct App {
     status: String,
     last_error: Option<String>,
     hits: Vec<HitRegion>,
+    selected_message: usize,
+    thread_stack: Vec<ThreadView>,
     worker: Option<Worker>,
     pending_g: bool,
 }
@@ -292,6 +327,7 @@ impl App {
             page: Page::Notifications,
             focus: Focus::Sidebar,
             selected_notification: 0,
+            selected_favorite: 0,
             selected_dm: 0,
             selected_channel: 0,
             selected_file: 0,
@@ -305,6 +341,9 @@ impl App {
             detail_view_height: 1,
             detail_view_width: 1,
             section_overview: false,
+            sidebar_visible: true,
+            fullscreen_content: false,
+            osc8_links: false,
             filter: String::new(),
             filter_mode: false,
             show_help: false,
@@ -312,6 +351,8 @@ impl App {
             busy: false,
             last_error: None,
             hits: Vec::new(),
+            selected_message: 0,
+            thread_stack: Vec::new(),
             worker,
             pending_g: false,
         }
@@ -336,6 +377,11 @@ impl App {
                     self.status = status;
                     self.last_error = None;
                     self.clamp_selection();
+                    if matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
+                        && !self.section_overview
+                    {
+                        self.content_scroll = self.max_content_scroll();
+                    }
                 }
                 WorkerEvent::Failed(error) => {
                     self.busy = false;
@@ -350,6 +396,8 @@ impl App {
     fn clamp_selection(&mut self) {
         self.selected_notification =
             clamp_index(self.selected_notification, self.state.notifications.len());
+        self.selected_favorite =
+            clamp_index(self.selected_favorite, self.filtered_favorites().len());
         self.selected_dm = clamp_index(self.selected_dm, self.filtered_conversations(true).len());
         self.selected_channel = clamp_index(
             self.selected_channel,
@@ -375,6 +423,54 @@ impl App {
             .collect()
     }
 
+    fn recent_active_channels(&self) -> Vec<&Conversation> {
+        let mut channels: Vec<&Conversation> = self
+            .filtered_conversations(false)
+            .into_iter()
+            .filter(|conversation| {
+                self.state.self_activity.contains_key(&conversation.id)
+                    || conversation.unread_count > 0
+                    || conversation.is_favorite
+            })
+            .collect();
+        channels.sort_by(|left, right| {
+            let left_activity = self
+                .state
+                .self_activity
+                .get(&left.id)
+                .and_then(|ts| ts.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let right_activity = self
+                .state
+                .self_activity
+                .get(&right.id)
+                .and_then(|ts| ts.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            right_activity
+                .partial_cmp(&left_activity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.unread_count.cmp(&left.unread_count))
+        });
+        if channels.is_empty() {
+            return self.filtered_conversations(false);
+        }
+        channels
+    }
+
+    fn filtered_favorites(&self) -> Vec<&Conversation> {
+        let needle = self.filter.to_lowercase();
+        self.state
+            .conversations
+            .iter()
+            .filter(|conversation| conversation.is_favorite)
+            .filter(|conversation| {
+                needle.is_empty()
+                    || conversation.name.to_lowercase().contains(&needle)
+                    || conversation.topic.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
     fn filtered_files(&self) -> Vec<&SlackFile> {
         let needle = self.filter.to_lowercase();
         self.state
@@ -391,6 +487,10 @@ impl App {
 
     fn selected_conversation(&self) -> Option<&Conversation> {
         match self.page {
+            Page::Favorites => self
+                .filtered_favorites()
+                .get(self.selected_favorite)
+                .copied(),
             Page::Dms => self
                 .filtered_conversations(true)
                 .get(self.selected_dm)
@@ -422,13 +522,20 @@ impl App {
                     self.select_conversation(id, kind);
                 }
             }
-            Page::Dms | Page::Channels => {
+            Page::Favorites | Page::Dms | Page::Channels => {
+                if self.in_message_view() && self.focus != Focus::Sidebar {
+                    self.open_selected_thread();
+                    return;
+                }
                 if let Some(conversation) = self.selected_conversation() {
                     let id = conversation.id.clone();
                     if self.state.messages.get(&id).is_none_or(Vec::is_empty) {
                         self.send(WorkerCommand::LoadConversation(id));
                     }
+                    self.section_overview = false;
+                    self.selected_message = self.visible_messages().len().saturating_sub(1);
                     self.focus = Focus::Content;
+                    self.content_scroll = self.max_content_scroll();
                 }
             }
             Page::Files => {
@@ -456,9 +563,15 @@ impl App {
         } else {
             self.selected_channel = index;
         }
-        self.content_scroll = 0;
         self.section_overview = false;
+        self.thread_stack.clear();
         self.focus = Focus::Content;
+        self.selected_message = self
+            .state
+            .messages
+            .get(&id)
+            .map_or(0, |messages| messages.len().saturating_sub(1));
+        self.content_scroll = self.max_content_scroll();
         if self.state.messages.get(&id).is_none_or(Vec::is_empty) {
             self.send(WorkerCommand::LoadConversation(id));
         }
@@ -476,8 +589,10 @@ impl App {
     fn refresh_visible(&mut self) {
         let target = match self.page {
             Page::Notifications => RefreshTarget::Notifications,
-            Page::Dms | Page::Channels if self.section_overview => RefreshTarget::Sidebar,
-            Page::Dms | Page::Channels => self
+            Page::Favorites | Page::Dms | Page::Channels if self.section_overview => {
+                RefreshTarget::Sidebar
+            }
+            Page::Favorites | Page::Dms | Page::Channels => self
                 .selected_conversation()
                 .map_or(RefreshTarget::Sidebar, |conversation| {
                     RefreshTarget::Conversation(conversation.id.clone())
@@ -514,7 +629,7 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('c' | 'q') => self.should_quit = true,
+                KeyCode::Char('c') => self.should_quit = true,
                 KeyCode::Char('r') => self.refresh_visible(),
                 KeyCode::Char('u') => self.scroll_up(8),
                 KeyCode::Char('d') => self.scroll_down(8),
@@ -525,9 +640,25 @@ impl App {
         let was_pending_g = self.pending_g;
         self.pending_g = false;
         match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('q') => {
+                if self.thread_stack.pop().is_some() {
+                    self.content_scroll = self.max_content_scroll();
+                } else if self.fullscreen_content {
+                    self.fullscreen_content = false;
+                } else if !self.sidebar_visible {
+                    self.sidebar_visible = true;
+                    self.focus = Focus::Sidebar;
+                } else if matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
+                    && !self.section_overview
+                {
+                    self.section_overview = true;
+                    self.focus = Focus::Sidebar;
+                }
+            }
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('/') => self.filter_mode = true,
+            KeyCode::Char('\\') => self.toggle_sidebar(),
+            KeyCode::Char('f') => self.toggle_fullscreen(),
             KeyCode::Char('g') if was_pending_g => self.go_top(),
             KeyCode::Char('g') => self.pending_g = true,
             KeyCode::Char('G') => self.go_bottom(),
@@ -535,6 +666,7 @@ impl App {
             KeyCode::Char('2') => self.set_page(Page::Dms),
             KeyCode::Char('3') => self.set_page(Page::Channels),
             KeyCode::Char('4') => self.set_page(Page::Files),
+            KeyCode::Char('5') => self.set_page(Page::Favorites),
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -557,6 +689,7 @@ impl App {
         if self.navigates_list() {
             match self.page {
                 Page::Notifications => self.selected_notification = 0,
+                Page::Favorites => self.selected_favorite = 0,
                 Page::Dms => self.selected_dm = 0,
                 Page::Channels => self.selected_channel = 0,
                 Page::Files => self.selected_file = 0,
@@ -573,6 +706,9 @@ impl App {
             match self.page {
                 Page::Notifications => {
                     self.selected_notification = self.state.notifications.len().saturating_sub(1);
+                }
+                Page::Favorites => {
+                    self.selected_favorite = self.filtered_favorites().len().saturating_sub(1);
                 }
                 Page::Dms => {
                     self.selected_dm = self.filtered_conversations(true).len().saturating_sub(1);
@@ -594,6 +730,33 @@ impl App {
         }
     }
 
+    fn toggle_sidebar(&mut self) {
+        self.fullscreen_content = false;
+        self.sidebar_visible = !self.sidebar_visible;
+        self.focus = if self.sidebar_visible {
+            Focus::Sidebar
+        } else if self.page == Page::Files {
+            Focus::Detail
+        } else {
+            Focus::Content
+        };
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        let has_markdown = self.page == Page::Files
+            || matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
+                && !self.section_overview;
+        if !has_markdown {
+            return;
+        }
+        self.fullscreen_content = !self.fullscreen_content;
+        self.focus = if self.page == Page::Files {
+            Focus::Detail
+        } else {
+            Focus::Content
+        };
+    }
+
     fn set_page(&mut self, page: Page) {
         self.page = page;
         self.content_scroll = 0;
@@ -601,7 +764,9 @@ impl App {
         self.activity_offset = 0;
         self.overview_offset = 0;
         self.file_offset = 0;
-        self.section_overview = matches!(page, Page::Dms | Page::Channels);
+        self.section_overview = matches!(page, Page::Favorites | Page::Dms | Page::Channels);
+        self.thread_stack.clear();
+        self.selected_message = 0;
         self.focus = Focus::Sidebar;
         if page == Page::Files && self.state.files.is_empty() {
             self.send(WorkerCommand::Refresh(RefreshTarget::Files));
@@ -625,6 +790,12 @@ impl App {
     }
 
     fn cycle_focus(&mut self, forward: bool) {
+        if !self.sidebar_visible || self.fullscreen_content {
+            self.sidebar_visible = true;
+            self.fullscreen_content = false;
+            self.focus = Focus::Sidebar;
+            return;
+        }
         let order: &[Focus] = if self.page == Page::Files {
             &[Focus::Sidebar, Focus::Content, Focus::Detail]
         } else {
@@ -639,7 +810,9 @@ impl App {
         } else {
             order[(index + order.len() - 1) % order.len()]
         };
-        if self.focus == Focus::Sidebar && matches!(self.page, Page::Dms | Page::Channels) {
+        if self.focus == Focus::Sidebar
+            && matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
+        {
             self.section_overview = true;
         }
     }
@@ -647,12 +820,98 @@ impl App {
     fn navigates_list(&self) -> bool {
         match self.page {
             Page::Notifications => true,
-            Page::Dms | Page::Channels => self.section_overview || self.focus == Focus::Sidebar,
+            Page::Favorites | Page::Dms | Page::Channels => {
+                self.section_overview || self.focus == Focus::Sidebar
+            }
             Page::Files => self.focus != Focus::Detail,
         }
     }
 
+    fn in_message_view(&self) -> bool {
+        matches!(self.page, Page::Favorites | Page::Dms | Page::Channels) && !self.section_overview
+    }
+
+    fn message_row_starts(&self) -> Vec<usize> {
+        let messages = self.visible_messages();
+        let mut prefix = String::new();
+        if let Some(conversation) = self.selected_conversation() {
+            if self.thread_stack.is_empty() && !conversation.topic.is_empty() {
+                let _ = write!(prefix, "> {}\n\n", conversation.topic);
+            }
+        }
+        let mut starts = Vec::with_capacity(messages.len());
+        for message in &messages {
+            starts.push(wrapped_markdown_rows(&prefix, self.content_view_width).saturating_sub(1));
+            let _ = write!(prefix, "### x\n\n{}\n\n---\n\n", message.text);
+        }
+        starts
+    }
+
+    fn move_message_selection(&mut self, delta: isize) {
+        let len = self.visible_messages().len();
+        self.selected_message = offset_index(self.selected_message, len, delta);
+        self.follow_selected_message();
+    }
+
+    fn follow_selected_message(&mut self) {
+        let messages = self.visible_messages();
+        if messages.is_empty() {
+            self.content_scroll = 0;
+            return;
+        }
+        let index = self.selected_message.min(messages.len() - 1);
+        let starts = self.message_row_starts();
+        let rows_before = starts.get(index).copied().unwrap_or(0);
+        let maximum = self.max_content_scroll();
+        let target = u16::try_from(rows_before).unwrap_or(u16::MAX).min(maximum);
+        let viewport = self.content_view_height.saturating_sub(2).max(1);
+        if target < self.content_scroll || target >= self.content_scroll.saturating_add(viewport) {
+            self.content_scroll = target;
+        }
+    }
+
+    fn open_selected_thread(&mut self) {
+        let Some(conversation) = self.selected_conversation().cloned() else {
+            return;
+        };
+        let messages = self.visible_messages();
+        let Some(message) = messages.get(self.selected_message).cloned() else {
+            return;
+        };
+        if message.reply_count == 0 && message.thread_ts.is_none() {
+            return;
+        }
+        let root_ts = message
+            .thread_ts
+            .clone()
+            .unwrap_or_else(|| message.ts.clone());
+        let view = ThreadView {
+            conversation_id: conversation.id.clone(),
+            root_ts: root_ts.clone(),
+        };
+        if self.thread_stack.last() == Some(&view) {
+            return;
+        }
+        self.thread_stack.push(view);
+        self.selected_message = 0;
+        if !self
+            .state
+            .threads
+            .contains_key(&CacheState::thread_key(&conversation.id, &root_ts))
+        {
+            self.send(WorkerCommand::LoadThread {
+                conversation_id: conversation.id,
+                thread_ts: root_ts,
+            });
+        }
+        self.content_scroll = self.max_content_scroll();
+    }
+
     fn move_selection(&mut self, delta: isize) {
+        if self.in_message_view() && self.focus != Focus::Sidebar {
+            self.move_message_selection(delta);
+            return;
+        }
         if !self.navigates_list() {
             if delta < 0 {
                 self.scroll_up(1);
@@ -666,6 +925,10 @@ impl App {
                 &mut self.selected_notification,
                 self.state.notifications.len(),
             ),
+            Page::Favorites => {
+                let len = self.filtered_favorites().len();
+                (&mut self.selected_favorite, len)
+            }
             Page::Dms => {
                 let len = self.filtered_conversations(true).len();
                 (&mut self.selected_dm, len)
@@ -695,6 +958,11 @@ impl App {
                 &mut self.activity_offset,
                 usize::from(self.content_view_height.saturating_sub(2) / 2).max(1),
             ),
+            Page::Favorites => keep_visible(
+                self.selected_favorite,
+                &mut self.overview_offset,
+                usize::from(self.content_view_height.saturating_sub(2)).max(1),
+            ),
             Page::Dms => keep_visible(
                 self.selected_dm,
                 &mut self.overview_offset,
@@ -713,22 +981,63 @@ impl App {
         }
     }
 
+    fn visible_messages(&self) -> Vec<Message> {
+        if let Some(view) = self.thread_stack.last() {
+            return self
+                .state
+                .threads
+                .get(&CacheState::thread_key(
+                    &view.conversation_id,
+                    &view.root_ts,
+                ))
+                .cloned()
+                .unwrap_or_default();
+        }
+        self.selected_conversation()
+            .and_then(|conversation| self.state.messages.get(&conversation.id))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn conversation_markdown(&self) -> String {
         let Some(conversation) = self.selected_conversation() else {
             return "Select a conversation".into();
         };
         let mut markdown = String::new();
-        if !conversation.topic.is_empty() {
+        if let Some(view) = self.thread_stack.last() {
+            let _ = write!(
+                markdown,
+                "> Thread in **{}** · press `q` to go back\n\n",
+                conversation.name
+            );
+            let _ = view;
+        } else if !conversation.topic.is_empty() {
             let _ = write!(markdown, "> {}\n\n", conversation.topic);
         }
-        let messages = self.state.messages.get(&conversation.id);
-        if messages.is_none_or(Vec::is_empty) {
+        let messages = self.visible_messages();
+        if messages.is_empty() {
             markdown.push_str("_Press Enter to load up to seven days of content._");
-        } else if let Some(messages) = messages {
-            for message in messages.iter().rev() {
+        } else {
+            for (index, message) in messages.iter().enumerate() {
+                let selected = index == self.selected_message && self.thread_stack.is_empty();
+                let thread = if message.reply_count > 0 {
+                    format!(
+                        "  ·  💬 {} repl{}",
+                        message.reply_count,
+                        if message.reply_count == 1 { "y" } else { "ies" }
+                    )
+                } else {
+                    String::new()
+                };
+                let permalink = if message.permalink.is_empty() {
+                    String::new()
+                } else {
+                    "  ·  open ↗".to_string()
+                };
                 let _ = write!(
                     markdown,
-                    "### {}  ·  {}\n\n{}\n\n---\n\n",
+                    "### {}{}  ·  {}{thread}{permalink}\n\n{}\n\n---\n\n",
+                    if selected { "▸ " } else { "" },
                     if message.author.is_empty() {
                         &message.user_id
                     } else {
@@ -793,7 +1102,7 @@ impl App {
         }
     }
 
-    fn handle_mouse(&mut self, mouse: MouseEvent) {
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(action) = self
@@ -819,7 +1128,15 @@ impl App {
                             self.request_selected();
                         }
                         HitAction::Focus(focus) => self.focus = focus,
+                        HitAction::Message(index) => {
+                            self.selected_message = index;
+                            self.focus = Focus::Content;
+                            self.open_selected_thread();
+                        }
                     }
+                    true
+                } else {
+                    false
                 }
             }
             MouseEventKind::ScrollUp => {
@@ -828,6 +1145,7 @@ impl App {
                 } else {
                     self.scroll_up(3);
                 }
+                true
             }
             MouseEventKind::ScrollDown => {
                 if self.navigates_list() {
@@ -835,8 +1153,9 @@ impl App {
                 } else {
                     self.scroll_down(3);
                 }
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -852,26 +1171,44 @@ impl App {
             ])
             .split(area);
         self.render_header(frame, vertical[0], graphics);
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(32), Constraint::Min(40)])
-            .split(vertical[1]);
-        self.render_sidebar(frame, columns[0], graphics);
-        if self.page == Page::Files {
-            let files = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
-                .split(columns[1]);
-            self.content_view_height = files[0].height;
-            self.content_view_width = files[0].width;
-            self.detail_view_height = files[1].height;
-            self.detail_view_width = files[1].width;
-            self.render_files(frame, files[0], graphics);
-            self.render_file_detail(frame, files[1], graphics);
+        let body = vertical[1];
+        if self.fullscreen_content {
+            if self.page == Page::Files {
+                self.detail_view_height = body.height;
+                self.detail_view_width = body.width;
+                self.render_file_detail(frame, body, graphics);
+            } else {
+                self.content_view_height = body.height;
+                self.content_view_width = body.width;
+                self.render_content(frame, body, graphics);
+            }
         } else {
-            self.content_view_height = columns[1].height;
-            self.content_view_width = columns[1].width;
-            self.render_content(frame, columns[1], graphics);
+            let content = if self.sidebar_visible {
+                let columns = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Length(32), Constraint::Min(40)])
+                    .split(body);
+                self.render_sidebar(frame, columns[0], graphics);
+                columns[1]
+            } else {
+                body
+            };
+            if self.page == Page::Files {
+                let files = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
+                    .split(content);
+                self.content_view_height = files[0].height;
+                self.content_view_width = files[0].width;
+                self.detail_view_height = files[1].height;
+                self.detail_view_width = files[1].width;
+                self.render_files(frame, files[0], graphics);
+                self.render_file_detail(frame, files[1], graphics);
+            } else {
+                self.content_view_height = content.height;
+                self.content_view_width = content.width;
+                self.render_content(frame, content, graphics);
+            }
         }
         self.render_footer(frame, vertical[2], graphics);
         if self.show_help {
@@ -971,6 +1308,12 @@ impl App {
                     .iter()
                     .filter(|item| item.unread || item.mention)
                     .count(),
+                Page::Favorites => self
+                    .state
+                    .conversations
+                    .iter()
+                    .filter(|item| item.is_favorite)
+                    .count(),
                 Page::Dms => self
                     .state
                     .conversations
@@ -1037,12 +1380,12 @@ impl App {
             row = row.saturating_add(1);
         }
         items.push(ListItem::new(Line::from(Span::styled(
-            "  Recent channels",
+            "  Channels you're active in",
             Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
         ))));
         row = row.saturating_add(1);
         let channels: Vec<Conversation> = self
-            .filtered_conversations(false)
+            .recent_active_channels()
             .into_iter()
             .take(8)
             .cloned()
@@ -1087,10 +1430,12 @@ impl App {
         });
         match self.page {
             Page::Notifications => self.render_notifications(frame, area, graphics),
-            Page::Dms | Page::Channels if self.section_overview => {
+            Page::Favorites | Page::Dms | Page::Channels if self.section_overview => {
                 self.render_conversation_overview(frame, area, graphics);
             }
-            Page::Dms | Page::Channels => self.render_messages(frame, area, graphics),
+            Page::Favorites | Page::Dms | Page::Channels => {
+                self.render_messages(frame, area, graphics);
+            }
             Page::Files => {}
         }
     }
@@ -1208,16 +1553,31 @@ impl App {
         area: Rect,
         graphics: Option<(&Runtime, &EffectsSink)>,
     ) {
-        let dms = self.page == Page::Dms;
-        let conversations: Vec<Conversation> = self
-            .filtered_conversations(dms)
-            .into_iter()
-            .cloned()
-            .collect();
-        let selected = if dms {
-            self.selected_dm
-        } else {
-            self.selected_channel
+        let (label, conversations, selected) = match self.page {
+            Page::Favorites => (
+                "Favorites",
+                self.filtered_favorites()
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                self.selected_favorite,
+            ),
+            Page::Dms => (
+                "Direct messages",
+                self.filtered_conversations(true)
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                self.selected_dm,
+            ),
+            _ => (
+                "Channels",
+                self.filtered_conversations(false)
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                self.selected_channel,
+            ),
         };
         let panes = Layout::default()
             .direction(Direction::Horizontal)
@@ -1258,7 +1618,7 @@ impl App {
         let total = conversations.len();
         let title = format!(
             " {} · {total} total · {}/{} ",
-            if dms { "Direct messages" } else { "Channels" },
+            label,
             selected.saturating_add(1).min(total),
             total.max(1),
         );
@@ -1308,12 +1668,12 @@ impl App {
     }
 
     fn render_messages(
-        &self,
+        &mut self,
         frame: &mut Frame<'_>,
         area: Rect,
         graphics: Option<(&Runtime, &EffectsSink)>,
     ) {
-        let Some(conversation) = self.selected_conversation() else {
+        let Some(conversation) = self.selected_conversation().cloned() else {
             render_paragraph(
                 frame,
                 area,
@@ -1325,8 +1685,40 @@ impl App {
             return;
         };
         let markdown = self.conversation_markdown();
+        let starts = self.message_row_starts();
+        let inner_top = area.y.saturating_add(1);
+        let inner_rows = area.height.saturating_sub(2);
+        for (index, start) in starts.iter().enumerate() {
+            let end = starts.get(index + 1).copied().unwrap_or(usize::MAX);
+            let start_row = u16::try_from(*start).unwrap_or(u16::MAX);
+            if start_row < self.content_scroll {
+                continue;
+            }
+            let offset = start_row - self.content_scroll;
+            if offset >= inner_rows {
+                break;
+            }
+            let height = u16::try_from(end.saturating_sub(*start))
+                .unwrap_or(u16::MAX)
+                .min(inner_rows - offset)
+                .max(1);
+            self.hits.push(HitRegion {
+                rect: Rect::new(
+                    area.x.saturating_add(1),
+                    inner_top.saturating_add(offset),
+                    area.width.saturating_sub(2),
+                    height,
+                ),
+                action: HitAction::Message(index),
+            });
+        }
+        let thread_hint = if self.thread_stack.is_empty() {
+            String::new()
+        } else {
+            format!(" · thread depth {}", self.thread_stack.len())
+        };
         let title = format!(
-            " {} {} · {} ",
+            " {} {} · {}{thread_hint} ",
             if conversation.kind.is_dm() {
                 "●"
             } else {
@@ -1355,6 +1747,45 @@ impl App {
             Tone::Content,
             self.focus == Focus::Content,
         );
+        if self.osc8_links {
+            apply_osc8_links(frame.buffer_mut(), area, &markdown);
+            self.patch_message_links(frame.buffer_mut(), area, &starts);
+        }
+    }
+
+    fn patch_message_links(&self, buffer: &mut Buffer, area: Rect, starts: &[usize]) {
+        let messages = self.visible_messages();
+        let inner_top = area.y.saturating_add(1);
+        let inner_rows = area.height.saturating_sub(2);
+        for (index, message) in messages.iter().enumerate() {
+            if message.permalink.is_empty() {
+                continue;
+            }
+            let Some(start) = starts.get(index) else {
+                continue;
+            };
+            let start_row = u16::try_from(*start).unwrap_or(u16::MAX);
+            if start_row < self.content_scroll {
+                continue;
+            }
+            let offset = start_row - self.content_scroll;
+            if offset >= inner_rows {
+                break;
+            }
+            for probe in 0..3u16 {
+                let y = inner_top.saturating_add(offset).saturating_add(probe);
+                if y >= area.bottom() {
+                    break;
+                }
+                let row = row_text(buffer, area, y);
+                let Some(byte_index) = row.find("open ↗") else {
+                    continue;
+                };
+                let column = row[..byte_index].chars().count();
+                patch_osc8_run(buffer, area, y, column, &message.permalink, "open ↗");
+                break;
+            }
+        }
     }
 
     fn render_files(
@@ -1489,6 +1920,9 @@ impl App {
             Tone::Detail,
             self.focus == Focus::Detail,
         );
+        if self.osc8_links {
+            apply_osc8_links(frame.buffer_mut(), area, &markdown);
+        }
     }
 
     fn render_footer(
@@ -1501,21 +1935,25 @@ impl App {
         let line = error.map_or_else(
             || {
                 Line::from(vec![
-                    Span::styled(" 1-4", key_style()),
+                    Span::styled(" 1-5", key_style()),
                     Span::raw(" views  "),
                     Span::styled("↑↓/jk", key_style()),
                     Span::raw(" move  "),
                     Span::styled("Enter", key_style()),
-                    Span::raw(" open  "),
-                    Span::styled("Tab", key_style()),
-                    Span::raw(" focus  "),
+                    Span::raw(" open/thread  "),
+                    Span::styled("q", key_style()),
+                    Span::raw(" back  "),
+                    Span::styled("\\", key_style()),
+                    Span::raw(" sidebar  "),
+                    Span::styled("f", key_style()),
+                    Span::raw(" full  "),
                     Span::styled("Ctrl-R", key_style()),
-                    Span::raw(" refresh visible + DMs  "),
+                    Span::raw(" refresh  "),
                     Span::styled("/", key_style()),
                     Span::raw(" filter  "),
                     Span::styled("?", key_style()),
                     Span::raw(" help  "),
-                    Span::styled("q", key_style()),
+                    Span::styled("Ctrl-C", key_style()),
                     Span::raw(" quit"),
                 ])
             },
@@ -1544,16 +1982,18 @@ impl App {
         let help = Text::from(vec![
             Line::from(Span::styled("Slick · keyboard and mouse", Style::default().fg(PURPLE).add_modifier(Modifier::BOLD))),
             Line::default(),
-            Line::from(vec![Span::styled("1-4 / ←→", key_style()), Span::raw("  Activity, DMs, Channels, Files")]),
-            Line::from(vec![Span::styled("↑↓ / j k", key_style()), Span::raw("  Move selection or scroll focused content")]),
+            Line::from(vec![Span::styled("1-5 / ←→", key_style()), Span::raw("  Activity, Favorites, DMs, Channels, Files")]),
+            Line::from(vec![Span::styled("↑↓ / j k", key_style()), Span::raw("  Move selection, message or scroll focused content")]),
             Line::from(vec![Span::styled("g g / G / 0", key_style()), Span::raw(" Top, bottom and home (Vim-style)")]),
-            Line::from(vec![Span::styled("Enter", key_style()), Span::raw("       Open/load selected conversation or file")]),
-            Line::from(vec![Span::styled("Tab", key_style()), Span::raw("         Cycle sidebar, content and file detail focus")]),
+            Line::from(vec![Span::styled("Enter", key_style()), Span::raw("       Open conversation/file, or open a thread on a reply-bearing message")]),
+            Line::from(vec![Span::styled("\\ / f", key_style()), Span::raw("       Toggle sidebar, fullscreen the Markdown pane")]),
+            Line::from(vec![Span::styled("Tab", key_style()), Span::raw("         Cycle focus; also restores a hidden sidebar")]),
             Line::from(vec![Span::styled("Ctrl-R", key_style()), Span::raw("      Refresh only the visible view plus DM list")]),
             Line::from(vec![Span::styled("Ctrl-U/D", key_style()), Span::raw("    Page rich content up/down")]),
             Line::from(vec![Span::styled("/", key_style()), Span::raw("           Filter cached names/files locally")]),
             Line::from(vec![Span::styled("Esc", key_style()), Span::raw("         Clear filter or close this help")]),
-            Line::from(vec![Span::styled("q / Ctrl-C", key_style()), Span::raw("  Quit safely")]),
+            Line::from(vec![Span::styled("q", key_style()), Span::raw("           Pop thread, fullscreen, sidebar or conversation")]),
+            Line::from(vec![Span::styled("Ctrl-C", key_style()), Span::raw("      Quit")]),
             Line::default(),
             Line::from(Span::styled("Mouse", Style::default().fg(CYAN).add_modifier(Modifier::BOLD))),
             Line::raw("Click navigation, conversations, notifications and files. Scroll the focused pane with the wheel."),
@@ -1743,6 +2183,100 @@ fn render_chrome_underlay(area: Rect, chrome: &Chrome, runtime: &Runtime) -> Ren
         )
 }
 
+fn patch_osc8_run(buffer: &mut Buffer, area: Rect, y: u16, column: usize, url: &str, text: &str) {
+    for (offset, payload) in osc8_chunks(url, text) {
+        let Ok(offset) = u16::try_from(column + offset) else {
+            break;
+        };
+        let x = area.x.saturating_add(offset);
+        if x >= area.right() {
+            break;
+        }
+        buffer[(x, y)].set_symbol(&payload);
+    }
+}
+
+fn row_text(buffer: &Buffer, area: Rect, y: u16) -> String {
+    (area.x..area.right())
+        .map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' '))
+        .collect()
+}
+
+fn apply_osc8_links(buffer: &mut Buffer, area: Rect, source: &str) {
+    let urls = extract_urls(source);
+    if urls.is_empty() || area.width == 0 || area.height == 0 {
+        return;
+    }
+    for y in area.y..area.bottom() {
+        let row = row_text(buffer, area, y);
+        if !row.contains("http") {
+            continue;
+        }
+        for url in &urls {
+            let mut search_from = 0;
+            while let Some(found) = row[search_from..].find(url.as_str()) {
+                let byte_index = search_from + found;
+                search_from = byte_index + url.len();
+                let column = row[..byte_index].chars().count();
+                patch_osc8_run(buffer, area, y, column, url, url);
+            }
+        }
+    }
+}
+
+fn finalize_graphics_frame(graphics: &mut Graphics, sink: &EffectsSink) -> DrawFlush {
+    let mut flush = DrawFlush::default();
+    let mut current = HashMap::new();
+    for effects in sink.drain() {
+        graphics.tracker.keep(&effects);
+        flush.upload.push_str(&effects.upload);
+        if let (Some(scene_id), Some(image_id), Some(footprint)) = (
+            effects.scene_id.as_ref(),
+            effects.image_id,
+            effects.footprint,
+        ) {
+            let key = scene_id.0.clone();
+            let unchanged = graphics
+                .placed
+                .get(&key)
+                .is_some_and(|placed| *placed == (image_id, footprint));
+            current.insert(key, (image_id, footprint));
+            if !unchanged {
+                // The runtime placement already contains its own absolute
+                // cursor move. Emitting a second host-side move (as the
+                // generic Ratakittui finalizer does) is redundant and makes
+                // cursor restoration harder to reason about.
+                flush.placement.push_str(&effects.placement);
+                flush.placement.push_str(&effects.embed);
+            }
+        } else {
+            flush.placement.push_str(&effects.placement);
+            flush.placement.push_str(&effects.embed);
+        }
+    }
+    for image_id in graphics.tracker.end_frame() {
+        flush.deletes.push_str(&graphics.runtime.unplace(image_id));
+    }
+    graphics.placed = current;
+    flush
+}
+
+fn write_graphics_flush<W: Write>(writer: &mut W, flush: &DrawFlush) -> io::Result<()> {
+    if flush.is_empty() {
+        return Ok(());
+    }
+    // Kittui placement commands move the real terminal cursor, while Ratatui's
+    // backend still believes the cursor is where its preceding draw left it.
+    // Save/restore around the complete graphics transaction so the next text
+    // diff starts from the same physical and logical cursor position.
+    writer.write_all(b"\x1b7")?;
+    writer.write_all(flush.upload.as_bytes())?;
+    writer.write_all(flush.placement.as_bytes())?;
+    writer.write_all(flush.deletes.as_bytes())?;
+    writer.write_all(b"\x1b8")?;
+    writer.flush()
+}
+
 fn chrome_underlay_options(image_id: u32) -> PlacementOptions {
     PlacementOptions::absolute_with_id(image_id).with_z_index(-1)
 }
@@ -1903,6 +2437,7 @@ pub fn run(options: RunOptions) -> Result<()> {
         App::live(initial, options.cache_store)
     };
     app.set_page(options.initial_page);
+    app.osc8_links = true;
     let mut stdout = io::stdout();
     enable_raw_mode().context("enable terminal raw mode")?;
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).context("enter Slick screen")?;
@@ -1917,13 +2452,11 @@ pub fn run(options: RunOptions) -> Result<()> {
 
     let result = run_loop(&mut terminal, &mut app, graphics.as_mut());
 
-    if let Some(graphics) = graphics.as_ref() {
+    if let Some(graphics) = graphics.as_mut() {
         graphics.tracker.begin_frame();
         let sink = EffectsSink::new();
-        let flush = ratakittui::finalize_frame(&sink, &graphics.tracker, &graphics.runtime);
-        let backend = terminal.backend_mut();
-        let _ = backend.write_all(flush.deletes.as_bytes());
-        let _ = backend.flush();
+        let flush = finalize_graphics_frame(graphics, &sink);
+        let _ = write_graphics_flush(terminal.backend_mut(), &flush);
     }
     disable_raw_mode().ok();
     execute!(
@@ -1954,13 +2487,8 @@ fn run_loop(
                 graphics.tracker.begin_frame();
                 let sink = EffectsSink::new();
                 terminal.draw(|frame| app.render(frame, Some((&graphics.runtime, &sink))))?;
-                let flush = ratakittui::finalize_frame(&sink, &graphics.tracker, &graphics.runtime);
-                terminal.backend_mut().write_all(flush.upload.as_bytes())?;
-                terminal
-                    .backend_mut()
-                    .write_all(flush.placement.as_bytes())?;
-                terminal.backend_mut().write_all(flush.deletes.as_bytes())?;
-                terminal.backend_mut().flush()?;
+                let flush = finalize_graphics_frame(graphics, &sink);
+                write_graphics_flush(terminal.backend_mut(), &flush)?;
             } else {
                 terminal.draw(|frame| app.render(frame, None))?;
             }
@@ -1968,12 +2496,16 @@ fn run_loop(
         }
 
         if event::poll(Duration::from_millis(16))? {
-            match event::read()? {
-                Event::Key(key) => app.handle_key(key),
+            let changed = match event::read()? {
+                Event::Key(key) => {
+                    app.handle_key(key);
+                    true
+                }
                 Event::Mouse(mouse) => app.handle_mouse(mouse),
-                Event::Resize(_, _) | Event::FocusGained | Event::FocusLost | Event::Paste(_) => {}
-            }
-            dirty = true;
+                Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => true,
+                Event::Paste(_) => false,
+            };
+            dirty |= changed;
         }
     }
     Ok(())
@@ -1986,10 +2518,22 @@ pub fn snapshot(state: CacheState, width: u16, height: u16) -> String {
 
 #[must_use]
 pub fn snapshot_page(state: CacheState, width: u16, height: u16, page: Page) -> String {
+    snapshot_view(state, width, height, page, false)
+}
+
+/// Render a deterministic snapshot, optionally opening the selected item so
+/// message/thread layout can be inspected without a live terminal.
+#[must_use]
+pub fn snapshot_view(state: CacheState, width: u16, height: u16, page: Page, open: bool) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test backend");
     let mut app = App::demo(state);
     app.set_page(page);
+    if open {
+        app.content_view_width = width;
+        app.content_view_height = height.saturating_sub(2);
+        app.request_selected();
+    }
     terminal
         .draw(|frame| app.render(frame, None))
         .expect("render snapshot");
@@ -2128,6 +2672,140 @@ mod tests {
             snapshot_age(Some(CacheState::now() - 125)),
             "snapshot 2m stale"
         );
+    }
+
+    #[test]
+    fn thread_stack_opens_and_pops_without_quitting() {
+        let mut app = App::demo(crate::slack::demo_state());
+        app.set_page(Page::Dms);
+        app.request_selected();
+        assert!(!app.section_overview);
+        app.selected_message = 0;
+        app.request_selected();
+        assert_eq!(app.thread_stack.len(), 1);
+        assert!(app.visible_messages().len() >= 2);
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(app.thread_stack.is_empty());
+        assert!(!app.should_quit);
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(!app.should_quit);
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn sidebar_and_fullscreen_toggles_are_reversible() {
+        let mut app = App::demo(crate::slack::demo_state());
+        app.handle_key(KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE));
+        assert!(!app.sidebar_visible);
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.sidebar_visible);
+        app.set_page(Page::Files);
+        app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        assert!(app.fullscreen_content);
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(!app.fullscreen_content);
+    }
+
+    #[test]
+    fn favorites_view_lists_starred_conversations() {
+        let mut state = crate::slack::demo_state();
+        state.conversations[0].is_favorite = true;
+        let favorite = state.conversations[0].name.clone();
+        let mut app = App::demo(state);
+        app.set_page(Page::Favorites);
+        assert_eq!(app.filtered_favorites().len(), 1);
+        let rendered = snapshot_page(app.state.clone(), 120, 24, Page::Favorites);
+        assert!(rendered.contains("Favorites"));
+        assert!(rendered.contains(&favorite));
+    }
+
+    #[test]
+    fn conversations_open_scrolled_to_newest_message() {
+        let mut app = App::demo(crate::slack::demo_state());
+        app.content_view_height = 6;
+        app.content_view_width = 40;
+        app.set_page(Page::Dms);
+        app.request_selected();
+        let messages = app.visible_messages();
+        assert_eq!(app.selected_message, messages.len() - 1);
+        assert_eq!(app.content_scroll, app.max_content_scroll());
+    }
+
+    #[test]
+    fn osc8_patching_wraps_visible_urls_without_shifting_columns() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
+        let text = "open https://example.com/x rest";
+        for (index, character) in text.chars().enumerate() {
+            buffer[(u16::try_from(index).unwrap(), 0)].set_symbol(&character.to_string());
+        }
+        apply_osc8_links(&mut buffer, Rect::new(0, 0, 40, 1), text);
+        let first = buffer[(5, 0)].symbol().to_string();
+        assert_eq!(
+            first, "\x1b]8;;https://example.com/x\x07ht\x1b]8;;\x07",
+            "link runs start on the first URL cell in two-character chunks"
+        );
+        assert_eq!(
+            buffer[(6, 0)].symbol(),
+            "t",
+            "interleaved cells stay intact"
+        );
+        assert_eq!(
+            buffer[(27, 0)].symbol(),
+            "r",
+            "text after the URL is untouched"
+        );
+    }
+
+    #[test]
+    fn graphics_frames_skip_unchanged_placements_and_preserve_cursor() {
+        let Ok(mut graphics) = Graphics::new() else {
+            return;
+        };
+        let chrome = chrome(Tone::Content, false);
+        let area = Rect::new(0, 0, 20, 6);
+
+        graphics.tracker.begin_frame();
+        let first_sink = EffectsSink::new();
+        first_sink.push(render_chrome_underlay(area, &chrome, &graphics.runtime));
+        let first = finalize_graphics_frame(&mut graphics, &first_sink);
+        assert!(!first.placement.is_empty(), "first frame places chrome");
+
+        graphics.tracker.begin_frame();
+        let second_sink = EffectsSink::new();
+        second_sink.push(render_chrome_underlay(area, &chrome, &graphics.runtime));
+        let second = finalize_graphics_frame(&mut graphics, &second_sink);
+        assert!(
+            second.placement.is_empty(),
+            "unchanged chrome must not re-place every frame"
+        );
+
+        let mut buffer = Vec::new();
+        write_graphics_flush(&mut buffer, &first).unwrap();
+        let written = String::from_utf8(buffer).unwrap();
+        assert!(written.starts_with("\x1b7"), "cursor is saved first");
+        assert!(written.ends_with("\x1b8"), "cursor is restored last");
+
+        let mut empty = Vec::new();
+        write_graphics_flush(&mut empty, &second).unwrap();
+        assert!(empty.is_empty(), "no-op frames write nothing");
+    }
+
+    #[test]
+    fn passive_mouse_motion_does_not_request_a_repaint() {
+        let mut app = App::demo(crate::slack::demo_state());
+        assert!(!app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 250,
+            row: 250,
+            modifiers: KeyModifiers::NONE,
+        }));
     }
 
     #[test]

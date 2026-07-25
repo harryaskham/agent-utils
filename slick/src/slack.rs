@@ -20,6 +20,7 @@ const USER_AGENT_VALUE: &str =
 const MAX_AUTOMATIC_DMS: usize = 12;
 const MAX_HISTORY_MESSAGES: usize = 100;
 const MAX_FILE_RESULTS: usize = 100;
+const MAX_BACKFILL_CONVERSATIONS: usize = 24;
 const MAX_CANVAS_MARKDOWN_CHARS: usize = 24_000;
 
 #[derive(Clone, Debug)]
@@ -206,6 +207,7 @@ impl SlackService {
         self.refresh_identity(state)?;
         self.refresh_sidebar(state)?;
         let notifications_error = self.refresh_notifications(state).err();
+        let _ = self.refresh_self_activity(state);
         let files_error = self.refresh_files(state).err();
         self.refresh_active_dms(state)?;
         rebuild_dm_notifications(state);
@@ -286,6 +288,94 @@ impl SlackService {
         state.mark_refreshed(key);
         rebuild_dm_notifications(state);
         state.normalize();
+        Ok(())
+    }
+
+    pub fn refresh_self_activity(&self, state: &mut CacheState) -> Result<()> {
+        let since = state
+            .since_for("self_activity")
+            .max(CacheState::seven_days_ago());
+        let mut params = BTreeMap::new();
+        params.insert(
+            "query".into(),
+            format!("from:me after:{}", date_filter(since)),
+        );
+        params.insert("count".into(), "100".into());
+        let result = self.client.call("search.messages", &params)?;
+        for value in result
+            .pointer("/messages/matches")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(id) = value.pointer("/channel/id").and_then(value_as_id) else {
+                continue;
+            };
+            let ts = value_string(value, "ts");
+            let entry = state.self_activity.entry(id).or_default();
+            if ts.parse::<f64>().unwrap_or(0.0) > entry.parse::<f64>().unwrap_or(0.0) {
+                *entry = ts;
+            }
+        }
+        state.mark_refreshed("self_activity");
+        self.backfill_conversations(state);
+        Ok(())
+    }
+
+    /// Add conversations referenced by recent self-activity that the
+    /// membership listings did not return, so "channels you're active in"
+    /// shows names rather than raw ids.
+    fn backfill_conversations(&self, state: &mut CacheState) {
+        let missing: Vec<String> = state
+            .self_activity
+            .keys()
+            .filter(|id| !state.conversations.iter().any(|item| item.id == **id))
+            .take(MAX_BACKFILL_CONVERSATIONS)
+            .cloned()
+            .collect();
+        for id in missing {
+            let mut params = BTreeMap::new();
+            params.insert("channel".into(), id);
+            if let Ok(result) = self.client.call("conversations.info", &params) {
+                if let Some(conversation) = result
+                    .get("channel")
+                    .and_then(|value| compact_conversation(value, &state.users))
+                {
+                    state.conversations.push(conversation);
+                }
+            }
+        }
+    }
+
+    pub fn refresh_thread(
+        &self,
+        state: &mut CacheState,
+        conversation_id: &str,
+        thread_ts: &str,
+    ) -> Result<()> {
+        let mut params = BTreeMap::new();
+        params.insert("channel".into(), conversation_id.to_string());
+        params.insert("ts".into(), thread_ts.to_string());
+        params.insert("limit".into(), MAX_HISTORY_MESSAGES.to_string());
+        let result = self.client.call("conversations.replies", &params)?;
+        let conversation = state.conversation(conversation_id).cloned();
+        let mut messages: Vec<Message> = result
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| compact_message(value, conversation.as_ref(), &state.users))
+            .collect();
+        messages.sort_by(|left, right| {
+            left.unix_ts()
+                .partial_cmp(&right.unix_ts())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        messages.dedup_by(|left, right| left.ts == right.ts);
+        state
+            .threads
+            .insert(CacheState::thread_key(conversation_id, thread_ts), messages);
+        state.mark_refreshed(format!("thread:{conversation_id}:{thread_ts}"));
         Ok(())
     }
 
@@ -1043,11 +1133,33 @@ pub fn demo_state() -> CacheState {
         },
     ];
     let messages = vec![
-        Message { ts: "1784897000.0".into(), timestamp: "2026-07-24T12:03:20Z".into(), user_id: "U_GRACE".into(), author: "Grace Hopper".into(), text: "## Welcome to Slick\n\nA **read-only** Slack TUI with:\n\n- compact message views\n- cached seven-day activity\n- rich Canvas Markdown\n- keyboard *and* mouse navigation".into(), permalink: "https://example.slack.com/demo/1".into(), ..Message::default() },
+        Message { ts: "1784897000.0".into(), timestamp: "2026-07-24T12:03:20Z".into(), user_id: "U_GRACE".into(), author: "Grace Hopper".into(), reply_count: 2, text: "## Welcome to Slick\n\nA **read-only** Slack TUI with:\n\n- compact message views\n- cached seven-day activity\n- rich Canvas Markdown\n- keyboard *and* mouse navigation".into(), permalink: "https://example.slack.com/demo/1".into(), ..Message::default() },
         Message { ts: "1784898000.0".into(), timestamp: "2026-07-24T12:20:00Z".into(), user_id: "U_ADA".into(), author: "Ada Lovelace".into(), text: "The analytical engine weaves algebraic patterns just as the Jacquard loom weaves flowers and leaves.\n\n> Ctrl-R refreshes only this visible conversation and the DM list.".into(), permalink: "https://example.slack.com/demo/2".into(), ..Message::default() },
     ];
     state.messages.insert("D_ADA".into(), messages.clone());
     state.messages.insert("C_GENERAL".into(), messages.clone());
+    state.threads.insert(
+        CacheState::thread_key("D_ADA", "1784897000.0"),
+        vec![
+            messages[0].clone(),
+            Message {
+                ts: "1784897100.0".into(),
+                timestamp: "2026-07-24T12:05:00Z".into(),
+                user_id: "U_ADA".into(),
+                author: "Ada Lovelace".into(),
+                text: "Threads keep the main conversation compact.".into(),
+                ..Message::default()
+            },
+            Message {
+                ts: "1784897200.0".into(),
+                timestamp: "2026-07-24T12:06:40Z".into(),
+                user_id: "U_GRACE".into(),
+                author: "Grace Hopper".into(),
+                text: "Press `q` to pop back to the channel.".into(),
+                ..Message::default()
+            },
+        ],
+    );
     state.notifications = vec![
         Notification {
             key: "D_ADA:1784898000".into(),
