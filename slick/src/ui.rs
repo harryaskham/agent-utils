@@ -30,7 +30,7 @@ use kittui::{CellRect, Direction as KittuiDirection, RendererKind, Rgba, Runtime
 use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
-use crate::markdown::{extract_urls, osc8_chunks, preview, render_markdown};
+use crate::markdown::{extract_urls, preview, render_markdown};
 use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
 use crate::slack::SlackService;
 
@@ -107,6 +107,14 @@ enum HitAction {
 struct HitRegion {
     rect: Rect,
     action: HitAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinkRun {
+    x: u16,
+    y: u16,
+    text: String,
+    url: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -295,6 +303,7 @@ pub struct App {
     status: String,
     last_error: Option<String>,
     hits: Vec<HitRegion>,
+    link_runs: Vec<LinkRun>,
     selected_message: usize,
     thread_stack: Vec<ThreadView>,
     worker: Option<Worker>,
@@ -351,6 +360,7 @@ impl App {
             busy: false,
             last_error: None,
             hits: Vec::new(),
+            link_runs: Vec::new(),
             selected_message: 0,
             thread_stack: Vec::new(),
             worker,
@@ -1161,6 +1171,7 @@ impl App {
 
     fn render(&mut self, frame: &mut Frame<'_>, graphics: Option<(&Runtime, &EffectsSink)>) {
         self.hits.clear();
+        self.link_runs.clear();
         let area = frame.area();
         let vertical = Layout::default()
             .direction(Direction::Vertical)
@@ -1748,12 +1759,12 @@ impl App {
             self.focus == Focus::Content,
         );
         if self.osc8_links {
-            apply_osc8_links(frame.buffer_mut(), area, &markdown);
-            self.patch_message_links(frame.buffer_mut(), area, &starts);
+            collect_url_runs(frame.buffer_mut(), area, &markdown, &mut self.link_runs);
+            self.collect_message_links(frame.buffer_mut(), area, &starts);
         }
     }
 
-    fn patch_message_links(&self, buffer: &mut Buffer, area: Rect, starts: &[usize]) {
+    fn collect_message_links(&mut self, buffer: &Buffer, area: Rect, starts: &[usize]) {
         let messages = self.visible_messages();
         let inner_top = area.y.saturating_add(1);
         let inner_rows = area.height.saturating_sub(2);
@@ -1781,8 +1792,15 @@ impl App {
                 let Some(byte_index) = row.find("open ↗") else {
                     continue;
                 };
-                let column = row[..byte_index].chars().count();
-                patch_osc8_run(buffer, area, y, column, &message.permalink, "open ↗");
+                let Ok(column) = u16::try_from(row[..byte_index].chars().count()) else {
+                    break;
+                };
+                self.link_runs.push(LinkRun {
+                    x: area.x.saturating_add(column),
+                    y,
+                    text: "open ↗".to_string(),
+                    url: message.permalink.clone(),
+                });
                 break;
             }
         }
@@ -1921,7 +1939,7 @@ impl App {
             self.focus == Focus::Detail,
         );
         if self.osc8_links {
-            apply_osc8_links(frame.buffer_mut(), area, &markdown);
+            collect_url_runs(frame.buffer_mut(), area, &markdown, &mut self.link_runs);
         }
     }
 
@@ -2165,9 +2183,17 @@ fn render_decorated<W: Widget>(
 }
 
 fn render_chrome_underlay(area: Rect, chrome: &Chrome, runtime: &Runtime) -> RenderEffects {
-    let Some(scene) = chrome.to_scene(area) else {
+    // Ratakittui 0.2 builds layer geometry from the absolute Ratatui `Rect`
+    // while rasterizing into a footprint-sized image. For any pane whose x/y
+    // is non-zero, that draws the chrome offset *inside its own image* and
+    // clips most (or all) of it before Kitty then places the image at x/y a
+    // second time. Build layer geometry in image-local coordinates and retain
+    // the absolute footprint only for terminal placement.
+    let local_area = Rect::new(0, 0, area.width, area.height);
+    let Some(mut scene) = chrome.to_scene(local_area) else {
         return RenderEffects::default();
     };
+    scene.footprint = CellRect::new(area.x, area.y, area.width, area.height);
     let id = scene.id();
     // Ratakittui's default unicode placement uses implicit z=0 placements.
     // In Ghostty (and especially through tmux), repeated frames can accumulate
@@ -2183,26 +2209,14 @@ fn render_chrome_underlay(area: Rect, chrome: &Chrome, runtime: &Runtime) -> Ren
         )
 }
 
-fn patch_osc8_run(buffer: &mut Buffer, area: Rect, y: u16, column: usize, url: &str, text: &str) {
-    for (offset, payload) in osc8_chunks(url, text) {
-        let Ok(offset) = u16::try_from(column + offset) else {
-            break;
-        };
-        let x = area.x.saturating_add(offset);
-        if x >= area.right() {
-            break;
-        }
-        buffer[(x, y)].set_symbol(&payload);
-    }
-}
-
-fn row_text(buffer: &Buffer, area: Rect, y: u16) -> String {
-    (area.x..area.right())
-        .map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' '))
-        .collect()
-}
-
-fn apply_osc8_links(buffer: &mut Buffer, area: Rect, source: &str) {
+/// Collect hyperlink runs for text already rendered into `buffer`.
+///
+/// Ratatui measures cell widths with `unicode-width`, so escape bytes must
+/// never be written into buffer symbols: the miscount makes the frame diff
+/// skip neighbouring cells and leaves stale text behind. Slick therefore
+/// records link positions here and emits OSC 8 directly to the terminal after
+/// the frame flush, exactly like its Kitty graphics transactions.
+fn collect_url_runs(buffer: &Buffer, area: Rect, source: &str, runs: &mut Vec<LinkRun>) {
     let urls = extract_urls(source);
     if urls.is_empty() || area.width == 0 || area.height == 0 {
         return;
@@ -2218,10 +2232,43 @@ fn apply_osc8_links(buffer: &mut Buffer, area: Rect, source: &str) {
                 let byte_index = search_from + found;
                 search_from = byte_index + url.len();
                 let column = row[..byte_index].chars().count();
-                patch_osc8_run(buffer, area, y, column, url, url);
+                let Ok(column) = u16::try_from(column) else {
+                    continue;
+                };
+                runs.push(LinkRun {
+                    x: area.x.saturating_add(column),
+                    y,
+                    text: url.clone(),
+                    url: url.clone(),
+                });
             }
         }
     }
+}
+
+fn row_text(buffer: &Buffer, area: Rect, y: u16) -> String {
+    (area.x..area.right())
+        .map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' '))
+        .collect()
+}
+
+fn write_link_runs<W: Write>(writer: &mut W, runs: &[LinkRun]) -> io::Result<()> {
+    if runs.is_empty() {
+        return Ok(());
+    }
+    let mut out = String::new();
+    for run in runs {
+        let _ = write!(
+            out,
+            "\x1b[{};{}H\x1b]8;;{}\x07\x1b[4;36m{}\x1b[0m\x1b]8;;\x07",
+            run.y.saturating_add(1),
+            run.x.saturating_add(1),
+            run.url,
+            run.text
+        );
+    }
+    writer.write_all(out.as_bytes())?;
+    writer.flush()
 }
 
 fn finalize_graphics_frame(graphics: &mut Graphics, sink: &EffectsSink) -> DrawFlush {
@@ -2229,7 +2276,6 @@ fn finalize_graphics_frame(graphics: &mut Graphics, sink: &EffectsSink) -> DrawF
     let mut current = HashMap::new();
     for effects in sink.drain() {
         graphics.tracker.keep(&effects);
-        flush.upload.push_str(&effects.upload);
         if let (Some(scene_id), Some(image_id), Some(footprint)) = (
             effects.scene_id.as_ref(),
             effects.image_id,
@@ -2242,14 +2288,21 @@ fn finalize_graphics_frame(graphics: &mut Graphics, sink: &EffectsSink) -> DrawF
                 .is_some_and(|placed| *placed == (image_id, footprint));
             current.insert(key, (image_id, footprint));
             if !unchanged {
-                // The runtime placement already contains its own absolute
-                // cursor move. Emitting a second host-side move (as the
-                // generic Ratakittui finalizer does) is redundant and makes
-                // cursor restoration harder to reason about.
-                flush.placement.push_str(&effects.placement);
+                flush.upload.push_str(&effects.upload);
+                // Runtime placements are cursor-anchored and already include
+                // the absolute move for `footprint`. Kittui 0.2 omits Kitty's
+                // `C=1` flag, however, so placing a full-height pane advances
+                // the terminal cursor past the bottom edge and scrolls the
+                // alternate screen by one row. That makes every later Ratatui
+                // diff appear one row lower and leaves old glyphs behind.
+                // Inject `C=1` until PlacementOptions exposes it upstream.
+                flush
+                    .placement
+                    .push_str(&effects.placement.replacen(",q=", ",C=1,q=", 1));
                 flush.placement.push_str(&effects.embed);
             }
         } else {
+            flush.upload.push_str(&effects.upload);
             flush.placement.push_str(&effects.placement);
             flush.placement.push_str(&effects.embed);
         }
@@ -2265,15 +2318,15 @@ fn write_graphics_flush<W: Write>(writer: &mut W, flush: &DrawFlush) -> io::Resu
     if flush.is_empty() {
         return Ok(());
     }
-    // Kittui placement commands move the real terminal cursor, while Ratatui's
-    // backend still believes the cursor is where its preceding draw left it.
-    // Save/restore around the complete graphics transaction so the next text
-    // diff starts from the same physical and logical cursor position.
-    writer.write_all(b"\x1b7")?;
+    // Crossterm starts every Ratatui diff with an absolute cursor move. Do not
+    // wrap Kitty traffic in DECSC/DECRC or CSI save/restore: terminals disagree
+    // about the modes restored by those sequences, and Ghostty can subsequently
+    // interpret every Ratatui coordinate one row lower. Leaving the cursor at
+    // the last placement origin is harmless because the next text draw anchors
+    // itself absolutely.
     writer.write_all(flush.upload.as_bytes())?;
     writer.write_all(flush.placement.as_bytes())?;
     writer.write_all(flush.deletes.as_bytes())?;
-    writer.write_all(b"\x1b8")?;
     writer.flush()
 }
 
@@ -2492,6 +2545,7 @@ fn run_loop(
             } else {
                 terminal.draw(|frame| app.render(frame, None))?;
             }
+            write_link_runs(terminal.backend_mut(), &app.link_runs)?;
             dirty = false;
         }
 
@@ -2733,28 +2787,28 @@ mod tests {
     }
 
     #[test]
-    fn osc8_patching_wraps_visible_urls_without_shifting_columns() {
+    fn link_runs_are_collected_without_touching_buffer_symbols() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
         let text = "open https://example.com/x rest";
         for (index, character) in text.chars().enumerate() {
             buffer[(u16::try_from(index).unwrap(), 0)].set_symbol(&character.to_string());
         }
-        apply_osc8_links(&mut buffer, Rect::new(0, 0, 40, 1), text);
-        let first = buffer[(5, 0)].symbol().to_string();
+        let mut runs = Vec::new();
+        collect_url_runs(&buffer, Rect::new(0, 0, 40, 1), text, &mut runs);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].x, 5);
+        assert_eq!(runs[0].y, 0);
+        assert_eq!(runs[0].url, "https://example.com/x");
         assert_eq!(
-            first, "\x1b]8;;https://example.com/x\x07ht\x1b]8;;\x07",
-            "link runs start on the first URL cell in two-character chunks"
+            buffer[(5, 0)].symbol(),
+            "h",
+            "buffer symbols must stay one character wide so the frame diff remains exact"
         );
-        assert_eq!(
-            buffer[(6, 0)].symbol(),
-            "t",
-            "interleaved cells stay intact"
-        );
-        assert_eq!(
-            buffer[(27, 0)].symbol(),
-            "r",
-            "text after the URL is untouched"
-        );
+        let mut written = Vec::new();
+        write_link_runs(&mut written, &runs).unwrap();
+        let escape = String::from_utf8(written).unwrap();
+        assert!(escape.starts_with("\x1b[1;6H"));
+        assert!(escape.contains("\x1b]8;;https://example.com/x\x07"));
     }
 
     #[test]
@@ -2769,7 +2823,14 @@ mod tests {
         let first_sink = EffectsSink::new();
         first_sink.push(render_chrome_underlay(area, &chrome, &graphics.runtime));
         let first = finalize_graphics_frame(&mut graphics, &first_sink);
-        assert!(!first.placement.is_empty(), "first frame places chrome");
+        assert!(
+            first.placement.contains("[1;1H"),
+            "absolute placement must anchor the Kitty cursor at the scene origin"
+        );
+        assert!(
+            first.placement.contains(",C=1,q="),
+            "full-height Kitty placements must not advance and scroll the text cursor"
+        );
 
         graphics.tracker.begin_frame();
         let second_sink = EffectsSink::new();
@@ -2779,12 +2840,18 @@ mod tests {
             second.placement.is_empty(),
             "unchanged chrome must not re-place every frame"
         );
+        assert!(
+            second.upload.is_empty(),
+            "unchanged chrome must not be uploaded every frame"
+        );
 
         let mut buffer = Vec::new();
         write_graphics_flush(&mut buffer, &first).unwrap();
         let written = String::from_utf8(buffer).unwrap();
-        assert!(written.starts_with("\x1b7"), "cursor is saved first");
-        assert!(written.ends_with("\x1b8"), "cursor is restored last");
+        assert!(
+            written.contains("[1;1H"),
+            "the placement itself anchors the Kitty cursor"
+        );
 
         let mut empty = Vec::new();
         write_graphics_flush(&mut empty, &second).unwrap();

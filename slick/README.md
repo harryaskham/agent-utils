@@ -88,19 +88,24 @@ and covered all text in the tested Ghostty/tmux path. Stable underlays remove th
 placeholder grid, replace rather than accumulate placements, and keep ordinary
 Ratatui text above the graphics. `--no-graphics` remains a universal fallback.
 
-Two further host-side rules keep graphics stable during interaction:
+Three compatibility rules keep graphics stable during interaction:
 
-- **Placement diffing.** A scene is re-placed only when its image id or cell
-  footprint changes, so idle repaints (for example the one-second staleness
-  timer) emit no graphics traffic at all.
-- **Cursor preservation.** Kitty placement commands move the real cursor while
-  Ratatui still tracks its own position, which made text drift and scroll away
-  under mouse movement. Slick wraps every graphics transaction in `ESC 7` /
-  `ESC 8` so the next text diff starts from the position Ratatui expects.
+- **Image-local chrome geometry.** Ratakittui 0.1 applies a pane's absolute x/y
+  to layer geometry inside its footprint-sized PNG, then Kitty applies x/y a
+  second time at placement. Slick rasterizes at `(0,0)` and retains x/y only in
+  the placement footprint, avoiding clipped and offset pane backgrounds.
+- **No cursor advance (`C=1`).** Kittui 0.1 omits this Kitty placement flag.
+  Placing a full-height panel therefore advances past the viewport and scrolls
+  the text plane one row; every later Ratatui diff lands low and old characters
+  remain painted. Slick injects `C=1` into absolute placements.
+- **Placement diffing.** A scene is uploaded and placed only when its image id
+  or cell footprint changes, so idle repaints (including the one-second
+  staleness timer) emit no graphics traffic.
 
-OSC 8 hyperlinks are emitted in two-character cell chunks, matching the
-workaround in ratatui's own hyperlink example, because `unicode-width`
-mis-measures escape bytes and would otherwise blank the following cells.
+OSC 8 escapes are never stored in Ratatui buffer symbols: doing so corrupts
+`unicode-width` damage calculations and leaves stale cells. Slick records the
+rendered link coordinates, then emits the clickable text directly after the
+frame flush using absolute cursor moves.
 
 ## Development
 
