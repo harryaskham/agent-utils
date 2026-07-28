@@ -31,6 +31,7 @@ use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
 use crate::config::{Config, ThemeName};
+use crate::feed::{Feed, FeedTarget};
 use crate::markdown::{extract_urls, preview, render_markdown};
 use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
 use crate::slack::SlackService;
@@ -173,6 +174,7 @@ const SIDEBAR_DM_ROWS: usize = 12;
 pub enum Page {
     #[default]
     Notifications,
+    Feed,
     Favorites,
     Dms,
     Channels,
@@ -180,8 +182,9 @@ pub enum Page {
 }
 
 impl Page {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Notifications,
+        Self::Feed,
         Self::Favorites,
         Self::Dms,
         Self::Channels,
@@ -192,6 +195,7 @@ impl Page {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Notifications => "Activity",
+            Self::Feed => "Feed",
             Self::Favorites => "Favorites",
             Self::Dms => "Direct messages",
             Self::Channels => "Channels",
@@ -203,6 +207,7 @@ impl Page {
     const fn icon(self) -> &'static str {
         match self {
             Self::Notifications => "◉",
+            Self::Feed => "≋",
             Self::Favorites => "★",
             Self::Dms => "◌",
             Self::Channels => "#",
@@ -224,6 +229,7 @@ enum HitAction {
     Page(Page),
     Conversation(String, ConversationKind),
     Notification(usize),
+    FeedEntry(usize),
     Message(usize),
     File(usize),
     Focus(Focus),
@@ -433,6 +439,9 @@ pub struct App {
     viewport_width: u16,
     config: Config,
     config_path: PathBuf,
+    feed: Feed,
+    selected_feed: usize,
+    feed_offset: usize,
     dragging: Option<Divider>,
     sidebar_visible: bool,
     fullscreen_content: bool,
@@ -498,6 +507,9 @@ impl App {
             viewport_width: 120,
             config: Config::default(),
             config_path: Config::default_path(),
+            feed: Feed::default(),
+            selected_feed: 0,
+            feed_offset: 0,
             dragging: None,
             sidebar_visible: true,
             fullscreen_content: false,
@@ -535,6 +547,7 @@ impl App {
                     self.busy = false;
                     self.status = status;
                     self.last_error = None;
+                    self.feed.ingest(&self.state, Instant::now());
                     self.clamp_selection();
                     if matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
                         && !self.section_overview
@@ -682,12 +695,41 @@ impl App {
                 .notifications
                 .get(self.selected_notification)
                 .and_then(|notification| self.state.conversation(&notification.conversation_id)),
+            Page::Feed => {
+                self.feed
+                    .entries()
+                    .get(self.selected_feed)
+                    .and_then(|entry| match &entry.target {
+                        FeedTarget::Conversation { id, .. } => self.state.conversation(id),
+                        FeedTarget::File { .. } => None,
+                    })
+            }
             Page::Files => None,
         }
     }
 
     fn selected_file(&self) -> Option<&SlackFile> {
         self.filtered_files().get(self.selected_file).copied()
+    }
+
+    /// Open the selected feed line's underlying conversation, thread or file.
+    fn open_feed_entry(&mut self) {
+        let Some(entry) = self.feed.entries().get(self.selected_feed).cloned() else {
+            return;
+        };
+        match entry.target {
+            FeedTarget::Conversation { id, kind } => self.select_conversation(id, kind),
+            FeedTarget::File { id } => {
+                self.page = Page::Files;
+                if let Some(position) = self.filtered_files().iter().position(|file| file.id == id)
+                {
+                    self.selected_file = position;
+                }
+                self.focus = Focus::Detail;
+                self.detail_scroll = 0;
+                self.request_selected();
+            }
+        }
     }
 
     fn request_selected(&mut self) {
@@ -700,6 +742,7 @@ impl App {
                     self.select_conversation(id, kind);
                 }
             }
+            Page::Feed => self.open_feed_entry(),
             Page::Favorites | Page::Dms | Page::Channels => {
                 if self.in_message_view() && self.focus != Focus::Sidebar {
                     self.open_selected_thread();
@@ -766,7 +809,7 @@ impl App {
 
     fn refresh_visible(&mut self) {
         let target = match self.page {
-            Page::Notifications => RefreshTarget::Notifications,
+            Page::Notifications | Page::Feed => RefreshTarget::Notifications,
             Page::Favorites | Page::Dms | Page::Channels if self.section_overview => {
                 RefreshTarget::Sidebar
             }
@@ -847,6 +890,7 @@ impl App {
             KeyCode::Char('3') => self.set_page(Page::Channels),
             KeyCode::Char('4') => self.set_page(Page::Files),
             KeyCode::Char('5') => self.set_page(Page::Favorites),
+            KeyCode::Char('6') => self.set_page(Page::Feed),
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -869,6 +913,7 @@ impl App {
         if self.navigates_list() {
             match self.page {
                 Page::Notifications => self.selected_notification = 0,
+                Page::Feed => self.selected_feed = 0,
                 Page::Favorites => self.selected_favorite = 0,
                 Page::Dms => self.selected_dm = 0,
                 Page::Channels => self.selected_channel = 0,
@@ -886,6 +931,9 @@ impl App {
             match self.page {
                 Page::Notifications => {
                     self.selected_notification = self.state.notifications.len().saturating_sub(1);
+                }
+                Page::Feed => {
+                    self.selected_feed = self.feed.entries().len().saturating_sub(1);
                 }
                 Page::Favorites => {
                     self.selected_favorite = self.filtered_favorites().len().saturating_sub(1);
@@ -999,7 +1047,7 @@ impl App {
 
     fn navigates_list(&self) -> bool {
         match self.page {
-            Page::Notifications => true,
+            Page::Notifications | Page::Feed => true,
             Page::Favorites | Page::Dms | Page::Channels => {
                 self.section_overview || self.focus == Focus::Sidebar
             }
@@ -1105,6 +1153,10 @@ impl App {
                 &mut self.selected_notification,
                 self.state.notifications.len(),
             ),
+            Page::Feed => {
+                let len = self.feed.entries().len();
+                (&mut self.selected_feed, len)
+            }
             Page::Favorites => {
                 let len = self.filtered_favorites().len();
                 (&mut self.selected_favorite, len)
@@ -1137,6 +1189,11 @@ impl App {
                 self.selected_notification,
                 &mut self.activity_offset,
                 usize::from(self.content_view_height.saturating_sub(2) / 2).max(1),
+            ),
+            Page::Feed => keep_visible(
+                self.selected_feed,
+                &mut self.feed_offset,
+                usize::from(self.content_view_height.saturating_sub(2)).max(1),
             ),
             Page::Favorites => keep_visible(
                 self.selected_favorite,
@@ -1326,6 +1383,12 @@ impl App {
                             self.selected_notification = index;
                             self.focus = Focus::Content;
                         }
+                        HitAction::FeedEntry(index) => {
+                            self.page = Page::Feed;
+                            self.selected_feed = index;
+                            self.focus = Focus::Content;
+                            self.open_feed_entry();
+                        }
                         HitAction::File(index) => {
                             self.page = Page::Files;
                             self.selected_file = index;
@@ -1394,6 +1457,24 @@ impl App {
     }
 
     /// Adopt user configuration: palette, pane geometry and local favourites.
+    /// Seed the feed from the current cache and release it immediately.
+    ///
+    /// Used by snapshots and demo mode where there is no live tick loop.
+    fn prime_feed(&mut self) {
+        let start = Instant::now();
+        self.feed = Feed::new(Duration::from_millis(0), 500);
+        self.feed.ingest(&self.state, start);
+        // Snapshots have no wall-clock loop, so advance a virtual clock past
+        // each paced slot until the backlog has drained.
+        let mut clock = start;
+        while self.feed.pending_len() > 0 {
+            clock += Duration::from_millis(100);
+            if self.feed.tick(clock) == 0 {
+                break;
+            }
+        }
+    }
+
     fn apply_config(&mut self, config: Config, path: PathBuf) {
         set_active_theme(config.theme);
         self.sidebar_width = config.sidebar_width.clamp(18, 80);
@@ -1626,6 +1707,7 @@ impl App {
                     .iter()
                     .filter(|item| item.unread || item.mention)
                     .count(),
+                Page::Feed => self.feed.entries().len(),
                 Page::Favorites => self
                     .state
                     .conversations
@@ -1766,6 +1848,7 @@ impl App {
         });
         match self.page {
             Page::Notifications => self.render_notifications(frame, area, graphics),
+            Page::Feed => self.render_feed(frame, area, graphics),
             Page::Favorites | Page::Dms | Page::Channels if self.section_overview => {
                 self.render_conversation_overview(frame, area, graphics);
             }
@@ -1774,6 +1857,94 @@ impl App {
             }
             Page::Files => {}
         }
+    }
+
+    /// Live feed: one line per arriving item, newest first.
+    fn render_feed(
+        &mut self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        graphics: Option<(&Runtime, &EffectsSink)>,
+    ) {
+        let mut items = Vec::new();
+        let mut row = list_origin(area, graphics.is_some(), true);
+        let visible = usize::from(area.height.saturating_sub(2)).max(1);
+        keep_visible(self.selected_feed, &mut self.feed_offset, visible);
+        let entries: Vec<_> = self.feed.entries().to_vec();
+        self.feed_offset = self
+            .feed_offset
+            .min(entries.len().saturating_sub(visible.min(entries.len())));
+        if entries.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "  Waiting for arrivals. New messages, mentions and files stream in here.",
+                Style::default().fg(MUTED()),
+            ))));
+        }
+        let summary_width = usize::from(area.width.saturating_sub(34)).max(24);
+        for (index, entry) in entries
+            .iter()
+            .enumerate()
+            .skip(self.feed_offset)
+            .take(visible)
+        {
+            let selected = index == self.selected_feed;
+            let style = if selected {
+                Style::default().bg(palette().selection)
+            } else {
+                Style::default()
+            };
+            let marker = if entry.mention {
+                "@"
+            } else if entry.revision > 0 {
+                "~"
+            } else {
+                "·"
+            };
+            items.push(
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!(" {marker} "),
+                        Style::default().fg(if entry.mention { YELLOW() } else { CYAN() }),
+                    ),
+                    Span::styled(
+                        format!("{:>5} ", short_time(&entry.time)),
+                        Style::default().fg(if entry.unread { GREEN() } else { MUTED() }),
+                    ),
+                    Span::styled(
+                        format!("{:<18} ", truncate_label(&entry.source, 18)),
+                        Style::default().fg(FG()).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        preview(&entry.summary, summary_width),
+                        Style::default().fg(if selected { FG() } else { MUTED() }),
+                    ),
+                ]))
+                .style(style),
+            );
+            self.hits.push(HitRegion {
+                rect: Rect::new(area.x + 1, row, area.width.saturating_sub(2), 1),
+                action: HitAction::FeedEntry(index),
+            });
+            row = row.saturating_add(1);
+        }
+        let pending = self.feed.pending_len();
+        let list = List::new(items).block(pane_block(
+            graphics.is_some(),
+            self.focus == Focus::Content,
+            if pending > 0 {
+                format!(" Feed · {} lines · {pending} incoming ", entries.len())
+            } else {
+                format!(" Feed · {} lines ", entries.len())
+            },
+        ));
+        render_list(
+            frame,
+            area,
+            list,
+            graphics,
+            Tone::Content,
+            self.focus == Focus::Content,
+        );
     }
 
     fn render_notifications(
@@ -2885,6 +3056,7 @@ pub fn run(options: RunOptions) -> Result<()> {
         App::live(initial, options.cache_store)
     };
     app.apply_config(options.config.clone(), options.config_path.clone());
+    app.feed.ingest(&app.state, Instant::now());
     app.set_page(options.initial_page);
     app.osc8_links = true;
     let mut stdout = io::stdout();
@@ -2927,9 +3099,14 @@ fn run_loop(
     let mut last_timer_tick = Instant::now();
     while !app.should_quit {
         dirty |= app.drain_worker();
-        if last_timer_tick.elapsed() >= Duration::from_secs(1) {
-            dirty = true;
-            last_timer_tick = Instant::now();
+        if last_timer_tick.elapsed() >= Duration::from_millis(120) {
+            // The feed releases queued arrivals on a cadence, so tick faster
+            // than the one-second staleness clock and repaint when it emits.
+            let released = app.feed.tick(Instant::now());
+            if released > 0 || last_timer_tick.elapsed() >= Duration::from_secs(1) {
+                dirty = true;
+                last_timer_tick = Instant::now();
+            }
         }
         if dirty {
             if let Some(graphics) = graphics.as_deref_mut() {
@@ -2992,6 +3169,7 @@ pub fn snapshot_view_with_config(
     let mut terminal = Terminal::new(backend).expect("test backend");
     let mut app = App::demo(state);
     app.apply_config(config.clone(), Config::default_path());
+    app.prime_feed();
     app.set_page(page);
     if open {
         app.content_view_width = width;

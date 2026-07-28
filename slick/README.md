@@ -26,7 +26,8 @@ expires, refresh it with `/slack-refresh` in Pi and press `Ctrl-R` in Slick.
 
 Slick mirrors Slack's navigation shape:
 
-- **Activity** combines mentions, unread DMs, and recent DM activity.
+- **Activity** combines mentions, unread DMs, and recent DM activity, grouping contiguous runs from one conversation under a single header.
+- **Feed** streams one line per arriving item, newest first. Lines are deduplicated by identity: an edited or re-delivered item updates its existing line (marked `~`) instead of appending a second one. A burst from one refresh is released on a cadence rather than dumped, so the view reads as a stream. `Enter` or a click opens the underlying conversation, thread or file.
 - **Favorites** is a dedicated view over everything Slack has starred.
 - **Direct messages** and **Channels** are complete, separately paginated API inventories normalized by name, favorite, recency, and unread state. Clicking either section opens a searchable, bounded overview before opening a conversation.
 - The sidebar's channel list is ordered by **channels you have posted in recently** (`search.messages from:me`, seven-day window), backfilled through `conversations.info` so non-member channels still resolve to names.
@@ -45,7 +46,7 @@ Slick mirrors Slack's navigation shape:
 
 | Key | Action |
 |---|---|
-| `1`…`5`, `h`/`l`, arrows | Switch Activity / Favorites / DMs / Channels / Files |
+| `1`…`6`, `h`/`l`, arrows | Switch Activity / Feed / Favorites / DMs / Channels / Files |
 | `j`/`k`, arrows | Move selection, move between messages, or scroll the focused pane |
 | `gg`, `G`, `0` | Top, bottom, home |
 | `Enter` | Open/lazy-load a conversation or file; on a reply-bearing message, open its thread |

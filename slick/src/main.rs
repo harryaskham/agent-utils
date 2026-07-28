@@ -45,7 +45,7 @@ struct Cli {
     width: u16,
 
     /// Initial/snapshot view.
-    #[arg(long, default_value = "activity", value_parser = ["activity", "favorites", "dms", "channels", "files"])]
+    #[arg(long, default_value = "activity", value_parser = ["activity", "feed", "favorites", "dms", "channels", "files"])]
     page: String,
 
     /// With --snapshot, open the selected conversation/file instead of its overview.
@@ -138,6 +138,7 @@ fn main() -> Result<()> {
 
 fn parse_page(value: &str) -> Page {
     match value {
+        "feed" => Page::Feed,
         "favorites" => Page::Favorites,
         "dms" => Page::Dms,
         "channels" => Page::Channels,
