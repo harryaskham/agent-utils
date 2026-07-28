@@ -37,7 +37,11 @@
           pname = "slick";
           version = "0.1.0";
           src = patchedSrc;
-          cargoHash = "sha256-nGm8XYYljZu2hfjD2GnkaILCMXCtEbxCIFsz5sMrsAc=";
+          # Regenerate whenever Cargo.lock changes (e.g. adding serde_yaml in
+          # 132b67d). A stale value fails the build with "cargoHash or
+          # cargoSha256 is out of date": set to pkgs.lib.fakeHash, build, and
+          # copy the reported "got:" hash back here.
+          cargoHash = "sha256-modcUj1dLSf8Ap84QpE7ZKkJOCnJxF1/MwtKqb/63z0=";
           strictDeps = true;
           buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
           doCheck = true;

@@ -128,6 +128,18 @@ fn set_active_theme(theme: ThemeName) {
     ACTIVE_THEME.store(index, Ordering::Relaxed);
 }
 
+/// Palette for an explicit theme, independent of the process-global active
+/// theme. Keeping this pure lets tests assert theme→palette mapping without
+/// racing on `ACTIVE_THEME` (Rust runs tests in parallel threads, and any test
+/// calling `apply_config` stores into that same global).
+fn palette_for(theme: ThemeName) -> Palette {
+    match theme {
+        ThemeName::Nord => NORD_PALETTE,
+        ThemeName::Slate => SLATE_PALETTE,
+        ThemeName::Slick => SLICK_PALETTE,
+    }
+}
+
 fn palette() -> Palette {
     match ACTIVE_THEME.load(Ordering::Relaxed) {
         1 => NORD_PALETTE,
@@ -3374,11 +3386,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("slick-theme-{}", std::process::id()));
         let mut app = App::demo(crate::slack::demo_state());
         app.apply_config(Config::default(), dir.join("config.yaml"));
-        let before = palette().accent;
+        let before = app.config.theme;
         app.cycle_theme();
         assert_eq!(app.config.theme, ThemeName::Nord);
-        assert_ne!(palette().accent, before);
-        set_active_theme(ThemeName::Slick);
+        // Assert against the pure mapping rather than `palette()`: ACTIVE_THEME
+        // is a process-global that parallel tests concurrently overwrite, which
+        // made the global-reading form flaky.
+        assert_ne!(
+            palette_for(app.config.theme).accent,
+            palette_for(before).accent
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
