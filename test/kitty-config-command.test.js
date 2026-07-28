@@ -7,6 +7,9 @@ import {
   applyConfigPatch,
   formatConfigSummary,
   configUsageHint,
+  parseWidthRatioValue,
+  formatWidthRatio,
+  widthUsageHint,
   CONFIG_FIELD_NAMES,
 } from "../extensions/kitty-image-preview/config-command.js";
 
@@ -82,4 +85,46 @@ test("formatConfigSummary and usage hint cover every settable field", () => {
   const hint = configUsageHint();
   assert.match(hint, /Usage: \/image-config/);
   assert.match(hint, /graphicsPlacement/);
+});
+
+// /image-width side-rail width parsing (image-preview sidebar width work).
+test("parseWidthRatioValue accepts percent, fraction, and bare-percent forms", () => {
+  assert.equal(parseWidthRatioValue("25%"), 0.25);
+  assert.equal(parseWidthRatioValue(" 50 % ".replace(/\s+%/, "%").trim()), 0.5);
+  assert.equal(parseWidthRatioValue("0.25"), 0.25);
+  assert.equal(parseWidthRatioValue(".4"), 0.4);
+  // A bare number above 1 is read as a percentage, not a fraction.
+  assert.equal(parseWidthRatioValue("25"), 0.25);
+  // 1 is still a fraction (full width) and clamps to the max allowed share.
+  assert.equal(parseWidthRatioValue("1"), 0.9);
+});
+
+test("parseWidthRatioValue treats auto/reset words as a default restore", () => {
+  for (const word of ["", "auto", "default", "reset", "none", "null", "AUTO"]) {
+    assert.equal(parseWidthRatioValue(word), undefined, word);
+  }
+});
+
+test("parseWidthRatioValue clamps out-of-band values instead of rejecting", () => {
+  assert.equal(parseWidthRatioValue("99%"), 0.9);
+  assert.equal(parseWidthRatioValue("1%"), 0.05);
+});
+
+test("parseWidthRatioValue rejects unparseable input", () => {
+  assert.throws(() => parseWidthRatioValue("wide"), /expected a width/);
+  assert.throws(() => parseWidthRatioValue("-10%"), /expected a width/);
+});
+
+test("widthRatio is settable through /image-config and renders as a percentage", () => {
+  const { patch } = parseConfigPatch(["widthRatio=25%"]);
+  assert.equal(patch.widthRatio, 0.25);
+  // the friendlier aliases resolve to the same canonical field.
+  assert.equal(parseConfigPatch(["width=0.3"]).patch.widthRatio, 0.3);
+  const config = baseConfig();
+  applyConfigPatch(config, patch);
+  assert.match(formatConfigSummary(config), /widthRatio=25%/);
+  // unset renders as auto (the built-in 50% default).
+  assert.equal(formatWidthRatio(undefined), "auto");
+  assert.equal(formatWidthRatio(0.5), "50%");
+  assert.match(widthUsageHint(), /Usage: \/image-width/);
 });

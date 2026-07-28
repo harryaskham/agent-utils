@@ -56,6 +56,7 @@ import {
   DEFAULT_COLUMNS,
   DEFAULT_MAX_ROWS,
   SIDE_OVERLAY_PLACEMENT,
+  SIDE_PANEL_MAX_WIDTH_RATIO,
   PREVIEW_PLACEMENTS,
 } from "./kitty-image-preview/constants.js";
 import {
@@ -85,6 +86,9 @@ import {
   applyConfigPatch,
   formatConfigSummary,
   configUsageHint,
+  parseWidthRatioValue,
+  formatWidthRatio,
+  widthUsageHint,
 } from "./kitty-image-preview/config-command.js";
 
 import {
@@ -1171,6 +1175,8 @@ export default function kittyImagePreviewExtension(pi) {
       passthrough: "auto",
       placementMode: "auto",
       chunkSize: 4096,
+      // undefined = use the built-in SIDE_PANEL_MAX_WIDTH_RATIO (50%) share.
+      widthRatio: undefined,
     },
   };
 
@@ -1998,6 +2004,41 @@ export default function kittyImagePreviewExtension(pi) {
     ctx.ui?.notify?.(`Updated image preview config — ${summary}.`, "info");
   }
 
+  async function widthCommand(args, ctx) {
+    const tokens = tokenizeConfigArgs(args);
+    const currentRatio = state.config.widthRatio;
+    if (tokens.length === 0) {
+      ctx.ui?.notify?.(
+        `image preview side-rail width: ${formatWidthRatio(currentRatio ?? SIDE_PANEL_MAX_WIDTH_RATIO)}${currentRatio === undefined ? " (default)" : ""}\n${widthUsageHint()}`,
+        "info",
+      );
+      return;
+    }
+    let ratio;
+    try {
+      ratio = parseWidthRatioValue(tokens.join(" "));
+    } catch (error) {
+      ctx.ui?.notify?.(`/image-width: ${error.message}`, "warning");
+      return;
+    }
+    if (ratio === currentRatio) {
+      ctx.ui?.notify?.(`image preview side-rail width unchanged: ${formatWidthRatio(ratio ?? SIDE_PANEL_MAX_WIDTH_RATIO)}.`, "info");
+      return;
+    }
+    const from = formatWidthRatio(currentRatio ?? SIDE_PANEL_MAX_WIDTH_RATIO);
+    state.config.widthRatio = ratio;
+    state.currentCommand = undefined;
+    if (state.visible && state.items[state.index]) {
+      await prepareCurrentImage(state, ctx, { forceReload: true });
+    }
+    syncWidget(ctx, state);
+    const to = formatWidthRatio(ratio ?? SIDE_PANEL_MAX_WIDTH_RATIO);
+    ctx.ui?.notify?.(
+      `image preview side-rail width ${from} \u2192 ${to}${ratio === undefined ? " (default)" : ""}.`,
+      "info",
+    );
+  }
+
   async function passthroughProbeCommand(ctx) {
     const mode = detectKittyPassthroughMode(process.env);
     const writers = enumerateGraphicsWriters(ctx);
@@ -2028,8 +2069,12 @@ export default function kittyImagePreviewExtension(pi) {
     async (_args, ctx) => statusCommand(ctx));
 
   registerImageCommand(["image-config"],
-    "Show or update image preview render params at runtime (placement, placementMode, transferMode, passthrough, zIndex, columns, rows, maxRows, minRows, background, showCaption, clearPrevious). Call with no args to print current config.",
+    "Show or update image preview render params at runtime (placement, placementMode, transferMode, passthrough, zIndex, columns, rows, maxRows, minRows, background, showCaption, clearPrevious, widthRatio). Call with no args to print current config.",
     configCommand);
+
+  registerImageCommand(["image-width", "image-panel-width"],
+    "Show or set the image preview side-rail width as a share of the terminal (e.g. /image-width 25%, 0.25, or auto for the 50% default). The text column always keeps at least 20 columns.",
+    widthCommand);
 
   registerImageCommand(["image-next"],
     "Show the next image in the kitty multiviewer gallery.",

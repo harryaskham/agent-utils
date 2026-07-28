@@ -8,7 +8,10 @@ import { MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE, estimateRowsForImage, viewportHa
 import {
   DEFAULT_MAX_ROWS,
   SIDE_PANEL_LEFT_PADDING,
+  SIDE_PANEL_MAX_ALLOWED_WIDTH_RATIO,
   SIDE_PANEL_MAX_WIDTH_RATIO,
+  SIDE_PANEL_MIN_MAIN_COLUMNS,
+  SIDE_PANEL_MIN_WIDTH_RATIO,
 } from "./constants.js";
 import { clampInteger } from "./text-utils.js";
 
@@ -232,11 +235,35 @@ export function previewImageRowLimit({ viewportRows = currentTerminalRows(), ava
   return Math.max(1, Math.min(...limits));
 }
 
+// Resolve the fraction of the terminal width reserved for the side rail.
+// `config.widthRatio` is the runtime override set by /image-width (and
+// /image-config widthRatio=…); anything missing or non-finite falls back to the
+// 50% default. Clamped to the supported band so a bad override can never wipe
+// out the text column or collapse the rail. Pure over its argument.
+export function resolveSidePanelWidthRatio(config) {
+  const raw = Number(config?.widthRatio);
+  if (!Number.isFinite(raw) || raw <= 0) return SIDE_PANEL_MAX_WIDTH_RATIO;
+  return Math.min(SIDE_PANEL_MAX_ALLOWED_WIDTH_RATIO, Math.max(SIDE_PANEL_MIN_WIDTH_RATIO, raw));
+}
+
+// Columns reserved for the side rail at a given terminal width: the configured
+// share of the width, capped so the text column never drops below
+// SIDE_PANEL_MIN_MAIN_COLUMNS. Returns 0 when the terminal is too narrow to
+// afford both a readable text column and any rail at all. Pure.
+export function sidePanelReservedColumns(terminalWidth, ratio = SIDE_PANEL_MAX_WIDTH_RATIO) {
+  const width = Math.max(1, Math.trunc(terminalWidth || 1));
+  const share = Math.floor(width * ratio);
+  return Math.max(0, Math.min(share, width - SIDE_PANEL_MIN_MAIN_COLUMNS));
+}
+
 export function buildSidePanelLayout(state, terminalWidth, availableRows = DEFAULT_MAX_ROWS) {
   const width = Math.max(1, Math.trunc(terminalWidth || 1));
-  // Keep at least one text column. On absurdly narrow terminals, disable the
-  // side rail rather than generating lines wider than the terminal.
-  const maxTotalWidth = Math.max(0, Math.min(Math.floor(width * SIDE_PANEL_MAX_WIDTH_RATIO), width - 1));
+  // Reserve a STABLE share of the width for the rail (default 50%), protecting
+  // a SIDE_PANEL_MIN_MAIN_COLUMNS-wide text column. Previously the rail
+  // collapsed to whatever width the aspect/row fit happened to produce, so a
+  // short row budget or a portrait image silently shrank the sidebar to a
+  // fraction of its share and reflowed the text column on every image change.
+  const maxTotalWidth = sidePanelReservedColumns(width, resolveSidePanelWidthRatio(state?.config));
   const rowLimit = Math.max(0, Math.trunc(availableRows || 0));
   if (maxTotalWidth < 1 || rowLimit < 1) {
     return { mainWidth: width, imageWidth: 0, imageRows: 0, padding: 0, totalWidth: 0 };
@@ -253,7 +280,10 @@ export function buildSidePanelLayout(state, terminalWidth, availableRows = DEFAU
   const current = state.items[state.index];
   const imageWidth = fitImageColumnsForRows(current, maxImageWidth, maxRows);
   const imageRows = Math.min(maxRows, estimatedRowsForColumns(current, imageWidth));
-  const totalWidth = Math.min(maxTotalWidth, imageWidth + padding);
+  // The rail keeps its full reserved width even when the aspect-fit image is
+  // narrower; the leftover becomes leading padding so the image is pinned to
+  // the right edge and the main column width stays constant across images.
+  const totalWidth = maxTotalWidth;
   return {
     mainWidth: Math.max(1, width - totalWidth),
     imageWidth,

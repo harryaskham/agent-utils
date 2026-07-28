@@ -8,7 +8,11 @@ import path from "node:path";
 
 import { kittyPreviewImageId } from "./id-space.js";
 import { clampInteger } from "./text-utils.js";
-import { PREVIEW_PLACEMENTS } from "./constants.js";
+import {
+  PREVIEW_PLACEMENTS,
+  SIDE_PANEL_MAX_ALLOWED_WIDTH_RATIO,
+  SIDE_PANEL_MIN_WIDTH_RATIO,
+} from "./constants.js";
 
 export function serializePublicState(state) {
   return {
@@ -153,5 +157,16 @@ export function applyConfig(state, config = {}) {
   if (["auto", "unicode", "cursor"].includes(config.placementMode)) state.config.placementMode = config.placementMode;
   if (config.placementId !== undefined) state.config.placementId = clampInteger(config.placementId, state.config.placementId, 1, 2147483647);
   if (config.chunkSize !== undefined) state.config.chunkSize = clampInteger(config.chunkSize, state.config.chunkSize, 512, 4096);
+  // widthRatio is nullable: an explicit `null` restores the default share,
+  // while a finite number is clamped into the supported band (bd image-preview
+  // sidebar width work).
+  if (config.widthRatio === null) {
+    state.config.widthRatio = undefined;
+  } else if (config.widthRatio !== undefined) {
+    const ratio = Number(config.widthRatio);
+    if (Number.isFinite(ratio) && ratio > 0) {
+      state.config.widthRatio = Math.min(SIDE_PANEL_MAX_ALLOWED_WIDTH_RATIO, Math.max(SIDE_PANEL_MIN_WIDTH_RATIO, ratio));
+    }
+  }
   state.currentCommand = undefined;
 }

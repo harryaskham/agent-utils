@@ -3,7 +3,12 @@
 // session. The main extension wires applyConfigArgs into a registerImageCommand
 // handler that re-renders the current image after a successful update.
 
-import { PREVIEW_PLACEMENTS } from "./constants.js";
+import {
+  PREVIEW_PLACEMENTS,
+  SIDE_PANEL_MAX_ALLOWED_WIDTH_RATIO,
+  SIDE_PANEL_MAX_WIDTH_RATIO,
+  SIDE_PANEL_MIN_WIDTH_RATIO,
+} from "./constants.js";
 
 // Enum option sets mirror the tool-schema enums in kitty-image-preview.js so the
 // runtime command and the tool API accept the same values.
@@ -27,7 +32,50 @@ const FIELD_SPECS = {
   background: { kind: "bool" },
   showCaption: { kind: "bool", aliases: ["caption"] },
   clearPrevious: { kind: "bool", aliases: ["clear-previous"] },
+  widthRatio: { kind: "ratio", nullable: true, aliases: ["width", "image-width", "width-ratio", "panelwidth", "panel-width"] },
 };
+
+// Accepted spellings for "go back to the default width share".
+const WIDTH_RESET_WORDS = ["", "auto", "default", "reset", "none", "null"];
+
+// Parse an /image-width argument into a side-rail width fraction.
+//
+//   "25%" | "25"   -> 0.25   (a bare number >1 is read as a percentage)
+//   "0.25" | ".25" -> 0.25   (0 < n <= 1 is read as a fraction)
+//   "auto"/"reset"/"default"/"" -> undefined (restore the built-in default)
+//
+// Values are clamped into the supported band rather than rejected, so an
+// over-eager "/image-width 99%" still leaves a usable text column. Throws only
+// on genuinely unparseable input. Pure.
+export function parseWidthRatioValue(raw) {
+  const value = String(raw ?? "").trim();
+  if (WIDTH_RESET_WORDS.includes(value.toLowerCase())) return undefined;
+  const percent = value.endsWith("%");
+  const numeric = Number.parseFloat(percent ? value.slice(0, -1) : value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    throw new Error(`expected a width like 50%, 0.5, or auto, got "${raw}"`);
+  }
+  // A bare number greater than 1 is a percentage ("/image-width 25"); anything
+  // in (0, 1] without a % suffix is already a fraction.
+  const ratio = percent || numeric > 1 ? numeric / 100 : numeric;
+  return Math.min(SIDE_PANEL_MAX_ALLOWED_WIDTH_RATIO, Math.max(SIDE_PANEL_MIN_WIDTH_RATIO, ratio));
+}
+
+// Render a width fraction as an operator-facing percentage ("50%"), or "auto"
+// when unset. Pure.
+export function formatWidthRatio(ratio) {
+  if (ratio === undefined || ratio === null || !Number.isFinite(Number(ratio))) return "auto";
+  return `${Math.round(Number(ratio) * 100)}%`;
+}
+
+// One-line usage hint for the /image-width command.
+export function widthUsageHint() {
+  return [
+    "Usage: /image-width [25% | 0.25 | auto]",
+    `default: ${formatWidthRatio(SIDE_PANEL_MAX_WIDTH_RATIO)} of the terminal width`,
+    `range: ${formatWidthRatio(SIDE_PANEL_MIN_WIDTH_RATIO)}-${formatWidthRatio(SIDE_PANEL_MAX_ALLOWED_WIDTH_RATIO)} (the text column always keeps at least 20 columns)`,
+  ].join("\n");
+}
 
 // Map any accepted spelling (canonical or alias, case-insensitive) to its
 // canonical field name.
@@ -99,6 +147,7 @@ export function parseConfigPatch(tokens) {
     try {
       if (spec.kind === "bool") value = parseBool(rawValue);
       else if (spec.kind === "int") value = parseInteger(rawValue, spec);
+      else if (spec.kind === "ratio") value = parseWidthRatioValue(rawValue);
       else value = parseEnum(rawValue, spec);
     } catch (error) {
       throw new Error(`invalid value for ${canonical}: ${error.message}`);
@@ -125,7 +174,10 @@ export function applyConfigPatch(config, patch) {
 // Render the current runtime-settable config as a stable "key=value" summary.
 export function formatConfigSummary(config) {
   return CONFIG_FIELD_NAMES
-    .map((key) => `${key}=${config[key] === undefined ? "auto" : config[key]}`)
+    .map((key) => {
+      if (key === "widthRatio") return `${key}=${formatWidthRatio(config[key])}`;
+      return `${key}=${config[key] === undefined ? "auto" : config[key]}`;
+    })
     .join(" ");
 }
 
@@ -138,5 +190,6 @@ export function configUsageHint() {
     `placementMode(graphicsPlacement): ${PLACEMENT_MODE_OPTIONS.join("|")}`,
     `transferMode(transfer): ${TRANSFER_MODE_OPTIONS.join("|")}`,
     `passthrough: ${PASSTHROUGH_OPTIONS.join("|")}`,
+    "widthRatio(width): side-rail share of the terminal, e.g. 25% or 0.25 or auto (see /image-width)",
   ].join("\n");
 }

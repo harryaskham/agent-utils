@@ -9,6 +9,7 @@ import {
   pushItems,
   replaceItems,
   summarizeCurrent,
+  applyConfig,
 } from "../extensions/kitty-image-preview/state.js";
 
 function makeState(overrides = {}) {
@@ -161,4 +162,21 @@ test("summarizeCurrent reports empty vs loaded state", () => {
   assert.match(summary, /placement=aboveEditor/);
   assert.match(summary, /transfer=auto/);
   assert.match(summary, /z=-1\./);
+});
+
+test("applyConfig clamps widthRatio and supports an explicit null reset", () => {
+  const state = { config: { widthRatio: undefined }, items: [], index: 0 };
+  applyConfig(state, { widthRatio: 0.25 });
+  assert.equal(state.config.widthRatio, 0.25);
+  // out-of-band values clamp into the supported share band.
+  applyConfig(state, { widthRatio: 5 });
+  assert.equal(state.config.widthRatio, 0.9);
+  applyConfig(state, { widthRatio: 0.0001 });
+  assert.equal(state.config.widthRatio, 0.05);
+  // non-finite input is ignored rather than corrupting the config.
+  applyConfig(state, { widthRatio: Number.NaN });
+  assert.equal(state.config.widthRatio, 0.05);
+  // explicit null restores the built-in default share.
+  applyConfig(state, { widthRatio: null });
+  assert.equal(state.config.widthRatio, undefined);
 });

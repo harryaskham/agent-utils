@@ -14,6 +14,8 @@ import {
   previewViewportRowLimit,
   previewImageRowLimit,
   buildSidePanelLayout,
+  resolveSidePanelWidthRatio,
+  sidePanelReservedColumns,
   componentContains,
 } from "../extensions/kitty-image-preview/layout.js";
 
@@ -403,32 +405,102 @@ test("buildSidePanelLayout disables the rail when no rows are available", () => 
   });
 });
 
-test("buildSidePanelLayout sizes the rail to half width with padding and main remainder", () => {
-  // width 100 -> maxTotalWidth 50; rows 20; padding 2; maxImageWidth 48;
-  // fit(48,20)=40 (ceil(40/2)=20); totalWidth=min(50,42)=42; main=58.
+test("buildSidePanelLayout reserves the full half-width rail with padding and main remainder", () => {
+  // width 100 -> reserved rail 50; rows 20; padding 2; maxImageWidth 48;
+  // fit(48,20)=40 (ceil(40/2)=20). The rail keeps its full 50-column share and
+  // the extra 10 columns become leading padding (image right-aligned).
   const layout = buildSidePanelLayout(panelState(), 100, 20);
   assert.equal(layout.imageWidth, 40);
   assert.equal(layout.imageRows, 20);
-  assert.equal(layout.padding, 2);
-  assert.equal(layout.totalWidth, 42);
-  assert.equal(layout.mainWidth, 58);
+  assert.equal(layout.totalWidth, 50);
+  assert.equal(layout.padding, 10);
+  assert.equal(layout.mainWidth, 50);
   // invariant: the panel and the main column tile the terminal width.
   assert.equal(layout.mainWidth + layout.totalWidth, 100);
+  // invariant: a rendered rail line is exactly totalWidth wide.
+  assert.equal(layout.padding + layout.imageWidth, layout.totalWidth);
 });
 
-test("buildSidePanelLayout clamps padding to maxTotalWidth-1 on narrow terminals", () => {
-  // width 4 -> maxTotalWidth 2; padding clamps to 1 (not the default 2).
-  const layout = buildSidePanelLayout(panelState(), 4, 10);
-  assert.equal(layout.totalWidth, 2);
-  assert.equal(layout.imageWidth, 1);
-  assert.equal(layout.padding, 1);
-  assert.equal(layout.mainWidth, 2);
+test("buildSidePanelLayout keeps the rail at half width regardless of the row budget", () => {
+  // A short row budget used to collapse the rail (totalWidth followed the
+  // aspect fit); the reserved share must now stay put so the text column does
+  // not reflow as images/rows change.
+  for (const rows of [2, 5, 12, 20]) {
+    const layout = buildSidePanelLayout(panelState(), 120, rows);
+    assert.equal(layout.totalWidth, 60, `rows=${rows}`);
+    assert.equal(layout.mainWidth, 60, `rows=${rows}`);
+  }
+});
+
+test("buildSidePanelLayout protects a 20-column text floor on slim terminals", () => {
+  // Below 40 columns the 50% share would eat the text column, so the floor
+  // binds instead and the rail shrinks.
+  const slim = buildSidePanelLayout(panelState(), 30, 10);
+  assert.equal(slim.mainWidth, 20);
+  assert.equal(slim.totalWidth, 10);
+
+  // At exactly 40 columns the default ratio and the floor agree (20/20).
+  const boundary = buildSidePanelLayout(panelState(), 40, 10);
+  assert.equal(boundary.mainWidth, 20);
+  assert.equal(boundary.totalWidth, 20);
+
+  // Above 40 the ratio binds and the rail is a true half.
+  const wide = buildSidePanelLayout(panelState(), 80, 10);
+  assert.equal(wide.totalWidth, 40);
+  assert.equal(wide.mainWidth, 40);
+});
+
+test("buildSidePanelLayout disables the rail when the text floor leaves no room", () => {
+  for (const width of [4, 12, 20]) {
+    assert.deepEqual(buildSidePanelLayout(panelState(), width, 10), {
+      mainWidth: width,
+      imageWidth: 0,
+      imageRows: 0,
+      padding: 0,
+      totalWidth: 0,
+    }, `width=${width}`);
+  }
+});
+
+test("buildSidePanelLayout honors a config.widthRatio override", () => {
+  const quarter = buildSidePanelLayout(panelState({ widthRatio: 0.25 }), 100, 20);
+  assert.equal(quarter.totalWidth, 25);
+  assert.equal(quarter.mainWidth, 75);
+
+  const wide = buildSidePanelLayout(panelState({ widthRatio: 0.75 }), 100, 20);
+  assert.equal(wide.totalWidth, 75);
+  assert.equal(wide.mainWidth, 25);
+
+  // Even an extreme override cannot breach the 20-column text floor.
+  const greedy = buildSidePanelLayout(panelState({ widthRatio: 0.9 }), 100, 20);
+  assert.equal(greedy.mainWidth, 20);
+  assert.equal(greedy.totalWidth, 80);
+});
+
+test("resolveSidePanelWidthRatio defaults and clamps", () => {
+  assert.equal(resolveSidePanelWidthRatio(undefined), 0.5);
+  assert.equal(resolveSidePanelWidthRatio({}), 0.5);
+  assert.equal(resolveSidePanelWidthRatio({ widthRatio: 0 }), 0.5);
+  assert.equal(resolveSidePanelWidthRatio({ widthRatio: Number.NaN }), 0.5);
+  assert.equal(resolveSidePanelWidthRatio({ widthRatio: 0.25 }), 0.25);
+  assert.equal(resolveSidePanelWidthRatio({ widthRatio: 5 }), 0.9);
+  assert.equal(resolveSidePanelWidthRatio({ widthRatio: 0.001 }), 0.05);
+});
+
+test("sidePanelReservedColumns applies the ratio then the text floor", () => {
+  assert.equal(sidePanelReservedColumns(100, 0.5), 50);
+  assert.equal(sidePanelReservedColumns(40, 0.5), 20);
+  assert.equal(sidePanelReservedColumns(30, 0.5), 10);
+  assert.equal(sidePanelReservedColumns(20, 0.5), 0);
+  assert.equal(sidePanelReservedColumns(100, 0.25), 25);
 });
 
 test("buildSidePanelLayout honors config.rows when capping image height", () => {
-  // rows 5 -> fit(48,5)=10 (ceil(10/2)=5); imageRows 5; totalWidth=min(50,12)=12.
+  // rows 5 -> fit(48,5)=10 (ceil(10/2)=5); imageRows 5. The rail still reserves
+  // its full 50-column share; the image is right-aligned inside it.
   const layout = buildSidePanelLayout(panelState({ rows: 5 }), 100, 20);
   assert.equal(layout.imageRows, 5);
   assert.equal(layout.imageWidth, 10);
-  assert.equal(layout.totalWidth, 12);
+  assert.equal(layout.totalWidth, 50);
+  assert.equal(layout.padding, 40);
 });
