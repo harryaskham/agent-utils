@@ -51,6 +51,8 @@ Slick mirrors Slack's navigation shape:
 | `Enter` | Open/lazy-load a conversation or file; on a reply-bearing message, open its thread |
 | `q` | Pop the thread stack, then fullscreen, then a hidden sidebar, then the conversation |
 | `\` | Toggle sidebar visibility (any view) |
+| `s` | Toggle a local favourite for the selected conversation |
+| `T` | Cycle theme (slick, nord, slate) |
 | `f` | Fullscreen the Markdown pane (messages, threads, Canvas) |
 | `Tab` / `Shift-Tab` | Cycle sidebar/content/detail focus; always restores a hidden sidebar |
 | `Ctrl-R` | Refresh the visible view plus the DM/channel list |
@@ -62,6 +64,32 @@ Slick mirrors Slack's navigation shape:
 Mouse clicks select navigation, conversations, notifications, files, and
 reply-bearing messages (opening their thread). The wheel scrolls the focused
 rich-content pane. Passive mouse motion never triggers a repaint.
+
+## Configuration
+
+Slick reads `~/.config/slick/config.yaml` (override with `$SLICK_CONFIG` or
+`--config`). Every key is optional; an absent file uses defaults.
+
+```yaml
+theme: nord            # slick (default) | nord | slate
+graphics: true         # false behaves like --no-graphics
+start-page: activity   # activity | favorites | dms | channels | files
+sidebar-width: 32      # cells
+detail-percent: 64     # share of the content area given to the Markdown pane
+favorites:             # local favourites overlay, unioned with Slack stars
+  - C0BELKU8YP6
+```
+
+### Favourites
+
+`is_favorite` comes from Slack `stars.list`. Slack's own sidebar *Favorites*
+section lives in the `channel_sections` user pref, and
+`users.channelSections.list` answers `team_is_restricted` on locked-down
+workspaces, so that membership is not readable through the supported API.
+
+Slick therefore shows **Slack stars ∪ local favourites**. Pressing `s` toggles a
+local favourite and writes it to the config file; Slack itself is never mutated,
+so the client stays read-only.
 
 ## Refresh and cache contract
 

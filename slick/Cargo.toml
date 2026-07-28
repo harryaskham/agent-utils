@@ -16,6 +16,7 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
+serde_yaml = "0.9"
 html2md = "0.2"
 kittui = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }
 kittui-kitty = { git = "https://github.com/harryaskham/kittui", rev = "c6e39675b31fa7af44d03c644a004de6ad14b371" }

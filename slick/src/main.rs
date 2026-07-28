@@ -52,6 +52,10 @@ struct Cli {
     #[arg(long)]
     open: bool,
 
+    /// Config file path (default: `$SLICK_CONFIG`, else `~/.config/slick/config.yaml`).
+    #[arg(long)]
+    config: Option<std::path::PathBuf>,
+
     /// Snapshot height in terminal cells.
     #[arg(long, default_value_t = 36)]
     height: u16,
@@ -102,21 +106,33 @@ fn main() -> Result<()> {
         };
         print!(
             "{}",
-            ui::snapshot_view(
+            ui::snapshot_view_with_config(
                 state,
                 cli.width.max(60),
                 cli.height.max(20),
                 parse_page(&cli.page),
                 cli.open,
+                &slick::Config::load(
+                    &cli.config
+                        .clone()
+                        .unwrap_or_else(slick::Config::default_path),
+                )?,
             )
         );
         return Ok(());
     }
+    let config_path = cli
+        .config
+        .clone()
+        .unwrap_or_else(slick::Config::default_path);
+    let config = slick::Config::load(&config_path)?;
     ui::run(RunOptions {
         demo: cli.demo,
-        no_graphics: cli.no_graphics,
+        no_graphics: cli.no_graphics || !config.graphics,
         cache_store: cache,
         initial_page: parse_page(&cli.page),
+        config,
+        config_path,
     })
 }
 

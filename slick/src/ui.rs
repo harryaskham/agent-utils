@@ -30,18 +30,143 @@ use kittui::{CellRect, Direction as KittuiDirection, RendererKind, Rgba, Runtime
 use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
+use crate::config::{Config, ThemeName};
 use crate::markdown::{extract_urls, preview, render_markdown};
 use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
 use crate::slack::SlackService;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 
-const PURPLE: Color = Color::Rgb(0x7c, 0x5c, 0xfc);
-const SLACK_PURPLE: Color = Color::Rgb(0x61, 0x1f, 0x69);
-const CYAN: Color = Color::Rgb(0x4d, 0xd9, 0xe8);
-const GREEN: Color = Color::Rgb(0x5c, 0xd6, 0x91);
-const YELLOW: Color = Color::Rgb(0xf2, 0xc7, 0x66);
-const RED: Color = Color::Rgb(0xef, 0x6a, 0x73);
-const FG: Color = Color::Rgb(0xe6, 0xe3, 0xeb);
-const MUTED: Color = Color::Rgb(0x99, 0x95, 0xa4);
+/// Palette for one named theme.
+///
+/// Slick renders both Ratatui text and Kitty chrome, so a theme carries the
+/// text colours plus the hex gradients/rails the chrome rasterizer needs.
+#[derive(Clone, Copy, Debug)]
+struct Palette {
+    accent: Color,
+    header: Color,
+    cyan: Color,
+    green: Color,
+    yellow: Color,
+    red: Color,
+    fg: Color,
+    muted: Color,
+    selection: Color,
+    chrome_sidebar: (&'static str, &'static str, &'static str),
+    chrome_content: (&'static str, &'static str, &'static str),
+    chrome_detail: (&'static str, &'static str, &'static str),
+    chrome_dark: (&'static str, &'static str, &'static str),
+    chrome_header: (&'static str, &'static str),
+    chrome_header_dark: (&'static str, &'static str),
+}
+
+const SLICK_PALETTE: Palette = Palette {
+    accent: Color::Rgb(0x7c, 0x5c, 0xfc),
+    header: Color::Rgb(0x61, 0x1f, 0x69),
+    cyan: Color::Rgb(0x4d, 0xd9, 0xe8),
+    green: Color::Rgb(0x5c, 0xd6, 0x91),
+    yellow: Color::Rgb(0xf2, 0xc7, 0x66),
+    red: Color::Rgb(0xef, 0x6a, 0x73),
+    fg: Color::Rgb(0xe6, 0xe3, 0xeb),
+    muted: Color::Rgb(0x99, 0x95, 0xa4),
+    selection: Color::Rgb(0x31, 0x2a, 0x42),
+    chrome_sidebar: ("#241229ff", "#17121bff", "#7c5cfcff"),
+    chrome_content: ("#171820ff", "#101117ff", "#4dd9e8ff"),
+    chrome_detail: ("#181621ff", "#101017ff", "#9d84ffff"),
+    chrome_dark: ("#171820ff", "#111219ff", "#5a5c6aff"),
+    chrome_header: ("#611f69ff", "#3f1447ff"),
+    chrome_header_dark: ("#171820ff", "#111219ff"),
+};
+
+const NORD_PALETTE: Palette = Palette {
+    accent: Color::Rgb(0x81, 0xa1, 0xc1),
+    header: Color::Rgb(0x3b, 0x42, 0x52),
+    cyan: Color::Rgb(0x88, 0xc0, 0xd0),
+    green: Color::Rgb(0xa3, 0xbe, 0x8c),
+    yellow: Color::Rgb(0xeb, 0xcb, 0x8b),
+    red: Color::Rgb(0xbf, 0x61, 0x6a),
+    fg: Color::Rgb(0xec, 0xef, 0xf4),
+    muted: Color::Rgb(0x8f, 0x9a, 0xad),
+    selection: Color::Rgb(0x3b, 0x42, 0x52),
+    chrome_sidebar: ("#3b4252ff", "#2e3440ff", "#81a1c1ff"),
+    chrome_content: ("#2e3440ff", "#272c36ff", "#88c0d0ff"),
+    chrome_detail: ("#2e3440ff", "#272c36ff", "#b48eadff"),
+    chrome_dark: ("#2e3440ff", "#272c36ff", "#4c566aff"),
+    chrome_header: ("#4c566aff", "#3b4252ff"),
+    chrome_header_dark: ("#2e3440ff", "#272c36ff"),
+};
+
+const SLATE_PALETTE: Palette = Palette {
+    accent: Color::Rgb(0x7f, 0x9c, 0xc4),
+    header: Color::Rgb(0x2b, 0x31, 0x3b),
+    cyan: Color::Rgb(0x79, 0xb8, 0xc4),
+    green: Color::Rgb(0x8f, 0xbc, 0x8f),
+    yellow: Color::Rgb(0xd8, 0xc0, 0x84),
+    red: Color::Rgb(0xc4, 0x7b, 0x7b),
+    fg: Color::Rgb(0xe4, 0xe7, 0xec),
+    muted: Color::Rgb(0x93, 0x9b, 0xa8),
+    selection: Color::Rgb(0x33, 0x3a, 0x46),
+    chrome_sidebar: ("#2b313bff", "#20242cff", "#7f9cc4ff"),
+    chrome_content: ("#232830ff", "#1b1f26ff", "#79b8c4ff"),
+    chrome_detail: ("#232830ff", "#1b1f26ff", "#a8b1c4ff"),
+    chrome_dark: ("#232830ff", "#1b1f26ff", "#4b525eff"),
+    chrome_header: ("#3a414dff", "#2b313bff"),
+    chrome_header_dark: ("#232830ff", "#1b1f26ff"),
+};
+
+/// Active palette. Slick renders on one thread, so a simple global keeps the
+/// existing colour constants readable at every call site.
+static ACTIVE_THEME: AtomicU8 = AtomicU8::new(0);
+
+fn set_active_theme(theme: ThemeName) {
+    let index = match theme {
+        ThemeName::Slick => 0,
+        ThemeName::Nord => 1,
+        ThemeName::Slate => 2,
+    };
+    ACTIVE_THEME.store(index, Ordering::Relaxed);
+}
+
+fn palette() -> Palette {
+    match ACTIVE_THEME.load(Ordering::Relaxed) {
+        1 => NORD_PALETTE,
+        2 => SLATE_PALETTE,
+        _ => SLICK_PALETTE,
+    }
+}
+
+#[allow(non_snake_case)]
+fn PURPLE() -> Color {
+    palette().accent
+}
+#[allow(non_snake_case)]
+fn SLACK_PURPLE() -> Color {
+    palette().header
+}
+#[allow(non_snake_case)]
+fn CYAN() -> Color {
+    palette().cyan
+}
+#[allow(non_snake_case)]
+fn GREEN() -> Color {
+    palette().green
+}
+#[allow(non_snake_case)]
+fn YELLOW() -> Color {
+    palette().yellow
+}
+#[allow(non_snake_case)]
+fn RED() -> Color {
+    palette().red
+}
+#[allow(non_snake_case)]
+fn FG() -> Color {
+    palette().fg
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color {
+    palette().muted
+}
 const SIDEBAR_DM_ROWS: usize = 12;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -306,6 +431,8 @@ pub struct App {
     sidebar_width: u16,
     detail_percent: u16,
     viewport_width: u16,
+    config: Config,
+    config_path: PathBuf,
     dragging: Option<Divider>,
     sidebar_visible: bool,
     fullscreen_content: bool,
@@ -369,6 +496,8 @@ impl App {
             sidebar_width: 32,
             detail_percent: 64,
             viewport_width: 120,
+            config: Config::default(),
+            config_path: Config::default_path(),
             dragging: None,
             sidebar_visible: true,
             fullscreen_content: false,
@@ -706,6 +835,8 @@ impl App {
             }
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('/') => self.filter_mode = true,
+            KeyCode::Char('s') => self.toggle_local_favorite(),
+            KeyCode::Char('T') => self.cycle_theme(),
             KeyCode::Char('\\') => self.toggle_sidebar(),
             KeyCode::Char('f') => self.toggle_fullscreen(),
             KeyCode::Char('g') if was_pending_g => self.go_top(),
@@ -1262,6 +1393,65 @@ impl App {
         None
     }
 
+    /// Adopt user configuration: palette, pane geometry and local favourites.
+    fn apply_config(&mut self, config: Config, path: PathBuf) {
+        set_active_theme(config.theme);
+        self.sidebar_width = config.sidebar_width.clamp(18, 80);
+        self.detail_percent = config.detail_percent.clamp(20, 80);
+        self.config = config;
+        self.config_path = path;
+        self.apply_local_favorites();
+    }
+
+    /// Union Slack stars with locally tagged favourites.
+    ///
+    /// Slack's own Favorites sidebar section is not readable through the
+    /// supported API (`users.channelSections.list` returns `team_is_restricted`),
+    /// so the local overlay is the only way to mark the rest — and Slick stays
+    /// read-only by never writing stars back to Slack.
+    fn apply_local_favorites(&mut self) {
+        for conversation in &mut self.state.conversations {
+            if self.config.is_local_favorite(&conversation.id) {
+                conversation.is_favorite = true;
+            }
+        }
+    }
+
+    /// Toggle the selected conversation's local favourite and persist it.
+    fn toggle_local_favorite(&mut self) {
+        let Some(id) = self.selected_conversation().map(|item| item.id.clone()) else {
+            return;
+        };
+        let now_favorite = self.config.toggle_favorite(&id);
+        if let Some(conversation) = self
+            .state
+            .conversations
+            .iter_mut()
+            .find(|item| item.id == id)
+        {
+            conversation.is_favorite = now_favorite;
+        }
+        match self.config.save(&self.config_path) {
+            Ok(()) => {
+                self.status = if now_favorite {
+                    format!("Favourited locally: {id}")
+                } else {
+                    format!("Unfavourited locally: {id}")
+                };
+            }
+            Err(error) => self.last_error = Some(error.to_string()),
+        }
+    }
+
+    fn cycle_theme(&mut self) {
+        self.config.theme = self.config.theme.next();
+        set_active_theme(self.config.theme);
+        self.status = format!("Theme: {}", self.config.theme.label());
+        if let Err(error) = self.config.save(&self.config_path) {
+            self.last_error = Some(error.to_string());
+        }
+    }
+
     fn pointer_in_sidebar(&self, column: u16) -> bool {
         self.sidebar_visible && !self.fullscreen_content && column < self.sidebar_width
     }
@@ -1372,11 +1562,11 @@ impl App {
             "●"
         };
         let color = if self.busy {
-            YELLOW
+            YELLOW()
         } else if self.last_error.is_some() {
-            RED
+            RED()
         } else {
-            GREEN
+            GREEN()
         };
         let paragraph = Paragraph::new(Line::from(vec![
             Span::styled(
@@ -1395,7 +1585,7 @@ impl App {
                     ),
                     self.status,
                 ),
-                Style::default().fg(MUTED),
+                Style::default().fg(MUTED()),
             ),
         ]));
         // Header strips are one row tall: the padded pane chrome used elsewhere
@@ -1464,16 +1654,16 @@ impl App {
             let style = if selected {
                 Style::default()
                     .fg(Color::White)
-                    .bg(SLACK_PURPLE)
+                    .bg(SLACK_PURPLE())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(FG)
+                Style::default().fg(FG())
             };
             items.push(
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!(" {} ", page.icon()),
-                        Style::default().fg(if selected { Color::White } else { CYAN }),
+                        Style::default().fg(if selected { Color::White } else { CYAN() }),
                     ),
                     Span::styled(format!("{:<19}{count}", page.label()), style),
                 ]))
@@ -1523,7 +1713,7 @@ impl App {
                 (Some(title), _) => {
                     items.push(ListItem::new(Line::from(Span::styled(
                         format!("  {title}"),
-                        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+                        Style::default().fg(MUTED()).add_modifier(Modifier::BOLD),
                     ))));
                 }
                 (_, Some(conversation)) => {
@@ -1608,10 +1798,10 @@ impl App {
             .min(self.state.notifications.len().saturating_sub(visible));
         if self.state.notifications.is_empty() {
             items.push(ListItem::new(Line::from(vec![
-                Span::styled("  ✓ ", Style::default().fg(GREEN)),
+                Span::styled("  ✓ ", Style::default().fg(GREEN())),
                 Span::styled(
                     "You're all caught up",
-                    Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                    Style::default().fg(FG()).add_modifier(Modifier::BOLD),
                 ),
             ])));
             items.push(ListItem::new("  Mentions, unread DMs and recent DM activity from the last seven days appear here."));
@@ -1637,7 +1827,7 @@ impl App {
                 "#"
             };
             let style = if selected {
-                Style::default().bg(Color::Rgb(0x31, 0x2a, 0x42))
+                Style::default().bg(palette().selection)
             } else {
                 Style::default()
             };
@@ -1647,12 +1837,16 @@ impl App {
                     Span::styled(
                         format!(" {marker} "),
                         Style::default()
-                            .fg(if notification.mention { YELLOW } else { CYAN })
+                            .fg(if notification.mention {
+                                YELLOW()
+                            } else {
+                                CYAN()
+                            })
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         notification.conversation_name.clone(),
-                        Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                        Style::default().fg(FG()).add_modifier(Modifier::BOLD),
                     ),
                 ])));
                 row = row.saturating_add(1);
@@ -1666,11 +1860,11 @@ impl App {
                             "   {:>5}{badge} ",
                             short_time(&notification.message.timestamp)
                         ),
-                        Style::default().fg(if badge.is_empty() { MUTED } else { GREEN }),
+                        Style::default().fg(if badge.is_empty() { MUTED() } else { GREEN() }),
                     ),
                     Span::styled(
                         preview(&notification.message.text, preview_width),
-                        Style::default().fg(if selected { FG } else { MUTED }),
+                        Style::default().fg(if selected { FG() } else { MUTED() }),
                     ),
                 ]))
                 .style(style),
@@ -1749,7 +1943,7 @@ impl App {
         for (index, conversation) in conversations.iter().enumerate().skip(offset).take(visible) {
             let is_selected = index == selected;
             let style = if is_selected {
-                Style::default().bg(Color::Rgb(0x31, 0x2a, 0x42))
+                Style::default().bg(palette().selection)
             } else {
                 Style::default()
             };
@@ -1973,7 +2167,7 @@ impl App {
         {
             let selected = index == self.selected_file;
             let style = if selected {
-                Style::default().bg(Color::Rgb(0x31, 0x2a, 0x42))
+                Style::default().bg(palette().selection)
             } else {
                 Style::default()
             };
@@ -1981,11 +2175,11 @@ impl App {
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         if file.is_canvas() { " ▤ " } else { " ▱ " },
-                        Style::default().fg(if file.is_canvas() { PURPLE } else { CYAN }),
+                        Style::default().fg(if file.is_canvas() { PURPLE() } else { CYAN() }),
                     ),
                     Span::styled(
                         file.title.clone(),
-                        Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                        Style::default().fg(FG()).add_modifier(Modifier::BOLD),
                     ),
                 ]))
                 .style(style),
@@ -1998,7 +2192,7 @@ impl App {
                         file.author,
                         short_time(&file.updated_at)
                     ),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(MUTED()),
                 )))
                 .style(style),
             );
@@ -2115,8 +2309,11 @@ impl App {
             },
             |error| {
                 Line::from(vec![
-                    Span::styled(" ! ", Style::default().fg(RED).add_modifier(Modifier::BOLD)),
-                    Span::styled(error, Style::default().fg(RED)),
+                    Span::styled(
+                        " ! ",
+                        Style::default().fg(RED()).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(error, Style::default().fg(RED())),
                 ])
             },
         );
@@ -2136,7 +2333,7 @@ impl App {
         let popup = centered_rect(width, height, area);
         frame.render_widget(Clear, popup);
         let help = Text::from(vec![
-            Line::from(Span::styled("Slick · keyboard and mouse", Style::default().fg(PURPLE).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled("Slick · keyboard and mouse", Style::default().fg(PURPLE()).add_modifier(Modifier::BOLD))),
             Line::default(),
             Line::from(vec![Span::styled("1-5 / ←→", key_style()), Span::raw("  Activity, Favorites, DMs, Channels, Files")]),
             Line::from(vec![Span::styled("↑↓ / j k", key_style()), Span::raw("  Move selection, message or scroll focused content")]),
@@ -2151,20 +2348,20 @@ impl App {
             Line::from(vec![Span::styled("q", key_style()), Span::raw("           Pop thread, fullscreen, sidebar or conversation")]),
             Line::from(vec![Span::styled("Ctrl-C", key_style()), Span::raw("      Quit")]),
             Line::default(),
-            Line::from(Span::styled("Mouse", Style::default().fg(CYAN).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled("Mouse", Style::default().fg(CYAN()).add_modifier(Modifier::BOLD))),
             Line::raw("Click navigation, conversations, notifications and files. Scroll the focused pane with the wheel."),
             Line::default(),
-            Line::from(Span::styled("Refresh contract", Style::default().fg(GREEN).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled("Refresh contract", Style::default().fg(GREEN()).add_modifier(Modifier::BOLD))),
             Line::raw("Slick caches content. Ctrl-R always updates the DM/channel sidebar, then requests only the active view from its last refresh (bounded to seven days)."),
             Line::default(),
-            Line::from(Span::styled("Read-only: Slick never sends, edits, reacts, joins or marks messages read.", Style::default().fg(YELLOW))),
+            Line::from(Span::styled("Read-only: Slick never sends, edits, reacts, joins or marks messages read.", Style::default().fg(YELLOW()))),
         ]);
         frame.render_widget(
             Paragraph::new(help)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(PURPLE))
+                        .border_style(Style::default().fg(PURPLE()))
                         .title(" Help "),
                 )
                 .wrap(Wrap { trim: false }),
@@ -2191,12 +2388,17 @@ enum Tone {
 }
 
 fn chrome(tone: Tone, focused: bool) -> Chrome {
+    let theme = palette();
     let (top, bottom, rail) = match tone {
-        Tone::Purple => ("#611f69ff", "#3f1447ff", "#d6a8e0ff"),
-        Tone::Sidebar => ("#241229ff", "#17121bff", "#7c5cfcff"),
-        Tone::Content => ("#171820ff", "#101117ff", "#4dd9e8ff"),
-        Tone::Detail => ("#181621ff", "#101017ff", "#9d84ffff"),
-        Tone::Dark => ("#171820ff", "#111219ff", "#5a5c6aff"),
+        Tone::Purple => (
+            theme.chrome_header.0,
+            theme.chrome_header.1,
+            theme.chrome_sidebar.2,
+        ),
+        Tone::Sidebar => theme.chrome_sidebar,
+        Tone::Content => theme.chrome_content,
+        Tone::Detail => theme.chrome_detail,
+        Tone::Dark => theme.chrome_dark,
     };
     let rail = if focused { "#f2c766ff" } else { rail };
     Chrome::default()
@@ -2219,9 +2421,10 @@ fn chrome(tone: Tone, focused: bool) -> Chrome {
 }
 
 fn header_chrome(tone: Tone) -> Chrome {
+    let theme = palette();
     let (start, end) = match tone {
-        Tone::Purple => ("#611f69ff", "#3f1447ff"),
-        _ => ("#171820ff", "#111219ff"),
+        Tone::Purple => theme.chrome_header,
+        _ => theme.chrome_header_dark,
     };
     Chrome::default()
         .background(Background::Linear {
@@ -2245,7 +2448,7 @@ fn render_title(
             .bg(if graphics.is_some() {
                 Color::Reset
             } else {
-                SLACK_PURPLE
+                SLACK_PURPLE()
             })
             .add_modifier(Modifier::BOLD),
     );
@@ -2278,9 +2481,9 @@ fn pane_block(graphics: bool, focused: bool, title: String) -> Block<'static> {
         .title(title);
     if !graphics {
         block = block.border_style(if focused {
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
+            Style::default().fg(YELLOW()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(MUTED())
         });
     }
     block
@@ -2534,11 +2737,11 @@ fn conversation_line(
             } else {
                 "  "
             },
-            Style::default().fg(YELLOW),
+            Style::default().fg(YELLOW()),
         ),
         Span::styled(
             format!("{marker} "),
-            Style::default().fg(if active { GREEN } else { MUTED }),
+            Style::default().fg(if active { GREEN() } else { MUTED() }),
         ),
         Span::styled(
             format!("{:<width$}", truncate_label(&conversation.name, width)),
@@ -2546,7 +2749,7 @@ fn conversation_line(
                 .fg(if conversation.unread_count > 0 {
                     Color::White
                 } else {
-                    FG
+                    FG()
                 })
                 .add_modifier(if conversation.unread_count > 0 {
                     Modifier::BOLD
@@ -2556,7 +2759,7 @@ fn conversation_line(
         ),
         Span::styled(
             unread,
-            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            Style::default().fg(GREEN()).add_modifier(Modifier::BOLD),
         ),
     ])
 }
@@ -2602,7 +2805,7 @@ fn short_time(value: &str) -> String {
 }
 
 fn key_style() -> Style {
-    Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+    Style::default().fg(CYAN()).add_modifier(Modifier::BOLD)
 }
 
 fn clamp_index(index: usize, len: usize) -> usize {
@@ -2666,6 +2869,8 @@ pub struct RunOptions {
     pub no_graphics: bool,
     pub cache_store: CacheStore,
     pub initial_page: Page,
+    pub config: Config,
+    pub config_path: PathBuf,
 }
 
 pub fn run(options: RunOptions) -> Result<()> {
@@ -2679,6 +2884,7 @@ pub fn run(options: RunOptions) -> Result<()> {
     } else {
         App::live(initial, options.cache_store)
     };
+    app.apply_config(options.config.clone(), options.config_path.clone());
     app.set_page(options.initial_page);
     app.osc8_links = true;
     let mut stdout = io::stdout();
@@ -2769,9 +2975,23 @@ pub fn snapshot_page(state: CacheState, width: u16, height: u16, page: Page) -> 
 /// message/thread layout can be inspected without a live terminal.
 #[must_use]
 pub fn snapshot_view(state: CacheState, width: u16, height: u16, page: Page, open: bool) -> String {
+    snapshot_view_with_config(state, width, height, page, open, &Config::default())
+}
+
+/// Snapshot honouring user configuration (theme and favourites overlay).
+#[must_use]
+pub fn snapshot_view_with_config(
+    state: CacheState,
+    width: u16,
+    height: u16,
+    page: Page,
+    open: bool,
+    config: &Config,
+) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test backend");
     let mut app = App::demo(state);
+    app.apply_config(config.clone(), Config::default_path());
     app.set_page(page);
     if open {
         app.content_view_width = width;
@@ -2949,6 +3169,39 @@ mod tests {
         assert!(app.fullscreen_content);
         app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         assert!(!app.fullscreen_content);
+    }
+
+    #[test]
+    fn local_favourites_union_slack_stars_without_writing_slack() {
+        let dir = std::env::temp_dir().join(format!("slick-fav-{}", std::process::id()));
+        let path = dir.join("config.yaml");
+        let mut app = App::demo(crate::slack::demo_state());
+        app.apply_config(Config::default(), path.clone());
+        app.set_page(Page::Dms);
+        let id = app.selected_conversation().unwrap().id.clone();
+        assert!(!app.selected_conversation().unwrap().is_favorite);
+
+        app.toggle_local_favorite();
+        assert!(app.selected_conversation().unwrap().is_favorite);
+        assert!(Config::load(&path).unwrap().is_local_favorite(&id));
+
+        app.toggle_local_favorite();
+        assert!(!app.selected_conversation().unwrap().is_favorite);
+        assert!(!Config::load(&path).unwrap().is_local_favorite(&id));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn theme_cycling_changes_the_active_palette() {
+        let dir = std::env::temp_dir().join(format!("slick-theme-{}", std::process::id()));
+        let mut app = App::demo(crate::slack::demo_state());
+        app.apply_config(Config::default(), dir.join("config.yaml"));
+        let before = palette().accent;
+        app.cycle_theme();
+        assert_eq!(app.config.theme, ThemeName::Nord);
+        assert_ne!(palette().accent, before);
+        set_active_theme(ThemeName::Slick);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
