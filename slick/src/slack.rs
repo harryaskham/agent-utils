@@ -206,6 +206,7 @@ impl SlackService {
     pub fn bootstrap(&self, state: &mut CacheState) -> Result<()> {
         self.refresh_identity(state)?;
         self.refresh_sidebar(state)?;
+        self.backfill_dm_names(state);
         let notifications_error = self.refresh_notifications(state).err();
         let _ = self.refresh_self_activity(state);
         let files_error = self.refresh_files(state).err();
@@ -289,6 +290,45 @@ impl SlackService {
         rebuild_dm_notifications(state);
         state.normalize();
         Ok(())
+    }
+
+    /// Resolve DM display names whose user was missing from `users.list`.
+    ///
+    /// Slack omits some users (deactivated, cross-workspace, app/bot DMs) from
+    /// the bulk listing, which previously left rows rendered as `DM <id>`.
+    fn backfill_dm_names(&self, state: &mut CacheState) {
+        let missing: Vec<(String, String)> = state
+            .conversations
+            .iter()
+            .filter(|conversation| conversation.name.starts_with("DM "))
+            .filter_map(|conversation| {
+                conversation
+                    .user_id
+                    .clone()
+                    .map(|user| (conversation.id.clone(), user))
+            })
+            .filter(|(_, user)| !state.users.contains_key(user))
+            .take(MAX_BACKFILL_CONVERSATIONS)
+            .collect();
+        for (conversation_id, user_id) in missing {
+            let mut params = BTreeMap::new();
+            params.insert("user".into(), user_id.clone());
+            let Ok(result) = self.client.call("users.info", &params) else {
+                continue;
+            };
+            let Some(user) = result.get("user").and_then(compact_user) else {
+                continue;
+            };
+            let label = user.label().to_string();
+            state.users.insert(user_id, user);
+            if let Some(conversation) = state
+                .conversations
+                .iter_mut()
+                .find(|item| item.id == conversation_id)
+            {
+                conversation.name = label;
+            }
+        }
     }
 
     pub fn refresh_self_activity(&self, state: &mut CacheState) -> Result<()> {

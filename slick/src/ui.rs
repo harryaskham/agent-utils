@@ -42,6 +42,7 @@ const YELLOW: Color = Color::Rgb(0xf2, 0xc7, 0x66);
 const RED: Color = Color::Rgb(0xef, 0x6a, 0x73);
 const FG: Color = Color::Rgb(0xe6, 0xe3, 0xeb);
 const MUTED: Color = Color::Rgb(0x99, 0x95, 0xa4);
+const SIDEBAR_DM_ROWS: usize = 12;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -107,6 +108,15 @@ enum HitAction {
 struct HitRegion {
     rect: Rect,
     action: HitAction,
+}
+
+/// Draggable pane divider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Divider {
+    /// Between the sidebar and the content pane.
+    Sidebar,
+    /// Between the file list and its Markdown detail pane.
+    Detail,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,6 +302,11 @@ pub struct App {
     detail_view_height: u16,
     detail_view_width: u16,
     section_overview: bool,
+    sidebar_offset: usize,
+    sidebar_width: u16,
+    detail_percent: u16,
+    viewport_width: u16,
+    dragging: Option<Divider>,
     sidebar_visible: bool,
     fullscreen_content: bool,
     osc8_links: bool,
@@ -350,6 +365,11 @@ impl App {
             detail_view_height: 1,
             detail_view_width: 1,
             section_overview: false,
+            sidebar_offset: 0,
+            sidebar_width: 32,
+            detail_percent: 64,
+            viewport_width: 120,
+            dragging: None,
             sidebar_visible: true,
             fullscreen_content: false,
             osc8_links: false,
@@ -433,38 +453,57 @@ impl App {
             .collect()
     }
 
-    fn recent_active_channels(&self) -> Vec<&Conversation> {
-        let mut channels: Vec<&Conversation> = self
-            .filtered_conversations(false)
+    /// DMs ordered by genuine latest activity, excluding conversations whose
+    /// only traffic is file/canvas comment threads (Slack surfaces those as
+    /// unnamed DM shells with no cached human message).
+    fn active_dms(&self) -> Vec<&Conversation> {
+        let mut dms: Vec<&Conversation> = self
+            .filtered_conversations(true)
             .into_iter()
             .filter(|conversation| {
-                self.state.self_activity.contains_key(&conversation.id)
+                conversation.activity_ts() > 0.0
                     || conversation.unread_count > 0
-                    || conversation.is_favorite
+                    || self.state.messages.contains_key(&conversation.id)
             })
             .collect();
-        channels.sort_by(|left, right| {
-            let left_activity = self
-                .state
-                .self_activity
-                .get(&left.id)
-                .and_then(|ts| ts.parse::<f64>().ok())
-                .unwrap_or(0.0);
-            let right_activity = self
-                .state
-                .self_activity
-                .get(&right.id)
-                .and_then(|ts| ts.parse::<f64>().ok())
-                .unwrap_or(0.0);
-            right_activity
-                .partial_cmp(&left_activity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| right.unread_count.cmp(&left.unread_count))
+        dms.sort_by(|left, right| {
+            right
+                .unread_count
+                .cmp(&left.unread_count)
+                .then_with(|| {
+                    right
+                        .activity_ts()
+                        .partial_cmp(&left.activity_ts())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
         });
-        if channels.is_empty() {
-            return self.filtered_conversations(false);
+        dms
+    }
+
+    /// Channels grouped for the sidebar: favourites first, then channels with
+    /// recent activity involving the user, then everything else.
+    fn sidebar_channel_sections(&self) -> Vec<(String, Vec<Conversation>)> {
+        let mut favourites = Vec::new();
+        let mut active = Vec::new();
+        let mut inactive = Vec::new();
+        for conversation in self.filtered_conversations(false) {
+            let recent = conversation.unread_count > 0
+                || conversation.mention_count > 0
+                || self.state.self_activity.contains_key(&conversation.id);
+            if conversation.is_favorite {
+                favourites.push(conversation.clone());
+            } else if recent {
+                active.push(conversation.clone());
+            } else {
+                inactive.push(conversation.clone());
+            }
         }
-        channels
+        vec![
+            ("Favourites".to_string(), favourites),
+            ("Active".to_string(), active),
+            ("Inactive".to_string(), inactive),
+        ]
     }
 
     fn filtered_favorites(&self) -> Vec<&Conversation> {
@@ -1114,6 +1153,32 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) if self.divider_at(mouse.column).is_some() => {
+                // Grab a pane divider: drag resizes, matching normal desktop
+                // split behaviour.
+                self.dragging = self.divider_at(mouse.column);
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) => match self.dragging {
+                Some(Divider::Sidebar) => {
+                    self.sidebar_width = mouse.column.clamp(18, self.viewport_width / 2);
+                    true
+                }
+                Some(Divider::Detail) => {
+                    let content = self
+                        .viewport_width
+                        .saturating_sub(self.sidebar_visible_width());
+                    if content > 0 {
+                        let offset = mouse.column.saturating_sub(self.sidebar_visible_width());
+                        let percent = 100u32
+                            .saturating_sub(u32::from(offset) * 100 / u32::from(content.max(1)));
+                        self.detail_percent = u16::try_from(percent.clamp(20, 80)).unwrap_or(64);
+                    }
+                    true
+                }
+                None => false,
+            },
+            MouseEventKind::Up(MouseButton::Left) => self.dragging.take().is_some(),
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(action) = self
                     .hits
@@ -1150,7 +1215,9 @@ impl App {
                 }
             }
             MouseEventKind::ScrollUp => {
-                if self.navigates_list() {
+                if self.pointer_in_sidebar(mouse.column) {
+                    self.sidebar_offset = self.sidebar_offset.saturating_sub(3);
+                } else if self.navigates_list() {
                     self.move_selection(-1);
                 } else {
                     self.scroll_up(3);
@@ -1158,7 +1225,9 @@ impl App {
                 true
             }
             MouseEventKind::ScrollDown => {
-                if self.navigates_list() {
+                if self.pointer_in_sidebar(mouse.column) {
+                    self.sidebar_offset = self.sidebar_offset.saturating_add(3);
+                } else if self.navigates_list() {
                     self.move_selection(1);
                 } else {
                     self.scroll_down(3);
@@ -1169,9 +1238,38 @@ impl App {
         }
     }
 
+    fn sidebar_visible_width(&self) -> u16 {
+        if self.sidebar_visible && !self.fullscreen_content {
+            self.sidebar_width
+        } else {
+            0
+        }
+    }
+
+    /// Divider whose grab column contains `column`, if any.
+    fn divider_at(&self, column: u16) -> Option<Divider> {
+        let sidebar_edge = self.sidebar_visible_width();
+        if sidebar_edge > 0 && column.abs_diff(sidebar_edge) <= 1 {
+            return Some(Divider::Sidebar);
+        }
+        if self.page == Page::Files {
+            let content = self.viewport_width.saturating_sub(sidebar_edge);
+            let split = sidebar_edge + content.saturating_mul(100 - self.detail_percent) / 100;
+            if content > 0 && column.abs_diff(split) <= 1 {
+                return Some(Divider::Detail);
+            }
+        }
+        None
+    }
+
+    fn pointer_in_sidebar(&self, column: u16) -> bool {
+        self.sidebar_visible && !self.fullscreen_content && column < self.sidebar_width
+    }
+
     fn render(&mut self, frame: &mut Frame<'_>, graphics: Option<(&Runtime, &EffectsSink)>) {
         self.hits.clear();
         self.link_runs.clear();
+        self.viewport_width = frame.area().width;
         let area = frame.area();
         let vertical = Layout::default()
             .direction(Direction::Vertical)
@@ -1197,7 +1295,7 @@ impl App {
             let content = if self.sidebar_visible {
                 let columns = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Length(32), Constraint::Min(40)])
+                    .constraints([Constraint::Length(self.sidebar_width), Constraint::Min(20)])
                     .split(body);
                 self.render_sidebar(frame, columns[0], graphics);
                 columns[1]
@@ -1207,7 +1305,10 @@ impl App {
             if self.page == Page::Files {
                 let files = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
+                    .constraints([
+                        Constraint::Percentage(100 - self.detail_percent),
+                        Constraint::Percentage(self.detail_percent),
+                    ])
                     .split(content);
                 self.content_view_height = files[0].height;
                 self.content_view_width = files[0].width;
@@ -1233,12 +1334,14 @@ impl App {
         area: Rect,
         graphics: Option<(&Runtime, &EffectsSink)>,
     ) {
+        // The status zone carries a variable-width staleness phrase, so give it
+        // room instead of a fixed 28 cells that clipped "1h 9m stale".
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Length(28),
-                Constraint::Min(30),
-                Constraint::Length(28),
+                Constraint::Min(20),
+                Constraint::Length(40),
             ])
             .split(area);
         let team = if self.state.team_name.is_empty() {
@@ -1295,7 +1398,21 @@ impl App {
                 Style::default().fg(MUTED),
             ),
         ]));
-        render_paragraph(frame, columns[2], paragraph, graphics, Tone::Dark, false);
+        // Header strips are one row tall: the padded pane chrome used elsewhere
+        // would consume that row entirely and the status would disappear under
+        // graphics, so render it through the unpadded header chrome.
+        if let Some((runtime, sink)) = graphics {
+            render_decorated(
+                paragraph,
+                &header_chrome(Tone::Dark),
+                columns[2],
+                frame.buffer_mut(),
+                runtime,
+                sink,
+            );
+        } else {
+            frame.render_widget(paragraph, columns[2]);
+        }
     }
 
     fn render_sidebar(
@@ -1309,7 +1426,7 @@ impl App {
             action: HitAction::Focus(Focus::Sidebar),
         });
         let mut items = Vec::new();
-        let mut row = area.y.saturating_add(1);
+        let mut row = list_origin(area, graphics.is_some(), false);
         for page in Page::ALL {
             let selected = page == self.page;
             let count = match page {
@@ -1370,55 +1487,73 @@ impl App {
         }
         items.push(ListItem::new(""));
         row = row.saturating_add(1);
-        items.push(ListItem::new(Line::from(Span::styled(
-            "  Active DMs",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        ))));
-        row = row.saturating_add(1);
+
         let dms: Vec<Conversation> = self
-            .filtered_conversations(true)
+            .active_dms()
             .into_iter()
-            .take(8)
+            .take(SIDEBAR_DM_ROWS)
             .cloned()
             .collect();
-        for conversation in &dms {
-            let unread = unread_badge(conversation);
-            items.push(ListItem::new(conversation_line(conversation, "●", unread)));
-            self.hits.push(HitRegion {
-                rect: Rect::new(area.x + 1, row, area.width.saturating_sub(2), 1),
-                action: HitAction::Conversation(conversation.id.clone(), conversation.kind),
-            });
-            row = row.saturating_add(1);
+        let channels = self.sidebar_channel_sections();
+        let mut sections: Vec<(String, Vec<Conversation>)> = vec![("Direct messages".into(), dms)];
+        sections.extend(channels);
+
+        // Everything below the nav scrolls as one list so the complete channel
+        // inventory is reachable instead of a fixed eight-row window.
+        let mut scrollable: Vec<(Option<String>, Option<Conversation>)> = Vec::new();
+        for (title, conversations) in sections {
+            if conversations.is_empty() {
+                continue;
+            }
+            scrollable.push((Some(title), None));
+            for conversation in conversations {
+                scrollable.push((None, Some(conversation)));
+            }
         }
-        items.push(ListItem::new(Line::from(Span::styled(
-            "  Channels you're active in",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        ))));
-        row = row.saturating_add(1);
-        let channels: Vec<Conversation> = self
-            .recent_active_channels()
-            .into_iter()
-            .take(8)
-            .cloned()
-            .collect();
-        for conversation in &channels {
-            let unread = unread_badge(conversation);
-            items.push(ListItem::new(conversation_line(conversation, "#", unread)));
-            self.hits.push(HitRegion {
-                rect: Rect::new(area.x + 1, row, area.width.saturating_sub(2), 1),
-                action: HitAction::Conversation(conversation.id.clone(), conversation.kind),
-            });
-            row = row.saturating_add(1);
-        }
-        let list = List::new(items).block(
-            Block::default()
-                .borders(if graphics.is_some() {
-                    Borders::NONE
-                } else {
-                    Borders::ALL
-                })
-                .title(" Slack "),
+        let body_rows = usize::from(area.height.saturating_sub(row.saturating_sub(area.y)))
+            .saturating_sub(1)
+            .max(1);
+        self.sidebar_offset = self.sidebar_offset.min(
+            scrollable
+                .len()
+                .saturating_sub(body_rows.min(scrollable.len())),
         );
+        for entry in scrollable.iter().skip(self.sidebar_offset).take(body_rows) {
+            match entry {
+                (Some(title), _) => {
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        format!("  {title}"),
+                        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+                    ))));
+                }
+                (_, Some(conversation)) => {
+                    let marker = if conversation.kind.is_dm() {
+                        "●"
+                    } else {
+                        "#"
+                    };
+                    let unread = unread_badge(conversation);
+                    let label_width = usize::from(area.width.saturating_sub(11)).max(10);
+                    items.push(ListItem::new(conversation_line(
+                        conversation,
+                        marker,
+                        unread,
+                        label_width,
+                    )));
+                    self.hits.push(HitRegion {
+                        rect: Rect::new(area.x + 1, row, area.width.saturating_sub(2), 1),
+                        action: HitAction::Conversation(conversation.id.clone(), conversation.kind),
+                    });
+                }
+                _ => {}
+            }
+            row = row.saturating_add(1);
+        }
+        let list = List::new(items).block(pane_block(
+            graphics.is_some(),
+            self.focus == Focus::Sidebar,
+            String::new(),
+        ));
         render_list(
             frame,
             area,
@@ -1458,7 +1593,10 @@ impl App {
         graphics: Option<(&Runtime, &EffectsSink)>,
     ) {
         let mut items = Vec::new();
-        let mut row = area.y.saturating_add(1);
+        let mut row = list_origin(area, graphics.is_some(), true);
+        // Rows are grouped, so a fixed items-per-row ratio no longer holds:
+        // window by notification but budget two rows for the first entry of a
+        // conversation run and one row for each continuation.
         let visible = usize::from(area.height.saturating_sub(2) / 2).max(1);
         keep_visible(
             self.selected_notification,
@@ -1478,6 +1616,10 @@ impl App {
             ])));
             items.push(ListItem::new("  Mentions, unread DMs and recent DM activity from the last seven days appear here."));
         }
+        // Preview width follows the pane instead of a fixed cap so text runs to
+        // the real edge: the gutter is "   HH:MM NEW " plus chrome borders.
+        let preview_width = usize::from(area.width.saturating_sub(16)).max(24);
+        let mut previous_conversation: Option<&str> = None;
         for (index, notification) in self
             .state
             .notifications
@@ -1494,14 +1636,14 @@ impl App {
             } else {
                 "#"
             };
-            let badge = if notification.unread { " NEW" } else { "" };
             let style = if selected {
                 Style::default().bg(Color::Rgb(0x31, 0x2a, 0x42))
             } else {
                 Style::default()
             };
-            items.push(
-                ListItem::new(Line::from(vec![
+            let starts_run = previous_conversation != Some(notification.conversation_id.as_str());
+            if starts_run {
+                items.push(ListItem::new(Line::from(vec![
                     Span::styled(
                         format!(" {marker} "),
                         Style::default()
@@ -1512,42 +1654,45 @@ impl App {
                         notification.conversation_name.clone(),
                         Style::default().fg(FG).add_modifier(Modifier::BOLD),
                     ),
+                ])));
+                row = row.saturating_add(1);
+            }
+            previous_conversation = Some(notification.conversation_id.as_str());
+            let badge = if notification.unread { " NEW" } else { "" };
+            items.push(
+                ListItem::new(Line::from(vec![
                     Span::styled(
-                        format!("  {}{badge}", short_time(&notification.message.timestamp)),
+                        format!(
+                            "   {:>5}{badge} ",
+                            short_time(&notification.message.timestamp)
+                        ),
                         Style::default().fg(if badge.is_empty() { MUTED } else { GREEN }),
+                    ),
+                    Span::styled(
+                        preview(&notification.message.text, preview_width),
+                        Style::default().fg(if selected { FG } else { MUTED }),
                     ),
                 ]))
                 .style(style),
             );
-            items.push(
-                ListItem::new(Line::from(Span::styled(
-                    format!("   {}", preview(&notification.message.text, 120)),
-                    Style::default().fg(MUTED),
-                )))
-                .style(style),
-            );
             self.hits.push(HitRegion {
-                rect: Rect::new(area.x + 1, row, area.width.saturating_sub(2), 2),
+                rect: Rect::new(area.x + 1, row, area.width.saturating_sub(2), 1),
                 action: HitAction::Notification(index),
             });
-            row = row.saturating_add(2);
+            row = row.saturating_add(1);
         }
-        let list = List::new(items).block(
-            Block::default()
-                .borders(if graphics.is_some() {
-                    Borders::NONE
-                } else {
-                    Borders::ALL
-                })
-                .title(format!(
-                    " Activity · {} items · {}/{} ",
-                    self.state.notifications.len(),
-                    self.selected_notification
-                        .saturating_add(1)
-                        .min(self.state.notifications.len()),
-                    self.state.notifications.len().max(1),
-                )),
-        );
+        let list = List::new(items).block(pane_block(
+            graphics.is_some(),
+            self.focus == Focus::Content,
+            format!(
+                " Activity · {} items · {}/{} ",
+                self.state.notifications.len(),
+                self.selected_notification
+                    .saturating_add(1)
+                    .min(self.state.notifications.len()),
+                self.state.notifications.len().max(1),
+            ),
+        ));
         render_list(
             frame,
             area,
@@ -1600,7 +1745,7 @@ impl App {
             .min(conversations.len().saturating_sub(visible));
         self.overview_offset = offset;
         let mut items = Vec::new();
-        let mut row = panes[0].y.saturating_add(1);
+        let mut row = list_origin(panes[0], graphics.is_some(), true);
         for (index, conversation) in conversations.iter().enumerate().skip(offset).take(visible) {
             let is_selected = index == selected;
             let style = if is_selected {
@@ -1617,6 +1762,7 @@ impl App {
                         "#"
                     },
                     unread_badge(conversation),
+                    24,
                 ))
                 .style(style),
             );
@@ -1633,15 +1779,7 @@ impl App {
             selected.saturating_add(1).min(total),
             total.max(1),
         );
-        let list = List::new(items).block(
-            Block::default()
-                .borders(if graphics.is_some() {
-                    Borders::NONE
-                } else {
-                    Borders::ALL
-                })
-                .title(title),
-        );
+        let list = List::new(items).block(pane_block(graphics.is_some(), true, title));
         render_list(frame, panes[0], list, graphics, Tone::Content, true);
 
         let detail = conversations.get(selected).map_or_else(
@@ -1818,7 +1956,7 @@ impl App {
         });
         let files: Vec<SlackFile> = self.filtered_files().into_iter().cloned().collect();
         let mut items = Vec::new();
-        let mut row = area.y.saturating_add(1);
+        let mut row = list_origin(area, graphics.is_some(), true);
         let visible = usize::from(area.height.saturating_sub(2) / 2).max(1);
         keep_visible(self.selected_file, &mut self.file_offset, visible);
         self.file_offset = self.file_offset.min(files.len().saturating_sub(visible));
@@ -2125,6 +2263,29 @@ fn render_title(
     }
 }
 
+/// Pane block with a focus-visible border.
+///
+/// Under Kitty chrome the border is drawn by the graphics underlay, so the
+/// Ratatui block stays borderless; the focused rail colour still marks focus.
+/// Without graphics the border itself is recoloured so focus is obvious.
+fn pane_block(graphics: bool, focused: bool, title: String) -> Block<'static> {
+    let mut block = Block::default()
+        .borders(if graphics {
+            Borders::NONE
+        } else {
+            Borders::ALL
+        })
+        .title(title);
+    if !graphics {
+        block = block.border_style(if focused {
+            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(MUTED)
+        });
+    }
+    block
+}
+
 fn render_list(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -2166,6 +2327,30 @@ fn render_paragraph(
         );
     } else {
         frame.render_widget(paragraph, area);
+    }
+}
+
+/// First row of list content inside `area` for hit-region mapping.
+///
+/// With Kitty chrome the widget is rendered into `Chrome::inner_rect`, which
+/// applies one cell of padding; a Ratatui `Block` title then consumes one more
+/// row. Hit regions must use the same origin as the rendered rows or clicks
+/// land on the neighbouring entry.
+fn list_origin(area: Rect, graphics: bool, titled: bool) -> u16 {
+    let padded = if graphics {
+        area.y.saturating_add(1)
+    } else {
+        area.y
+    };
+    let bordered = if graphics {
+        padded
+    } else {
+        padded.saturating_add(1)
+    };
+    if titled {
+        bordered.saturating_add(1)
+    } else {
+        bordered
     }
 }
 
@@ -2334,7 +2519,12 @@ fn chrome_underlay_options(image_id: u32) -> PlacementOptions {
     PlacementOptions::absolute_with_id(image_id).with_z_index(-1)
 }
 
-fn conversation_line(conversation: &Conversation, marker: &str, unread: String) -> Line<'static> {
+fn conversation_line(
+    conversation: &Conversation,
+    marker: &str,
+    unread: String,
+    width: usize,
+) -> Line<'static> {
     let active = conversation.unread_count > 0
         || conversation.activity_ts() >= CacheState::seven_days_ago() as f64;
     Line::from(vec![
@@ -2351,7 +2541,7 @@ fn conversation_line(conversation: &Conversation, marker: &str, unread: String) 
             Style::default().fg(if active { GREEN } else { MUTED }),
         ),
         Span::styled(
-            format!("{:<20}", truncate_label(&conversation.name, 20)),
+            format!("{:<width$}", truncate_label(&conversation.name, width)),
             Style::default()
                 .fg(if conversation.unread_count > 0 {
                     Color::White
@@ -2624,7 +2814,7 @@ mod tests {
             output
                 .lines()
                 .nth(1)
-                .is_some_and(|line| line.contains("Slack")),
+                .is_some_and(|line| line.contains("Activity")),
             "body begins immediately after the one-line header"
         );
         let files = snapshot_page(crate::slack::demo_state(), 140, 40, Page::Files);
