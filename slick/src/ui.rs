@@ -30,7 +30,7 @@ use kittui::{CellRect, Direction as KittuiDirection, RendererKind, Rgba, Runtime
 use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
-use crate::config::{Config, ThemeName};
+use crate::config::{AlertMode, Config, ThemeName};
 use crate::feed::{Feed, FeedTarget};
 use crate::markdown::{extract_urls, preview, render_markdown};
 use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
@@ -141,11 +141,11 @@ fn palette_for(theme: ThemeName) -> Palette {
 }
 
 fn palette() -> Palette {
-    match ACTIVE_THEME.load(Ordering::Relaxed) {
-        1 => NORD_PALETTE,
-        2 => SLATE_PALETTE,
-        _ => SLICK_PALETTE,
-    }
+    palette_for(match ACTIVE_THEME.load(Ordering::Relaxed) {
+        1 => ThemeName::Nord,
+        2 => ThemeName::Slate,
+        _ => ThemeName::Slick,
+    })
 }
 
 #[allow(non_snake_case)]
@@ -181,6 +181,10 @@ fn MUTED() -> Color {
     palette().muted
 }
 const SIDEBAR_DM_ROWS: usize = 12;
+/// Floor for the configurable auto-refresh interval. Each cycle refreshes the
+/// visible target, so a tighter loop would burn Slack rate limit for no
+/// perceptible gain.
+const MIN_AUTO_REFRESH_SECS: u64 = 15;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -341,6 +345,10 @@ impl Worker {
                             |error| format!("{label}; cache warning: {error}"),
                             |()| label.clone(),
                         );
+                        // A throttled-but-recovered call still matters to the
+                        // user: surface it rather than silently reporting success.
+                        let status = crate::slack::take_throttle_notice()
+                            .map_or(status, |notice| format!("{label}; {notice}"));
                         let _ =
                             event_tx.send(WorkerEvent::Updated(Box::new(state.clone()), status));
                     }
@@ -559,6 +567,10 @@ impl App {
                     self.busy = false;
                     self.status = status;
                     self.last_error = None;
+                    // A refresh replaces state with Slack's own counts, which
+                    // still treat locally-read conversations as unread.
+                    self.apply_local_favorites();
+                    self.apply_read_markers();
                     self.feed.ingest(&self.state, Instant::now());
                     self.clamp_selection();
                     if matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
@@ -573,6 +585,9 @@ impl App {
                     self.status = "cached · refresh failed".into();
                 }
             }
+        }
+        if changed {
+            self.mark_open_conversation_read();
         }
         changed
     }
@@ -807,6 +822,10 @@ impl App {
         self.content_scroll = self.max_content_scroll();
         if self.state.messages.get(&id).is_none_or(Vec::is_empty) {
             self.send(WorkerCommand::LoadConversation(id));
+        } else {
+            // Content is already cached, so it is on screen now: this counts as
+            // read. The lazy-load path marks read when its messages arrive.
+            self.mark_conversation_read(&id);
         }
     }
 
@@ -833,6 +852,31 @@ impl App {
             Page::Files => RefreshTarget::Files,
         };
         self.send(WorkerCommand::Refresh(target));
+    }
+
+    /// Interval between automatic background refreshes, or `None` when the
+    /// user has opted out (`refresh-interval-secs: 0`).
+    ///
+    /// Clamped to a floor because each cycle costs Slack calls and the client
+    /// must not be able to throttle the operator's token through config alone.
+    fn auto_refresh_interval(&self) -> Option<Duration> {
+        match self.config.refresh_interval_secs {
+            0 => None,
+            seconds => Some(Duration::from_secs(seconds.max(MIN_AUTO_REFRESH_SECS))),
+        }
+    }
+
+    /// Fire one automatic refresh cycle if the worker is free.
+    ///
+    /// Returns whether work was dispatched. Skipped while `busy` so a slow
+    /// Slack call can never accumulate a queue of stale refreshes, and a no-op
+    /// in demo mode because `send` has no worker there.
+    fn auto_refresh(&mut self) -> bool {
+        if self.busy || self.worker.is_none() {
+            return false;
+        }
+        self.refresh_visible();
+        true
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
@@ -1494,6 +1538,97 @@ impl App {
         self.config = config;
         self.config_path = path;
         self.apply_local_favorites();
+        self.apply_read_markers();
+    }
+
+    /// The snapshot-age label shown in the status bar.
+    ///
+    /// Shared with the redraw gate in `run_loop`, so the loop can repaint
+    /// exactly when this string changes rather than once a second regardless.
+    fn staleness_label(&self) -> String {
+        snapshot_age(
+            self.state
+                .last_refresh
+                .get("sidebar")
+                .copied()
+                .or(self.state.saved_at),
+        )
+    }
+
+    /// Escape sequence for any newly arrived mentions/DMs, coalesced into one
+    /// announcement and cleared once taken.
+    fn take_alert_sequence(&mut self) -> Option<String> {
+        let count = self.feed.take_alerts();
+        alert_sequence(self.config.alerts, count)
+    }
+
+    /// Mark the conversation currently on screen as read, if any.
+    ///
+    /// Opening a conversation whose messages were not cached dispatches a
+    /// lazy load, so the newest timestamp is only known once the worker
+    /// answers; this runs after each update to close that gap.
+    fn mark_open_conversation_read(&mut self) {
+        if self.section_overview
+            || !matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
+        {
+            return;
+        }
+        let Some(id) = self
+            .selected_conversation()
+            .map(|conversation| conversation.id.clone())
+        else {
+            return;
+        };
+        if self.state.messages.get(&id).is_some_and(|m| !m.is_empty()) {
+            self.mark_conversation_read(&id);
+        }
+    }
+
+    /// Clear unread badges already covered by a local read marker.
+    ///
+    /// Slick never sends `conversations.mark`, so Slack keeps reporting a
+    /// conversation as unread after it has been read here. Zeroing the count
+    /// locally keeps Slick's own view self-consistent; every badge and sort
+    /// path reads `unread_count`, so applying it at the state layer (exactly
+    /// like the favourites overlay) fixes all of them at once.
+    fn apply_read_markers(&mut self) {
+        for conversation in &mut self.state.conversations {
+            let Some(latest) = conversation.latest_ts.as_deref() else {
+                continue;
+            };
+            if self.config.has_read_through(&conversation.id, latest) {
+                conversation.unread_count = 0;
+                conversation.mention_count = 0;
+            }
+        }
+    }
+
+    /// Record that the operator has seen this conversation up to its newest
+    /// loaded message, persisting the marker.
+    fn mark_conversation_read(&mut self, conversation_id: &str) {
+        let newest = self
+            .state
+            .messages
+            .get(conversation_id)
+            .and_then(|messages| messages.last())
+            .map(|message| message.ts.clone())
+            .or_else(|| {
+                self.state
+                    .conversations
+                    .iter()
+                    .find(|conversation| conversation.id == conversation_id)
+                    .and_then(|conversation| conversation.latest_ts.clone())
+            });
+        let Some(newest) = newest else {
+            return;
+        };
+        if !self.config.mark_read(conversation_id, &newest) {
+            return;
+        }
+        self.apply_read_markers();
+        if let Err(error) = self.config.save(&self.config_path) {
+            self.last_error = Some(error.to_string());
+        }
     }
 
     /// Union Slack stars with locally tagged favourites.
@@ -1667,17 +1802,7 @@ impl App {
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(
-                    "{} · {}",
-                    snapshot_age(
-                        self.state
-                            .last_refresh
-                            .get("sidebar")
-                            .copied()
-                            .or(self.state.saved_at),
-                    ),
-                    self.status,
-                ),
+                format!("{} · {}", self.staleness_label(), self.status),
                 Style::default().fg(MUTED()),
             ),
         ]));
@@ -2823,6 +2948,30 @@ fn row_text(buffer: &Buffer, area: Rect, y: u16) -> String {
         .collect()
 }
 
+/// Escape sequence announcing `count` new mentions/unread DMs.
+///
+/// Emitted after the frame flush, exactly like the OSC 8 link runs: escapes
+/// must never reach Ratatui buffer symbols or `unicode-width` miscounts them.
+/// OSC 777 is what Ghostty/kitty understand for desktop notifications, and the
+/// bell is appended as the universal fallback.
+fn alert_sequence(mode: AlertMode, count: usize) -> Option<String> {
+    if count == 0 {
+        return None;
+    }
+    match mode {
+        AlertMode::Off => None,
+        AlertMode::Bell => Some("\x07".to_string()),
+        AlertMode::Notify => {
+            let body = if count == 1 {
+                "1 new mention or DM".to_string()
+            } else {
+                format!("{count} new mentions or DMs")
+            };
+            Some(format!("\x1b]777;notify;Slick;{body}\x07\x07"))
+        }
+    }
+}
+
 fn write_link_runs<W: Write>(writer: &mut W, runs: &[LinkRun]) -> io::Result<()> {
     if runs.is_empty() {
         return Ok(());
@@ -2969,8 +3118,13 @@ fn snapshot_age(saved_at: Option<i64>) -> String {
         return "snapshot uncached".into();
     };
     let age = CacheState::now().saturating_sub(saved_at);
-    if age < 60 {
-        format!("snapshot {age}s stale")
+    if age < 5 {
+        "snapshot fresh".into()
+    } else if age < 60 {
+        // Bucketed to 5s: the redraw gate repaints whenever this label
+        // changes, and second-by-second precision here is worth nothing
+        // visually while costing a full frame rebuild every second.
+        format!("snapshot {}s stale", (age / 5) * 5)
     } else if age < 3_600 {
         format!("snapshot {}m stale", age / 60)
     } else if age < 86_400 {
@@ -3069,6 +3223,9 @@ pub fn run(options: RunOptions) -> Result<()> {
     };
     app.apply_config(options.config.clone(), options.config_path.clone());
     app.feed.ingest(&app.state, Instant::now());
+    // The startup ingest is the cached backlog, not new arrivals: announcing it
+    // would fire a burst of alerts every launch.
+    let _ = app.feed.take_alerts();
     app.set_page(options.initial_page);
     app.osc8_links = true;
     let mut stdout = io::stdout();
@@ -3109,15 +3266,41 @@ fn run_loop(
 ) -> Result<()> {
     let mut dirty = true;
     let mut last_timer_tick = Instant::now();
+    // Automatic refresh keeps the workday view live without a keypress. It is
+    // deliberately driven from the UI loop (not a timer thread) so it can skip
+    // a cycle whenever the worker is still busy.
+    let auto_refresh_interval = app.auto_refresh_interval();
+    let mut last_auto_refresh = Instant::now();
+    let mut last_staleness = app.staleness_label();
     while !app.should_quit {
         dirty |= app.drain_worker();
+        if let Some(interval) = auto_refresh_interval {
+            if last_auto_refresh.elapsed() >= interval {
+                // Reset the clock even when the worker was busy, so a slow
+                // call spaces the next attempt instead of firing immediately.
+                last_auto_refresh = Instant::now();
+                dirty |= app.auto_refresh();
+            }
+        }
         if last_timer_tick.elapsed() >= Duration::from_millis(120) {
             // The feed releases queued arrivals on a cadence, so tick faster
-            // than the one-second staleness clock and repaint when it emits.
+            // than the staleness clock and repaint when it emits.
             let released = app.feed.tick(Instant::now());
-            if released > 0 || last_timer_tick.elapsed() >= Duration::from_secs(1) {
+            if released > 0 {
                 dirty = true;
+            }
+            if last_timer_tick.elapsed() >= Duration::from_secs(1) {
                 last_timer_tick = Instant::now();
+                // Repaint for staleness only when the rendered label actually
+                // changes. Unconditionally marking dirty here rebuilt and
+                // diffed a whole frame every second forever, even with nothing
+                // on screen changing - a guaranteed wakeup per second in a TUI
+                // meant to sit open all day.
+                let staleness = app.staleness_label();
+                if staleness != last_staleness {
+                    last_staleness = staleness;
+                    dirty = true;
+                }
             }
         }
         if dirty {
@@ -3132,6 +3315,13 @@ fn run_loop(
             }
             write_link_runs(terminal.backend_mut(), &app.link_runs)?;
             dirty = false;
+        }
+
+        if let Some(alert) = app.take_alert_sequence() {
+            // After the frame flush, like the OSC 8 runs: escapes must never
+            // reach Ratatui buffer symbols.
+            terminal.backend_mut().write_all(alert.as_bytes())?;
+            terminal.backend_mut().flush()?;
         }
 
         if event::poll(Duration::from_millis(16))? {
@@ -3318,9 +3508,11 @@ mod tests {
 
     #[test]
     fn snapshot_staleness_timer_is_human_readable() {
+        // Sub-minute ages bucket to 5s so an idle Slick is not forced to
+        // rebuild a frame every second; 42s therefore reads as 40s.
         assert_eq!(
             snapshot_age(Some(CacheState::now() - 42)),
-            "snapshot 42s stale"
+            "snapshot 40s stale"
         );
         assert_eq!(
             snapshot_age(Some(CacheState::now() - 125)),
@@ -3396,6 +3588,125 @@ mod tests {
             palette_for(app.config.theme).accent,
             palette_for(before).accent
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn auto_refresh_interval_honours_opt_out_and_floor() {
+        let mut app = App::demo(crate::slack::demo_state());
+        let path = std::env::temp_dir().join("slick-refresh-test/config.yaml");
+
+        // 0 means "manual only": no background traffic at all.
+        let config = Config {
+            refresh_interval_secs: 0,
+            ..Config::default()
+        };
+        app.apply_config(config, path.clone());
+        assert_eq!(app.auto_refresh_interval(), None);
+
+        // A too-eager value is clamped up so config alone cannot throttle the
+        // operator's Slack token.
+        let config = Config {
+            refresh_interval_secs: 1,
+            ..Config::default()
+        };
+        app.apply_config(config, path.clone());
+        assert_eq!(
+            app.auto_refresh_interval(),
+            Some(Duration::from_secs(MIN_AUTO_REFRESH_SECS))
+        );
+
+        // A sensible value is used as-is.
+        let config = Config {
+            refresh_interval_secs: 90,
+            ..Config::default()
+        };
+        app.apply_config(config, path);
+        assert_eq!(app.auto_refresh_interval(), Some(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn auto_refresh_is_skipped_while_the_worker_is_busy() {
+        let mut app = App::demo(crate::slack::demo_state());
+        // Demo mode has no worker, so a cycle must be a no-op rather than
+        // spinning or claiming it dispatched work.
+        assert!(!app.auto_refresh());
+        app.busy = true;
+        assert!(!app.auto_refresh(), "a busy worker must not be queued onto");
+    }
+
+    #[test]
+    fn staleness_label_is_stable_between_visible_changes() {
+        let now = CacheState::now();
+        // Sub-minute ages bucket to 5s, so the redraw gate fires ~5x less
+        // rather than rebuilding a frame every second.
+        assert_eq!(snapshot_age(Some(now)), "snapshot fresh");
+        assert_eq!(snapshot_age(Some(now - 3)), "snapshot fresh");
+        assert_eq!(snapshot_age(Some(now - 7)), snapshot_age(Some(now - 9)));
+        assert_eq!(snapshot_age(Some(now - 7)), "snapshot 5s stale");
+        assert_ne!(snapshot_age(Some(now - 7)), snapshot_age(Some(now - 12)));
+        // Coarser bands are unchanged.
+        assert_eq!(snapshot_age(Some(now - 90)), "snapshot 1m stale");
+        assert_eq!(snapshot_age(None), "snapshot uncached");
+    }
+
+    #[test]
+    fn alerts_coalesce_and_respect_the_configured_mode() {
+        // Off never announces, however many arrived.
+        assert_eq!(alert_sequence(AlertMode::Off, 9), None);
+        // Nothing new is never an announcement.
+        assert_eq!(alert_sequence(AlertMode::Bell, 0), None);
+        // A burst is ONE bell, not one per item.
+        assert_eq!(alert_sequence(AlertMode::Bell, 12).as_deref(), Some("\x07"));
+        // Notify carries a count and keeps the bell as a fallback.
+        let notify = alert_sequence(AlertMode::Notify, 3).expect("notify sequence");
+        assert!(notify.starts_with("\x1b]777;notify;Slick;"));
+        assert!(notify.contains("3 new mentions or DMs"));
+        assert!(notify.ends_with('\x07'));
+        let single = alert_sequence(AlertMode::Notify, 1).expect("notify sequence");
+        assert!(single.contains("1 new mention or DM"));
+    }
+
+    #[test]
+    fn local_read_markers_clear_unread_badges() {
+        let dir = std::env::temp_dir().join(format!("slick-read-{}", std::process::id()));
+        let mut state = crate::slack::demo_state();
+        state.conversations[0].unread_count = 5;
+        state.conversations[0].mention_count = 2;
+        state.conversations[0].latest_ts = Some("1717171717.000100".into());
+        let id = state.conversations[0].id.clone();
+        let mut app = App::demo(state);
+        app.apply_config(Config::default(), dir.join("config.yaml"));
+
+        // Slack still reports it unread because Slick never sends
+        // conversations.mark.
+        assert_eq!(app.state.conversations[0].unread_count, 5);
+
+        assert!(app.config.mark_read(&id, "1717171717.000100"));
+        app.apply_read_markers();
+        assert_eq!(app.state.conversations[0].unread_count, 0);
+        assert_eq!(app.state.conversations[0].mention_count, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_newer_message_makes_a_read_conversation_unread_again() {
+        let dir = std::env::temp_dir().join(format!("slick-read-new-{}", std::process::id()));
+        let mut state = crate::slack::demo_state();
+        state.conversations[0].unread_count = 1;
+        state.conversations[0].latest_ts = Some("1717171717.000100".into());
+        let id = state.conversations[0].id.clone();
+        let mut app = App::demo(state);
+        app.apply_config(Config::default(), dir.join("config.yaml"));
+        app.config.mark_read(&id, "1717171717.000100");
+        app.apply_read_markers();
+        assert_eq!(app.state.conversations[0].unread_count, 0);
+
+        // A message arriving after the marker must badge again.
+        app.state.conversations[0].unread_count = 3;
+        app.state.conversations[0].latest_ts = Some("1717171999.000200".into());
+        app.apply_read_markers();
+        assert_eq!(app.state.conversations[0].unread_count, 3);
         std::fs::remove_dir_all(&dir).ok();
     }
 

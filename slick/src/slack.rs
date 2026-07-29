@@ -1,12 +1,16 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use reqwest::blocking::{Client, Response};
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, RETRY_AFTER, USER_AGENT,
+};
+use reqwest::StatusCode;
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -22,6 +26,59 @@ const MAX_HISTORY_MESSAGES: usize = 100;
 const MAX_FILE_RESULTS: usize = 100;
 const MAX_BACKFILL_CONVERSATIONS: usize = 24;
 const MAX_CANVAS_MARKDOWN_CHARS: usize = 24_000;
+/// Slack throttles hard (search.* is roughly 20/min), so a burst refresh must
+/// wait rather than surface a bare failure. Bounded so a wedged workspace can
+/// never hang the worker thread indefinitely.
+const MAX_RATE_LIMIT_ATTEMPTS: u32 = 4;
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
+
+/// Most recent throttling notice, drained by the worker into the status line.
+static THROTTLE_NOTICE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Take the pending throttle notice, if any. Clears it.
+pub fn take_throttle_notice() -> Option<String> {
+    THROTTLE_NOTICE.lock().ok().and_then(|mut slot| slot.take())
+}
+
+fn record_throttle_notice(notice: String) {
+    if let Ok(mut slot) = THROTTLE_NOTICE.lock() {
+        *slot = Some(notice);
+    }
+}
+
+/// Outcome of one Slack HTTP attempt.
+enum ApiOutcome {
+    Value(Box<Value>),
+    RateLimited,
+}
+
+/// Whether a response means "throttled, try again later".
+///
+/// Slack signals this either as HTTP 429 or as a 200 with `ok:false` and
+/// `error:"ratelimited"`, so both must be treated the same.
+fn is_rate_limited(status: StatusCode, error: Option<&str>) -> bool {
+    status == StatusCode::TOO_MANY_REQUESTS || error == Some("ratelimited")
+}
+
+/// How long to wait before retrying a throttled call.
+///
+/// Slack's `Retry-After` (seconds) is authoritative when present; otherwise
+/// back off exponentially. Both are capped, and a little jitter keeps several
+/// refreshers from retrying in lockstep.
+fn rate_limit_delay(attempt: u32, retry_after: Option<u64>, jitter_millis: u64) -> Duration {
+    let base = match retry_after {
+        Some(seconds) => Duration::from_secs(seconds),
+        None => Duration::from_secs(1 << attempt.min(5)),
+    };
+    let capped = base.min(MAX_RATE_LIMIT_WAIT);
+    capped.saturating_add(Duration::from_millis(jitter_millis % 250))
+}
+
+fn jitter_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| u64::from(elapsed.subsec_millis()))
+}
 
 #[derive(Clone, Debug)]
 struct Tokens {
@@ -46,23 +103,46 @@ impl SlackClient {
     }
 
     pub fn call(&self, method: &str, params: &BTreeMap<String, String>) -> Result<Value> {
-        let response = self
-            .http
-            .post(format!("{API_ROOT}/{method}"))
-            .header(AUTHORIZATION, format!("Bearer {}", self.tokens.token))
-            .header(COOKIE, format!("d={}", self.tokens.cookie))
-            .header(
-                CONTENT_TYPE,
-                "application/x-www-form-urlencoded;charset=utf-8",
-            )
-            .header(USER_AGENT, USER_AGENT_VALUE)
-            .header(ORIGIN, "https://app.slack.com")
-            .header(REFERER, "https://app.slack.com/")
-            .header(ACCEPT, "application/json")
-            .form(params)
-            .send()
-            .with_context(|| format!("call Slack {method}"))?;
-        parse_api_response(method, response)
+        for attempt in 0..MAX_RATE_LIMIT_ATTEMPTS {
+            let response = self
+                .http
+                .post(format!("{API_ROOT}/{method}"))
+                .header(AUTHORIZATION, format!("Bearer {}", self.tokens.token))
+                .header(COOKIE, format!("d={}", self.tokens.cookie))
+                .header(
+                    CONTENT_TYPE,
+                    "application/x-www-form-urlencoded;charset=utf-8",
+                )
+                .header(USER_AGENT, USER_AGENT_VALUE)
+                .header(ORIGIN, "https://app.slack.com")
+                .header(REFERER, "https://app.slack.com/")
+                .header(ACCEPT, "application/json")
+                .form(params)
+                .send()
+                .with_context(|| format!("call Slack {method}"))?;
+            let retry_after = retry_after_seconds(&response);
+            match parse_api_response(method, response)? {
+                ApiOutcome::Value(value) => return Ok(*value),
+                ApiOutcome::RateLimited => {
+                    let last = attempt + 1 == MAX_RATE_LIMIT_ATTEMPTS;
+                    if last {
+                        record_throttle_notice(format!(
+                            "Slack rate-limited {method}; giving up after {MAX_RATE_LIMIT_ATTEMPTS} attempts"
+                        ));
+                        bail!(
+                            "Slack {method} failed: ratelimited (retried {MAX_RATE_LIMIT_ATTEMPTS} times)"
+                        );
+                    }
+                    let delay = rate_limit_delay(attempt, retry_after, jitter_seed());
+                    record_throttle_notice(format!(
+                        "Slack rate-limited {method}; retrying in {}s",
+                        delay.as_secs().max(1)
+                    ));
+                    std::thread::sleep(delay);
+                }
+            }
+        }
+        bail!("Slack {method} failed: ratelimited")
     }
 
     fn get_canvas_html(&self, file: &SlackFile) -> Result<String> {
@@ -129,15 +209,33 @@ impl SlackClient {
     }
 }
 
-fn parse_api_response(method: &str, response: Response) -> Result<Value> {
+fn retry_after_seconds(response: &Response) -> Option<u64> {
+    response
+        .headers()
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
+fn parse_api_response(method: &str, response: Response) -> Result<ApiOutcome> {
     let status = response.status();
     let text = response.text().context("read Slack API response")?;
-    let value: Value = serde_json::from_str(&text).with_context(|| {
-        format!(
+    // A throttled response is not always JSON (429 bodies can be plain text),
+    // so classify before insisting on a JSON body.
+    let value: Option<Value> = serde_json::from_str(&text).ok();
+    let error = value
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(Value::as_str);
+    if is_rate_limited(status, error) {
+        return Ok(ApiOutcome::RateLimited);
+    }
+    let Some(value) = value else {
+        bail!(
             "Slack {method} returned non-JSON HTTP {status}: {}",
             text.chars().take(240).collect::<String>()
-        )
-    })?;
+        );
+    };
     if !status.is_success() || value.get("ok").and_then(Value::as_bool) == Some(false) {
         let error = value
             .get("error")
@@ -151,7 +249,7 @@ fn parse_api_response(method: &str, response: Response) -> Result<Value> {
         }
         bail!("Slack {method} failed: {error}");
     }
-    Ok(value)
+    Ok(ApiOutcome::Value(Box::new(value)))
 }
 
 fn load_tokens() -> Result<Tokens> {
@@ -1232,6 +1330,37 @@ pub fn demo_state() -> CacheState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rate_limited_detects_both_slack_throttle_shapes() {
+        // HTTP 429 with no JSON body.
+        assert!(is_rate_limited(StatusCode::TOO_MANY_REQUESTS, None));
+        // Slack also answers 200 with ok:false / error:"ratelimited".
+        assert!(is_rate_limited(StatusCode::OK, Some("ratelimited")));
+        assert!(!is_rate_limited(StatusCode::OK, Some("invalid_auth")));
+        assert!(!is_rate_limited(StatusCode::OK, None));
+    }
+
+    #[test]
+    fn retry_after_is_authoritative_and_capped() {
+        // Slack's Retry-After wins over the exponential schedule.
+        let delay = rate_limit_delay(0, Some(7), 0);
+        assert_eq!(delay.as_secs(), 7);
+        // An absurd Retry-After must not wedge the worker thread.
+        let delay = rate_limit_delay(0, Some(6000), 0);
+        assert_eq!(delay.as_secs(), MAX_RATE_LIMIT_WAIT.as_secs());
+    }
+
+    #[test]
+    fn backoff_grows_and_jitters_without_retry_after() {
+        assert_eq!(rate_limit_delay(0, None, 0).as_secs(), 1);
+        assert_eq!(rate_limit_delay(1, None, 0).as_secs(), 2);
+        assert_eq!(rate_limit_delay(2, None, 0).as_secs(), 4);
+        // Jitter is additive, bounded, and never collapses the base wait.
+        let jittered = rate_limit_delay(1, None, 1_234);
+        assert!(jittered >= Duration::from_secs(2));
+        assert!(jittered < Duration::from_millis(2_250));
+    }
 
     #[test]
     fn rich_blocks_flatten_with_list_boundaries() {

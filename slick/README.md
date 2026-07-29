@@ -77,12 +77,25 @@ graphics: true         # false behaves like --no-graphics
 start-page: activity   # activity | favorites | dms | channels | files
 sidebar-width: 32      # cells
 detail-percent: 64     # share of the content area given to the Markdown pane
+refresh-interval-secs: 60  # background refresh cadence; 0 = manual (Ctrl-R) only
+alerts: bell           # bell (default) | notify (OSC 777 + bell) | off
 favorites:             # local favourites overlay, unioned with Slack stars
   - C0BELKU8YP6
 ```
 
-### Favourites
+### Alerts
 
+A newly arrived mention or unread DM announces itself, so Slick does not have
+to be the focused window to be useful. `bell` emits the terminal bell; `notify`
+adds an OSC 777 desktop notification (Ghostty/kitty) with the bell as a
+fallback; `off` stays silent.
+
+Only genuinely new items announce. Slick reuses the Feed's identity dedupe, so
+an edited or re-delivered message updates its line without re-alerting, and a
+whole refresh burst coalesces into a single announcement. The cached backlog
+replayed at startup never alerts.
+
+### Favourites
 `is_favorite` comes from Slack `stars.list`. Slack's own sidebar *Favorites*
 section lives in the `channel_sections` user pref, and
 `users.channelSections.list` answers `team_is_restricted` on locked-down
@@ -91,6 +104,22 @@ workspaces, so that membership is not readable through the supported API.
 Slick therefore shows **Slack stars ∪ local favourites**. Pressing `s` toggles a
 local favourite and writes it to the config file; Slack itself is never mutated,
 so the client stays read-only.
+
+## Read state
+
+Slick never sends `conversations.mark`, so Slack keeps reporting a conversation
+as unread even after you have read it here. Slick therefore keeps a **local read
+marker** per conversation (`read-markers` in the config file): opening a
+conversation records the newest message you have seen, and any unread/mention
+badge covered by that marker is cleared in Slick's own view.
+
+Markers only ever move forward, so re-opening an older view cannot resurrect
+read conversations, and a message arriving after the marker badges the
+conversation again. Comparison is numeric rather than lexical, so timestamps
+remain correctly ordered.
+
+This keeps Slick self-consistent while preserving the read-only contract; it
+does not clear the badge in Slack's own clients.
 
 ## Refresh and cache contract
 
@@ -104,6 +133,18 @@ then only the visible target:
 - Activity → mentions and DM activity
 - DMs/Channels → selected conversation since its last refresh
 - Files → recent-file search since the last refresh date
+
+Slick also refreshes **automatically in the background** every
+`refresh-interval-secs` (default 60; set `0` for manual-only). Each cycle runs
+the same bounded, incremental visible-target refresh as `Ctrl-R` — never a
+re-bootstrap — and is skipped whenever a Slack call is already in flight, so a
+slow response can never queue up stale work. The interval is clamped to a floor
+of 15s. The status line always shows snapshot age, so staleness stays visible.
+
+Slack throttles aggressively (`search.*` especially). Slick honours `Retry-After`
+on HTTP 429 and on `ok:false`/`ratelimited`, backing off exponentially with
+jitter up to a cap, and reports throttling in the status line rather than
+failing the refresh.
 
 The client is deliberately read-only: no sends, edits, reactions, joins, read
 markers, or presence mutations.

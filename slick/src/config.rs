@@ -8,8 +8,33 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+/// How Slick announces a new mention or unread DM.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AlertMode {
+    /// Never announce.
+    Off,
+    /// Terminal bell only.
+    #[default]
+    Bell,
+    /// Desktop notification (OSC 777) plus the bell as a fallback.
+    Notify,
+}
+
+impl AlertMode {
+    /// Parse an alert mode, falling back to the default for unknown values.
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_lowercase().as_str() {
+            "off" | "none" | "false" => Self::Off,
+            "notify" | "desktop" => Self::Notify,
+            _ => Self::Bell,
+        }
+    }
+}
 
 /// Named colour palette.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -70,8 +95,23 @@ pub struct Config {
     pub sidebar_width: u16,
     /// Percentage of the content area given to the Markdown detail pane.
     pub detail_percent: u16,
+    /// Seconds between automatic background refreshes; `0` disables them and
+    /// leaves Slick manual-refresh-only (Ctrl-R).
+    ///
+    /// Clamped to a sane floor when enabled: Slack throttles aggressively and
+    /// each cycle refreshes the sidebar plus the visible target.
+    pub refresh_interval_secs: u64,
     /// Conversation ids favourited inside Slick; unioned with Slack stars.
     pub favorites: BTreeSet<String>,
+    /// Local read markers: conversation id -> newest message timestamp the
+    /// operator has seen inside Slick.
+    ///
+    /// Slick is read-only against Slack, so it never sends `conversations.mark`.
+    /// Without this overlay a conversation read in Slick stays badged forever,
+    /// because `unread_count` only ever clears when Slack itself is told.
+    pub read_markers: BTreeMap<String, String>,
+    /// How to announce a newly arrived mention or unread DM.
+    pub alerts: AlertMode,
 }
 
 impl Default for Config {
@@ -82,7 +122,10 @@ impl Default for Config {
             start_page: "activity".to_string(),
             sidebar_width: 32,
             detail_percent: 64,
+            refresh_interval_secs: 60,
             favorites: BTreeSet::new(),
+            read_markers: BTreeMap::new(),
+            alerts: AlertMode::default(),
         }
     }
 }
@@ -144,11 +187,69 @@ impl Config {
     pub fn is_local_favorite(&self, conversation_id: &str) -> bool {
         self.favorites.contains(conversation_id)
     }
+
+    /// Record that everything up to `ts` has been read in `conversation_id`.
+    ///
+    /// Returns whether the marker moved, so callers only persist on a real
+    /// change. Never moves a marker backwards: re-opening an older view must
+    /// not resurrect already-read conversations.
+    pub fn mark_read(&mut self, conversation_id: &str, ts: &str) -> bool {
+        if ts.is_empty() {
+            return false;
+        }
+        let current = self.read_markers.get(conversation_id);
+        if current.is_some_and(|current| !timestamp_is_newer(ts, current)) {
+            return false;
+        }
+        self.read_markers
+            .insert(conversation_id.to_string(), ts.to_string());
+        true
+    }
+
+    /// Whether the local marker already covers `ts` for this conversation.
+    #[must_use]
+    pub fn has_read_through(&self, conversation_id: &str, ts: &str) -> bool {
+        self.read_markers
+            .get(conversation_id)
+            .is_some_and(|marker| !timestamp_is_newer(ts, marker))
+    }
+}
+
+/// Whether Slack timestamp `candidate` is strictly newer than `baseline`.
+///
+/// Slack timestamps are decimal seconds ("1717171717.123456"). Compare
+/// numerically: lexical comparison breaks the moment the integer part changes
+/// width, and silently mis-ordering read state would hide real messages.
+fn timestamp_is_newer(candidate: &str, baseline: &str) -> bool {
+    match (candidate.parse::<f64>(), baseline.parse::<f64>()) {
+        (Ok(candidate), Ok(baseline)) => candidate > baseline,
+        _ => candidate > baseline,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_markers_never_move_backwards() {
+        let mut config = Config::default();
+        assert!(config.mark_read("C1", "1717171717.000200"));
+        // Re-opening an older view must not resurrect already-read messages.
+        assert!(!config.mark_read("C1", "1717171717.000100"));
+        assert_eq!(
+            config.read_markers.get("C1").map(String::as_str),
+            Some("1717171717.000200")
+        );
+        // Numeric, not lexical: a wider integer part is newer.
+        assert!(config.mark_read("C1", "9999999999.000000"));
+        assert!(config.has_read_through("C1", "9999999999.000000"));
+        assert!(config.has_read_through("C1", "1717171717.000200"));
+        assert!(!config.has_read_through("C1", "99999999999.000000"));
+        // An empty ts is not a marker.
+        assert!(!config.mark_read("C2", ""));
+        assert!(!config.has_read_through("C2", "1717171717.000100"));
+    }
 
     #[test]
     fn absent_and_empty_files_yield_defaults() {

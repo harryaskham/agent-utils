@@ -57,6 +57,11 @@ pub struct Feed {
     next_release: Option<Instant>,
     interval: Duration,
     capacity: usize,
+    /// Newly arrived mentions/unread DMs not yet announced.
+    ///
+    /// Only genuinely NEW lines count: an edited or re-delivered item updates
+    /// its existing line, and re-announcing that would cry wolf.
+    pending_alerts: usize,
 }
 
 impl Default for Feed {
@@ -76,7 +81,16 @@ impl Feed {
             next_release: None,
             interval: window,
             capacity,
+            pending_alerts: 0,
         }
+    }
+
+    /// Take the count of unannounced new mentions/unread DMs, clearing it.
+    ///
+    /// Coalescing is the caller's job: a refresh can release a whole burst at
+    /// once and that must be one announcement, not fifty.
+    pub fn take_alerts(&mut self) -> usize {
+        std::mem::take(&mut self.pending_alerts)
     }
 
     /// Visible entries, newest first.
@@ -121,6 +135,9 @@ impl Feed {
                     {
                         *slot = candidate;
                     } else {
+                        if candidate.mention || candidate.unread {
+                            self.pending_alerts = self.pending_alerts.saturating_add(1);
+                        }
                         self.pending.push(candidate);
                         queued += 1;
                     }
@@ -291,6 +308,28 @@ mod tests {
         assert_eq!(feed.entries().len(), 1, "the line is updated in place");
         assert_eq!(feed.entries()[0].revision, 1);
         assert!(feed.entries()[0].summary.contains("edited"));
+    }
+
+    #[test]
+    fn alerts_count_new_arrivals_once_and_ignore_edits() {
+        let start = Instant::now();
+        let mut feed = Feed::new(Duration::from_secs(60), 100);
+        let state = state_with(&[("c1", "01", "one"), ("c1", "02", "two")]);
+        feed.ingest(&state, start);
+        // Two genuinely new unread items.
+        assert_eq!(feed.take_alerts(), 2);
+        // Draining clears: the same arrivals must not announce twice.
+        assert_eq!(feed.take_alerts(), 0);
+
+        // Re-ingesting the same items is not a new arrival.
+        feed.ingest(&state, start);
+        assert_eq!(feed.take_alerts(), 0);
+
+        // An edit updates in place and must not cry wolf.
+        let edited = state_with(&[("c1", "01", "one edited"), ("c1", "02", "two")]);
+        feed.tick(start);
+        feed.ingest(&edited, start);
+        assert_eq!(feed.take_alerts(), 0, "an edit is not a new arrival");
     }
 
     #[test]

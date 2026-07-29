@@ -76,14 +76,12 @@ pub fn render_markdown(source: &str) -> Text<'static> {
                 let _ = inline.pop();
                 lines.push(Line::default());
             }
-            Event::Start(Tag::Paragraph) => {
-                if quote_depth > 0 && spans.is_empty() {
-                    push_text(
-                        &mut spans,
-                        "▌ ".repeat(quote_depth),
-                        Style::default().fg(ACCENT),
-                    );
-                }
+            Event::Start(Tag::Paragraph) if quote_depth > 0 && spans.is_empty() => {
+                push_text(
+                    &mut spans,
+                    "▌ ".repeat(quote_depth),
+                    Style::default().fg(ACCENT),
+                );
             }
             Event::End(TagEnd::Paragraph) => {
                 flush(&mut lines, &mut spans);
