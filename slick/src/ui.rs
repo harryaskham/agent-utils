@@ -347,7 +347,7 @@ impl Worker {
                         );
                         // A throttled-but-recovered call still matters to the
                         // user: surface it rather than silently reporting success.
-                        let status = crate::slack::take_throttle_notice()
+                        let status = crate::slack::take_notice()
                             .map_or(status, |notice| format!("{label}; {notice}"));
                         let _ =
                             event_tx.send(WorkerEvent::Updated(Box::new(state.clone()), status));

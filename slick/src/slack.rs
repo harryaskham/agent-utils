@@ -32,16 +32,17 @@ const MAX_CANVAS_MARKDOWN_CHARS: usize = 24_000;
 const MAX_RATE_LIMIT_ATTEMPTS: u32 = 4;
 const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
 
-/// Most recent throttling notice, drained by the worker into the status line.
-static THROTTLE_NOTICE: Mutex<Option<String>> = Mutex::new(None);
+/// Most recent degradation notice (throttling, partial results), drained by
+/// the worker into the status line.
+static NOTICE: Mutex<Option<String>> = Mutex::new(None);
 
-/// Take the pending throttle notice, if any. Clears it.
-pub fn take_throttle_notice() -> Option<String> {
-    THROTTLE_NOTICE.lock().ok().and_then(|mut slot| slot.take())
+/// Take the pending notice, if any. Clears it.
+pub fn take_notice() -> Option<String> {
+    NOTICE.lock().ok().and_then(|mut slot| slot.take())
 }
 
-fn record_throttle_notice(notice: String) {
-    if let Ok(mut slot) = THROTTLE_NOTICE.lock() {
+fn record_notice(notice: String) {
+    if let Ok(mut slot) = NOTICE.lock() {
         *slot = Some(notice);
     }
 }
@@ -126,7 +127,7 @@ impl SlackClient {
                 ApiOutcome::RateLimited => {
                     let last = attempt + 1 == MAX_RATE_LIMIT_ATTEMPTS;
                     if last {
-                        record_throttle_notice(format!(
+                        record_notice(format!(
                             "Slack rate-limited {method}; giving up after {MAX_RATE_LIMIT_ATTEMPTS} attempts"
                         ));
                         bail!(
@@ -134,7 +135,7 @@ impl SlackClient {
                         );
                     }
                     let delay = rate_limit_delay(attempt, retry_after, jitter_seed());
-                    record_throttle_notice(format!(
+                    record_notice(format!(
                         "Slack rate-limited {method}; retrying in {}s",
                         delay.as_secs().max(1)
                     ));
@@ -529,11 +530,21 @@ impl SlackService {
         let mut notifications = Vec::new();
         let mut discovered_conversations = Vec::new();
         let mut any_success = false;
+        let mut failed_queries = 0usize;
+        let total_queries = queries.len();
         for query in queries {
             let mut params = BTreeMap::new();
             params.insert("query".into(), query);
             params.insert("count".into(), "100".into());
-            if let Ok(result) = self.client.call("search.messages", &params) {
+            let Ok(result) = self.client.call("search.messages", &params) else {
+                // One query failing (throttled after retries, transient 5xx,
+                // permissions) must not masquerade as a clean refresh: the
+                // mentions query dropping out silently loses mentions, and
+                // alerts only fire on newly seen ones.
+                failed_queries += 1;
+                continue;
+            };
+            {
                 any_success = true;
                 let embedded_users = result
                     .get("users")
@@ -565,6 +576,11 @@ impl SlackService {
         }
         if !any_success {
             bail!("Slack search.messages could not load mentions/DM activity");
+        }
+        if failed_queries > 0 {
+            record_notice(format!(
+                "partial activity: {failed_queries} of {total_queries} mention/DM searches failed; some mentions may be missing"
+            ));
         }
         let mut known_ids: HashSet<String> = state
             .conversations
@@ -1330,6 +1346,18 @@ pub fn demo_state() -> CacheState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notices_round_trip_and_clear_on_take() {
+        // The worker drains this into the status line, so a stale notice must
+        // not repeat on the next successful refresh.
+        record_notice("partial activity: 1 of 2 mention/DM searches failed".into());
+        assert_eq!(
+            take_notice().as_deref(),
+            Some("partial activity: 1 of 2 mention/DM searches failed")
+        );
+        assert_eq!(take_notice(), None, "taking a notice must clear it");
+    }
 
     #[test]
     fn rate_limited_detects_both_slack_throttle_shapes() {
