@@ -1,5 +1,5 @@
 {
-  description = "slick — a read-only graphical Slack TUI";
+  description = "slick — a read-only-by-default graphical Slack TUI";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -46,7 +46,7 @@
           buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
           doCheck = true;
           meta = {
-            description = "Read-only graphical Slack TUI with compact cached views";
+            description = "Read-only-by-default graphical Slack TUI with compact cached views";
             homepage = "https://github.com/harryaskham/agent-utils/tree/main/slick";
             license = pkgs.lib.licenses.mit;
             mainProgram = "slick";

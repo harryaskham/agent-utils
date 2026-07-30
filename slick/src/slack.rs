@@ -461,6 +461,23 @@ impl SlackService {
         Ok(())
     }
 
+    /// Send a Slack read marker for `conversation_id` up to `ts`.
+    ///
+    /// This is the ONLY Slack mutation Slick can perform, and it is reached
+    /// only when the operator sets `mark-read-in-slack: true`. It clears the
+    /// unread badge in every Slack client, which is why it is opt-in: the
+    /// client is otherwise strictly read-only.
+    pub fn mark_conversation_read(&self, conversation_id: &str, ts: &str) -> Result<()> {
+        if conversation_id.is_empty() || ts.is_empty() {
+            return Ok(());
+        }
+        let mut params = BTreeMap::new();
+        params.insert("channel".into(), conversation_id.to_string());
+        params.insert("ts".into(), ts.to_string());
+        self.client.call("conversations.mark", &params)?;
+        Ok(())
+    }
+
     /// Add conversations referenced by recent self-activity that the
     /// membership listings did not return, so "channels you're active in"
     /// shows names rather than raw ids.

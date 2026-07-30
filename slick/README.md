@@ -1,6 +1,7 @@
 # Slick
 
-Slick is a fast, read-only Slack terminal client built with Rust, Ratatui, and
+Slick is a fast, read-only-by-default Slack terminal client built with Rust,
+Ratatui, and
 [kittui](https://github.com/harryaskham/kittui)'s `ratakittui` graphical
 chrome. It uses the same compact projection as the native `slack_*` Pi tools:
 message text and provenance stay visible, repeated Web API metadata disappears,
@@ -78,17 +79,18 @@ start-page: activity   # activity | favorites | dms | channels | files
 sidebar-width: 32      # cells
 detail-percent: 64     # share of the content area given to the Markdown pane
 refresh-interval-secs: 60  # background refresh cadence; 0 = manual (Ctrl-R) only
-alerts: bell           # bell (default) | notify (OSC 777 + bell) | off
+alerts: off            # off (default) | bell | notify (OSC 777 + bell)
+mark-read-in-slack: false  # true also clears the unread badge in Slack itself
 favorites:             # local favourites overlay, unioned with Slack stars
   - C0BELKU8YP6
 ```
 
 ### Alerts
 
-A newly arrived mention or unread DM announces itself, so Slick does not have
-to be the focused window to be useful. `bell` emits the terminal bell; `notify`
-adds an OSC 777 desktop notification (Ghostty/kitty) with the bell as a
-fallback; `off` stays silent.
+A newly arrived mention or unread DM can announce itself, so Slick does not
+have to be the focused window to be useful. `off` (the default) stays silent;
+`bell` emits the terminal bell; `notify` adds an OSC 777 desktop notification
+(Ghostty/kitty) with the bell as a fallback.
 
 Only genuinely new items announce. Slick reuses the Feed's identity dedupe, so
 an edited or re-delivered message updates its line without re-alerting, and a
@@ -102,24 +104,26 @@ section lives in the `channel_sections` user pref, and
 workspaces, so that membership is not readable through the supported API.
 
 Slick therefore shows **Slack stars ∪ local favourites**. Pressing `s` toggles a
-local favourite and writes it to the config file; Slack itself is never mutated,
-so the client stays read-only.
+local favourite and writes it to the config file; Slack's own stars are never
+mutated.
 
 ## Read state
 
-Slick never sends `conversations.mark`, so Slack keeps reporting a conversation
-as unread even after you have read it here. Slick therefore keeps a **local read
-marker** per conversation (`read-markers` in the config file): opening a
-conversation records the newest message you have seen, and any unread/mention
-badge covered by that marker is cleared in Slick's own view.
+Slick keeps a **local read marker** per conversation (`read-markers` in the
+config file): opening a conversation records the newest message you have seen,
+and any unread/mention badge covered by that marker is cleared in Slick's own
+view.
 
 Markers only ever move forward, so re-opening an older view cannot resurrect
 read conversations, and a message arriving after the marker badges the
 conversation again. Comparison is numeric rather than lexical, so timestamps
 remain correctly ordered.
 
-This keeps Slick self-consistent while preserving the read-only contract; it
-does not clear the badge in Slack's own clients.
+By default this is purely local: Slack still shows the conversation unread in
+its own clients. Set `mark-read-in-slack: true` to additionally send
+`conversations.mark`, which clears the badge everywhere and makes Slick usable
+as a primary client. That is **opt-in because it is a Slack mutation** — see
+below.
 
 ## Refresh and cache contract
 
@@ -146,8 +150,14 @@ on HTTP 429 and on `ok:false`/`ratelimited`, backing off exponentially with
 jitter up to a cap, and reports throttling in the status line rather than
 failing the refresh.
 
-The client is deliberately read-only: no sends, edits, reactions, joins, read
+The client is read-only **by default**: no sends, edits, reactions, joins, read
 markers, or presence mutations.
+
+The single exception is opt-in and off by default: with
+`mark-read-in-slack: true`, reading a conversation in Slick also sends
+`conversations.mark` for it. That is the only Slack write Slick can perform. It
+runs on the worker thread like every other Slack call, and is never dispatched
+unless you enable it.
 
 ## Graphics compatibility
 

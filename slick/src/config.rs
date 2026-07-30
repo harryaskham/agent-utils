@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 #[serde(rename_all = "kebab-case")]
 pub enum AlertMode {
     /// Never announce.
+    #[default]
     Off,
     /// Terminal bell only.
-    #[default]
     Bell,
     /// Desktop notification (OSC 777) plus the bell as a fallback.
     Notify,
@@ -29,9 +29,9 @@ impl AlertMode {
     #[must_use]
     pub fn parse(value: &str) -> Self {
         match value.trim().to_lowercase().as_str() {
-            "off" | "none" | "false" => Self::Off,
+            "bell" | "true" => Self::Bell,
             "notify" | "desktop" => Self::Notify,
-            _ => Self::Bell,
+            _ => Self::Off,
         }
     }
 }
@@ -112,6 +112,13 @@ pub struct Config {
     pub read_markers: BTreeMap<String, String>,
     /// How to announce a newly arrived mention or unread DM.
     pub alerts: AlertMode,
+    /// Whether to send Slack read markers (`conversations.mark`) when a
+    /// conversation is read in Slick.
+    ///
+    /// OFF by default: enabling it makes Slick write to Slack, which
+    /// deliberately breaks the otherwise read-only contract. With it on,
+    /// reading here clears the unread badge in every Slack client too.
+    pub mark_read_in_slack: bool,
 }
 
 impl Default for Config {
@@ -126,6 +133,7 @@ impl Default for Config {
             favorites: BTreeSet::new(),
             read_markers: BTreeMap::new(),
             alerts: AlertMode::default(),
+            mark_read_in_slack: false,
         }
     }
 }
@@ -230,6 +238,20 @@ fn timestamp_is_newer(candidate: &str, baseline: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slack_write_is_opt_in_and_off_by_default() {
+        // Slick stays read-only unless the operator explicitly opts in, so the
+        // default must never dispatch a Slack mutation.
+        assert!(!Config::default().mark_read_in_slack);
+        // Alerts likewise ship silent by default.
+        assert_eq!(AlertMode::default(), AlertMode::Off);
+        assert_eq!(AlertMode::parse("off"), AlertMode::Off);
+        assert_eq!(AlertMode::parse("bell"), AlertMode::Bell);
+        assert_eq!(AlertMode::parse("notify"), AlertMode::Notify);
+        // Unknown values fall back to the safe default, not to ringing.
+        assert_eq!(AlertMode::parse("wat"), AlertMode::Off);
+    }
 
     #[test]
     fn read_markers_never_move_backwards() {

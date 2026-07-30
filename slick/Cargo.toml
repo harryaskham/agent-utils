@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
-description = "A read-only, graphical Slack TUI with compact cached views"
+description = "A read-only-by-default, graphical Slack TUI with compact cached views"
 repository = "https://github.com/harryaskham/agent-utils"
 
 [[bin]]

@@ -298,6 +298,12 @@ enum WorkerCommand {
     },
     LoadFile(String),
     Refresh(RefreshTarget),
+    /// Send a Slack read marker. Only ever dispatched when the operator has
+    /// opted in via `mark-read-in-slack`; this is Slick's only Slack write.
+    MarkRead {
+        conversation_id: String,
+        ts: String,
+    },
     Stop,
 }
 
@@ -383,6 +389,7 @@ fn command_label(command: &WorkerCommand) -> String {
         }
         WorkerCommand::Refresh(RefreshTarget::Files) => "Refreshing visible files".into(),
         WorkerCommand::Refresh(RefreshTarget::Sidebar) => "Refreshing DMs and channels".into(),
+        WorkerCommand::MarkRead { .. } => "Marking read in Slack".into(),
         WorkerCommand::Stop => "Stopping".into(),
     }
 }
@@ -400,6 +407,10 @@ fn run_worker_command(
             thread_ts,
         } => service.refresh_thread(state, conversation_id, thread_ts),
         WorkerCommand::LoadFile(id) => service.load_file_content(state, id),
+        WorkerCommand::MarkRead {
+            conversation_id,
+            ts,
+        } => service.mark_conversation_read(conversation_id, ts),
         WorkerCommand::Refresh(target) => {
             service.refresh_sidebar(state)?;
             match target {
@@ -1626,6 +1637,15 @@ impl App {
             return;
         }
         self.apply_read_markers();
+        // Opt-in only: this is Slick's single Slack mutation, so it is
+        // dispatched to the worker (never the UI thread) and only when the
+        // operator has explicitly enabled it.
+        if self.config.mark_read_in_slack && self.worker.is_some() {
+            self.send(WorkerCommand::MarkRead {
+                conversation_id: conversation_id.to_string(),
+                ts: newest.clone(),
+            });
+        }
         if let Err(error) = self.config.save(&self.config_path) {
             self.last_error = Some(error.to_string());
         }
@@ -3652,6 +3672,9 @@ mod tests {
 
     #[test]
     fn alerts_coalesce_and_respect_the_configured_mode() {
+        // Off is now the DEFAULT (operator decision): ship silent, opt in.
+        assert_eq!(AlertMode::default(), AlertMode::Off);
+        assert_eq!(alert_sequence(AlertMode::default(), 9), None);
         // Off never announces, however many arrived.
         assert_eq!(alert_sequence(AlertMode::Off, 9), None);
         // Nothing new is never an announcement.
