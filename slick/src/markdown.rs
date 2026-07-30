@@ -35,7 +35,16 @@ fn flush(lines: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>) {
             lines.push(Line::default());
         }
     } else {
-        lines.push(Line::from(std::mem::take(spans)));
+        // Emoji arrive as alt text immediately followed by the literal
+        // shortcode; collapse the duplicate once the line is complete.
+        let collapsed: Vec<Span<'static>> = std::mem::take(spans)
+            .into_iter()
+            .map(|span| {
+                let content = collapse_repeated_shortcodes(&span.content);
+                Span::styled(content, span.style)
+            })
+            .collect();
+        lines.push(Line::from(collapsed));
     }
 }
 
@@ -56,6 +65,7 @@ pub fn render_markdown(source: &str) -> Text<'static> {
     let mut quote_depth = 0usize;
     let mut in_code_block = false;
     let mut link_target = None::<String>;
+    let mut image_kind = None::<ImageKind>;
 
     for event in parser {
         let current = inline.last().copied().unwrap_or_default().style;
@@ -186,16 +196,19 @@ pub fn render_markdown(source: &str) -> Text<'static> {
                 }
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                link_target = Some(dest_url.to_string());
-                push_text(&mut spans, "🖼 ", Style::default().fg(YELLOW));
+                image_kind = Some(classify_image(&dest_url));
+                if image_kind == Some(ImageKind::Attachment) {
+                    flush(&mut lines, &mut spans);
+                    push_text(&mut spans, "🖼 ", Style::default().fg(YELLOW));
+                }
             }
             Event::End(TagEnd::Image) => {
-                if let Some(target) = link_target.take() {
-                    push_text(
-                        &mut spans,
-                        format!(" ({target})"),
-                        Style::default().fg(MUTED),
-                    );
+                // Slack proxies every emoji through slack-imgs.com and repeats
+                // the same symbol as glyph, alt text and a doubly encoded URL.
+                // The URL is never actionable, so it is dropped for both kinds;
+                // attachments keep their own line because they are content.
+                if image_kind.take() == Some(ImageKind::Attachment) {
+                    flush(&mut lines, &mut spans);
                 }
             }
             Event::Start(Tag::TableRow) => {
@@ -249,6 +262,72 @@ pub fn render_markdown(source: &str) -> Text<'static> {
         let _ = lines.pop();
     }
     Text::from(lines)
+}
+
+/// How an image in Slack content should be treated.
+///
+/// Slack renders emoji as proxied images, so an image is not automatically
+/// content. Unknown sources default to `Attachment`: an over-large image is
+/// obvious and fixable, while an attachment collapsed to emoji size is lost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageKind {
+    /// Punctuation-sized emoji that must not disturb the line it sits in.
+    Emoji,
+    /// Real content deserving its own block.
+    Attachment,
+}
+
+/// Classify an image URL as emoji or attachment.
+#[must_use]
+pub fn classify_image(url: &str) -> ImageKind {
+    // Slack double-encodes the proxied target, so match on the decoded-ish text
+    // rather than parsing: `%2F` separators keep the asset path recognisable.
+    let lowered = url.to_lowercase();
+    let emoji_asset = lowered.contains("production-standard-emoji-assets")
+        || lowered.contains("production-standard-emoji")
+        || lowered.contains("/emoji/");
+    if lowered.contains("slack-imgs.com") && emoji_asset {
+        return ImageKind::Emoji;
+    }
+    if emoji_asset {
+        return ImageKind::Emoji;
+    }
+    ImageKind::Attachment
+}
+
+/// Collapse an emoji rendered twice in a row as alt text and shortcode.
+///
+/// Slack canvases emit `![calendar](proxied-url):calendar:`, so dropping the
+/// URL alone would still leave the symbol twice.
+#[must_use]
+pub fn collapse_repeated_shortcodes(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find(':') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find(':') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let token = &after[..end];
+        let is_shortcode = !token.is_empty()
+            && token
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '+');
+        let shortcode = format!(":{token}:");
+        rest = &after[end + 1..];
+        if is_shortcode {
+            out.push_str(&shortcode);
+            while let Some(stripped) = rest.strip_prefix(shortcode.as_str()) {
+                rest = stripped;
+            }
+        } else {
+            out.push_str(&shortcode);
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[must_use]
@@ -316,6 +395,82 @@ mod tests {
         assert!(text.contains("rust"));
         assert!(text.contains("fn main() {}"));
         assert!(text.contains("site ↗https://example.com"));
+    }
+
+    #[test]
+    fn slack_proxied_emoji_keeps_the_shortcode_and_drops_the_url() {
+        let source = "![calendar](https://slack-imgs.com/?c=1&o1=gu&url=https%3A%2F%2Fa.slack-edge.com%2Fproduction-standard-emoji-assets%2F16.0%2Fapple-small%2F1f4c6%402x.png):calendar: Daily notes";
+        let text = rendered(source);
+        assert!(
+            !text.contains("slack-imgs.com"),
+            "proxied URL is dropped: {text}"
+        );
+        assert!(
+            !text.contains("🖼"),
+            "emoji are punctuation, not attachments: {text}"
+        );
+        assert_eq!(
+            text.matches(":calendar:").count(),
+            1,
+            "the symbol appears once, not as alt plus shortcode: {text}"
+        );
+        assert!(
+            text.contains("Daily notes"),
+            "surrounding sentence survives: {text}"
+        );
+    }
+
+    #[test]
+    fn attachments_keep_a_marker_and_break_flow() {
+        let text = rendered(
+            "before ![架 diagram](https://files.slack.com/files-pri/T1-F2/diagram.png) after",
+        );
+        assert!(
+            !text.contains("files.slack.com"),
+            "raw URL is dropped: {text}"
+        );
+        assert!(
+            text.contains("🖼"),
+            "attachments stay marked as content: {text}"
+        );
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("🖼") && !line.contains("before")),
+            "attachment gets its own block: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn image_classification_defaults_unknown_sources_to_attachment() {
+        assert_eq!(
+            classify_image("https://slack-imgs.com/?url=https%3A%2F%2Fa.slack-edge.com%2Fproduction-standard-emoji-assets%2F16.0%2F1f4c6.png"),
+            ImageKind::Emoji
+        );
+        assert_eq!(
+            classify_image("https://files.slack.com/files-pri/T1-F2/screenshot.png"),
+            ImageKind::Attachment
+        );
+        assert_eq!(
+            classify_image("https://example.com/unknown"),
+            ImageKind::Attachment,
+            "unknown sources must not be shrunk to emoji size"
+        );
+    }
+
+    #[test]
+    fn repeated_shortcodes_collapse_but_ordinary_colons_survive() {
+        assert_eq!(
+            collapse_repeated_shortcodes(":calendar::calendar: x"),
+            ":calendar: x"
+        );
+        assert_eq!(collapse_repeated_shortcodes("ratio 3:4:5"), "ratio 3:4:5");
+        assert_eq!(collapse_repeated_shortcodes("plain text"), "plain text");
+        assert_eq!(collapse_repeated_shortcodes(":+1::+1: ok"), ":+1: ok");
     }
 
     #[test]
