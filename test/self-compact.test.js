@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import selfCompactExtension, {
+  resolveMinPercent,
+  shouldRefuseCompaction,
   buildCompactCommand,
   sanitizeInstructions,
 } from "../extensions/self-compact.js";
@@ -165,4 +167,87 @@ test("buildCompactCommand + sanitizeInstructions: bound, single-line, strip lead
   assert.equal(sanitizeInstructions("a\nb\tc"), "a b c");
   // Bounded length.
   assert.equal(sanitizeInstructions("x".repeat(5000)).length, 2000);
+});
+
+// bd-78ac4f: compaction is not free, so it is refused below a usage threshold
+// unless explicitly forced. A session compacting at 50.1% "because this feels
+// long" throws away half a usable window.
+function makeUsageHarness(usage) {
+  const h = makeHarness();
+  h.ctx.getContextUsage = () => usage;
+  return h;
+}
+
+test("self_compact refuses below the 75% threshold and reports the real figure", async () => {
+  const h = makeUsageHarness({ tokens: 100_100, contextWindow: 200_000, percent: 50.1 });
+  load(h.pi);
+  const result = await run(h, "call-1", {});
+  assert.equal(result.details.queued, false);
+  assert.equal(result.details.reason, "below_threshold");
+  assert.equal(result.details.minPercent, 75);
+  // The agent is told the actual number, not just "no".
+  assert.match(result.content[0].text, /50\.1% used/);
+  assert.match(result.content[0].text, /75% threshold/);
+  assert.equal(h.compactCalls.length, 0, "no compaction may run when refused");
+});
+
+test("self_compact proceeds below the threshold when force is set", async () => {
+  const h = makeUsageHarness({ tokens: 100_100, contextWindow: 200_000, percent: 50.1 });
+  load(h.pi);
+  const result = await run(h, "call-1", { force: true });
+  assert.equal(result.details.queued, true);
+  assert.equal(result.details.forced, true);
+  assert.equal(h.compactCalls.length, 1);
+});
+
+test("self_compact proceeds at or above the threshold without force", async () => {
+  const h = makeUsageHarness({ tokens: 160_000, contextWindow: 200_000, percent: 80 });
+  load(h.pi);
+  const result = await run(h, "call-1", {});
+  assert.equal(result.details.queued, true);
+  assert.equal(result.details.forced, false);
+  assert.equal(h.compactCalls.length, 1);
+});
+
+test("self_compact still works when the runtime cannot report usage", async () => {
+  // Blocking on an unmeasurable figure would disable the tool outright on
+  // runtimes without the usage API, which is worse than an early compaction.
+  const h = makeHarness();
+  load(h.pi);
+  const result = await run(h, "call-1", {});
+  assert.equal(result.details.queued, true);
+  assert.equal(result.details.usage.available, false);
+  assert.equal(h.compactCalls.length, 1);
+});
+
+test("self_compact dry run reports usage without compacting", async () => {
+  const h = makeUsageHarness({ tokens: 20_000, contextWindow: 200_000, percent: 10 });
+  load(h.pi);
+  const result = await run(h, "call-1", { dryRun: true });
+  assert.equal(result.details.queued, false);
+  assert.equal(result.details.dryRun, true);
+  assert.equal(result.details.usage.percent, 10);
+  assert.equal(h.compactCalls.length, 0);
+});
+
+test("resolveMinPercent: default, override, disable, and invalid fallback", () => {
+  assert.equal(resolveMinPercent({}), 75);
+  assert.equal(resolveMinPercent({ PI_SELF_COMPACT_MIN_PERCENT: "90" }), 90);
+  // 0 disables the guard entirely.
+  assert.equal(resolveMinPercent({ PI_SELF_COMPACT_MIN_PERCENT: "0" }), 0);
+  // Invalid values fall back to the default rather than silently disabling it.
+  assert.equal(resolveMinPercent({ PI_SELF_COMPACT_MIN_PERCENT: "wat" }), 75);
+  assert.equal(resolveMinPercent({ PI_SELF_COMPACT_MIN_PERCENT: "-5" }), 75);
+  assert.equal(resolveMinPercent({ PI_SELF_COMPACT_MIN_PERCENT: "150" }), 75);
+});
+
+test("shouldRefuseCompaction: only refuses on a known sub-threshold figure", () => {
+  const below = { available: true, percent: 50, tokens: 1, contextWindow: 2, remaining: 1 };
+  const above = { available: true, percent: 80, tokens: 8, contextWindow: 10, remaining: 2 };
+  const unknown = { available: false, percent: null, tokens: null, contextWindow: null, remaining: null };
+  assert.ok(shouldRefuseCompaction(below, 75, false));
+  assert.equal(shouldRefuseCompaction(below, 75, true), null, "force overrides");
+  assert.equal(shouldRefuseCompaction(above, 75, false), null);
+  assert.equal(shouldRefuseCompaction(unknown, 75, false), null, "unknown usage must not block");
+  assert.equal(shouldRefuseCompaction(below, 0, false), null, "0 disables the guard");
 });

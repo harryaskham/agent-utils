@@ -16,13 +16,23 @@
 // self-compaction within a minimum interval), matching the pi-self-compact
 // mixin's "rate-limiting + duplicate/recursive compaction prevention" contract.
 //
+// bd-78ac4f: compaction is also refused below a usage threshold (default 75%)
+// unless `force: true`. Agents cannot see their own context usage, and one
+// session compacted at 50.1% purely on a subjective sense of "this feels
+// long", throwing away half a usable window. Legitimate early-compaction cases
+// exist (deliberately dropping a large one-off payload before a long
+// autonomous run), so the escape hatch stays.
+//
 // Disable with PI_SELF_COMPACT_TOOL=0. Override the minimum interval with
-// PI_SELF_COMPACT_MIN_INTERVAL_MS (milliseconds).
+// PI_SELF_COMPACT_MIN_INTERVAL_MS (milliseconds). Override the usage threshold
+// with PI_SELF_COMPACT_MIN_PERCENT (0 disables the check).
 
 import { ToolSchema } from "./lib/tool-schema.js";
+import { getContextUsage, formatContextUsage } from "./lib/context-usage.js";
 
 const FALSE_RE = /^(0|false|off|no|disabled)$/i;
 const DEFAULT_MIN_INTERVAL_MS = 30_000;
+const DEFAULT_MIN_PERCENT = 75;
 const MAX_INSTRUCTIONS_LEN = 2000;
 
 function envBool(name, fallback = true) {
@@ -37,6 +47,37 @@ function resolveMinIntervalMs(env = process.env) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_MIN_INTERVAL_MS;
   return Math.floor(n);
+}
+
+/**
+ * Usage percentage below which compaction is refused without `force`.
+ *
+ * `0` disables the guard entirely. Invalid values fall back to the default
+ * rather than silently disabling it, so a typo cannot quietly restore the old
+ * compact-at-any-time behaviour.
+ */
+export function resolveMinPercent(env = process.env) {
+  const raw = env.PI_SELF_COMPACT_MIN_PERCENT;
+  if (raw === undefined || raw === "") return DEFAULT_MIN_PERCENT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return DEFAULT_MIN_PERCENT;
+  return n;
+}
+
+/**
+ * Decide whether compaction should be refused as premature.
+ *
+ * Refuses only when usage is genuinely KNOWN to be below the threshold. When
+ * the runtime cannot report usage, compaction proceeds: blocking on an
+ * unmeasurable figure would disable the tool outright on runtimes without the
+ * usage API, which is worse than the occasional early compaction.
+ */
+export function shouldRefuseCompaction(usage, minPercent, force = false) {
+  if (force) return null;
+  if (!minPercent) return null;
+  if (!usage || !usage.available || usage.percent === null) return null;
+  if (usage.percent >= minPercent) return null;
+  return { percent: usage.percent, minPercent };
 }
 
 // Single-line, bounded; strip control chars and any leading slashes so the
@@ -57,6 +98,7 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
   if (typeof pi.registerTool !== "function") return;
 
   const minIntervalMs = resolveMinIntervalMs(process.env);
+  const minPercent = resolveMinPercent(process.env);
   let lastQueuedAt = 0;
 
   // After a real compaction fires, treat that moment as the new reference point
@@ -77,12 +119,19 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
       "Prefer self_compact over a context-driven handoff: compaction preserves the session and avoids spin-up overhead.",
       "Pass instructions to focus the retained summary on the current task/bead when relevant.",
       "A rate limit prevents a second self-compaction within a short interval; do not call it repeatedly in a tight loop.",
+      "Compaction is refused below the usage threshold (default 75%) because it is not free: it discards recent detail and forces re-orientation. Check context_usage first, and pass force only for a deliberate reason such as dropping a large one-off payload before a long autonomous run.",
     ],
     parameters: ToolSchema.object({
       instructions: ToolSchema.optional(
         ToolSchema.string({
           description:
             "Optional instructions to focus the compaction summary (for example, on the current bead/task). Leading slashes are stripped.",
+        }),
+      ),
+      force: ToolSchema.optional(
+        ToolSchema.boolean({
+          description:
+            "Compact even when context usage is below the threshold. Use only for a deliberate reason, such as dropping a large one-off payload before a long autonomous run.",
         }),
       ),
       dryRun: ToolSchema.optional(
@@ -94,11 +143,37 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
     async execute(_toolCallId, params = {}, _signal, _onUpdate, ctx) {
       const command = buildCompactCommand(params.instructions);
       const customInstructions = sanitizeInstructions(params.instructions) || undefined;
+      const usage = getContextUsage(ctx);
 
       if (params.dryRun) {
         return {
-          content: [{ type: "text", text: `Would trigger compaction (\`${command}\`) of this agent's own context.` }],
-          details: { command, queued: false, dryRun: true, minIntervalMs },
+          content: [{ type: "text", text: `Would trigger compaction (\`${command}\`) of this agent's own context. Context: ${formatContextUsage(usage)}.` }],
+          details: { command, queued: false, dryRun: true, minIntervalMs, minPercent, usage },
+        };
+      }
+
+      // Refuse premature compaction before the rate-limit check: "you are only
+      // half full" is the more useful answer than "wait 20s".
+      const premature = shouldRefuseCompaction(usage, minPercent, params.force === true);
+      if (premature) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Refused self-compaction: context is only ${premature.percent.toFixed(
+                1,
+              )}% used, below the ${premature.minPercent}% threshold (${formatContextUsage(
+                usage,
+              )}). Compaction discards recent detail and forces a re-orientation pass, so compacting now would waste the rest of a usable window. Pass force: true if you have a deliberate reason.`,
+            },
+          ],
+          details: {
+            command,
+            queued: false,
+            reason: "below_threshold",
+            minPercent: premature.minPercent,
+            usage,
+          },
         };
       }
 
@@ -142,10 +217,12 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
         content: [
           {
             type: "text",
-            text: `Triggering compaction (\`${command}\`) — this agent will compact its own context, equivalent to a user-issued /compact.`,
+            text: `Triggering compaction (\`${command}\`) — this agent will compact its own context, equivalent to a user-issued /compact. Context: ${formatContextUsage(
+              usage,
+            )}.`,
           },
         ],
-        details: { command, queued: true, minIntervalMs },
+        details: { command, queued: true, minIntervalMs, minPercent, forced: params.force === true, usage },
       };
     },
   });
