@@ -33,7 +33,7 @@ use crate::cache::CacheStore;
 use crate::config::{AlertMode, Config, ThemeName};
 use crate::feed::{Feed, FeedTarget};
 use crate::images::{self, ImageStore};
-use crate::markdown::{extract_urls, preview, render_markdown, render_markdown_with_images};
+use crate::markdown::{extract_urls, preview, render_markdown, render_markdown_for};
 use crate::markdown::{ImageKind, ImagePlacement, IMAGE_PLACEHOLDER};
 use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
 use crate::slack::SlackService;
@@ -2505,7 +2505,7 @@ impl App {
             conversation.name,
             conversation.kind.label()
         );
-        let (rendered, image_placements) = render_markdown_with_images(&markdown);
+        let (rendered, image_placements) = render_markdown_for(&markdown, graphics.is_some());
         let paragraph = Paragraph::new(rendered)
             .block(
                 Block::default()
@@ -2688,7 +2688,7 @@ impl App {
                 (format!("{} · Markdown", file.title), body)
             },
         );
-        let (rendered, image_placements) = render_markdown_with_images(&markdown);
+        let (rendered, image_placements) = render_markdown_for(&markdown, graphics.is_some());
         let paragraph = Paragraph::new(rendered)
             .block(
                 Block::default()

@@ -79,6 +79,17 @@ pub fn render_markdown(source: &str) -> Text<'static> {
 /// simply ignore them and see the textual fallback.
 #[must_use]
 pub fn render_markdown_with_images(source: &str) -> (Text<'static>, Vec<ImagePlacement>) {
+    render_markdown_for(source, false)
+}
+
+/// Render Markdown for a target that can (or cannot) draw the images.
+///
+/// When `graphics` is set the emoji image itself is the symbol, so the literal
+/// shortcode Slack repeats immediately after it is swallowed: the sentence then
+/// reads exactly as it would with a unicode glyph. Without graphics the
+/// shortcode is the only representation and is kept.
+#[must_use]
+pub fn render_markdown_for(source: &str, graphics: bool) -> (Text<'static>, Vec<ImagePlacement>) {
     let parser = Parser::new_ext(
         source,
         Options::ENABLE_TABLES
@@ -97,6 +108,7 @@ pub fn render_markdown_with_images(source: &str) -> (Text<'static>, Vec<ImagePla
     let mut image_kind = None::<ImageKind>;
     let mut images: Vec<ImagePlacement> = Vec::new();
     let mut image_alt = String::new();
+    let mut swallow_shortcode: Option<String> = None;
 
     for event in parser {
         let current = inline.last().copied().unwrap_or_default().style;
@@ -262,6 +274,11 @@ pub fn render_markdown_with_images(source: &str) -> (Text<'static>, Vec<ImagePla
                 if let Some(entry) = images.last_mut() {
                     entry.alt = image_alt.trim().to_string();
                 }
+                swallow_shortcode = if graphics && image_kind == Some(ImageKind::Emoji) {
+                    Some(format!(":{}:", image_alt.trim()))
+                } else {
+                    None
+                };
                 if image_kind.take() == Some(ImageKind::Attachment) {
                     flush(&mut lines, &mut spans);
                 }
@@ -280,6 +297,12 @@ pub fn render_markdown_with_images(source: &str) -> (Text<'static>, Vec<ImagePla
                 image_alt.push_str(&text);
             }
             Event::Text(text) => {
+                let text = match swallow_shortcode.take() {
+                    Some(shortcode) => text
+                        .strip_prefix(shortcode.as_str())
+                        .map_or(text.clone(), |rest| rest.to_string().into()),
+                    None => text,
+                };
                 let style = if in_code_block {
                     Style::default().fg(GREEN).bg(Color::Rgb(0x16, 0x17, 0x20))
                 } else {
@@ -456,6 +479,37 @@ mod tests {
         assert!(text.contains("rust"));
         assert!(text.contains("fn main() {}"));
         assert!(text.contains("site ↗https://example.com"));
+    }
+
+    #[test]
+    fn graphics_mode_swallows_the_duplicate_shortcode_after_an_emoji() {
+        let source = "![calendar](https://slack-imgs.com/?url=production-standard-emoji-assets%2F1f4c6.png):calendar: Daily notes";
+        let flatten = |text: Text<'static>| {
+            text.lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let with_graphics = flatten(render_markdown_for(source, true).0);
+        assert!(
+            !with_graphics.contains(":calendar:"),
+            "the drawn image is the symbol; the shortcode would duplicate it: {with_graphics:?}"
+        );
+        assert!(with_graphics.contains("Daily notes"));
+        assert_eq!(with_graphics.matches(IMAGE_PLACEHOLDER).count(), 1);
+
+        let text_only = flatten(render_markdown_for(source, false).0);
+        assert!(
+            text_only.contains(":calendar:"),
+            "without graphics the shortcode is the only representation: {text_only:?}"
+        );
     }
 
     #[test]
