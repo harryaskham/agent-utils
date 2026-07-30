@@ -36,7 +36,11 @@ Slick mirrors Slack's navigation shape:
 - Conversations read oldest → newest and open pinned to the newest message, like a chat client.
 - Messages carrying replies can be opened as **threads** (`conversations.replies`); threads stack and `q` pops one level at a time.
 - Permalinks render as an `open ↗` OSC 8 hyperlink rather than raw URLs, and URLs inside Markdown bodies become clickable in place.
-- Slack proxies emoji through `slack-imgs.com`, which previously rendered one symbol three times (glyph, alt text and a doubly percent-encoded URL). Slick classifies images: emoji keep only their shortcode and never disturb the line, while attachments keep a `🖼` marker on their own block. Unknown sources default to attachment, since an over-large image is obvious while a shrunken attachment is lost.
+- Slack proxies emoji through `slack-imgs.com`, which previously rendered one symbol three times (glyph, alt text and a doubly percent-encoded URL). Slick classifies images and drops the URL entirely. Unknown sources default to attachment, since an over-large image is obvious while a shrunken attachment is lost.
+- With Kitty graphics available, images are fetched once into `$SLICK_CACHE_DIR/images` and drawn in place, as **two distinct treatments**:
+  - **Emoji are punctuation.** They reserve exactly the two cells a unicode glyph occupies and are placed at `z=1` with `C=1`, so the cursor never advances and the surrounding sentence reads exactly as it would with a glyph in that position.
+  - **Attachments are content.** They take an aspect-scaled block of their own, deliberately breaking flow rather than shrinking to fit a line.
+  Without graphics, the same text renders with the placeholder and marker only, so nothing is lost.
 - Opening a conversation lazy-loads its compact content.
 - **Files** presents recent files in the middle pane and renders selected Slack
   Canvas content as rich Markdown on the right.

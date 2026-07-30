@@ -48,8 +48,37 @@ fn flush(lines: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>) {
     }
 }
 
+/// Cell placeholder that reserves space for an inline image.
+///
+/// A unicode emoji occupies two cells, so an emoji placement reserves exactly
+/// two: the object-replacement character plus one padding cell. The renderer
+/// then draws the image over those cells, leaving the surrounding sentence
+/// byte-for-byte identical to the glyph case.
+pub const IMAGE_PLACEHOLDER: char = '\u{fffc}';
+
+/// One image referenced by rendered Markdown, in document order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImagePlacement {
+    /// Emoji (punctuation) or attachment (content).
+    pub kind: ImageKind,
+    /// Source URL to fetch.
+    pub url: String,
+    /// Alt text, used as the accessible fallback label.
+    pub alt: String,
+}
+
 #[must_use]
 pub fn render_markdown(source: &str) -> Text<'static> {
+    render_markdown_with_images(source).0
+}
+
+/// Render Markdown and report the images it references, in document order.
+///
+/// Callers that can draw terminal graphics pair the returned placements with
+/// the [`IMAGE_PLACEHOLDER`] cells in the rendered buffer; callers that cannot
+/// simply ignore them and see the textual fallback.
+#[must_use]
+pub fn render_markdown_with_images(source: &str) -> (Text<'static>, Vec<ImagePlacement>) {
     let parser = Parser::new_ext(
         source,
         Options::ENABLE_TABLES
@@ -66,6 +95,8 @@ pub fn render_markdown(source: &str) -> Text<'static> {
     let mut in_code_block = false;
     let mut link_target = None::<String>;
     let mut image_kind = None::<ImageKind>;
+    let mut images: Vec<ImagePlacement> = Vec::new();
+    let mut image_alt = String::new();
 
     for event in parser {
         let current = inline.last().copied().unwrap_or_default().style;
@@ -196,10 +227,31 @@ pub fn render_markdown(source: &str) -> Text<'static> {
                 }
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                image_kind = Some(classify_image(&dest_url));
-                if image_kind == Some(ImageKind::Attachment) {
-                    flush(&mut lines, &mut spans);
-                    push_text(&mut spans, "🖼 ", Style::default().fg(YELLOW));
+                let kind = classify_image(&dest_url);
+                image_kind = Some(kind);
+                image_alt.clear();
+                images.push(ImagePlacement {
+                    kind,
+                    url: dest_url.to_string(),
+                    alt: String::new(),
+                });
+                match kind {
+                    // Reserve exactly the two cells a unicode emoji occupies so
+                    // a graphics-capable renderer can draw over them without
+                    // moving a single surrounding character.
+                    ImageKind::Emoji => push_text(
+                        &mut spans,
+                        format!("{IMAGE_PLACEHOLDER} "),
+                        Style::default().fg(FG),
+                    ),
+                    ImageKind::Attachment => {
+                        flush(&mut lines, &mut spans);
+                        push_text(
+                            &mut spans,
+                            format!("{IMAGE_PLACEHOLDER}🖼 "),
+                            Style::default().fg(YELLOW),
+                        );
+                    }
                 }
             }
             Event::End(TagEnd::Image) => {
@@ -207,6 +259,9 @@ pub fn render_markdown(source: &str) -> Text<'static> {
                 // the same symbol as glyph, alt text and a doubly encoded URL.
                 // The URL is never actionable, so it is dropped for both kinds;
                 // attachments keep their own line because they are content.
+                if let Some(entry) = images.last_mut() {
+                    entry.alt = image_alt.trim().to_string();
+                }
                 if image_kind.take() == Some(ImageKind::Attachment) {
                     flush(&mut lines, &mut spans);
                 }
@@ -217,6 +272,12 @@ pub fn render_markdown(source: &str) -> Text<'static> {
             }
             Event::End(TagEnd::TableCell) => {
                 push_text(&mut spans, " │ ", Style::default().fg(MUTED));
+            }
+            Event::Text(text) if image_kind.is_some() => {
+                // Alt text belongs to the image record, not the line: for Slack
+                // emoji the shortcode that follows in the source already
+                // carries the symbol, and duplicating it would widen the line.
+                image_alt.push_str(&text);
             }
             Event::Text(text) => {
                 let style = if in_code_block {
@@ -261,7 +322,7 @@ pub fn render_markdown(source: &str) -> Text<'static> {
     while lines.last().is_some_and(|line| line.spans.is_empty()) {
         let _ = lines.pop();
     }
-    Text::from(lines)
+    (Text::from(lines), images)
 }
 
 /// How an image in Slack content should be treated.
@@ -395,6 +456,82 @@ mod tests {
         assert!(text.contains("rust"));
         assert!(text.contains("fn main() {}"));
         assert!(text.contains("site ↗https://example.com"));
+    }
+
+    #[test]
+    fn emoji_reserve_exactly_two_cells_and_preserve_the_sentence() {
+        let source = "one ![calendar](https://slack-imgs.com/?url=production-standard-emoji-assets%2F1f4c6.png):calendar: two";
+        let (text, images) = render_markdown_with_images(source);
+        let rendered: String = text
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].kind, ImageKind::Emoji);
+        assert_eq!(images[0].alt, "calendar");
+        assert!(images[0].url.contains("slack-imgs.com"));
+
+        let placeholders = rendered.matches(IMAGE_PLACEHOLDER).count();
+        assert_eq!(placeholders, 1, "one reservation per emoji: {rendered:?}");
+        let reserved: String = rendered
+            .chars()
+            .skip_while(|c| *c != IMAGE_PLACEHOLDER)
+            .take(2)
+            .collect();
+        assert_eq!(
+            reserved.chars().count(),
+            2,
+            "an emoji occupies the two cells a unicode glyph would: {reserved:?}"
+        );
+        assert!(
+            rendered.contains("one "),
+            "text before survives: {rendered:?}"
+        );
+        assert!(
+            rendered.contains(" two"),
+            "text after survives: {rendered:?}"
+        );
+        assert!(!rendered.contains("slack-imgs.com"));
+    }
+
+    #[test]
+    fn attachments_report_a_placement_and_keep_their_own_block() {
+        let (text, images) = render_markdown_with_images(
+            "before\n\n![diagram](https://files.slack.com/f/d.png)\n\nafter",
+        );
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].kind, ImageKind::Attachment);
+        assert_eq!(images[0].alt, "diagram");
+        let lines: Vec<String> = text
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(IMAGE_PLACEHOLDER) && !line.contains("before")),
+            "attachment occupies its own line: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn documents_without_images_report_no_placements() {
+        let (_, images) = render_markdown_with_images("plain **text** only");
+        assert!(images.is_empty());
     }
 
     #[test]

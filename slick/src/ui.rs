@@ -32,7 +32,9 @@ use kittui_kitty::PlacementOptions;
 use crate::cache::CacheStore;
 use crate::config::{AlertMode, Config, ThemeName};
 use crate::feed::{Feed, FeedTarget};
-use crate::markdown::{extract_urls, preview, render_markdown};
+use crate::images::{self, ImageStore};
+use crate::markdown::{extract_urls, preview, render_markdown, render_markdown_with_images};
+use crate::markdown::{ImageKind, ImagePlacement, IMAGE_PLACEHOLDER};
 use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
 use crate::slack::SlackService;
 use std::path::PathBuf;
@@ -266,6 +268,20 @@ enum Divider {
     Detail,
 }
 
+/// One image to draw over reserved placeholder cells.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImageRun {
+    /// Column of the first reserved cell.
+    x: u16,
+    /// Row of the reserved cell.
+    y: u16,
+    /// Cell footprint: 1x2 for emoji, aspect-scaled block for attachments.
+    cols: u16,
+    rows: u16,
+    /// Source URL, used as the placement identity.
+    url: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinkRun {
     x: u16,
@@ -428,6 +444,7 @@ struct Graphics {
     runtime: Runtime,
     tracker: LifecycleTracker,
     placed: HashMap<String, (u32, CellRect)>,
+    placed_images: HashMap<String, CellRect>,
 }
 
 impl Graphics {
@@ -441,6 +458,7 @@ impl Graphics {
             runtime,
             tracker: LifecycleTracker::new(),
             placed: HashMap::new(),
+            placed_images: HashMap::new(),
         })
     }
 }
@@ -470,6 +488,10 @@ pub struct App {
     viewport_width: u16,
     config: Config,
     config_path: PathBuf,
+    images: ImageStore,
+    image_runs: Vec<ImageRun>,
+    image_client: Option<reqwest::blocking::Client>,
+    cell_size: (u16, u16),
     feed: Feed,
     selected_feed: usize,
     feed_offset: usize,
@@ -538,6 +560,10 @@ impl App {
             viewport_width: 120,
             config: Config::default(),
             config_path: Config::default_path(),
+            images: ImageStore::new(images::default_root(&CacheStore::default_path())),
+            image_runs: Vec::new(),
+            image_client: None,
+            cell_size: (8, 16),
             feed: Feed::default(),
             selected_feed: 0,
             feed_offset: 0,
@@ -1700,6 +1726,86 @@ impl App {
         }
     }
 
+    /// Fetch any images referenced by the pane and pair them with the reserved
+    /// placeholder cells, in document order.
+    ///
+    /// Order is stable across wrapping, so pairing by sequence is safe: the nth
+    /// placeholder in the buffer is the nth image in the source.
+    fn collect_image_runs(
+        &mut self,
+        buffer: &Buffer,
+        area: Rect,
+        placements: &[ImagePlacement],
+        cell_width_px: u16,
+        cell_height_px: u16,
+    ) {
+        if placements.is_empty() || area.width == 0 || area.height == 0 {
+            return;
+        }
+        let mut found: Vec<(u16, u16)> = Vec::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if buffer[(x, y)].symbol().starts_with(IMAGE_PLACEHOLDER) {
+                    found.push((x, y));
+                }
+            }
+        }
+        let content_cols = area.width.saturating_sub(2).max(1);
+        for ((x, y), placement) in found.into_iter().zip(placements.iter()) {
+            let Some(image) = self.image_for(placement) else {
+                continue;
+            };
+            let (cols, rows) = match placement.kind {
+                // Emoji are punctuation: exactly the two cells a unicode glyph
+                // would occupy, one row, never reflowing the sentence.
+                ImageKind::Emoji => (2, 1),
+                ImageKind::Attachment => {
+                    image.block_cells(cell_width_px, cell_height_px, content_cols)
+                }
+            };
+            self.image_runs.push(ImageRun {
+                x,
+                y,
+                cols,
+                rows: rows.min(area.bottom().saturating_sub(y)).max(1),
+                url: placement.url.clone(),
+            });
+        }
+    }
+
+    /// Cached image for a placement, fetching it once if necessary.
+    fn image_for(&mut self, placement: &ImagePlacement) -> Option<crate::images::CachedImage> {
+        if let Some(hit) = self.images.get(&placement.url) {
+            return Some(hit);
+        }
+        if self.images.failed(&placement.url) {
+            return None;
+        }
+        let client = self
+            .image_client
+            .get_or_insert_with(reqwest::blocking::Client::new);
+        let response = client
+            .get(&placement.url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .and_then(reqwest::blocking::Response::bytes);
+        match response {
+            Ok(bytes) => match self.images.insert(&placement.url, bytes.to_vec()) {
+                Ok(entry) => Some(entry),
+                Err(error) => {
+                    self.images
+                        .record_failure(&placement.url, error.to_string());
+                    None
+                }
+            },
+            Err(error) => {
+                self.images
+                    .record_failure(&placement.url, error.to_string());
+                None
+            }
+        }
+    }
+
     fn pointer_in_sidebar(&self, column: u16) -> bool {
         self.sidebar_visible && !self.fullscreen_content && column < self.sidebar_width
     }
@@ -1707,6 +1813,7 @@ impl App {
     fn render(&mut self, frame: &mut Frame<'_>, graphics: Option<(&Runtime, &EffectsSink)>) {
         self.hits.clear();
         self.link_runs.clear();
+        self.image_runs.clear();
         self.viewport_width = frame.area().width;
         let area = frame.area();
         let vertical = Layout::default()
@@ -2398,7 +2505,8 @@ impl App {
             conversation.name,
             conversation.kind.label()
         );
-        let paragraph = Paragraph::new(render_markdown(&markdown))
+        let (rendered, image_placements) = render_markdown_with_images(&markdown);
+        let paragraph = Paragraph::new(rendered)
             .block(
                 Block::default()
                     .borders(if graphics.is_some() {
@@ -2422,6 +2530,8 @@ impl App {
             collect_url_runs(frame.buffer_mut(), area, &markdown, &mut self.link_runs);
             self.collect_message_links(frame.buffer_mut(), area, &starts);
         }
+        let (cell_w, cell_h) = self.cell_size;
+        self.collect_image_runs(frame.buffer_mut(), area, &image_placements, cell_w, cell_h);
     }
 
     fn collect_message_links(&mut self, buffer: &Buffer, area: Rect, starts: &[usize]) {
@@ -2578,7 +2688,8 @@ impl App {
                 (format!("{} · Markdown", file.title), body)
             },
         );
-        let paragraph = Paragraph::new(render_markdown(&markdown))
+        let (rendered, image_placements) = render_markdown_with_images(&markdown);
+        let paragraph = Paragraph::new(rendered)
             .block(
                 Block::default()
                     .borders(if graphics.is_some() {
@@ -2601,6 +2712,8 @@ impl App {
         if self.osc8_links {
             collect_url_runs(frame.buffer_mut(), area, &markdown, &mut self.link_runs);
         }
+        let (cell_w, cell_h) = self.cell_size;
+        self.collect_image_runs(frame.buffer_mut(), area, &image_placements, cell_w, cell_h);
     }
 
     fn render_footer(
@@ -3011,6 +3124,43 @@ fn write_link_runs<W: Write>(writer: &mut W, runs: &[LinkRun]) -> io::Result<()>
     writer.flush()
 }
 
+/// Draw inline images over their reserved placeholder cells.
+///
+/// Emoji are placed at z above the text so the reserved blanks are covered,
+/// with `C=1` (guaranteed by the placement builder) so the terminal cursor
+/// never advances and the line cannot reflow. Placement ids are derived from
+/// the image and its cell position, so a redraw replaces rather than stacks.
+fn place_image_runs(graphics: &mut Graphics, runs: &[ImageRun], store: &mut ImageStore) -> String {
+    let mut out = String::new();
+    for run in runs {
+        let Some(image) = store.get(&run.url) else {
+            continue;
+        };
+        let key = format!("img:{}:{}:{}", run.url, run.x, run.y);
+        let image_id = images::stable_hash(&key);
+        let image_id = u32::from_str_radix(&image_id[..8], 16).unwrap_or(1) | 1;
+        let footprint = CellRect::new(run.x, run.y, run.cols, run.rows);
+        if graphics
+            .placed_images
+            .get(&key)
+            .is_some_and(|placed| *placed == footprint)
+        {
+            continue;
+        }
+        let options = PlacementOptions::absolute_with_id(image_id).with_z_index(1);
+        let placement = graphics.runtime.place_png_frame_with_options(
+            image_id,
+            image.bytes.as_slice(),
+            footprint,
+            &options,
+        );
+        out.push_str(&placement.upload);
+        out.push_str(&placement.placement);
+        graphics.placed_images.insert(key, footprint);
+    }
+    out
+}
+
 fn finalize_graphics_frame(graphics: &mut Graphics, sink: &EffectsSink) -> DrawFlush {
     let mut flush = DrawFlush::default();
     let mut current = HashMap::new();
@@ -3328,7 +3478,9 @@ fn run_loop(
                 graphics.tracker.begin_frame();
                 let sink = EffectsSink::new();
                 terminal.draw(|frame| app.render(frame, Some((&graphics.runtime, &sink))))?;
-                let flush = finalize_graphics_frame(graphics, &sink);
+                let mut flush = finalize_graphics_frame(graphics, &sink);
+                let inline = place_image_runs(graphics, &app.image_runs, &mut app.images);
+                flush.placement.push_str(&inline);
                 write_graphics_flush(terminal.backend_mut(), &flush)?;
             } else {
                 terminal.draw(|frame| app.render(frame, None))?;
@@ -3756,6 +3908,65 @@ mod tests {
         let messages = app.visible_messages();
         assert_eq!(app.selected_message, messages.len() - 1);
         assert_eq!(app.content_scroll, app.max_content_scroll());
+    }
+
+    #[test]
+    fn emoji_runs_reserve_one_row_and_two_cells_at_the_placeholder() {
+        let mut app = App::demo(crate::slack::demo_state());
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buffer = Buffer::empty(area);
+        buffer[(5, 1)].set_symbol(&IMAGE_PLACEHOLDER.to_string());
+        let placements = vec![ImagePlacement {
+            kind: ImageKind::Emoji,
+            url: "https://slack-imgs.com/emoji.png".to_string(),
+            alt: "calendar".to_string(),
+        }];
+        // Seed the cache so the run does not depend on the network.
+        app.images
+            .insert(&placements[0].url, png_fixture(64, 64))
+            .unwrap();
+
+        app.collect_image_runs(&buffer, area, &placements, 8, 16);
+        assert_eq!(app.image_runs.len(), 1);
+        let run = &app.image_runs[0];
+        assert_eq!((run.x, run.y), (5, 1), "the run sits on the placeholder");
+        assert_eq!(
+            (run.cols, run.rows),
+            (2, 1),
+            "emoji occupy exactly the cells a unicode glyph would"
+        );
+    }
+
+    #[test]
+    fn attachment_runs_take_a_block_scaled_to_the_pane() {
+        let mut app = App::demo(crate::slack::demo_state());
+        let area = Rect::new(0, 0, 40, 20);
+        let mut buffer = Buffer::empty(area);
+        buffer[(1, 2)].set_symbol(&IMAGE_PLACEHOLDER.to_string());
+        let placements = vec![ImagePlacement {
+            kind: ImageKind::Attachment,
+            url: "https://files.slack.com/diagram.png".to_string(),
+            alt: "diagram".to_string(),
+        }];
+        app.images
+            .insert(&placements[0].url, png_fixture(160, 80))
+            .unwrap();
+
+        app.collect_image_runs(&buffer, area, &placements, 8, 16);
+        assert_eq!(app.image_runs.len(), 1);
+        let run = &app.image_runs[0];
+        assert!(run.cols > 2, "attachments are not emoji-sized: {run:?}");
+        assert!(run.rows > 1, "attachments take vertical space: {run:?}");
+    }
+
+    fn png_fixture(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+        bytes
     }
 
     #[test]
