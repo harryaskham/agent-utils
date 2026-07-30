@@ -63,6 +63,7 @@ pub struct ImageStore {
     root: PathBuf,
     memory: HashMap<String, CachedImage>,
     failed: HashMap<String, String>,
+    write_errors: Vec<String>,
 }
 
 impl ImageStore {
@@ -73,6 +74,7 @@ impl ImageStore {
             root,
             memory: HashMap::new(),
             failed: HashMap::new(),
+            write_errors: Vec::new(),
         }
     }
 
@@ -99,7 +101,12 @@ impl ImageStore {
         self.failed.insert(url.to_string(), reason);
     }
 
-    /// Insert freshly fetched bytes, writing through to disk.
+    /// Insert freshly fetched bytes, writing through to disk best-effort.
+    ///
+    /// The disk copy is an optimisation, not the cache itself: a read-only or
+    /// sandboxed `HOME` (the Nix build sandbox points it at an unwritable
+    /// `/homeless-shelter`) must degrade to memory-only rather than failing the
+    /// caller. Only genuinely invalid payloads are errors.
     pub fn insert(&mut self, url: &str, bytes: Vec<u8>) -> Result<CachedImage> {
         if bytes.is_empty() {
             bail!("empty image body");
@@ -107,16 +114,29 @@ impl ImageStore {
         if bytes.len() > MAX_IMAGE_BYTES {
             bail!("image exceeds {MAX_IMAGE_BYTES} byte cache limit");
         }
+        if let Err(error) = self.write_through(url, &bytes) {
+            self.write_errors.push(error.to_string());
+        }
+        let entry = Self::decode(bytes);
+        self.memory.insert(url.to_string(), entry.clone());
+        Ok(entry)
+    }
+
+    /// Persist bytes to the on-disk cache.
+    fn write_through(&self, url: &str, bytes: &[u8]) -> Result<()> {
         let path = self.path_for(url);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create image cache dir {}", parent.display()))?;
         }
-        std::fs::write(&path, &bytes)
-            .with_context(|| format!("write image cache {}", path.display()))?;
-        let entry = Self::decode(bytes);
-        self.memory.insert(url.to_string(), entry.clone());
-        Ok(entry)
+        std::fs::write(&path, bytes)
+            .with_context(|| format!("write image cache {}", path.display()))
+    }
+
+    /// Disk write-through failures observed so far, for status reporting.
+    #[must_use]
+    pub fn write_errors(&self) -> &[String] {
+        &self.write_errors
     }
 
     /// Cache path for a URL: a stable hash keeps proxied query strings, which
@@ -269,6 +289,24 @@ mod tests {
         assert_eq!((hit.width, hit.height), (64, 64));
 
         assert!(fresh.insert(url, vec![0u8; MAX_IMAGE_BYTES + 1]).is_err());
+        assert!(fresh.insert(url, Vec::new()).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unwritable_cache_directory_degrades_to_memory_only() {
+        // The Nix build sandbox sets HOME to an unwritable /homeless-shelter,
+        // so a cache that treats disk write-through as fatal breaks the build.
+        let mut store = ImageStore::new(PathBuf::from("/homeless-shelter/.cache/slick/images"));
+        let url = "https://slack-imgs.com/?url=emoji";
+        let entry = store
+            .insert(url, png_header(64, 64))
+            .expect("an unwritable cache is still a working cache");
+        assert_eq!((entry.width, entry.height), (64, 64));
+        assert!(store.get(url).is_some(), "the entry is served from memory");
+        assert!(
+            !store.write_errors().is_empty(),
+            "the failure is recorded rather than silent"
+        );
     }
 }

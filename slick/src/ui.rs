@@ -3913,6 +3913,7 @@ mod tests {
     #[test]
     fn emoji_runs_reserve_one_row_and_two_cells_at_the_placeholder() {
         let mut app = App::demo(crate::slack::demo_state());
+        app.images = ImageStore::new(test_cache_dir("emoji-runs"));
         let area = Rect::new(0, 0, 40, 4);
         let mut buffer = Buffer::empty(area);
         buffer[(5, 1)].set_symbol(&IMAGE_PLACEHOLDER.to_string());
@@ -3940,6 +3941,7 @@ mod tests {
     #[test]
     fn attachment_runs_take_a_block_scaled_to_the_pane() {
         let mut app = App::demo(crate::slack::demo_state());
+        app.images = ImageStore::new(test_cache_dir("attachment-runs"));
         let area = Rect::new(0, 0, 40, 20);
         let mut buffer = Buffer::empty(area);
         buffer[(1, 2)].set_symbol(&IMAGE_PLACEHOLDER.to_string());
@@ -3957,6 +3959,12 @@ mod tests {
         let run = &app.image_runs[0];
         assert!(run.cols > 2, "attachments are not emoji-sized: {run:?}");
         assert!(run.rows > 1, "attachments take vertical space: {run:?}");
+    }
+
+    /// Per-test cache root: tests must never write to the user's real cache,
+    /// and the Nix sandbox makes `$HOME` unwritable by design.
+    fn test_cache_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("slick-test-{label}-{}", std::process::id()))
     }
 
     fn png_fixture(width: u32, height: u32) -> Vec<u8> {
