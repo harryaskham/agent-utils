@@ -7,6 +7,9 @@ import mCommandExtension, {
   listAvailableModels,
   modelLabel,
   resolveModelReference,
+  extractSelfModelReferences,
+  referenceAllowsModel,
+  buildSelfModelPolicy,
 } from "../extensions/m.js";
 
 const MODELS = [
@@ -32,28 +35,42 @@ function makeRegistry(models = MODELS, { scoped = [] } = {}) {
   };
 }
 
-function makeHarness({ models = MODELS, setModelResult = true, withRegistry = true } = {}) {
+function makeHarness({
+  models = MODELS,
+  setModelResult = true,
+  withRegistry = true,
+  currentModel = MODELS[0],
+  settings = {},
+} = {}) {
   const notifications = [];
   const commands = new Map();
   const tools = new Map();
   const events = new Map();
   const ctx = {
     modelRegistry: makeRegistry(models),
+    model: currentModel,
+    cwd: "/work/project",
     ui: { notify(message, level) { notifications.push({ message, level }); } },
   };
-  let currentModel;
+  let activeModel = currentModel;
   const pi = {
     on(event, handler) { events.set(event, handler); },
     registerCommand(name, definition) { commands.set(name, definition); },
     registerTool(definition) { tools.set(definition.name, definition); },
-    async setModel(model) { if (setModelResult) currentModel = model; return setModelResult; },
+    async setModel(model) {
+      if (setModelResult) {
+        activeModel = model;
+        ctx.model = model;
+      }
+      return setModelResult;
+    },
   };
-  mCommandExtension(pi);
+  mCommandExtension(pi, { settings });
   // Simulate session_start so completion registry is captured.
   if (withRegistry) events.get("session_start")?.({}, ctx);
   return {
     pi, ctx, commands, tools, notifications, events,
-    get currentModel() { return currentModel; },
+    get currentModel() { return activeModel; },
     get last() { return notifications.at(-1); },
   };
 }
@@ -146,6 +163,48 @@ test("/m reports a failed switch", async () => {
   assert.match(h.last.message, /Failed to switch model/);
 });
 
+test("extractSelfModelReferences accepts top-level and namespaced settings and fails closed", () => {
+  assert.deepEqual(
+    extractSelfModelReferences({ selfModelSelection: { models: ["gpt-5.6-sol", " gpt-5.6-sol ", ""] } }),
+    ["gpt-5.6-sol"],
+  );
+  assert.deepEqual(
+    extractSelfModelReferences({ agentUtils: { selfModelSelection: { models: ["openai/gpt-5.5"] } } }),
+    ["openai/gpt-5.5"],
+  );
+  assert.equal(extractSelfModelReferences({}), undefined);
+  assert.deepEqual(extractSelfModelReferences({ selfModelSelection: { models: "not-an-array" } }), []);
+});
+
+test("bare whitelist ids permit matching ids while canonical references pin providers", () => {
+  assert.equal(referenceAllowsModel("gpt-5.5", MODELS[2]), true);
+  assert.equal(referenceAllowsModel("gpt-5.5", MODELS[3]), true);
+  assert.equal(referenceAllowsModel("github-copilot/gpt-5.5", MODELS[2]), true);
+  assert.equal(referenceAllowsModel("github-copilot/gpt-5.5", MODELS[3]), false);
+});
+
+test("project self-model settings can narrow but cannot broaden a global whitelist", () => {
+  const policy = buildSelfModelPolicy(MODELS, [
+    { source: "global", settings: { selfModelSelection: { models: ["gpt-5.5"] } } },
+    { source: "project", settings: { selfModelSelection: { models: ["github-copilot/gpt-5.5", "gemini-3.5-flash"] } } },
+  ]);
+  assert.equal(policy.configured, true);
+  assert.deepEqual(policy.models.map(modelLabel), ["github-copilot/gpt-5.5"]);
+});
+
+test("empty or unresolved configured whitelist denies every self-switch", () => {
+  const empty = buildSelfModelPolicy(MODELS, [
+    { source: "global", settings: { selfModelSelection: { models: [] } } },
+  ]);
+  assert.deepEqual(empty.models, []);
+
+  const unresolved = buildSelfModelPolicy(MODELS, [
+    { source: "global", settings: { selfModelSelection: { models: ["does-not-exist"] } } },
+  ]);
+  assert.deepEqual(unresolved.models, []);
+  assert.deepEqual(unresolved.unresolved, [{ source: "global", reference: "does-not-exist" }]);
+});
+
 test("self_set_model tool switches models and warns it is operator-instructed only", async () => {
   const h = makeHarness();
   const tool = h.tools.get("self_set_model");
@@ -166,6 +225,89 @@ test("self_set_model tool returns model resolution errors", async () => {
   assert.equal(result.details.ok, false);
   assert.equal(result.details.code, "model_not_found");
   assert.match(result.content[0].text, /No model matches/);
+});
+
+test("self_set_model enforces selfModelSelection.models and leaves model unchanged when denied", async () => {
+  const h = makeHarness({
+    settings: { selfModelSelection: { models: ["gemini-3.5-flash"] } },
+  });
+  const tool = h.tools.get("self_set_model");
+
+  const denied = await tool.execute(
+    "tool-denied",
+    { model: "github-copilot/gpt-5.5" },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  assert.equal(denied.details.ok, false);
+  assert.equal(denied.details.code, "model_not_allowed");
+  assert.equal(h.currentModel, MODELS[0], "denied switch must not change the active model");
+  assert.match(denied.content[0].text, /does not allow github-copilot\/gpt-5.5/);
+
+  const allowed = await tool.execute(
+    "tool-allowed",
+    { model: "github-copilot/gemini-3.5-flash" },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  assert.equal(allowed.details.ok, true);
+  assert.equal(h.currentModel, MODELS[4]);
+});
+
+test("operator-facing /m remains unrestricted by selfModelSelection policy", async () => {
+  const h = makeHarness({
+    settings: { selfModelSelection: { models: ["gemini-3.5-flash"] } },
+  });
+  await h.commands.get("m").handler("openai/gpt-5.5", h.ctx);
+  assert.equal(h.currentModel, MODELS[3]);
+});
+
+test("self_get_model reports an active model outside the whitelist without changing it", async () => {
+  const h = makeHarness({
+    currentModel: MODELS[0],
+    settings: { selfModelSelection: { models: ["gemini-3.5-flash"] } },
+  });
+  const result = await h.tools.get("self_get_model").execute(
+    "tool-get",
+    {},
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  assert.equal(result.details.currentModel, "anthropic/claude-opus-4-7");
+  assert.equal(result.details.selectable, false);
+  assert.match(result.content[0].text, /self-selectable: no/);
+  assert.equal(h.currentModel, MODELS[0]);
+});
+
+test("self_list_models returns only concrete models permitted by the whitelist", async () => {
+  const h = makeHarness({
+    settings: { selfModelSelection: { models: ["gpt-5.5"] } },
+  });
+  const result = await h.tools.get("self_list_models").execute(
+    "tool-list",
+    {},
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  assert.deepEqual(result.details.models, [
+    "github-copilot/gpt-5.5",
+    "openai/gpt-5.5",
+  ]);
+  assert.match(result.content[0].text, /Self-selectable models \(2\)/);
+});
+
+test("self model inspection tools are registered with strict empty parameter objects", () => {
+  const h = makeHarness();
+  for (const name of ["self_get_model", "self_list_models"]) {
+    const tool = h.tools.get(name);
+    assert.ok(tool, `${name} is registered`);
+    assert.deepEqual(tool.parameters.required, undefined);
+    assert.equal(tool.parameters.additionalProperties, false);
+  }
 });
 
 test("/m argument completions use the captured full registry", () => {

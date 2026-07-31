@@ -10,11 +10,137 @@
 // switches immediately, with tab-completion over every available
 // provider/model string. It deliberately does not touch `/model` or
 // `/scoped-models`; scoped-models keeps governing Ctrl+P cycling only.
+//
+// Agent-callable model switching is a separate authority surface. The
+// `selfModelSelection.models` settings list constrains self_set_model and is
+// reported by self_list_models. It does not constrain operator-facing `/m`,
+// built-in `/model`, startup/session restore, or self_get_model.
+
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const M_USAGE = "Usage: /m <provider/model> — switch to any model (tab-completes the full list).";
 
 // Default cap on completion items so very large registries stay responsive.
 export const M_COMPLETION_LIMIT = 50;
+
+/** Expand `~` in the small set of settings paths this extension owns. */
+function expandHome(path) {
+  const text = String(path ?? "");
+  if (text === "~") return homedir();
+  if (text.startsWith("~/")) return join(homedir(), text.slice(2));
+  return text;
+}
+
+function readJson(path) {
+  try {
+    if (!existsSync(path)) return undefined;
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    // Distinguish an absent file (undefined) from one that exists but cannot be
+    // trusted (null). The latter becomes a deny-all layer below.
+    return null;
+  }
+}
+
+/**
+ * Extract `selfModelSelection.models` from one settings object.
+ *
+ * Returns undefined when the slice is absent (legacy unrestricted behavior),
+ * and an array otherwise. A present but malformed value becomes an empty
+ * array, deliberately denying self-switches instead of broadening authority.
+ * The agentUtils namespace is accepted as a compatibility alias, while the
+ * operator-requested top-level key takes precedence.
+ */
+export function extractSelfModelReferences(settings) {
+  if (!settings || typeof settings !== "object") return undefined;
+  const direct = settings.selfModelSelection;
+  const namespaced = settings.agentUtils?.selfModelSelection;
+  const slice = direct && typeof direct === "object" ? direct : namespaced;
+  if (!slice || typeof slice !== "object" || !("models" in slice)) return undefined;
+  if (!Array.isArray(slice.models)) return [];
+  return [...new Set(slice.models.map((value) => String(value ?? "").trim()).filter(Boolean))];
+}
+
+/** Does one configured reference permit a concrete model? */
+export function referenceAllowsModel(reference, model) {
+  const configured = String(reference ?? "").trim().toLowerCase();
+  if (!configured) return false;
+  if (configured.includes("/")) return modelLabel(model).toLowerCase() === configured;
+  return String(model?.id ?? "").trim().toLowerCase() === configured;
+}
+
+/**
+ * Build the self-selection policy over concrete registry models.
+ *
+ * Every configured layer is a ceiling: project settings may narrow a global
+ * whitelist but cannot broaden it. Bare ids (e.g. `gpt-5.6-sol`) permit that
+ * id on any provider; use canonical `provider/id` to pin a provider.
+ */
+export function buildSelfModelPolicy(models, layers = []) {
+  const allModels = Array.isArray(models) ? models : [];
+  const configuredLayers = [];
+  for (const layer of Array.isArray(layers) ? layers : []) {
+    const references = extractSelfModelReferences(layer?.settings);
+    if (references !== undefined) {
+      configuredLayers.push({ source: String(layer?.source ?? "settings"), references });
+    }
+  }
+
+  const configured = configuredLayers.length > 0;
+  const selectable = configured
+    ? allModels.filter((model) =>
+        configuredLayers.every((layer) =>
+          layer.references.some((reference) => referenceAllowsModel(reference, model)),
+        ),
+      )
+    : allModels;
+  const seen = new Set();
+  const deduped = selectable.filter((model) => {
+    const label = modelLabel(model);
+    if (!label || seen.has(label)) return false;
+    seen.add(label);
+    return true;
+  });
+
+  const unresolved = configuredLayers.flatMap((layer) =>
+    layer.references
+      .filter((reference) => !allModels.some((model) => referenceAllowsModel(reference, model)))
+      .map((reference) => ({ source: layer.source, reference })),
+  );
+
+  return {
+    configured,
+    models: deduped,
+    layers: configuredLayers,
+    unresolved,
+  };
+}
+
+/** Load global + trusted-project-style settings files for the current cwd. */
+export function loadSelfModelPolicy(ctx, { env = process.env, cwd = ctx?.cwd || process.cwd(), settings } = {}) {
+  const models = listAvailableModels(ctx?.modelRegistry);
+  if (settings !== undefined) {
+    return buildSelfModelPolicy(models, [{ source: "injected", settings }]);
+  }
+  const globalDir = expandHome(env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"));
+  const layer = (path) => {
+    const settingsFromDisk = readJson(path);
+    return {
+      source: path,
+      // Existing-but-unreadable settings fail closed for self-selection. Pi
+      // reports malformed settings separately; this extension must not turn a
+      // parse failure into broader agent authority.
+      settings:
+        settingsFromDisk === null
+          ? { selfModelSelection: { models: [] } }
+          : settingsFromDisk,
+    };
+  };
+  const layers = [layer(join(globalDir, "settings.json")), layer(join(cwd, ".pi", "settings.json"))];
+  return buildSelfModelPolicy(models, layers);
+}
 
 function notify(ctx, message, level = "info") {
   ctx?.ui?.notify?.(message, level);
@@ -133,7 +259,12 @@ export function buildModelCompletions(models, prefix, limit = M_COMPLETION_LIMIT
   return Number.isFinite(limit) && limit > 0 ? items.slice(0, limit) : items;
 }
 
-export async function switchModelReference(pi, ctx, reference, { notifyResult = true } = {}) {
+export async function switchModelReference(
+  pi,
+  ctx,
+  reference,
+  { notifyResult = true, selectionPolicy } = {},
+) {
   const trimmed = String(reference ?? "").trim();
   const models = listAvailableModels(ctx?.modelRegistry);
 
@@ -161,6 +292,27 @@ export async function switchModelReference(pi, ctx, reference, { notifyResult = 
     return { ok: false, code: "model_not_found", message, suggestions };
   }
 
+  if (
+    selectionPolicy?.configured &&
+    !selectionPolicy.models.some((allowed) => modelLabel(allowed) === modelLabel(model))
+  ) {
+    const allowed = selectionPolicy.models.map(modelLabel);
+    const configured = selectionPolicy.layers.flatMap((layer) => layer.references);
+    const suffix = allowed.length
+      ? ` Self-selectable models: ${allowed.join(", ")}.`
+      : ` No available model matches the configured selfModelSelection.models list (${configured.join(", ") || "empty"}).`;
+    const message = `Self-selection policy does not allow ${modelLabel(model)}.${suffix} The active model is unchanged.`;
+    if (notifyResult) notify(ctx, message, "warning");
+    return {
+      ok: false,
+      code: "model_not_allowed",
+      message,
+      model,
+      allowed,
+      configured,
+    };
+  }
+
   const ok = await pi.setModel(model);
   if (!ok) {
     const message = `Failed to switch model: could not select ${modelLabel(model)}.`;
@@ -173,11 +325,20 @@ export async function switchModelReference(pi, ctx, reference, { notifyResult = 
   return { ok: true, code: "model_set", message, model };
 }
 
-export default function mCommandExtension(pi) {
+export default function mCommandExtension(pi, options = {}) {
   // getArgumentCompletions receives only the prefix (no ctx), so capture the
   // registry from session_start for completion listing. The handler always has
   // ctx.modelRegistry directly, so switching works even before this is set.
   let completionRegistry = null;
+
+  const policyFor = (ctx) =>
+    typeof options.loadSelectionPolicy === "function"
+      ? options.loadSelectionPolicy(ctx)
+      : loadSelfModelPolicy(ctx, {
+          settings: options.settings,
+          env: options.env,
+          cwd: options.cwd ?? ctx?.cwd,
+        });
 
   pi.on?.("session_start", (_event, ctx) => {
     if (ctx?.modelRegistry) completionRegistry = ctx.modelRegistry;
@@ -211,10 +372,76 @@ export default function mCommandExtension(pi) {
       },
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await switchModelReference(pi, ctx, params?.model, { notifyResult: true });
+      const selectionPolicy = policyFor(ctx);
+      const result = await switchModelReference(pi, ctx, params?.model, {
+        notifyResult: true,
+        selectionPolicy,
+      });
       return {
         content: [{ type: "text", text: result.message }],
-        details: result,
+        details: { ...result, selectionPolicy },
+      };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "self_get_model",
+    label: "Self Get Model",
+    description:
+      "Report this agent session's active model and whether it is self-selectable. The active model may be outside the self-selection whitelist.",
+    promptSnippet: "Inspect this agent session's current model without changing it.",
+    parameters: { type: "object", additionalProperties: false, properties: {} },
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const selectionPolicy = policyFor(ctx);
+      const currentModel = ctx?.model;
+      const current = modelLabel(currentModel) || "unknown";
+      const selectable = Boolean(
+        currentModel &&
+          (!selectionPolicy.configured ||
+            selectionPolicy.models.some((model) => modelLabel(model) === modelLabel(currentModel))),
+      );
+      const message = selectionPolicy.configured
+        ? `Model: ${current} (self-selectable: ${selectable ? "yes" : "no"})`
+        : `Model: ${current} (self-selection unrestricted)`;
+      return {
+        content: [{ type: "text", text: message }],
+        details: {
+          currentModel: current,
+          selectable,
+          configured: selectionPolicy.configured,
+          layers: selectionPolicy.layers,
+        },
+      };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "self_list_models",
+    label: "Self List Models",
+    description:
+      "List models this agent is permitted to select itself under settings.json selfModelSelection.models. This does not restrict the model selected by the operator or session startup.",
+    promptSnippet: "List models this agent may self-select under the configured whitelist.",
+    parameters: { type: "object", additionalProperties: false, properties: {} },
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const selectionPolicy = policyFor(ctx);
+      const labels = selectionPolicy.models.map(modelLabel);
+      const heading = selectionPolicy.configured
+        ? `Self-selectable models (${labels.length})`
+        : `Self-selectable models (${labels.length}, unrestricted)`;
+      const unresolved = selectionPolicy.unresolved.length
+        ? `\nUnresolved configured references: ${selectionPolicy.unresolved
+            .map((item) => `${item.reference} [${item.source}]`)
+            .join(", ")}`
+        : "";
+      const text = `${heading}:\n${labels.length ? labels.map((label) => `- ${label}`).join("\n") : "- (none)"}${unresolved}`;
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          models: labels,
+          configured: selectionPolicy.configured,
+          layers: selectionPolicy.layers,
+          unresolved: selectionPolicy.unresolved,
+        },
       };
     },
   });
