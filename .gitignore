@@ -3,3 +3,4 @@
 /artifacts/
 result
 node_modules/
+/.cacophony/agent/

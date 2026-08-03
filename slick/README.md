@@ -70,7 +70,9 @@ Slick mirrors Slack's navigation shape:
 
 Mouse clicks select navigation, conversations, notifications, files, and
 reply-bearing messages (opening their thread). The wheel scrolls the focused
-rich-content pane. Passive mouse motion never triggers a repaint.
+rich-content pane. Passive mouse motion never triggers a repaint, and bursts of
+divider-drag samples are coalesced to the newest pointer coordinate before the
+next graphical frame.
 
 ## Configuration
 
@@ -179,13 +181,14 @@ Three compatibility rules keep graphics stable during interaction:
   to layer geometry inside its footprint-sized PNG, then Kitty applies x/y a
   second time at placement. Slick rasterizes at `(0,0)` and retains x/y only in
   the placement footprint, avoiding clipped and offset pane backgrounds.
-- **No cursor advance (`C=1`).** Kittui 0.1 omits this Kitty placement flag.
-  Placing a full-height panel therefore advances past the viewport and scrolls
-  the text plane one row; every later Ratatui diff lands low and old characters
-  remain painted. Slick injects `C=1` into absolute placements.
-- **Placement diffing.** A scene is uploaded and placed only when its image id
-  or cell footprint changes, so idle repaints (including the one-second
-  staleness timer) emit no graphics traffic.
+- **No cursor advance (`C=1`).** Every absolute chrome and inline-image
+  placement uses Kittui's typed `without_cursor_advance()` option. A full-height
+  panel or image can therefore never scroll the text plane one row, shift mouse
+  hit geometry, or strand the footer below the viewport.
+- **Placement reconciliation.** A scene is uploaded and placed only when its
+  image id or cell footprint changes. Inline placements absent from the current
+  frame are explicitly deleted, so scrolling moves an image instead of leaving
+  copies at every historical coordinate.
 
 OSC 8 escapes are never stored in Ratatui buffer symbols: doing so corrupts
 `unicode-width` damage calculations and leaves stale cells. Slick records the

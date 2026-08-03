@@ -1224,7 +1224,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "kittui"
 version = "0.1.3"
-source = "git+https://github.com/harryaskham/kittui?rev=c6e39675b31fa7af44d03c644a004de6ad14b371#c6e39675b31fa7af44d03c644a004de6ad14b371"
+source = "git+https://github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5#fab4b7e39cfe5f515c68ce1188979864b3c632d5"
 dependencies = [
  "kittui-cache",
  "kittui-core",
@@ -1238,7 +1238,7 @@ dependencies = [
 [[package]]
 name = "kittui-cache"
 version = "0.1.3"
-source = "git+https://github.com/harryaskham/kittui?rev=c6e39675b31fa7af44d03c644a004de6ad14b371#c6e39675b31fa7af44d03c644a004de6ad14b371"
+source = "git+https://github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5#fab4b7e39cfe5f515c68ce1188979864b3c632d5"
 dependencies = [
  "fs2",
  "kittui-core",
@@ -1251,7 +1251,7 @@ dependencies = [
 [[package]]
 name = "kittui-core"
 version = "0.1.3"
-source = "git+https://github.com/harryaskham/kittui?rev=c6e39675b31fa7af44d03c644a004de6ad14b371#c6e39675b31fa7af44d03c644a004de6ad14b371"
+source = "git+https://github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5#fab4b7e39cfe5f515c68ce1188979864b3c632d5"
 dependencies = [
  "blake3",
  "serde",
@@ -1262,7 +1262,7 @@ dependencies = [
 [[package]]
 name = "kittui-kitty"
 version = "0.1.3"
-source = "git+https://github.com/harryaskham/kittui?rev=c6e39675b31fa7af44d03c644a004de6ad14b371#c6e39675b31fa7af44d03c644a004de6ad14b371"
+source = "git+https://github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5#fab4b7e39cfe5f515c68ce1188979864b3c632d5"
 dependencies = [
  "base64",
  "flate2",
@@ -1274,7 +1274,7 @@ dependencies = [
 [[package]]
 name = "kittui-render-cpu"
 version = "0.1.3"
-source = "git+https://github.com/harryaskham/kittui?rev=c6e39675b31fa7af44d03c644a004de6ad14b371#c6e39675b31fa7af44d03c644a004de6ad14b371"
+source = "git+https://github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5#fab4b7e39cfe5f515c68ce1188979864b3c632d5"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -1287,7 +1287,7 @@ dependencies = [
 [[package]]
 name = "kittui-render-gpu"
 version = "0.1.3"
-source = "git+https://github.com/harryaskham/kittui?rev=c6e39675b31fa7af44d03c644a004de6ad14b371#c6e39675b31fa7af44d03c644a004de6ad14b371"
+source = "git+https://github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5#fab4b7e39cfe5f515c68ce1188979864b3c632d5"
 dependencies = [
  "bytemuck",
  "image",
@@ -1840,10 +1840,11 @@ checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
 [[package]]
 name = "ratakittui"
 version = "0.1.3"
-source = "git+https://github.com/harryaskham/kittui?rev=c6e39675b31fa7af44d03c644a004de6ad14b371#c6e39675b31fa7af44d03c644a004de6ad14b371"
+source = "git+https://github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5#fab4b7e39cfe5f515c68ce1188979864b3c632d5"
 dependencies = [
  "kittui",
  "kittui-core",
+ "kittui-kitty",
  "parking_lot",
  "ratatui",
 ]

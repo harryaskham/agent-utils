@@ -444,7 +444,7 @@ struct Graphics {
     runtime: Runtime,
     tracker: LifecycleTracker,
     placed: HashMap<String, (u32, CellRect)>,
-    placed_images: HashMap<String, CellRect>,
+    placed_images: HashMap<String, (u32, CellRect)>,
 }
 
 impl Graphics {
@@ -504,6 +504,7 @@ pub struct App {
     show_help: bool,
     should_quit: bool,
     busy: bool,
+    busy_since: Option<Instant>,
     status: String,
     last_error: Option<String>,
     hits: Vec<HitRegion>,
@@ -576,6 +577,7 @@ impl App {
             show_help: false,
             should_quit: false,
             busy: false,
+            busy_since: None,
             last_error: None,
             hits: Vec::new(),
             link_runs: Vec::new(),
@@ -596,12 +598,14 @@ impl App {
             match event {
                 WorkerEvent::Started(status) => {
                     self.busy = true;
+                    self.busy_since.get_or_insert_with(Instant::now);
                     self.status = status;
                     self.last_error = None;
                 }
                 WorkerEvent::Updated(state, status) => {
                     self.state = *state;
                     self.busy = false;
+                    self.busy_since = None;
                     self.status = status;
                     self.last_error = None;
                     // A refresh replaces state with Slack's own counts, which
@@ -618,6 +622,7 @@ impl App {
                 }
                 WorkerEvent::Failed(error) => {
                     self.busy = false;
+                    self.busy_since = None;
                     self.last_error = Some(error.clone());
                     self.status = "cached · refresh failed".into();
                 }
@@ -870,6 +875,7 @@ impl App {
         if let Some(worker) = &self.worker {
             worker.send(command);
             self.busy = true;
+            self.busy_since.get_or_insert_with(Instant::now);
         } else {
             self.status = "demo mode · network disabled".into();
         }
@@ -1592,6 +1598,38 @@ impl App {
         )
     }
 
+    /// Animation generation for the in-flight worker. The main loop compares
+    /// this value rather than blindly redrawing, so liveness is visible while a
+    /// network call runs without bringing back the permanent idle repaint.
+    fn liveness_tick(&self) -> Option<u64> {
+        self.busy.then(|| {
+            self.busy_since
+                .map_or(0, |started| started.elapsed().as_millis() as u64 / 160)
+        })
+    }
+
+    /// Icon, colour and bounded text for the header's live worker state.
+    fn header_status(&self) -> (&'static str, Color, String) {
+        if self.busy {
+            let tick = self.liveness_tick().unwrap_or(0);
+            let icon = ["◐", "◓", "◑", "◒"][usize::try_from(tick % 4).unwrap_or(0)];
+            let elapsed = self
+                .busy_since
+                .map_or(0, |started| started.elapsed().as_secs());
+            let slow = elapsed >= 45;
+            let text = if slow {
+                format!("{} · slow {elapsed}s", self.status)
+            } else {
+                format!("{} · {elapsed}s", self.status)
+            };
+            (icon, if slow { RED() } else { YELLOW() }, text)
+        } else if self.last_error.is_some() {
+            ("!", RED(), self.status.clone())
+        } else {
+            ("●", GREEN(), self.status.clone())
+        }
+    }
+
     /// Escape sequence for any newly arrived mentions/DMs, coalesced into one
     /// announcement and cleared once taken.
     fn take_alert_sequence(&mut self) -> Option<String> {
@@ -1881,12 +1919,16 @@ impl App {
     ) {
         // The status zone carries a variable-width staleness phrase, so give it
         // room instead of a fixed 28 cells that clipped "1h 9m stale".
+        // Give status every spare cell after the fixed team label and a
+        // minimally useful search field. Wide terminals can now show the full
+        // refresh action and elapsed liveness instead of clipping at 40 cells.
+        let status_width = area.width.saturating_sub(48).min(80);
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Length(28),
                 Constraint::Min(20),
-                Constraint::Length(40),
+                Constraint::Length(status_width),
             ])
             .split(area);
         let team = if self.state.team_name.is_empty() {
@@ -1909,27 +1951,14 @@ impl App {
             format!("  Filter: {}  (Esc clears)", self.filter)
         };
         render_title(frame, columns[1], search, graphics, Tone::Dark);
-        let icon = if self.busy {
-            "◌"
-        } else if self.last_error.is_some() {
-            "!"
-        } else {
-            "●"
-        };
-        let color = if self.busy {
-            YELLOW()
-        } else if self.last_error.is_some() {
-            RED()
-        } else {
-            GREEN()
-        };
+        let (icon, color, status) = self.header_status();
         let paragraph = Paragraph::new(Line::from(vec![
             Span::styled(
                 format!(" {icon} "),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{} · {}", self.staleness_label(), self.status),
+                format!("{} · {status}", self.staleness_label()),
                 Style::default().fg(MUTED()),
             ),
         ]));
@@ -2726,7 +2755,7 @@ impl App {
         let line = error.map_or_else(
             || {
                 Line::from(vec![
-                    Span::styled(" 1-5", key_style()),
+                    Span::styled(" 1-6", key_style()),
                     Span::raw(" views  "),
                     Span::styled("↑↓/jk", key_style()),
                     Span::raw(" move  "),
@@ -2758,14 +2787,22 @@ impl App {
                 ])
             },
         );
-        render_paragraph(
-            frame,
-            area,
-            Paragraph::new(line),
-            graphics,
-            Tone::Dark,
-            false,
-        );
+        let paragraph = Paragraph::new(line).style(Style::default().fg(FG()));
+        if let Some((runtime, sink)) = graphics {
+            // A one-row strip cannot use pane chrome: uniform vertical padding
+            // reduces its inner rect to zero and makes every footer glyph
+            // disappear. Header chrome is deliberately unpadded.
+            render_decorated(
+                paragraph,
+                &header_chrome(Tone::Dark),
+                area,
+                frame.buffer_mut(),
+                runtime,
+                sink,
+            );
+        } else {
+            frame.render_widget(paragraph, area);
+        }
     }
 
     fn render_help(frame: &mut Frame<'_>, area: Rect) {
@@ -2913,13 +2950,17 @@ fn render_title(
 /// Ratatui block stays borderless; the focused rail colour still marks focus.
 /// Without graphics the border itself is recoloured so focus is obvious.
 fn pane_block(graphics: bool, focused: bool, title: String) -> Block<'static> {
-    let mut block = Block::default()
-        .borders(if graphics {
-            Borders::NONE
-        } else {
-            Borders::ALL
-        })
-        .title(title);
+    let mut block = Block::default().borders(if graphics {
+        Borders::NONE
+    } else {
+        Borders::ALL
+    });
+    // Ratatui reserves a title row even for an empty title. The sidebar used
+    // to render one row below its manually calculated hit regions because its
+    // empty title silently consumed that row in graphical mode.
+    if !title.is_empty() {
+        block = block.title(title);
+    }
     if !graphics {
         block = block.border_style(if focused {
             Style::default().fg(YELLOW()).add_modifier(Modifier::BOLD)
@@ -2981,21 +3022,17 @@ fn render_paragraph(
 /// row. Hit regions must use the same origin as the rendered rows or clicks
 /// land on the neighbouring entry.
 fn list_origin(area: Rect, graphics: bool, titled: bool) -> u16 {
-    let padded = if graphics {
-        area.y.saturating_add(1)
+    let widget_area = if graphics {
+        // Use the exact component geometry instead of duplicating the current
+        // padding constant. This stays correct as Ratakittui evolves.
+        chrome(Tone::Content, false).inner_rect(area)
     } else {
-        area.y
+        area
     };
-    let bordered = if graphics {
-        padded
-    } else {
-        padded.saturating_add(1)
-    };
-    if titled {
-        bordered.saturating_add(1)
-    } else {
-        bordered
-    }
+    let title = if titled { "list" } else { "" };
+    pane_block(graphics, false, title.to_string())
+        .inner(widget_area)
+        .y
 }
 
 fn render_decorated<W: Widget>(
@@ -3132,6 +3169,7 @@ fn write_link_runs<W: Write>(writer: &mut W, runs: &[LinkRun]) -> io::Result<()>
 /// the image and its cell position, so a redraw replaces rather than stacks.
 fn place_image_runs(graphics: &mut Graphics, runs: &[ImageRun], store: &mut ImageStore) -> String {
     let mut out = String::new();
+    let mut current = HashMap::new();
     for run in runs {
         let Some(image) = store.get(&run.url) else {
             continue;
@@ -3140,14 +3178,17 @@ fn place_image_runs(graphics: &mut Graphics, runs: &[ImageRun], store: &mut Imag
         let image_id = images::stable_hash(&key);
         let image_id = u32::from_str_radix(&image_id[..8], 16).unwrap_or(1) | 1;
         let footprint = CellRect::new(run.x, run.y, run.cols, run.rows);
+        current.insert(key.clone(), (image_id, footprint));
         if graphics
             .placed_images
             .get(&key)
-            .is_some_and(|placed| *placed == footprint)
+            .is_some_and(|placed| *placed == (image_id, footprint))
         {
             continue;
         }
-        let options = PlacementOptions::absolute_with_id(image_id).with_z_index(1);
+        let options = PlacementOptions::absolute_with_id(image_id)
+            .with_z_index(1)
+            .without_cursor_advance();
         let placement = graphics.runtime.place_png_frame_with_options(
             image_id,
             image.bytes.as_slice(),
@@ -3156,8 +3197,16 @@ fn place_image_runs(graphics: &mut Graphics, runs: &[ImageRun], store: &mut Imag
         );
         out.push_str(&placement.upload);
         out.push_str(&placement.placement);
-        graphics.placed_images.insert(key, footprint);
     }
+    // A scroll changes image screen coordinates. Placements from the previous
+    // frame that are no longer present must be explicitly deleted; otherwise
+    // Kitty keeps every historical coordinate and paints a vertical stack.
+    for (key, (image_id, _)) in &graphics.placed_images {
+        if !current.contains_key(key) {
+            out.push_str(&graphics.runtime.unplace(*image_id));
+        }
+    }
+    graphics.placed_images = current;
     out
 }
 
@@ -3180,15 +3229,10 @@ fn finalize_graphics_frame(graphics: &mut Graphics, sink: &EffectsSink) -> DrawF
             if !unchanged {
                 flush.upload.push_str(&effects.upload);
                 // Runtime placements are cursor-anchored and already include
-                // the absolute move for `footprint`. Kittui 0.2 omits Kitty's
-                // `C=1` flag, however, so placing a full-height pane advances
-                // the terminal cursor past the bottom edge and scrolls the
-                // alternate screen by one row. That makes every later Ratatui
-                // diff appear one row lower and leaves old glyphs behind.
-                // Inject `C=1` until PlacementOptions exposes it upstream.
-                flush
-                    .placement
-                    .push_str(&effects.placement.replacen(",q=", ",C=1,q=", 1));
+                // the absolute move for `footprint`. The placement options now
+                // carry Kitty's `C=1` contract directly, so no transport-fragile
+                // escape-string surgery is needed here.
+                flush.placement.push_str(&effects.placement);
                 flush.placement.push_str(&effects.embed);
             }
         } else {
@@ -3221,7 +3265,9 @@ fn write_graphics_flush<W: Write>(writer: &mut W, flush: &DrawFlush) -> io::Resu
 }
 
 fn chrome_underlay_options(image_id: u32) -> PlacementOptions {
-    PlacementOptions::absolute_with_id(image_id).with_z_index(-1)
+    PlacementOptions::absolute_with_id(image_id)
+        .with_z_index(-1)
+        .without_cursor_advance()
 }
 
 fn conversation_line(
@@ -3429,6 +3475,37 @@ pub fn run(options: RunOptions) -> Result<()> {
     result
 }
 
+const MAX_EVENT_BATCH: usize = 256;
+
+/// Keep every semantic input event while collapsing consecutive drag samples
+/// to the newest pointer coordinate. Terminals can report hundreds of drag
+/// positions faster than graphical chrome can rasterize them; replaying each
+/// stale coordinate makes the divider visibly trail the pointer.
+fn coalesce_input_events(events: Vec<Event>) -> Vec<Event> {
+    let mut output = Vec::with_capacity(events.len());
+    let mut pending_drag = None;
+    for event in events {
+        if matches!(
+            event,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(_),
+                ..
+            })
+        ) {
+            pending_drag = Some(event);
+        } else {
+            if let Some(drag) = pending_drag.take() {
+                output.push(drag);
+            }
+            output.push(event);
+        }
+    }
+    if let Some(drag) = pending_drag {
+        output.push(drag);
+    }
+    output
+}
+
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -3442,6 +3519,7 @@ fn run_loop(
     let auto_refresh_interval = app.auto_refresh_interval();
     let mut last_auto_refresh = Instant::now();
     let mut last_staleness = app.staleness_label();
+    let mut last_liveness_tick = app.liveness_tick();
     while !app.should_quit {
         dirty |= app.drain_worker();
         if let Some(interval) = auto_refresh_interval {
@@ -3457,6 +3535,11 @@ fn run_loop(
             // than the staleness clock and repaint when it emits.
             let released = app.feed.tick(Instant::now());
             if released > 0 {
+                dirty = true;
+            }
+            let liveness_tick = app.liveness_tick();
+            if liveness_tick != last_liveness_tick {
+                last_liveness_tick = liveness_tick;
                 dirty = true;
             }
             if last_timer_tick.elapsed() >= Duration::from_secs(1) {
@@ -3497,16 +3580,22 @@ fn run_loop(
         }
 
         if event::poll(Duration::from_millis(16))? {
-            let changed = match event::read()? {
-                Event::Key(key) => {
-                    app.handle_key(key);
-                    true
-                }
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
-                Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => true,
-                Event::Paste(_) => false,
-            };
-            dirty |= changed;
+            let mut events = vec![event::read()?];
+            while events.len() < MAX_EVENT_BATCH && event::poll(Duration::ZERO)? {
+                events.push(event::read()?);
+            }
+            for event in coalesce_input_events(events) {
+                let changed = match event {
+                    Event::Key(key) => {
+                        app.handle_key(key);
+                        true
+                    }
+                    Event::Mouse(mouse) => app.handle_mouse(mouse),
+                    Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => true,
+                    Event::Paste(_) => false,
+                };
+                dirty |= changed;
+            }
         }
     }
     Ok(())
@@ -3637,6 +3726,44 @@ mod tests {
     }
 
     #[test]
+    fn drag_event_batches_keep_only_the_latest_motion() {
+        let mouse = |kind, column| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row: 8,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let events = vec![
+            mouse(MouseEventKind::Down(MouseButton::Left), 10),
+            mouse(MouseEventKind::Drag(MouseButton::Left), 20),
+            mouse(MouseEventKind::Drag(MouseButton::Left), 30),
+            mouse(MouseEventKind::Drag(MouseButton::Left), 40),
+            mouse(MouseEventKind::Up(MouseButton::Left), 40),
+        ];
+        let coalesced = coalesce_input_events(events);
+        assert_eq!(coalesced.len(), 3, "down, newest drag, and up survive");
+        assert!(matches!(
+            &coalesced[1],
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: 40,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn list_hit_origins_follow_the_real_decorated_inner_rect() {
+        let area = Rect::new(0, 1, 40, 20);
+        assert_eq!(list_origin(area, true, false), area.y + 1);
+        assert_eq!(list_origin(area, true, true), area.y + 2);
+        assert_eq!(list_origin(area, false, false), area.y + 1);
+        assert_eq!(list_origin(area, false, true), area.y + 1);
+    }
+
+    #[test]
     fn activity_accepts_jk_in_content_focus() {
         let mut app = App::demo(crate::slack::demo_state());
         app.focus = Focus::Content;
@@ -3665,7 +3792,27 @@ mod tests {
         let options = chrome_underlay_options(42);
         assert_eq!(options.placement_id, Some(42));
         assert!(!options.unicode_placeholder);
+        assert!(!options.cursor_advance);
         assert_eq!(options.z_index, -1);
+    }
+
+    #[test]
+    fn one_row_footer_chrome_preserves_a_text_row() {
+        let area = Rect::new(0, 20, 80, 1);
+        assert_eq!(header_chrome(Tone::Dark).inner_rect(area).height, 1);
+        assert_eq!(
+            chrome(Tone::Dark, false).inner_rect(area).height,
+            0,
+            "pane padding would erase a one-row footer"
+        );
+        let snapshot = snapshot(crate::slack::demo_state(), 120, 20);
+        assert!(
+            snapshot
+                .lines()
+                .last()
+                .is_some_and(|line| line.contains("1-6")),
+            "the footer remains in the terminal viewport"
+        );
     }
 
     #[test]
@@ -3805,6 +3952,23 @@ mod tests {
         assert!(!app.auto_refresh());
         app.busy = true;
         assert!(!app.auto_refresh(), "a busy worker must not be queued onto");
+    }
+
+    #[test]
+    fn busy_header_reports_elapsed_liveness_and_slow_work() {
+        let mut app = App::demo(crate::slack::demo_state());
+        app.busy = true;
+        app.busy_since = Some(Instant::now() - Duration::from_secs(3));
+        let (icon, color, text) = app.header_status();
+        assert!(["◐", "◓", "◑", "◒"].contains(&icon));
+        assert_eq!(color, YELLOW());
+        assert!(text.contains("3s"), "{text}");
+        assert!(app.liveness_tick().is_some());
+
+        app.busy_since = Some(Instant::now() - Duration::from_secs(46));
+        let (_, color, text) = app.header_status();
+        assert_eq!(color, RED());
+        assert!(text.contains("slow 46s"), "{text}");
     }
 
     #[test]
@@ -4047,6 +4211,38 @@ mod tests {
         let mut empty = Vec::new();
         write_graphics_flush(&mut empty, &second).unwrap();
         assert!(empty.is_empty(), "no-op frames write nothing");
+    }
+
+    #[test]
+    fn image_frames_delete_scrolled_placements_and_preserve_the_cursor() {
+        let Ok(mut graphics) = Graphics::new() else {
+            return;
+        };
+        let mut store = ImageStore::new(test_cache_dir("placed-images"));
+        let url = "https://slack-imgs.com/placed.png".to_string();
+        store.insert(&url, png_fixture(64, 64)).unwrap();
+        let initial = ImageRun {
+            x: 4,
+            y: 5,
+            cols: 2,
+            rows: 1,
+            url: url.clone(),
+        };
+        let first = place_image_runs(&mut graphics, std::slice::from_ref(&initial), &mut store);
+        assert!(first.contains(",C=1,q="), "{first:?}");
+        assert_eq!(graphics.placed_images.len(), 1);
+
+        let moved = ImageRun { y: 9, ..initial };
+        let second = place_image_runs(&mut graphics, &[moved], &mut store);
+        assert!(
+            second.contains("a=d"),
+            "the placement at the old scroll coordinate is deleted: {second:?}"
+        );
+        assert_eq!(graphics.placed_images.len(), 1);
+        assert!(graphics
+            .placed_images
+            .keys()
+            .all(|key| key.ends_with(":4:9")));
     }
 
     #[test]

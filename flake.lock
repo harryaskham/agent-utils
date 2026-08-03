@@ -21,16 +21,16 @@
     "kittui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1784810524,
-        "narHash": "sha256-kpWaO6VdKZZBALmCixoTz0ZHiu6bIF7fojk+oLAFntY=",
+        "lastModified": 1785748268,
+        "narHash": "sha256-1hybr7r3wS7/JoSxIZtiSgVtJq850VjgbghXre/7+U8=",
         "ref": "refs/heads/main",
-        "rev": "c6e39675b31fa7af44d03c644a004de6ad14b371",
-        "revCount": 3159,
+        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
+        "revCount": 3239,
         "type": "git",
         "url": "ssh://git@github.com/harryaskham/kittui"
       },
       "original": {
-        "rev": "c6e39675b31fa7af44d03c644a004de6ad14b371",
+        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
         "type": "git",
         "url": "ssh://git@github.com/harryaskham/kittui"
       }
