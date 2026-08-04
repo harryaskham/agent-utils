@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod cache;
+pub mod client;
 pub mod config;
+pub mod daemon;
 pub mod feed;
 pub mod images;
 pub mod markdown;

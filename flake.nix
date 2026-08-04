@@ -96,6 +96,12 @@
           pi-wasm-serve = pi-wasm.packages.${system}.pi-wasm-serve;
         });
 
+      # Re-export Slick's cross-platform daemon modules so consumers only need
+      # the agent-utils root flake.
+      nixosModules.slick = slick.nixosModules.slick;
+      darwinModules.slick = slick.darwinModules.slick;
+      nixOnDroidModules.slick = slick.nixOnDroidModules.slick;
+
       apps = forAllSystems (system: {
         default = {
           type = "app";

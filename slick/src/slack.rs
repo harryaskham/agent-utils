@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -15,7 +15,8 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::model::{
-    CacheState, Conversation, ConversationKind, Message, Notification, SlackFile, User,
+    CacheState, Conversation, ConversationKind, Message, Notification, SearchProgress, SlackFile,
+    User,
 };
 
 const API_ROOT: &str = "https://www.slack.com/api";
@@ -32,16 +33,34 @@ const MAX_CANVAS_MARKDOWN_CHARS: usize = 24_000;
 const MAX_RATE_LIMIT_ATTEMPTS: u32 = 4;
 const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
 
+/// Structured degradation notice emitted while a Slack call is in progress.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlackNotice {
+    pub message: String,
+    pub rate_limited: bool,
+    pub retry_after_secs: Option<u64>,
+    pub partial: bool,
+}
+
+/// Expected, durable incompleteness while a paginated cache window is filled.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct IncompleteCoverage(pub String);
+
 /// Most recent degradation notice (throttling, partial results), drained by
-/// the worker into the status line.
-static NOTICE: Mutex<Option<String>> = Mutex::new(None);
+/// the legacy in-TUI worker into the status line.
+static NOTICE: Mutex<Option<SlackNotice>> = Mutex::new(None);
 
 /// Take the pending notice, if any. Clears it.
 pub fn take_notice() -> Option<String> {
-    NOTICE.lock().ok().and_then(|mut slot| slot.take())
+    NOTICE
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .map(|notice| notice.message)
 }
 
-fn record_notice(notice: String) {
+fn record_notice(notice: SlackNotice) {
     if let Ok(mut slot) = NOTICE.lock() {
         *slot = Some(notice);
     }
@@ -91,6 +110,7 @@ struct Tokens {
 pub struct SlackClient {
     http: Client,
     tokens: Tokens,
+    notice: Option<Arc<dyn Fn(SlackNotice) + Send + Sync>>,
 }
 
 impl SlackClient {
@@ -100,7 +120,23 @@ impl SlackClient {
             .timeout(Duration::from_secs(45))
             .build()
             .context("build Slack HTTP client")?;
-        Ok(Self { http, tokens })
+        Ok(Self {
+            http,
+            tokens,
+            notice: None,
+        })
+    }
+
+    fn with_notice(mut self, notice: Arc<dyn Fn(SlackNotice) + Send + Sync>) -> Self {
+        self.notice = Some(notice);
+        self
+    }
+
+    fn emit_notice(&self, notice: SlackNotice) {
+        record_notice(notice.clone());
+        if let Some(callback) = &self.notice {
+            callback(notice);
+        }
     }
 
     pub fn call(&self, method: &str, params: &BTreeMap<String, String>) -> Result<Value> {
@@ -127,18 +163,28 @@ impl SlackClient {
                 ApiOutcome::RateLimited => {
                     let last = attempt + 1 == MAX_RATE_LIMIT_ATTEMPTS;
                     if last {
-                        record_notice(format!(
-                            "Slack rate-limited {method}; giving up after {MAX_RATE_LIMIT_ATTEMPTS} attempts"
-                        ));
+                        self.emit_notice(SlackNotice {
+                            message: format!(
+                                "Slack rate-limited {method}; giving up after {MAX_RATE_LIMIT_ATTEMPTS} attempts"
+                            ),
+                            rate_limited: true,
+                            retry_after_secs: retry_after,
+                            partial: false,
+                        });
                         bail!(
                             "Slack {method} failed: ratelimited (retried {MAX_RATE_LIMIT_ATTEMPTS} times)"
                         );
                     }
                     let delay = rate_limit_delay(attempt, retry_after, jitter_seed());
-                    record_notice(format!(
-                        "Slack rate-limited {method}; retrying in {}s",
-                        delay.as_secs().max(1)
-                    ));
+                    self.emit_notice(SlackNotice {
+                        message: format!(
+                            "Slack rate-limited {method}; retrying in {}s",
+                            delay.as_secs().max(1)
+                        ),
+                        rate_limited: true,
+                        retry_after_secs: Some(delay.as_secs().max(1)),
+                        partial: false,
+                    });
                     std::thread::sleep(delay);
                 }
             }
@@ -302,6 +348,17 @@ impl SlackService {
         })
     }
 
+    /// Construct a service that reports in-flight rate-limit/partial progress.
+    /// The daemon uses this to publish backoff state while a Slack call sleeps;
+    /// the legacy in-TUI worker continues to use the global one-shot notice.
+    pub fn from_environment_with_notice(
+        notice: Arc<dyn Fn(SlackNotice) + Send + Sync>,
+    ) -> Result<Self> {
+        Ok(Self {
+            client: SlackClient::from_environment()?.with_notice(notice),
+        })
+    }
+
     pub fn bootstrap(&self, state: &mut CacheState) -> Result<()> {
         self.refresh_identity(state)?;
         self.refresh_sidebar(state)?;
@@ -358,7 +415,7 @@ impl SlackService {
             .filter(|value| seen.insert(value_string(value, "id")))
             .filter_map(|value| compact_conversation(&value, &state.users))
             .collect();
-        self.refresh_favorites(state);
+        self.refresh_favorites(state)?;
         state.mark_refreshed("sidebar");
         state.normalize();
         Ok(())
@@ -370,11 +427,25 @@ impl SlackService {
         conversation_id: &str,
     ) -> Result<()> {
         let key = format!("conversation:{conversation_id}");
-        let oldest = state.since_for(&key).max(CacheState::seven_days_ago());
+        let progress_key = format!("history:{conversation_id}");
+        let fallback = state.since_for(&key).max(CacheState::seven_days_ago());
+        let progress = state
+            .search_progress
+            .entry(progress_key.clone())
+            .or_insert_with(|| SearchProgress {
+                window_start: fallback,
+                next_page: 1,
+                cursor: String::new(),
+                complete: false,
+            })
+            .clone();
         let mut params = BTreeMap::new();
         params.insert("channel".into(), conversation_id.to_string());
-        params.insert("oldest".into(), oldest.to_string());
+        params.insert("oldest".into(), progress.window_start.to_string());
         params.insert("limit".into(), MAX_HISTORY_MESSAGES.to_string());
+        if !progress.cursor.is_empty() {
+            params.insert("cursor".into(), progress.cursor.clone());
+        }
         let result = self.client.call("conversations.history", &params)?;
         let conversation = state.conversation(conversation_id).cloned();
         let messages = result
@@ -385,9 +456,34 @@ impl SlackService {
             .filter_map(|value| compact_message(value, conversation.as_ref(), &state.users))
             .collect();
         state.merge_messages(conversation_id, messages);
-        state.mark_refreshed(key);
         rebuild_dm_notifications(state);
         state.normalize();
+        let next_cursor = result
+            .pointer("/response_metadata/next_cursor")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let at_capacity = state
+            .messages
+            .get(conversation_id)
+            .is_some_and(|messages| messages.len() >= 500);
+        if !next_cursor.is_empty() && !at_capacity {
+            let page = progress.next_page.max(1);
+            state.search_progress.insert(
+                progress_key,
+                SearchProgress {
+                    next_page: page.saturating_add(1),
+                    cursor: next_cursor,
+                    ..progress
+                },
+            );
+            return Err(IncompleteCoverage(format!(
+                "conversation coverage incomplete: loaded page {page}"
+            ))
+            .into());
+        }
+        state.search_progress.remove(&progress_key);
+        state.mark_refreshed(key);
         Ok(())
     }
 
@@ -431,15 +527,28 @@ impl SlackService {
     }
 
     pub fn refresh_self_activity(&self, state: &mut CacheState) -> Result<()> {
-        let since = state
+        let progress_key = "search:self_activity";
+        let fallback = state
             .since_for("self_activity")
             .max(CacheState::seven_days_ago());
+        let progress = state
+            .search_progress
+            .entry(progress_key.into())
+            .or_insert_with(|| SearchProgress {
+                window_start: fallback,
+                next_page: 1,
+                cursor: String::new(),
+                complete: false,
+            })
+            .clone();
+        let page = progress.next_page.max(1);
         let mut params = BTreeMap::new();
         params.insert(
             "query".into(),
-            format!("from:me after:{}", date_filter(since)),
+            format!("from:me after:{}", date_filter(progress.window_start)),
         );
         params.insert("count".into(), "100".into());
+        params.insert("page".into(), page.to_string());
         let result = self.client.call("search.messages", &params)?;
         for value in result
             .pointer("/messages/matches")
@@ -456,6 +565,21 @@ impl SlackService {
                 *entry = ts;
             }
         }
+        let pages = search_page_count(&result, "messages").max(1);
+        if page < pages {
+            state.search_progress.insert(
+                progress_key.into(),
+                SearchProgress {
+                    next_page: page.saturating_add(1),
+                    ..progress
+                },
+            );
+            return Err(IncompleteCoverage(format!(
+                "self-activity coverage incomplete: page {page} of {pages}"
+            ))
+            .into());
+        }
+        state.search_progress.remove(progress_key);
         state.mark_refreshed("self_activity");
         self.backfill_conversations(state);
         Ok(())
@@ -536,68 +660,101 @@ impl SlackService {
     }
 
     pub fn refresh_notifications(&self, state: &mut CacheState) -> Result<()> {
-        let since = state
+        let prefix = "search:notifications:";
+        let fallback = state
             .since_for("notifications")
             .max(CacheState::seven_days_ago());
-        let after = date_filter(since);
-        let mut queries = vec![format!("to:me after:{after}")];
+        let window_start = state
+            .search_progress
+            .iter()
+            .find(|(key, _)| key.starts_with(prefix))
+            .map_or(fallback, |(_, progress)| progress.window_start);
+        let after = date_filter(window_start);
+        let mut queries = vec![("to_me", format!("to:me after:{after}"))];
         if !state.self_username.is_empty() {
-            queries.push(format!("@{} after:{after}", state.self_username));
+            queries.push(("mention", format!("@{} after:{after}", state.self_username)));
         }
+        let keys: Vec<String> = queries
+            .iter()
+            .map(|(name, _)| format!("{prefix}{name}"))
+            .collect();
         let mut notifications = Vec::new();
         let mut discovered_conversations = Vec::new();
-        let mut any_success = false;
-        let mut failed_queries = 0usize;
+        let mut failures = Vec::new();
         let total_queries = queries.len();
-        for query in queries {
+        for ((_, query), progress_key) in queries.into_iter().zip(&keys) {
+            let progress = state
+                .search_progress
+                .entry(progress_key.clone())
+                .or_insert_with(|| SearchProgress {
+                    window_start,
+                    next_page: 1,
+                    cursor: String::new(),
+                    complete: false,
+                })
+                .clone();
+            if progress.complete {
+                continue;
+            }
+            let page = progress.next_page.max(1);
             let mut params = BTreeMap::new();
             params.insert("query".into(), query);
             params.insert("count".into(), "100".into());
-            let Ok(result) = self.client.call("search.messages", &params) else {
-                // One query failing (throttled after retries, transient 5xx,
-                // permissions) must not masquerade as a clean refresh: the
-                // mentions query dropping out silently loses mentions, and
-                // alerts only fire on newly seen ones.
-                failed_queries += 1;
-                continue;
+            params.insert("page".into(), page.to_string());
+            let result = match self.client.call("search.messages", &params) {
+                Ok(result) => result,
+                Err(error) => {
+                    failures.push(error.to_string());
+                    continue;
+                }
             };
+            let embedded_users = result
+                .get("users")
+                .and_then(Value::as_object)
+                .map(compact_embedded_users)
+                .unwrap_or_default();
+            let mut users = state.users.clone();
+            users.extend(embedded_users);
+            for value in result
+                .pointer("/messages/matches")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
             {
-                any_success = true;
-                let embedded_users = result
-                    .get("users")
-                    .and_then(Value::as_object)
-                    .map(compact_embedded_users)
-                    .unwrap_or_default();
-                let mut users = state.users.clone();
-                users.extend(embedded_users);
-                for value in result
-                    .pointer("/messages/matches")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
+                if let Some(notification) =
+                    compact_search_notification(value, &users, &state.self_user_id)
                 {
-                    if let Some(notification) =
-                        compact_search_notification(value, &users, &state.self_user_id)
-                    {
-                        discovered_conversations.push(Conversation {
-                            id: notification.conversation_id.clone(),
-                            name: notification.conversation_name.clone(),
-                            kind: notification.kind,
-                            latest_ts: Some(notification.message.ts.clone()),
-                            ..Conversation::default()
-                        });
-                        notifications.push(notification);
-                    }
+                    discovered_conversations.push(Conversation {
+                        id: notification.conversation_id.clone(),
+                        name: notification.conversation_name.clone(),
+                        kind: notification.kind,
+                        latest_ts: Some(notification.message.ts.clone()),
+                        ..Conversation::default()
+                    });
+                    notifications.push(notification);
                 }
             }
+            let pages = search_page_count(&result, "messages").max(1);
+            state.search_progress.insert(
+                progress_key.clone(),
+                SearchProgress {
+                    window_start,
+                    next_page: page.saturating_add(1),
+                    cursor: String::new(),
+                    complete: page >= pages,
+                },
+            );
         }
-        if !any_success {
-            bail!("Slack search.messages could not load mentions/DM activity");
-        }
+        let failed_queries = failures.len();
         if failed_queries > 0 {
-            record_notice(format!(
-                "partial activity: {failed_queries} of {total_queries} mention/DM searches failed; some mentions may be missing"
-            ));
+            self.client.emit_notice(SlackNotice {
+                message: format!(
+                    "partial activity: {failed_queries} of {total_queries} mention/DM searches failed; some mentions may be missing"
+                ),
+                rate_limited: failures.iter().any(|error| error.contains("ratelimited")),
+                retry_after_secs: None,
+                partial: true,
+            });
         }
         let mut known_ids: HashSet<String> = state
             .conversations
@@ -614,17 +771,54 @@ impl SlackService {
             notifications,
             CacheState::seven_days_ago() as f64,
         );
-        state.mark_refreshed("notifications");
         rebuild_dm_notifications(state);
         state.normalize();
+        if failed_queries > 0 {
+            bail!(
+                "partial activity: {failed_queries} of {total_queries} searches failed ({})",
+                failures.join("; ")
+            );
+        }
+        let complete = keys.iter().all(|key| {
+            state
+                .search_progress
+                .get(key)
+                .is_some_and(|progress| progress.complete)
+        });
+        if !complete {
+            return Err(IncompleteCoverage(
+                "activity coverage incomplete; continuing paginated searches".into(),
+            )
+            .into());
+        }
+        state
+            .search_progress
+            .retain(|key, _| !key.starts_with(prefix));
+        state.mark_refreshed("notifications");
         Ok(())
     }
 
     pub fn refresh_files(&self, state: &mut CacheState) -> Result<()> {
-        let since = state.since_for("files").max(CacheState::seven_days_ago());
+        let progress_key = "search:files";
+        let fallback = state.since_for("files").max(CacheState::seven_days_ago());
+        let progress = state
+            .search_progress
+            .entry(progress_key.into())
+            .or_insert_with(|| SearchProgress {
+                window_start: fallback,
+                next_page: 1,
+                cursor: String::new(),
+                complete: false,
+            })
+            .clone();
+        let page = progress.next_page.max(1);
         let mut params = BTreeMap::new();
-        params.insert("query".into(), format!("after:{}", date_filter(since)));
+        params.insert(
+            "query".into(),
+            format!("after:{}", date_filter(progress.window_start)),
+        );
         params.insert("count".into(), MAX_FILE_RESULTS.to_string());
+        params.insert("page".into(), page.to_string());
         let result = self.client.call("search.files", &params)?;
         let embedded_users = result
             .get("users")
@@ -640,8 +834,23 @@ impl SlackService {
             .filter_map(|value| compact_file(value, &state.users))
             .collect();
         state.files = merge_files(std::mem::take(&mut state.files), incoming);
-        state.mark_refreshed("files");
         state.normalize();
+        let pages = search_page_count(&result, "files").max(1);
+        if page < pages {
+            state.search_progress.insert(
+                progress_key.into(),
+                SearchProgress {
+                    next_page: page.saturating_add(1),
+                    ..progress
+                },
+            );
+            return Err(IncompleteCoverage(format!(
+                "file coverage incomplete: page {page} of {pages}"
+            ))
+            .into());
+        }
+        state.search_progress.remove(progress_key);
+        state.mark_refreshed("files");
         Ok(())
     }
 
@@ -673,13 +882,10 @@ impl SlackService {
         Ok(())
     }
 
-    fn refresh_favorites(&self, state: &mut CacheState) {
-        let Ok(items) = self
+    fn refresh_favorites(&self, state: &mut CacheState) -> Result<()> {
+        let items = self
             .client
-            .paginate("stars.list", &BTreeMap::new(), "items")
-        else {
-            return;
-        };
+            .paginate("stars.list", &BTreeMap::new(), "items")?;
         let favorite_ids: HashSet<String> = items
             .iter()
             .filter_map(|item| {
@@ -699,24 +905,25 @@ impl SlackService {
         for id in missing {
             let mut params = BTreeMap::new();
             params.insert("channel".into(), id);
-            if let Ok(result) = self.client.call("conversations.info", &params) {
-                if let Some(mut conversation) = result
-                    .get("channel")
-                    .and_then(|value| compact_conversation(value, &state.users))
-                {
-                    conversation.is_favorite = true;
-                    state.conversations.push(conversation);
-                }
+            let result = self.client.call("conversations.info", &params)?;
+            if let Some(mut conversation) = result
+                .get("channel")
+                .and_then(|value| compact_conversation(value, &state.users))
+            {
+                conversation.is_favorite = true;
+                state.conversations.push(conversation);
             }
         }
+        Ok(())
     }
 
-    fn refresh_identity(&self, state: &mut CacheState) -> Result<()> {
+    pub fn refresh_identity(&self, state: &mut CacheState) -> Result<()> {
         let result = self.client.call("auth.test", &BTreeMap::new())?;
         state.team_id = value_string(&result, "team_id");
         state.team_name = value_string(&result, "team");
         state.self_user_id = value_string(&result, "user_id");
         state.self_username = value_string(&result, "user");
+        state.mark_refreshed("identity");
         Ok(())
     }
 
@@ -1147,6 +1354,23 @@ fn merge_files(cached: Vec<SlackFile>, incoming: Vec<SlackFile>) -> Vec<SlackFil
     merged.into_values().collect()
 }
 
+fn search_page_count(value: &Value, family: &str) -> u32 {
+    [
+        format!("/{family}/pagination/page_count"),
+        format!("/{family}/paging/pages"),
+    ]
+    .iter()
+    .find_map(|pointer| {
+        value.pointer(pointer).and_then(|value| match value {
+            Value::Number(number) => number.as_u64(),
+            Value::String(number) => number.parse().ok(),
+            _ => None,
+        })
+    })
+    .and_then(|pages| u32::try_from(pages).ok())
+    .unwrap_or(1)
+}
+
 fn value_string(value: &Value, key: &str) -> String {
     value.get(key).and_then(value_as_id).unwrap_or_default()
 }
@@ -1368,7 +1592,12 @@ mod tests {
     fn notices_round_trip_and_clear_on_take() {
         // The worker drains this into the status line, so a stale notice must
         // not repeat on the next successful refresh.
-        record_notice("partial activity: 1 of 2 mention/DM searches failed".into());
+        record_notice(SlackNotice {
+            message: "partial activity: 1 of 2 mention/DM searches failed".into(),
+            rate_limited: false,
+            retry_after_secs: None,
+            partial: true,
+        });
         assert_eq!(
             take_notice().as_deref(),
             Some("partial activity: 1 of 2 mention/DM searches failed")
@@ -1405,6 +1634,19 @@ mod tests {
         let jittered = rate_limit_delay(1, None, 1_234);
         assert!(jittered >= Duration::from_secs(2));
         assert!(jittered < Duration::from_millis(2_250));
+    }
+
+    #[test]
+    fn search_pagination_accepts_modern_and_legacy_slack_shapes() {
+        let modern = serde_json::json!({
+            "messages": { "pagination": { "page_count": 85 } }
+        });
+        assert_eq!(search_page_count(&modern, "messages"), 85);
+        let legacy = serde_json::json!({
+            "files": { "paging": { "pages": "12" } }
+        });
+        assert_eq!(search_page_count(&legacy, "files"), 12);
+        assert_eq!(search_page_count(&serde_json::json!({}), "messages"), 1);
     }
 
     #[test]

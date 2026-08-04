@@ -98,9 +98,20 @@ pub struct Config {
     /// Seconds between automatic background refreshes; `0` disables them and
     /// leaves Slick manual-refresh-only (Ctrl-R).
     ///
-    /// Clamped to a sane floor when enabled: Slack throttles aggressively and
-    /// each cycle refreshes the sidebar plus the visible target.
+    /// This applies to the legacy all-in-one TUI mode. `slick --client` never
+    /// calls Slack; `slick daemon` owns its independent gap scheduler.
     pub refresh_interval_secs: u64,
+    /// HTTP bind address for `slick daemon` snapshot + SSE service.
+    pub daemon_bind: String,
+    /// Optional HTTP base URL used by `slick --client`. When absent, the client
+    /// follows atomic writes to the local cache file instead.
+    pub daemon_url: Option<String>,
+    /// Optional bearer-token file. Defaults beside this config as
+    /// `daemon-token`; the daemon generates it mode 0600 on first launch.
+    pub daemon_token_file: Option<PathBuf>,
+    /// Minimum spacing between daemon refresh tasks. Individual domains have
+    /// longer freshness targets; this is only the global API-burst floor.
+    pub daemon_min_refresh_secs: u64,
     /// Conversation ids favourited inside Slick; unioned with Slack stars.
     pub favorites: BTreeSet<String>,
     /// Local read markers: conversation id -> newest message timestamp the
@@ -130,6 +141,10 @@ impl Default for Config {
             sidebar_width: 32,
             detail_percent: 64,
             refresh_interval_secs: 60,
+            daemon_bind: "127.0.0.1:7612".to_string(),
+            daemon_url: None,
+            daemon_token_file: None,
+            daemon_min_refresh_secs: 2,
             favorites: BTreeSet::new(),
             read_markers: BTreeMap::new(),
             alerts: AlertMode::default(),
@@ -178,6 +193,17 @@ impl Config {
         }
         let body = serde_yaml::to_string(self).context("serialize Slick config")?;
         std::fs::write(path, body).with_context(|| format!("write Slick config {}", path.display()))
+    }
+
+    /// Bearer-token path for the daemon/client protocol.
+    #[must_use]
+    pub fn daemon_token_path(&self, config_path: &Path) -> PathBuf {
+        self.daemon_token_file.clone().unwrap_or_else(|| {
+            config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("daemon-token")
+        })
     }
 
     /// Toggle a local favourite, returning the new state.

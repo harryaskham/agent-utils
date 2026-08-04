@@ -1,13 +1,16 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use clap::Parser;
+use anyhow::{bail, Context, Result};
+use clap::{Parser, Subcommand};
 use slick::cache::CacheStore;
 use slick::ui::{self, Page, RunOptions};
 
 #[derive(Debug, Parser)]
 #[command(name = "slick", version, about = "A read-only, graphical Slack TUI")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Run with deterministic offline demo data.
     #[arg(long)]
     demo: bool,
@@ -33,7 +36,7 @@ struct Cli {
     no_graphics: bool,
 
     /// Override the cache JSON path.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, global = true, value_name = "PATH")]
     cache: Option<PathBuf>,
 
     /// Remove the cache before startup.
@@ -53,17 +56,65 @@ struct Cli {
     open: bool,
 
     /// Config file path (default: `$SLICK_CONFIG`, else `~/.config/slick/config.yaml`).
-    #[arg(long)]
+    #[arg(long, global = true)]
     config: Option<std::path::PathBuf>,
+
+    /// Run the TUI as a cache-only client. No Slack service is constructed.
+    #[arg(long)]
+    client: bool,
+
+    /// Authenticated Slick daemon base URL for --client. Without it the client
+    /// follows atomic writes to the local cache path.
+    #[arg(long, value_name = "URL")]
+    daemon_url: Option<String>,
+
+    /// Bearer token file for remote --client (default beside config).
+    #[arg(long, value_name = "PATH")]
+    token_file: Option<PathBuf>,
 
     /// Snapshot height in terminal cells.
     #[arg(long, default_value_t = 36)]
     height: u16,
 }
 
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Continuously fill the cache and serve authenticated snapshots/SSE.
+    Daemon {
+        /// HTTP bind address (default from config: daemon-bind).
+        #[arg(long, value_name = "ADDR")]
+        bind: Option<String>,
+        /// Bearer token file (generated mode 0600 when absent).
+        #[arg(long, value_name = "PATH")]
+        token_file: Option<PathBuf>,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config_path = cli
+        .config
+        .clone()
+        .unwrap_or_else(slick::Config::default_path);
+    let config = slick::Config::load(&config_path)?;
     let cache = CacheStore::new(cli.cache.unwrap_or_else(CacheStore::default_path));
+    if let Some(Command::Daemon { bind, token_file }) = &cli.command {
+        if cli.demo || cli.snapshot || cli.sync_once || cli.fetch_file.is_some() || cli.client {
+            bail!("slick daemon cannot be combined with TUI/snapshot/sync modes");
+        }
+        return slick::daemon::run(slick::daemon::DaemonOptions {
+            cache_store: cache,
+            bind: bind.clone().unwrap_or_else(|| config.daemon_bind.clone()),
+            token_path: token_file
+                .clone()
+                .or(cli.token_file.clone())
+                .unwrap_or_else(|| config.daemon_token_path(&config_path)),
+            min_refresh_secs: config.daemon_min_refresh_secs,
+        });
+    }
+    if cli.client && (cli.sync_once || cli.fetch_file.is_some()) {
+        bail!("--client cannot be combined with --sync-once or --fetch-file; cache-only mode never constructs SlackService");
+    }
     if cli.clear_cache {
         cache.clear()?;
     }
@@ -99,7 +150,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if cli.snapshot {
-        let state = if cli.live {
+        let state = if cli.live || cli.client {
             cache.load().unwrap_or_default()
         } else {
             slick::demo_state()
@@ -112,24 +163,26 @@ fn main() -> Result<()> {
                 cli.height.max(20),
                 parse_page(&cli.page),
                 cli.open,
-                &slick::Config::load(
-                    &cli.config
-                        .clone()
-                        .unwrap_or_else(slick::Config::default_path),
-                )?,
+                &config,
             )
         );
         return Ok(());
     }
-    let config_path = cli
-        .config
-        .clone()
-        .unwrap_or_else(slick::Config::default_path);
-    let config = slick::Config::load(&config_path)?;
+    if cli.client && cli.demo {
+        bail!("--client cannot be combined with --demo");
+    }
+    let client = cli.client.then(|| slick::client::ClientOptions {
+        cache_store: cache.clone(),
+        endpoint: cli.daemon_url.or_else(|| config.daemon_url.clone()),
+        token_path: cli
+            .token_file
+            .unwrap_or_else(|| config.daemon_token_path(&config_path)),
+    });
     ui::run(RunOptions {
         demo: cli.demo,
         no_graphics: cli.no_graphics || !config.graphics,
         cache_store: cache,
+        client,
         initial_page: parse_page(&cli.page),
         config,
         config_path,

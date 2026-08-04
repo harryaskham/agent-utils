@@ -30,12 +30,13 @@ use kittui::{CellRect, Direction as KittuiDirection, RendererKind, Rgba, Runtime
 use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
+use crate::client::{ClientOptions, ClientSubscription, ClientUpdate};
 use crate::config::{AlertMode, Config, ThemeName};
 use crate::feed::{Feed, FeedTarget};
 use crate::images::{self, ImageStore};
 use crate::markdown::{extract_urls, preview, render_markdown, render_markdown_for};
 use crate::markdown::{ImageKind, ImagePlacement, IMAGE_PLACEHOLDER};
-use crate::model::{CacheState, Conversation, ConversationKind, Message, SlackFile};
+use crate::model::{CacheState, Conversation, ConversationKind, Message, RefreshState, SlackFile};
 use crate::slack::SlackService;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -331,8 +332,9 @@ enum WorkerEvent {
 }
 
 struct Worker {
-    tx: Sender<WorkerCommand>,
-    rx: Receiver<WorkerEvent>,
+    tx: Option<Sender<WorkerCommand>>,
+    rx: Option<Receiver<WorkerEvent>>,
+    client: Option<ClientSubscription>,
 }
 
 impl Worker {
@@ -381,13 +383,47 @@ impl Worker {
             }
         });
         Self {
-            tx: command_tx,
-            rx: event_rx,
+            tx: Some(command_tx),
+            rx: Some(event_rx),
+            client: None,
         }
     }
 
+    fn spawn_client(options: ClientOptions) -> Self {
+        Self {
+            tx: None,
+            rx: None,
+            client: Some(ClientSubscription::spawn(options)),
+        }
+    }
+
+    fn events(&self) -> Vec<WorkerEvent> {
+        if let Some(rx) = &self.rx {
+            return rx.try_iter().collect();
+        }
+        self.client.as_ref().map_or_else(Vec::new, |client| {
+            client
+                .rx
+                .try_iter()
+                .map(|update| match update {
+                    ClientUpdate::State(state, status) => WorkerEvent::Updated(state, status),
+                    ClientUpdate::Error(error) => WorkerEvent::Failed(error),
+                })
+                .collect()
+        })
+    }
+
     fn send(&self, command: WorkerCommand) {
-        let _ = self.tx.send(command);
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(command);
+        }
+    }
+
+    fn stop(&self) {
+        self.send(WorkerCommand::Stop);
+        if let Some(client) = &self.client {
+            client.stop();
+        }
     }
 }
 
@@ -512,25 +548,30 @@ pub struct App {
     selected_message: usize,
     thread_stack: Vec<ThreadView>,
     worker: Option<Worker>,
+    cache_only_client: bool,
     pending_g: bool,
 }
 
 impl App {
     #[must_use]
     pub fn demo(state: CacheState) -> Self {
-        Self::new(state, None)
+        Self::new(state, None, false)
     }
 
     fn live(state: CacheState, store: CacheStore) -> Self {
         let worker = Worker::spawn(state.clone(), store);
-        let app = Self::new(state, Some(worker));
+        let app = Self::new(state, Some(worker), false);
         if let Some(worker) = &app.worker {
             worker.send(WorkerCommand::Bootstrap);
         }
         app
     }
 
-    fn new(state: CacheState, worker: Option<Worker>) -> Self {
+    fn client(state: CacheState, options: ClientOptions) -> Self {
+        Self::new(state, Some(Worker::spawn_client(options)), true)
+    }
+
+    fn new(state: CacheState, worker: Option<Worker>, cache_only_client: bool) -> Self {
         Self {
             status: if state.saved_at.is_some() {
                 "cached".into()
@@ -584,6 +625,7 @@ impl App {
             selected_message: 0,
             thread_stack: Vec::new(),
             worker,
+            cache_only_client,
             pending_g: false,
         }
     }
@@ -592,7 +634,7 @@ impl App {
         let Some(worker) = &self.worker else {
             return false;
         };
-        let events: Vec<_> = worker.rx.try_iter().collect();
+        let events = worker.events();
         let changed = !events.is_empty();
         for event in events {
             match event {
@@ -624,7 +666,11 @@ impl App {
                     self.busy = false;
                     self.busy_since = None;
                     self.last_error = Some(error.clone());
-                    self.status = "cached · refresh failed".into();
+                    self.status = if self.cache_only_client {
+                        "client · daemon disconnected".into()
+                    } else {
+                        "cached · refresh failed".into()
+                    };
                 }
             }
         }
@@ -872,6 +918,11 @@ impl App {
     }
 
     fn send(&mut self, command: WorkerCommand) {
+        if self.cache_only_client {
+            self.status = "client cache-only · waiting for daemon".into();
+            self.last_error = None;
+            return;
+        }
         if let Some(worker) = &self.worker {
             worker.send(command);
             self.busy = true;
@@ -915,7 +966,7 @@ impl App {
     /// Slack call can never accumulate a queue of stale refreshes, and a no-op
     /// in demo mode because `send` has no worker there.
     fn auto_refresh(&mut self) -> bool {
-        if self.busy || self.worker.is_none() {
+        if self.busy || self.worker.is_none() || self.cache_only_client {
             return false;
         }
         self.refresh_visible();
@@ -1555,23 +1606,9 @@ impl App {
         None
     }
 
-    /// Adopt user configuration: palette, pane geometry and local favourites.
-    /// Seed the feed from the current cache and release it immediately.
-    ///
-    /// Used by snapshots and demo mode where there is no live tick loop.
+    /// Seed snapshots/demo views from persisted history without replay pacing.
     fn prime_feed(&mut self) {
-        let start = Instant::now();
-        self.feed = Feed::new(Duration::from_millis(0), 500);
-        self.feed.ingest(&self.state, start);
-        // Snapshots have no wall-clock loop, so advance a virtual clock past
-        // each paced slot until the backlog has drained.
-        let mut clock = start;
-        while self.feed.pending_len() > 0 {
-            clock += Duration::from_millis(100);
-            if self.feed.tick(clock) == 0 {
-                break;
-            }
-        }
+        self.feed.seed(&self.state);
     }
 
     fn apply_config(&mut self, config: Config, path: PathBuf) {
@@ -1589,13 +1626,46 @@ impl App {
     /// Shared with the redraw gate in `run_loop`, so the loop can repaint
     /// exactly when this string changes rather than once a second regardless.
     fn staleness_label(&self) -> String {
-        snapshot_age(
-            self.state
-                .last_refresh
-                .get("sidebar")
-                .copied()
-                .or(self.state.saved_at),
-        )
+        let (key, label) = self.visible_refresh_domain();
+        let age = snapshot_age(self.state.refreshed_at(&key));
+        let mut status = format!("{label} {}", age.trim_start_matches("snapshot "));
+        if let Some(domain) = self.state.collector.domains.get(&key) {
+            match domain.state {
+                RefreshState::Partial => status.push_str(" · partial gap"),
+                RefreshState::Backoff => {
+                    let remaining = self
+                        .state
+                        .collector
+                        .rate_limited_until
+                        .map_or(0, |until| until.saturating_sub(CacheState::now()));
+                    if remaining > 0 {
+                        let _ = write!(status, " · rate limit {remaining}s");
+                    } else {
+                        status.push_str(" · rate limited");
+                    }
+                }
+                RefreshState::Error => status.push_str(" · refresh error"),
+                RefreshState::Refreshing => status.push_str(" · refreshing"),
+                RefreshState::Unknown | RefreshState::Healthy => {}
+            }
+        }
+        status
+    }
+
+    fn visible_refresh_domain(&self) -> (String, &'static str) {
+        match self.page {
+            Page::Notifications | Page::Feed => ("notifications".into(), "activity"),
+            Page::Files => ("files".into(), "files"),
+            Page::Favorites | Page::Dms | Page::Channels if self.section_overview => {
+                ("sidebar".into(), "inventory")
+            }
+            Page::Favorites | Page::Dms | Page::Channels => {
+                self.selected_conversation().map_or_else(
+                    || ("sidebar".into(), "inventory"),
+                    |conversation| (format!("conversation:{}", conversation.id), "conversation"),
+                )
+            }
+        }
     }
 
     /// Animation generation for the in-flight worker. The main loop compares
@@ -1907,7 +1977,7 @@ impl App {
         }
         self.render_footer(frame, vertical[2], graphics);
         if self.show_help {
-            Self::render_help(frame, area);
+            self.render_help(frame, area);
         }
     }
 
@@ -2805,7 +2875,7 @@ impl App {
         }
     }
 
-    fn render_help(frame: &mut Frame<'_>, area: Rect) {
+    fn render_help(&self, frame: &mut Frame<'_>, area: Rect) {
         let width = area.width.min(72);
         let height = area.height.min(23);
         let popup = centered_rect(width, height, area);
@@ -2813,7 +2883,7 @@ impl App {
         let help = Text::from(vec![
             Line::from(Span::styled("Slick · keyboard and mouse", Style::default().fg(PURPLE()).add_modifier(Modifier::BOLD))),
             Line::default(),
-            Line::from(vec![Span::styled("1-5 / ←→", key_style()), Span::raw("  Activity, Favorites, DMs, Channels, Files")]),
+            Line::from(vec![Span::styled("1-6 / ←→", key_style()), Span::raw("  Activity, Feed, Favorites, DMs, Channels, Files")]),
             Line::from(vec![Span::styled("↑↓ / j k", key_style()), Span::raw("  Move selection, message or scroll focused content")]),
             Line::from(vec![Span::styled("g g / G / 0", key_style()), Span::raw(" Top, bottom and home (Vim-style)")]),
             Line::from(vec![Span::styled("Enter", key_style()), Span::raw("       Open conversation/file, or open a thread on a reply-bearing message")]),
@@ -2830,9 +2900,22 @@ impl App {
             Line::raw("Click navigation, conversations, notifications and files. Scroll the focused pane with the wheel."),
             Line::default(),
             Line::from(Span::styled("Refresh contract", Style::default().fg(GREEN()).add_modifier(Modifier::BOLD))),
-            Line::raw("Slick caches content. Ctrl-R always updates the DM/channel sidebar, then requests only the active view from its last refresh (bounded to seven days)."),
+            Line::raw(if self.cache_only_client {
+                "Cache-only client: Ctrl-R waits for daemon/cache data and never calls Slack."
+            } else {
+                "Legacy live mode: Ctrl-R refreshes the sidebar, then only the active view."
+            }),
             Line::default(),
-            Line::from(Span::styled("Read-only: Slick never sends, edits, reacts, joins or marks messages read.", Style::default().fg(YELLOW()))),
+            Line::from(Span::styled(
+                if self.cache_only_client {
+                    "Structurally read-only: this process has no Slack service."
+                } else if self.config.mark_read_in_slack {
+                    "Slack writes enabled: opening a conversation sends its read marker."
+                } else {
+                    "Read-only: Slick never sends, edits, reacts, joins or marks messages read."
+                },
+                Style::default().fg(YELLOW()),
+            )),
         ]);
         frame.render_widget(
             Paragraph::new(help)
@@ -2851,7 +2934,7 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         if let Some(worker) = &self.worker {
-            worker.send(WorkerCommand::Stop);
+            worker.stop();
         }
     }
 }
@@ -3421,6 +3504,7 @@ pub struct RunOptions {
     pub demo: bool,
     pub no_graphics: bool,
     pub cache_store: CacheStore,
+    pub client: Option<ClientOptions>,
     pub initial_page: Page,
     pub config: Config,
     pub config_path: PathBuf,
@@ -3434,14 +3518,15 @@ pub fn run(options: RunOptions) -> Result<()> {
     };
     let mut app = if options.demo {
         App::demo(initial)
+    } else if let Some(client) = options.client {
+        App::client(initial, client)
     } else {
         App::live(initial, options.cache_store)
     };
     app.apply_config(options.config.clone(), options.config_path.clone());
-    app.feed.ingest(&app.state, Instant::now());
-    // The startup ingest is the cached backlog, not new arrivals: announcing it
-    // would fire a burst of alerts every launch.
-    let _ = app.feed.take_alerts();
+    // Persisted history must be fully visible on the first frame. Only later
+    // daemon/network deltas enter the paced-arrival queue.
+    app.feed.seed(&app.state);
     app.set_page(options.initial_page);
     app.osc8_links = true;
     let mut stdout = io::stdout();
@@ -3945,6 +4030,15 @@ mod tests {
     }
 
     #[test]
+    fn cache_only_client_never_dispatches_refresh_commands() {
+        let mut app = App::new(crate::slack::demo_state(), None, true);
+        app.send(WorkerCommand::Bootstrap);
+        assert!(!app.busy);
+        assert_eq!(app.status, "client cache-only · waiting for daemon");
+        assert!(!app.auto_refresh());
+    }
+
+    #[test]
     fn auto_refresh_is_skipped_while_the_worker_is_busy() {
         let mut app = App::demo(crate::slack::demo_state());
         // Demo mode has no worker, so a cycle must be a no-op rather than
@@ -3958,17 +4052,32 @@ mod tests {
     fn busy_header_reports_elapsed_liveness_and_slow_work() {
         let mut app = App::demo(crate::slack::demo_state());
         app.busy = true;
-        app.busy_since = Some(Instant::now() - Duration::from_secs(3));
+        app.busy_since = Some(Instant::now().checked_sub(Duration::from_secs(3)).unwrap());
         let (icon, color, text) = app.header_status();
         assert!(["◐", "◓", "◑", "◒"].contains(&icon));
         assert_eq!(color, YELLOW());
         assert!(text.contains("3s"), "{text}");
         assert!(app.liveness_tick().is_some());
 
-        app.busy_since = Some(Instant::now() - Duration::from_secs(46));
+        app.busy_since = Some(Instant::now().checked_sub(Duration::from_secs(46)).unwrap());
         let (_, color, text) = app.header_status();
         assert_eq!(color, RED());
         assert!(text.contains("slow 46s"), "{text}");
+    }
+
+    #[test]
+    fn visible_domain_staleness_exposes_partial_and_rate_limit_state() {
+        let now = CacheState::now();
+        let mut state = crate::slack::demo_state();
+        let domain = state.domain_health_mut("notifications");
+        domain.last_success_at = Some(now - 7_200);
+        domain.state = RefreshState::Backoff;
+        state.collector.rate_limited_until = Some(now + 30);
+        let mut app = App::demo(state);
+        app.set_page(Page::Feed);
+        let status = app.staleness_label();
+        assert!(status.contains("activity 2h 0m stale"), "{status}");
+        assert!(status.contains("rate limit"), "{status}");
     }
 
     #[test]

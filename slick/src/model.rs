@@ -6,6 +6,64 @@ use serde::{Deserialize, Serialize};
 pub const CACHE_VERSION: u32 = 1;
 pub const SEVEN_DAYS_SECS: i64 = 7 * 24 * 60 * 60;
 
+/// Collector state for one independently refreshed cache domain.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefreshState {
+    /// No collector has attempted this domain yet.
+    #[default]
+    Unknown,
+    /// A request for this domain is currently in flight.
+    Refreshing,
+    /// The last attempt produced a complete snapshot.
+    Healthy,
+    /// Some data was retained, but the attempt was not complete.
+    Partial,
+    /// Slack asked the collector to stop and retry later.
+    Backoff,
+    /// The last attempt failed for a reason other than throttling.
+    Error,
+}
+
+/// Persistent health and coverage metadata for one refresh domain.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct DomainHealth {
+    pub state: RefreshState,
+    pub last_attempt_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub next_attempt_at: Option<i64>,
+    pub consecutive_failures: u32,
+    pub detail: String,
+}
+
+/// Persistent status written by `slick daemon` beside the cache payload.
+///
+/// `saved_at` can advance for a health-only update, so clients must use these
+/// per-domain success timestamps when deciding whether activity is complete.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CollectorHealth {
+    pub running: bool,
+    pub revision: u64,
+    pub current_domain: Option<String>,
+    pub rate_limited_until: Option<i64>,
+    pub last_cycle_at: Option<i64>,
+    pub last_error: String,
+    pub domains: BTreeMap<String, DomainHealth>,
+}
+
+/// Durable cursor for a multi-page Slack search. A domain's complete-refresh
+/// timestamp advances only after every page in its fixed window succeeds.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SearchProgress {
+    pub window_start: i64,
+    pub next_page: u32,
+    pub cursor: String,
+    pub complete: bool,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct User {
     pub id: String,
@@ -167,6 +225,10 @@ pub struct CacheState {
     pub last_refresh: BTreeMap<String, i64>,
     #[serde(default)]
     pub self_activity: BTreeMap<String, String>,
+    #[serde(default)]
+    pub collector: CollectorHealth,
+    #[serde(default)]
+    pub search_progress: BTreeMap<String, SearchProgress>,
     pub saved_at: Option<i64>,
 }
 
@@ -186,6 +248,8 @@ impl Default for CacheState {
             files: Vec::new(),
             last_refresh: BTreeMap::new(),
             self_activity: BTreeMap::new(),
+            collector: CollectorHealth::default(),
+            search_progress: BTreeMap::new(),
             saved_at: None,
         }
     }
@@ -212,6 +276,27 @@ impl CacheState {
 
     pub fn mark_refreshed(&mut self, key: impl Into<String>) {
         self.last_refresh.insert(key.into(), Self::now());
+    }
+
+    /// Last complete refresh for a domain, preferring daemon coverage metadata
+    /// and falling back to pre-daemon cache timestamps.
+    #[must_use]
+    pub fn refreshed_at(&self, key: &str) -> Option<i64> {
+        match (
+            self.collector
+                .domains
+                .get(key)
+                .and_then(|domain| domain.last_success_at),
+            self.last_refresh.get(key).copied(),
+        ) {
+            (Some(collector), Some(legacy)) => Some(collector.max(legacy)),
+            (collector, legacy) => collector.or(legacy),
+        }
+    }
+
+    /// Mutable health record, created lazily for old cache files.
+    pub fn domain_health_mut(&mut self, key: &str) -> &mut DomainHealth {
+        self.collector.domains.entry(key.to_string()).or_default()
     }
 
     #[must_use]
@@ -278,10 +363,10 @@ impl CacheState {
                 .partial_cmp(&left.message.unix_ts())
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        self.notifications.truncate(500);
+        self.notifications.truncate(5_000);
         self.files
             .sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        self.files.truncate(200);
+        self.files.truncate(1_000);
         for messages in self.messages.values_mut().chain(self.threads.values_mut()) {
             messages.sort_by(|left, right| {
                 left.unix_ts()

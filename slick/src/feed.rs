@@ -66,7 +66,7 @@ pub struct Feed {
 
 impl Default for Feed {
     fn default() -> Self {
-        Self::new(Duration::from_secs(60), 500)
+        Self::new(Duration::from_secs(60), 5_000)
     }
 }
 
@@ -103,6 +103,20 @@ impl Feed {
     #[must_use]
     pub fn pending_len(&self) -> usize {
         self.pending.len()
+    }
+
+    /// Seed every persisted cache candidate immediately.
+    ///
+    /// The cache is history, not a new network burst. Replaying it through the
+    /// pacing queue made Feed visibly repopulate on every launch and created the
+    /// false impression that old items had just arrived.
+    pub fn seed(&mut self, state: &CacheState) {
+        self.entries = Self::candidates(state);
+        self.entries.truncate(self.capacity);
+        self.pending.clear();
+        self.next_release = None;
+        self.pending_alerts = 0;
+        self.reindex();
     }
 
     /// Ingest the current cache snapshot, queueing anything new or changed.
@@ -270,6 +284,17 @@ mod tests {
             notifications,
             ..CacheState::default()
         }
+    }
+
+    #[test]
+    fn persisted_cache_seeds_immediately_without_replaying_arrivals() {
+        let state = state_with(&[("c1", "01", "one"), ("c1", "02", "two")]);
+        let mut feed = Feed::new(Duration::from_secs(60), 100);
+        feed.seed(&state);
+        assert_eq!(feed.entries().len(), 2);
+        assert_eq!(feed.pending_len(), 0);
+        assert_eq!(feed.take_alerts(), 0);
+        assert_eq!(feed.entries()[0].key, "msg:c1:02");
     }
 
     #[test]
