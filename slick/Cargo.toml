@@ -20,10 +20,12 @@ serde_yaml = "0.9"
 html2md = "0.2"
 kittui = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }
 kittui-kitty = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }
+mcp-cli = { package = "mcp-cli-core", git = "https://github.com/harryaskham/mcp-cli", rev = "81e55235df7d7335d4dc7bd1095131246d157a2a" }
 pulldown-cmark = "0.12"
 ratakittui = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }
 ratatui = { version = "0.29", features = ["crossterm", "unstable-rendered-line-info"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+schemars = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

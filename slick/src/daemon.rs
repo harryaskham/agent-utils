@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::cache::CacheStore;
 use crate::model::{CacheState, CollectorHealth, ConversationKind, RefreshState, SEVEN_DAYS_SECS};
+use crate::query::{project_state, Surface};
 use crate::slack::{IncompleteCoverage, SlackNotice, SlackService};
 use anyhow::{bail, Context, Result};
 
@@ -568,6 +569,19 @@ fn serve_connection(mut stream: TcpStream, shared: &SharedCache, token: &str) ->
             let body = serde_json::to_vec(&shared.snapshot()).context("serialize snapshot")?;
             write_http_response(&mut stream, "200 OK", "application/json", &body)
         }
+        ("GET", route) if route.starts_with("/snapshot/") => {
+            let Some(surface) = snapshot_surface(route, &request.path) else {
+                return write_http_response(
+                    &mut stream,
+                    "404 Not Found",
+                    "text/plain",
+                    b"unknown snapshot surface\n",
+                );
+            };
+            let body = serde_json::to_vec(&project_state(&shared.snapshot(), &surface))
+                .context("serialize partial snapshot")?;
+            write_http_response(&mut stream, "200 OK", "application/json", &body)
+        }
         ("GET", "/health") => {
             let body = serde_json::to_vec(&shared.snapshot().collector)
                 .context("serialize collector health")?;
@@ -601,6 +615,26 @@ fn serve_connection(mut stream: TcpStream, shared: &SharedCache, token: &str) ->
             )
         }
         _ => write_http_response(&mut stream, "404 Not Found", "text/plain", b"not found\n"),
+    }
+}
+
+fn snapshot_surface(route: &str, path: &str) -> Option<Surface> {
+    let id = || {
+        path.split_once('?').and_then(|(_, query)| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find(|(name, _)| name == "id")
+                .map(|(_, value)| value.into_owned())
+        })
+    };
+    match route {
+        "/snapshot/feed" => Some(Surface::Feed),
+        "/snapshot/activity" => Some(Surface::Activity),
+        "/snapshot/dms" => Some(Surface::Dms),
+        "/snapshot/channels" => Some(Surface::Channels),
+        "/snapshot/files" => Some(Surface::Files),
+        "/snapshot/conversation" => id().map(Surface::Conversation),
+        "/snapshot/file" => id().map(Surface::File),
+        _ => None,
     }
 }
 
@@ -879,6 +913,33 @@ mod tests {
         let response = http_get(address, Some(&"x".repeat(64)), "/snapshot");
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.contains("Authenticated workspace"), "{response}");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn partial_snapshot_routes_return_only_requested_surface() {
+        let dir = std::env::temp_dir().join(format!(
+            "slick-partial-http-test-{}-{}",
+            std::process::id(),
+            CacheState::now()
+        ));
+        let shared = Arc::new(SharedCache::new(
+            crate::slack::demo_state(),
+            CacheStore::new(dir.join("state.json")),
+        ));
+        let token = "p".repeat(64);
+        let address = start_http_server("127.0.0.1:0", shared, token.clone()).unwrap();
+        let response = http_get(address, Some(&token), "/snapshot/dms");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let body = response.split_once("\r\n\r\n").unwrap().1;
+        let projection: crate::query::ProjectionSnapshot = serde_json::from_str(body).unwrap();
+        assert_eq!(projection.surface, "dms");
+        assert!(projection
+            .state
+            .conversations
+            .iter()
+            .all(|conversation| conversation.kind.is_dm()));
+        assert!(projection.state.files.is_empty());
         fs::remove_dir_all(dir).ok();
     }
 

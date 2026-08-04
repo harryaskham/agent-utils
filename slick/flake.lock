@@ -35,6 +35,23 @@
         "url": "ssh://git@github.com/harryaskham/kittui"
       }
     },
+    "mcp-cli-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785482795,
+        "narHash": "sha256-IZ9SX1iUWYv8mUufYVWiEOvVC55peViCnGTcdqpCMBs=",
+        "ref": "refs/heads/main",
+        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
+        "revCount": 52,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/mcp-cli"
+      },
+      "original": {
+        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/mcp-cli"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1784796856,
@@ -55,6 +72,7 @@
       "inputs": {
         "flake-utils": "flake-utils",
         "kittui-src": "kittui-src",
+        "mcp-cli-src": "mcp-cli-src",
         "nixpkgs": "nixpkgs"
       }
     },

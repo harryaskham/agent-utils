@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use slick::cache::CacheStore;
 use slick::ui::{self, Page, RunOptions};
 
@@ -30,6 +30,10 @@ struct Cli {
     /// Fetch one cached Slack file/Canvas by ID into the cache and exit.
     #[arg(long, value_name = "FILE_ID")]
     fetch_file: Option<String>,
+
+    /// Emit stable mcp-cli JSON envelopes for query commands.
+    #[arg(long, global = true)]
+    json: bool,
 
     /// Disable Ratakittui/Kitty graphical chrome and use plain terminal borders.
     #[arg(long, global = true)]
@@ -93,6 +97,33 @@ struct Cli {
 enum Command {
     /// Run the smart TUI client (also the default when no command is given).
     Client,
+    /// List the merged message/file feed.
+    Feed(ListArgs),
+    /// Query grouped activity.
+    Activity {
+        #[command(subcommand)]
+        command: ListCommand,
+    },
+    /// Query direct messages.
+    Dm {
+        #[command(subcommand)]
+        command: ListGetCommand,
+    },
+    /// Query channels.
+    Channel {
+        #[command(subcommand)]
+        command: ListGetCommand,
+    },
+    /// Query files and Canvas Markdown.
+    Files {
+        #[command(subcommand)]
+        command: ListGetCommand,
+    },
+    /// Serve Slick query tools over MCP stdio.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
     /// Continuously fill the cache and serve authenticated snapshots/SSE.
     Daemon {
         /// HTTP bind address (default from config: daemon.bind).
@@ -102,6 +133,51 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         token_file: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Debug, Args)]
+struct ListArgs {
+    /// Maximum records to return.
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
+impl From<&ListArgs> for slick::query::ListInput {
+    fn from(value: &ListArgs) -> Self {
+        Self { limit: value.limit }
+    }
+}
+
+#[derive(Clone, Debug, Args)]
+struct GetArgs {
+    /// Slack conversation or file id.
+    #[arg(long)]
+    id: String,
+}
+
+impl From<&GetArgs> for slick::query::GetInput {
+    fn from(value: &GetArgs) -> Self {
+        Self {
+            id: value.id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum ListCommand {
+    List(ListArgs),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum ListGetCommand {
+    List(ListArgs),
+    Get(GetArgs),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum McpCommand {
+    /// Run NDJSON-framed MCP over stdin/stdout.
+    Stdio,
 }
 
 fn main() -> Result<()> {
@@ -122,6 +198,7 @@ fn main() -> Result<()> {
             || cli.no_fallback
             || cli.fallback_timeout.is_some()
             || cli.daemon_url.is_some()
+            || cli.json
         {
             bail!("slick daemon cannot be combined with client/TUI/snapshot/sync options");
         }
@@ -135,7 +212,111 @@ fn main() -> Result<()> {
             min_refresh_secs: config.daemon.min_refresh_secs,
         });
     }
-    let explicit_client = matches!(cli.command, Some(Command::Client));
+    let query_runtime = slick::query::QueryRuntime {
+        cache_store: cache.clone(),
+        use_cache: config.client.cache && !cli.no_cache,
+        use_daemon: config.client.daemon && !cli.no_daemon,
+        endpoint: cli
+            .daemon_url
+            .clone()
+            .unwrap_or_else(|| config.client.daemon_url.clone()),
+        token_path: cli
+            .token_file
+            .clone()
+            .unwrap_or_else(|| config.client_token_path(&config_path)),
+        fallback: config.client.fallback && !cli.no_fallback,
+        fallback_lease_path: config.fallback_lease_path(&config_path),
+    };
+    if let Some(command) = &cli.command {
+        match command {
+            Command::Feed(args) => {
+                let output = slick::query::feed(&query_runtime, &args.into())?;
+                return emit_query("slick_feed", cli.json, &output, slick::query::render_feed);
+            }
+            Command::Activity {
+                command: ListCommand::List(args),
+            } => {
+                let output = slick::query::activity(&query_runtime, &args.into())?;
+                return emit_query(
+                    "slick_activity_list",
+                    cli.json,
+                    &output,
+                    slick::query::render_activity,
+                );
+            }
+            Command::Dm { command } => match command {
+                ListGetCommand::List(args) => {
+                    let output = slick::query::conversations(&query_runtime, &args.into(), true)?;
+                    return emit_query(
+                        "slick_dm_list",
+                        cli.json,
+                        &output,
+                        slick::query::render_conversations,
+                    );
+                }
+                ListGetCommand::Get(args) => {
+                    let output = slick::query::conversation_get(&query_runtime, &args.into())?;
+                    return emit_query(
+                        "slick_dm_get",
+                        cli.json,
+                        &output,
+                        slick::query::render_conversation,
+                    );
+                }
+            },
+            Command::Channel { command } => match command {
+                ListGetCommand::List(args) => {
+                    let output = slick::query::conversations(&query_runtime, &args.into(), false)?;
+                    return emit_query(
+                        "slick_channel_list",
+                        cli.json,
+                        &output,
+                        slick::query::render_conversations,
+                    );
+                }
+                ListGetCommand::Get(args) => {
+                    let output = slick::query::conversation_get(&query_runtime, &args.into())?;
+                    return emit_query(
+                        "slick_channel_get",
+                        cli.json,
+                        &output,
+                        slick::query::render_conversation,
+                    );
+                }
+            },
+            Command::Files { command } => match command {
+                ListGetCommand::List(args) => {
+                    let output = slick::query::files(&query_runtime, &args.into())?;
+                    return emit_query(
+                        "slick_files_list",
+                        cli.json,
+                        &output,
+                        slick::query::render_files,
+                    );
+                }
+                ListGetCommand::Get(args) => {
+                    let output = slick::query::file_get(&query_runtime, &args.into())?;
+                    return emit_query(
+                        "slick_files_get",
+                        cli.json,
+                        &output,
+                        slick::query::render_file,
+                    );
+                }
+            },
+            Command::Mcp {
+                command: McpCommand::Stdio,
+            } => {
+                slick::query::serve_mcp(&query_runtime)?;
+                return Ok(());
+            }
+            Command::Client | Command::Daemon { .. } => {}
+        }
+    }
+    let explicit_client = matches!(&cli.command, Some(Command::Client));
+    if cli.json && (explicit_client || cli.command.is_none()) {
+        bail!("--json requires a query command such as feed, activity, dm, channel, or files");
+    }
     let utility_mode = cli.demo || cli.snapshot || cli.sync_once || cli.fetch_file.is_some();
     if explicit_client && utility_mode {
         bail!("slick client cannot be combined with demo/snapshot/sync utility modes");
@@ -222,6 +403,19 @@ fn main() -> Result<()> {
     })
 }
 
+fn emit_query<T, F>(command: &str, json: bool, output: &T, human: F) -> Result<()>
+where
+    T: serde::Serialize,
+    F: FnOnce(&T) -> String,
+{
+    if json {
+        println!("{}", slick::query::json_output(command, output)?);
+    } else {
+        print!("{}", human(output));
+    }
+    Ok(())
+}
+
 fn parse_page(value: &str) -> Page {
     match value {
         "feed" => Page::Feed,
@@ -255,6 +449,26 @@ mod tests {
         assert_eq!(client.page, "feed");
         assert!(client.no_cache);
         assert_eq!(client.fallback_timeout, Some(12));
+    }
+
+    #[test]
+    fn query_and_mcp_command_shapes_parse_with_global_json() {
+        let channel =
+            Cli::try_parse_from(["slick", "channel", "get", "--id", "C123", "--json"]).unwrap();
+        assert!(channel.json);
+        assert!(matches!(
+            channel.command,
+            Some(Command::Channel {
+                command: ListGetCommand::Get(GetArgs { ref id })
+            }) if id == "C123"
+        ));
+        let mcp = Cli::try_parse_from(["slick", "mcp", "stdio"]).unwrap();
+        assert!(matches!(
+            mcp.command,
+            Some(Command::Mcp {
+                command: McpCommand::Stdio
+            })
+        ));
     }
 
     #[test]

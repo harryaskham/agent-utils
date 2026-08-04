@@ -12,6 +12,10 @@
       url = "git+ssh://git@github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5";
       flake = false;
     };
+    mcp-cli-src = {
+      url = "git+ssh://git@github.com/harryaskham/mcp-cli?rev=81e55235df7d7335d4dc7bd1095131246d157a2a";
+      flake = false;
+    };
   };
 
   outputs =
@@ -20,6 +24,7 @@
       nixpkgs,
       flake-utils,
       kittui-src,
+      mcp-cli-src,
       ...
     }:
     let
@@ -36,11 +41,14 @@
               --replace-fail 'kittui-kitty = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }' \
                              'kittui-kitty = { path = "${kittui-src}/crates/kittui-kitty" }' \
               --replace-fail 'kittui = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }' \
-                             'kittui = { path = "${kittui-src}/crates/kittui" }'
+                             'kittui = { path = "${kittui-src}/crates/kittui" }' \
+              --replace-fail 'mcp-cli = { package = "mcp-cli-core", git = "https://github.com/harryaskham/mcp-cli", rev = "81e55235df7d7335d4dc7bd1095131246d157a2a" }' \
+                             'mcp-cli = { package = "mcp-cli-core", path = "${mcp-cli-src}" }'
             # Path dependencies have source-less lock entries. Cargo's git lock
             # entries carry no checksum, so deleting only this source line is the
             # exact git -> path lock transformation.
             sed -i '/source = "git+https:\/\/github.com\/harryaskham\/kittui?/d' "$out/Cargo.lock"
+            sed -i '/source = "git+https:\/\/github.com\/harryaskham\/mcp-cli?/d' "$out/Cargo.lock"
           '';
           slick = pkgs.rustPlatform.buildRustPackage {
             pname = "slick";
@@ -50,7 +58,7 @@
             # 132b67d). A stale value fails the build with "cargoHash or
             # cargoSha256 is out of date": set to pkgs.lib.fakeHash, build, and
             # copy the reported "got:" hash back here.
-            cargoHash = "sha256-TZFvF48HoDx4rb2xZ9aUBwI3FeTJP4YFyeXwtpTj3wM=";
+            cargoHash = "sha256-m0RasH/6OlnNgz3bIRCkk9yQ91LY08z9yVvgtVJuAAQ=";
             strictDeps = true;
             buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
             doCheck = true;

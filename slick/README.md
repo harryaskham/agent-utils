@@ -16,6 +16,10 @@ nix run ./slick -- client      # cache + http://127.0.0.1:7612 SSE by default
 nix run ./slick -- client --no-daemon  # strict cache-only client
 nix run ./slick -- client --no-cache   # daemon-only; no state read/write
 nix run ./slick -- client --daemon-url http://slick-host:7612  # remote SSE
+nix run ./slick -- feed --limit 50
+nix run ./slick -- channel get --id C123 --json
+nix run ./slick -- files get --id F123
+nix run ./slick -- mcp stdio
 nix run ./slick -- --demo       # deterministic offline UI
 nix run ./slick -- --demo --no-graphics
 nix run ./slick -- --sync-once  # bounded live refresh into the cache
@@ -229,6 +233,45 @@ failed.
 
 Slick is structurally read-only against Slack. The daemon and embedded fallback
 fetch data but cannot send, edit, react, join, mark read, or mutate presence.
+
+## CLI and MCP query surface
+
+Slick's terse one-shot queries use the same source policy as the smart client:
+use a local surface when it is available, otherwise fetch only that projection
+from the authenticated daemon, queue a daemon refresh when the surface is not
+yet populated, and finally use the same per-host fallback lease if daemon access
+fails and fallback is enabled. Remote projections merge into the local cache
+unless `--no-cache` is set.
+
+```bash
+slick feed [--limit 100]
+slick activity list [--limit 100]
+slick dm list [--limit 100]
+slick dm get --id D123
+slick channel list [--limit 100]
+slick channel get --id C123
+slick files list [--limit 100]
+slick files get --id F123
+```
+
+Human-readable text is the default. Global `--json` emits the stable mcp-cli
+envelope and bounded terse data: activity messages are grouped once under their
+conversation provenance, repeated Slack user/channel metadata is removed, and
+Canvas content is returned as the cached bounded Markdown rather than raw HTML.
+
+`slick mcp stdio` exposes the same implementations over NDJSON-framed MCP:
+
+- `slick_feed`
+- `slick_activity_list`
+- `slick_dm_list` / `slick_dm_get`
+- `slick_channel_list` / `slick_channel_get`
+- `slick_files_list` / `slick_files_get`
+
+The daemon keeps the full `/snapshot` + `/events` endpoints for TUI clients and
+also exposes authenticated partial snapshots at `/snapshot/feed`,
+`/snapshot/activity`, `/snapshot/dms`, `/snapshot/channels`, `/snapshot/files`,
+`/snapshot/conversation?id=…`, and `/snapshot/file?id=…`. This avoids shipping a
+multi-megabyte cache when an agent asks for one channel or Canvas.
 
 ## Nix service modules
 

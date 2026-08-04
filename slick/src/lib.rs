@@ -8,6 +8,7 @@ pub mod feed;
 pub mod images;
 pub mod markdown;
 pub mod model;
+pub mod query;
 pub mod slack;
 pub mod ui;
 

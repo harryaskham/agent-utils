@@ -623,7 +623,7 @@ fn remote_session(
     Ok(())
 }
 
-fn read_token(path: &Path) -> Result<String> {
+pub(crate) fn read_token(path: &Path) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -649,13 +649,13 @@ fn read_token(path: &Path) -> Result<String> {
     Ok(token)
 }
 
-struct FallbackLease {
+pub(crate) struct FallbackLease {
     path: PathBuf,
     owner: String,
 }
 
 impl FallbackLease {
-    fn try_acquire(path: &Path) -> Result<Option<Self>> {
+    pub(crate) fn try_acquire(path: &Path) -> Result<Option<Self>> {
         if let Ok(metadata) = fs::metadata(path) {
             let stale = metadata
                 .modified()
