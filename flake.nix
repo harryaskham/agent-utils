@@ -47,6 +47,12 @@
       inputs.flake-utils.follows = "flake-utils";
     };
 
+    cost-tui = {
+      url = "path:./cost-tui";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
+
     # pi-wasm: in-browser Pi agent loop subproject (epic bd-f76cee). Node/Vite
     # subflake; only needs nixpkgs + flake-utils (no python/uv2nix toolchain).
     pi-wasm = {
@@ -56,7 +62,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, slick, pi-wasm, ... }:
+  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, slick, cost-tui, pi-wasm, ... }:
     let
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -76,6 +82,7 @@
             web-search.packages.${system}.web-search-mcp
             linear-extra.packages.${system}.linear-extra-mcp
             slick.packages.${system}.slick
+            cost-tui.packages.${system}.cost-tui
             skillServer
           ];
         in {
@@ -87,6 +94,7 @@
           web-search-mcp = web-search.packages.${system}.web-search-mcp;
           linear-extra-mcp = linear-extra.packages.${system}.linear-extra-mcp;
           slick = slick.packages.${system}.slick;
+          cost-tui = cost-tui.packages.${system}.cost-tui;
           skill-server = skillServer;
           skill-search = skillServer;
           # pi-wasm browser bundle (static site) + local serve wrapper. Kept out
@@ -115,6 +123,10 @@
         slick = {
           type = "app";
           program = "${self.packages.${system}.slick}/bin/slick";
+        };
+        cost-tui = {
+          type = "app";
+          program = "${self.packages.${system}.cost-tui}/bin/cost-tui";
         };
         skill-server = {
           type = "app";

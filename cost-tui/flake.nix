@@ -32,7 +32,7 @@
           src = patchedSrc;
           # Set to pkgs.lib.fakeHash after Cargo.lock changes, build once, and
           # replace this with the reported vendor hash.
-          cargoHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+          cargoHash = "sha256-PVVWAThVv3ER/mraHi8WgJX6MtX3Y+yYLQFN4HhIAAk=";
           strictDeps = true;
           nativeBuildInputs = [ pkgs.makeWrapper ];
           buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
