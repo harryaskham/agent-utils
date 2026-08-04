@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Datelike, Local, Utc};
 use ratakittui::{
     Background, Border, Chrome, DrawFlush, EffectsSink, LifecycleTracker, Padding, RenderEffects,
     Shadow,
@@ -30,7 +31,7 @@ use kittui::{CellRect, Direction as KittuiDirection, RendererKind, Rgba, Runtime
 use kittui_kitty::PlacementOptions;
 
 use crate::cache::CacheStore;
-use crate::client::{ClientOptions, ClientSubscription, ClientUpdate};
+use crate::client::{ClientHealth, ClientOptions, ClientSubscription, ClientUpdate};
 use crate::config::{AlertMode, Config, ThemeName};
 use crate::feed::{Feed, FeedTarget};
 use crate::images::{self, ImageStore};
@@ -315,12 +316,6 @@ enum WorkerCommand {
     },
     LoadFile(String),
     Refresh(RefreshTarget),
-    /// Send a Slack read marker. Only ever dispatched when the operator has
-    /// opted in via `mark-read-in-slack`; this is Slick's only Slack write.
-    MarkRead {
-        conversation_id: String,
-        ts: String,
-    },
     Stop,
 }
 
@@ -328,7 +323,11 @@ enum WorkerCommand {
 enum WorkerEvent {
     Started(String),
     Updated(Box<CacheState>, String),
+    Status(String),
+    Health(ClientHealth),
     Failed(String),
+    FallbackRequired(String),
+    DaemonRecovered,
 }
 
 struct Worker {
@@ -338,7 +337,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn spawn(initial: CacheState, store: CacheStore) -> Self {
+    fn spawn(initial: CacheState, store: CacheStore, persist: bool) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         thread::spawn(move || {
@@ -364,7 +363,7 @@ impl Worker {
                     Ok(()) => {
                         state.normalize();
                         state.saved_at = Some(CacheState::now());
-                        let save_result = store.save(&state);
+                        let save_result = if persist { store.save(&state) } else { Ok(()) };
                         let status = save_result.map_or_else(
                             |error| format!("{label}; cache warning: {error}"),
                             |()| label.clone(),
@@ -407,10 +406,20 @@ impl Worker {
                 .try_iter()
                 .map(|update| match update {
                     ClientUpdate::State(state, status) => WorkerEvent::Updated(state, status),
+                    ClientUpdate::Health(health) => WorkerEvent::Health(health),
+                    ClientUpdate::Status(status) => WorkerEvent::Status(status),
                     ClientUpdate::Error(error) => WorkerEvent::Failed(error),
+                    ClientUpdate::FallbackRequired(reason) => WorkerEvent::FallbackRequired(reason),
+                    ClientUpdate::DaemonRecovered => WorkerEvent::DaemonRecovered,
                 })
                 .collect()
         })
+    }
+
+    fn request_client_refresh(&self, domain: String) -> bool {
+        self.client
+            .as_ref()
+            .is_some_and(|client| client.request_refresh(domain))
     }
 
     fn send(&self, command: WorkerCommand) {
@@ -424,6 +433,26 @@ impl Worker {
         if let Some(client) = &self.client {
             client.stop();
         }
+    }
+}
+
+fn client_refresh_domain(command: &WorkerCommand) -> Option<String> {
+    match command {
+        WorkerCommand::Bootstrap | WorkerCommand::Refresh(RefreshTarget::Notifications) => {
+            Some("notifications".into())
+        }
+        WorkerCommand::LoadConversation(id)
+        | WorkerCommand::Refresh(RefreshTarget::Conversation(id)) => {
+            Some(format!("conversation:{id}"))
+        }
+        WorkerCommand::LoadThread {
+            conversation_id,
+            thread_ts,
+        } => Some(format!("thread:{conversation_id}:{thread_ts}")),
+        WorkerCommand::LoadFile(id) => Some(format!("file-content:{id}")),
+        WorkerCommand::Refresh(RefreshTarget::Files) => Some("files".into()),
+        WorkerCommand::Refresh(RefreshTarget::Sidebar) => Some("sidebar".into()),
+        WorkerCommand::Stop => None,
     }
 }
 
@@ -441,7 +470,6 @@ fn command_label(command: &WorkerCommand) -> String {
         }
         WorkerCommand::Refresh(RefreshTarget::Files) => "Refreshing visible files".into(),
         WorkerCommand::Refresh(RefreshTarget::Sidebar) => "Refreshing DMs and channels".into(),
-        WorkerCommand::MarkRead { .. } => "Marking read in Slack".into(),
         WorkerCommand::Stop => "Stopping".into(),
     }
 }
@@ -459,10 +487,6 @@ fn run_worker_command(
             thread_ts,
         } => service.refresh_thread(state, conversation_id, thread_ts),
         WorkerCommand::LoadFile(id) => service.load_file_content(state, id),
-        WorkerCommand::MarkRead {
-            conversation_id,
-            ts,
-        } => service.mark_conversation_read(conversation_id, ts),
         WorkerCommand::Refresh(target) => {
             service.refresh_sidebar(state)?;
             match target {
@@ -548,7 +572,11 @@ pub struct App {
     selected_message: usize,
     thread_stack: Vec<ThreadView>,
     worker: Option<Worker>,
-    cache_only_client: bool,
+    smart_client: bool,
+    fallback_worker: Option<Worker>,
+    fallback_store: Option<CacheStore>,
+    fallback_persist: bool,
+    client_health: Option<ClientHealth>,
     pending_g: bool,
 }
 
@@ -559,7 +587,7 @@ impl App {
     }
 
     fn live(state: CacheState, store: CacheStore) -> Self {
-        let worker = Worker::spawn(state.clone(), store);
+        let worker = Worker::spawn(state.clone(), store, true);
         let app = Self::new(state, Some(worker), false);
         if let Some(worker) = &app.worker {
             worker.send(WorkerCommand::Bootstrap);
@@ -568,10 +596,15 @@ impl App {
     }
 
     fn client(state: CacheState, options: ClientOptions) -> Self {
-        Self::new(state, Some(Worker::spawn_client(options)), true)
+        let fallback_store = options.cache_store.clone();
+        let fallback_persist = options.use_cache;
+        let mut app = Self::new(state, Some(Worker::spawn_client(options)), true);
+        app.fallback_store = Some(fallback_store);
+        app.fallback_persist = fallback_persist;
+        app
     }
 
-    fn new(state: CacheState, worker: Option<Worker>, cache_only_client: bool) -> Self {
+    fn new(state: CacheState, worker: Option<Worker>, smart_client: bool) -> Self {
         Self {
             status: if state.saved_at.is_some() {
                 "cached".into()
@@ -625,36 +658,69 @@ impl App {
             selected_message: 0,
             thread_stack: Vec::new(),
             worker,
-            cache_only_client,
+            smart_client,
+            fallback_worker: None,
+            fallback_store: None,
+            fallback_persist: true,
+            client_health: None,
             pending_g: false,
         }
     }
 
     fn drain_worker(&mut self) -> bool {
-        let Some(worker) = &self.worker else {
-            return false;
-        };
-        let events = worker.events();
+        // Fallback results apply first. A daemon-recovery event collected in
+        // the same drain must win instead of being overwritten by a late
+        // embedded-collector snapshot.
+        let mut events: Vec<(WorkerEvent, bool)> =
+            self.fallback_worker
+                .as_ref()
+                .map_or_else(Vec::new, |worker| {
+                    worker
+                        .events()
+                        .into_iter()
+                        .map(|event| (event, true))
+                        .collect()
+                });
+        if let Some(worker) = &self.worker {
+            events.extend(worker.events().into_iter().map(|event| (event, false)));
+        }
         let changed = !events.is_empty();
-        for event in events {
+        for (event, from_fallback) in events {
             match event {
                 WorkerEvent::Started(status) => {
                     self.busy = true;
                     self.busy_since.get_or_insert_with(Instant::now);
-                    self.status = status;
+                    self.status = if from_fallback {
+                        format!("fallback · {status}")
+                    } else {
+                        status
+                    };
                     self.last_error = None;
                 }
                 WorkerEvent::Updated(state, status) => {
+                    let catch_up = self.smart_client
+                        && self
+                            .state
+                            .refreshed_at("notifications")
+                            .is_none_or(|refreshed| {
+                                CacheState::now().saturating_sub(refreshed) > 5 * 60
+                            });
                     self.state = *state;
                     self.busy = false;
                     self.busy_since = None;
-                    self.status = status;
+                    self.status = if from_fallback {
+                        format!("fallback · {status}")
+                    } else {
+                        status
+                    };
                     self.last_error = None;
-                    // A refresh replaces state with Slack's own counts, which
-                    // still treat locally-read conversations as unread.
                     self.apply_local_favorites();
                     self.apply_read_markers();
-                    self.feed.ingest(&self.state, Instant::now());
+                    if catch_up {
+                        self.feed.seed(&self.state);
+                    } else {
+                        self.feed.ingest(&self.state, Instant::now());
+                    }
                     self.clamp_selection();
                     if matches!(self.page, Page::Favorites | Page::Dms | Page::Channels)
                         && !self.section_overview
@@ -662,22 +728,58 @@ impl App {
                         self.content_scroll = self.max_content_scroll();
                     }
                 }
+                WorkerEvent::Status(status) => {
+                    self.status = status;
+                    self.last_error = None;
+                }
+                WorkerEvent::Health(health) => {
+                    self.client_health = Some(health);
+                }
                 WorkerEvent::Failed(error) => {
                     self.busy = false;
                     self.busy_since = None;
-                    self.last_error = Some(error.clone());
-                    self.status = if self.cache_only_client {
-                        "client · daemon disconnected".into()
+                    self.last_error = Some(error);
+                    self.status = if from_fallback {
+                        "fallback · refresh failed".into()
+                    } else if self.smart_client {
+                        "client · source unavailable".into()
                     } else {
                         "cached · refresh failed".into()
                     };
                 }
+                WorkerEvent::FallbackRequired(reason) => self.start_fallback(&reason),
+                WorkerEvent::DaemonRecovered => self.stop_fallback(),
             }
         }
         if changed {
             self.mark_open_conversation_read();
         }
         changed
+    }
+
+    fn start_fallback(&mut self, reason: &str) {
+        if self.fallback_worker.is_some() {
+            return;
+        }
+        let Some(store) = self.fallback_store.clone() else {
+            self.last_error = Some("fallback cache store unavailable".into());
+            return;
+        };
+        let worker = Worker::spawn(self.state.clone(), store, self.fallback_persist);
+        worker.send(WorkerCommand::Bootstrap);
+        self.fallback_worker = Some(worker);
+        self.status = reason.to_string();
+        self.last_error = None;
+        self.busy = true;
+        self.busy_since = Some(Instant::now());
+    }
+
+    fn stop_fallback(&mut self) {
+        if let Some(worker) = self.fallback_worker.take() {
+            worker.stop();
+        }
+        self.busy = false;
+        self.busy_since = None;
     }
 
     fn clamp_selection(&mut self) {
@@ -918,9 +1020,22 @@ impl App {
     }
 
     fn send(&mut self, command: WorkerCommand) {
-        if self.cache_only_client {
-            self.status = "client cache-only · waiting for daemon".into();
-            self.last_error = None;
+        if self.smart_client {
+            if let Some(worker) = &self.fallback_worker {
+                worker.send(command);
+                self.busy = true;
+                self.busy_since.get_or_insert_with(Instant::now);
+            } else if client_refresh_domain(&command).is_some_and(|domain| {
+                self.worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.request_client_refresh(domain))
+            }) {
+                self.status = "client · daemon refresh queued".into();
+                self.last_error = None;
+            } else {
+                self.status = "client · waiting for cache/daemon".into();
+                self.last_error = None;
+            }
             return;
         }
         if let Some(worker) = &self.worker {
@@ -966,7 +1081,14 @@ impl App {
     /// Slack call can never accumulate a queue of stale refreshes, and a no-op
     /// in demo mode because `send` has no worker there.
     fn auto_refresh(&mut self) -> bool {
-        if self.busy || self.worker.is_none() || self.cache_only_client {
+        if self.busy {
+            return false;
+        }
+        if self.smart_client {
+            if self.fallback_worker.is_none() {
+                return false;
+            }
+        } else if self.worker.is_none() {
             return false;
         }
         self.refresh_visible();
@@ -1218,7 +1340,14 @@ impl App {
             }
         }
         let mut starts = Vec::with_capacity(messages.len());
+        let mut previous_date = None;
         for message in &messages {
+            if let Some(section) = date_section(&message.timestamp) {
+                if previous_date.as_deref() != Some(section.key.as_str()) {
+                    let _ = write!(prefix, "## {}\n\n", section.label);
+                    previous_date = Some(section.key);
+                }
+            }
             starts.push(wrapped_markdown_rows(&prefix, self.content_view_width).saturating_sub(1));
             let _ = write!(prefix, "### x\n\n{}\n\n---\n\n", message.text);
         }
@@ -1338,12 +1467,12 @@ impl App {
             Page::Notifications => keep_visible(
                 self.selected_notification,
                 &mut self.activity_offset,
-                usize::from(self.content_view_height.saturating_sub(2) / 2).max(1),
+                usize::from(self.content_view_height.saturating_sub(2) / 3).max(1),
             ),
             Page::Feed => keep_visible(
                 self.selected_feed,
                 &mut self.feed_offset,
-                usize::from(self.content_view_height.saturating_sub(2)).max(1),
+                usize::from(self.content_view_height.saturating_sub(2) / 2).max(1),
             ),
             Page::Favorites => keep_visible(
                 self.selected_favorite,
@@ -1363,7 +1492,7 @@ impl App {
             Page::Files => keep_visible(
                 self.selected_file,
                 &mut self.file_offset,
-                usize::from(self.content_view_height.saturating_sub(2) / 2).max(1),
+                usize::from(self.content_view_height.saturating_sub(2) / 3).max(1),
             ),
         }
     }
@@ -1405,7 +1534,14 @@ impl App {
         if messages.is_empty() {
             markdown.push_str("_Press Enter to load up to seven days of content._");
         } else {
+            let mut previous_date = None;
             for (index, message) in messages.iter().enumerate() {
+                if let Some(section) = date_section(&message.timestamp) {
+                    if previous_date.as_deref() != Some(section.key.as_str()) {
+                        let _ = write!(markdown, "## {}\n\n", section.label);
+                        previous_date = Some(section.key);
+                    }
+                }
                 let selected = index == self.selected_message && self.thread_stack.is_empty();
                 let thread = if message.reply_count > 0 {
                     format!(
@@ -1678,8 +1814,58 @@ impl App {
         })
     }
 
-    /// Icon, colour and bounded text for the header's live worker state.
+    /// Icon, colour and bounded text for source/worker liveness.
     fn header_status(&self) -> (&'static str, Color, String) {
+        if self.smart_client {
+            if let Some(health) = &self.client_health {
+                let daemon = if health.daemon_enabled {
+                    health.daemon_age_secs.map_or_else(
+                        || "daemon (waiting)".into(),
+                        |age| format!("daemon ({})", compact_age(age)),
+                    )
+                } else {
+                    "daemon (off)".into()
+                };
+                let cache = if health.cache_enabled {
+                    health.cache_age_secs.map_or_else(
+                        || "cache (empty)".into(),
+                        |age| format!("cache ({})", compact_age(age)),
+                    )
+                } else {
+                    "cache (off)".into()
+                };
+                let fallback = if health.fallback_active {
+                    " · fallback"
+                } else {
+                    ""
+                };
+                let domain_state = self
+                    .state
+                    .collector
+                    .domains
+                    .get(&self.visible_refresh_domain().0)
+                    .map(|domain| &domain.state);
+                let hard_error = matches!(
+                    domain_state,
+                    Some(RefreshState::Backoff | RefreshState::Error)
+                );
+                let degraded = matches!(domain_state, Some(RefreshState::Partial));
+                let source_error =
+                    health.error.is_some() && (health.daemon_connected || !health.cache_live);
+                let (icon, color) = if hard_error
+                    || source_error
+                    || (health.fallback_active && self.last_error.is_some())
+                    || (!health.daemon_connected && !health.cache_live && !health.fallback_active)
+                {
+                    ("●", RED())
+                } else if !health.daemon_connected || degraded || health.fallback_active {
+                    ("●", YELLOW())
+                } else {
+                    ("●", GREEN())
+                };
+                return (icon, color, format!("{daemon} · {cache}{fallback}"));
+            }
+        }
         if self.busy {
             let tick = self.liveness_tick().unwrap_or(0);
             let icon = ["◐", "◓", "◑", "◒"][usize::try_from(tick % 4).unwrap_or(0)];
@@ -1771,15 +1957,6 @@ impl App {
             return;
         }
         self.apply_read_markers();
-        // Opt-in only: this is Slick's single Slack mutation, so it is
-        // dispatched to the worker (never the UI thread) and only when the
-        // operator has explicitly enabled it.
-        if self.config.mark_read_in_slack && self.worker.is_some() {
-            self.send(WorkerCommand::MarkRead {
-                conversation_id: conversation_id.to_string(),
-                ts: newest.clone(),
-            });
-        }
         if let Err(error) = self.config.save(&self.config_path) {
             self.last_error = Some(error.to_string());
         }
@@ -2231,7 +2408,8 @@ impl App {
     ) {
         let mut items = Vec::new();
         let mut row = list_origin(area, graphics.is_some(), true);
-        let visible = usize::from(area.height.saturating_sub(2)).max(1);
+        let row_budget = usize::from(area.height.saturating_sub(2)).max(1);
+        let visible = (row_budget / 2).max(1);
         keep_visible(self.selected_feed, &mut self.feed_offset, visible);
         let entries: Vec<_> = self.feed.entries().to_vec();
         self.feed_offset = self
@@ -2244,12 +2422,24 @@ impl App {
             ))));
         }
         let summary_width = usize::from(area.width.saturating_sub(34)).max(24);
-        for (index, entry) in entries
-            .iter()
-            .enumerate()
-            .skip(self.feed_offset)
-            .take(visible)
-        {
+        let mut used_rows = 0usize;
+        let mut previous_date = None;
+        for (index, entry) in entries.iter().enumerate().skip(self.feed_offset) {
+            let section = date_section(&entry.time);
+            let starts_date = section
+                .as_ref()
+                .is_some_and(|section| previous_date.as_deref() != Some(section.key.as_str()));
+            let needed = 1 + usize::from(starts_date);
+            if used_rows + needed > row_budget {
+                break;
+            }
+            if starts_date {
+                let section = section.as_ref().expect("checked above");
+                items.push(date_header(section));
+                previous_date = Some(section.key.clone());
+                row = row.saturating_add(1);
+                used_rows += 1;
+            }
             let selected = index == self.selected_feed;
             let style = if selected {
                 Style::default().bg(palette().selection)
@@ -2289,6 +2479,7 @@ impl App {
                 action: HitAction::FeedEntry(index),
             });
             row = row.saturating_add(1);
+            used_rows += 1;
         }
         let pending = self.feed.pending_len();
         let list = List::new(items).block(pane_block(
@@ -2318,10 +2509,10 @@ impl App {
     ) {
         let mut items = Vec::new();
         let mut row = list_origin(area, graphics.is_some(), true);
-        // Rows are grouped, so a fixed items-per-row ratio no longer holds:
-        // window by notification but budget two rows for the first entry of a
-        // conversation run and one row for each continuation.
-        let visible = usize::from(area.height.saturating_sub(2) / 2).max(1);
+        // Date and conversation headers are non-clickable rows. Use a
+        // conservative three-row selection window, then fill any spare rows.
+        let row_budget = usize::from(area.height.saturating_sub(2)).max(1);
+        let visible = (row_budget / 3).max(1);
         keep_visible(
             self.selected_notification,
             &mut self.activity_offset,
@@ -2344,14 +2535,34 @@ impl App {
         // the real edge: the gutter is "   HH:MM NEW " plus chrome borders.
         let preview_width = usize::from(area.width.saturating_sub(16)).max(24);
         let mut previous_conversation: Option<&str> = None;
+        let mut previous_date = None;
+        let mut used_rows = 0usize;
         for (index, notification) in self
             .state
             .notifications
             .iter()
             .enumerate()
             .skip(self.activity_offset)
-            .take(visible)
         {
+            let section = date_section(&notification.message.timestamp);
+            let starts_date = section
+                .as_ref()
+                .is_some_and(|section| previous_date.as_deref() != Some(section.key.as_str()));
+            if starts_date {
+                previous_conversation = None;
+            }
+            let starts_run = previous_conversation != Some(notification.conversation_id.as_str());
+            let needed = 1 + usize::from(starts_date) + usize::from(starts_run);
+            if used_rows + needed > row_budget {
+                break;
+            }
+            if starts_date {
+                let section = section.as_ref().expect("checked above");
+                items.push(date_header(section));
+                previous_date = Some(section.key.clone());
+                row = row.saturating_add(1);
+                used_rows += 1;
+            }
             let selected = index == self.selected_notification;
             let marker = if notification.mention {
                 "@"
@@ -2365,7 +2576,6 @@ impl App {
             } else {
                 Style::default()
             };
-            let starts_run = previous_conversation != Some(notification.conversation_id.as_str());
             if starts_run {
                 items.push(ListItem::new(Line::from(vec![
                     Span::styled(
@@ -2384,6 +2594,7 @@ impl App {
                     ),
                 ])));
                 row = row.saturating_add(1);
+                used_rows += 1;
             }
             previous_conversation = Some(notification.conversation_id.as_str());
             let badge = if notification.unread { " NEW" } else { "" };
@@ -2408,6 +2619,7 @@ impl App {
                 action: HitAction::Notification(index),
             });
             row = row.saturating_add(1);
+            used_rows += 1;
         }
         let list = List::new(items).block(pane_block(
             graphics.is_some(),
@@ -2688,7 +2900,8 @@ impl App {
         let files: Vec<SlackFile> = self.filtered_files().into_iter().cloned().collect();
         let mut items = Vec::new();
         let mut row = list_origin(area, graphics.is_some(), true);
-        let visible = usize::from(area.height.saturating_sub(2) / 2).max(1);
+        let row_budget = usize::from(area.height.saturating_sub(2)).max(1);
+        let visible = (row_budget / 3).max(1);
         keep_visible(self.selected_file, &mut self.file_offset, visible);
         self.file_offset = self.file_offset.min(files.len().saturating_sub(visible));
         if files.is_empty() {
@@ -2696,12 +2909,24 @@ impl App {
                 "No recent files. Ctrl-R refreshes the visible seven-day window.",
             ));
         }
-        for (index, file) in files
-            .iter()
-            .enumerate()
-            .skip(self.file_offset)
-            .take(visible)
-        {
+        let mut previous_date = None;
+        let mut used_rows = 0usize;
+        for (index, file) in files.iter().enumerate().skip(self.file_offset) {
+            let section = date_section(&file.updated_at);
+            let starts_date = section
+                .as_ref()
+                .is_some_and(|section| previous_date.as_deref() != Some(section.key.as_str()));
+            let needed = 2 + usize::from(starts_date);
+            if used_rows + needed > row_budget {
+                break;
+            }
+            if starts_date {
+                let section = section.as_ref().expect("checked above");
+                items.push(date_header(section));
+                previous_date = Some(section.key.clone());
+                row = row.saturating_add(1);
+                used_rows += 1;
+            }
             let selected = index == self.selected_file;
             let style = if selected {
                 Style::default().bg(palette().selection)
@@ -2738,6 +2963,7 @@ impl App {
                 action: HitAction::File(index),
             });
             row = row.saturating_add(2);
+            used_rows += 2;
         }
         let list = List::new(items).block(
             Block::default()
@@ -2900,20 +3126,16 @@ impl App {
             Line::raw("Click navigation, conversations, notifications and files. Scroll the focused pane with the wheel."),
             Line::default(),
             Line::from(Span::styled("Refresh contract", Style::default().fg(GREEN()).add_modifier(Modifier::BOLD))),
-            Line::raw(if self.cache_only_client {
-                "Cache-only client: Ctrl-R waits for daemon/cache data and never calls Slack."
+            Line::raw(if self.smart_client && self.fallback_worker.is_some() {
+                "Smart client fallback: Ctrl-R refreshes through the leased read-only collector."
+            } else if self.smart_client {
+                "Smart client: cache and daemon SSE are merged; Ctrl-R waits for source data."
             } else {
-                "Legacy live mode: Ctrl-R refreshes the sidebar, then only the active view."
+                "Live worker: Ctrl-R refreshes the sidebar, then only the active view."
             }),
             Line::default(),
             Line::from(Span::styled(
-                if self.cache_only_client {
-                    "Structurally read-only: this process has no Slack service."
-                } else if self.config.mark_read_in_slack {
-                    "Slack writes enabled: opening a conversation sends its read marker."
-                } else {
-                    "Read-only: Slick never sends, edits, reacts, joins or marks messages read."
-                },
+                "Read-only: Slick never sends, edits, reacts, joins or marks messages read in Slack.",
                 Style::default().fg(YELLOW()),
             )),
         ]);
@@ -2934,6 +3156,9 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         if let Some(worker) = &self.worker {
+            worker.stop();
+        }
+        if let Some(worker) = &self.fallback_worker {
             worker.stop();
         }
     }
@@ -3412,6 +3637,61 @@ fn truncate_label(value: &str, max: usize) -> String {
     value
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DateSection {
+    key: String,
+    label: String,
+}
+
+fn date_section(timestamp: &str) -> Option<DateSection> {
+    let local = DateTime::parse_from_rfc3339(timestamp)
+        .ok()
+        .map(|date| date.with_timezone(&Local))
+        .or_else(|| {
+            timestamp
+                .parse::<f64>()
+                .ok()
+                .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds as i64, 0))
+                .map(|date| date.with_timezone(&Local))
+        })?;
+    let day = local.day();
+    let suffix = if (11..=13).contains(&(day % 100)) {
+        "th"
+    } else {
+        match day % 10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        }
+    };
+    Some(DateSection {
+        key: local.format("%Y-%m-%d").to_string(),
+        label: format!(
+            "{} {day}{suffix} {}",
+            local.format("%A"),
+            local.format("%B")
+        ),
+    })
+}
+
+fn date_header(section: &DateSection) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        format!("  {}", section.label),
+        Style::default().fg(MUTED()).add_modifier(Modifier::BOLD),
+    )))
+}
+
+fn compact_age(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{}h {}m", seconds / 3_600, (seconds % 3_600) / 60)
+    }
+}
+
 fn snapshot_age(saved_at: Option<i64>) -> String {
     let Some(saved_at) = saved_at else {
         return "snapshot uncached".into();
@@ -3513,6 +3793,12 @@ pub struct RunOptions {
 pub fn run(options: RunOptions) -> Result<()> {
     let initial = if options.demo {
         crate::slack::demo_state()
+    } else if options
+        .client
+        .as_ref()
+        .is_some_and(|client| !client.use_cache)
+    {
+        CacheState::default()
     } else {
         options.cache_store.load().unwrap_or_default()
     };
@@ -3749,6 +4035,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn date_sections_use_human_weekday_ordinals_and_skip_empty_days() {
+        let section = date_section("2026-08-04T12:00:00Z").unwrap();
+        assert_eq!(section.label, "Tuesday 4th August");
+        let section = date_section("2026-08-03T12:00:00Z").unwrap();
+        assert_eq!(section.label, "Monday 3rd August");
+    }
+
+    #[test]
+    fn feed_date_headers_do_not_capture_click_rows() {
+        let mut state = crate::slack::demo_state();
+        state.notifications[0].message.timestamp = "2026-08-04T12:00:00Z".into();
+        state.notifications[1].message.timestamp = "2026-08-03T12:00:00Z".into();
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::demo(state);
+        app.prime_feed();
+        app.set_page(Page::Feed);
+        terminal.draw(|frame| app.render(frame, None)).unwrap();
+        let header_rows: Vec<u16> = buffer_text(terminal.backend().buffer())
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("August"))
+            .map(|(row, _)| u16::try_from(row).unwrap())
+            .collect();
+        assert_eq!(header_rows.len(), 2);
+        let clickable_rows: Vec<u16> = app
+            .hits
+            .iter()
+            .filter(|hit| matches!(hit.action, HitAction::FeedEntry(_)))
+            .map(|hit| hit.rect.y)
+            .collect();
+        assert!(
+            header_rows.iter().all(|row| !clickable_rows.contains(row)),
+            "date headings must remain non-clickable separators"
+        );
+    }
+
+    #[test]
     fn demo_snapshot_contains_slack_surfaces() {
         let output = snapshot(crate::slack::demo_state(), 120, 36);
         assert!(output.contains("Activity"));
@@ -3766,6 +4090,30 @@ mod tests {
         let files = snapshot_page(crate::slack::demo_state(), 140, 40, Page::Files);
         assert!(files.contains("Slick Product Brief"));
         assert!(files.contains("Markdown"));
+    }
+
+    #[test]
+    fn smart_client_commands_map_to_daemon_refresh_domains() {
+        assert_eq!(
+            client_refresh_domain(&WorkerCommand::Refresh(RefreshTarget::Notifications)).as_deref(),
+            Some("notifications")
+        );
+        assert_eq!(
+            client_refresh_domain(&WorkerCommand::LoadConversation("C1".into())).as_deref(),
+            Some("conversation:C1")
+        );
+        assert_eq!(
+            client_refresh_domain(&WorkerCommand::LoadThread {
+                conversation_id: "C1".into(),
+                thread_ts: "123.45".into(),
+            })
+            .as_deref(),
+            Some("thread:C1:123.45")
+        );
+        assert_eq!(
+            client_refresh_domain(&WorkerCommand::LoadFile("F1".into())).as_deref(),
+            Some("file-content:F1")
+        );
     }
 
     #[test]
@@ -4030,11 +4378,11 @@ mod tests {
     }
 
     #[test]
-    fn cache_only_client_never_dispatches_refresh_commands() {
+    fn smart_client_without_fallback_never_dispatches_refresh_commands() {
         let mut app = App::new(crate::slack::demo_state(), None, true);
         app.send(WorkerCommand::Bootstrap);
         assert!(!app.busy);
-        assert_eq!(app.status, "client cache-only · waiting for daemon");
+        assert_eq!(app.status, "client · waiting for cache/daemon");
         assert!(!app.auto_refresh());
     }
 
@@ -4063,6 +4411,31 @@ mod tests {
         let (_, color, text) = app.header_status();
         assert_eq!(color, RED());
         assert!(text.contains("slow 46s"), "{text}");
+    }
+
+    #[test]
+    fn smart_client_header_distinguishes_daemon_cache_and_outage_liveness() {
+        let mut app = App::new(crate::slack::demo_state(), None, true);
+        app.client_health = Some(ClientHealth {
+            daemon_enabled: true,
+            daemon_connected: true,
+            daemon_age_secs: Some(30),
+            cache_enabled: true,
+            cache_live: true,
+            cache_age_secs: Some(60),
+            fallback_active: false,
+            error: None,
+        });
+        let (icon, color, text) = app.header_status();
+        assert_eq!(icon, "●");
+        assert_eq!(color, GREEN());
+        assert!(text.contains("daemon (30s)"), "{text}");
+        assert!(text.contains("cache (1m)"), "{text}");
+
+        app.client_health.as_mut().unwrap().daemon_connected = false;
+        assert_eq!(app.header_status().1, YELLOW());
+        app.client_health.as_mut().unwrap().cache_live = false;
+        assert_eq!(app.header_status().1, RED());
     }
 
     #[test]

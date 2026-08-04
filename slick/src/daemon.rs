@@ -2,9 +2,9 @@
 //!
 //! One daemon owns Slack API consumption. It refreshes one independently-aged
 //! domain at a time, chooses the largest overdue coverage gap, persists every
-//! outcome atomically, and publishes the same state to cache-only clients.
+//! outcome atomically, and publishes the same state to smart clients.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -41,6 +41,11 @@ enum RefreshKind {
     SelfActivity,
     Files,
     Conversation(String),
+    Thread {
+        conversation_id: String,
+        thread_ts: String,
+    },
+    FileContent(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +81,7 @@ struct SharedCache {
     state: Mutex<CacheState>,
     changed: Condvar,
     store: CacheStore,
+    refresh_requests: Mutex<VecDeque<String>>,
 }
 
 impl SharedCache {
@@ -84,6 +90,7 @@ impl SharedCache {
             state: Mutex::new(state),
             changed: Condvar::new(),
             store,
+            refresh_requests: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -92,6 +99,23 @@ impl SharedCache {
             |poisoned| poisoned.into_inner().clone(),
             |state| state.clone(),
         )
+    }
+
+    fn request_refresh(&self, domain: String) {
+        let mut requests = self
+            .refresh_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !requests.contains(&domain) {
+            requests.push_back(domain);
+        }
+    }
+
+    fn take_refresh_request(&self) -> Option<String> {
+        self.refresh_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()
     }
 
     fn update(&self, mutate: impl FnOnce(&mut CacheState)) {
@@ -167,7 +191,10 @@ pub fn run(options: DaemonOptions) -> Result<()> {
             continue;
         }
 
-        let Some(task) = select_task(&snapshot, now) else {
+        let requested = shared
+            .take_refresh_request()
+            .and_then(|key| requested_task(&snapshot, &key));
+        let Some(task) = requested.or_else(|| select_task(&snapshot, now)) else {
             thread::sleep(Duration::from_secs(2));
             continue;
         };
@@ -229,10 +256,22 @@ pub fn run(options: DaemonOptions) -> Result<()> {
                 }
             }
         });
-        if let Err(error) = result {
-            if error.downcast_ref::<IncompleteCoverage>().is_none() {
-                eprintln!("slick daemon: {} failed: {error:#}", task.key);
-            }
+        let status = shared.snapshot();
+        match &result {
+            Ok(()) => eprintln!(
+                "slick daemon: complete domain={} conversations={} activity={} files={} streams={} next={}s",
+                task.key,
+                status.conversations.len(),
+                status.notifications.len(),
+                status.files.len(),
+                status.messages.len(),
+                task.interval_secs,
+            ),
+            Err(error) if error.downcast_ref::<IncompleteCoverage>().is_some() => eprintln!(
+                "slick daemon: progress domain={} detail={} next={}s",
+                task.key, error, COVERAGE_CONTINUE_SECS,
+            ),
+            Err(error) => eprintln!("slick daemon: failed domain={} error={error:#}", task.key),
         }
         thread::sleep(spacing);
     }
@@ -246,6 +285,11 @@ fn run_task(service: &SlackService, state: &mut CacheState, task: &RefreshTask) 
         RefreshKind::SelfActivity => service.refresh_self_activity(state),
         RefreshKind::Files => service.refresh_files(state),
         RefreshKind::Conversation(id) => service.refresh_conversation(state, id),
+        RefreshKind::Thread {
+            conversation_id,
+            thread_ts,
+        } => service.refresh_thread(state, conversation_id, thread_ts),
+        RefreshKind::FileContent(id) => service.load_file_content(state, id),
     }
 }
 
@@ -257,7 +301,50 @@ fn task_label(task: &RefreshTask) -> &str {
         RefreshKind::SelfActivity => "recent self activity",
         RefreshKind::Files => "files",
         RefreshKind::Conversation(_) => "conversation messages",
+        RefreshKind::Thread { .. } => "thread replies",
+        RefreshKind::FileContent(_) => "file content",
     }
+}
+
+fn requested_task(state: &CacheState, key: &str) -> Option<RefreshTask> {
+    let (kind, interval_secs, priority) = match key {
+        "identity" => (RefreshKind::Identity, 6 * 60 * 60, 200),
+        "sidebar" => (RefreshKind::Sidebar, 5 * 60, 200),
+        "notifications" => (RefreshKind::Notifications, 30, 200),
+        "self_activity" => (RefreshKind::SelfActivity, 15 * 60, 200),
+        "files" => (RefreshKind::Files, 10 * 60, 200),
+        _ if key.starts_with("conversation:") => {
+            let id = key.strip_prefix("conversation:")?.to_string();
+            if !state.conversations.iter().any(|item| item.id == id) {
+                return None;
+            }
+            (RefreshKind::Conversation(id), 5 * 60, 200)
+        }
+        _ if key.starts_with("thread:") => {
+            let value = key.strip_prefix("thread:")?;
+            let (conversation_id, thread_ts) = value.split_once(':')?;
+            (
+                RefreshKind::Thread {
+                    conversation_id: conversation_id.to_string(),
+                    thread_ts: thread_ts.to_string(),
+                },
+                5 * 60,
+                200,
+            )
+        }
+        _ if key.starts_with("file-content:") => (
+            RefreshKind::FileContent(key.strip_prefix("file-content:")?.to_string()),
+            24 * 60 * 60,
+            200,
+        ),
+        _ => return None,
+    };
+    Some(RefreshTask {
+        key: key.to_string(),
+        kind,
+        interval_secs,
+        priority,
+    })
 }
 
 /// Pick the most overdue eligible domain. Missing coverage sorts before stale
@@ -366,6 +453,7 @@ fn payload_changed(before: &CacheState, after: &CacheState) -> bool {
 }
 
 fn publish_notice(shared: &SharedCache, notice: &SlackNotice) {
+    eprintln!("slick daemon: notice {}", notice.message);
     let now = CacheState::now();
     shared.update(|state| {
         let key = state.collector.current_domain.clone();
@@ -474,22 +562,50 @@ fn serve_connection(mut stream: TcpStream, shared: &SharedCache, token: &str) ->
             b"unauthorized\n",
         );
     }
-    match request.path.split('?').next().unwrap_or_default() {
-        "/snapshot" => {
+    let route = request.path.split('?').next().unwrap_or_default();
+    match (request.method.as_str(), route) {
+        ("GET", "/snapshot") => {
             let body = serde_json::to_vec(&shared.snapshot()).context("serialize snapshot")?;
             write_http_response(&mut stream, "200 OK", "application/json", &body)
         }
-        "/health" => {
+        ("GET", "/health") => {
             let body = serde_json::to_vec(&shared.snapshot().collector)
                 .context("serialize collector health")?;
             write_http_response(&mut stream, "200 OK", "application/json", &body)
         }
-        "/events" => serve_sse(stream, shared),
+        ("GET", "/events") => serve_sse(stream, shared),
+        ("POST", "/refresh") => {
+            let domain = request
+                .path
+                .split_once('?')
+                .and_then(|(_, query)| {
+                    url::form_urlencoded::parse(query.as_bytes())
+                        .find(|(name, _)| name == "domain")
+                        .map(|(_, value)| value.into_owned())
+                })
+                .unwrap_or_default();
+            if domain.is_empty() || requested_task(&shared.snapshot(), &domain).is_none() {
+                return write_http_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "text/plain",
+                    b"unknown refresh domain\n",
+                );
+            }
+            shared.request_refresh(domain);
+            write_http_response(
+                &mut stream,
+                "202 Accepted",
+                "application/json",
+                b"{\"queued\":true}\n",
+            )
+        }
         _ => write_http_response(&mut stream, "404 Not Found", "text/plain", b"not found\n"),
     }
 }
 
 struct HttpRequest {
+    method: String,
     path: String,
     headers: BTreeMap<String, String>,
 }
@@ -514,8 +630,12 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     let mut lines = text.split("\r\n");
     let request_line = lines.next().context("missing HTTP request line")?;
     let mut request_parts = request_line.split_whitespace();
-    if request_parts.next() != Some("GET") {
-        bail!("only GET is supported");
+    let method = request_parts
+        .next()
+        .context("missing HTTP method")?
+        .to_string();
+    if !matches!(method.as_str(), "GET" | "POST") {
+        bail!("only GET and POST are supported");
     }
     let path = request_parts
         .next()
@@ -526,7 +646,11 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
         .collect();
-    Ok(HttpRequest { path, headers })
+    Ok(HttpRequest {
+        method,
+        path,
+        headers,
+    })
 }
 
 fn authorized(headers: &BTreeMap<String, String>, expected: &str) -> bool {
@@ -676,14 +800,19 @@ mod tests {
         assert_eq!(failure_backoff(100), MAX_FAILURE_BACKOFF_SECS);
     }
 
-    fn http_get(address: SocketAddr, authorization: Option<&str>, path: &str) -> String {
+    fn http_request(
+        address: SocketAddr,
+        method: &str,
+        authorization: Option<&str>,
+        path: &str,
+    ) -> String {
         let mut stream = TcpStream::connect(address).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         write!(
             stream,
-            "GET {path} HTTP/1.1\r\nHost: localhost\r\n{}\r\n",
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n{}\r\n",
             authorization.map_or_else(String::new, |token| format!(
                 "Authorization: Bearer {token}\r\n"
             ))
@@ -693,6 +822,41 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
         response
+    }
+
+    fn http_get(address: SocketAddr, authorization: Option<&str>, path: &str) -> String {
+        http_request(address, "GET", authorization, path)
+    }
+
+    #[test]
+    fn refresh_endpoint_authenticates_and_queues_domain() {
+        let dir = std::env::temp_dir().join(format!(
+            "slick-refresh-http-test-{}-{}",
+            std::process::id(),
+            CacheState::now()
+        ));
+        let shared = Arc::new(SharedCache::new(
+            CacheState::default(),
+            CacheStore::new(dir.join("state.json")),
+        ));
+        let token = "r".repeat(64);
+        let address = start_http_server("127.0.0.1:0", Arc::clone(&shared), token.clone()).unwrap();
+        assert!(
+            http_request(address, "POST", None, "/refresh?domain=notifications")
+                .starts_with("HTTP/1.1 401")
+        );
+        assert!(http_request(
+            address,
+            "POST",
+            Some(&token),
+            "/refresh?domain=notifications"
+        )
+        .starts_with("HTTP/1.1 202"));
+        assert_eq!(
+            shared.take_refresh_request().as_deref(),
+            Some("notifications")
+        );
+        fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -739,17 +903,37 @@ mod tests {
         let client_store = CacheStore::new(dir.join("client.json"));
         let subscription = ClientSubscription::spawn(ClientOptions {
             cache_store: client_store.clone(),
-            endpoint: Some(format!("http://{address}")),
+            use_cache: true,
+            use_daemon: true,
+            endpoint: format!("http://{address}"),
             token_path,
+            fallback: false,
+            fallback_timeout: Duration::from_secs(30),
+            fallback_lease_path: dir.join("fallback.lock"),
         });
-        let first = subscription
-            .rx
-            .recv_timeout(Duration::from_secs(3))
-            .unwrap();
-        assert!(matches!(
-            first,
-            ClientUpdate::State(state, _) if state.team_name == "initial"
-        ));
+        let mut received_initial = false;
+        for _ in 0..3 {
+            let update = subscription
+                .rx
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap();
+            if matches!(update, ClientUpdate::State(state, _) if state.team_name == "initial") {
+                received_initial = true;
+                break;
+            }
+        }
+        assert!(
+            received_initial,
+            "initial daemon snapshot did not reach client"
+        );
+        assert!(subscription.request_refresh("notifications".into()));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut queued = None;
+        while std::time::Instant::now() < deadline && queued.is_none() {
+            queued = shared.take_refresh_request();
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(queued.as_deref(), Some("notifications"));
 
         shared.update(|state| state.team_name = "live".into());
         let mut received_live = false;

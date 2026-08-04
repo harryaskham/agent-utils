@@ -10,10 +10,12 @@ and Slack Canvas HTML becomes bounded, rich Markdown.
 ## Run
 
 ```bash
-nix run ./slick -- daemon       # sole rate-limit-aware Slack cache collector
-nix run ./slick -- --client     # cache-only TUI; follows local atomic writes
-nix run ./slick -- --client --daemon-url http://slick-host:7612  # authenticated SSE
-nix run ./slick                 # legacy combined TUI + Slack worker
+nix run ./slick -- daemon       # central rate-limit-aware collector + SSE
+nix run ./slick                 # smart client (same as `slick client`)
+nix run ./slick -- client      # cache + http://127.0.0.1:7612 SSE by default
+nix run ./slick -- client --no-daemon  # strict cache-only client
+nix run ./slick -- client --no-cache   # daemon-only; no state read/write
+nix run ./slick -- client --daemon-url http://slick-host:7612  # remote SSE
 nix run ./slick -- --demo       # deterministic offline UI
 nix run ./slick -- --demo --no-graphics
 nix run ./slick -- --sync-once  # bounded live refresh into the cache
@@ -36,6 +38,7 @@ Slick mirrors Slack's navigation shape:
 - **Direct messages** and **Channels** are complete, separately paginated API inventories normalized by name, favorite, recency, and unread state. Clicking either section opens a searchable, bounded overview before opening a conversation.
 - The sidebar's channel list is ordered by **channels you have posted in recently** (`search.messages from:me`, seven-day window), backfilled through `conversations.info` so non-member channels still resolve to names.
 - Slick mirrors Slack favorites via `stars.list`. Slack's arbitrary custom sidebar-section layout is not exposed by the supported Web API, so Slick presents Favorites/Active DMs/Channels over the complete inventory rather than pretending to reproduce private UI-only section metadata.
+- Timestamp-sorted Activity, Feed, Files, conversations, and threads insert non-clickable date separators such as **Tuesday 4th August**. Only dates containing visible items appear, and hit regions remain attached to item rows rather than the inserted headings.
 - Conversations read oldest → newest and open pinned to the newest message, like a chat client.
 - Messages carrying replies can be opened as **threads** (`conversations.replies`); threads stack and `q` pops one level at a time.
 - Permalinks render as an `open ↗` OSC 8 hyperlink rather than raw URLs, and URLs inside Markdown bodies become clickable in place.
@@ -65,7 +68,7 @@ Slick mirrors Slack's navigation shape:
 | `T` | Cycle theme (slick, nord, slate) |
 | `f` | Fullscreen the Markdown pane (messages, threads, Canvas) |
 | `Tab` / `Shift-Tab` | Cycle sidebar/content/detail focus; always restores a hidden sidebar |
-| `Ctrl-R` | Refresh the visible view plus the DM/channel list |
+| `Ctrl-R` | Queue the visible domain on the daemon, or refresh through embedded fallback |
 | `Ctrl-U` / `Ctrl-D`, `PageUp` / `PageDown`, `Space` | Page rich content |
 | `/` | Filter cached names and files locally |
 | `?` | Help |
@@ -88,13 +91,20 @@ graphics: true         # false behaves like --no-graphics
 start-page: activity   # activity | feed | favorites | dms | channels | files
 sidebar-width: 32      # cells
 detail-percent: 64     # share of the content area given to the Markdown pane
-refresh-interval-secs: 60  # legacy combined-mode cadence; ignored by --client
-daemon-bind: 127.0.0.1:7612
-daemon-url: null          # set on remote --client hosts, e.g. http://slick-host:7612
-daemon-token-file: null   # default: ~/.config/slick/daemon-token
-daemon-min-refresh-secs: 2
+refresh-interval-secs: 60  # cadence used only while embedded fallback is active
+client:
+  cache: true
+  daemon: true
+  daemon-url: http://127.0.0.1:7612
+  token-file: null            # default: ~/.config/slick/daemon-token
+  fallback: true
+  fallback-timeout-secs: 90
+  fallback-lease-file: null   # default: ~/.config/slick/fallback-collector.lock
+daemon:
+  bind: 127.0.0.1:7612
+  token-file: null            # generated mode 0600 when absent
+  min-refresh-secs: 2
 alerts: off            # off (default) | bell | notify (OSC 777 + bell)
-mark-read-in-slack: false  # true also clears the unread badge in Slack itself
 favorites:             # local favourites overlay, unioned with Slack stars
   - C0BELKU8YP6
 ```
@@ -133,17 +143,14 @@ read conversations, and a message arriving after the marker badges the
 conversation again. Comparison is numeric rather than lexical, so timestamps
 remain correctly ordered.
 
-By default this is purely local: Slack still shows the conversation unread in
-its own clients. Set `mark-read-in-slack: true` to additionally send
-`conversations.mark`, which clears the badge everywhere and makes Slick usable
-as a primary client. That is **opt-in because it is a Slack mutation** — see
-below.
+This is always purely local: Slack still shows the conversation unread in its
+own clients. Slick has no message/read-state mutation path.
 
 ## Daemon/client cache architecture
 
 For reliable all-day use, run exactly one `slick daemon` per Slack identity and
-open every TUI with `slick --client`. The daemon is the **only Slack API
-consumer**. It maintains independent coverage records for identity, inventory,
+open every TUI with plain `slick` or `slick client` (the two are aliases). The
+daemon is the normal Slack API consumer. It maintains independent coverage records for identity, inventory,
 activity, files, self-activity, and each eligible conversation; at each cycle it
 selects the largest overdue gap rather than blindly refreshing whichever view is
 focused. Missing coverage wins first, but absolute age ensures a quiet
@@ -160,57 +167,68 @@ restarting at page one after every rate limit. The cache retains up to 5,000
 activity/feed entries and 1,000 files. On Slack throttling the daemon publishes
 the method and countdown immediately, obeys `Retry-After`, adds bounded jitter,
 then applies a bounded global/domain backoff before trying the largest remaining
-gap.
+gap. The daemon writes one concise completion/progress/failure line per refresh
+and rate-limit notices to stderr, so systemd journal, launchd logs, and
+supervisord logs show what it is doing without debug-level noise.
 
-A local `--client` watches atomic cache replacements and never constructs
-`SlackService`. Give it `--daemon-url` (or `daemon-url` in config) to fetch an
-initial snapshot and consume `GET /events` as Server-Sent Events. It reconnects
-with bounded exponential backoff and writes remote snapshots through the same
-atomic cache, so it can render the last good state while disconnected. `Ctrl-R`
-in client mode only reports that the client is waiting for daemon data; it never
-falls through to Slack.
+The smart client enables **both** local cache and daemon sources by default. It
+renders the cache immediately, connects to `http://127.0.0.1:7612`, fetches an
+initial snapshot, and follows `GET /events` as Server-Sent Events. Cache and SSE
+carry the same collector revision and are deduplicated; SSE snapshots are
+written atomically to the client's local cache, including on remote nodes, so
+the next launch is warm. `--no-cache` makes it daemon/memory-only, while
+`--no-daemon` is strict cache-only.
+
+If the daemon is unavailable **and** the cache has not advanced for
+`client.fallback-timeout-secs`, one local client may acquire the owner-only
+fallback lease and start an embedded read-only collector. Other local clients
+remain cached rather than multiplying Slack traffic. When daemon SSE (or a
+newer daemon cache revision) returns, fallback finishes its in-flight request,
+stops, and releases the lease. With both sources disabled fallback starts
+immediately; `--no-fallback` disables this circuit breaker. A remote host needs
+Slack credentials locally before its fallback can work.
 
 The daemon creates a random bearer token at
-`~/.config/slick/daemon-token` (or `daemon-token-file` / `--token-file`) with
+`~/.config/slick/daemon-token` (or `daemon.token-file` / `--token-file`) with
 mode 0600. `/snapshot`, `/health`, and `/events` all require
-`Authorization: Bearer …`; unsafe existing token permissions are refused. Copy
+`Authorization: Bearer …`; unsafe existing token permissions are refused. An
+authenticated `POST /refresh?domain=…` lets `Ctrl-R`, conversation opens, thread
+opens, and file opens queue the relevant domain on the central collector; the
+result returns through the ordinary atomic cache plus SSE revision. Copy
 that token to remote clients through your secret manager and point their token
 file at the copy. Plain HTTP does not encrypt the bearer: keep non-loopback binds
 on a private/VPN network or behind a TLS tunnel/reverse proxy. Never commit the
 token.
 
-The first legacy live startup refreshes identity, separately paginates every accessible DM/group-DM and public/private channel, applies favorites, then loads mentions/DM activity, recent files, and a bounded set of active or unread DMs.
-It requests no more than seven days when history is available. Responses are
-cached at `$SLICK_CACHE_DIR/state.json` or the platform cache directory.
-
-`Ctrl-R` does **not** redownload everything. It refreshes the DM/channel sidebar,
-then only the visible target:
+The daemon and embedded fallback request no more than seven days when history
+is available. Responses are cached at `$SLICK_CACHE_DIR/state.json` or the
+platform cache directory. While embedded fallback is active, `Ctrl-R` does
+**not** redownload everything: it refreshes the sidebar, then only the visible
+target:
 
 - Activity → mentions and DM activity
 - DMs/Channels → selected conversation since its last refresh
 - Files → recent-file search since the last refresh date
 
-Slick also refreshes **automatically in the background** every
-`refresh-interval-secs` (default 60; set `0` for manual-only). Each cycle runs
-the same bounded, incremental visible-target refresh as `Ctrl-R` — never a
-re-bootstrap — and is skipped whenever a Slack call is already in flight, so a
-slow response can never queue up stale work. The interval is clamped to a floor
-of 15s. The status line always shows the active data domain's complete-refresh age, so a recent unrelated cache write cannot hide hours of missing Feed activity.
+Embedded fallback refreshes in the background every `refresh-interval-secs`
+(default 60; set `0` for manual-only). A slow response cannot queue stale work.
+The normal daemon continues using its independent gap scheduler. The status
+line always shows the active data domain's complete-refresh age, so a recent
+unrelated cache write cannot hide hours of missing Feed activity.
 
 Slack throttles aggressively (`search.*` especially). Slick honours `Retry-After`
 on HTTP 429 and on `ok:false`/`ratelimited`, backing off exponentially with
 jitter up to a cap, and reports throttling in the status line rather than
 failing the refresh.
 
-`slick --client` is structurally read-only against Slack: it has no Slack
-service and cannot send, edit, react, join, mark read, or mutate presence. The
-legacy combined client is read-only **by default**.
+The header reports data age separately from source liveness, for example
+`activity 15s stale · ● daemon (5s) · cache (30s)`. Green means daemon heartbeats
+are live, yellow means daemon is absent but cache/fallback is still progressing,
+and red means neither source is healthy or the visible domain is rate-limited or
+failed.
 
-The single exception is opt-in and off by default: with
-`mark-read-in-slack: true`, reading a conversation in Slick also sends
-`conversations.mark` for it. That is the only Slack write Slick can perform. It
-runs on the worker thread like every other Slack call, and is never dispatched
-unless you enable it.
+Slick is structurally read-only against Slack. The daemon and embedded fallback
+fetch data but cannot send, edit, react, join, mark read, or mutate presence.
 
 ## Nix service modules
 

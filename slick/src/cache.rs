@@ -46,6 +46,17 @@ impl CacheStore {
     }
 
     pub fn save(&self, state: &CacheState) -> Result<()> {
+        self.save_inner(state, true)
+    }
+
+    /// Persist a received authoritative snapshot without replacing its source
+    /// timestamp. Smart clients use this so cache and SSE carry the same
+    /// revision identity.
+    pub fn save_exact(&self, state: &CacheState) -> Result<()> {
+        self.save_inner(state, false)
+    }
+
+    fn save_inner(&self, state: &CacheState, stamp_now: bool) -> Result<()> {
         let parent = self
             .path
             .parent()
@@ -54,7 +65,9 @@ impl CacheStore {
             .with_context(|| format!("create Slick cache directory {}", parent.display()))?;
         let mut snapshot = state.clone();
         snapshot.normalize();
-        snapshot.saved_at = Some(CacheState::now());
+        if stamp_now {
+            snapshot.saved_at = Some(CacheState::now());
+        }
         let bytes = serde_json::to_vec_pretty(&snapshot).context("serialize Slick cache")?;
         let temporary = self
             .path
@@ -125,6 +138,19 @@ mod tests {
         assert!(loaded.saved_at.is_some());
         store.clear().unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn exact_save_preserves_authoritative_snapshot_timestamp() {
+        let path = test_path("exact");
+        let store = CacheStore::new(path.clone());
+        let state = CacheState {
+            saved_at: Some(123_456),
+            ..CacheState::default()
+        };
+        store.save_exact(&state).unwrap();
+        assert_eq!(store.load().unwrap().saved_at, Some(123_456));
+        store.clear().unwrap();
     }
 
     #[test]

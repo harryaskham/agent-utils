@@ -48,7 +48,7 @@ pub struct SlackNotice {
 pub struct IncompleteCoverage(pub String);
 
 /// Most recent degradation notice (throttling, partial results), drained by
-/// the legacy in-TUI worker into the status line.
+/// an embedded fallback worker into the status line.
 static NOTICE: Mutex<Option<SlackNotice>> = Mutex::new(None);
 
 /// Take the pending notice, if any. Clears it.
@@ -350,7 +350,7 @@ impl SlackService {
 
     /// Construct a service that reports in-flight rate-limit/partial progress.
     /// The daemon uses this to publish backoff state while a Slack call sleeps;
-    /// the legacy in-TUI worker continues to use the global one-shot notice.
+    /// an embedded fallback worker continues to use the global one-shot notice.
     pub fn from_environment_with_notice(
         notice: Arc<dyn Fn(SlackNotice) + Send + Sync>,
     ) -> Result<Self> {
@@ -582,23 +582,6 @@ impl SlackService {
         state.search_progress.remove(progress_key);
         state.mark_refreshed("self_activity");
         self.backfill_conversations(state);
-        Ok(())
-    }
-
-    /// Send a Slack read marker for `conversation_id` up to `ts`.
-    ///
-    /// This is the ONLY Slack mutation Slick can perform, and it is reached
-    /// only when the operator sets `mark-read-in-slack: true`. It clears the
-    /// unread badge in every Slack client, which is why it is opt-in: the
-    /// client is otherwise strictly read-only.
-    pub fn mark_conversation_read(&self, conversation_id: &str, ts: &str) -> Result<()> {
-        if conversation_id.is_empty() || ts.is_empty() {
-            return Ok(());
-        }
-        let mut params = BTreeMap::new();
-        params.insert("channel".into(), conversation_id.to_string());
-        params.insert("ts".into(), ts.to_string());
-        self.client.call("conversations.mark", &params)?;
         Ok(())
     }
 

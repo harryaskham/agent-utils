@@ -81,6 +81,59 @@ impl ThemeName {
     }
 }
 
+/// Smart-client source and fallback policy.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ClientConfig {
+    /// Load and follow the durable cache.
+    pub cache: bool,
+    /// Connect to the daemon snapshot/SSE service.
+    pub daemon: bool,
+    /// Daemon base URL. Localhost is the compatible default for `slick daemon`.
+    pub daemon_url: String,
+    /// Optional client-side copy of the daemon bearer token.
+    pub token_file: Option<PathBuf>,
+    /// Permit a read-only embedded collector after a real source outage.
+    pub fallback: bool,
+    /// Seconds without daemon/cache progress before fallback is considered.
+    pub fallback_timeout_secs: u64,
+    /// Optional per-host fallback lease path.
+    pub fallback_lease_file: Option<PathBuf>,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            cache: true,
+            daemon: true,
+            daemon_url: "http://127.0.0.1:7612".into(),
+            token_file: None,
+            fallback: true,
+            fallback_timeout_secs: 90,
+            fallback_lease_file: None,
+        }
+    }
+}
+
+/// Central collector and HTTP service policy.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct DaemonConfig {
+    pub bind: String,
+    pub token_file: Option<PathBuf>,
+    pub min_refresh_secs: u64,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            bind: "127.0.0.1:7612".into(),
+            token_file: None,
+            min_refresh_secs: 2,
+        }
+    }
+}
+
 /// Persisted user configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -98,20 +151,13 @@ pub struct Config {
     /// Seconds between automatic background refreshes; `0` disables them and
     /// leaves Slick manual-refresh-only (Ctrl-R).
     ///
-    /// This applies to the legacy all-in-one TUI mode. `slick --client` never
-    /// calls Slack; `slick daemon` owns its independent gap scheduler.
+    /// This applies only while the smart client's embedded fallback collector
+    /// is active; `slick daemon` owns its independent gap scheduler.
     pub refresh_interval_secs: u64,
-    /// HTTP bind address for `slick daemon` snapshot + SSE service.
-    pub daemon_bind: String,
-    /// Optional HTTP base URL used by `slick --client`. When absent, the client
-    /// follows atomic writes to the local cache file instead.
-    pub daemon_url: Option<String>,
-    /// Optional bearer-token file. Defaults beside this config as
-    /// `daemon-token`; the daemon generates it mode 0600 on first launch.
-    pub daemon_token_file: Option<PathBuf>,
-    /// Minimum spacing between daemon refresh tasks. Individual domains have
-    /// longer freshness targets; this is only the global API-burst floor.
-    pub daemon_min_refresh_secs: u64,
+    /// Smart-client source/fallback settings.
+    pub client: ClientConfig,
+    /// Central collector/service settings.
+    pub daemon: DaemonConfig,
     /// Conversation ids favourited inside Slick; unioned with Slack stars.
     pub favorites: BTreeSet<String>,
     /// Local read markers: conversation id -> newest message timestamp the
@@ -123,13 +169,6 @@ pub struct Config {
     pub read_markers: BTreeMap<String, String>,
     /// How to announce a newly arrived mention or unread DM.
     pub alerts: AlertMode,
-    /// Whether to send Slack read markers (`conversations.mark`) when a
-    /// conversation is read in Slick.
-    ///
-    /// OFF by default: enabling it makes Slick write to Slack, which
-    /// deliberately breaks the otherwise read-only contract. With it on,
-    /// reading here clears the unread badge in every Slack client too.
-    pub mark_read_in_slack: bool,
 }
 
 impl Default for Config {
@@ -141,14 +180,11 @@ impl Default for Config {
             sidebar_width: 32,
             detail_percent: 64,
             refresh_interval_secs: 60,
-            daemon_bind: "127.0.0.1:7612".to_string(),
-            daemon_url: None,
-            daemon_token_file: None,
-            daemon_min_refresh_secs: 2,
+            client: ClientConfig::default(),
+            daemon: DaemonConfig::default(),
             favorites: BTreeSet::new(),
             read_markers: BTreeMap::new(),
             alerts: AlertMode::default(),
-            mark_read_in_slack: false,
         }
     }
 }
@@ -198,11 +234,31 @@ impl Config {
     /// Bearer-token path for the daemon/client protocol.
     #[must_use]
     pub fn daemon_token_path(&self, config_path: &Path) -> PathBuf {
-        self.daemon_token_file.clone().unwrap_or_else(|| {
+        self.daemon.token_file.clone().unwrap_or_else(|| {
             config_path
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
                 .join("daemon-token")
+        })
+    }
+
+    /// Client token path; local deployments share the daemon token by default.
+    #[must_use]
+    pub fn client_token_path(&self, config_path: &Path) -> PathBuf {
+        self.client
+            .token_file
+            .clone()
+            .unwrap_or_else(|| self.daemon_token_path(config_path))
+    }
+
+    /// Per-host lease that prevents several local clients entering fallback.
+    #[must_use]
+    pub fn fallback_lease_path(&self, config_path: &Path) -> PathBuf {
+        self.client.fallback_lease_file.clone().unwrap_or_else(|| {
+            config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("fallback-collector.lock")
         })
     }
 
@@ -266,11 +322,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slack_write_is_opt_in_and_off_by_default() {
-        // Slick stays read-only unless the operator explicitly opts in, so the
-        // default must never dispatch a Slack mutation.
-        assert!(!Config::default().mark_read_in_slack);
-        // Alerts likewise ship silent by default.
+    fn alerts_are_off_by_default() {
+        // Alerts ship silent by default.
         assert_eq!(AlertMode::default(), AlertMode::Off);
         assert_eq!(AlertMode::parse("off"), AlertMode::Off);
         assert_eq!(AlertMode::parse("bell"), AlertMode::Bell);
@@ -310,6 +363,30 @@ mod tests {
         std::fs::write(&empty, "\n").unwrap();
         assert_eq!(Config::load(&empty).unwrap(), Config::default());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn smart_client_and_daemon_sections_have_compatible_local_defaults() {
+        let config = Config::default();
+        assert!(config.client.cache);
+        assert!(config.client.daemon);
+        assert!(config.client.fallback);
+        assert_eq!(config.client.daemon_url, "http://127.0.0.1:7612");
+        assert_eq!(config.daemon.bind, "127.0.0.1:7612");
+        assert_eq!(config.client.fallback_timeout_secs, 90);
+    }
+
+    #[test]
+    fn nested_client_and_daemon_config_parses() {
+        let config: Config = serde_yaml::from_str(
+            "client:\n  cache: false\n  daemon: true\n  fallback-timeout-secs: 12\ndaemon:\n  bind: 127.0.0.1:9001\n  min-refresh-secs: 4\n",
+        )
+        .unwrap();
+        assert!(!config.client.cache);
+        assert!(config.client.daemon);
+        assert_eq!(config.client.fallback_timeout_secs, 12);
+        assert_eq!(config.daemon.bind, "127.0.0.1:9001");
+        assert_eq!(config.daemon.min_refresh_secs, 4);
     }
 
     #[test]
