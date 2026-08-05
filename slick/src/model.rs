@@ -390,6 +390,36 @@ impl CacheState {
     }
 }
 
+impl remote_cli::Snapshot for CacheState {
+    const APP_NAME: &'static str = "slick";
+    const DISPLAY_NAME: &'static str = "Slick";
+    const CACHE_DIR_ENV: &'static str = "SLICK_CACHE_DIR";
+
+    fn normalize(&mut self) {
+        CacheState::normalize(self);
+    }
+
+    fn revision(&self) -> u64 {
+        self.collector.revision
+    }
+
+    fn set_revision(&mut self, revision: u64) {
+        self.collector.revision = revision;
+    }
+
+    fn saved_at(&self) -> Option<i64> {
+        self.saved_at
+    }
+
+    fn set_saved_at(&mut self, saved_at: Option<i64>) {
+        self.saved_at = saved_at;
+    }
+
+    fn latest_refresh(&self) -> Option<i64> {
+        self.last_refresh.values().copied().max()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

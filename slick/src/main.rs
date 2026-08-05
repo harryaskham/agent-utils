@@ -119,6 +119,11 @@ enum Command {
         #[command(subcommand)]
         command: ListGetCommand,
     },
+    /// Inspect, initialize, validate, import, export, or schema-check config.yaml.
+    Config {
+        #[command(subcommand)]
+        command: Option<configurable_cli::ConfigCommand>,
+    },
     /// Serve Slick query tools over MCP stdio.
     Mcp {
         #[command(subcommand)]
@@ -129,6 +134,9 @@ enum Command {
         /// HTTP bind address (default from config: daemon.bind).
         #[arg(long, value_name = "ADDR")]
         bind: Option<String>,
+        /// Owner-local Unix socket serving the same authenticated protocol.
+        #[arg(long, value_name = "PATH")]
+        unix_socket: Option<PathBuf>,
         /// Bearer token file (generated mode 0600 when absent).
         #[arg(long, value_name = "PATH")]
         token_file: Option<PathBuf>,
@@ -182,13 +190,28 @@ enum McpCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::Config { command }) = &cli.command {
+        let output = slick::config::manager().execute(
+            cli.config.as_deref(),
+            command
+                .clone()
+                .unwrap_or(configurable_cli::ConfigCommand::Show),
+        )?;
+        output.print(cli.json)?;
+        return Ok(());
+    }
     let config_path = cli
         .config
         .clone()
         .unwrap_or_else(slick::Config::default_path);
     let config = slick::Config::load(&config_path)?;
     let cache = CacheStore::new(cli.cache.clone().unwrap_or_else(CacheStore::default_path));
-    if let Some(Command::Daemon { bind, token_file }) = &cli.command {
+    if let Some(Command::Daemon {
+        bind,
+        unix_socket,
+        token_file,
+    }) = &cli.command
+    {
         if cli.demo
             || cli.snapshot
             || cli.sync_once
@@ -205,6 +228,9 @@ fn main() -> Result<()> {
         return slick::daemon::run(slick::daemon::DaemonOptions {
             cache_store: cache,
             bind: bind.clone().unwrap_or_else(|| config.daemon.bind.clone()),
+            unix_socket: unix_socket
+                .clone()
+                .or_else(|| config.daemon.unix_socket.clone()),
             token_path: token_file
                 .clone()
                 .or(cli.token_file.clone())
@@ -310,7 +336,7 @@ fn main() -> Result<()> {
                 slick::query::serve_mcp(&query_runtime)?;
                 return Ok(());
             }
-            Command::Client | Command::Daemon { .. } => {}
+            Command::Client | Command::Config { .. } | Command::Daemon { .. } => {}
         }
     }
     let explicit_client = matches!(&cli.command, Some(Command::Client));

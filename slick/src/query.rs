@@ -8,14 +8,12 @@ use std::time::{Duration, Instant};
 use mcp_cli::{
     ErrorCategory, JsonEnvelope, McpServer, StdioServerConfig, StructuredError, ToolRouter,
 };
-use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, AUTHORIZATION};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::cache::CacheStore;
-use crate::client::{read_token, FallbackLease};
+use crate::client::FallbackLease;
 use crate::model::{
     CacheState, Conversation, ConversationKind, Message, Notification, RefreshState, SlackFile,
 };
@@ -61,12 +59,11 @@ impl Surface {
         }
     }
 
-    fn snapshot_url(&self, base: &str) -> String {
-        let base = base.trim_end_matches('/');
+    fn snapshot_path(&self) -> String {
         match self {
-            Self::Conversation(id) => format!("{base}/snapshot/conversation?id={}", encode(id)),
-            Self::File(id) => format!("{base}/snapshot/file?id={}", encode(id)),
-            _ => format!("{base}/snapshot/{}", self.name()),
+            Self::Conversation(id) => format!("/snapshot/conversation?id={}", encode(id)),
+            Self::File(id) => format!("/snapshot/file?id={}", encode(id)),
+            _ => format!("/snapshot/{}", self.name()),
         }
     }
 
@@ -295,21 +292,13 @@ fn resolve_from_daemon(
     surface: &Surface,
     cached: Option<CacheState>,
 ) -> Result<CacheState, QueryError> {
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(35))
-        .build()
-        .map_err(|error| QueryError::Daemon(error.to_string()))?;
-    let token =
-        read_token(&runtime.token_path).map_err(|error| QueryError::Daemon(error.to_string()))?;
-    let authorization = format!("Bearer {token}");
-    let mut projection = fetch_projection(&client, runtime, surface, &authorization)?;
+    let mut projection = fetch_projection(runtime, surface)?;
     if !surface_available(&projection.state, surface) {
-        request_refresh(&client, runtime, surface, &authorization)?;
+        request_daemon_refresh(runtime, surface)?;
         let deadline = Instant::now() + DAEMON_WAIT;
         while Instant::now() < deadline {
             thread::sleep(Duration::from_millis(250));
-            projection = fetch_projection(&client, runtime, surface, &authorization)?;
+            projection = fetch_projection(runtime, surface)?;
             if surface_available(&projection.state, surface) {
                 break;
             }
@@ -407,41 +396,24 @@ fn run_paged(mut refresh: impl FnMut() -> anyhow::Result<()>) -> Result<(), Quer
 }
 
 fn fetch_projection(
-    client: &Client,
     runtime: &QueryRuntime,
     surface: &Surface,
-    authorization: &str,
 ) -> Result<ProjectionSnapshot, QueryError> {
-    client
-        .get(surface.snapshot_url(&runtime.endpoint))
-        .header(AUTHORIZATION, authorization)
-        .header(ACCEPT, "application/json")
-        .send()
-        .map_err(|error| QueryError::Daemon(error.to_string()))?
-        .error_for_status()
-        .map_err(|error| QueryError::Daemon(error.to_string()))?
-        .json()
-        .map_err(|error| QueryError::Daemon(error.to_string()))
+    remote_cli::fetch_json(
+        &runtime.endpoint,
+        &runtime.token_path,
+        &surface.snapshot_path(),
+    )
+    .map_err(|error| QueryError::Daemon(error.to_string()))
 }
 
-fn request_refresh(
-    client: &Client,
-    runtime: &QueryRuntime,
-    surface: &Surface,
-    authorization: &str,
-) -> Result<(), QueryError> {
-    client
-        .post(format!(
-            "{}/refresh",
-            runtime.endpoint.trim_end_matches('/')
-        ))
-        .header(AUTHORIZATION, authorization)
-        .query(&[("domain", surface.refresh_domain())])
-        .send()
-        .map_err(|error| QueryError::Daemon(error.to_string()))?
-        .error_for_status()
-        .map_err(|error| QueryError::Daemon(error.to_string()))?;
-    Ok(())
+fn request_daemon_refresh(runtime: &QueryRuntime, surface: &Surface) -> Result<(), QueryError> {
+    remote_cli::request_refresh(
+        &runtime.endpoint,
+        &runtime.token_path,
+        &surface.refresh_domain(),
+    )
+    .map_err(|error| QueryError::Daemon(error.to_string()))
 }
 
 #[must_use]
@@ -904,6 +876,9 @@ pub fn build_mcp_server() -> McpServer<QueryRuntime> {
         "Get one Slack file; Canvas content is bounded Markdown.",
         |runtime, input: GetInput| file_get(runtime, &input),
     );
+    configurable_cli::register_config_tools(&mut router, |_runtime: &QueryRuntime| {
+        crate::config::manager()
+    });
     McpServer::new(
         StdioServerConfig {
             server_name: "slick".into(),

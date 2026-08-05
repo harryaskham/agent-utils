@@ -6,13 +6,15 @@
 //! read-only against Slack, so starring inside the TUI is persisted here and
 //! unioned with Slack's own `stars.list` rather than written back to Slack.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use configurable_cli::{AppConfig, ConfigManager, ConfigSpec};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// How Slick announces a new mention or unread DM.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlertMode {
     /// Never announce.
@@ -37,7 +39,7 @@ impl AlertMode {
 }
 
 /// Named colour palette.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemeName {
     /// Slick's original aubergine palette.
@@ -81,61 +83,11 @@ impl ThemeName {
     }
 }
 
-/// Smart-client source and fallback policy.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct ClientConfig {
-    /// Load and follow the durable cache.
-    pub cache: bool,
-    /// Connect to the daemon snapshot/SSE service.
-    pub daemon: bool,
-    /// Daemon base URL. Localhost is the compatible default for `slick daemon`.
-    pub daemon_url: String,
-    /// Optional client-side copy of the daemon bearer token.
-    pub token_file: Option<PathBuf>,
-    /// Permit a read-only embedded collector after a real source outage.
-    pub fallback: bool,
-    /// Seconds without daemon/cache progress before fallback is considered.
-    pub fallback_timeout_secs: u64,
-    /// Optional per-host fallback lease path.
-    pub fallback_lease_file: Option<PathBuf>,
-}
-
-impl Default for ClientConfig {
-    fn default() -> Self {
-        Self {
-            cache: true,
-            daemon: true,
-            daemon_url: "http://127.0.0.1:7612".into(),
-            token_file: None,
-            fallback: true,
-            fallback_timeout_secs: 90,
-            fallback_lease_file: None,
-        }
-    }
-}
-
-/// Central collector and HTTP service policy.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct DaemonConfig {
-    pub bind: String,
-    pub token_file: Option<PathBuf>,
-    pub min_refresh_secs: u64,
-}
-
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            bind: "127.0.0.1:7612".into(),
-            token_file: None,
-            min_refresh_secs: 2,
-        }
-    }
-}
+/// Canonical smart-client and daemon transport policy from `remote-cli`.
+pub use remote_cli::{ClientConfig, DaemonConfig};
 
 /// Persisted user configuration.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Config {
     /// Colour palette name.
@@ -189,46 +141,29 @@ impl Default for Config {
     }
 }
 
+impl AppConfig for Config {}
+
+#[must_use]
+pub fn manager() -> ConfigManager<Config> {
+    ConfigManager::new(ConfigSpec::new("slick").with_env_var("SLICK_CONFIG"))
+}
+
 impl Config {
     /// Default config path: `$SLICK_CONFIG`, else `$XDG_CONFIG_HOME/slick/config.yaml`,
     /// else `~/.config/slick/config.yaml`.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        if let Ok(explicit) = std::env::var("SLICK_CONFIG") {
-            return PathBuf::from(explicit);
-        }
-        let base = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .ok()
-            .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join("slick").join("config.yaml")
+        manager().default_path()
     }
 
-    /// Load configuration, returning defaults when the file is absent.
-    ///
-    /// A malformed file is an error rather than a silent reset so a typo does
-    /// not quietly discard the operator's favourites.
+    /// Load and validate configuration, returning defaults when absent/empty.
     pub fn load(path: &Path) -> Result<Self> {
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("read Slick config {}", path.display()))?;
-        if raw.trim().is_empty() {
-            return Ok(Self::default());
-        }
-        serde_yaml::from_str(&raw).with_context(|| format!("parse Slick config {}", path.display()))
+        Ok(manager().load(Some(path))?.config)
     }
 
-    /// Persist configuration, creating parent directories as needed.
+    /// Validate and atomically persist owner-only configuration.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create Slick config dir {}", parent.display()))?;
-        }
-        let body = serde_yaml::to_string(self).context("serialize Slick config")?;
-        std::fs::write(path, body).with_context(|| format!("write Slick config {}", path.display()))
+        Ok(manager().save(path, self)?)
     }
 
     /// Bearer-token path for the daemon/client protocol.

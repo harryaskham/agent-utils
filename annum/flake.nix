@@ -1,13 +1,9 @@
 {
-  description = "slick — a read-only-by-default graphical Slack TUI";
+  description = "annum — deterministic Outlook + Teams Kittui client, CLI, MCP server, cache, and daemon";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Private source is fetched once by Nix over the operator's SSH transport.
-    # The build below rewrites Cargo's development-time git dependencies to
-    # path dependencies inside this immutable source, so sandboxed cargo
-    # vendoring never needs GitHub credentials.
     kittui-src = {
       url = "git+ssh://git@github.com/harryaskham/kittui?rev=fab4b7e39cfe5f515c68ce1188979864b3c632d5";
       flake = false;
@@ -27,31 +23,21 @@
     };
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      flake-utils,
-      kittui-src,
-      mcp-cli-src,
-      configurable-cli-src,
-      remote-cli,
-      ...
-    }:
+  outputs = { self, nixpkgs, flake-utils, kittui-src, mcp-cli-src, configurable-cli-src, remote-cli, ... }:
     let
       remoteModules = remote-cli.lib.mkDaemonModules {
-        packageFor = pkgs: self.packages.${pkgs.system}.slick;
-        appName = "slick";
-        displayName = "Slick";
-        binary = "slick";
-        defaultBind = "127.0.0.1:7612";
-        description = "Slick rate-limit-aware Slack cache collector";
+        packageFor = pkgs: self.packages.${pkgs.system}.annum;
+        appName = "annum";
+        displayName = "Annum";
+        binary = "annum";
+        defaultBind = "127.0.0.1:7621";
+        description = "Annum Outlook and Teams WorkIQ cache collector";
       };
       perSystem = flake-utils.lib.eachDefaultSystem (
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          patchedSrc = pkgs.runCommand "slick-source" { } ''
+          patchedSrc = pkgs.runCommand "annum-source" { } ''
             cp -R ${./.} "$out"
             chmod -R u+w "$out"
             substituteInPlace "$out/Cargo.toml" \
@@ -67,9 +53,6 @@
                              'configurable-cli = { path = "${configurable-cli-src}" }' \
               --replace-fail 'remote-cli = { git = "https://github.com/harryaskham/remote-cli", rev = "046740f5f696e7d5adc5b1776acff3078a781945" }' \
                              'remote-cli = { path = "${remote-cli}" }'
-            # Path dependencies have source-less lock entries. Cargo's git lock
-            # entries carry no checksum, so deleting only this source line is the
-            # exact git -> path lock transformation.
             sed -i '/source = "git+https:\/\/github.com\/harryaskham\/kittui?/d' "$out/Cargo.lock"
             sed -i '/source = "git+https:\/\/github.com\/harryaskham\/mcp-cli?/d' "$out/Cargo.lock"
             sed -i '/source = "git+https:\/\/github.com\/harryaskham\/configurable-cli?/d' "$out/Cargo.lock"
@@ -80,56 +63,43 @@
             mcp-cli-core = { path = "${mcp-cli-src}" }
             EOF
           '';
-          slick = pkgs.rustPlatform.buildRustPackage {
-            pname = "slick";
+          annum = pkgs.rustPlatform.buildRustPackage {
+            pname = "annum";
             version = "0.1.0";
             src = patchedSrc;
-            # Regenerate whenever Cargo.lock changes (e.g. adding serde_yaml in
-            # 132b67d). A stale value fails the build with "cargoHash or
-            # cargoSha256 is out of date": set to pkgs.lib.fakeHash, build, and
-            # copy the reported "got:" hash back here.
-            cargoHash = "sha256-2CfkZDgQDGTDM9dePK+DM5mb9+OUBWzoo0r3u9JMfL4=";
+            cargoHash = "sha256-LnFgjgmdNxlpVmQ79LusEz1Xl6D7esEizb92Wv3/LeY=";
             strictDeps = true;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
             buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
+            postInstall = ''
+              wrapProgram "$out/bin/annum" --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nodejs ]}
+            '';
             doCheck = true;
             meta = {
-              description = "Read-only-by-default graphical Slack TUI with compact cached views";
-              homepage = "https://github.com/harryaskham/agent-utils/tree/main/slick";
+              description = "Deterministic Outlook and Teams Kittui client, CLI, MCP server, cache, and daemon";
+              homepage = "https://github.com/harryaskham/agent-utils/tree/main/annum";
               license = pkgs.lib.licenses.mit;
-              mainProgram = "slick";
+              mainProgram = "annum";
               platforms = pkgs.lib.platforms.unix;
             };
           };
         in
         {
-          packages = {
-            inherit slick;
-            default = slick;
-          };
-          apps = {
-            slick = flake-utils.lib.mkApp { drv = slick; };
-            default = self.apps.${system}.slick;
-          };
+          packages = { inherit annum; default = annum; };
+          apps = { annum = flake-utils.lib.mkApp { drv = annum; }; default = self.apps.${system}.annum; };
           devShells.default = pkgs.mkShell {
-            packages = [
-              pkgs.cargo
-              pkgs.rustc
-              pkgs.rustfmt
-              pkgs.clippy
-              pkgs.pkg-config
-            ];
+            packages = [ pkgs.cargo pkgs.rustc pkgs.rustfmt pkgs.clippy pkgs.pkg-config pkgs.nodejs ];
             buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
           };
         }
       );
     in
-    perSystem
-    // {
+    perSystem // {
       nixosModules.default = remoteModules.nixos;
-      nixosModules.slick = remoteModules.nixos;
+      nixosModules.annum = remoteModules.nixos;
       darwinModules.default = remoteModules.darwin;
-      darwinModules.slick = remoteModules.darwin;
+      darwinModules.annum = remoteModules.darwin;
       nixOnDroidModules.default = remoteModules.nixOnDroid;
-      nixOnDroidModules.slick = remoteModules.nixOnDroid;
+      nixOnDroidModules.annum = remoteModules.nixOnDroid;
     };
 }

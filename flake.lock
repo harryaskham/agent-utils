@@ -1,11 +1,68 @@
 {
   "nodes": {
+    "annum": {
+      "inputs": {
+        "configurable-cli-src": "configurable-cli-src",
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "kittui-src": "kittui-src",
+        "mcp-cli-src": "mcp-cli-src",
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "remote-cli": "remote-cli"
+      },
+      "locked": {
+        "path": "./annum",
+        "type": "path"
+      },
+      "original": {
+        "path": "./annum",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "configurable-cli-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785888722,
+        "narHash": "sha256-Lk8CvGUa/ujExWbA5y16VaOxslanN+WZ3IewgkWImsc=",
+        "ref": "refs/heads/main",
+        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
+        "revCount": 2,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/configurable-cli"
+      },
+      "original": {
+        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/configurable-cli"
+      }
+    },
+    "configurable-cli-src_2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785888722,
+        "narHash": "sha256-Lk8CvGUa/ujExWbA5y16VaOxslanN+WZ3IewgkWImsc=",
+        "ref": "refs/heads/main",
+        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
+        "revCount": 2,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/configurable-cli"
+      },
+      "original": {
+        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/configurable-cli"
+      }
+    },
     "cost-tui": {
       "inputs": {
         "flake-utils": [
           "flake-utils"
         ],
-        "kittui-src": "kittui-src",
+        "kittui-src": "kittui-src_2",
         "nixpkgs": [
           "nixpkgs"
         ]
@@ -72,6 +129,23 @@
         "url": "ssh://git@github.com/harryaskham/kittui"
       }
     },
+    "kittui-src_3": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785748268,
+        "narHash": "sha256-1hybr7r3wS7/JoSxIZtiSgVtJq850VjgbghXre/7+U8=",
+        "ref": "refs/heads/main",
+        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
+        "revCount": 3239,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/kittui"
+      },
+      "original": {
+        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/kittui"
+      }
+    },
     "linear-extra": {
       "inputs": {
         "flake-utils": [
@@ -99,6 +173,40 @@
         "type": "path"
       },
       "parent": []
+    },
+    "mcp-cli-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785482795,
+        "narHash": "sha256-IZ9SX1iUWYv8mUufYVWiEOvVC55peViCnGTcdqpCMBs=",
+        "ref": "refs/heads/main",
+        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
+        "revCount": 52,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/mcp-cli"
+      },
+      "original": {
+        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/mcp-cli"
+      }
+    },
+    "mcp-cli-src_2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785482795,
+        "narHash": "sha256-IZ9SX1iUWYv8mUufYVWiEOvVC55peViCnGTcdqpCMBs=",
+        "ref": "refs/heads/main",
+        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
+        "revCount": 52,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/mcp-cli"
+      },
+      "original": {
+        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/mcp-cli"
+      }
     },
     "nixpkgs": {
       "locked": {
@@ -181,8 +289,61 @@
         "type": "github"
       }
     },
+    "remote-cli": {
+      "inputs": {
+        "flake-utils": [
+          "annum",
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "annum",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1785894632,
+        "narHash": "sha256-0RBCcAdUxLwYoZXaU2mNoOox2pdCmZXzCQSInkqaqcY=",
+        "ref": "refs/heads/main",
+        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
+        "revCount": 2,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/remote-cli"
+      },
+      "original": {
+        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/remote-cli"
+      }
+    },
+    "remote-cli_2": {
+      "inputs": {
+        "flake-utils": [
+          "slick",
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "slick",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1785894632,
+        "narHash": "sha256-0RBCcAdUxLwYoZXaU2mNoOox2pdCmZXzCQSInkqaqcY=",
+        "ref": "refs/heads/main",
+        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
+        "revCount": 2,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/remote-cli"
+      },
+      "original": {
+        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/remote-cli"
+      }
+    },
     "root": {
       "inputs": {
+        "annum": "annum",
         "cost-tui": "cost-tui",
         "flake-utils": "flake-utils",
         "linear-extra": "linear-extra",
@@ -197,13 +358,16 @@
     },
     "slick": {
       "inputs": {
+        "configurable-cli-src": "configurable-cli-src_2",
         "flake-utils": [
           "flake-utils"
         ],
-        "kittui-src": "kittui-src_2",
+        "kittui-src": "kittui-src_3",
+        "mcp-cli-src": "mcp-cli-src_2",
         "nixpkgs": [
           "nixpkgs"
-        ]
+        ],
+        "remote-cli": "remote-cli_2"
       },
       "locked": {
         "path": "./slick",

@@ -1,38 +1,41 @@
 [package]
-name = "slick"
+name = "annum"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.85"
+edition = "2024"
+rust-version = "1.87"
 license = "MIT"
-description = "A read-only-by-default, graphical Slack TUI with compact cached views"
+description = "Deterministic Outlook mail/calendar and Teams chat/channel CLI, MCP server, daemon, cache, and Kittui client"
 repository = "https://github.com/harryaskham/agent-utils"
 
 [[bin]]
-name = "slick"
+name = "annum"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive"] }
-dirs = "6"
-serde_yaml = "0.9"
+configurable-cli = { git = "https://github.com/harryaskham/configurable-cli", rev = "ed0a5be165f861bb58c81e22fed44153af519060" }
+crossterm = "0.28"
 html2md = "0.2"
 kittui = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }
 kittui-kitty = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }
 mcp-cli = { package = "mcp-cli-core", git = "https://github.com/harryaskham/mcp-cli", rev = "81e55235df7d7335d4dc7bd1095131246d157a2a" }
-configurable-cli = { git = "https://github.com/harryaskham/configurable-cli", rev = "ed0a5be165f861bb58c81e22fed44153af519060" }
-remote-cli = { git = "https://github.com/harryaskham/remote-cli", rev = "046740f5f696e7d5adc5b1776acff3078a781945" }
-pulldown-cmark = "0.12"
 ratakittui = { git = "https://github.com/harryaskham/kittui", rev = "fab4b7e39cfe5f515c68ce1188979864b3c632d5" }
 ratatui = { version = "0.29", features = ["crossterm", "unstable-rendered-line-info"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+remote-cli = { git = "https://github.com/harryaskham/remote-cli", rev = "046740f5f696e7d5adc5b1776acff3078a781945" }
+rmcp = { version = "=1.0.0", default-features = false, features = ["client", "transport-child-process"] }
 schemars = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "time"] }
 unicode-width = "0.2"
 url = "2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -47,5 +50,7 @@ too_many_lines = "allow"
 struct_excessive_bools = "allow"
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
+needless_pass_by_value = "allow"
+too_many_arguments = "allow"
 
 [workspace]

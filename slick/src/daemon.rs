@@ -4,13 +4,8 @@
 //! domain at a time, chooses the largest overdue coverage gap, persists every
 //! outcome atomically, and publishes the same state to smart clients.
 
-use std::collections::{BTreeMap, VecDeque};
-use std::fmt::Write as FmtWrite;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -18,10 +13,7 @@ use crate::cache::CacheStore;
 use crate::model::{CacheState, CollectorHealth, ConversationKind, RefreshState, SEVEN_DAYS_SECS};
 use crate::query::{project_state, Surface};
 use crate::slack::{IncompleteCoverage, SlackNotice, SlackService};
-use anyhow::{bail, Context, Result};
-
-const HTTP_READ_LIMIT: usize = 16 * 1024;
-const SSE_KEEPALIVE_SECS: u64 = 15;
+use anyhow::Result;
 const MAX_FAILURE_BACKOFF_SECS: i64 = 60 * 60;
 const COVERAGE_CONTINUE_SECS: i64 = 8;
 
@@ -30,6 +22,7 @@ const COVERAGE_CONTINUE_SECS: i64 = 8;
 pub struct DaemonOptions {
     pub cache_store: CacheStore,
     pub bind: String,
+    pub unix_socket: Option<PathBuf>,
     pub token_path: PathBuf,
     pub min_refresh_secs: u64,
 }
@@ -77,97 +70,36 @@ impl RefreshTask {
     }
 }
 
-/// Single-writer state shared with HTTP connection threads.
-struct SharedCache {
-    state: Mutex<CacheState>,
-    changed: Condvar,
-    store: CacheStore,
-    refresh_requests: Mutex<VecDeque<String>>,
-}
-
-impl SharedCache {
-    fn new(state: CacheState, store: CacheStore) -> Self {
-        Self {
-            state: Mutex::new(state),
-            changed: Condvar::new(),
-            store,
-            refresh_requests: Mutex::new(VecDeque::new()),
-        }
-    }
-
-    fn snapshot(&self) -> CacheState {
-        self.state.lock().map_or_else(
-            |poisoned| poisoned.into_inner().clone(),
-            |state| state.clone(),
-        )
-    }
-
-    fn request_refresh(&self, domain: String) {
-        let mut requests = self
-            .refresh_requests
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !requests.contains(&domain) {
-            requests.push_back(domain);
-        }
-    }
-
-    fn take_refresh_request(&self) -> Option<String> {
-        self.refresh_requests
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pop_front()
-    }
-
-    fn update(&self, mutate: impl FnOnce(&mut CacheState)) {
-        let snapshot = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            mutate(&mut state);
-            state.collector.revision = state.collector.revision.saturating_add(1);
-            state.saved_at = Some(CacheState::now());
-            state.clone()
-        };
-        if let Err(error) = self.store.save(&snapshot) {
-            eprintln!("slick daemon: cache save failed: {error:#}");
-        }
-        self.changed.notify_all();
-    }
-
-    fn replace_payload(&self, mut state: CacheState, mutate: impl FnOnce(&mut CacheState)) {
-        let snapshot = {
-            let mut current = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // In-flight notices may have updated collector health while the
-            // Slack call modified an unlocked payload clone.
-            state.collector = current.collector.clone();
-            mutate(&mut state);
-            state.collector.revision = state.collector.revision.saturating_add(1);
-            state.saved_at = Some(CacheState::now());
-            *current = state.clone();
-            state
-        };
-        if let Err(error) = self.store.save(&snapshot) {
-            eprintln!("slick daemon: cache save failed: {error:#}");
-        }
-        self.changed.notify_all();
-    }
-}
+type SharedCache = remote_cli::SharedSnapshot<CacheState>;
 
 /// Run the collector until the process is stopped by its supervisor.
 pub fn run(options: DaemonOptions) -> Result<()> {
-    let token = load_or_create_token(&options.token_path)?;
+    let token = remote_cli::load_or_create_token(&options.token_path)?;
     let mut initial = options.cache_store.load().unwrap_or_default();
     initial.collector.running = true;
     initial.collector.last_error.clear();
     let shared = Arc::new(SharedCache::new(initial, options.cache_store));
-    let address = start_http_server(&options.bind, Arc::clone(&shared), token)?;
+    let server = start_snapshot_server(
+        &options.bind,
+        options.unix_socket.clone(),
+        Arc::clone(&shared),
+        token,
+    )?;
+    let endpoints = [
+        server
+            .http_address
+            .map(|address| format!("http://{address}")),
+        server
+            .unix_socket
+            .as_ref()
+            .map(|path| format!("unix://{}", path.display())),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
     eprintln!(
-        "slick daemon: serving authenticated snapshots at http://{address} (token file {})",
+        "slick daemon: serving authenticated snapshots at {endpoints} (token file {})",
         options.token_path.display()
     );
     shared.update(|state| state.collector.running = true);
@@ -213,7 +145,10 @@ pub fn run(options: DaemonOptions) -> Result<()> {
         let result = run_task(&service, &mut working, &task);
         let changed = payload_changed(&before, &working);
         let finished = CacheState::now();
-        shared.replace_payload(working, |state| {
+        shared.replace_payload(working, |state, current| {
+            // Preserve in-flight notice/health updates made while the Slack
+            // request modified its unlocked payload clone.
+            state.collector = current.collector.clone();
             state.collector.current_domain = None;
             state.collector.last_cycle_at = Some(finished);
             let domain = state.domain_health_mut(&task.key);
@@ -477,145 +412,25 @@ fn publish_notice(shared: &SharedCache, notice: &SlackNotice) {
     });
 }
 
-fn load_or_create_token(path: &Path) -> Result<String> {
-    if path.exists() {
-        let token = fs::read_to_string(path)
-            .with_context(|| format!("read Slick daemon token {}", path.display()))?
-            .trim()
-            .to_string();
-        if token.len() < 32 {
-            bail!(
-                "Slick daemon token {} is empty or too short",
-                path.display()
-            );
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(path)?.permissions().mode() & 0o777;
-            if mode & 0o077 != 0 {
-                bail!(
-                    "Slick daemon token {} has unsafe mode {mode:o}; require 0600 or stricter",
-                    path.display()
-                );
-            }
-        }
-        return Ok(token);
-    }
-    let parent = path.parent().context("daemon token path has no parent")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create Slick config directory {}", parent.display()))?;
-    let mut random = [0_u8; 32];
-    fs::File::open("/dev/urandom")
-        .context("open operating-system random source")?
-        .read_exact(&mut random)
-        .context("read operating-system random source")?;
-    let mut token = String::with_capacity(random.len() * 2);
-    for byte in random {
-        write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("create Slick daemon token {}", path.display()))?;
-    writeln!(file, "{token}")?;
-    file.sync_all()?;
-    Ok(token)
-}
-
-fn start_http_server(bind: &str, shared: Arc<SharedCache>, token: String) -> Result<SocketAddr> {
-    let listener = TcpListener::bind(bind)
-        .with_context(|| format!("bind Slick daemon HTTP server at {bind}"))?;
-    let address = listener.local_addr().context("read Slick daemon address")?;
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let shared = Arc::clone(&shared);
-                    let token = token.clone();
-                    thread::spawn(move || {
-                        if let Err(error) = serve_connection(stream, &shared, &token) {
-                            eprintln!("slick daemon: client connection failed: {error:#}");
-                        }
-                    });
-                }
-                Err(error) => eprintln!("slick daemon: accept failed: {error}"),
-            }
-        }
-    });
-    Ok(address)
-}
-
-fn serve_connection(mut stream: TcpStream, shared: &SharedCache, token: &str) -> Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let request = read_http_request(&mut stream)?;
-    if !authorized(&request.headers, token) {
-        return write_http_response(
-            &mut stream,
-            "401 Unauthorized",
-            "text/plain",
-            b"unauthorized\n",
-        );
-    }
-    let route = request.path.split('?').next().unwrap_or_default();
-    match (request.method.as_str(), route) {
-        ("GET", "/snapshot") => {
-            let body = serde_json::to_vec(&shared.snapshot()).context("serialize snapshot")?;
-            write_http_response(&mut stream, "200 OK", "application/json", &body)
-        }
-        ("GET", route) if route.starts_with("/snapshot/") => {
-            let Some(surface) = snapshot_surface(route, &request.path) else {
-                return write_http_response(
-                    &mut stream,
-                    "404 Not Found",
-                    "text/plain",
-                    b"unknown snapshot surface\n",
-                );
-            };
-            let body = serde_json::to_vec(&project_state(&shared.snapshot(), &surface))
-                .context("serialize partial snapshot")?;
-            write_http_response(&mut stream, "200 OK", "application/json", &body)
-        }
-        ("GET", "/health") => {
-            let body = serde_json::to_vec(&shared.snapshot().collector)
-                .context("serialize collector health")?;
-            write_http_response(&mut stream, "200 OK", "application/json", &body)
-        }
-        ("GET", "/events") => serve_sse(stream, shared),
-        ("POST", "/refresh") => {
-            let domain = request
-                .path
-                .split_once('?')
-                .and_then(|(_, query)| {
-                    url::form_urlencoded::parse(query.as_bytes())
-                        .find(|(name, _)| name == "domain")
-                        .map(|(_, value)| value.into_owned())
-                })
-                .unwrap_or_default();
-            if domain.is_empty() || requested_task(&shared.snapshot(), &domain).is_none() {
-                return write_http_response(
-                    &mut stream,
-                    "400 Bad Request",
-                    "text/plain",
-                    b"unknown refresh domain\n",
-                );
-            }
-            shared.request_refresh(domain);
-            write_http_response(
-                &mut stream,
-                "202 Accepted",
-                "application/json",
-                b"{\"queued\":true}\n",
-            )
-        }
-        _ => write_http_response(&mut stream, "404 Not Found", "text/plain", b"not found\n"),
-    }
+fn start_snapshot_server(
+    bind: &str,
+    unix_socket: Option<PathBuf>,
+    shared: Arc<SharedCache>,
+    token: String,
+) -> Result<remote_cli::ServerHandle> {
+    let mut options = remote_cli::ServerOptions::new(shared, token);
+    options.bind = (!bind.is_empty()).then(|| bind.to_string());
+    options.unix_socket = unix_socket;
+    options.projector = Some(Arc::new(|state, route, path| {
+        let surface = snapshot_surface(route, path)?;
+        remote_cli::ProjectedResponse::json(&project_state(state, &surface)).ok()
+    }));
+    options.refresh_validator = Arc::new(|state, domain| requested_task(state, domain).is_some());
+    options.health_projector = Some(Arc::new(|state| {
+        remote_cli::ProjectedResponse::json(&state.collector)
+            .expect("collector health is serializable")
+    }));
+    remote_cli::start_server(options)
 }
 
 fn snapshot_surface(route: &str, path: &str) -> Option<Surface> {
@@ -638,125 +453,25 @@ fn snapshot_surface(route: &str, path: &str) -> Option<Surface> {
     }
 }
 
-struct HttpRequest {
-    method: String,
-    path: String,
-    headers: BTreeMap<String, String>,
-}
-
-fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    while bytes.len() < HTTP_READ_LIMIT {
-        let read = stream.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
-    }
-    if bytes.len() >= HTTP_READ_LIMIT {
-        bail!("HTTP request headers exceed {HTTP_READ_LIMIT} bytes");
-    }
-    let text = std::str::from_utf8(&bytes).context("HTTP request is not UTF-8")?;
-    let mut lines = text.split("\r\n");
-    let request_line = lines.next().context("missing HTTP request line")?;
-    let mut request_parts = request_line.split_whitespace();
-    let method = request_parts
-        .next()
-        .context("missing HTTP method")?
-        .to_string();
-    if !matches!(method.as_str(), "GET" | "POST") {
-        bail!("only GET and POST are supported");
-    }
-    let path = request_parts
-        .next()
-        .context("missing HTTP path")?
-        .to_string();
-    let headers = lines
-        .take_while(|line| !line.is_empty())
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
-        .collect();
-    Ok(HttpRequest {
-        method,
-        path,
-        headers,
-    })
-}
-
-fn authorized(headers: &BTreeMap<String, String>, expected: &str) -> bool {
+#[cfg(test)]
+fn authorized(headers: &std::collections::BTreeMap<String, String>, expected: &str) -> bool {
     let Some(candidate) = headers
         .get("authorization")
         .and_then(|value| value.strip_prefix("Bearer "))
     else {
         return false;
     };
-    constant_time_eq(candidate.as_bytes(), expected.as_bytes())
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
+    if candidate.len() != expected.len() {
         return false;
     }
-    left.iter()
-        .zip(right)
+    candidate
+        .as_bytes()
+        .iter()
+        .zip(expected.as_bytes())
         .fold(0_u8, |difference, (left, right)| {
             difference | (left ^ right)
         })
         == 0
-}
-
-fn write_http_response(
-    stream: &mut TcpStream,
-    status: &str,
-    content_type: &str,
-    body: &[u8],
-) -> Result<()> {
-    write!(
-        stream,
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        body.len()
-    )?;
-    stream.write_all(body)?;
-    stream.flush()?;
-    Ok(())
-}
-
-fn serve_sse(mut stream: TcpStream, shared: &SharedCache) -> Result<()> {
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n"
-    )?;
-    let mut revision = u64::MAX;
-    loop {
-        let mut guard = shared
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if guard.collector.revision == revision {
-            let waited = shared
-                .changed
-                .wait_timeout(guard, Duration::from_secs(SSE_KEEPALIVE_SECS))
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard = waited.0;
-            if waited.1.timed_out() {
-                drop(guard);
-                stream.write_all(b": keepalive\n\n")?;
-                stream.flush()?;
-                continue;
-            }
-        }
-        let snapshot = guard.clone();
-        revision = snapshot.collector.revision;
-        drop(guard);
-        let data = serde_json::to_string(&snapshot).context("serialize SSE snapshot")?;
-        write!(stream, "id: {revision}\nevent: snapshot\ndata: {data}\n\n")?;
-        stream.flush()?;
-    }
 }
 
 #[cfg(test)]
@@ -764,6 +479,10 @@ mod tests {
     use super::*;
     use crate::client::{ClientOptions, ClientSubscription, ClientUpdate};
     use crate::model::{Conversation, DomainHealth};
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
 
     #[test]
     fn missing_prerequisites_schedule_identity_then_sidebar() {
@@ -874,7 +593,9 @@ mod tests {
             CacheStore::new(dir.join("state.json")),
         ));
         let token = "r".repeat(64);
-        let address = start_http_server("127.0.0.1:0", Arc::clone(&shared), token.clone()).unwrap();
+        let server =
+            start_snapshot_server("127.0.0.1:0", None, Arc::clone(&shared), token.clone()).unwrap();
+        let address = server.http_address.unwrap();
         assert!(
             http_request(address, "POST", None, "/refresh?domain=notifications")
                 .starts_with("HTTP/1.1 401")
@@ -908,7 +629,8 @@ mod tests {
             state,
             CacheStore::new(dir.join("state.json")),
         ));
-        let address = start_http_server("127.0.0.1:0", shared, "x".repeat(64)).unwrap();
+        let server = start_snapshot_server("127.0.0.1:0", None, shared, "x".repeat(64)).unwrap();
+        let address = server.http_address.unwrap();
         assert!(http_get(address, None, "/snapshot").starts_with("HTTP/1.1 401"));
         let response = http_get(address, Some(&"x".repeat(64)), "/snapshot");
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
@@ -928,7 +650,8 @@ mod tests {
             CacheStore::new(dir.join("state.json")),
         ));
         let token = "p".repeat(64);
-        let address = start_http_server("127.0.0.1:0", shared, token.clone()).unwrap();
+        let server = start_snapshot_server("127.0.0.1:0", None, shared, token.clone()).unwrap();
+        let address = server.http_address.unwrap();
         let response = http_get(address, Some(&token), "/snapshot/dms");
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         let body = response.split_once("\r\n\r\n").unwrap().1;
@@ -959,8 +682,10 @@ mod tests {
             server_store,
         ));
         let token_path = dir.join("daemon-token");
-        let token = load_or_create_token(&token_path).unwrap();
-        let address = start_http_server("127.0.0.1:0", Arc::clone(&shared), token).unwrap();
+        let token = remote_cli::load_or_create_token(&token_path).unwrap();
+        let server =
+            start_snapshot_server("127.0.0.1:0", None, Arc::clone(&shared), token).unwrap();
+        let address = server.http_address.unwrap();
         let client_store = CacheStore::new(dir.join("client.json"));
         let subscription = ClientSubscription::spawn(ClientOptions {
             cache_store: client_store.clone(),
@@ -1031,8 +756,8 @@ mod tests {
             CacheState::now()
         ));
         let path = dir.join("token");
-        let first = load_or_create_token(&path).unwrap();
-        let second = load_or_create_token(&path).unwrap();
+        let first = remote_cli::load_or_create_token(&path).unwrap();
+        let second = remote_cli::load_or_create_token(&path).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.len(), 64);
         #[cfg(unix)]

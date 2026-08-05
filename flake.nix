@@ -47,6 +47,12 @@
       inputs.flake-utils.follows = "flake-utils";
     };
 
+    annum = {
+      url = "path:./annum";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
+
     cost-tui = {
       url = "path:./cost-tui";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -62,7 +68,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, slick, cost-tui, pi-wasm, ... }:
+  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, slick, annum, cost-tui, pi-wasm, ... }:
     let
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -82,6 +88,7 @@
             web-search.packages.${system}.web-search-mcp
             linear-extra.packages.${system}.linear-extra-mcp
             slick.packages.${system}.slick
+            annum.packages.${system}.annum
             cost-tui.packages.${system}.cost-tui
             skillServer
           ];
@@ -94,6 +101,7 @@
           web-search-mcp = web-search.packages.${system}.web-search-mcp;
           linear-extra-mcp = linear-extra.packages.${system}.linear-extra-mcp;
           slick = slick.packages.${system}.slick;
+          annum = annum.packages.${system}.annum;
           cost-tui = cost-tui.packages.${system}.cost-tui;
           skill-server = skillServer;
           skill-search = skillServer;
@@ -109,6 +117,9 @@
       nixosModules.slick = slick.nixosModules.slick;
       darwinModules.slick = slick.darwinModules.slick;
       nixOnDroidModules.slick = slick.nixOnDroidModules.slick;
+      nixosModules.annum = annum.nixosModules.annum;
+      darwinModules.annum = annum.darwinModules.annum;
+      nixOnDroidModules.annum = annum.nixOnDroidModules.annum;
 
       apps = forAllSystems (system: {
         default = {
@@ -123,6 +134,10 @@
         slick = {
           type = "app";
           program = "${self.packages.${system}.slick}/bin/slick";
+        };
+        annum = {
+          type = "app";
+          program = "${self.packages.${system}.annum}/bin/annum";
         };
         cost-tui = {
           type = "app";
