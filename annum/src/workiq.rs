@@ -9,6 +9,9 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use process_wrap::tokio::CommandWrap;
+#[cfg(unix)]
+use process_wrap::tokio::ProcessGroup;
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::transport::TokioChildProcess;
@@ -34,11 +37,12 @@ impl WorkIqClient {
         let (ready_tx, ready_rx) = mpsc::channel();
         let config = config.clone();
         let timeout = Duration::from_secs(config.timeout_secs.max(10));
+        let initialization_timeout = timeout.max(Duration::from_secs(300));
         thread::Builder::new()
             .name("annum-workiq-mcp".into())
             .spawn(move || worker(config, rx, ready_tx))
             .context("spawn WorkIQ MCP worker")?;
-        match ready_rx.recv_timeout(timeout.saturating_add(Duration::from_secs(5))) {
+        match ready_rx.recv_timeout(initialization_timeout.saturating_add(Duration::from_secs(5))) {
             Ok(Ok(())) => Ok(Self { tx, timeout }),
             Ok(Err(error)) => bail!("initialize WorkIQ MCP: {error}"),
             Err(error) => bail!("initialize WorkIQ MCP timed out: {error}"),
@@ -151,15 +155,22 @@ fn worker(config: WorkIqConfig, requests: Receiver<Request>, ready: Sender<Resul
         command.arg("--account").arg(account);
     }
     let timeout = Duration::from_secs(config.timeout_secs.max(10));
+    let initialization_timeout = timeout.max(Duration::from_secs(300));
+    let mut command = CommandWrap::from(command);
+    #[cfg(unix)]
+    command.wrap(ProcessGroup::leader());
     let client = match runtime.block_on(async {
         let transport = TokioChildProcess::new(command).context("spawn WorkIQ MCP process")?;
-        tokio::time::timeout(timeout, ().serve(transport))
+        tokio::time::timeout(initialization_timeout, ().serve(transport))
             .await
             .context("WorkIQ MCP initialization timeout")?
             .context("WorkIQ MCP initialization")
     }) {
         Ok(client) => client,
         Err(error) => {
+            // TokioChildProcess schedules process-group cleanup on drop. Give
+            // that task one runtime turn before tearing the runtime down.
+            runtime.block_on(tokio::time::sleep(Duration::from_millis(100)));
             let _ = ready.send(Err(format!("{error:#}")));
             return;
         }

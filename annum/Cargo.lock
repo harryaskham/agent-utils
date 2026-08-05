@@ -45,6 +45,7 @@ dependencies = [
  "kittui",
  "kittui-kitty",
  "mcp-cli-core",
+ "process-wrap",
  "ratakittui",
  "ratatui",
  "remote-cli",
