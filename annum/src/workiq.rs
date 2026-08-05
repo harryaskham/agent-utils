@@ -69,10 +69,7 @@ impl WorkIqClient {
     }
 
     pub fn fetch(&self, entity_urls: Vec<String>) -> Result<Vec<Value>> {
-        let value = self.call(
-            "workiq_fetch",
-            json!({"entityUrls": entity_urls, "agentId": null}),
-        )?;
+        let value = self.call("fetch", json!({"entityUrls": entity_urls, "agentId": null}))?;
         let results = value
             .get("results")
             .and_then(Value::as_array)
@@ -93,7 +90,7 @@ impl WorkIqClient {
 
     pub fn ask(&self, question: &str, conversation_id: Option<&str>) -> Result<Value> {
         self.call(
-            "workiq_ask",
+            "ask",
             json!({
                 "question": question,
                 "fileUrls": null,
@@ -105,7 +102,7 @@ impl WorkIqClient {
 
     pub fn retrieve(&self, query: Vec<String>) -> Result<Value> {
         self.call(
-            "workiq_retrieve",
+            "retrieve",
             json!({
                 "query": query,
                 "includeDeveloperCard": false,
@@ -117,21 +114,21 @@ impl WorkIqClient {
 
     pub fn create(&self, path: &str, body: Value) -> Result<Value> {
         self.call(
-            "workiq_create_entity",
+            "create_entity",
             json!({"entityUrl": path, "jsonBody": body, "agentId": null}),
         )
     }
 
     pub fn update(&self, path: &str, body: Value) -> Result<Value> {
         self.call(
-            "workiq_update_entity",
+            "update_entity",
             json!({"entityUrl": path, "jsonBody": body, "agentId": null}),
         )
     }
 
     pub fn action(&self, path: &str, body: Value) -> Result<Value> {
         self.call(
-            "workiq_do_action",
+            "do_action",
             json!({"actionUrl": path, "jsonBody": body, "agentId": null}),
         )
     }
@@ -170,7 +167,9 @@ fn worker(config: WorkIqConfig, requests: Receiver<Request>, ready: Sender<Resul
         Err(error) => {
             // TokioChildProcess schedules process-group cleanup on drop. Give
             // that task one runtime turn before tearing the runtime down.
-            runtime.block_on(tokio::time::sleep(Duration::from_millis(100)));
+            runtime.block_on(async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            });
             let _ = ready.send(Err(format!("{error:#}")));
             return;
         }
