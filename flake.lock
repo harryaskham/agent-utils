@@ -301,16 +301,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1785894632,
-        "narHash": "sha256-0RBCcAdUxLwYoZXaU2mNoOox2pdCmZXzCQSInkqaqcY=",
+        "lastModified": 1785942593,
+        "narHash": "sha256-/5evIQyXvjADK1uR4aR8iNAJ47Zh+xfgEekAAdy0rHY=",
         "ref": "refs/heads/main",
-        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
-        "revCount": 2,
+        "rev": "5c4d2be3e7fb36c6a31dbe8b0b85c37143f4a9b0",
+        "revCount": 3,
         "type": "git",
         "url": "ssh://git@github.com/harryaskham/remote-cli"
       },
       "original": {
-        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
+        "rev": "5c4d2be3e7fb36c6a31dbe8b0b85c37143f4a9b0",
         "type": "git",
         "url": "ssh://git@github.com/harryaskham/remote-cli"
       }
@@ -327,16 +327,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1785894632,
-        "narHash": "sha256-0RBCcAdUxLwYoZXaU2mNoOox2pdCmZXzCQSInkqaqcY=",
+        "lastModified": 1785942593,
+        "narHash": "sha256-/5evIQyXvjADK1uR4aR8iNAJ47Zh+xfgEekAAdy0rHY=",
         "ref": "refs/heads/main",
-        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
-        "revCount": 2,
+        "rev": "5c4d2be3e7fb36c6a31dbe8b0b85c37143f4a9b0",
+        "revCount": 3,
         "type": "git",
         "url": "ssh://git@github.com/harryaskham/remote-cli"
       },
       "original": {
-        "rev": "046740f5f696e7d5adc5b1776acff3078a781945",
+        "rev": "5c4d2be3e7fb36c6a31dbe8b0b85c37143f4a9b0",
         "type": "git",
         "url": "ssh://git@github.com/harryaskham/remote-cli"
       }

@@ -59,7 +59,7 @@ impl QueryRuntime {
         }
     }
 
-    fn workiq(&self) -> Result<&WorkIqClient, QueryError> {
+    fn direct_workiq(&self) -> Result<&WorkIqClient, QueryError> {
         if self.workiq_client.get().is_none() {
             let client = WorkIqClient::start(&self.workiq)
                 .map_err(|error| QueryError::WorkIq(format!("{error:#}")))?;
@@ -68,6 +68,40 @@ impl QueryRuntime {
         self.workiq_client
             .get()
             .ok_or_else(|| QueryError::WorkIq("WorkIQ client initialization raced".into()))
+    }
+
+    fn call_workiq(
+        &self,
+        operation: &str,
+        arguments: serde_json::Value,
+        confirmed: bool,
+    ) -> Result<serde_json::Value, QueryError> {
+        if self.use_daemon {
+            let request = remote_cli::CommandRequest {
+                operation: operation.into(),
+                input: serde_json::json!({
+                    "arguments": arguments,
+                    "confirmed": confirmed,
+                }),
+            };
+            match remote_cli::post_json(&self.endpoint, &self.token_path, "/command", &request) {
+                Ok(output) => return Ok(output),
+                Err(error) if !self.fallback => {
+                    return Err(QueryError::Daemon(format!(
+                        "daemon command conduit failed: {error:#}"
+                    )));
+                }
+                Err(_) => {}
+            }
+        }
+        if !self.fallback {
+            return Err(QueryError::Daemon(
+                "daemon command conduit unavailable and direct fallback disabled".into(),
+            ));
+        }
+        self.direct_workiq()?
+            .call(operation, arguments)
+            .map_err(|error| QueryError::WorkIq(format!("{error:#}")))
     }
 }
 
@@ -687,20 +721,22 @@ pub fn send_mail(
             "mail requires at least one recipient and a subject".into(),
         ));
     }
-    runtime
-        .workiq()?
-        .action(
-            "/me/sendMail",
-            json!({
+    runtime.call_workiq(
+        "do_action",
+        json!({
+            "actionUrl": "/me/sendMail",
+            "jsonBody": {
                 "message": {
                     "subject": input.subject,
                     "body": {"contentType":"Text", "content":input.body},
                     "toRecipients": input.to.iter().map(|address| json!({"emailAddress":{"address":address}})).collect::<Vec<_>>()
                 },
                 "saveToSentItems": true
-            }),
-        )
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))?;
+            },
+            "agentId": null
+        }),
+        true,
+    )?;
     Ok(MutationReceipt {
         accepted: true,
         operation: "send-mail".into(),
@@ -715,13 +751,15 @@ pub fn reply_mail(
 ) -> Result<MutationReceipt, QueryError> {
     require_confirmation(input.confirmed)?;
     let action = if input.reply_all { "replyAll" } else { "reply" };
-    runtime
-        .workiq()?
-        .action(
-            &format!("/me/messages/{}/{action}", encode_segment(&input.id)),
-            json!({"comment": input.body}),
-        )
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))?;
+    runtime.call_workiq(
+        "do_action",
+        json!({
+            "actionUrl": format!("/me/messages/{}/{action}", encode_segment(&input.id)),
+            "jsonBody": {"comment": input.body},
+            "agentId": null
+        }),
+        true,
+    )?;
     Ok(MutationReceipt {
         accepted: true,
         operation: action.into(),
@@ -735,13 +773,15 @@ pub fn mark_read(
     input: &MarkReadInput,
 ) -> Result<MutationReceipt, QueryError> {
     require_confirmation(input.confirmed)?;
-    runtime
-        .workiq()?
-        .update(
-            &format!("/me/messages/{}", encode_segment(&input.id)),
-            json!({"isRead": input.read}),
-        )
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))?;
+    runtime.call_workiq(
+        "update_entity",
+        json!({
+            "entityUrl": format!("/me/messages/{}", encode_segment(&input.id)),
+            "jsonBody": {"isRead": input.read},
+            "agentId": null
+        }),
+        true,
+    )?;
     Ok(MutationReceipt {
         accepted: true,
         operation: if input.read {
@@ -760,19 +800,21 @@ pub fn create_event(
     input: &CreateEventInput,
 ) -> Result<MutationReceipt, QueryError> {
     require_confirmation(input.confirmed)?;
-    runtime
-        .workiq()?
-        .create(
-            "/me/events",
-            json!({
+    runtime.call_workiq(
+        "create_entity",
+        json!({
+            "entityUrl": "/me/events",
+            "jsonBody": {
                 "subject": input.subject,
                 "start": {"dateTime": input.start, "timeZone": input.timezone},
                 "end": {"dateTime": input.end, "timeZone": input.timezone},
                 "body": {"contentType":"Text", "content":input.body.clone().unwrap_or_default()},
                 "attendees": input.attendees.iter().map(|address| json!({"emailAddress":{"address":address},"type":"required"})).collect::<Vec<_>>()
-            }),
-        )
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))?;
+            },
+            "agentId": null
+        }),
+        true,
+    )?;
     Ok(MutationReceipt {
         accepted: true,
         operation: "create-event".into(),
@@ -794,20 +836,22 @@ pub fn respond_event(
             "response must be accept, tentativelyAccept, or decline".into(),
         ));
     }
-    runtime
-        .workiq()?
-        .action(
-            &format!(
+    runtime.call_workiq(
+        "do_action",
+        json!({
+            "actionUrl": format!(
                 "/me/events/{}/{}",
                 encode_segment(&input.id),
                 input.response
             ),
-            json!({
+            "jsonBody": {
                 "comment": input.comment.clone().unwrap_or_default(),
                 "sendResponse": input.send_response
-            }),
-        )
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))?;
+            },
+            "agentId": null
+        }),
+        true,
+    )?;
     Ok(MutationReceipt {
         accepted: true,
         operation: input.response.clone(),
@@ -821,13 +865,15 @@ pub fn send_chat(
     input: &SendChatInput,
 ) -> Result<MutationReceipt, QueryError> {
     require_confirmation(input.confirmed)?;
-    runtime
-        .workiq()?
-        .create(
-            &format!("/me/chats/{}/messages", encode_segment(&input.chat_id)),
-            json!({"body":{"contentType":"text","content":input.body}}),
-        )
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))?;
+    runtime.call_workiq(
+        "create_entity",
+        json!({
+            "entityUrl": format!("/me/chats/{}/messages", encode_segment(&input.chat_id)),
+            "jsonBody": {"body":{"contentType":"text","content":input.body}},
+            "agentId": null
+        }),
+        true,
+    )?;
     Ok(MutationReceipt {
         accepted: true,
         operation: "send-chat".into(),
@@ -843,10 +889,16 @@ pub fn copilot_ask(
     if input.question.trim().is_empty() {
         return Err(QueryError::Validation("question cannot be empty".into()));
     }
-    runtime
-        .workiq()?
-        .ask(&input.question, input.conversation_id.as_deref())
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))
+    runtime.call_workiq(
+        "ask",
+        json!({
+            "question": input.question,
+            "fileUrls": null,
+            "conversationId": input.conversation_id,
+            "agentId": null
+        }),
+        false,
+    )
 }
 
 pub fn semantic_search(
@@ -856,10 +908,16 @@ pub fn semantic_search(
     if input.query.iter().all(|query| query.trim().is_empty()) {
         return Err(QueryError::Validation("query cannot be empty".into()));
     }
-    runtime
-        .workiq()?
-        .retrieve(input.query.clone())
-        .map_err(|error| QueryError::WorkIq(format!("{error:#}")))
+    runtime.call_workiq(
+        "retrieve",
+        json!({
+            "query": input.query,
+            "includeDeveloperCard": false,
+            "agentId": null,
+            "strategy": "grounding"
+        }),
+        false,
+    )
 }
 
 fn encode_segment(value: &str) -> String {
@@ -1037,6 +1095,7 @@ pub fn render_chats(output: &ChatListOutput) -> String {
 mod tests {
     use super::*;
     use crate::model::{Address, MailMessage};
+    use std::sync::Arc;
 
     fn runtime_with(state: CacheState) -> (tempfile::TempDir, QueryRuntime) {
         let dir = tempfile::tempdir().unwrap();
@@ -1108,6 +1167,58 @@ mod tests {
         .unwrap();
         assert_eq!(output.team.display_name, "Engineering");
         assert_eq!(output.channel.display_name, "General");
+    }
+
+    #[test]
+    fn direct_workiq_is_impossible_when_fallback_is_disabled() {
+        let (_dir, runtime) = runtime_with(CacheState::default());
+        let error = semantic_search(
+            &runtime,
+            &SemanticSearchInput {
+                query: vec!["hello".into()],
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, QueryError::Daemon(_)));
+    }
+
+    #[test]
+    fn explicit_workiq_queries_use_daemon_command_conduit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheStore::new(dir.path().join("state.json"));
+        let shared = Arc::new(remote_cli::SharedSnapshot::new(
+            CacheState::default(),
+            store.clone(),
+        ));
+        let token_path = dir.path().join("token");
+        let token = remote_cli::load_or_create_token(&token_path).unwrap();
+        let mut options = remote_cli::ServerOptions::new(shared, token);
+        options.command_handler = Some(Arc::new(|operation, input| {
+            assert_eq!(operation, "ask");
+            assert_eq!(input["confirmed"], false);
+            Ok(serde_json::json!({"answer": "from daemon"}))
+        }));
+        let server = remote_cli::start_server(options).unwrap();
+        let runtime = QueryRuntime::new(
+            store,
+            true,
+            true,
+            format!("http://{}", server.http_address.unwrap()),
+            token_path,
+            false,
+            dir.path().join("lease"),
+            WorkIqConfig::default(),
+            CollectorConfig::default(),
+        );
+        let output = copilot_ask(
+            &runtime,
+            &CopilotAskInput {
+                question: "hello".into(),
+                conversation_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(output["answer"], "from daemon");
     }
 
     #[test]

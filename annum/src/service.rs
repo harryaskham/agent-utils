@@ -38,12 +38,23 @@ impl WorkIqService {
         Ok(())
     }
 
-    /// Advance one bounded inbox delta page. The first cycle performs Graph's
-    /// initial backfill; subsequent cycles reuse the opaque delta cursor.
-    pub fn refresh_mail_folder(&self, state: &mut CacheState, folder: &str) -> Result<bool> {
+    /// Advance one bounded mail page. Backfill is restricted to the configured
+    /// history window; later cycles revisit the newest page so edits/read state
+    /// converge without relying on `WorkIQ`'s currently long-running delta calls.
+    pub fn refresh_mail_folder(
+        &self,
+        state: &mut CacheState,
+        folder: &str,
+        backfill_days: u32,
+    ) -> Result<bool> {
         let key = format!("mail:{folder}");
         let path = state.cursors.get(&key).cloned().unwrap_or_else(|| {
-            format!("/me/mailFolders/{folder}/messages/delta()?$select={MAIL_SELECT}&$top=100")
+            let cutoff = (Utc::now() - Duration::days(i64::from(backfill_days)))
+                .to_rfc3339_opts(SecondsFormat::Secs, true);
+            format!(
+                "/me/mailFolders/{folder}/messages?$select={MAIL_SELECT}&$filter={}&$orderby=receivedDateTime desc&$top=100",
+                encode(&format!("receivedDateTime ge {cutoff}"))
+            )
         });
         let data = self.fetch_one(&path)?;
         let page = parse_page(&data, |item| parse_mail(item, folder));
@@ -148,7 +159,7 @@ impl WorkIqService {
         let key = format!("chat:{chat_id}");
         let path = state.cursors.get(&key).cloned().unwrap_or_else(|| {
             format!(
-                "/me/chats/{}/messages/delta()?$select={CHAT_MESSAGE_SELECT}&$top=100",
+                "/me/chats/{}/messages?$select={CHAT_MESSAGE_SELECT}&$orderby=lastModifiedDateTime desc&$top=100",
                 encode_segment(chat_id)
             )
         });
@@ -214,7 +225,7 @@ impl WorkIqService {
         let key = format!("channel:{team_id}:{channel_id}");
         let path = state.cursors.get(&key).cloned().unwrap_or_else(|| {
             format!(
-                "/teams/{}/channels/{}/messages/delta()?$select={CHAT_MESSAGE_SELECT}&$top=100",
+                "/teams/{}/channels/{}/messages?$select={CHAT_MESSAGE_SELECT}&$orderby=lastModifiedDateTime desc&$top=100",
                 encode_segment(team_id),
                 encode_segment(channel_id)
             )
@@ -303,7 +314,9 @@ fn apply_cursor(
         state.cursors.insert(key.to_string(), delta);
         true
     } else {
-        // Non-delta collection endpoints are complete after one bounded fetch.
+        // A regular paged collection is complete; the next scheduled cycle
+        // starts again at its newest bounded page.
+        state.cursors.remove(key);
         true
     }
 }

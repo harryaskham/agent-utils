@@ -259,7 +259,11 @@ envelope and bounded terse data: activity messages are grouped once under their
 conversation provenance, repeated Slack user/channel metadata is removed, and
 Canvas content is returned as the cached bounded Markdown rather than raw HTML.
 
-`slick mcp stdio` exposes the same implementations over NDJSON-framed MCP:
+`slick mcp stdio` exposes the same implementations over NDJSON-framed MCP.
+Default MCP mode is strictly cache/daemon-only, so an agent process never
+becomes another Slack API collector. `slick mcp stdio --standalone` is the
+explicit cache/direct fallback mode for operation without a daemon.
+
 
 - `slick_feed`
 - `slick_activity_list`

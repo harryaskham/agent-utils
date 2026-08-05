@@ -22,13 +22,19 @@ annum teams get --team-id TEAM_ID --channel-id CHANNEL_ID
 annum search "architecture review" # deterministic local cache
 annum search --semantic "..."       # explicit WorkIQ retrieval
 annum copilot ask "prepare me for my next meeting"
-annum mcp stdio
+annum mcp stdio                 # cache + daemon only (default)
+annum mcp stdio --standalone    # explicit cache/direct-WorkIQ fallback
 ```
 
 The main application is not generative. Email, calendar, chat, channel, and
 local search surfaces are projections of bounded Graph-shaped WorkIQ fetches.
 `copilot ask` and `search --semantic` are explicit opt-in commands and have
 separate MCP tools.
+
+Normal `annum mcp stdio` never starts WorkIQ: deterministic reads come from the
+cache/daemon and explicit semantic or mutation tools use the daemon's
+authenticated command conduit. `--standalone` is the deliberate escape hatch
+for cache plus direct WorkIQ fallback when operating without a daemon.
 
 ## Authentication
 
@@ -58,7 +64,8 @@ Annum uses the same canonical `remote-cli` substrate as Slick:
 
 - one daemon owns WorkIQ traffic;
 - initial bounded backfills advance one page per collector cycle;
-- opaque Graph `nextLink`/`deltaLink` cursors survive restarts;
+- opaque Graph `nextLink` cursors survive restarts, while newest pages are
+  revisited after completion so edits/read state converge;
 - inbox, sent mail, event, chat-message, and channel-message deltas are
   independent domains;
 - a rolling calendar view provides deterministic recurrence instances;

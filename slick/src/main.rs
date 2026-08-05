@@ -185,7 +185,11 @@ enum ListGetCommand {
 #[derive(Clone, Debug, Subcommand)]
 enum McpCommand {
     /// Run NDJSON-framed MCP over stdin/stdout.
-    Stdio,
+    Stdio {
+        /// Skip the daemon and permit explicit cache/direct-source fallback.
+        #[arg(long)]
+        standalone: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -331,9 +335,18 @@ fn main() -> Result<()> {
                 }
             },
             Command::Mcp {
-                command: McpCommand::Stdio,
+                command: McpCommand::Stdio { standalone },
             } => {
-                slick::query::serve_mcp(&query_runtime)?;
+                let mut mcp_runtime = query_runtime.clone();
+                if *standalone {
+                    mcp_runtime.use_daemon = false;
+                    mcp_runtime.fallback = true;
+                } else {
+                    // Default MCP reads are cache/daemon-only. Never let an
+                    // agent-owned stdio server become another Slack collector.
+                    mcp_runtime.fallback = false;
+                }
+                slick::query::serve_mcp(&mcp_runtime)?;
                 return Ok(());
             }
             Command::Client | Command::Config { .. } | Command::Daemon { .. } => {}
@@ -492,7 +505,14 @@ mod tests {
         assert!(matches!(
             mcp.command,
             Some(Command::Mcp {
-                command: McpCommand::Stdio
+                command: McpCommand::Stdio { standalone: false }
+            })
+        ));
+        let standalone = Cli::try_parse_from(["slick", "mcp", "stdio", "--standalone"]).unwrap();
+        assert!(matches!(
+            standalone.command,
+            Some(Command::Mcp {
+                command: McpCommand::Stdio { standalone: true }
             })
         ));
     }

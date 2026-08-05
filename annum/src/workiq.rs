@@ -206,7 +206,15 @@ fn extract_result(result: CallToolResult) -> Result<Value> {
             .map(|text| text.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        bail!("WorkIQ tool error: {message}");
+        let detail = if message.is_empty() {
+            result.structured_content.as_ref().map_or_else(
+                || "no error detail returned".into(),
+                serde_json::Value::to_string,
+            )
+        } else {
+            message
+        };
+        bail!("WorkIQ tool error: {detail}");
     }
     if let Some(value) = result.structured_content {
         return Ok(value);
@@ -239,6 +247,14 @@ mod tests {
     fn textual_json_is_supported_for_older_servers() {
         let result = CallToolResult::success(vec![Content::text("{\"ok\":true}")]);
         assert_eq!(extract_result(result).unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn structured_tool_errors_are_not_rendered_blank() {
+        let mut result = CallToolResult::error(Vec::new());
+        result.structured_content = Some(json!({"code": "denied"}));
+        let error = extract_result(result).unwrap_err().to_string();
+        assert!(error.contains("denied"), "{error}");
     }
 
     #[test]

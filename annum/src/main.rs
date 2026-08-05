@@ -160,7 +160,11 @@ enum CopilotCommand {
 }
 #[derive(Clone, Debug, Subcommand)]
 enum McpCommand {
-    Stdio,
+    Stdio {
+        /// Ignore daemon/cache authority and permit explicit direct `WorkIQ` fallback.
+        #[arg(long)]
+        standalone: bool,
+    },
 }
 
 #[derive(Clone, Debug, Default, Args)]
@@ -312,7 +316,11 @@ fn main() -> Result<()> {
     if let Some(account) = &cli.account {
         config.workiq.account = Some(account.clone());
     }
-    let cache = CacheStore::new(cli.cache.clone().unwrap_or_else(CacheStore::default_path));
+    let cache = CacheStore::new(if cli.demo {
+        std::env::temp_dir().join(format!("annum-demo-{}.json", std::process::id()))
+    } else {
+        cli.cache.clone().unwrap_or_else(CacheStore::default_path)
+    });
     if cli.clear_cache {
         cache.clear()?;
     }
@@ -349,6 +357,8 @@ fn main() -> Result<()> {
     }
 
     if cli.demo {
+        // Demo data is process-local scratch and must never contaminate the
+        // durable Microsoft 365 cache consumed by the daemon.
         cache.save(&annum::demo_state())?;
     }
     if matches!(cli.command, Some(Command::Sync)) {
@@ -464,9 +474,18 @@ fn main() -> Result<()> {
                 });
             }
             Command::Mcp {
-                command: McpCommand::Stdio,
+                command: McpCommand::Stdio { standalone },
             } => {
-                query::serve_mcp(&runtime)?;
+                let mut mcp_runtime = runtime.clone();
+                if *standalone {
+                    mcp_runtime.use_daemon = false;
+                    mcp_runtime.fallback = true;
+                } else {
+                    // Default MCP mode is cache/daemon-only. The persistent
+                    // daemon remains the sole WorkIQ source owner.
+                    mcp_runtime.fallback = false;
+                }
+                query::serve_mcp(&mcp_runtime)?;
                 return Ok(());
             }
             Command::Client
@@ -742,6 +761,14 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["annum", "config", "schema"]).is_ok());
+        assert!(matches!(
+            Cli::try_parse_from(["annum", "mcp", "stdio", "--standalone"])
+                .unwrap()
+                .command,
+            Some(Command::Mcp {
+                command: McpCommand::Stdio { standalone: true }
+            })
+        ));
         assert!(
             Cli::try_parse_from([
                 "annum",

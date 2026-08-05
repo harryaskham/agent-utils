@@ -304,6 +304,17 @@ impl CacheState {
         }
     }
 
+    #[must_use]
+    pub fn is_demo_fixture(&self) -> bool {
+        self.mail
+            .iter()
+            .any(|message| message.id == "mail-1" && message.subject == "Quarterly plan review")
+            && self
+                .chats
+                .iter()
+                .any(|chat| chat.id == "chat-1" && chat.topic == "Annum launch")
+    }
+
     pub fn normalize(&mut self) {
         if self.version != CACHE_VERSION {
             *self = Self::default();
@@ -403,6 +414,27 @@ mod tests {
         assert_eq!(state.mail.len(), 2);
         assert_eq!(state.mail[0].id, "2");
         assert_eq!(state.mail[1].subject, "new");
+    }
+
+    #[test]
+    fn demo_fixture_is_identifiable_after_identity_refresh() {
+        let mut state = CacheState::default();
+        state.account.id = "user-1".into();
+        state.mail.push(MailMessage {
+            id: "mail-1".into(),
+            subject: "Quarterly plan review".into(),
+            ..MailMessage::default()
+        });
+        state.chats.push(Chat {
+            id: "chat-1".into(),
+            topic: "Annum launch".into(),
+            ..Chat::default()
+        });
+        assert!(state.is_demo_fixture());
+        state.account.id = "real-user".into();
+        assert!(state.is_demo_fixture());
+        state.mail[0].subject = "real message".into();
+        assert!(!state.is_demo_fixture());
     }
 
     #[test]

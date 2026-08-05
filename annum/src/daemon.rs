@@ -32,7 +32,6 @@ enum RefreshKind {
     Identity,
     Mail(String),
     Calendar,
-    CalendarDelta,
     Chats,
     ChatMessages(String),
     Teams,
@@ -50,15 +49,22 @@ struct RefreshTask {
 pub fn run(options: DaemonOptions) -> Result<()> {
     let token = remote_cli::load_or_create_token(&options.token_path)?;
     let mut initial = options.cache_store.load().unwrap_or_default();
+    if initial.is_demo_fixture() {
+        eprintln!("annum daemon: discarding legacy demo fixture from durable cache");
+        initial = CacheState::default();
+        options.cache_store.save(&initial)?;
+    }
     initial.collector.running = true;
     initial.collector.last_error.clear();
     let shared = Arc::new(SharedCache::new(initial, options.cache_store));
+    let service = WorkIqService::new(WorkIqClient::start(&options.workiq)?);
     let server = start_snapshot_server(
         &options.bind,
         options.unix_socket.clone(),
         Arc::clone(&shared),
         token,
         options.collector.clone(),
+        service.clone(),
     )?;
     let endpoints = [
         server
@@ -77,7 +83,6 @@ pub fn run(options: DaemonOptions) -> Result<()> {
         "annum daemon: serving authenticated snapshots at {endpoints} (token file {})",
         options.token_path.display()
     );
-    let service = WorkIqService::new(WorkIqClient::start(&options.workiq)?);
     shared.update(|state| state.collector.running = true);
     let spacing = Duration::from_secs(options.min_refresh_secs.max(1));
 
@@ -104,14 +109,13 @@ pub fn sync_once(
     let mut state = store.load().unwrap_or_default();
     service.refresh_identity(&mut state)?;
     // Advance bounded pages. Repeated invocations continue from durable cursors.
-    let _ = service.refresh_mail_folder(&mut state, "inbox")?;
-    let _ = service.refresh_mail_folder(&mut state, "sentitems")?;
+    let _ = service.refresh_mail_folder(&mut state, "inbox", collector.mail_backfill_days)?;
+    let _ = service.refresh_mail_folder(&mut state, "sentitems", collector.mail_backfill_days)?;
     service.refresh_calendar_view(
         &mut state,
         collector.calendar_past_days,
         collector.calendar_future_days,
     )?;
-    let _ = service.refresh_event_delta(&mut state)?;
     service.refresh_chats(&mut state)?;
     for chat_id in state
         .chats
@@ -207,7 +211,9 @@ fn run_task(
 ) -> Result<bool> {
     match kind {
         RefreshKind::Identity => service.refresh_identity(state).map(|()| true),
-        RefreshKind::Mail(folder) => service.refresh_mail_folder(state, folder),
+        RefreshKind::Mail(folder) => {
+            service.refresh_mail_folder(state, folder, collector.mail_backfill_days)
+        }
         RefreshKind::Calendar => service
             .refresh_calendar_view(
                 state,
@@ -215,7 +221,6 @@ fn run_task(
                 collector.calendar_future_days,
             )
             .map(|()| true),
-        RefreshKind::CalendarDelta => service.refresh_event_delta(state),
         RefreshKind::Chats => service.refresh_chats(state).map(|()| true),
         RefreshKind::ChatMessages(chat_id) => service.refresh_chat_messages(state, chat_id),
         RefreshKind::Teams => service.refresh_teams(state).map(|()| true),
@@ -276,12 +281,6 @@ fn all_tasks(state: &CacheState, config: &CollectorConfig) -> Vec<RefreshTask> {
             RefreshKind::Calendar,
             config.calendar_refresh_secs,
             85,
-        ),
-        task(
-            "calendar:delta",
-            RefreshKind::CalendarDelta,
-            config.calendar_refresh_secs,
-            80,
         ),
         task("chats", RefreshKind::Chats, config.chats_refresh_secs, 88),
     ];
@@ -350,7 +349,6 @@ fn task_label(kind: &RefreshKind) -> &'static str {
         RefreshKind::Identity => "identity",
         RefreshKind::Mail(_) => "mail delta",
         RefreshKind::Calendar => "calendar view",
-        RefreshKind::CalendarDelta => "calendar delta",
         RefreshKind::Chats => "chat inventory",
         RefreshKind::ChatMessages(_) => "chat messages",
         RefreshKind::Teams => "team/channel inventory",
@@ -369,6 +367,7 @@ fn start_snapshot_server(
     shared: Arc<SharedCache>,
     token: String,
     collector: CollectorConfig,
+    service: WorkIqService,
 ) -> Result<remote_cli::ServerHandle> {
     let mut options = remote_cli::ServerOptions::new(shared, token);
     options.bind = (!bind.is_empty()).then(|| bind.to_string());
@@ -379,6 +378,29 @@ fn start_snapshot_server(
     options.health_projector = Some(Arc::new(|state| {
         remote_cli::ProjectedResponse::json(&state.collector)
             .expect("collector health is serializable")
+    }));
+    options.command_handler = Some(Arc::new(move |operation, input| {
+        let confirmed = input
+            .get("confirmed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if matches!(operation, "create_entity" | "update_entity" | "do_action") && !confirmed {
+            return Err("confirmation required for Microsoft 365 mutation".into());
+        }
+        if !matches!(
+            operation,
+            "ask" | "retrieve" | "create_entity" | "update_entity" | "do_action"
+        ) {
+            return Err(format!("unsupported Annum daemon operation: {operation}"));
+        }
+        let arguments = input
+            .get("arguments")
+            .cloned()
+            .ok_or_else(|| "daemon command is missing arguments".to_string())?;
+        service
+            .client()
+            .call(operation, arguments)
+            .map_err(|error| format!("{error:#}"))
     }));
     options.projector = Some(Arc::new(|state, route, _path| {
         let mut projected = state.clone();
