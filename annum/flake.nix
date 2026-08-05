@@ -67,7 +67,7 @@
             pname = "annum";
             version = "0.1.0";
             src = patchedSrc;
-            cargoHash = "sha256-LnFgjgmdNxlpVmQ79LusEz1Xl6D7esEizb92Wv3/LeY=";
+            cargoHash = "sha256-ZcwROTNPKrswWnc+beC+jy1w6tyWCvWhrzQdQglTjDI=";
             strictDeps = true;
             nativeBuildInputs = [ pkgs.makeWrapper ];
             buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
