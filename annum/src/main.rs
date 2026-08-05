@@ -132,6 +132,7 @@ enum EmailCommand {
 #[derive(Clone, Debug, Subcommand)]
 enum CalendarCommand {
     List(ListArgs),
+    Get(GetArgs),
     Create(CreateEventArgs),
     Respond(RespondEventArgs),
 }
@@ -146,6 +147,8 @@ enum ChatCommand {
 #[derive(Clone, Debug, Subcommand)]
 enum TeamsCommand {
     List(ListArgs),
+    Channels(ChannelListArgs),
+    Get(ChannelGetArgs),
 }
 #[derive(Clone, Debug, Subcommand)]
 enum CopilotCommand {
@@ -190,6 +193,22 @@ impl From<&GetArgs> for query::GetInput {
             id: value.id.clone(),
         }
     }
+}
+
+#[derive(Clone, Debug, Args)]
+struct ChannelListArgs {
+    #[arg(long)]
+    team_id: String,
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Args)]
+struct ChannelGetArgs {
+    #[arg(long)]
+    team_id: String,
+    #[arg(long)]
+    channel_id: String,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -389,14 +408,7 @@ fn main() -> Result<()> {
             Command::Email { command } => return run_email(&runtime, command, cli.json),
             Command::Calendar { command } => return run_calendar(&runtime, command, cli.json),
             Command::Chat { command } => return run_chat(&runtime, command, cli.json),
-            Command::Teams {
-                command: TeamsCommand::List(args),
-            } => {
-                let output = query::teams(&runtime, &args.into())?;
-                return emit("annum_teams_list", cli.json, &output, |output| {
-                    serde_json::to_string_pretty(output).unwrap_or_default() + "\n"
-                });
-            }
+            Command::Teams { command } => return run_teams(&runtime, command, cli.json),
             Command::Search(args) if args.semantic => {
                 let output = query::semantic_search(
                     &runtime,
@@ -559,6 +571,12 @@ fn run_calendar(
             let output = query::calendar_list(runtime, &args.into())?;
             emit("annum_calendar_list", json, &output, query::render_events)
         }
+        CalendarCommand::Get(args) => {
+            let output = query::calendar_get(runtime, &args.into())?;
+            emit("annum_calendar_get", json, &output, |output| {
+                serde_json::to_string_pretty(output).unwrap_or_default() + "\n"
+            })
+        }
         CalendarCommand::Create(args) => {
             let output = query::create_event(
                 runtime,
@@ -614,6 +632,41 @@ fn run_chat(runtime: &query::QueryRuntime, command: &ChatCommand, json: bool) ->
         }
     }
 }
+fn run_teams(runtime: &query::QueryRuntime, command: &TeamsCommand, json: bool) -> Result<()> {
+    match command {
+        TeamsCommand::List(args) => {
+            let output = query::teams(runtime, &args.into())?;
+            emit("annum_teams_list", json, &output, |output| {
+                serde_json::to_string_pretty(output).unwrap_or_default() + "\n"
+            })
+        }
+        TeamsCommand::Channels(args) => {
+            let output = query::channel_list(
+                runtime,
+                &query::ChannelListInput {
+                    team_id: args.team_id.clone(),
+                    limit: args.limit,
+                },
+            )?;
+            emit("annum_channel_list", json, &output, |output| {
+                serde_json::to_string_pretty(output).unwrap_or_default() + "\n"
+            })
+        }
+        TeamsCommand::Get(args) => {
+            let output = query::channel_get(
+                runtime,
+                &query::ChannelGetInput {
+                    team_id: args.team_id.clone(),
+                    channel_id: args.channel_id.clone(),
+                },
+            )?;
+            emit("annum_channel_get", json, &output, |output| {
+                serde_json::to_string_pretty(output).unwrap_or_default() + "\n"
+            })
+        }
+    }
+}
+
 fn emit_receipt(command: &str, json: bool, output: &query::MutationReceipt) -> Result<()> {
     emit(command, json, output, |o| {
         format!(
@@ -689,5 +742,17 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["annum", "config", "schema"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "annum",
+                "teams",
+                "get",
+                "--team-id",
+                "t1",
+                "--channel-id",
+                "c1",
+            ])
+            .is_ok()
+        );
     }
 }

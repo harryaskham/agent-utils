@@ -31,7 +31,7 @@ use crate::cache::CacheStore;
 use crate::client::{ClientHealth, ClientOptions, ClientSubscription, ClientUpdate};
 use crate::config::Config;
 use crate::daemon;
-use crate::model::{CacheState, CalendarEvent, ChatMessage, MailMessage};
+use crate::model::{CacheState, CalendarEvent, Channel, ChatMessage, MailMessage, Team};
 
 const PURPLE: Color = Color::Rgb(0x9d, 0x84, 0xff);
 const CYAN: Color = Color::Rgb(0x4d, 0xd9, 0xe8);
@@ -77,7 +77,15 @@ impl Page {
                 .chats
                 .get(selected)
                 .map_or_else(|| "chats".into(), |chat| format!("chat:{}", chat.id)),
-            Self::Teams => "teams".into(),
+            Self::Teams => selected_team_channel(state, selected).map_or_else(
+                || "teams".into(),
+                |(team, channel)| {
+                    channel.map_or_else(
+                        || "teams".into(),
+                        |channel| format!("channel:{}:{}", team.id, channel.id),
+                    )
+                },
+            ),
         }
     }
     fn next(self) -> Self {
@@ -234,17 +242,7 @@ impl App {
             Page::Email | Page::Search => self.filtered_mail().len(),
             Page::Calendar => self.filtered_events().len(),
             Page::Chats => self.state.chats.len(),
-            Page::Teams => self
-                .state
-                .teams
-                .iter()
-                .map(|team| {
-                    self.state
-                        .channels
-                        .get(&team.id)
-                        .map_or(1, |channels| channels.len().max(1))
-                })
-                .sum(),
+            Page::Teams => team_rows(&self.state).len(),
         }
     }
 
@@ -387,7 +385,7 @@ impl App {
                 if contains_cell(list, event.column, event.row) =>
             {
                 self.list_focus = true;
-                let row = usize::from(event.row.saturating_sub(list.y));
+                let row = usize::from(event.row.saturating_sub(list.y)) / 2;
                 self.selected = row.min(self.item_count().saturating_sub(1));
                 self.detail_scroll = 0;
                 true
@@ -437,7 +435,11 @@ impl App {
                 .chats
                 .get(self.selected)
                 .map(|chat| chat.web_url.as_str()),
-            Page::Teams => None,
+            Page::Teams => {
+                selected_team_channel(&self.state, self.selected).map(|(team, channel)| {
+                    channel.map_or(team.web_url.as_str(), |channel| channel.web_url.as_str())
+                })
+            }
         };
         let Some(url) = url.filter(|value| !value.is_empty()) else {
             return;
@@ -635,29 +637,30 @@ impl App {
                     ])
                 })
                 .collect(),
-            Page::Teams => {
-                let mut items = Vec::new();
-                for team in &self.state.teams {
-                    let channels = self.state.channels.get(&team.id);
-                    if let Some(channels) = channels.filter(|channels| !channels.is_empty()) {
-                        for channel in channels {
-                            items.push(ListItem::new(vec![
-                                Line::from(Span::styled(
-                                    channel.display_name.clone(),
-                                    Style::default().fg(FG).add_modifier(Modifier::BOLD),
-                                )),
-                                Line::from(Span::styled(
-                                    team.display_name.clone(),
-                                    Style::default().fg(MUTED),
-                                )),
-                            ]));
-                        }
-                    } else {
-                        items.push(ListItem::new(team.display_name.clone()));
-                    }
-                }
-                items
-            }
+            Page::Teams => team_rows(&self.state)
+                .into_iter()
+                .map(|(team, channel)| {
+                    let title = channel.map_or_else(
+                        || team.display_name.clone(),
+                        |channel| channel.display_name.clone(),
+                    );
+                    let subtitle = channel.map_or_else(
+                        || "team · no cached channels".into(),
+                        |channel| {
+                            let key = format!("channel:{}:{}", team.id, channel.id);
+                            let count = self.state.channel_messages.get(&key).map_or(0, Vec::len);
+                            format!("{} · {count} cached", team.display_name)
+                        },
+                    );
+                    ListItem::new(vec![
+                        Line::from(Span::styled(
+                            title,
+                            Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(Span::styled(subtitle, Style::default().fg(MUTED))),
+                    ])
+                })
+                .collect(),
         }
     }
 
@@ -693,16 +696,37 @@ impl App {
                     chat_detail(&chat.label(), messages)
                 },
             ),
-            Page::Teams => Text::from(vec![
-                Line::styled(
-                    "Teams and channels",
-                    Style::default().fg(PURPLE).add_modifier(Modifier::BOLD),
-                ),
-                Line::raw(""),
-                Line::raw(
-                    "Select a channel, press r to request a channel inventory refresh, or use annum search for deterministic cached content.",
-                ),
-            ]),
+            Page::Teams => selected_team_channel(&self.state, self.selected).map_or_else(
+                || Text::from("No Team or channel selected."),
+                |(team, channel)| {
+                    channel.map_or_else(
+                        || {
+                            Text::from(vec![
+                                Line::styled(
+                                    team.display_name.clone(),
+                                    Style::default().fg(PURPLE).add_modifier(Modifier::BOLD),
+                                ),
+                                Line::raw(""),
+                                Line::raw(team.description.clone()),
+                                Line::raw(""),
+                                Line::raw("Press r to refresh the Team/channel inventory."),
+                            ])
+                        },
+                        |channel| {
+                            let key = format!("channel:{}:{}", team.id, channel.id);
+                            let messages = self
+                                .state
+                                .channel_messages
+                                .get(&key)
+                                .map_or(&[][..], Vec::as_slice);
+                            chat_detail(
+                                &format!("{} / {}", team.display_name, channel.display_name),
+                                messages,
+                            )
+                        },
+                    )
+                },
+            ),
         }
     }
 
@@ -844,6 +868,25 @@ fn chat_detail(title: &str, messages: &[ChatMessage]) -> Text<'static> {
         lines.push(Line::raw("No cached messages. Press r to queue this chat."));
     }
     Text::from(lines)
+}
+
+fn team_rows(state: &CacheState) -> Vec<(&Team, Option<&Channel>)> {
+    let mut rows = Vec::new();
+    for team in &state.teams {
+        match state
+            .channels
+            .get(&team.id)
+            .filter(|channels| !channels.is_empty())
+        {
+            Some(channels) => rows.extend(channels.iter().map(|channel| (team, Some(channel)))),
+            None => rows.push((team, None)),
+        }
+    }
+    rows
+}
+
+fn selected_team_channel(state: &CacheState, selected: usize) -> Option<(&Team, Option<&Channel>)> {
+    team_rows(state).get(selected).copied()
 }
 
 fn display_address<'a>(name: &'a str, address: &'a str) -> &'a str {

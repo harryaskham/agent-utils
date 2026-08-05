@@ -14,7 +14,7 @@ pub use model::CacheState;
 
 #[must_use]
 pub fn demo_state() -> CacheState {
-    use model::{Account, Address, CalendarEvent, Chat, ChatMessage, MailMessage, Team};
+    use model::{Account, Address, CalendarEvent, Channel, Chat, ChatMessage, MailMessage, Team};
     let mut state = CacheState {
         account: Account {
             id: "user-1".into(),
@@ -85,6 +85,30 @@ pub fn demo_state() -> CacheState {
         }],
         ..CacheState::default()
     };
+    state.channels.insert(
+        "team-1".into(),
+        vec![Channel {
+            id: "channel-1".into(),
+            team_id: "team-1".into(),
+            display_name: "General".into(),
+            description: "Engineering announcements".into(),
+            web_url: "https://teams.microsoft.com/l/channel/example".into(),
+            ..Channel::default()
+        }],
+    );
+    state.channel_messages.insert(
+        "channel:team-1:channel-1".into(),
+        vec![ChatMessage {
+            id: "channel-message-1".into(),
+            created_at: "2026-08-04T16:05:00Z".into(),
+            from: Address {
+                name: "Grace Hopper".into(),
+                address: "grace@example.com".into(),
+            },
+            body_markdown: "The release checklist is posted.".into(),
+            ..ChatMessage::default()
+        }],
+    );
     state.chat_messages.insert(
         "chat-1".into(),
         vec![ChatMessage {

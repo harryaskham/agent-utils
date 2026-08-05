@@ -13,8 +13,12 @@ annum daemon                       # central WorkIQ collector + cache + SSE
 annum email list --unread
 annum email get --id MESSAGE_ID
 annum calendar list
+annum calendar get --id EVENT_ID
 annum chat list
 annum chat get --id CHAT_ID
+annum teams list
+annum teams channels --team-id TEAM_ID
+annum teams get --team-id TEAM_ID --channel-id CHANNEL_ID
 annum search "architecture review" # deterministic local cache
 annum search --semantic "..."       # explicit WorkIQ retrieval
 annum copilot ask "prepare me for my next meeting"

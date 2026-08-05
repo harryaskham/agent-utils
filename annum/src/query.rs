@@ -160,6 +160,12 @@ pub struct CalendarListOutput {
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct CalendarGetOutput {
+    pub meta: QueryMeta,
+    pub event: CalendarEvent,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct ChatListOutput {
     pub meta: QueryMeta,
     pub chats: Vec<Chat>,
@@ -176,6 +182,33 @@ pub struct ChatGetOutput {
 pub struct TeamsOutput {
     pub meta: QueryMeta,
     pub teams: Vec<Team>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+pub struct ChannelListInput {
+    pub team_id: String,
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+pub struct ChannelGetInput {
+    pub team_id: String,
+    pub channel_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ChannelListOutput {
+    pub meta: QueryMeta,
+    pub team: Team,
+    pub channels: Vec<crate::model::Channel>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ChannelGetOutput {
+    pub meta: QueryMeta,
+    pub team: Team,
+    pub channel: crate::model::Channel,
+    pub messages: Vec<ChatMessage>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -345,6 +378,26 @@ pub fn calendar_list(
     })
 }
 
+pub fn calendar_get(
+    runtime: &QueryRuntime,
+    input: &GetInput,
+) -> Result<CalendarGetOutput, QueryError> {
+    let (state, source) = resolve_state(runtime)?;
+    let event = state
+        .events
+        .iter()
+        .find(|event| event.id == input.id)
+        .cloned()
+        .ok_or_else(|| QueryError::NotFound {
+            kind: "event",
+            id: input.id.clone(),
+        })?;
+    Ok(CalendarGetOutput {
+        meta: meta(&state, source),
+        event,
+    })
+}
+
 pub fn chat_list(runtime: &QueryRuntime, input: &ListInput) -> Result<ChatListOutput, QueryError> {
     let (state, source) = resolve_state(runtime)?;
     let query = input.query.as_deref().filter(|value| !value.is_empty());
@@ -397,6 +450,74 @@ pub fn teams(runtime: &QueryRuntime, input: &ListInput) -> Result<TeamsOutput, Q
     Ok(TeamsOutput {
         meta: meta(&state, source),
         teams,
+    })
+}
+
+pub fn channel_list(
+    runtime: &QueryRuntime,
+    input: &ChannelListInput,
+) -> Result<ChannelListOutput, QueryError> {
+    let (state, source) = resolve_state(runtime)?;
+    let team = state
+        .teams
+        .iter()
+        .find(|team| team.id == input.team_id)
+        .cloned()
+        .ok_or_else(|| QueryError::NotFound {
+            kind: "team",
+            id: input.team_id.clone(),
+        })?;
+    let channels = state
+        .channels
+        .get(&input.team_id)
+        .into_iter()
+        .flatten()
+        .take(limit(input.limit))
+        .cloned()
+        .collect();
+    Ok(ChannelListOutput {
+        meta: meta(&state, source),
+        team,
+        channels,
+    })
+}
+
+pub fn channel_get(
+    runtime: &QueryRuntime,
+    input: &ChannelGetInput,
+) -> Result<ChannelGetOutput, QueryError> {
+    let (state, source) = resolve_state(runtime)?;
+    let team = state
+        .teams
+        .iter()
+        .find(|team| team.id == input.team_id)
+        .cloned()
+        .ok_or_else(|| QueryError::NotFound {
+            kind: "team",
+            id: input.team_id.clone(),
+        })?;
+    let channel = state
+        .channels
+        .get(&input.team_id)
+        .into_iter()
+        .flatten()
+        .find(|channel| channel.id == input.channel_id)
+        .cloned()
+        .ok_or_else(|| QueryError::NotFound {
+            kind: "channel",
+            id: input.channel_id.clone(),
+        })?;
+    let key = format!("channel:{}:{}", input.team_id, input.channel_id);
+    let messages = state
+        .channel_messages
+        .get(&key)
+        .cloned()
+        .unwrap_or_default();
+    Ok(ChannelGetOutput {
+        meta: meta(&state, source),
+        team,
+        channel,
+        messages,
     })
 }
 
@@ -764,6 +885,11 @@ pub fn build_mcp_server() -> McpServer<QueryRuntime> {
         |runtime, input: ListInput| calendar_list(runtime, &input),
     );
     router.add_typed_tool(
+        "annum_calendar_get",
+        "Get one deterministic cached Outlook calendar event.",
+        |runtime, input: GetInput| calendar_get(runtime, &input),
+    );
+    router.add_typed_tool(
         "annum_chat_list",
         "List deterministic cached Teams chats.",
         |runtime, input: ListInput| chat_list(runtime, &input),
@@ -777,6 +903,16 @@ pub fn build_mcp_server() -> McpServer<QueryRuntime> {
         "annum_teams_list",
         "List joined Teams.",
         |runtime, input: ListInput| teams(runtime, &input),
+    );
+    router.add_typed_tool(
+        "annum_channel_list",
+        "List cached channels for one joined Team.",
+        |runtime, input: ChannelListInput| channel_list(runtime, &input),
+    );
+    router.add_typed_tool(
+        "annum_channel_get",
+        "Get one Teams channel and deterministic cached messages.",
+        |runtime, input: ChannelGetInput| channel_get(runtime, &input),
     );
     router.add_typed_tool(
         "annum_search",
@@ -945,6 +1081,36 @@ mod tests {
     }
 
     #[test]
+    fn channel_queries_keep_team_provenance() {
+        let mut state = CacheState::default();
+        state.teams.push(Team {
+            id: "t1".into(),
+            display_name: "Engineering".into(),
+            ..Team::default()
+        });
+        state.channels.insert(
+            "t1".into(),
+            vec![crate::model::Channel {
+                id: "c1".into(),
+                team_id: "t1".into(),
+                display_name: "General".into(),
+                ..crate::model::Channel::default()
+            }],
+        );
+        let (_dir, runtime) = runtime_with(state);
+        let output = channel_get(
+            &runtime,
+            &ChannelGetInput {
+                team_id: "t1".into(),
+                channel_id: "c1".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(output.team.display_name, "Engineering");
+        assert_eq!(output.channel.display_name, "General");
+    }
+
+    #[test]
     fn writes_fail_closed_without_confirmation() {
         let (_dir, runtime) = runtime_with(CacheState::default());
         let error = send_mail(
@@ -971,6 +1137,8 @@ mod tests {
             "annum_email_list",
             "annum_calendar_list",
             "annum_chat_list",
+            "annum_channel_list",
+            "annum_channel_get",
             "annum_search",
             "annum_copilot_ask",
             "config_validate",
