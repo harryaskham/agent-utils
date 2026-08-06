@@ -92,19 +92,49 @@
             cost-tui.packages.${system}.cost-tui
             skillServer
           ];
+          withoutChecks = package: package.overrideAttrs (_: {
+            doCheck = false;
+          });
+          webSearchUnchecked = withoutChecks web-search.packages.${system}.web-search-mcp;
+          linearExtraUnchecked = withoutChecks linear-extra.packages.${system}.linear-extra-mcp;
+          slickUnchecked = withoutChecks slick.packages.${system}.slick;
+          annumUnchecked = withoutChecks annum.packages.${system}.annum;
+          costTuiUnchecked = withoutChecks cost-tui.packages.${system}.cost-tui;
+          skillServerUnchecked = withoutChecks skillServer;
+          uncheckedPackages = [
+            webSearchUnchecked
+            linearExtraUnchecked
+            slickUnchecked
+            annumUnchecked
+            costTuiUnchecked
+            skillServerUnchecked
+          ];
+          uncheckedJoin = pkgs.symlinkJoin {
+            name = "agent-utils-unchecked";
+            paths = uncheckedPackages;
+          };
         in {
           default = pkgs.symlinkJoin {
             name = "agent-utils";
             paths = allPackages;
           };
           all = self.packages.${system}.default;
+          unchecked = uncheckedJoin;
+          all-unchecked = uncheckedJoin;
           web-search-mcp = web-search.packages.${system}.web-search-mcp;
+          web-search-mcp-unchecked = webSearchUnchecked;
           linear-extra-mcp = linear-extra.packages.${system}.linear-extra-mcp;
+          linear-extra-mcp-unchecked = linearExtraUnchecked;
           slick = slick.packages.${system}.slick;
+          slick-unchecked = slickUnchecked;
           annum = annum.packages.${system}.annum;
+          annum-unchecked = annumUnchecked;
           cost-tui = cost-tui.packages.${system}.cost-tui;
+          cost-tui-unchecked = costTuiUnchecked;
           skill-server = skillServer;
+          skill-server-unchecked = skillServerUnchecked;
           skill-search = skillServer;
+          skill-search-unchecked = skillServerUnchecked;
           # pi-wasm browser bundle (static site) + local serve wrapper. Kept out
           # of the `default`/`all` symlinkJoin because it is a web bundle, not a
           # bin. Build: `nix build .#pi-wasm`. Serve: `nix run .#pi-wasm-serve`.
