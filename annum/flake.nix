@@ -67,7 +67,7 @@
             pname = "annum";
             version = "0.1.0";
             src = patchedSrc;
-            cargoHash = "sha256-T5nP8D3jdNfa5HkfRvUv9GBSlkpPvTncc2FgdQddkhs=";
+            cargoHash = "sha256-ZcwROTNPKrswWnc+beC+jy1w6tyWCvWhrzQdQglTjDI=";
             strictDeps = true;
             nativeBuildInputs = [ pkgs.makeWrapper ];
             nativeCheckInputs = [ pkgs.python3 ];

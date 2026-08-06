@@ -88,7 +88,7 @@
             # 132b67d). A stale value fails the build with "cargoHash or
             # cargoSha256 is out of date": set to pkgs.lib.fakeHash, build, and
             # copy the reported "got:" hash back here.
-            cargoHash = "sha256-pB6JtC0ULBoG1jFSTS6PiweL0tYhIreRDXR2sF0i/qE=";
+            cargoHash = "sha256-2CfkZDgQDGTDM9dePK+DM5mb9+OUBWzoo0r3u9JMfL4=";
             strictDeps = true;
             buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
             doCheck = true;
