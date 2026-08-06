@@ -21,7 +21,7 @@
       flake = false;
     };
     remote-cli = {
-      url = "git+ssh://git@github.com/harryaskham/remote-cli?rev=5c4d2be3e7fb36c6a31dbe8b0b85c37143f4a9b0";
+      url = "git+ssh://git@github.com/harryaskham/remote-cli?rev=4c528bc6f31755d9c9b95e0e44807cb6a8955143";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
@@ -65,7 +65,7 @@
                              'mcp-cli = { package = "mcp-cli-core", path = "${mcp-cli-src}" }' \
               --replace-fail 'configurable-cli = { git = "https://github.com/harryaskham/configurable-cli", rev = "ed0a5be165f861bb58c81e22fed44153af519060" }' \
                              'configurable-cli = { path = "${configurable-cli-src}" }' \
-              --replace-fail 'remote-cli = { git = "https://github.com/harryaskham/remote-cli", rev = "5c4d2be3e7fb36c6a31dbe8b0b85c37143f4a9b0" }' \
+              --replace-fail 'remote-cli = { git = "https://github.com/harryaskham/remote-cli", rev = "4c528bc6f31755d9c9b95e0e44807cb6a8955143" }' \
                              'remote-cli = { path = "${remote-cli}" }'
             # Path dependencies have source-less lock entries. Cargo's git lock
             # entries carry no checksum, so deleting only this source line is the

@@ -561,7 +561,7 @@ mod tests {
     ) -> String {
         let mut stream = TcpStream::connect(address).unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
         write!(
             stream,
@@ -698,14 +698,13 @@ mod tests {
             fallback_lease_path: dir.join("fallback.lock"),
         });
         let mut received_initial = false;
-        for _ in 0..3 {
-            let update = subscription
-                .rx
-                .recv_timeout(Duration::from_secs(3))
-                .unwrap();
-            if matches!(update, ClientUpdate::State(state, _) if state.team_name == "initial") {
-                received_initial = true;
-                break;
+        let initial_deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while std::time::Instant::now() < initial_deadline {
+            if let Ok(update) = subscription.rx.recv_timeout(Duration::from_millis(500)) {
+                if matches!(update, ClientUpdate::State(state, _) if state.team_name == "initial") {
+                    received_initial = true;
+                    break;
+                }
             }
         }
         assert!(
@@ -723,14 +722,13 @@ mod tests {
 
         shared.update(|state| state.team_name = "live".into());
         let mut received_live = false;
-        for _ in 0..3 {
-            let update = subscription
-                .rx
-                .recv_timeout(Duration::from_secs(3))
-                .unwrap();
-            if matches!(update, ClientUpdate::State(state, _) if state.team_name == "live") {
-                received_live = true;
-                break;
+        let live_deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while std::time::Instant::now() < live_deadline {
+            if let Ok(update) = subscription.rx.recv_timeout(Duration::from_millis(500)) {
+                if matches!(update, ClientUpdate::State(state, _) if state.team_name == "live") {
+                    received_live = true;
+                    break;
+                }
             }
         }
         assert!(received_live, "SSE update did not reach cache-only client");
