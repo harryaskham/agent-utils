@@ -40,7 +40,9 @@
     }:
     let
       remoteModules = remote-cli.lib.mkDaemonModules {
-        packageFor = pkgs: self.packages.${pkgs.system}.slick;
+        # Honor a consumer overlay (for example pkgs.slick = slick-unchecked)
+        # while retaining a standalone-flake fallback.
+        packageFor = pkgs: pkgs.slick or self.packages.${pkgs.system}.slick;
         appName = "slick";
         displayName = "Slick";
         binary = "slick";

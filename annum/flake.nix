@@ -26,7 +26,9 @@
   outputs = { self, nixpkgs, flake-utils, kittui-src, mcp-cli-src, configurable-cli-src, remote-cli, ... }:
     let
       remoteModules = remote-cli.lib.mkDaemonModules {
-        packageFor = pkgs: self.packages.${pkgs.system}.annum;
+        # Honor a consumer overlay (for example pkgs.annum = annum-unchecked)
+        # while retaining a standalone-flake fallback.
+        packageFor = pkgs: pkgs.annum or self.packages.${pkgs.system}.annum;
         appName = "annum";
         displayName = "Annum";
         binary = "annum";
