@@ -95,10 +95,16 @@
           withoutChecks = package: package.overrideAttrs (_: {
             doCheck = false;
           });
+          binOnly = name: package: pkgs.buildEnv {
+            inherit name;
+            paths = [ package ];
+            pathsToLink = [ "/bin" ];
+            meta = package.meta or {};
+          };
           webSearchUnchecked = withoutChecks web-search.packages.${system}.web-search-mcp;
           linearExtraUnchecked = withoutChecks linear-extra.packages.${system}.linear-extra-mcp;
-          slickUnchecked = withoutChecks slick.packages.${system}.slick;
-          annumUnchecked = withoutChecks annum.packages.${system}.annum;
+          slickUnchecked = binOnly "slick-unchecked" (withoutChecks slick.packages.${system}.slick);
+          annumUnchecked = binOnly "annum-unchecked" (withoutChecks annum.packages.${system}.annum);
           costTuiUnchecked = withoutChecks cost-tui.packages.${system}.cost-tui;
           skillServerUnchecked = withoutChecks skillServer;
           uncheckedPackages = [
@@ -112,11 +118,15 @@
           uncheckedJoin = pkgs.symlinkJoin {
             name = "agent-utils-unchecked";
             paths = uncheckedPackages;
+            # CLI aggregate: shared Rust cdylibs from sibling packages may use
+            # identical generic paths (for example lib/libhtml2md.so).
+            pathsToLink = [ "/bin" ];
           };
         in {
           default = pkgs.symlinkJoin {
             name = "agent-utils";
             paths = allPackages;
+            pathsToLink = [ "/bin" ];
           };
           all = self.packages.${system}.default;
           unchecked = uncheckedJoin;
@@ -141,6 +151,23 @@
           pi-wasm = pi-wasm.packages.${system}.pi-wasm;
           pi-wasm-serve = pi-wasm.packages.${system}.pi-wasm-serve;
         });
+
+      # Consumer overlay: install the one non-overlapping aggregate for user
+      # profiles, while daemon modules resolve their individual unchecked
+      # binary-only packages through pkgs.slick / pkgs.annum.
+      overlays.default = final: prev: let
+        packages = self.packages.${prev.system};
+      in {
+        agent-utils = packages.unchecked;
+        slick = packages.slick-unchecked;
+        annum = packages.annum-unchecked;
+        cost-tui = packages.cost-tui-unchecked;
+        web-search-mcp = packages.web-search-mcp-unchecked;
+        linear-extra-mcp = packages.linear-extra-mcp-unchecked;
+        skill-server = packages.skill-server-unchecked;
+        skill-search = packages.skill-search-unchecked;
+      };
+      overlays.unchecked = self.overlays.default;
 
       # Re-export Slick's cross-platform daemon modules so consumers only need
       # the agent-utils root flake.
