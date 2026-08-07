@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::Value;
@@ -17,13 +19,22 @@ const CHANNEL_SELECT: &str = "id,displayName,description,membershipType,webUrl";
 
 #[derive(Clone)]
 pub struct WorkIqService {
-    client: WorkIqClient,
+    client: Arc<RwLock<WorkIqClient>>,
 }
 
 impl WorkIqService {
     #[must_use]
     pub fn new(client: WorkIqClient) -> Self {
-        Self { client }
+        Self {
+            client: Arc::new(RwLock::new(client)),
+        }
+    }
+
+    pub fn replace_client(&self, client: WorkIqClient) {
+        *self
+            .client
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = client;
     }
 
     pub fn refresh_identity(&self, state: &mut CacheState) -> Result<()> {
@@ -144,7 +155,7 @@ impl WorkIqService {
             })
             .collect::<Vec<_>>();
         if !paths.is_empty() {
-            for (chat, result) in chats.iter_mut().zip(self.client.fetch(paths)?) {
+            for (chat, result) in chats.iter_mut().zip(self.client().fetch(paths)?) {
                 let data = result.get("data").cloned().unwrap_or(Value::Null);
                 chat.members = values(&data).iter().map(parse_member).collect();
             }
@@ -200,7 +211,7 @@ impl WorkIqService {
             .collect::<Vec<_>>();
         let mut channels = std::collections::BTreeMap::new();
         if !paths.is_empty() {
-            for (team, result) in state.teams.iter().zip(self.client.fetch(paths)?) {
+            for (team, result) in state.teams.iter().zip(self.client().fetch(paths)?) {
                 let data = result.get("data").cloned().unwrap_or(Value::Null);
                 channels.insert(
                     team.id.clone(),
@@ -249,13 +260,16 @@ impl WorkIqService {
     }
 
     #[must_use]
-    pub fn client(&self) -> &WorkIqClient {
-        &self.client
+    pub fn client(&self) -> WorkIqClient {
+        self.client
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn fetch_one(&self, path: &str) -> Result<Value> {
         let result = self
-            .client
+            .client()
             .fetch(vec![normalize_entity_url(path)])?
             .into_iter()
             .next()

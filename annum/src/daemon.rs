@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -13,6 +13,7 @@ use crate::workiq::WorkIqClient;
 
 const CONTINUE_SECS: i64 = 2;
 const MAX_FAILURE_BACKOFF_SECS: i64 = 30 * 60;
+const WORKIQ_RECONNECT_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
 pub type SharedCache = remote_cli::SharedSnapshot<CacheState>;
 
@@ -85,6 +86,7 @@ pub fn run(options: DaemonOptions) -> Result<()> {
     );
     shared.update(|state| state.collector.running = true);
     let spacing = Duration::from_secs(options.min_refresh_secs.max(1));
+    let mut last_workiq_reconnect = None;
 
     loop {
         let snapshot = shared.snapshot();
@@ -95,7 +97,14 @@ pub fn run(options: DaemonOptions) -> Result<()> {
             thread::sleep(Duration::from_secs(1));
             continue;
         };
-        execute_task(&shared, &service, &options.collector, task);
+        execute_task(
+            &shared,
+            &service,
+            &options.workiq,
+            &options.collector,
+            task,
+            &mut last_workiq_reconnect,
+        );
         thread::sleep(spacing);
     }
 }
@@ -137,8 +146,10 @@ pub fn sync_once(
 fn execute_task(
     shared: &SharedCache,
     service: &WorkIqService,
+    workiq: &WorkIqConfig,
     collector: &CollectorConfig,
     task: RefreshTask,
+    last_workiq_reconnect: &mut Option<Instant>,
 ) {
     let started = CacheState::now();
     shared.update(|state| {
@@ -150,7 +161,25 @@ fn execute_task(
         health.detail = format!("refreshing {}", task_label(&task.kind));
     });
     let mut working = shared.snapshot();
-    let result = run_task(service, &mut working, collector, &task.kind);
+    let mut result = run_task(service, &mut working, collector, &task.kind);
+    let reconnect_due = result.as_ref().is_err_and(missing_remote_fetch_tool)
+        && last_workiq_reconnect.is_none_or(|last| last.elapsed() >= WORKIQ_RECONNECT_COOLDOWN);
+    if reconnect_due {
+        *last_workiq_reconnect = Some(Instant::now());
+        eprintln!(
+            "annum daemon: WorkIQ remote fetch tool is unavailable; restarting the persistent MCP child once"
+        );
+        match WorkIqClient::start(workiq) {
+            Ok(client) => {
+                service.replace_client(client);
+                working = shared.snapshot();
+                result = run_task(service, &mut working, collector, &task.kind);
+            }
+            Err(error) => {
+                result = Err(error.context("restart WorkIQ MCP after missing fetch tool"));
+            }
+        }
+    }
     let finished = CacheState::now();
     shared.replace_payload(working, |state, current| {
         state.collector = current.collector.clone();
@@ -356,6 +385,11 @@ fn task_label(kind: &RefreshKind) -> &'static str {
     }
 }
 
+fn missing_remote_fetch_tool(error: &anyhow::Error) -> bool {
+    let detail = format!("{error:#}");
+    detail.contains("Unknown tool: 'fetch'") || detail.contains("Unknown tool: \"fetch\"")
+}
+
 fn failure_backoff(failures: u32) -> i64 {
     (10_i64.saturating_mul(1_i64 << failures.saturating_sub(1).min(10)))
         .min(MAX_FAILURE_BACKOFF_SECS)
@@ -472,6 +506,14 @@ mod tests {
         let tasks = all_tasks(&state, &CollectorConfig::default());
         assert!(tasks.iter().any(|task| task.key == "chat:c1"));
         assert!(tasks.iter().any(|task| task.key == "channel:t1:ch1"));
+    }
+
+    #[test]
+    fn missing_fetch_tool_is_reconnectable_but_other_errors_are_not() {
+        assert!(missing_remote_fetch_tool(&anyhow::anyhow!(
+            "Mcp error: -32602: Unknown tool: 'fetch'"
+        )));
+        assert!(!missing_remote_fetch_tool(&anyhow::anyhow!("network down")));
     }
 
     #[test]
