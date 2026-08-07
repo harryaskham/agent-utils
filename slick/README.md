@@ -11,6 +11,8 @@ and Slack Canvas HTML becomes bounded, rich Markdown.
 
 ```bash
 nix run ./slick -- daemon       # central rate-limit-aware collector + SSE
+nix run ./slick -- log -n 100   # current daemon service log
+nix run ./slick -- log -f       # follow daemon log
 nix run ./slick                 # smart client (same as `slick client`)
 nix run ./slick -- client      # cache + http://127.0.0.1:7612 SSE by default
 nix run ./slick -- client --no-daemon  # strict cache-only client

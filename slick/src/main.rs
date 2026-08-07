@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use slick::cache::CacheStore;
 use slick::ui::{self, Page, RunOptions};
 
@@ -124,6 +124,9 @@ enum Command {
         #[command(subcommand)]
         command: Option<configurable_cli::ConfigCommand>,
     },
+    /// Show daemon service logs; use -f to follow.
+    #[command(alias = "logs")]
+    Log(LogArgs),
     /// Serve Slick query tools over MCP stdio.
     Mcp {
         #[command(subcommand)]
@@ -141,6 +144,30 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         token_file: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum LogStreamArg {
+    Stdout,
+    #[default]
+    Stderr,
+    All,
+}
+
+#[derive(Clone, Debug, Args)]
+struct LogArgs {
+    /// Number of existing lines to show.
+    #[arg(short = 'n', long, default_value_t = 50)]
+    lines: usize,
+    /// Continue following newly appended lines.
+    #[arg(short = 'f', long)]
+    follow: bool,
+    /// Select launchd stdout, stderr, or both.
+    #[arg(long, value_enum, default_value_t)]
+    stream: LogStreamArg,
+    /// Explicit log file; repeat to follow multiple files.
+    #[arg(long = "file", value_name = "PATH")]
+    files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -194,6 +221,19 @@ enum McpCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::Log(args)) = &cli.command {
+        let mut options = remote_cli::DaemonLogOptions::new("slick");
+        options.lines = args.lines;
+        options.follow = args.follow;
+        options.stream = match args.stream {
+            LogStreamArg::Stdout => remote_cli::LogStream::Stdout,
+            LogStreamArg::Stderr => remote_cli::LogStream::Stderr,
+            LogStreamArg::All => remote_cli::LogStream::All,
+        };
+        options.files.clone_from(&args.files);
+        remote_cli::show_daemon_logs(&options)?;
+        return Ok(());
+    }
     if let Some(Command::Config { command }) = &cli.command {
         let output = slick::config::manager().execute(
             cli.config.as_deref(),
@@ -349,7 +389,8 @@ fn main() -> Result<()> {
                 slick::query::serve_mcp(&mcp_runtime)?;
                 return Ok(());
             }
-            Command::Client | Command::Config { .. } | Command::Daemon { .. } => {}
+            Command::Client | Command::Log(_) | Command::Config { .. } | Command::Daemon { .. } => {
+            }
         }
     }
     let explicit_client = matches!(&cli.command, Some(Command::Client));
@@ -492,6 +533,15 @@ mod tests {
 
     #[test]
     fn query_and_mcp_command_shapes_parse_with_global_json() {
+        let logs = Cli::try_parse_from(["slick", "log", "-n", "25", "-f"]).unwrap();
+        assert!(matches!(
+            logs.command,
+            Some(Command::Log(LogArgs {
+                lines: 25,
+                follow: true,
+                ..
+            }))
+        ));
         let channel =
             Cli::try_parse_from(["slick", "channel", "get", "--id", "C123", "--json"]).unwrap();
         assert!(channel.json);

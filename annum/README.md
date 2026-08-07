@@ -10,6 +10,9 @@ terse CLI commands and an MCP server:
 ```sh
 annum                              # Kittui smart client
 annum daemon                       # central WorkIQ collector + cache + SSE
+annum log -n 100                    # current daemon service log
+annum log -f                        # follow daemon log
+annum log --stream all -f           # stdout + stderr
 annum email list --unread
 annum email get --id MESSAGE_ID
 annum calendar list

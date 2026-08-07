@@ -1997,7 +1997,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "remote-cli"
 version = "0.1.0"
-source = "git+https://github.com/harryaskham/remote-cli?rev=4c528bc6f31755d9c9b95e0e44807cb6a8955143#4c528bc6f31755d9c9b95e0e44807cb6a8955143"
+source = "git+https://github.com/harryaskham/remote-cli?rev=91d6994ef6103e6a0498930140e112b4f7f492eb#91d6994ef6103e6a0498930140e112b4f7f492eb"
 dependencies = [
  "anyhow",
  "dirs",

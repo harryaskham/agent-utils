@@ -17,7 +17,7 @@
       flake = false;
     };
     remote-cli = {
-      url = "git+ssh://git@github.com/harryaskham/remote-cli?rev=4c528bc6f31755d9c9b95e0e44807cb6a8955143";
+      url = "git+ssh://git@github.com/harryaskham/remote-cli?rev=91d6994ef6103e6a0498930140e112b4f7f492eb";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
@@ -53,7 +53,7 @@
                              'mcp-cli = { package = "mcp-cli-core", path = "${mcp-cli-src}" }' \
               --replace-fail 'configurable-cli = { git = "https://github.com/harryaskham/configurable-cli", rev = "ed0a5be165f861bb58c81e22fed44153af519060" }' \
                              'configurable-cli = { path = "${configurable-cli-src}" }' \
-              --replace-fail 'remote-cli = { git = "https://github.com/harryaskham/remote-cli", rev = "4c528bc6f31755d9c9b95e0e44807cb6a8955143" }' \
+              --replace-fail 'remote-cli = { git = "https://github.com/harryaskham/remote-cli", rev = "91d6994ef6103e6a0498930140e112b4f7f492eb" }' \
                              'remote-cli = { path = "${remote-cli}" }'
             sed -i '/source = "git+https:\/\/github.com\/harryaskham\/kittui?/d' "$out/Cargo.lock"
             sed -i '/source = "git+https:\/\/github.com\/harryaskham\/mcp-cli?/d' "$out/Cargo.lock"

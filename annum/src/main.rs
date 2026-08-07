@@ -6,7 +6,7 @@ use annum::cache::CacheStore;
 use annum::query;
 use annum::ui::{self, Page, RunOptions};
 use anyhow::{Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -90,6 +90,9 @@ enum Command {
     Sync,
     /// Print source/cache/collector status.
     Status,
+    /// Show daemon service logs; use -f to follow.
+    #[command(alias = "logs")]
+    Log(LogArgs),
     /// Render a deterministic TUI snapshot and exit.
     Snapshot {
         #[arg(long, default_value_t = 120)]
@@ -165,6 +168,30 @@ enum McpCommand {
         #[arg(long)]
         standalone: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum LogStreamArg {
+    Stdout,
+    #[default]
+    Stderr,
+    All,
+}
+
+#[derive(Clone, Debug, Args)]
+struct LogArgs {
+    /// Number of existing lines to show.
+    #[arg(short = 'n', long, default_value_t = 50)]
+    lines: usize,
+    /// Continue following newly appended lines.
+    #[arg(short = 'f', long)]
+    follow: bool,
+    /// Select launchd stdout, stderr, or both.
+    #[arg(long, value_enum, default_value_t)]
+    stream: LogStreamArg,
+    /// Explicit log file; repeat to follow multiple files.
+    #[arg(long = "file", value_name = "PATH")]
+    files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Args)]
@@ -298,6 +325,19 @@ struct SendChatArgs {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::Log(args)) = &cli.command {
+        let mut options = remote_cli::DaemonLogOptions::new("annum");
+        options.lines = args.lines;
+        options.follow = args.follow;
+        options.stream = match args.stream {
+            LogStreamArg::Stdout => remote_cli::LogStream::Stdout,
+            LogStreamArg::Stderr => remote_cli::LogStream::Stderr,
+            LogStreamArg::All => remote_cli::LogStream::All,
+        };
+        options.files.clone_from(&args.files);
+        remote_cli::show_daemon_logs(&options)?;
+        return Ok(());
+    }
     if let Some(Command::Config { command }) = &cli.command {
         let output = annum::config::manager().execute(
             cli.config.as_deref(),
@@ -489,6 +529,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             Command::Client
+            | Command::Log(_)
             | Command::Daemon { .. }
             | Command::Config { .. }
             | Command::Sync
@@ -761,6 +802,16 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["annum", "config", "schema"]).is_ok());
+        assert!(matches!(
+            Cli::try_parse_from(["annum", "log", "-n", "25", "-f"])
+                .unwrap()
+                .command,
+            Some(Command::Log(LogArgs {
+                lines: 25,
+                follow: true,
+                ..
+            }))
+        ));
         assert!(matches!(
             Cli::try_parse_from(["annum", "mcp", "stdio", "--standalone"])
                 .unwrap()
