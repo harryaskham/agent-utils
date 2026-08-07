@@ -177,6 +177,9 @@
       nixosModules.annum = annum.nixosModules.annum;
       darwinModules.annum = annum.darwinModules.annum;
       nixOnDroidModules.annum = annum.nixOnDroidModules.annum;
+      nixosModules.cost-tui = cost-tui.nixosModules.cost-tui;
+      darwinModules.cost-tui = cost-tui.darwinModules.cost-tui;
+      nixOnDroidModules.cost-tui = cost-tui.nixOnDroidModules.cost-tui;
 
       apps = forAllSystems (system: {
         default = {

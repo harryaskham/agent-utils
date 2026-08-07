@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "configurable-cli-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785888722,
+        "narHash": "sha256-Lk8CvGUa/ujExWbA5y16VaOxslanN+WZ3IewgkWImsc=",
+        "ref": "refs/heads/main",
+        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
+        "revCount": 2,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/configurable-cli"
+      },
+      "original": {
+        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/configurable-cli"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -51,11 +68,37 @@
         "type": "github"
       }
     },
+    "remote-cli": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786103059,
+        "narHash": "sha256-P2g4nIuxRVeLASTm7WnHzeB5qNqvxPJDGbuj4HxWzes=",
+        "ref": "refs/heads/main",
+        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
+        "revCount": 6,
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/remote-cli"
+      },
+      "original": {
+        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
+        "type": "git",
+        "url": "ssh://git@github.com/harryaskham/remote-cli"
+      }
+    },
     "root": {
       "inputs": {
+        "configurable-cli-src": "configurable-cli-src",
         "flake-utils": "flake-utils",
         "kittui-src": "kittui-src",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "remote-cli": "remote-cli"
       }
     },
     "systems": {
