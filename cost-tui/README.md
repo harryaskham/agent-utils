@@ -13,7 +13,8 @@ It displays:
 
 - exact AI-credit usage, entitlement, remaining quota and overage state;
 - dollar equivalents at exactly `$0.01 / credit`;
-- persistent charts rehydrated from daemon history;
+- stable account-card ordering and multi-account aggregate selection;
+- zoomable non-zero-baseline charts with labelled dollar axes, rehydrated from daemon history;
 - freshest `$ / minute` from the latest same-cycle sample interval;
 - actual spend observed over 1 hour, 24 hours, 7 days and 28 days;
 - UTC calendar-month-to-date spend, segmented across quota resets;
@@ -87,7 +88,9 @@ cost-tui sync --standalone       # explicit direct one-shot writer
 
 A `~` before a spend value means the available retained samples cover only
 part of that requested window. Counter decreases and reset-marker changes are
-boundaries, never negative spend.
+boundaries, never negative spend. Graph axes use the observed dollar minimum
+and maximum rather than forcing zero, so small changes remain visible; `+` and
+`-` move through 1h, 6h, 24h, 7d, 28d, 90d and all-history views.
 
 ## Configuration
 
@@ -109,7 +112,7 @@ accounts: [] # empty = daemon discovers healthy gh accounts
 history:
   retention-days: 400
   max-samples-per-account: 120000
-  chart-points: 576
+  chart-points: 2048
   compact-every-cycles: 288
 client:
   cache: true
@@ -145,8 +148,10 @@ cost-tui --no-graphics
 
 | Key | Action |
 |---|---|
-| arrows, `h`/`j`/`k`/`l` | Select an account |
-| `1`…`9` | Select an account directly |
+| arrows, `h`/`j`/`k`/`l` | Move account focus |
+| Space, Enter, `1`…`9`, mouse | Toggle accounts in the aggregate |
+| `a` / `x` | Select all / focused account only |
+| `+` / `-` | Zoom graph in / out |
 | `r` | Ask the daemon to refresh all accounts |
 | `?` | Help |
 | `q`, `Ctrl-C` | Quit |

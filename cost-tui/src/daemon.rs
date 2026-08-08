@@ -203,7 +203,12 @@ pub fn merge_usages(current: &mut Vec<AccountUsage>, incoming: Vec<AccountUsage>
             usage
         })
         .collect();
-    current.sort_by_key(|usage| usage.account.key());
+    current.sort_by(|left, right| {
+        crate::model::host_rank(&left.account.host)
+            .cmp(&crate::model::host_rank(&right.account.host))
+            .then_with(|| left.account.host.cmp(&right.account.host))
+            .then_with(|| left.account.login.cmp(&right.account.login))
+    });
 }
 
 fn ensure_accounts(state: &mut CostState, accounts: &[AccountId]) {

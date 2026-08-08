@@ -263,10 +263,10 @@ pub fn summarize(
     let mut rates = BTreeMap::new();
     for (key, mut account) in grouped {
         account.sort_by_key(|sample| sample.captured_at);
-        series.insert(key.clone(), downsample(&account, max_chart_points));
+        series.insert(key.clone(), downsample(&account, max_chart_points, now));
         rates.insert(key, rate_summary(&account, now));
     }
-    let aggregate = aggregate_rates(rates.values());
+    let aggregate = aggregate_rate_summaries(rates.values());
     rates.insert(AGGREGATE_KEY.into(), aggregate);
     (series, rates)
 }
@@ -331,7 +331,9 @@ fn window_spend(samples: &[&HistorySample], start: i64, end: i64) -> WindowSpend
     }
 }
 
-fn aggregate_rates<'a>(summaries: impl Iterator<Item = &'a RateSummary>) -> RateSummary {
+pub fn aggregate_rate_summaries<'a>(
+    summaries: impl Iterator<Item = &'a RateSummary>,
+) -> RateSummary {
     let values: Vec<_> = summaries.collect();
     let current_rates = values
         .iter()
@@ -370,29 +372,74 @@ fn aggregate_window<'a>(windows: impl Iterator<Item = &'a WindowSpend>) -> Windo
     }
 }
 
-fn downsample(samples: &[&HistorySample], maximum: usize) -> Vec<ChartPoint> {
+fn downsample(samples: &[&HistorySample], maximum: usize, now: i64) -> Vec<ChartPoint> {
     if maximum == 0 || samples.is_empty() {
         return Vec::new();
     }
     if samples.len() <= maximum {
-        return samples
-            .iter()
-            .map(|sample| ChartPoint {
-                captured_at: sample.captured_at,
-                credits_used: sample.credits_used,
-            })
-            .collect();
+        return chart_points(samples);
+    }
+
+    // Keep recent five-minute ticks intact for sensitive short-range charts,
+    // then retain hourly and daily representatives for long zoom levels.
+    let recent_cutoff = now.saturating_sub(DAY_SECS);
+    let hourly_cutoff = now.saturating_sub(35 * DAY_SECS);
+    let recent = samples
+        .iter()
+        .copied()
+        .filter(|sample| sample.captured_at >= recent_cutoff)
+        .collect::<Vec<_>>();
+    let has_older = samples
+        .iter()
+        .any(|sample| sample.captured_at < recent_cutoff);
+    let recent_budget = recent.len().min(if has_older {
+        maximum.saturating_mul(3) / 4
+    } else {
+        maximum
+    });
+    let recent = evenly_select(&recent, recent_budget);
+    let remaining = maximum.saturating_sub(recent.len());
+
+    let mut older_buckets: BTreeMap<(u8, i64), &HistorySample> = BTreeMap::new();
+    for sample in samples
+        .iter()
+        .copied()
+        .filter(|sample| sample.captured_at < recent_cutoff)
+    {
+        let bucket = if sample.captured_at >= hourly_cutoff {
+            (1, sample.captured_at.div_euclid(HOUR_SECS))
+        } else {
+            (2, sample.captured_at.div_euclid(DAY_SECS))
+        };
+        older_buckets.insert(bucket, sample);
+    }
+    let older = older_buckets.into_values().collect::<Vec<_>>();
+    let mut selected = evenly_select(&older, remaining);
+    selected.extend(recent);
+    selected.sort_by_key(|sample| sample.captured_at);
+    chart_points(&selected)
+}
+
+fn evenly_select<'a>(samples: &[&'a HistorySample], maximum: usize) -> Vec<&'a HistorySample> {
+    if maximum == 0 || samples.is_empty() {
+        return Vec::new();
+    }
+    if samples.len() <= maximum {
+        return samples.to_vec();
     }
     let last = samples.len() - 1;
     let divisor = maximum.saturating_sub(1).max(1);
     (0..maximum)
-        .map(|index| {
-            let source = index.saturating_mul(last) / divisor;
-            let sample = samples[source];
-            ChartPoint {
-                captured_at: sample.captured_at,
-                credits_used: sample.credits_used,
-            }
+        .map(|index| samples[index.saturating_mul(last) / divisor])
+        .collect()
+}
+
+fn chart_points(samples: &[&HistorySample]) -> Vec<ChartPoint> {
+    samples
+        .iter()
+        .map(|sample| ChartPoint {
+            captured_at: sample.captured_at,
+            credits_used: sample.credits_used,
         })
         .collect()
 }
@@ -536,7 +583,7 @@ mod tests {
             .map(|index| sample(index, index as f64, "a"))
             .collect::<Vec<_>>();
         let refs = values.iter().collect::<Vec<_>>();
-        let points = downsample(&refs, 10);
+        let points = downsample(&refs, 10, 99);
         assert_eq!(points.first().unwrap().captured_at, 0);
         assert_eq!(points.last().unwrap().captured_at, 99);
     }

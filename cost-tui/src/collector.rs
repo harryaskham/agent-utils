@@ -10,8 +10,8 @@ use crate::model::{host_rank, AccountId, AccountUsage, Quota};
 pub const DEFAULT_ACCOUNTS: [(&str, &str); 4] = [
     ("harryaskham", "github.com"),
     ("harryaskham_microsoft", "github.com"),
-    ("harryaskham", "msft.ghe.com"),
     ("harryaskham", "microsoft.ghe.com"),
+    ("harryaskham", "msft.ghe.com"),
 ];
 
 #[derive(Debug, Deserialize)]

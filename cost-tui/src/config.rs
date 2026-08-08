@@ -25,7 +25,7 @@ impl Default for HistoryConfig {
             file: None,
             retention_days: 400,
             max_samples_per_account: 120_000,
-            chart_points: 576,
+            chart_points: 2_048,
             compact_every_cycles: 288,
         }
     }
@@ -80,9 +80,9 @@ impl AppConfig for Config {
                 "history.max-samples-per-account must be at least 100",
             ));
         }
-        if self.history.chart_points < 12 {
+        if self.history.chart_points < 288 {
             return Err(ConfigError::validation(
-                "history.chart-points must be at least 12",
+                "history.chart-points must be at least 288",
             ));
         }
         if self.history.compact_every_cycles == 0 {
@@ -157,6 +157,6 @@ mod tests {
         let config: Config = serde_yaml::from_str("graphics: false\n").unwrap();
         assert!(!config.graphics);
         assert_eq!(config.refresh_secs, 300);
-        assert_eq!(config.history.chart_points, 576);
+        assert_eq!(config.history.chart_points, 2_048);
     }
 }

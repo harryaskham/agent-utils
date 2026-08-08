@@ -271,3 +271,46 @@ impl Snapshot for CostState {
 pub fn host_rank(host: &str) -> u8 {
     u8::from(host != "github.com")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalization_has_a_stable_account_order() {
+        let mut state = CostState {
+            usages: [
+                ("harryaskham", "msft.ghe.com"),
+                ("harryaskham_microsoft", "github.com"),
+                ("harryaskham", "microsoft.ghe.com"),
+                ("harryaskham", "github.com"),
+            ]
+            .into_iter()
+            .map(|(login, host)| {
+                AccountUsage::loading(AccountId {
+                    login: login.into(),
+                    host: host.into(),
+                })
+            })
+            .collect(),
+            ..CostState::default()
+        };
+        state.normalize();
+        let first = state
+            .usages
+            .iter()
+            .map(|usage| usage.account.key())
+            .collect::<Vec<_>>();
+        state.normalize();
+        let second = state
+            .usages
+            .iter()
+            .map(|usage| usage.account.key())
+            .collect::<Vec<_>>();
+        assert_eq!(first, second);
+        assert_eq!(first[0], "harryaskham@github.com");
+        assert_eq!(first[1], "harryaskham_microsoft@github.com");
+        assert_eq!(first[2], "harryaskham@microsoft.ghe.com");
+        assert_eq!(first[3], "harryaskham@msft.ghe.com");
+    }
+}

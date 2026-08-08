@@ -365,7 +365,7 @@ fn show_history(store: &HistoryStore, args: &HistoryArgs, json: bool) -> Result<
     if args.limit > 0 && samples.len() > args.limit {
         samples.drain(..samples.len() - args.limit);
     }
-    let (_, rates) = summarize(&samples, 576, CostState::now());
+    let (_, rates) = summarize(&samples, 2_048, CostState::now());
     if json {
         println!(
             "{}",

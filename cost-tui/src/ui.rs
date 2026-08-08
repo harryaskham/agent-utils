@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -8,8 +8,10 @@ use std::time::{Duration, Instant};
 
 use crate::client::{ClientHealth, ClientSubscription, ClientUpdate};
 use crate::collector::{default_accounts, fetch_all};
-use crate::history::{summarize, HistorySample};
-use crate::model::{AccountId, AccountUsage, CostState, Quota, RateSummary, WindowSpend};
+use crate::history::{aggregate_rate_summaries, summarize, HistorySample};
+use crate::model::{
+    AccountId, AccountUsage, ChartPoint, CostState, Quota, RateSummary, WindowSpend,
+};
 use anyhow::{Context, Result};
 use kittui::{CellRect, Direction as KittuiDirection, RendererKind, Rgba, Runtime, TerminalInfo};
 use kittui_kitty::PlacementOptions;
@@ -30,7 +32,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Sparkline, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
 use ratatui::{Frame, Terminal};
 
 const PURPLE: Color = Color::Rgb(0x9d, 0x84, 0xff);
@@ -40,6 +42,16 @@ const YELLOW: Color = Color::Rgb(0xf2, 0xc7, 0x66);
 const RED: Color = Color::Rgb(0xef, 0x6a, 0x73);
 const FG: Color = Color::Rgb(0xe6, 0xe3, 0xeb);
 const MUTED: Color = Color::Rgb(0x99, 0x95, 0xa4);
+
+const ZOOM_LEVELS: [(Option<i64>, &str); 7] = [
+    (Some(60 * 60), "1h"),
+    (Some(6 * 60 * 60), "6h"),
+    (Some(24 * 60 * 60), "24h"),
+    (Some(7 * 24 * 60 * 60), "7d"),
+    (Some(28 * 24 * 60 * 60), "28d"),
+    (Some(90 * 24 * 60 * 60), "90d"),
+    (None, "all"),
+];
 
 #[derive(Debug)]
 enum WorkerEvent {
@@ -99,8 +111,9 @@ impl Graphics {
 struct App {
     usages: Vec<AccountUsage>,
     selected: usize,
-    histories: HashMap<String, Vec<u64>>,
-    history_times: HashMap<String, (i64, i64)>,
+    series: BTreeMap<String, Vec<ChartPoint>>,
+    included: BTreeSet<String>,
+    zoom: usize,
     rates: BTreeMap<String, RateSummary>,
     deltas: HashMap<String, f64>,
     worker: Option<Worker>,
@@ -118,12 +131,14 @@ struct App {
 impl App {
     fn new(usages: Vec<AccountUsage>, refresh_secs: u64, embedded: bool) -> Self {
         let accounts = usages.iter().map(|usage| usage.account.clone()).collect();
+        let included = usages.iter().map(|usage| usage.account.key()).collect();
         let worker = embedded.then(|| Worker::spawn(accounts));
         let mut app = Self {
             usages,
             selected: 0,
-            histories: HashMap::new(),
-            history_times: HashMap::new(),
+            series: BTreeMap::new(),
+            included,
+            zoom: 2,
             rates: BTreeMap::new(),
             deltas: HashMap::new(),
             worker,
@@ -233,29 +248,18 @@ impl App {
 
     fn apply_state(&mut self, state: CostState, source: &str) {
         self.merge(state.usages);
-        self.histories = state
-            .series
+        let valid = self
+            .usages
             .iter()
-            .map(|(key, points)| {
-                (
-                    key.clone(),
-                    points
-                        .iter()
-                        .map(|point| credit_sample(point.credits_used))
-                        .collect(),
-                )
-            })
-            .collect();
-        self.history_times = state
-            .series
-            .iter()
-            .filter_map(|(key, points)| {
-                Some((
-                    key.clone(),
-                    (points.first()?.captured_at, points.last()?.captured_at),
-                ))
-            })
-            .collect();
+            .map(|usage| usage.account.key())
+            .collect::<BTreeSet<_>>();
+        self.included.retain(|key| valid.contains(key));
+        if self.included.is_empty() {
+            if let Some(usage) = self.usages.get(self.selected) {
+                self.included.insert(usage.account.key());
+            }
+        }
+        self.series.clone_from(&state.series);
         self.rates = state.rates;
         self.busy = state.collector.current_domain.is_some();
         self.status = if state.collector.last_error.is_empty() {
@@ -328,9 +332,22 @@ impl App {
             let Some(quota) = usage.premium() else {
                 continue;
             };
-            let points = self.histories.entry(usage.account.key()).or_default();
-            points.push(credit_sample(quota.credits_used));
-            if points.len() > 72 {
+            let points = self.series.entry(usage.account.key()).or_default();
+            let captured_at = if usage.refreshed_at > 0 {
+                usage.refreshed_at
+            } else {
+                CostState::now()
+            };
+            if points.last().is_none_or(|point| {
+                point.captured_at != captured_at
+                    || (point.credits_used - quota.credits_used).abs() >= f64::EPSILON
+            }) {
+                points.push(ChartPoint {
+                    captured_at,
+                    credits_used: quota.credits_used,
+                });
+            }
+            if points.len() > 2_048 {
                 points.remove(0);
             }
         }
@@ -357,6 +374,38 @@ impl App {
         }
     }
 
+    fn toggle_account(&mut self, index: usize) {
+        let Some(usage) = self.usages.get(index) else {
+            return;
+        };
+        let key = usage.account.key();
+        if self.included.contains(&key) {
+            if self.included.len() > 1 {
+                self.included.remove(&key);
+            } else {
+                self.status = "at least one account must remain selected".into();
+            }
+        } else {
+            self.included.insert(key);
+        }
+    }
+
+    fn select_all(&mut self) {
+        self.included = self
+            .usages
+            .iter()
+            .map(|usage| usage.account.key())
+            .collect();
+        self.status = format!("selected all {} accounts", self.included.len());
+    }
+
+    fn focus_only(&mut self) {
+        if let Some(usage) = self.usages.get(self.selected) {
+            self.included = [usage.account.key()].into_iter().collect();
+            self.status = "selected focused account only".into();
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         if key.kind == KeyEventKind::Release {
             return;
@@ -375,6 +424,17 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('r') => self.request_refresh(),
+            KeyCode::Char('a') => self.select_all(),
+            KeyCode::Char('x') => self.focus_only(),
+            KeyCode::Char('+' | '=') => {
+                self.zoom = self.zoom.saturating_sub(1);
+                self.status = format!("graph zoom {}", ZOOM_LEVELS[self.zoom].1);
+            }
+            KeyCode::Char('-') => {
+                self.zoom = self.zoom.saturating_add(1).min(ZOOM_LEVELS.len() - 1);
+                self.status = format!("graph zoom {}", ZOOM_LEVELS[self.zoom].1);
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => self.toggle_account(self.selected),
             KeyCode::Left | KeyCode::Char('h' | 'k') | KeyCode::Up => {
                 self.selected = self.selected.saturating_sub(1);
             }
@@ -388,6 +448,7 @@ impl App {
                 let index = value.to_digit(10).unwrap_or(1) as usize - 1;
                 if index < self.usages.len() {
                     self.selected = index;
+                    self.toggle_account(index);
                 }
             }
             _ => {}
@@ -397,6 +458,7 @@ impl App {
     fn handle_mouse(&mut self, column: u16, row: u16, cards: &[Rect]) -> bool {
         if let Some(index) = cards.iter().position(|area| contains(*area, column, row)) {
             self.selected = index;
+            self.toggle_account(index);
             true
         } else {
             false
@@ -433,7 +495,14 @@ impl App {
         let cards = card_grid(vertical[1], self.usages.len(), wide);
         for (index, usage) in self.usages.iter().enumerate() {
             if let Some(card) = cards.get(index) {
-                self.render_card(frame, *card, usage, index == self.selected, graphics);
+                self.render_card(
+                    frame,
+                    *card,
+                    usage,
+                    index == self.selected,
+                    self.included.contains(&usage.account.key()),
+                    graphics,
+                );
             }
         }
         self.render_detail(frame, vertical[2], graphics);
@@ -523,11 +592,13 @@ impl App {
         frame: &mut Frame<'_>,
         area: Rect,
         usage: &AccountUsage,
-        selected: bool,
+        focused: bool,
+        included: bool,
         graphics: Option<(&Runtime, &EffectsSink)>,
     ) {
-        let title = format!(" {}@{} ", usage.account.login, usage.account.host);
-        let inner = panel(frame, area, &title, selected, Tone::Card, graphics);
+        let mark = if included { "✓" } else { " " };
+        let title = format!(" [{mark}] {}@{} ", usage.account.login, usage.account.host);
+        let inner = panel(frame, area, &title, focused, Tone::Card, graphics);
         if inner.height == 0 || inner.width == 0 {
             return;
         }
@@ -559,11 +630,7 @@ impl App {
             return;
         };
 
-        let delta = self
-            .deltas
-            .get(&usage.account.key())
-            .copied()
-            .unwrap_or(0.0);
+        let delta = self.deltas.get(&usage.account.key()).copied();
         let status = if let Some(error) = &usage.error {
             (format!("! stale · {error}"), RED)
         } else {
@@ -600,14 +667,7 @@ impl App {
                     format!("  {}", format_currency(quota.credits_used * 0.01)),
                     Style::default().fg(CYAN),
                 ),
-                Span::styled(
-                    if delta > 0.0 {
-                        format!("  Δ +{}", format_number(delta))
-                    } else {
-                        String::new()
-                    },
-                    Style::default().fg(PURPLE),
-                ),
+                Span::styled(delta_label(delta), Style::default().fg(PURPLE)),
             ])),
             content[1],
         );
@@ -643,10 +703,20 @@ impl App {
         area: Rect,
         graphics: Option<(&Runtime, &EffectsSink)>,
     ) {
-        let Some(usage) = self.usages.get(self.selected) else {
+        let selected = self
+            .usages
+            .iter()
+            .filter(|usage| self.included.contains(&usage.account.key()))
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
             return;
+        }
+        let usage = aggregate_usage(&selected);
+        let title = if selected.len() == 1 {
+            format!(" Details · {} ", usage.account.key())
+        } else {
+            format!(" Aggregate · {} selected accounts ", selected.len())
         };
-        let title = format!(" Details · {} ", usage.account.key());
         let inner = panel(frame, area, &title, true, Tone::Detail, graphics);
         if inner.height < 3 || inner.width < 20 {
             return;
@@ -654,7 +724,7 @@ impl App {
         let chunks = Layout::vertical([
             Constraint::Length(2),
             Constraint::Min(4),
-            Constraint::Length(5),
+            Constraint::Length(9),
         ])
         .split(inner);
         let assigned = if usage.assigned_date.is_empty() {
@@ -692,7 +762,7 @@ impl App {
             "Reset",
         ])
         .style(Style::default().fg(PURPLE).add_modifier(Modifier::BOLD));
-        let rows: Vec<Row<'_>> = ordered_quotas(usage)
+        let rows: Vec<Row<'_>> = ordered_quotas(&usage)
             .into_iter()
             .map(|(name, quota)| {
                 Row::new([
@@ -743,48 +813,33 @@ impl App {
         .column_spacing(1);
         frame.render_widget(table, chunks[1]);
 
-        let key = usage.account.key();
-        let points: &[u64] = self.histories.get(&key).map_or(&[], Vec::as_slice);
-        let bottom = Layout::horizontal([
-            Constraint::Length(58),
-            Constraint::Length(22),
-            Constraint::Min(8),
-        ])
-        .split(chunks[2]);
-        let rates = self.rates.get(&key).cloned().unwrap_or_default();
+        let selected_keys = selected
+            .iter()
+            .map(|usage| usage.account.key())
+            .collect::<Vec<_>>();
+        let rates = if selected_keys.len() == 1 {
+            self.rates
+                .get(&selected_keys[0])
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            aggregate_rate_summaries(selected_keys.iter().filter_map(|key| self.rates.get(key)))
+        };
+        let graph = aggregate_graph_series(
+            &self.series,
+            &selected_keys,
+            ZOOM_LEVELS[self.zoom].0,
+            CostState::now(),
+        );
+        let bottom =
+            Layout::horizontal([Constraint::Length(58), Constraint::Min(24)]).split(chunks[2]);
         frame.render_widget(Paragraph::new(rate_lines(&rates)), bottom[0]);
-        let span = self.history_times.get(&key).map_or_else(
-            || "no durable span".into(),
-            |(first, last)| {
-                format!(
-                    "{} span",
-                    duration_label(u64::try_from(last.saturating_sub(*first)).unwrap_or(0))
-                )
-            },
-        );
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(Span::styled("Durable history", Style::default().fg(MUTED))),
-                Line::from(Span::styled(
-                    format!("{} samples", rates.sample_count),
-                    Style::default().fg(FG),
-                )),
-                Line::from(Span::styled(span, Style::default().fg(FG))),
-                Line::from(Span::styled(
-                    rates.latest_sample_at.map_or_else(
-                        || "waiting".into(),
-                        |at| format!("latest {}", age_label(at)),
-                    ),
-                    Style::default().fg(MUTED),
-                )),
-            ]),
+        render_usage_graph(
+            frame,
             bottom[1],
-        );
-        frame.render_widget(
-            Sparkline::default()
-                .data(points)
-                .style(Style::default().fg(CYAN)),
-            bottom[2],
+            &graph,
+            ZOOM_LEVELS[self.zoom].1,
+            rates.sample_count,
         );
     }
 
@@ -792,18 +847,36 @@ impl App {
         let countdown = self.countdown_label();
         let line = Line::from(vec![
             Span::styled(
-                "  ←/→ 1–9",
+                "  ←/→",
                 Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" select   ", Style::default().fg(MUTED)),
+            Span::styled(" focus  ", Style::default().fg(MUTED)),
+            Span::styled(
+                "Space/1–9",
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" toggle  ", Style::default().fg(MUTED)),
+            Span::styled(
+                "+/-",
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {}  ", ZOOM_LEVELS[self.zoom].1),
+                Style::default().fg(MUTED),
+            ),
             Span::styled("r", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
-            Span::styled(" refresh   ", Style::default().fg(MUTED)),
+            Span::styled(" refresh  ", Style::default().fg(MUTED)),
             Span::styled("?", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
-            Span::styled(" help   ", Style::default().fg(MUTED)),
+            Span::styled(" help  ", Style::default().fg(MUTED)),
             Span::styled("q", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
             Span::styled(" quit", Style::default().fg(MUTED)),
             Span::styled(
-                format!("     {} · {countdown}", self.status),
+                format!(
+                    "   {}/{} selected · {} · {countdown}",
+                    self.included.len(),
+                    self.usages.len(),
+                    self.status
+                ),
                 Style::default().fg(if self.busy { YELLOW } else { GREEN }),
             ),
         ]);
@@ -814,7 +887,7 @@ impl App {
     }
 
     fn render_help(frame: &mut Frame<'_>, area: Rect) {
-        let popup = centered_rect(76, 18, area);
+        let popup = centered_rect(78, 21, area);
         frame.render_widget(Clear, popup);
         let help = Text::from(vec![
             Line::from(Span::styled(
@@ -825,8 +898,10 @@ impl App {
             Line::raw("Normal mode reads daemon/cache snapshots; the daemon alone polls"),
             Line::raw("/copilot_internal/user and records owner-only JSONL history."),
             Line::default(),
-            help_line("←/→ · h/l · j/k", "Select account"),
-            help_line("1–9", "Select account directly"),
+            help_line("←/→ · h/l · j/k", "Move account focus"),
+            help_line("Space · Enter · 1–9", "Toggle account in aggregate"),
+            help_line("a / x", "Select all / focused account only"),
+            help_line("+ / -", "Zoom graph in / out"),
             help_line("r", "Request a daemon refresh (or standalone refresh)"),
             help_line("? / Esc", "Close this help"),
             help_line("q / Ctrl-C", "Quit"),
@@ -853,6 +928,258 @@ impl App {
             popup,
         );
     }
+}
+
+fn aggregate_usage(usages: &[&AccountUsage]) -> AccountUsage {
+    if let [usage] = usages {
+        return (*usage).clone();
+    }
+    let mut quota_names = BTreeSet::new();
+    for usage in usages {
+        quota_names.extend(usage.quotas.keys().cloned());
+    }
+    let mut quotas = BTreeMap::new();
+    for name in quota_names {
+        let values = usages
+            .iter()
+            .filter_map(|usage| usage.quotas.get(&name))
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            continue;
+        }
+        let entitlement = values.iter().map(|quota| quota.entitlement).sum::<f64>();
+        let remaining = values
+            .iter()
+            .map(|quota| quota.remaining_value())
+            .sum::<f64>();
+        let reset_markers = values
+            .iter()
+            .map(|quota| quota.reset_marker())
+            .filter(|marker| !marker.is_empty())
+            .collect::<BTreeSet<_>>();
+        quotas.insert(
+            name.clone(),
+            Quota {
+                id: name,
+                credits_used: values.iter().map(|quota| quota.credits_used).sum(),
+                entitlement,
+                remaining,
+                available: remaining,
+                percent_remaining: if entitlement > 0.0 {
+                    remaining / entitlement * 100.0
+                } else {
+                    100.0
+                },
+                overage_count: values.iter().map(|quota| quota.overage_count).sum(),
+                overage_entitlement: values.iter().map(|quota| quota.overage_entitlement).sum(),
+                overage_permitted: values.iter().any(|quota| quota.overage_permitted),
+                unlimited: values.iter().all(|quota| quota.unlimited),
+                token_based_billing: values.iter().any(|quota| quota.token_based_billing),
+                timestamp_utc: values
+                    .iter()
+                    .map(|quota| quota.timestamp_utc.as_str())
+                    .max()
+                    .unwrap_or_default()
+                    .into(),
+                reset_at: if reset_markers.len() == 1 {
+                    serde_json::Value::String(reset_markers.into_iter().next().unwrap_or_default())
+                } else {
+                    serde_json::Value::String("mixed cycles".into())
+                },
+            },
+        );
+    }
+    AccountUsage {
+        account: AccountId {
+            login: format!("{} selected", usages.len()),
+            host: "aggregate".into(),
+        },
+        login: "aggregate".into(),
+        plan: format!("{} accounts", usages.len()),
+        sku: "combined Copilot quota".into(),
+        assigned_date: format!("{} accounts", usages.len()),
+        quotas,
+        refreshed_at: usages
+            .iter()
+            .map(|usage| usage.refreshed_at)
+            .max()
+            .unwrap_or_default(),
+        error: usages.iter().any(|usage| usage.error.is_some()).then(|| {
+            format!(
+                "{} stale",
+                usages.iter().filter(|usage| usage.error.is_some()).count()
+            )
+        }),
+    }
+}
+
+fn aggregate_graph_series(
+    series: &BTreeMap<String, Vec<ChartPoint>>,
+    keys: &[String],
+    window_secs: Option<i64>,
+    now: i64,
+) -> Vec<ChartPoint> {
+    let selected = keys
+        .iter()
+        .filter_map(|key| series.get(key))
+        .filter(|points| !points.is_empty())
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Vec::new();
+    }
+    let requested_start = window_secs.map_or(i64::MIN, |seconds| now.saturating_sub(seconds));
+    let start = selected
+        .iter()
+        .filter_map(|points| points.first().map(|point| point.captured_at))
+        .max()
+        .unwrap_or(requested_start)
+        .max(requested_start);
+    let mut timestamps = BTreeSet::from([start]);
+    for points in &selected {
+        timestamps.extend(
+            points
+                .iter()
+                .filter(|point| point.captured_at >= start)
+                .map(|point| point.captured_at),
+        );
+    }
+    timestamps
+        .into_iter()
+        .filter_map(|captured_at| {
+            let values = selected
+                .iter()
+                .map(|points| {
+                    let end = points.partition_point(|point| point.captured_at <= captured_at);
+                    end.checked_sub(1).map(|index| points[index].credits_used)
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(ChartPoint {
+                captured_at,
+                credits_used: values.into_iter().sum(),
+            })
+        })
+        .collect()
+}
+
+fn render_usage_graph(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    points: &[ChartPoint],
+    zoom_label: &str,
+    sample_count: usize,
+) {
+    if area.width < 24 || area.height < 6 {
+        frame.render_widget(
+            Paragraph::new(format!("Usage graph · {zoom_label} · expand terminal"))
+                .style(Style::default().fg(MUTED)),
+            area,
+        );
+        return;
+    }
+    frame.render_widget(Clear, area);
+    let label_width = 10_u16.min(area.width.saturating_sub(14));
+    let axis_x = area.x.saturating_add(label_width);
+    let plot_left = axis_x.saturating_add(1);
+    let plot_right = area.right().saturating_sub(1);
+    let plot_top = area.y.saturating_add(1);
+    let axis_y = area.bottom().saturating_sub(2);
+    let plot_bottom = axis_y.saturating_sub(1);
+    let plot_width = plot_right.saturating_sub(plot_left).max(1);
+    let plot_height = plot_bottom.saturating_sub(plot_top).max(1);
+    let style = Style::default().fg(MUTED);
+    let graph_style = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
+    let buffer = frame.buffer_mut();
+    buffer.set_string(
+        area.x,
+        area.y,
+        format!("Usage value · zoom {zoom_label} · {sample_count} durable samples"),
+        Style::default().fg(MUTED),
+    );
+    for y in plot_top..=axis_y {
+        buffer[(axis_x, y)].set_symbol("│").set_style(style);
+    }
+    buffer[(axis_x, axis_y)].set_symbol("└").set_style(style);
+    for x in plot_left..=plot_right {
+        buffer[(x, axis_y)].set_symbol("─").set_style(style);
+    }
+    if points.is_empty() {
+        buffer.set_string(
+            plot_left,
+            plot_top,
+            "waiting for durable history",
+            Style::default().fg(YELLOW),
+        );
+        return;
+    }
+    let dollars = points
+        .iter()
+        .map(|point| point.credits_used * 0.01)
+        .collect::<Vec<_>>();
+    let minimum = dollars.iter().copied().fold(f64::INFINITY, f64::min);
+    let maximum = dollars.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let value_range = (maximum - minimum).max(1.0);
+    let first_at = points.first().map_or(0, |point| point.captured_at);
+    let last_at = points.last().map_or(first_at, |point| point.captured_at);
+    let time_range = last_at.saturating_sub(first_at).max(1);
+    let mut columns = BTreeMap::new();
+    for (point, value) in points.iter().zip(&dollars) {
+        let x_offset = u16::try_from(
+            point
+                .captured_at
+                .saturating_sub(first_at)
+                .saturating_mul(i64::from(plot_width))
+                .div_euclid(time_range),
+        )
+        .unwrap_or(plot_width)
+        .min(plot_width);
+        let y_offset = ((*value - minimum) / value_range * f64::from(plot_height)).round();
+        let y_offset = rounded_u16(y_offset).min(plot_height);
+        columns.insert(
+            plot_left.saturating_add(x_offset).min(plot_right),
+            plot_bottom.saturating_sub(y_offset),
+        );
+    }
+    let mut previous = None;
+    for (x, y) in columns {
+        if let Some((old_x, old_y)) = previous {
+            let distance = x.saturating_sub(old_x).max(1);
+            for step in 1..distance {
+                let ratio = f64::from(step) / f64::from(distance);
+                let interpolated = f64::from(old_y) + (f64::from(y) - f64::from(old_y)) * ratio;
+                let line_y = rounded_u16(interpolated);
+                buffer[(old_x.saturating_add(step), line_y)]
+                    .set_symbol("·")
+                    .set_style(graph_style);
+            }
+        }
+        buffer[(x, y)].set_symbol("●").set_style(graph_style);
+        previous = Some((x, y));
+    }
+    buffer.set_string(
+        area.x,
+        plot_top,
+        format!("{:>9}", format_currency(maximum)),
+        Style::default().fg(YELLOW),
+    );
+    buffer.set_string(
+        area.x,
+        plot_bottom,
+        format!("{:>9}", format_currency(minimum)),
+        Style::default().fg(YELLOW),
+    );
+    let first = dollars.first().copied().unwrap_or_default();
+    let last = dollars.last().copied().unwrap_or(first);
+    buffer.set_string(
+        area.x,
+        axis_y.saturating_add(1),
+        format!(
+            "{zoom_label}  {} → {}  Δ {}",
+            format_currency(first),
+            format_currency(last),
+            format_currency((last - first).max(0.0))
+        ),
+        Style::default().fg(FG),
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -1201,7 +1528,7 @@ pub fn demo_state() -> CostState {
             });
         }
     }
-    let (series, rates) = summarize(&history, 576, now);
+    let (series, rates) = summarize(&history, 2_048, now);
     CostState {
         usages,
         series,
@@ -1270,13 +1597,6 @@ fn demo_usages() -> Vec<AccountUsage> {
         .collect()
 }
 
-fn credit_sample(value: f64) -> u64 {
-    if !value.is_finite() || value <= 0.0 {
-        return 0;
-    }
-    format!("{value:.0}").parse().unwrap_or(u64::MAX)
-}
-
 fn format_number(value: f64) -> String {
     let value = value.max(0.0);
     if value >= 1_000_000_000.0 {
@@ -1290,6 +1610,23 @@ fn format_number(value: f64) -> String {
     } else {
         format!("{value:.0}")
     }
+}
+
+fn delta_label(delta: Option<f64>) -> String {
+    delta.map_or_else(
+        || "  Δ — AIC / — $".into(),
+        |credits| {
+            format!(
+                "  Δ +{} AIC / +{}",
+                format_number(credits),
+                format_currency(credits * 0.01)
+            )
+        },
+    )
+}
+
+fn rounded_u16(value: f64) -> u16 {
+    format!("{:.0}", value.max(0.0)).parse().unwrap_or(u16::MAX)
 }
 
 fn rate_lines(rates: &RateSummary) -> Vec<Line<'static>> {
@@ -1454,7 +1791,48 @@ mod tests {
         assert!(output.contains("msft.ghe.com"));
         assert!(output.contains("2.06M"));
         assert!(output.contains("AI credits"));
+        assert!(output.contains("Δ — AIC / — $"));
         assert!(output.contains("Spend rates"));
+        assert!(output.contains("Aggregate · 4 selected accounts"));
+        assert!(output.contains("Usage value · zoom 24h"));
+        assert!(output.contains('└'));
+    }
+
+    #[test]
+    fn account_selection_is_multi_select_with_a_nonempty_invariant() {
+        let state = demo_state();
+        let mut app = App::new(state.usages, 300, false);
+        assert_eq!(app.included.len(), 4);
+        app.toggle_account(0);
+        assert_eq!(app.included.len(), 3);
+        app.focus_only();
+        assert_eq!(app.included.len(), 1);
+        app.toggle_account(app.selected);
+        assert_eq!(app.included.len(), 1);
+        app.select_all();
+        assert_eq!(app.included.len(), 4);
+    }
+
+    #[test]
+    fn arbitrary_selected_accounts_aggregate_quota_and_graph_values() {
+        let state = demo_state();
+        let selected = state.usages.iter().take(2).collect::<Vec<_>>();
+        let aggregate = aggregate_usage(&selected);
+        let expected = selected
+            .iter()
+            .filter_map(|usage| usage.premium())
+            .map(|quota| quota.credits_used)
+            .sum::<f64>();
+        assert!((aggregate.premium().unwrap().credits_used - expected).abs() < f64::EPSILON);
+        let keys = selected
+            .iter()
+            .map(|usage| usage.account.key())
+            .collect::<Vec<_>>();
+        let graph =
+            aggregate_graph_series(&state.series, &keys, Some(24 * 60 * 60), CostState::now());
+        assert!(graph.len() >= 2);
+        assert!(graph.first().unwrap().credits_used > 0.0);
+        assert!(graph.last().unwrap().credits_used >= graph.first().unwrap().credits_used);
     }
 
     #[test]
@@ -1462,6 +1840,7 @@ mod tests {
         assert_eq!(format_number(50_000_000.0), "50.00M");
         assert_eq!(format_number(738_344.0), "738.3K");
         assert_eq!(format_currency(20_616.18), "$20.6K");
+        assert_eq!(delta_label(Some(603.0)), "  Δ +603 AIC / +$6.03");
     }
 
     #[test]
