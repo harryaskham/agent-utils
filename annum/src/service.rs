@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
@@ -16,6 +17,7 @@ const CHAT_MESSAGE_SELECT: &str =
     "id,createdDateTime,lastModifiedDateTime,from,body,messageType,replyToId,webUrl,importance";
 const TEAM_SELECT: &str = "id,displayName,description,webUrl";
 const CHANNEL_SELECT: &str = "id,displayName,description,membershipType,webUrl";
+const MAX_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct WorkIqService {
@@ -475,16 +477,47 @@ fn parse_email(value: &Value) -> Address {
     }
 }
 
+struct FlatTableFactory;
+
+impl html2md::TagHandlerFactory for FlatTableFactory {
+    fn instantiate(&self) -> Box<dyn html2md::TagHandler> {
+        // html2md's TableHandler recursively re-walks nested Outlook layout
+        // tables and can expand pathologically. DummyHandler still walks every
+        // descendant once, preserving cell text without table formatting.
+        Box::new(html2md::dummy::DummyHandler)
+    }
+}
+
 fn body_markdown(body: Option<&Value>) -> String {
     let Some(body) = body else {
         return String::new();
     };
     let content = string(body, "content");
-    if string(body, "contentType").eq_ignore_ascii_case("html") {
-        html2md::parse_html(&content)
+    let (content, truncated) = bounded_utf8(&content, MAX_BODY_BYTES);
+    let mut output = if string(body, "contentType").eq_ignore_ascii_case("html") {
+        let custom: HashMap<String, Box<dyn html2md::TagHandlerFactory>> =
+            [("table".into(), Box::new(FlatTableFactory) as _)]
+                .into_iter()
+                .collect();
+        html2md::parse_html_custom(content, &custom)
     } else {
-        content
+        content.to_string()
+    };
+    if truncated {
+        output.push_str("\n\n[body truncated by Annum]");
     }
+    output
+}
+
+fn bounded_utf8(value: &str, maximum: usize) -> (&str, bool) {
+    if value.len() <= maximum {
+        return (value, false);
+    }
+    let mut end = maximum;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&value[..end], true)
 }
 
 fn string(value: &Value, key: &str) -> String {
@@ -548,6 +581,35 @@ mod tests {
         assert_eq!(mail.from.name, "Ada");
         assert!(mail.body_markdown.contains("**world**"));
         assert!(!mail.body_markdown.contains("<b>"));
+    }
+
+    #[test]
+    fn nested_outlook_layout_tables_are_flattened_once() {
+        let mut content = String::new();
+        for _ in 0..200 {
+            content.push_str("<table><tr><td>");
+        }
+        content.push_str("bounded body");
+        for _ in 0..200 {
+            content.push_str("</td></tr></table>");
+        }
+        let markdown = body_markdown(Some(&json!({
+            "contentType": "html",
+            "content": content,
+        })));
+        assert!(markdown.contains("bounded body"));
+        assert!(markdown.len() < 1_000);
+    }
+
+    #[test]
+    fn oversized_bodies_are_utf8_safely_bounded() {
+        let content = "é".repeat(MAX_BODY_BYTES);
+        let markdown = body_markdown(Some(&json!({
+            "contentType": "text",
+            "content": content,
+        })));
+        assert!(markdown.ends_with("[body truncated by Annum]"));
+        assert!(markdown.len() <= MAX_BODY_BYTES + 64);
     }
 
     #[test]
