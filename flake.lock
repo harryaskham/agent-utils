@@ -1,101 +1,5 @@
 {
   "nodes": {
-    "annum": {
-      "inputs": {
-        "configurable-cli-src": "configurable-cli-src",
-        "flake-utils": [
-          "flake-utils"
-        ],
-        "kittui-src": "kittui-src",
-        "mcp-cli-src": "mcp-cli-src",
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "remote-cli": "remote-cli"
-      },
-      "locked": {
-        "path": "./annum",
-        "type": "path"
-      },
-      "original": {
-        "path": "./annum",
-        "type": "path"
-      },
-      "parent": []
-    },
-    "configurable-cli-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785888722,
-        "narHash": "sha256-Lk8CvGUa/ujExWbA5y16VaOxslanN+WZ3IewgkWImsc=",
-        "ref": "refs/heads/main",
-        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
-        "revCount": 2,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/configurable-cli"
-      },
-      "original": {
-        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/configurable-cli"
-      }
-    },
-    "configurable-cli-src_2": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785888722,
-        "narHash": "sha256-Lk8CvGUa/ujExWbA5y16VaOxslanN+WZ3IewgkWImsc=",
-        "ref": "refs/heads/main",
-        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
-        "revCount": 2,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/configurable-cli"
-      },
-      "original": {
-        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/configurable-cli"
-      }
-    },
-    "configurable-cli-src_3": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785888722,
-        "narHash": "sha256-Lk8CvGUa/ujExWbA5y16VaOxslanN+WZ3IewgkWImsc=",
-        "ref": "refs/heads/main",
-        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
-        "revCount": 2,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/configurable-cli"
-      },
-      "original": {
-        "rev": "ed0a5be165f861bb58c81e22fed44153af519060",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/configurable-cli"
-      }
-    },
-    "cost-tui": {
-      "inputs": {
-        "configurable-cli-src": "configurable-cli-src_2",
-        "flake-utils": [
-          "flake-utils"
-        ],
-        "kittui-src": "kittui-src_2",
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "remote-cli": "remote-cli_2"
-      },
-      "locked": {
-        "path": "./cost-tui",
-        "type": "path"
-      },
-      "original": {
-        "path": "./cost-tui",
-        "type": "path"
-      },
-      "parent": []
-    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -112,57 +16,6 @@
         "owner": "numtide",
         "repo": "flake-utils",
         "type": "github"
-      }
-    },
-    "kittui-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785748268,
-        "narHash": "sha256-1hybr7r3wS7/JoSxIZtiSgVtJq850VjgbghXre/7+U8=",
-        "ref": "refs/heads/main",
-        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
-        "revCount": 3239,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/kittui"
-      },
-      "original": {
-        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/kittui"
-      }
-    },
-    "kittui-src_2": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785748268,
-        "narHash": "sha256-1hybr7r3wS7/JoSxIZtiSgVtJq850VjgbghXre/7+U8=",
-        "ref": "refs/heads/main",
-        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
-        "revCount": 3239,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/kittui"
-      },
-      "original": {
-        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/kittui"
-      }
-    },
-    "kittui-src_3": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785748268,
-        "narHash": "sha256-1hybr7r3wS7/JoSxIZtiSgVtJq850VjgbghXre/7+U8=",
-        "ref": "refs/heads/main",
-        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
-        "revCount": 3239,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/kittui"
-      },
-      "original": {
-        "rev": "fab4b7e39cfe5f515c68ce1188979864b3c632d5",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/kittui"
       }
     },
     "linear-extra": {
@@ -192,40 +45,6 @@
         "type": "path"
       },
       "parent": []
-    },
-    "mcp-cli-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785482795,
-        "narHash": "sha256-IZ9SX1iUWYv8mUufYVWiEOvVC55peViCnGTcdqpCMBs=",
-        "ref": "refs/heads/main",
-        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
-        "revCount": 52,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/mcp-cli"
-      },
-      "original": {
-        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/mcp-cli"
-      }
-    },
-    "mcp-cli-src_2": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785482795,
-        "narHash": "sha256-IZ9SX1iUWYv8mUufYVWiEOvVC55peViCnGTcdqpCMBs=",
-        "ref": "refs/heads/main",
-        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
-        "revCount": 52,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/mcp-cli"
-      },
-      "original": {
-        "rev": "81e55235df7d7335d4dc7bd1095131246d157a2a",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/mcp-cli"
-      }
     },
     "nixpkgs": {
       "locked": {
@@ -308,121 +127,17 @@
         "type": "github"
       }
     },
-    "remote-cli": {
-      "inputs": {
-        "flake-utils": [
-          "annum",
-          "flake-utils"
-        ],
-        "nixpkgs": [
-          "annum",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1786103059,
-        "narHash": "sha256-P2g4nIuxRVeLASTm7WnHzeB5qNqvxPJDGbuj4HxWzes=",
-        "ref": "refs/heads/main",
-        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
-        "revCount": 6,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/remote-cli"
-      },
-      "original": {
-        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/remote-cli"
-      }
-    },
-    "remote-cli_2": {
-      "inputs": {
-        "flake-utils": [
-          "cost-tui",
-          "flake-utils"
-        ],
-        "nixpkgs": [
-          "cost-tui",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1786103059,
-        "narHash": "sha256-P2g4nIuxRVeLASTm7WnHzeB5qNqvxPJDGbuj4HxWzes=",
-        "ref": "refs/heads/main",
-        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
-        "revCount": 6,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/remote-cli"
-      },
-      "original": {
-        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/remote-cli"
-      }
-    },
-    "remote-cli_3": {
-      "inputs": {
-        "flake-utils": [
-          "slick",
-          "flake-utils"
-        ],
-        "nixpkgs": [
-          "slick",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1786103059,
-        "narHash": "sha256-P2g4nIuxRVeLASTm7WnHzeB5qNqvxPJDGbuj4HxWzes=",
-        "ref": "refs/heads/main",
-        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
-        "revCount": 6,
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/remote-cli"
-      },
-      "original": {
-        "rev": "91d6994ef6103e6a0498930140e112b4f7f492eb",
-        "type": "git",
-        "url": "ssh://git@github.com/harryaskham/remote-cli"
-      }
-    },
     "root": {
       "inputs": {
-        "annum": "annum",
-        "cost-tui": "cost-tui",
         "flake-utils": "flake-utils",
         "linear-extra": "linear-extra",
         "nixpkgs": "nixpkgs",
         "pi-wasm": "pi-wasm",
         "pyproject-build-systems": "pyproject-build-systems",
         "pyproject-nix": "pyproject-nix",
-        "slick": "slick",
         "uv2nix": "uv2nix",
         "web-search": "web-search"
       }
-    },
-    "slick": {
-      "inputs": {
-        "configurable-cli-src": "configurable-cli-src_3",
-        "flake-utils": [
-          "flake-utils"
-        ],
-        "kittui-src": "kittui-src_3",
-        "mcp-cli-src": "mcp-cli-src_2",
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "remote-cli": "remote-cli_3"
-      },
-      "locked": {
-        "path": "./slick",
-        "type": "path"
-      },
-      "original": {
-        "path": "./slick",
-        "type": "path"
-      },
-      "parent": []
     },
     "systems": {
       "locked": {

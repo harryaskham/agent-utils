@@ -41,24 +41,6 @@
       inputs.pyproject-build-systems.follows = "pyproject-build-systems";
     };
 
-    slick = {
-      url = "path:./slick";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
-    };
-
-    annum = {
-      url = "path:./annum";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
-    };
-
-    cost-tui = {
-      url = "path:./cost-tui";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
-    };
-
     # pi-wasm: in-browser Pi agent loop subproject (epic bd-f76cee). Node/Vite
     # subflake; only needs nixpkgs + flake-utils (no python/uv2nix toolchain).
     pi-wasm = {
@@ -68,7 +50,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, slick, annum, cost-tui, pi-wasm, ... }:
+  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, pi-wasm, ... }:
     let
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -87,32 +69,17 @@
           allPackages = [
             web-search.packages.${system}.web-search-mcp
             linear-extra.packages.${system}.linear-extra-mcp
-            slick.packages.${system}.slick
-            annum.packages.${system}.annum
-            cost-tui.packages.${system}.cost-tui
             skillServer
           ];
           withoutChecks = package: package.overrideAttrs (_: {
             doCheck = false;
           });
-          binOnly = name: package: pkgs.buildEnv {
-            inherit name;
-            paths = [ package ];
-            pathsToLink = [ "/bin" ];
-            meta = package.meta or {};
-          };
           webSearchUnchecked = withoutChecks web-search.packages.${system}.web-search-mcp;
           linearExtraUnchecked = withoutChecks linear-extra.packages.${system}.linear-extra-mcp;
-          slickUnchecked = binOnly "slick-unchecked" (withoutChecks slick.packages.${system}.slick);
-          annumUnchecked = binOnly "annum-unchecked" (withoutChecks annum.packages.${system}.annum);
-          costTuiUnchecked = withoutChecks cost-tui.packages.${system}.cost-tui;
           skillServerUnchecked = withoutChecks skillServer;
           uncheckedPackages = [
             webSearchUnchecked
             linearExtraUnchecked
-            slickUnchecked
-            annumUnchecked
-            costTuiUnchecked
             skillServerUnchecked
           ];
           uncheckedJoin = pkgs.symlinkJoin {
@@ -135,12 +102,6 @@
           web-search-mcp-unchecked = webSearchUnchecked;
           linear-extra-mcp = linear-extra.packages.${system}.linear-extra-mcp;
           linear-extra-mcp-unchecked = linearExtraUnchecked;
-          slick = slick.packages.${system}.slick;
-          slick-unchecked = slickUnchecked;
-          annum = annum.packages.${system}.annum;
-          annum-unchecked = annumUnchecked;
-          cost-tui = cost-tui.packages.${system}.cost-tui;
-          cost-tui-unchecked = costTuiUnchecked;
           skill-server = skillServer;
           skill-server-unchecked = skillServerUnchecked;
           skill-search = skillServer;
@@ -152,34 +113,18 @@
           pi-wasm-serve = pi-wasm.packages.${system}.pi-wasm-serve;
         });
 
-      # Consumer overlay: install the one non-overlapping aggregate for user
-      # profiles, while daemon modules resolve their individual unchecked
-      # binary-only packages through pkgs.slick / pkgs.annum.
+      # Consumer overlay for the remaining agent-utils binaries. Standalone
+      # applications such as Slick, Annum, and Cost own their own overlays.
       overlays.default = final: prev: let
         packages = self.packages.${prev.system};
       in {
         agent-utils = packages.unchecked;
-        slick = packages.slick-unchecked;
-        annum = packages.annum-unchecked;
-        cost-tui = packages.cost-tui-unchecked;
         web-search-mcp = packages.web-search-mcp-unchecked;
         linear-extra-mcp = packages.linear-extra-mcp-unchecked;
         skill-server = packages.skill-server-unchecked;
         skill-search = packages.skill-search-unchecked;
       };
       overlays.unchecked = self.overlays.default;
-
-      # Re-export Slick's cross-platform daemon modules so consumers only need
-      # the agent-utils root flake.
-      nixosModules.slick = slick.nixosModules.slick;
-      darwinModules.slick = slick.darwinModules.slick;
-      nixOnDroidModules.slick = slick.nixOnDroidModules.slick;
-      nixosModules.annum = annum.nixosModules.annum;
-      darwinModules.annum = annum.darwinModules.annum;
-      nixOnDroidModules.annum = annum.nixOnDroidModules.annum;
-      nixosModules.cost-tui = cost-tui.nixosModules.cost-tui;
-      darwinModules.cost-tui = cost-tui.darwinModules.cost-tui;
-      nixOnDroidModules.cost-tui = cost-tui.nixOnDroidModules.cost-tui;
 
       apps = forAllSystems (system: {
         default = {
@@ -190,18 +135,6 @@
         linear-extra-mcp = {
           type = "app";
           program = "${self.packages.${system}.linear-extra-mcp}/bin/linear-extra-mcp";
-        };
-        slick = {
-          type = "app";
-          program = "${self.packages.${system}.slick}/bin/slick";
-        };
-        annum = {
-          type = "app";
-          program = "${self.packages.${system}.annum}/bin/annum";
-        };
-        cost-tui = {
-          type = "app";
-          program = "${self.packages.${system}.cost-tui}/bin/cost-tui";
         };
         skill-server = {
           type = "app";
