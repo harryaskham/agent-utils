@@ -18,6 +18,7 @@ import {
   resolveAzureSpeechCreds,
   synthesizeAzureSpeechDirect,
   resolveSpeakToolParams,
+  cascadeSpeechEnabled,
   DEFAULT_AZURE_SPEECH_ENDPOINT,
   assistantReplyText,
   pickLastAssistantReply,
@@ -333,6 +334,31 @@ test("resolveAzureSpeechCreds: endpoint defaults to eastus speech URL, key from 
   const b = resolveAzureSpeechCreds({ env: { AZURE_SPEECH_ENDPOINT: "https://westus.tts.speech.microsoft.com/", AZURE_SPEECH_API_KEY: "k1" } });
   assert.equal(b.endpoint, "https://westus.tts.speech.microsoft.com"); // trailing slash trimmed
   assert.equal(b.apiKey, "k1");
+});
+
+test("cascadeSpeechEnabled is backward-compatible when unset and fail-closed when configured", () => {
+  assert.equal(cascadeSpeechEnabled({ env: {} }), true);
+  assert.equal(cascadeSpeechEnabled({ env: { PI_CASCADE_SPEECH_ENABLED: "1" } }), true);
+  assert.equal(cascadeSpeechEnabled({ env: { PI_CASCADE_SPEECH_ENABLED: "true" } }), true);
+  for (const value of ["0", "false", "off", "unexpected"]) {
+    assert.equal(cascadeSpeechEnabled({ env: { PI_CASCADE_SPEECH_ENABLED: value } }), false, value);
+  }
+});
+
+test("synthesizeAzureSpeechDirect refuses disabled Cacophony policy before fetch even with explicit voice", async () => {
+  let fetched = false;
+  await assert.rejects(
+    synthesizeAzureSpeechDirect({
+      text: "must stay silent",
+      voice: "MAI-Voice-2",
+      endpoint: "https://eastus.tts.speech.microsoft.com",
+      apiKey: "secret-key",
+      env: { PI_CASCADE_SPEECH_ENABLED: "0" },
+      fetchImpl: async () => { fetched = true; throw new Error("must not fetch"); },
+    }),
+    /disabled by Cacophony node policy/,
+  );
+  assert.equal(fetched, false);
 });
 
 test("synthesizeAzureSpeechDirect: POSTs mstts SSML to /cognitiveservices/v1 with the subscription-key header and returns PCM", async () => {

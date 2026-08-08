@@ -193,6 +193,7 @@ import {
   synthesizeAzureSpeechDirect,
   resolveAzureSpeechCreds,
   resolveSpeakToolParams,
+  cascadeSpeechEnabled,
   assistantReplyText,
   pickLastAssistantReply,
   thinkingSummaryText,
@@ -2868,7 +2869,7 @@ export default function realtimeAgentExtension(pi) {
   let lastSpokenReplyKey = null;
   async function speakTextDirect(text, ctx) {
     const body = String(text || "").trim();
-    if (!body) return;
+    if (!body || !cascadeSpeechEnabled({ env: process.env })) return;
     const { voice, speakerProfileId, lang, speed } = resolveSpeakToolParams({ text: body }, { env: process.env });
     if (!voice) return; // no concrete Azure voice configured; stay silent rather than throw
     const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
@@ -3763,6 +3764,7 @@ export default function realtimeAgentExtension(pi) {
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         const { text, voice, speakerProfileId, lang, speed } = resolveSpeakToolParams(params, { env: process.env });
         if (!text) return { content: [{ type: "text", text: "speak: empty text" }] };
+        if (!cascadeSpeechEnabled({ env: process.env })) return { content: [{ type: "text", text: "speak: disabled by Cacophony node policy (speech.enabled=false)" }] };
         if (!voice) return { content: [{ type: "text", text: "speak: no voice — pass voice= or set PI_CASCADE_VOICE to a concrete Azure voice (e.g. MAI-Voice-2)" }] };
         const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
         try {

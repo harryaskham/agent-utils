@@ -271,6 +271,17 @@ export function resolveSpeakToolParams(params = {}, { env = process.env } = {}) 
   return { text, voice, speakerProfileId, lang, speed };
 }
 
+/// Cacophony-managed Pi runtimes export PI_CASCADE_SPEECH_ENABLED from the
+/// node's resolved speech policy (bd-8d6525 / agent-utils bd-107599). Absence
+/// stays backward-compatible for unmanaged Pi; an explicit false/unknown value
+/// fails closed so a caller cannot bypass node policy with `voice=`.
+export function cascadeSpeechEnabled({ env = process.env } = {}) {
+  const raw = env?.PI_CASCADE_SPEECH_ENABLED;
+  if (raw == null || String(raw).trim() === "") return true;
+  const normalized = String(raw).trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 // --- Auto-speak agent replies (bd-095b3d) ---
 //
 // When the operator is in a voice session (/rt stt local-vad feeds their speech
@@ -369,7 +380,11 @@ export async function synthesizeAzureSpeechDirect({
   fetchImpl,
   timeoutMs,
   signal,
+  env = process.env,
 } = {}) {
+  if (!cascadeSpeechEnabled({ env })) {
+    throw new Error("azure-speech: disabled by Cacophony node policy (speech.enabled=false)");
+  }
   const body = String(text ?? "");
   if (!body.trim()) throw new Error("azure-speech: refusing to synthesize empty text");
   const ep = String(endpoint ?? "").trim().replace(/\/+$/, "");
