@@ -272,6 +272,52 @@ Tuning knobs (all optional):
   so the echo is gated (bd-ddc391). On a slow TTS voice, raise `/rt energy=` if any
   tail still leaks.
 
+### Read the input editor aloud (`/read`)
+
+`/read` is a persistent editor-to-speech mode backed by the shared native Azure
+Speech library. It never routes through `caco msg speak` and never shells out to
+the `tts` CLI: text becomes SSML in-process, one bounded Azure REST call returns
+raw 24 kHz mono PCM, and an interruptible playback child plays it.
+
+Start with the shared defaults:
+
+```text
+/read
+```
+
+Or configure the complete voice in one command:
+
+```text
+/read provider=azure lang=en-GB base_url=$AZURE_SPEECH_ENDPOINT api_key=$AZURE_SPEECH_API_KEY speed=1.6 style=hopeful styledegree=1.53 embedding=0daec43c-911f-4529-820a-16dab73630d3 voice=MAI-Voice-2
+```
+
+Exact `$NAME` and `${NAME}` values are resolved from the Pi process environment;
+API keys are never included in status output. Defaults are `provider=azure`,
+`voice=MAI-Voice-2`, `lang=en-GB`, `speed=2`, the embedding shown above,
+`delay=2000`, `on_delay=true`, and `on_send=true`. Use `value=none` to remove an
+optional wrapper or override, for example `style=none speed=none embedding=none`.
+A missing style omits `<mstts:express-as>`, a missing speed omits `<prosody>`, and
+a missing embedding omits `<mstts:ttsembedding>`; supplied voices are honored
+verbatim rather than rewritten to another Azure base model.
+
+While the mode is active:
+
+- after the editor stops changing for `delay` milliseconds, the **whole current
+  buffer** is spoken;
+- another edit interrupts stale synthesis/playback and speaks the whole new
+  version after the next delay;
+- Enter speaks the whole submitted buffer again when `on_send=true`, even if the
+  delayed version already played;
+- `/read some words` remains a one-shot convenience and also enables the mode;
+- `/read status` reports redacted settings and `/read off` cancels timers,
+  synthesis, and playback.
+
+Playback defaults to `backend=pulse server=$PULSE_SERVER`, with `device` taken
+from `$PULSE_SINK` or Pulse's `@DEFAULT_SINK@` (currently `hw_output` in the
+operator setup). The raw-PCM `pacat` client and stream are both named `/read`, so the stream is easy
+to identify and route. A new version terminates the previous player before it
+starts. `backend=sox` and `backend=ffplay` remain available for local output.
+
 ### Spoken replies (force-agent-speech)
 
 `force-agent-speech` closes the other half of the hands-free loop: with `/rt stt
@@ -332,14 +378,13 @@ per-session voice, the realtime extension also registers a `speak` **tool** the
 agent can call directly: it synthesizes via the direct Azure Speech REST path
 (no daemon) in the configured cascade voice and plays locally.
 
-- Defaults come from `PI_CASCADE_VOICE` (a concrete Azure voice such as
-  `MAI-Voice-2`), `PI_CASCADE_SPEAKER` (mstts ttsembedding speakerProfileId),
-  `PI_CASCADE_LANG`, and `PI_CASCADE_SPEED`; the agent can override any per call.
-  `PI_CASCADE_SPEAK_VOICE` overrides just the speak-tool voice (it wins over
-  `PI_CASCADE_VOICE`) if you want the spoken-reply voice to differ from the
-  cascade roster voice.
-- A concrete voice is required (the cascade embedding sentinel is not a real
-  Azure voice). Azure creds come from `AZURE_SPEECH_API_KEY` /
+- Defaults come from the shared TTS library: `MAI-Voice-2`, embedding
+  `0daec43c-911f-4529-820a-16dab73630d3`, `en-GB`, and speed `2`.
+  `PI_CASCADE_VOICE`, `PI_CASCADE_SPEAKER`, `PI_CASCADE_LANG`, and
+  `PI_CASCADE_SPEED` override those defaults; the agent can override any per
+  call. `PI_CASCADE_SPEAK_VOICE` overrides just the speak-tool voice.
+- `style` and `styledegree` add Azure `<mstts:express-as>` without changing the
+  selected voice. Azure credentials come from `AZURE_SPEECH_API_KEY` and
   `AZURE_SPEECH_ENDPOINT` in the environment.
 
 Pair it with `/rt stt local-vad` so your speech becomes agent turns and the
@@ -377,7 +422,7 @@ daemon), this speaks the full reply via the fast direct-Azure REST path.
 **Architecture:** a single-agent voice loop (`n=1`) is just `stt local-vad` +
 `speak-replies` — both hit your real agent. `/cascade` is the multi-participant
 group-chat layer (`n>=2`, per-participant voices/models) built over the same
-primitives.
+native synthesis primitives.
 
 ### Replay the latest spoken response
 
@@ -393,8 +438,9 @@ The extension caches recent response PCM clips in memory. `/rt-play latest` repl
 `/cascade` is a multi-agent **voice group chat** (bd-7c6790): you speak once, then
 each participant takes one turn — in arbitrary order — and every agent hears you
 *and* everyone who already spoke that round, answering in its own synthesized
-voice. It is built from the local `stt` + `tts` CLIs directly (no daemon round
-trip), so each agent is speech-in, think, speech-out.
+voice. Speech output uses the same native Azure REST implementation as `/read`
+and the `speak` tool (no daemon or `tts` CLI round trip), so each agent is
+speech-in, think, speech-out.
 
 The widget shows the round live: a rolling **transcript** (`you: …`, then each
 agent), a **mic input-level meter** with a caret at the VAD speech threshold while
@@ -421,7 +467,7 @@ Start-time arguments (env-style `key=value`):
 | `participants=a,b` | named peers beyond main (`var,cedar` or `var[voice=...,model=...]`) |
 | `order=fixed\|random\|round-robin` | turn order each round (default `random`) |
 | `voice=` / `model=` / `base_url=` | overrides for the main participant |
-| `azure=true` | synthesize via the DIRECT Azure Speech REST API (no `tts` subprocess); see below |
+| `azure=true` | compatibility no-op; native Azure Speech REST is now always used |
 | `speaker=<profileId>` | Azure `mstts:ttsembedding` speaker profile id (personal/embedding voice) |
 | `lang=<locale>` | `xml:lang` for the SSML (e.g. `en-GB`) |
 | `pipeline=false` | disable concurrent-synthesis pipelining (also `PI_CASCADE_PIPELINE=0`); default on |
@@ -430,8 +476,8 @@ Start-time arguments (env-style `key=value`):
 Per-participant overrides use a bracket form, e.g.
 `participants=var[voice=cedar,model=haiku];cedar[base_url=http://...]`.
 
-Defaults: cascade gives every agent the caco azure/speech embedding voice unless
-overridden (so distinguish them by name/content, or pass distinct `voice=`). For
+Defaults: cascade gives every agent the shared `MAI-Voice-2` voice and embedding
+unless overridden (so distinguish them by name/content, or pass distinct `voice=`). For
 the **peer chat model**, an unpinned peer (no `model=`) now runs through Pi's own
 inference engine on the model already loaded in Pi (bd-15beec) — so `n=1` behaves
 like talking to the loaded Pi model and never hits the proxy's "no healthy
@@ -441,38 +487,36 @@ chat-completions default is `gpt-5-mini`, override with `PI_CASCADE_MODEL`; it i
 also the fallback for every peer when no Pi model/auth is available). The `say`
 verb is the no-microphone way to try a round.
 
-### Direct Azure Speech voices + embeddings (`azure=true`)
+### Native Azure Speech voices + embeddings
 
-`azure=true` makes cascade synthesize each turn with a **direct Azure Speech REST
-call** (`POST <AZURE_SPEECH_ENDPOINT>/cognitiveservices/v1`) instead of shelling
-out to the `tts` CLI. It sends an mstts SSML body and reads credentials from the
-environment — `AZURE_SPEECH_API_KEY` and `AZURE_SPEECH_ENDPOINT` (endpoint
-defaults to the eastus speech URL). The key is never typed in chat or hardcoded.
+Cascade synthesizes every turn with the shared **direct Azure Speech REST** path
+(`POST <AZURE_SPEECH_ENDPOINT>/cognitiveservices/v1`). The historical
+`azure=true` argument is still accepted but is now redundant: there is no `tts`
+CLI fallback. Credentials come from `AZURE_SPEECH_API_KEY` and
+`AZURE_SPEECH_ENDPOINT` (the endpoint otherwise falls back to the eastus Speech
+URL), and keys are never logged.
 
-A concrete Azure `voice=` is required (the cascade embedding sentinel is not a
-real Azure voice). To use a personal/embedding voice, pass the base voice name
-plus the `speaker=` profile id, which becomes an `<mstts:ttsembedding
-speakerProfileId=...>` wrapper around the text:
+To use a personal/embedding voice, pass the desired voice name plus `speaker=`.
+The voice is preserved exactly as supplied and the speaker profile becomes an
+`<mstts:ttsembedding speakerProfileId=...>` wrapper:
 
 ```text
 # one embedding voice, British English, a touch faster
-/cascade start n=1 azure=true voice=MAI-Voice-2 speaker=0daec43c-... lang=en-GB speed=1.2
+/cascade start n=1 voice=MAI-Voice-2 speaker=0daec43c-... lang=en-GB speed=1.2
 
-# a two-voice room, both direct-Azure (give each a distinct voice)
-/cascade start n=2 azure=true participants="Ava[voice=en-US-AvaMultilingualNeural];Andrew[voice=en-US-AndrewMultilingualNeural]"
+# a two-voice room (give each a distinct voice)
+/cascade start n=2 participants="Ava[voice=en-US-AvaMultilingualNeural];Andrew[voice=en-US-AndrewMultilingualNeural]"
 ```
 
-`speaker=` / `lang=` / `speed=` map to the SSML `<mstts:ttsembedding>`,
-`xml:lang`, and `<prosody rate>` respectively; omit `speaker=` for a plain named
-Azure voice. `azure=true` defaults every agent that did not set its own
-`provider=` to `azure-speech`.
+`speaker=` / `lang=` / `speed=` map to `<mstts:ttsembedding>`, `<lang
+xml:lang>`, and `<prosody rate>` respectively. `style=` plus `styledegree=` adds
+`<mstts:express-as>`. Every participant defaults to the native `azure` provider.
 
-> Latency note: synthesis is pipelined (concurrent TTS, ordered playback), which
-> roughly halves a multi-agent round; you can A/B it with `/cascade start
-> pipeline=false`. The remaining per-turn cost is the `tts` cold-spawn — a warm
-> resident tts path is tracked as a follow-up (bd-67b916). The fully audio-native
-> realtime version where agents hear each other as *audio* over parallel `/rt`
-> websockets is bd-07bb7f (blocked on the proxy's GA-realtime routing, bd-0b40ce).
+> Latency note: synthesis is pipelined (concurrent native HTTP synthesis,
+> ordered playback), which roughly halves a multi-agent round; you can A/B it
+> with `/cascade start pipeline=false`. The fully audio-native realtime version
+> where agents hear each other as *audio* over parallel `/rt` websockets is
+> bd-07bb7f.
 
 ## Status and diagnostics
 

@@ -1865,12 +1865,15 @@ test("agent_end with speak-thinking on does not throw (bd-551e93: thinkingSummar
     disable: process.env.PI_RT_DISABLE_AUDIO,
     voice: process.env.PI_CASCADE_VOICE,
     speakVoice: process.env.PI_CASCADE_SPEAK_VOICE,
+    speechEnabled: process.env.PI_CASCADE_SPEECH_ENABLED,
   };
   process.env.PI_RT_SPEAK_REPLIES = "1";
   process.env.PI_RT_SPEAK_THINKING = "1";
   delete process.env.PI_RT_DISABLE_AUDIO; // keep audioEnabled true so the hook proceeds
-  // No cascade voice -> speakTextDirect no-ops (no real Azure synth), but the hook
-  // still runs thinkingSummaryText + boundThinkingForSpeech, proving they resolve.
+  // The shared TTS library now has a concrete default voice, so explicitly apply
+  // the node speech-policy gate to keep this unit test network/audio-free. The
+  // hook still runs thinkingSummaryText + boundThinkingForSpeech first.
+  process.env.PI_CASCADE_SPEECH_ENABLED = "0";
   delete process.env.PI_CASCADE_VOICE;
   delete process.env.PI_CASCADE_SPEAK_VOICE;
   try {
@@ -1891,6 +1894,7 @@ test("agent_end with speak-thinking on does not throw (bd-551e93: thinkingSummar
       PI_RT_DISABLE_AUDIO: saved.disable,
       PI_CASCADE_VOICE: saved.voice,
       PI_CASCADE_SPEAK_VOICE: saved.speakVoice,
+      PI_CASCADE_SPEECH_ENABLED: saved.speechEnabled,
     };
     for (const [k, v] of Object.entries(restore)) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;

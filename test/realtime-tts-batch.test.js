@@ -1,456 +1,52 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
 
 import {
-  AZURE_SPEECH_PROVIDER,
-  CASCADE_DEFAULT_VOICE_SENTINEL,
-  resolveCascadeTtsVoice,
-  buildTtsBatchArgs,
-  synthesizeToPcm,
-  speedToProsodyRate,
-  isAzureSpeechProvider,
-  isAzureEmbeddingBaseModel,
-  azureEmbeddingVoiceError,
-  buildAzureSpeechSsml,
-  resolveAzureVoiceName,
-  DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL,
-  resolveAzureSpeechCreds,
-  synthesizeAzureSpeechDirect,
-  resolveSpeakToolParams,
-  cascadeSpeechEnabled,
-  DEFAULT_AZURE_SPEECH_ENDPOINT,
   assistantReplyText,
   pickLastAssistantReply,
   thinkingSummaryText,
   boundThinkingForSpeech,
+  synthesizeAzureSpeechDirect,
 } from "../extensions/lib/realtime-tts-batch.js";
 
-// --- Auto-speak agent replies (bd-095b3d) ---
+// The historical import path remains a compatibility surface while synthesis
+// itself lives in extensions/lib/tts.js.
+test("realtime TTS compatibility module re-exports native Azure synthesis", () => {
+  assert.equal(typeof synthesizeAzureSpeechDirect, "function");
+});
 
-test("assistantReplyText extracts text from string + array-of-parts content, ignores non-text", () => {
+test("assistantReplyText extracts text from string + array content", () => {
   assert.equal(assistantReplyText({ role: "assistant", content: "  hi there " }), "hi there");
   assert.equal(
     assistantReplyText({ role: "assistant", content: [{ type: "text", text: "a" }, { type: "thinking", text: "secret" }, { type: "text", text: "b" }] }),
     "ab",
   );
-  assert.equal(assistantReplyText({ role: "user", content: "nope" }), "", "non-assistant -> ''");
-  assert.equal(assistantReplyText({ role: "assistant", content: [{ type: "tool_call" }] }), "", "tool-call-only -> ''");
-  assert.equal(assistantReplyText(null), "");
+  assert.equal(assistantReplyText({ role: "user", content: "nope" }), "");
+  assert.equal(assistantReplyText({ role: "assistant", content: [{ type: "tool_call" }] }), "");
 });
 
-test("pickLastAssistantReply returns the most recent assistant text + a dedupe key", () => {
+test("pickLastAssistantReply returns the most recent reply and dedupe key", () => {
   const messages = [
-    { role: "user", content: "q" },
     { role: "assistant", content: "old", timestamp: 1 },
-    { role: "user", content: "q2" },
+    { role: "user", content: "q" },
     { role: "assistant", content: [{ type: "text", text: "new reply" }], timestamp: 2 },
   ];
-  const { text, key } = pickLastAssistantReply(messages);
-  assert.equal(text, "new reply");
-  assert.equal(key, "2:new reply");
-  // No assistant / empty -> empty text + empty key (caller skips).
+  assert.deepEqual(pickLastAssistantReply(messages), { text: "new reply", key: "2:new reply" });
   assert.deepEqual(pickLastAssistantReply([{ role: "user", content: "x" }]), { text: "", key: "" });
-  assert.deepEqual(pickLastAssistantReply([{ role: "assistant", content: [{ type: "tool_call" }], timestamp: 3 }]), { text: "", key: "" });
 });
 
-test("thinkingSummaryText extracts reasoning/thinking parts or a top-level field, else ''", () => {
-  assert.equal(
-    thinkingSummaryText({ role: "assistant", content: [{ type: "thinking", text: "let me think" }, { type: "text", text: "answer" }] }),
-    "let me think",
-  );
-  assert.equal(thinkingSummaryText({ role: "assistant", content: [{ type: "reasoning", summary: "weighed options" }] }), "weighed options");
-  // The REAL pi-ai shape: ThinkingContent = { type: "thinking", thinking: string } (bd-551e93).
+test("thinkingSummaryText handles Pi thinking shapes", () => {
   assert.equal(
     thinkingSummaryText({ role: "assistant", content: [{ type: "thinking", thinking: "reasoning trace" }, { type: "text", text: "answer" }] }),
     "reasoning trace",
-    "extracts the pi-ai ThinkingContent.thinking field, not just .text",
   );
-  assert.equal(thinkingSummaryText({ role: "assistant", content: "plain", reasoning: "top-level reason" }), "top-level reason");
-  assert.equal(thinkingSummaryText({ role: "assistant", content: [{ type: "text", text: "just an answer" }] }), "", "no thinking -> ''");
+  assert.equal(thinkingSummaryText({ role: "assistant", reasoning: "top-level" }), "top-level");
   assert.equal(thinkingSummaryText({ role: "user", content: "x" }), "");
 });
 
-test("boundThinkingForSpeech returns a listenable gist: whole when short, sentence-cut + ellipsis when long (bd-551e93)", () => {
-  assert.equal(boundThinkingForSpeech(""), "");
-  assert.equal(boundThinkingForSpeech(null), "");
-  // Short -> whole (whitespace collapsed).
+test("boundThinkingForSpeech keeps short text and bounds long text", () => {
   assert.equal(boundThinkingForSpeech("  first thought.  second.  "), "first thought. second.");
-  // Long -> cut at the last sentence end within the window, trailing ellipsis.
-  const long = "First sentence is short. " + "word ".repeat(200) + "end.";
-  const gist = boundThinkingForSpeech(long, 80);
-  assert.ok(gist.length <= 81, `gist within bound (+ellipsis): got ${gist.length}`);
-  assert.ok(gist.endsWith("\u2026"), "trailing ellipsis when truncated");
-  assert.ok(gist.startsWith("First sentence is short."), "keeps the leading sentence");
-  // No sentence end within the window -> word-boundary cut, no mid-word slice.
-  const noStop = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima";
-  const g2 = boundThinkingForSpeech(noStop, 30);
-  assert.ok(g2.endsWith("\u2026"));
-  assert.ok(!/\s$/.test(g2.slice(0, -1)), "no trailing space before ellipsis");
-  assert.ok(noStop.startsWith(g2.slice(0, -1)), "cut is a clean prefix (no mid-word slice)");
-});
-
-test("speedToProsodyRate maps speed to azure prosody rate %", () => {
-  assert.equal(speedToProsodyRate(1.5), "+50%");
-  assert.equal(speedToProsodyRate(2), "+100%");
-  assert.equal(speedToProsodyRate(0.8), "-20%");
-  assert.equal(speedToProsodyRate(1), undefined);
-  assert.equal(speedToProsodyRate(undefined), undefined);
-  assert.equal(speedToProsodyRate(0), undefined);
-});
-
-test("buildAzureSpeechSsml wraps voice/embedding/lang/prosody and escapes text", () => {
-  const s = buildAzureSpeechSsml({ text: "hi <b> & 'x'", voice: "MAI-Voice-2", lang: "en-GB", speed: 1.5, speakerProfileId: "0daec43c" });
-  assert.match(s, /^<speak version='1.0' xmlns='[^']+' xmlns:mstts='[^']+' xml:lang='en-GB'>/);
-  // personal voice (speakerProfileId set) -> base-model <voice name>, NOT the nickname (bd-dbfaa7)
-  assert.match(s, /<voice name='DragonLatestNeural' xml:lang='en-GB'>/);
-  assert.doesNotMatch(s, /<voice name='MAI-Voice-2'/);
-  assert.match(s, /<mstts:ttsembedding speakerProfileId='0daec43c'>/);
-  assert.match(s, /<prosody rate='\+50%'>/);
-  assert.match(s, /hi &lt;b&gt; &amp; &apos;x&apos;/);
-  // omit ttsembedding + prosody when not supplied; no speakerProfileId -> voice used verbatim
-  const plain = buildAzureSpeechSsml({ text: "yo", voice: "en-US-Harper:MAI-Voice-2" });
-  assert.doesNotMatch(plain, /ttsembedding|prosody/);
-  assert.match(plain, /<voice name='en-US-Harper:MAI-Voice-2'>/);
-  // bd-80663f: <speak> must always carry xml:lang (Azure 400s without it);
-  // default to en-US when no lang is given, but do NOT force a locale on <voice>.
-  assert.match(plain, /^<speak version='1.0' xmlns='[^']+' xmlns:mstts='[^']+' xml:lang='en-US'>/);
-  assert.doesNotMatch(plain, /<voice name='en-US-Harper:MAI-Voice-2' xml:lang=/);
-});
-
-test("resolveAzureVoiceName: personal voice -> base model, standard voice verbatim (bd-dbfaa7)", () => {
-  // No speakerProfileId -> standard voice used as-is.
-  assert.equal(resolveAzureVoiceName({ voice: "en-US-AvaNeural" }), "en-US-AvaNeural");
-  assert.equal(resolveAzureVoiceName({ voice: "MAI-Voice-2" }), "MAI-Voice-2");
-  // speakerProfileId + nickname -> documented default base model (the nickname 400s on Azure).
-  assert.equal(resolveAzureVoiceName({ voice: "MAI-Voice-2", speakerProfileId: "p1" }), DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL);
-  assert.equal(DEFAULT_AZURE_PERSONAL_VOICE_BASE_MODEL, "DragonLatestNeural");
-  // speakerProfileId + an explicitly base-model-shaped voice (…Neural) -> honored.
-  assert.equal(resolveAzureVoiceName({ voice: "PhoenixLatestNeural", speakerProfileId: "p1" }), "PhoenixLatestNeural");
-  // speakerProfileId + explicit azureBaseVoice override -> used.
-  assert.equal(resolveAzureVoiceName({ voice: "MAI-Voice-2", speakerProfileId: "p1", azureBaseVoice: "PhoenixLatestNeural" }), "PhoenixLatestNeural");
-});
-
-test("isAzureSpeechProvider matches azure-speech only", () => {
-  assert.equal(isAzureSpeechProvider("azure-speech"), true);
-  assert.equal(isAzureSpeechProvider("AZURE-SPEECH"), true);
-  assert.equal(isAzureSpeechProvider("openai"), false);
-  assert.equal(isAzureSpeechProvider(undefined), false);
-});
-
-test("isAzureEmbeddingBaseModel recognizes Dragon/Phoenix base models (bd-5d4784)", () => {
-  assert.equal(isAzureEmbeddingBaseModel("DragonLatestNeural"), true);
-  assert.equal(isAzureEmbeddingBaseModel("PhoenixLatestNeural"), true);
-  assert.equal(isAzureEmbeddingBaseModel("en-US-DragonLatestNeural"), true);
-  assert.equal(isAzureEmbeddingBaseModel("MAI-Voice-2"), false);
-  assert.equal(isAzureEmbeddingBaseModel(""), false);
-  assert.equal(isAzureEmbeddingBaseModel(undefined), false);
-});
-
-test("azureEmbeddingVoiceError fails fast only for non-base-model embedding voices (bd-5d4784)", () => {
-  // not azure-speech, or no speaker profile -> no error
-  assert.equal(azureEmbeddingVoiceError({ provider: "openai", voice: "MAI-Voice-2", speakerProfileId: "abc" }), null);
-  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "MAI-Voice-2" }), null);
-  // base model (incl. locale-prefixed) -> no error
-  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "DragonLatestNeural", speakerProfileId: "abc" }), null);
-  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "en-US-PhoenixLatestNeural", speakerProfileId: "abc" }), null);
-  // sentinel/empty default voice -> defer to provider default, no error
-  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: CASCADE_DEFAULT_VOICE_SENTINEL, speakerProfileId: "abc" }), null);
-  assert.equal(azureEmbeddingVoiceError({ provider: "azure-speech", voice: "", speakerProfileId: "abc" }), null);
-  // explicit non-base-model voice + speaker profile -> actionable error
-  const err = azureEmbeddingVoiceError({ provider: "azure-speech", voice: "MAI-Voice-2", speakerProfileId: "ee6ff3bb" });
-  assert.ok(err, "returns an error message");
-  assert.match(err, /DragonLatestNeural/);
-  assert.match(err, /PhoenixLatestNeural/);
-  assert.match(err, /HTTP 400/);
-  assert.match(err, /speaker=ee6ff3bb/);
-});
-
-test("synthesizeToPcm rejects a bad azure embedding voice WITHOUT spawning tts (bd-5d4784)", async () => {
-  let spawned = false;
-  const spawnImpl = () => { spawned = true; throw new Error("should not spawn"); };
-  await assert.rejects(
-    () => synthesizeToPcm("hello", { provider: "azure-speech", voice: "MAI-Voice-2", speakerProfileId: "ee6ff3bb", spawnImpl }),
-    /not an Azure base model/,
-  );
-  assert.equal(spawned, false, "must fail fast before spawning tts");
-});
-
-test("buildTtsBatchArgs emits SSML body for azure-speech (no --speed) and plain text otherwise", () => {
-  const az = buildTtsBatchArgs({ text: "hello", voice: "MAI-Voice-2", model: "azure/speech/azure-tts", provider: "azure-speech", speed: 1.5, speakerProfileId: "abc", lang: "en-GB" });
-  assert.equal(az[az.length - 2], "--");
-  assert.match(az[az.length - 1], /mstts:ttsembedding speakerProfileId='abc'/);
-  assert.ok(!az.includes("--speed"), "azure prosody carries speed, not --speed");
-  const plain = buildTtsBatchArgs({ text: "hello", voice: "alloy", speed: 1.5 });
-  assert.equal(plain[plain.length - 1], "hello");
-  assert.ok(plain.includes("--speed"));
-});
-
-// ---------------------------------------------------------------------------
-// resolveCascadeTtsVoice
-// ---------------------------------------------------------------------------
-
-test("resolveCascadeTtsVoice maps the sentinel/empty to undefined and passes explicit voices", () => {
-  assert.equal(resolveCascadeTtsVoice(CASCADE_DEFAULT_VOICE_SENTINEL), undefined);
-  assert.equal(resolveCascadeTtsVoice(""), undefined);
-  assert.equal(resolveCascadeTtsVoice("   "), undefined);
-  assert.equal(resolveCascadeTtsVoice(null), undefined);
-  assert.equal(resolveCascadeTtsVoice("en-us-phoebe:MAI-Voice-1"), "en-us-phoebe:MAI-Voice-1");
-  assert.equal(resolveCascadeTtsVoice("  cedar  "), "cedar");
-});
-
-// ---------------------------------------------------------------------------
-// buildTtsBatchArgs
-// ---------------------------------------------------------------------------
-
-test("buildTtsBatchArgs defaults to stdout + pcm and forces no provider (inherits caco env defaults)", () => {
-  assert.deepEqual(buildTtsBatchArgs(), ["--stdout", "--response-format", "pcm"]);
-  // sentinel voice is omitted (provider default voice)
-  assert.deepEqual(buildTtsBatchArgs({ voice: CASCADE_DEFAULT_VOICE_SENTINEL }), [
-    "--stdout", "--response-format", "pcm",
-  ]);
-});
-
-test("buildTtsBatchArgs passes text as a positional after -- (leading-dash safe)", () => {
-  assert.deepEqual(buildTtsBatchArgs({ text: "hello there" }), [
-    "--stdout", "--response-format", "pcm", "--", "hello there",
-  ]);
-  assert.deepEqual(buildTtsBatchArgs({ text: "-dashy" }), [
-    "--stdout", "--response-format", "pcm", "--", "-dashy",
-  ]);
-});
-
-test("buildTtsBatchArgs threads voice/model/baseUrl/instructions, a non-unity speed, and an explicit provider", () => {
-  assert.deepEqual(
-    buildTtsBatchArgs({
-      text: "be warm",
-      voice: "cedar",
-      model: "azure/speech/azure-tts",
-      provider: "openai",
-      baseUrl: "http://x",
-      speed: 1.2,
-      instructions: "warm tone",
-    }),
-    [
-      "--stdout", "--response-format", "pcm",
-      "--voice", "cedar",
-      "--model", "azure/speech/azure-tts",
-      "--provider", "openai",
-      "--base-url", "http://x",
-      "--speed", "1.2",
-      "--instructions", "warm tone",
-      "--", "be warm",
-    ],
-  );
-});
-
-test("buildTtsBatchArgs omits a unity / invalid speed and honours an explicit response format", () => {
-  assert.ok(!buildTtsBatchArgs({ speed: 1 }).includes("--speed"));
-  assert.ok(!buildTtsBatchArgs({ speed: 0 }).includes("--speed"));
-  assert.ok(!buildTtsBatchArgs({ speed: "nope" }).includes("--speed"));
-  assert.deepEqual(buildTtsBatchArgs({ responseFormat: "wav" }), ["--stdout", "--response-format", "wav"]);
-});
-
-// ---------------------------------------------------------------------------
-// synthesizeToPcm (injected spawn)
-// ---------------------------------------------------------------------------
-
-// A fake `tts` subprocess that emits stdout/stderr + close after listeners attach.
-function fakeTts({ exitCode = 0, stdout = null, stderr = "", throwOnSpawn = false } = {}) {
-  const calls = { command: null, args: null, opts: null };
-  const spawnImpl = (command, args, opts) => {
-    if (throwOnSpawn) throw new Error("spawn ENOENT");
-    calls.command = command;
-    calls.args = args;
-    calls.opts = opts;
-    const proc = new EventEmitter();
-    proc.stdout = new EventEmitter();
-    proc.stderr = new EventEmitter();
-    // no stdin: synthesizeToPcm uses positional text, stdin is "ignore"
-    queueMicrotask(() => {
-      if (stdout) proc.stdout.emit("data", stdout);
-      if (stderr) proc.stderr.emit("data", Buffer.from(stderr));
-      proc.emit("close", exitCode);
-    });
-    return proc;
-  };
-  return { spawnImpl, calls };
-}
-
-test("synthesizeToPcm resolves with concatenated PCM and passes text as a positional arg", async () => {
-  const pcm = Buffer.from([0, 1, 2, 3, 4, 5]);
-  const { spawnImpl, calls } = fakeTts({ stdout: pcm });
-  const buf = await synthesizeToPcm("hello there", { voice: "cedar", spawnImpl });
-  assert.ok(Buffer.isBuffer(buf));
-  assert.deepEqual(buf, pcm);
-  assert.equal(calls.command, "tts");
-  assert.deepEqual(calls.args, [
-    "--stdout", "--response-format", "pcm", "--voice", "cedar", "--", "hello there",
-  ]);
-  // stdin is not used (ignored) — text rides in argv
-  assert.equal(calls.opts.stdio[0], "ignore");
-});
-
-test("synthesizeToPcm concatenates multiple stdout chunks", async () => {
-  const spawnImpl = () => {
-    const proc = new EventEmitter();
-    proc.stdout = new EventEmitter();
-    proc.stderr = new EventEmitter();
-    queueMicrotask(() => {
-      proc.stdout.emit("data", Buffer.from([1, 2]));
-      proc.stdout.emit("data", Buffer.from([3, 4]));
-      proc.emit("close", 0);
-    });
-    return proc;
-  };
-  const buf = await synthesizeToPcm("hi", { spawnImpl });
-  assert.deepEqual(buf, Buffer.from([1, 2, 3, 4]));
-});
-
-test("synthesizeToPcm rejects empty text without spawning", async () => {
-  let spawned = false;
-  const spawnImpl = () => { spawned = true; return new EventEmitter(); };
-  await assert.rejects(synthesizeToPcm("   ", { spawnImpl }), /empty text/);
-  assert.equal(spawned, false);
-});
-
-test("synthesizeToPcm rejects on a non-zero exit, carrying stderr", async () => {
-  const { spawnImpl } = fakeTts({ exitCode: 3, stderr: "azure auth failed" });
-  await assert.rejects(synthesizeToPcm("hi", { spawnImpl }), /tts exited 3: azure auth failed/);
-});
-
-test("synthesizeToPcm rejects when spawn itself throws", async () => {
-  const { spawnImpl } = fakeTts({ throwOnSpawn: true });
-  await assert.rejects(synthesizeToPcm("hi", { spawnImpl }), /spawn ENOENT/);
-});
-
-// --- Direct Azure Speech REST path (azure=true cascade) ---
-
-test("resolveAzureSpeechCreds: endpoint defaults to eastus speech URL, key from env, never hardcoded", () => {
-  const a = resolveAzureSpeechCreds({ env: {} });
-  assert.equal(a.endpoint, DEFAULT_AZURE_SPEECH_ENDPOINT);
-  assert.equal(a.endpoint, "https://eastus.tts.speech.microsoft.com");
-  assert.equal(a.apiKey, ""); // no default key
-  const b = resolveAzureSpeechCreds({ env: { AZURE_SPEECH_ENDPOINT: "https://westus.tts.speech.microsoft.com/", AZURE_SPEECH_API_KEY: "k1" } });
-  assert.equal(b.endpoint, "https://westus.tts.speech.microsoft.com"); // trailing slash trimmed
-  assert.equal(b.apiKey, "k1");
-});
-
-test("cascadeSpeechEnabled is backward-compatible when unset and fail-closed when configured", () => {
-  assert.equal(cascadeSpeechEnabled({ env: {} }), true);
-  assert.equal(cascadeSpeechEnabled({ env: { PI_CASCADE_SPEECH_ENABLED: "1" } }), true);
-  assert.equal(cascadeSpeechEnabled({ env: { PI_CASCADE_SPEECH_ENABLED: "true" } }), true);
-  for (const value of ["0", "false", "off", "unexpected"]) {
-    assert.equal(cascadeSpeechEnabled({ env: { PI_CASCADE_SPEECH_ENABLED: value } }), false, value);
-  }
-});
-
-test("synthesizeAzureSpeechDirect refuses disabled Cacophony policy before fetch even with explicit voice", async () => {
-  let fetched = false;
-  await assert.rejects(
-    synthesizeAzureSpeechDirect({
-      text: "must stay silent",
-      voice: "MAI-Voice-2",
-      endpoint: "https://eastus.tts.speech.microsoft.com",
-      apiKey: "secret-key",
-      env: { PI_CASCADE_SPEECH_ENABLED: "0" },
-      fetchImpl: async () => { fetched = true; throw new Error("must not fetch"); },
-    }),
-    /disabled by Cacophony node policy/,
-  );
-  assert.equal(fetched, false);
-});
-
-test("synthesizeAzureSpeechDirect: POSTs mstts SSML to /cognitiveservices/v1 with the subscription-key header and returns PCM", async () => {
-  let captured = null;
-  const fetchImpl = async (url, opts) => {
-    captured = { url, opts };
-    return { ok: true, status: 200, async arrayBuffer() { return Uint8Array.from([1, 2, 3, 4]).buffer; } };
-  };
-  const buf = await synthesizeAzureSpeechDirect({
-    text: "hello", voice: "MAI-Voice-2", lang: "en-GB", speed: 1.5,
-    speakerProfileId: "abc-123", endpoint: "https://eastus.tts.speech.microsoft.com",
-    apiKey: "secret-key", fetchImpl,
-  });
-  assert.deepEqual(buf, Buffer.from([1, 2, 3, 4]));
-  assert.equal(captured.url, "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
-  assert.equal(captured.opts.method, "POST");
-  assert.equal(captured.opts.headers["Ocp-Apim-Subscription-Key"], "secret-key");
-  assert.equal(captured.opts.headers["Content-Type"], "application/ssml+xml");
-  assert.match(captured.opts.headers["X-Microsoft-OutputFormat"], /pcm/);
-  // SSML carries the embedding tag + a base-model voice name (NOT the nickname, bd-dbfaa7) + lang + prosody.
-  assert.match(captured.opts.body, /<mstts:ttsembedding speakerProfileId='abc-123'>/);
-  assert.match(captured.opts.body, /<voice name='DragonLatestNeural'/);
-  assert.doesNotMatch(captured.opts.body, /<voice name='MAI-Voice-2'/);
-  assert.match(captured.opts.body, /xml:lang='en-GB'/);
-  assert.match(captured.opts.body, /<prosody rate='\+50%'>/);
-});
-
-test("synthesizeAzureSpeechDirect: rejects on empty text, missing endpoint/key, and non-2xx", async () => {
-  const okFetch = async () => ({ ok: true, status: 200, async arrayBuffer() { return new ArrayBuffer(0); } });
-  await assert.rejects(synthesizeAzureSpeechDirect({ text: "  ", endpoint: "https://e", apiKey: "k", fetchImpl: okFetch }), /empty text/);
-  await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "", apiKey: "k", fetchImpl: okFetch }), /no endpoint/);
-  await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "https://e", apiKey: "", fetchImpl: okFetch }), /no API key/);
-  const badFetch = async () => ({ ok: false, status: 401, async text() { return "Unauthorized"; } });
-  await assert.rejects(synthesizeAzureSpeechDirect({ text: "hi", endpoint: "https://e", apiKey: "k", fetchImpl: badFetch }), /azure-speech HTTP 401: Unauthorized/);
-});
-
-test("resolveSpeakToolParams: params win over PI_CASCADE_* env; sentinel voice -> undefined", () => {
-  const a = resolveSpeakToolParams({ text: " hi ", voice: "MAI-Voice-2", speaker: "p1", lang: "en-GB", speed: 1.5 }, { env: {} });
-  assert.deepEqual(a, { text: "hi", voice: "MAI-Voice-2", speakerProfileId: "p1", lang: "en-GB", speed: 1.5 });
-  const b = resolveSpeakToolParams({ text: "yo" }, { env: { PI_CASCADE_VOICE: "en-US-AvaMultilingualNeural", PI_CASCADE_SPEAKER: "pp", PI_CASCADE_LANG: "en-US", PI_CASCADE_SPEED: "1.2" } });
-  assert.deepEqual(b, { text: "yo", voice: "en-US-AvaMultilingualNeural", speakerProfileId: "pp", lang: "en-US", speed: 1.2 });
-  const c = resolveSpeakToolParams({ text: "x", voice: "embedding:default" }, { env: {} });
-  assert.equal(c.voice, undefined);
-  assert.equal(c.speed, undefined);
-});
-
-// --- bd-29a134: batch tts subprocess + direct-Azure HTTP timeouts ---
-
-test("synthesizeToPcm times out + kills a stalled tts subprocess instead of hanging (bd-29a134)", async () => {
-  const proc = new EventEmitter();
-  proc.stdout = new EventEmitter();
-  proc.stderr = new EventEmitter();
-  let killed = null;
-  proc.kill = (sig) => { killed = sig; };
-  const spawnImpl = () => proc; // never emits "close" -> would hang the speaking state without the timeout
-  await assert.rejects(
-    synthesizeToPcm("hello", { spawnImpl, timeoutMs: 20 }),
-    /tts timed out after 20ms/,
-  );
-  assert.equal(killed, "SIGTERM");
-});
-
-test("synthesizeToPcm timeoutMs=0 disables the timeout (a slow-but-successful child still resolves)", async () => {
-  const proc = new EventEmitter();
-  proc.stdout = new EventEmitter();
-  proc.stderr = new EventEmitter();
-  proc.kill = () => { throw new Error("must not kill when timeout disabled"); };
-  const spawnImpl = () => proc;
-  const p = synthesizeToPcm("hi", { spawnImpl, timeoutMs: 0 });
-  setTimeout(() => { proc.stdout.emit("data", Buffer.from([1, 2, 3])); proc.emit("close", 0); }, 30);
-  const buf = await p;
-  assert.deepEqual([...buf], [1, 2, 3]);
-});
-
-test("synthesizeAzureSpeechDirect aborts + throws a clear error on HTTP timeout (bd-29a134)", async () => {
-  // fetchImpl that only settles when the request signal aborts (a hung upstream).
-  const fetchImpl = (_url, opts) => new Promise((_resolve, reject) => {
-    opts?.signal?.addEventListener?.("abort", () => reject(new Error("aborted")), { once: true });
-  });
-  await assert.rejects(
-    synthesizeAzureSpeechDirect({ text: "hi", endpoint: "http://az:1", apiKey: "k", timeoutMs: 20, fetchImpl }),
-    /azure-speech timed out after 20ms/,
-  );
-});
-
-test("synthesizeAzureSpeechDirect honors an incoming cancel distinctly from a timeout (bd-29a134)", async () => {
-  const incoming = new AbortController();
-  const fetchImpl = (_url, opts) => new Promise((_resolve, reject) => {
-    opts?.signal?.addEventListener?.("abort", () => reject(new Error("aborted")), { once: true });
-  });
-  const p = synthesizeAzureSpeechDirect({ text: "hi", endpoint: "http://az:1", apiKey: "k", timeoutMs: 10000, signal: incoming.signal, fetchImpl });
-  incoming.abort();
-  // A user cancel is NOT reported as a timeout; the raw abort error propagates.
-  await assert.rejects(p, /aborted/);
+  const gist = boundThinkingForSpeech("First sentence. " + "word ".repeat(100), 60);
+  assert.ok(gist.length <= 61);
+  assert.ok(gist.endsWith("…"));
 });

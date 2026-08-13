@@ -194,6 +194,8 @@ import {
   resolveAzureSpeechCreds,
   resolveSpeakToolParams,
   cascadeSpeechEnabled,
+} from "./lib/tts.js";
+import {
   assistantReplyText,
   pickLastAssistantReply,
   thinkingSummaryText,
@@ -2870,11 +2872,11 @@ export default function realtimeAgentExtension(pi) {
   async function speakTextDirect(text, ctx) {
     const body = String(text || "").trim();
     if (!body || !cascadeSpeechEnabled({ env: process.env })) return;
-    const { voice, speakerProfileId, lang, speed } = resolveSpeakToolParams({ text: body }, { env: process.env });
+    const { voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams({ text: body }, { env: process.env });
     if (!voice) return; // no concrete Azure voice configured; stay silent rather than throw
     const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
     try {
-      const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, endpoint, apiKey });
+      const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey });
       if (pcm && pcm.length) {
         markAssistantSpeaking(audioDurationMs(pcm));
         await playPcmBuffer(pcm, ttsStream(config.playbackCommand || defaultPlaybackCommand()), (m, l) => { try { ctx?.ui?.notify?.(m, l); } catch {} }, config.debug);
@@ -3286,7 +3288,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   function ensureCascadeController(ctx, rawArgs) {
-    const { roster, values, directAzureSpeech } = cascadeRosterFromArgs(rawArgs, { env: process.env });
+    const { roster, values } = cascadeRosterFromArgs(rawArgs, { env: process.env });
     const defaultModel = values.model || env("PI_CASCADE_MODEL", "OPENAI_CHAT_MODEL", "MAPI_MODEL_ID") || "gpt-5-mini";
     const defaultBaseUrl = values.base_url || values.baseurl || env("PI_RT_BASE_URL", "OPENAI_BASE_URL");
     // bd-15beec: unpinned cascade peers (n=1 = "the model loaded in Pi") run
@@ -3309,9 +3311,9 @@ export default function realtimeAgentExtension(pi) {
     // ordered, ~halving a multi-agent round. Opt out with pipeline=false / PI_CASCADE_PIPELINE=0.
     const pipelineRaw = String(values.pipeline ?? env("PI_CASCADE_PIPELINE") ?? "1").toLowerCase();
     const usePipeline = pipelineRaw !== "0" && pipelineRaw !== "false" && pipelineRaw !== "off";
-    // azure=true routes cascade synthesis through the DIRECT Azure Speech REST
-    // path (no `tts` subprocess); creds come from AZURE_SPEECH_* in the env.
-    const cascadeSynthImpl = makeCascadeTtsSynth({ directAzureSpeech, env: process.env });
+    // Cascade always uses the shared native Azure Speech REST path; the
+    // directAzureSpeech field is retained only as a compatibility receipt.
+    const cascadeSynthImpl = makeCascadeTtsSynth({ env: process.env });
     const speakDeps = usePipeline
       ? { synth: makeCascadeSynth({ synthImpl: cascadeSynthImpl }), play: makeCascadePlay({ playImpl }) }
       : { speak: makeCascadeSpeak({ synthImpl: cascadeSynthImpl, playImpl }) };
@@ -3759,16 +3761,18 @@ export default function realtimeAgentExtension(pi) {
         voice: ToolSchema.optional(ToolSchema.string({ description: "Azure voice name override (e.g. MAI-Voice-2). Defaults to PI_CASCADE_VOICE." })),
         speaker: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts ttsembedding speakerProfileId for a personal/embedding voice. Defaults to PI_CASCADE_SPEAKER." })),
         lang: ToolSchema.optional(ToolSchema.string({ description: "xml:lang locale, e.g. en-GB." })),
-        speed: ToolSchema.optional(ToolSchema.number({ description: "Speech rate multiplier, e.g. 1.2." })),
+        speed: ToolSchema.optional(ToolSchema.number({ description: "Speech rate multiplier, e.g. 1.6." })),
+        style: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts express-as style, e.g. hopeful." })),
+        styledegree: ToolSchema.optional(ToolSchema.number({ description: "Azure express-as style degree from 0.01 to 2; only used with style." })),
       }),
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-        const { text, voice, speakerProfileId, lang, speed } = resolveSpeakToolParams(params, { env: process.env });
+        const { text, voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams(params, { env: process.env });
         if (!text) return { content: [{ type: "text", text: "speak: empty text" }] };
         if (!cascadeSpeechEnabled({ env: process.env })) return { content: [{ type: "text", text: "speak: disabled by Cacophony node policy (speech.enabled=false)" }] };
         if (!voice) return { content: [{ type: "text", text: "speak: no voice — pass voice= or set PI_CASCADE_VOICE to a concrete Azure voice (e.g. MAI-Voice-2)" }] };
         const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
         try {
-          const pcm = await synthesizeAzureSpeechDirect({ text, voice, lang, speed, speakerProfileId, endpoint, apiKey });
+          const pcm = await synthesizeAzureSpeechDirect({ text, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey });
           if (pcm && pcm.length) {
             markAssistantSpeaking(audioDurationMs(pcm));
             await playPcmBuffer(pcm, ttsStream(config.playbackCommand || defaultPlaybackCommand()), (m, l) => { try { ctx.ui.notify(m, l); } catch {} }, config.debug);
@@ -3857,7 +3861,7 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.registerCommand("cascade", {
-    description: "Multi-agent voice group chat (STT in, per-agent TTS out, turn-taking). Usage: /cascade start [n=N participants=a,b order=fixed|random|round-robin voice= model= base_url= azure=true speaker=<profileId> lang=<locale>], /cascade say <text>, /cascade stop, /cascade reset, /cascade status. azure=true synthesizes via the direct Azure Speech REST API (AZURE_SPEECH_* env) with mstts embedding voices.",
+    description: "Multi-agent voice group chat (STT in, native Azure TTS out, turn-taking). Usage: /cascade start [n=N participants=a,b order=fixed|random|round-robin voice= model= base_url= speaker=<profileId> lang=<locale> style=<style> styledegree=<0.01..2>], /cascade say <text>, /cascade stop, /cascade reset, /cascade status. Speech uses the shared direct Azure REST path; azure=true remains a compatibility no-op.",
     handler: async (args, ctx) => {
       try {
         const raw = String(args || "").trim();

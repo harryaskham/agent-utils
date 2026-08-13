@@ -1,7 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-
 import { buildParticipantRoster, MODE_CASCADE, ORDER_FIXED } from "../extensions/lib/realtime-participants.js";
 import {
   CascadeController,
@@ -313,73 +311,45 @@ test("CascadeController drives a pipelined round when given synth+play deps", as
   assert.equal(c.round, 1);
 });
 
-// --- azure=true: direct Azure Speech REST cascade ---
+// --- shared native Azure Speech REST cascade ---
 
-function fakeSpawn(byte) {
-  let spawned = false;
-  const spawnImpl = () => {
-    spawned = true;
-    const p = new EventEmitter();
-    p.stdout = new EventEmitter();
-    p.stderr = new EventEmitter();
-    setImmediate(() => { p.stdout.emit("data", Buffer.from([byte])); p.emit("close", 0); });
-    return p;
-  };
-  return { spawnImpl, didSpawn: () => spawned };
-}
-
-test("cascadeRosterFromArgs: azure=true defaults every agent to the azure-speech provider", () => {
-  const { roster, directAzureSpeech } = cascadeRosterFromArgs("azure=true n=2 voice=MAI-Voice-2 speaker=p1");
+test("cascadeRosterFromArgs defaults every agent to the native Azure provider", () => {
+  const { roster, directAzureSpeech } = cascadeRosterFromArgs("n=2 voice=MAI-Voice-2 speaker=p1");
   assert.equal(directAzureSpeech, true);
   assert.ok(roster.participants.length >= 2);
-  for (const p of roster.participants) assert.equal(p.provider, "azure-speech");
+  for (const participant of roster.participants) assert.equal(participant.provider, "azure");
 });
 
-test("cascadeRosterFromArgs: no azure flag leaves provider unset and directAzureSpeech false", () => {
-  const { roster, directAzureSpeech } = cascadeRosterFromArgs("n=2");
-  assert.equal(directAzureSpeech, false);
-  for (const p of roster.participants) assert.equal(p.provider, undefined);
-});
-
-test("makeCascadeTtsSynth: azure-speech participant routes to the direct Azure REST path", async () => {
+test("makeCascadeTtsSynth routes Azure participants through the shared direct REST path", async () => {
   let called = null;
-  const fetchImpl = async (url, o) => { called = { url, o }; return { ok: true, status: 200, async arrayBuffer() { return Uint8Array.from([9]).buffer; } }; };
-  const synth = makeCascadeTtsSynth({ directAzureSpeech: true, env: { AZURE_SPEECH_API_KEY: "k", AZURE_SPEECH_ENDPOINT: "https://e.example" }, fetchImpl });
-  const pcm = await synth("hi", { provider: "azure-speech", voice: "MAI-Voice-2", speakerProfileId: "p1", lang: "en-GB" });
+  const fetchImpl = async (url, options) => {
+    called = { url, options };
+    return { ok: true, status: 200, async arrayBuffer() { return Uint8Array.from([9]).buffer; } };
+  };
+  const synth = makeCascadeTtsSynth({ env: { AZURE_SPEECH_API_KEY: "k", AZURE_SPEECH_ENDPOINT: "https://e.example" }, fetchImpl });
+  const pcm = await synth("hi", { provider: "azure", voice: "MAI-Voice-2", speakerProfileId: "p1", lang: "en-GB" });
   assert.deepEqual(pcm, Buffer.from([9]));
   assert.equal(called.url, "https://e.example/cognitiveservices/v1");
-  assert.equal(called.o.headers["Ocp-Apim-Subscription-Key"], "k");
-  assert.match(called.o.body, /speakerProfileId='p1'/);
-  // personal voice -> base-model voice name, not the nickname (bd-dbfaa7)
-  assert.match(called.o.body, /<voice name='DragonLatestNeural'/);
-  assert.doesNotMatch(called.o.body, /<voice name='MAI-Voice-2'/);
+  assert.equal(called.options.headers["Ocp-Apim-Subscription-Key"], "k");
+  assert.match(called.options.body, /speakerProfileId='p1'/);
+  assert.match(called.options.body, /<voice name='MAI-Voice-2'/);
+  assert.doesNotMatch(called.options.body, /DragonLatestNeural|PhoenixLatestNeural/);
 });
 
-test("makeCascadeTtsSynth: azure direct requires a concrete voice (rejects the embedding sentinel)", async () => {
-  let fetched = false;
-  const fetchImpl = async () => { fetched = true; return { ok: true, status: 200, async arrayBuffer() { return new ArrayBuffer(0); } }; };
-  const synth = makeCascadeTtsSynth({ directAzureSpeech: true, env: { AZURE_SPEECH_API_KEY: "k" }, fetchImpl });
-  await assert.rejects(synth("hi", { provider: "azure-speech", voice: "embedding:default" }), /concrete Azure voice/);
-  assert.equal(fetched, false);
+test("makeCascadeTtsSynth resolves the historical embedding sentinel to shared defaults", async () => {
+  let body = "";
+  const fetchImpl = async (_url, options) => {
+    body = options.body;
+    return { ok: true, status: 200, async arrayBuffer() { return new ArrayBuffer(0); } };
+  };
+  const synth = makeCascadeTtsSynth({ env: { AZURE_SPEECH_API_KEY: "k" }, fetchImpl });
+  await synth("hi", { provider: "azure-speech", voice: "embedding:default" });
+  assert.match(body, /<voice name='MAI-Voice-2'/);
 });
 
-test("makeCascadeTtsSynth: non-azure provider uses the tts subprocess, not fetch", async () => {
+test("makeCascadeTtsSynth rejects non-Azure providers instead of spawning a CLI fallback", async () => {
   let fetched = false;
-  const fetchImpl = async () => { fetched = true; return { ok: true, status: 200, async arrayBuffer() { return new ArrayBuffer(0); } }; };
-  const { spawnImpl, didSpawn } = fakeSpawn(7);
-  const synth = makeCascadeTtsSynth({ directAzureSpeech: true, env: {}, fetchImpl, spawnImpl });
-  const pcm = await synth("hi", { provider: "openai", voice: "alloy" });
-  assert.deepEqual(pcm, Buffer.from([7]));
+  const synth = makeCascadeTtsSynth({ fetchImpl: async () => { fetched = true; } });
+  await assert.rejects(synth("hi", { provider: "openai" }), /unsupported; use provider=azure/);
   assert.equal(fetched, false);
-  assert.equal(didSpawn(), true);
-});
-
-test("makeCascadeTtsSynth: directAzureSpeech=false keeps azure-speech on the subprocess path", async () => {
-  let fetched = false;
-  const fetchImpl = async () => { fetched = true; return { ok: true, status: 200, async arrayBuffer() { return new ArrayBuffer(0); } }; };
-  const { spawnImpl, didSpawn } = fakeSpawn(5);
-  const synth = makeCascadeTtsSynth({ directAzureSpeech: false, env: {}, fetchImpl, spawnImpl });
-  await synth("hi", { provider: "azure-speech", voice: "MAI-Voice-2" });
-  assert.equal(fetched, false);
-  assert.equal(didSpawn(), true);
 });

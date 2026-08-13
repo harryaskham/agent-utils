@@ -5,7 +5,7 @@
 // think-then-speak — while delegating the impure parts (running an LLM turn,
 // synthesising + playing speech) to injected deps. That split keeps the whole
 // orchestration unit-tested with mock deps; the live extension supplies real ones
-// (chat-completions for a peer turn, realtime-tts-batch + playPcmBuffer to speak).
+// (chat-completions for a peer turn, shared native tts.js + PCM playback to speak).
 //
 // A cascade round:
 //   1. The human speaks once (already transcribed via the stt primitive).

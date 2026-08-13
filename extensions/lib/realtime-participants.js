@@ -66,6 +66,9 @@ const ATTR_ALIASES = new Map([
   ["speaker", "speakerProfileId"],
   ["lang", "lang"],
   ["xml_lang", "lang"],
+  ["style", "style"],
+  ["styledegree", "styleDegree"],
+  ["style_degree", "styleDegree"],
   ["instructions", "instructions"],
   ["persona", "instructions"],
   ["prompt", "instructions"],
@@ -217,6 +220,8 @@ export function buildParticipantRoster({
     provider: main.provider ?? undefined,
     speakerProfileId: main.speakerProfileId ?? undefined,
     lang: main.lang ?? undefined,
+    style: main.style ?? undefined,
+    styleDegree: main.styleDegree ?? undefined,
     instructions: main.instructions ?? undefined,
   });
 
@@ -238,6 +243,8 @@ export function buildParticipantRoster({
       provider: spec.provider ?? undefined,
       speakerProfileId: spec.speakerProfileId ?? undefined,
       lang: spec.lang ?? undefined,
+      style: spec.style ?? undefined,
+      styleDegree: spec.styleDegree ?? undefined,
       instructions: spec.instructions ?? undefined,
     });
   }
