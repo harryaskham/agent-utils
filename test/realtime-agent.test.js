@@ -288,6 +288,14 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.equal(emittedEvents.at(-1)?.payload, pi.realtime);
 });
 
+test("speak tool is disabled while automatic /tts mode is on", async () => {
+  const h = makeHarness();
+  realtimeAgentExtension(h.pi);
+  h.pi.ttsNarration = { isEnabled: () => true };
+  const result = await h.tools.get("speak").execute("id", { text: "do not synthesize" }, null, null, h.ctx);
+  assert.match(result.content[0].text, /disabled while automatic \/tts mode is on/);
+});
+
 test("unified realtime controls mutate audio, voice, and widget state", () => {
   const { pi, handlers, widgets, ctx } = makeHarness();
   realtimeAgentExtension(pi);
@@ -2143,6 +2151,10 @@ test("local-vad drives the color-coded state indicator widget and clears it on s
       const w = h.widgets.get("realtime-ptt-indicator");
       return Array.isArray(w) && String(w[0]).includes("38;2;") && String(w[0]).includes("▁");
     }, { timeoutMs: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 170));
+    cap.stdout.emit("data", pcm(100, true));
+    const status = String(h.widgets.get("realtime-status")?.[0] || "");
+    assert.match(status, /mic .*% threshold=.*%/, "live status includes input level and threshold marker");
     // Stop tears the indicator down.
     await h.commands.get("rt").handler("stt stop", h.ctx);
     assert.equal(h.widgets.get("realtime-ptt-indicator"), undefined, "indicator cleared on stop");

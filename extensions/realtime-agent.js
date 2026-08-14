@@ -198,7 +198,7 @@ import {
   resolveSpeakToolParams,
   cascadeSpeechEnabled,
 } from "./lib/tts.js";
-import { readPersistedTtsSettings } from "./lib/tts-settings.js";
+import { readPersistedTtsSettings, resolveSpeakToolEnabled } from "./lib/tts-settings.js";
 import {
   assistantReplyText,
   pickLastAssistantReply,
@@ -2825,7 +2825,7 @@ export default function realtimeAgentExtension(pi) {
     const persisted = readPersistedTtsSettings();
     return {
       persisted,
-      backend: process.env.PI_RT_AUDIO_BACKEND || persisted.backend || DEFAULT_TTS_BACKEND,
+      backend: process.env.PI_TTS_BACKEND || persisted.backend || DEFAULT_TTS_BACKEND,
       server: process.env.PULSE_SERVER || persisted.server,
       device: process.env.PULSE_SINK || persisted.device || DEFAULT_TTS_DEVICE,
     };
@@ -2932,6 +2932,7 @@ export default function realtimeAgentExtension(pi) {
     const body = String(text || "").trim();
     if (!body || !cascadeSpeechEnabled({ env: process.env })) return;
     const output = resolvedFastTts();
+    if (pi.ttsNarration?.isEnabled?.() || !resolveSpeakToolEnabled(process.env, output.persisted)) return;
     const { voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams({ text: body }, { env: process.env, persisted: output.persisted });
     if (!voice) return; // no concrete Azure voice configured; stay silent rather than throw
     const credentialOptions = { env: process.env };
@@ -3091,7 +3092,7 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
-  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null };
+  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null, meter: null, inputLevel: 0, lastMeterRenderAt: 0 };
 
   // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
   // VAD). Updates the running segmenter immediately and persists for next start.
@@ -3111,6 +3112,13 @@ export default function realtimeAgentExtension(pi) {
     if (localVad.hold) parts.push("ptt-hold");
     if (localVad.quickfile) parts.push("quickfile→draft");
     if (localVad.model) parts.push(`model=${localVad.model}`);
+    if (localVad.active) {
+      if (isAssistantSpeaking()) parts.push("mic muted (agent speaking)");
+      else {
+        const threshold = rmsToLevel(localVad.cfg?.energyThreshold ?? 0.012);
+        parts.push(`mic ${formatLevelBar(localVad.inputLevel, { width: 12, threshold })} ${String(Math.round(localVad.inputLevel * 100)).padStart(3, " ")}% threshold=${Math.round(threshold * 100)}%`);
+      }
+    }
     if (localVad.cfg) parts.push(describeLocalVadConfig(localVad.cfg).replace(/^local-vad: /, ""));
     if (localVad.lastTranscript) parts.push(`last="${String(localVad.lastTranscript).slice(0, 40)}"`);
     if (localVad.lastError) parts.push(`err=${String(localVad.lastError).slice(0, 60)}`);
@@ -3133,6 +3141,10 @@ export default function realtimeAgentExtension(pi) {
     try { localVad.clearPttIndicator?.(); } catch {}
     localVad.pttIndicator = null;
     localVad.clearPttIndicator = null;
+    try { localVad.meter?.reset?.(); } catch {}
+    localVad.meter = null;
+    localVad.inputLevel = 0;
+    localVad.lastMeterRenderAt = 0;
     if (flush && ctrl) { ctrl.flush().catch((e) => { localVad.lastError = e?.message || String(e); }); }
     if (speechInputState.mode === SPEECH_INPUT_MODES.PTT || speechInputState.mode === SPEECH_INPUT_MODES.VAD) {
       speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
@@ -3149,7 +3161,7 @@ export default function realtimeAgentExtension(pi) {
     const cfg = parseLocalVadConfig(process.env, persistedStt);
     const model = resolveBatchSttModel(process.env, persistedStt);
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
-    Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now() });
+    Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, lastMeterRenderAt: 0 });
 
     // bd-0c008d: stream partial transcripts into the input editor (live voice
     // editing) instead of only a status widget; commit sends the editor's text
@@ -3258,6 +3270,17 @@ export default function realtimeAgentExtension(pi) {
 
     capture.stdout?.on("data", (chunk) => {
       if (!localVad.active) return;
+      if (localVad.meter) {
+        if (isAssistantSpeaking()) {
+          localVad.meter.reset();
+          localVad.inputLevel = 0;
+        } else localVad.inputLevel = localVad.meter.pushFrame(chunk);
+        const now = Date.now();
+        if (now - localVad.lastMeterRenderAt > 150) {
+          localVad.lastMeterRenderAt = now;
+          try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
+        }
+      }
       controller.pushFrame(chunk).catch((e) => { localVad.lastError = e?.message || String(e); });
     });
     capture.stderr?.on("data", (d) => { const s = String(d).trim(); if (s) localVad.lastError = truncateDiagnostic(s); });
@@ -3850,7 +3873,7 @@ export default function realtimeAgentExtension(pi) {
       label: "Speak (fast direct-Azure)",
       description: "Speak text aloud immediately via the shared agentUtils.tts voice/playback defaults and fast direct-Azure REST path (no daemon round-trip). Per-call overrides win.",
       promptSnippet: "Use the speak tool to talk to the user out loud: call speak with your reply text and it is synthesized in the cascade voice with low latency.",
-      promptGuidelines: ["When voice/cascade mode is active, respond by calling speak with your spoken reply so the user hears you. Keep spoken text concise and natural; do not read out tool mechanics, code, or URLs."],
+      promptGuidelines: ["When voice/cascade output is active AND automatic /tts is off, use speak for concise natural replies. Never call speak while /tts is on; assistant text is already spoken automatically. Do not read out tool mechanics, code, or URLs."],
       parameters: ToolSchema.object({
         text: ToolSchema.string({ description: "The text to speak aloud." }),
         voice: ToolSchema.optional(ToolSchema.string({ description: "Azure voice override. Defaults through env then agentUtils.tts.voice." })),
@@ -3862,6 +3885,8 @@ export default function realtimeAgentExtension(pi) {
       }),
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         const output = resolvedFastTts();
+        if (pi.ttsNarration?.isEnabled?.()) return { content: [{ type: "text", text: "speak: disabled while automatic /tts mode is on" }] };
+        if (!resolveSpeakToolEnabled(process.env, output.persisted)) return { content: [{ type: "text", text: "speak: disabled by agentUtils.tts.speakToolEnabled=false" }] };
         const { text, voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams(params, { env: process.env, persisted: output.persisted });
         if (!text) return { content: [{ type: "text", text: "speak: empty text" }] };
         if (!cascadeSpeechEnabled({ env: process.env })) return { content: [{ type: "text", text: "speak: disabled by Cacophony node policy (speech.enabled=false)" }] };

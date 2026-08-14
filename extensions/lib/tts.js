@@ -273,7 +273,15 @@ export function buildPcmPlaybackSpec({
   streamName = DEFAULT_TTS_STREAM_NAME,
   env = process.env,
 } = {}) {
-  const selected = String(backend || DEFAULT_TTS_BACKEND).trim().toLowerCase();
+  let selected = String(backend || DEFAULT_TTS_BACKEND).trim().toLowerCase();
+  if (selected === "auto") {
+    // TTS auto prefers the configured Pulse graph (including remote Pulse on
+    // macOS); without Pulse routing, use local CoreAudio on macOS and Pulse on
+    // other hosts. Never leave `auto` as an unsupported playback backend.
+    selected = server || env.PULSE_SERVER || env.PULSE_SINK
+      ? "pulse"
+      : process.platform === "darwin" ? "coreaudio" : "pulse";
+  }
   const childEnv = { ...env };
   if (server == null || server === "") delete childEnv.PULSE_SERVER;
   else childEnv.PULSE_SERVER = String(server);

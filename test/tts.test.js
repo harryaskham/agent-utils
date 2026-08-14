@@ -170,6 +170,9 @@ test("Pulse playback spec is raw PCM, named /read, and uses configured server/de
   assert.ok(spec.args.includes("--device=@DEFAULT_SINK@"));
   assert.ok(spec.args.includes("--client-name=/read"));
   assert.ok(spec.args.includes("--stream-name=/read"));
+  const auto = buildPcmPlaybackSpec({ backend: "auto", server: "pulse.example:4713", device: "hw_output", env: {} });
+  assert.equal(auto.command, "pacat", "auto resolves to Pulse when Pulse routing is configured");
+  assert.ok(auto.args.includes("--server=pulse.example:4713"));
 });
 
 function fakePlayerSpawn() {

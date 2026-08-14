@@ -335,6 +335,27 @@ A missing style omits `<mstts:express-as>`, a missing speed omits `<prosody>`, a
 a missing embedding omits `<mstts:ttsembedding>`; supplied voices are honored
 verbatim rather than rewritten to another Azure base model.
 
+Read-specific timing is durable under `agentUtils.read` (separate from the
+shared voice/playback fields in `agentUtils.tts`):
+
+```json
+{
+  "agentUtils": {
+    "read": {
+      "enabled": false,
+      "delayMs": 2000,
+      "onDelay": true,
+      "onSend": true
+    }
+  }
+}
+```
+
+Set the delay with `agentUtils.read.delayMs` or `/read delay=750`; explicit
+`/read` setters persist `delayMs`, `onDelay`, `onSend`, and enabled state. Env
+`PI_READ_DELAY_MS`, `PI_READ_ON_DELAY`, `PI_READ_ON_SEND`, and
+`PI_READ_ENABLED` override settings.
+
 While the mode is active:
 
 - after the editor stops changing for `delay` milliseconds, the **whole current
@@ -383,8 +404,10 @@ text are skipped.
 ### Push-to-talk hold mode (`/ptt`)
 
 `/ptt` (also `/stt ptt` and `/rt stt local-vad-ptt`) is the push-to-talk variant
-of local VAD (bd-9e06ae): VAD still runs and transcribes incrementally into the
-input editor while held, but even the longer per-segment commit silence does
+of local VAD (bd-9e06ae): the complete raw hold is captured independently of
+energy classification, while VAD controls incremental preview/chunk boundaries.
+Even if no frame crosses the energy threshold, Space/Enter/Escape re-transcribes
+the whole raw hold on release. Even the longer per-segment commit silence does
 **not** send. Instead segments accumulate and the whole turn is controlled by a
 key when you finish:
 
@@ -411,7 +434,9 @@ compatibility mode (`/rt stt local-vad-ptt` + speak-replies).
 A color-coded state indicator (bd-081267) renders a truecolor bar under the input
 box and tracks the live state: **orange** while listening/recording, **magenta**
 while transcribing, a **yellow** flash when a transcription chunk completes, and a
-**green** flash when a turn is committed/sent. It needs a 24-bit-color terminal.
+**green** flash when a turn is committed/sent. The status line also shows a live
+mic energy bar, percentage, and threshold marker at a bounded refresh rate for
+sensitivity debugging in both `/stt` and `/ptt`. It needs a 24-bit-color terminal.
 
 ### The `speak` tool (low-latency direct-Azure agent voice)
 

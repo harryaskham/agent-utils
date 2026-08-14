@@ -130,7 +130,10 @@ export class LocalVadController {
     // PTT-hold mode (bd-9e06ae): accumulate committed segment transcripts instead
     // of sending each; commitHeld() sends the whole accrual once on PTT release.
     this.holdCommits = !!holdCommits;
-    this._held = [];                  // finalized segment transcripts awaiting release
+    this._held = [];                  // finalized preview-segment transcripts
+    // PTT captures the complete raw hold independently of VAD. Energy controls
+    // previews/chunking only; release always transcribes this full buffer.
+    this._heldRawChunks = [];
   }
 
   /// PTT-release semantic (bd-9e06ae): finalize any in-progress segment into the
@@ -140,9 +143,7 @@ export class LocalVadController {
   /// ("" when nothing was captured). Safe to call in non-hold mode too, where it
   /// degrades to a plain flush (the last turn already sent) returning "".
   async commitHeld() {
-    await this.flush();
-    const text = this._held.join(" ").replace(/\s+/g, " ").trim();
-    this._held = [];
+    const text = await this._finalizeHeldText();
     if (text) {
       try { this.sendTurn(text); } catch (err) { this.onError(err); }
     }
@@ -154,6 +155,12 @@ export class LocalVadController {
   /// cancel path (Ctrl-C). Clears the accrual; the caller stops capture separately.
   discardHeld() {
     this._held = [];
+    this._heldRawChunks = [];
+    this._pending = Buffer.alloc(0);
+    this._pendingDraftAudio = null;
+    this._pendingDraftEvent = null;
+    this._pendingCommit = null;
+    try { this.segmenter.flush(); } catch {}
   }
 
   /// PTT early-exit (bd-4daaf5): finalize the in-progress segment + accrued held
@@ -162,14 +169,39 @@ export class LocalVadController {
   /// edit the text and send it manually. Returns the finalized text ("" when
   /// nothing was captured). No sendTurn is called, so no message is dispatched.
   async finalizeHeldToEditor() {
-    await this.flush();
-    const text = this._held.join(" ").replace(/\s+/g, " ").trim();
-    this._held = [];
+    const text = await this._finalizeHeldText();
     if (text) {
       try { this.insertPartial(text); } catch (err) { this.onError(err); }
     }
     try { this.onState("idle"); } catch { /* best-effort */ }
     return text;
+  }
+
+  async _finalizeHeldText() {
+    if (!this.holdCommits) {
+      await this.flush();
+      return "";
+    }
+    // Stop future VAD jobs, reset segmentation, and let any already-running
+    // preview finish before the authoritative whole-hold transcription.
+    this._pending = Buffer.alloc(0);
+    this._pendingDraftAudio = null;
+    this._pendingDraftEvent = null;
+    this._pendingCommit = null;
+    try { this.segmenter.flush(); } catch {}
+    await this._drain();
+    const raw = Buffer.concat(this._heldRawChunks);
+    this._heldRawChunks = [];
+    const previewFallback = this._held.join(" ").replace(/\s+/g, " ").trim();
+    this._held = [];
+    if (!raw.length) return previewFallback;
+    try {
+      const finalText = String(await this.transcribe(raw) ?? "").trim();
+      return finalText || previewFallback;
+    } catch (err) {
+      this.onError(err);
+      return previewFallback;
+    }
   }
 
   /// Feed PCM16 audio (an arbitrary-size capture chunk). Re-frames into fixed
@@ -205,6 +237,7 @@ export class LocalVadController {
       }
       return;
     }
+    if (this.holdCommits) this._heldRawChunks.push(Buffer.from(chunk));
     this._pending = this._pending.length ? Buffer.concat([this._pending, chunk]) : Buffer.from(chunk);
     while (this._pending.length >= this.frameBytes) {
       const frame = this._pending.subarray(0, this.frameBytes);

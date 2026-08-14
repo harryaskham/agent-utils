@@ -5,13 +5,15 @@ import { readJsonIfExists, agentSettingsPath } from "../pi-graphics/agent-io.js"
 
 export const PERSISTED_TTS_FIELDS = Object.freeze([
   "enabled", "provider", "voice", "lang", "speed", "embedding", "style",
-  "styleDegree", "endpoint", "backend", "server", "device",
+  "styleDegree", "endpoint", "backend", "server", "device", "speakToolEnabled",
 ]);
 export const PERSISTED_NARRATE_FIELDS = Object.freeze(["enabled", "model"]);
+export const PERSISTED_READ_FIELDS = Object.freeze(["enabled", "delayMs", "onDelay", "onSend"]);
 export const PERSISTED_CHOICE_FIELDS = Object.freeze(["timeoutMs", "wrap", "maxChoices", "speechEnabled", "forceAtAgentEnd"]);
 export const PERSISTED_RING_INPUT_FIELDS = Object.freeze(["enabled", "ring", "command", "previousEvents", "nextEvents", "selectEvents", "cancelEvents"]);
 const TTS_FIELDS = new Set(PERSISTED_TTS_FIELDS);
 const NARRATE_FIELDS = new Set(PERSISTED_NARRATE_FIELDS);
+const READ_FIELDS = new Set(PERSISTED_READ_FIELDS);
 const CHOICE_FIELDS = new Set(PERSISTED_CHOICE_FIELDS);
 const RING_INPUT_FIELDS = new Set(PERSISTED_RING_INPUT_FIELDS);
 
@@ -47,8 +49,22 @@ export function persistTtsSetting(field, value, path = agentSettingsPath()) {
   return persistSlice("tts", TTS_FIELDS, field, value, path);
 }
 
+export function resolveSpeakToolEnabled(env = process.env, persisted = {}) {
+  const raw = env.PI_SPEAK_TOOL_ENABLED ?? persisted.speakToolEnabled;
+  if (raw == null || String(raw).trim() === "") return true;
+  return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
+}
+
 export function persistNarrateSetting(field, value, path = agentSettingsPath()) {
   return persistSlice("narrate", NARRATE_FIELDS, field, value, path);
+}
+
+export function readPersistedReadSettings(path = agentSettingsPath()) {
+  return readSlice("read", path);
+}
+
+export function persistReadSetting(field, value, path = agentSettingsPath()) {
+  return persistSlice("read", READ_FIELDS, field, value, path);
 }
 
 export function readPersistedChoiceSettings(path = agentSettingsPath()) {

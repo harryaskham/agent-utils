@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import readAloudExtension, {
   DEFAULT_READ_DELAY_MS,
@@ -9,6 +12,7 @@ import readAloudExtension, {
   formatReadStatus,
   isReadControlText,
   createReadModeController,
+  createReadAloudExtension,
 } from "../extensions/read-aloud.js";
 import {
   DEFAULT_TTS_VOICE,
@@ -40,6 +44,16 @@ function makeCtx(initial = "") {
     terminal,
   };
 }
+
+test("/read durable timing resolves env > agentUtils.read > defaults", () => {
+  const persisted = defaultReadConfig({}, {}, { enabled: true, delayMs: 750, onDelay: false, onSend: false });
+  assert.equal(persisted.delay, 750);
+  assert.equal(persisted.onDelay, false);
+  assert.equal(persisted.onSend, false);
+  const env = defaultReadConfig({ PI_READ_DELAY_MS: "900", PI_READ_ON_DELAY: "1" }, {}, { delayMs: 750, onDelay: false });
+  assert.equal(env.delay, 900);
+  assert.equal(env.onDelay, true);
+});
 
 test("/read defaults match the requested native Azure mode", () => {
   const config = defaultReadConfig({ PULSE_SERVER: "pulse.example:4713" });
@@ -207,6 +221,25 @@ test("a newer synthesis aborts the stale request and interrupts playback", async
   assert.ok(interrupts >= 2);
 });
 
+test("/read command persists delay/on-delay/on-send/enabled in agentUtils.read", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "read-settings-"));
+  const settingsPath = join(dir, "settings.json");
+  const commands = new Map();
+  const handlers = new Map();
+  const pi = { registerCommand: (name, definition) => commands.set(name, definition), on: (event, handler) => handlers.set(event, handler) };
+  const harness = makeCtx("");
+  try {
+    createReadAloudExtension({ persistedTts: {}, persistedRead: {}, settingsPath })(pi);
+    handlers.get("session_start")({}, harness.ctx);
+    await commands.get("read").handler("delay=123 on_delay=false on_send=false", harness.ctx);
+    let settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.deepEqual(settings.agentUtils.read, { delayMs: 123, onDelay: false, onSend: false, enabled: true });
+    await commands.get("read").handler("off", harness.ctx);
+    settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.equal(settings.agentUtils.read.enabled, false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("extension registers /read, attaches editor input, and exposes redacted status", async () => {
   const commands = new Map();
   const handlers = new Map();
@@ -215,7 +248,7 @@ test("extension registers /read, attaches editor input, and exposes redacted sta
     on: (event, handler) => handlers.set(event, handler),
   };
   const harness = makeCtx("");
-  readAloudExtension(pi);
+  createReadAloudExtension({ persistedTts: {}, persistedRead: {}, settingsPath: null })(pi);
   handlers.get("session_start")({ reason: "startup" }, harness.ctx);
   assert.ok(commands.has("read"));
   assert.match(commands.get("read").description, /Direct Azure editor-to-speech mode/);

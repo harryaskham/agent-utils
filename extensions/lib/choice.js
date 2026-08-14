@@ -154,7 +154,7 @@ export function createChoiceSpeaker({
       const pcm = await synthesize(body, options);
       if (synthesis !== controller || controller.signal.aborted) return { interrupted: true };
       return await player.play(pcm, {
-        backend: env.PI_RT_AUDIO_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,
+        backend: env.PI_TTS_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,
         server: env.PULSE_SERVER || shared.server,
         device: env.PULSE_SINK || shared.device || DEFAULT_TTS_DEVICE,
         streamName,

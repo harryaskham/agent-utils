@@ -438,7 +438,7 @@ test("holdCommits accumulates per-segment VAD commits and sends once on commitHe
   const finalText = await controller.commitHeld();
   assert.equal(sent.length, 1, "commitHeld sends exactly one combined turn");
   assert.equal(sent[0], finalText);
-  assert.equal(sent[0], "seg1 seg2", "the combined turn joins the accumulated segments in order");
+  assert.equal(sent[0], "seg3", "release performs one authoritative whole-hold transcription after preview segments");
 });
 
 test("finalizeHeldToEditor writes the accrued turn to the editor without sending (bd-4daaf5)", async () => {
@@ -460,9 +460,9 @@ test("finalizeHeldToEditor writes the accrued turn to the editor without sending
   }
   // Early exit (Esc): finalize the accrual INTO the editor, do NOT send.
   const text = await controller.finalizeHeldToEditor();
-  assert.equal(text, "seg1 seg2");
+  assert.equal(text, "seg3");
   assert.deepEqual(sent, [], "early-exit does NOT dispatch a message");
-  assert.equal(inserted.at(-1), "seg1 seg2", "the accrued turn is written to the editor via insertPartial");
+  assert.equal(inserted.at(-1), "seg3", "the whole raw hold is written to the editor via insertPartial");
   // The accrual is cleared, so a later commitHeld sends nothing.
   const after = await controller.commitHeld();
   assert.equal(after, "", "held accrual cleared after finalizeHeldToEditor");
@@ -487,6 +487,29 @@ test("holdCommits renders incremental partials but defers the send to commitHeld
   const text = await controller.commitHeld();
   assert.equal(text, "hello");
   assert.deepEqual(sent, ["hello"], "commitHeld sends the accumulated turn on release");
+});
+
+test("PTT release transcribes the whole raw hold even when energy threshold suppresses every preview", async () => {
+  const sent = [];
+  const inserted = [];
+  const lengths = [];
+  const controller = new LocalVadController({
+    holdCommits: true,
+    config: { energyThreshold: 1, minTurnSpeechMs: 200 }, // ordinary speech never crosses 1.0
+    transcribe: async (audio) => { lengths.push(audio.length); return "threshold independent final"; },
+    insertPartial: (text) => inserted.push(text),
+    sendTurn: (text) => sent.push(text),
+  });
+  await controller.pushFrame(frame(800, { speech: true }));
+  for (let ms = 0; ms < 3500; ms += 100) await controller.pushFrame(frame(100));
+  await controller._drain();
+  assert.deepEqual(inserted, [], "energy threshold still controls preview visibility");
+  assert.deepEqual(sent, [], "PTT never sends on silence");
+  const text = await controller.commitHeld();
+  assert.equal(text, "threshold independent final");
+  assert.deepEqual(sent, ["threshold independent final"]);
+  assert.equal(lengths.length, 1, "only release transcribes when VAD found no preview segments");
+  assert.ok(lengths[0] >= frame(4300).length, "release receives the entire raw held audio");
 });
 
 test("commitHeld finalizes an in-progress segment released mid-speech (no VAD-silence yet, bd-9e06ae)", async () => {

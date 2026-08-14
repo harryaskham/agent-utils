@@ -137,7 +137,7 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = 
     PI_TTS_PROVIDER: "provider", PI_TTS_VOICE: "voice", PI_TTS_LANG: "lang",
     PI_TTS_SPEED: "speed", PI_TTS_EMBEDDING: "embedding", PI_TTS_STYLE: "style",
     PI_TTS_STYLEDEGREE: "styledegree", AZURE_SPEECH_ENDPOINT: "endpoint",
-    PI_RT_AUDIO_BACKEND: "backend", PULSE_SERVER: "server", PULSE_SINK: "device",
+    PI_TTS_BACKEND: "backend", PULSE_SERVER: "server", PULSE_SINK: "device",
   };
   for (const [envKey, configKey] of Object.entries(envMap)) {
     if (env[envKey] != null && String(env[envKey]).trim() !== "") envValues[configKey] = env[envKey];

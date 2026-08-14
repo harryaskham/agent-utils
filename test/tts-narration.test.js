@@ -22,12 +22,15 @@ import {
 import {
   persistChoiceSetting,
   persistNarrateSetting,
+  persistReadSetting,
   persistRingInputSetting,
   persistTtsSetting,
   readPersistedChoiceSettings,
   readPersistedNarrateSettings,
+  readPersistedReadSettings,
   readPersistedRingInputSettings,
   readPersistedTtsSettings,
+  resolveSpeakToolEnabled,
 } from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
 
@@ -97,6 +100,13 @@ test("narration model resolves exact provider/id and refuses unavailable models"
   assert.equal(DEFAULT_NARRATION_MODEL, "github-copilot/gpt-5.6-luna");
 });
 
+test("speak tool enablement resolves env > agentUtils.tts > default", () => {
+  assert.equal(resolveSpeakToolEnabled({}, {}), true);
+  assert.equal(resolveSpeakToolEnabled({}, { speakToolEnabled: false }), false);
+  assert.equal(resolveSpeakToolEnabled({ PI_SPEAK_TOOL_ENABLED: "1" }, { speakToolEnabled: false }), true);
+  assert.equal(resolveSpeakToolEnabled({ PI_SPEAK_TOOL_ENABLED: "0" }, { speakToolEnabled: true }), false);
+});
+
 test("durable TTS/narrate settings use env > persisted > defaults", () => {
   const tts = resolveAgentTtsSettings({
     persisted: { enabled: true, voice: "PersistedVoice", speed: 1.25, device: "persisted-sink" },
@@ -128,6 +138,7 @@ test("settings read/write is scoped, rejects secret fields, and tolerates malfor
     assert.equal(persistTtsSetting("apiKey", "must-not-write", path), false);
     assert.equal(persistNarrateSetting("enabled", true, path), true);
     assert.equal(persistNarrateSetting("model", DEFAULT_NARRATION_MODEL, path), true);
+    assert.equal(persistReadSetting("delayMs", 2000, path), true);
     assert.equal(persistChoiceSetting("timeoutMs", 30000, path), true);
     assert.equal(persistRingInputSetting("selectEvents", ["EVENT_RING_SELECT"], path), true);
     const all = JSON.parse(readFileSync(path, "utf8"));
@@ -137,12 +148,14 @@ test("settings read/write is scoped, rejects secret fields, and tolerates malfor
     assert.equal(all.agentUtils.tts.apiKey, undefined);
     assert.deepEqual(readPersistedTtsSettings(path), { voice: "MAI-Voice-2" });
     assert.deepEqual(readPersistedNarrateSettings(path), { enabled: true, model: DEFAULT_NARRATION_MODEL });
+    assert.deepEqual(readPersistedReadSettings(path), { delayMs: 2000 });
     assert.deepEqual(readPersistedChoiceSettings(path), { timeoutMs: 30000 });
     assert.deepEqual(readPersistedRingInputSettings(path), { selectEvents: ["EVENT_RING_SELECT"] });
 
     writeFileSync(path, "not json");
     assert.deepEqual(readPersistedTtsSettings(path), {});
     assert.deepEqual(readPersistedNarrateSettings(path), {});
+    assert.deepEqual(readPersistedReadSettings(path), {});
     assert.deepEqual(readPersistedChoiceSettings(path), {});
     assert.deepEqual(readPersistedRingInputSettings(path), {});
   } finally {

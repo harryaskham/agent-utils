@@ -20,15 +20,31 @@ import {
 } from "./lib/tts.js";
 import { audioDurationMs } from "./lib/realtime-audio.js";
 import { markAssistantSpeaking } from "./lib/half-duplex-state.js";
-import { readPersistedTtsSettings } from "./lib/tts-settings.js";
+import {
+  persistReadSetting,
+  readPersistedReadSettings,
+  readPersistedTtsSettings,
+} from "./lib/tts-settings.js";
 
 export const DEFAULT_READ_DELAY_MS = 2000;
 
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const NONE = /^(none|null|unset)$/i;
 
-export function defaultReadConfig(env = process.env, persisted = {}) {
+export function defaultReadConfig(env = process.env, persisted = {}, persistedRead = {}) {
   const configured = (key, fallback) => persisted[key] !== undefined ? persisted[key] : fallback;
+  const readConfigured = (key, fallback) => persistedRead[key] !== undefined ? persistedRead[key] : fallback;
+  const bool = (value, fallback) => {
+    if (value == null || String(value).trim() === "") return fallback;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+    return fallback;
+  };
+  const nonNegative = (value, fallback) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : fallback;
+  };
   return {
     provider: env.PI_TTS_PROVIDER || configured("provider", DEFAULT_TTS_PROVIDER),
     voice: env.PI_TTS_VOICE || configured("voice", DEFAULT_TTS_VOICE),
@@ -39,13 +55,13 @@ export function defaultReadConfig(env = process.env, persisted = {}) {
     styleDegree: env.PI_TTS_STYLEDEGREE != null ? Number(env.PI_TTS_STYLEDEGREE) : configured("styleDegree", null),
     endpoint: env.AZURE_SPEECH_ENDPOINT || configured("endpoint", undefined),
     apiKey: undefined,
-    backend: env.PI_RT_AUDIO_BACKEND || configured("backend", DEFAULT_TTS_BACKEND),
+    backend: env.PI_TTS_BACKEND || configured("backend", DEFAULT_TTS_BACKEND),
     server: env.PULSE_SERVER || configured("server", undefined),
     device: env.PULSE_SINK || configured("device", DEFAULT_TTS_DEVICE),
     streamName: DEFAULT_TTS_STREAM_NAME,
-    delay: DEFAULT_READ_DELAY_MS,
-    onDelay: true,
-    onSend: true,
+    delay: env.PI_READ_DELAY_MS != null ? nonNegative(env.PI_READ_DELAY_MS, DEFAULT_READ_DELAY_MS) : nonNegative(readConfigured("delayMs", DEFAULT_READ_DELAY_MS), DEFAULT_READ_DELAY_MS),
+    onDelay: bool(env.PI_READ_ON_DELAY, bool(readConfigured("onDelay", true), true)),
+    onSend: bool(env.PI_READ_ON_SEND, bool(readConfigured("onSend", true), true)),
   };
 }
 
@@ -172,9 +188,11 @@ export function createReadModeController({
   clearTimer = clearTimeout,
   defer = queueMicrotask,
   persistedTts = {},
+  persistedRead = {},
 } = {}) {
-  let config = defaultReadConfig(env, persistedTts);
-  let enabled = false;
+  let config = defaultReadConfig(env, persistedTts, persistedRead);
+  const enabledFrom = env.PI_READ_ENABLED ?? persistedRead.enabled;
+  let enabled = ["1", "true", "yes", "on"].includes(String(enabledFrom ?? "").trim().toLowerCase());
   let timer = null;
   let generation = 0;
   let synthesisAbort = null;
@@ -325,8 +343,12 @@ export function createReadModeController({
   };
 }
 
-export default function readAloudExtension(pi) {
-  const controller = createReadModeController({ persistedTts: readPersistedTtsSettings() });
+export function createReadAloudExtension({ settingsPath, persistedTts, persistedRead } = {}) {
+  return function readAloudExtension(pi) {
+  const controller = createReadModeController({
+    persistedTts: persistedTts ?? readPersistedTtsSettings(settingsPath),
+    persistedRead: persistedRead ?? readPersistedReadSettings(settingsPath),
+  });
   let terminalInputUnsubscribe = null;
   let sessionCtx = null;
 
@@ -353,11 +375,15 @@ export default function readAloudExtension(pi) {
     handler: async (args, ctx) => {
       try {
         const parsed = parseEnvStyleArgs(String(args || ""));
-        controller.updateConfig(parsed.values, ctx);
+        const updated = controller.updateConfig(parsed.values, ctx);
+        if (Object.hasOwn(parsed.values, "delay")) persistReadSetting("delayMs", updated.delay, settingsPath);
+        if (Object.hasOwn(parsed.values, "on_delay") || Object.hasOwn(parsed.values, "ondelay")) persistReadSetting("onDelay", updated.onDelay, settingsPath);
+        if (Object.hasOwn(parsed.values, "on_send") || Object.hasOwn(parsed.values, "onsend")) persistReadSetting("onSend", updated.onSend, settingsPath);
         const action = String(parsed.positionals[0] || "").toLowerCase();
         if (["off", "stop", "disable"].includes(action)) {
           controller.disable(ctx);
-          ctx.ui.notify("/read off", "info");
+          persistReadSetting("enabled", false, settingsPath);
+          ctx.ui.notify("/read off (persisted)", "info");
           return;
         }
         if (action === "status") {
@@ -365,6 +391,7 @@ export default function readAloudExtension(pi) {
           return;
         }
         controller.enable(ctx);
+        persistReadSetting("enabled", true, settingsPath);
         if (["on", "start", "enable"].includes(action) || parsed.positionals.length === 0) {
           ctx.ui.notify(controller.status(), "info");
           return;
@@ -379,4 +406,7 @@ export default function readAloudExtension(pi) {
   });
 
   try { pi.readAloud = controller; } catch {}
+  };
 }
+
+export default createReadAloudExtension();

@@ -87,6 +87,12 @@ export function createTtsNarrationExtension({
     let narrateEnabledSource = resolvedNarrate.enabledSource;
     let narrationModel = resolvedNarrate.model;
     let narrationModelSource = resolvedNarrate.modelSource;
+    try {
+      pi.ttsNarration = {
+        isEnabled: () => ttsEnabled,
+        isNarrateEnabled: () => narrateEnabled,
+      };
+    } catch {}
     let lastPlainKey = null;
     let nextBatchId = 1;
     let narrationGeneration = 0;
