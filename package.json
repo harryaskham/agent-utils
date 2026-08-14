@@ -54,6 +54,7 @@
       "./extensions/pi-graphics.js",
       "./extensions/firecracker-vm.js",
       "./extensions/realtime-agent.js",
+      "./extensions/pipe.js",
       "./extensions/read-aloud.js",
       "./extensions/force-agent-speech.js",
       "./extensions/compaction-continue-guard.js",

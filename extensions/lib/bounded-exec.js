@@ -35,6 +35,7 @@ export function runBoundedSubprocess({
   args = [],
   spawnImpl = spawn,
   stdio,
+  spawnOptions,
   timeoutMs,
   label = "subprocess",
   killGraceMs = DEFAULT_KILL_GRACE_MS,
@@ -55,7 +56,9 @@ export function runBoundedSubprocess({
 
     let proc;
     try {
-      proc = spawnImpl(command, args, stdio ? { stdio } : undefined);
+      const options = { ...(spawnOptions || {}) };
+      if (stdio !== undefined) options.stdio = stdio;
+      proc = spawnImpl(command, args, Object.keys(options).length > 0 ? options : undefined);
     } catch (err) {
       reject(err);
       return;

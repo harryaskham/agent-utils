@@ -384,6 +384,18 @@
           "sourceOfTruth": "extensions/m.js"
         },
         {
+          "name": "User-input pipe Pi extension",
+          "command": "/pipe, /fix",
+          "audience": "operators",
+          "purpose": "Transform interactively submitted user text through any shell command on stdin, with preview/send-raw/cancel or automatic-send modes; runs before read-aloud so on-send TTS speaks exactly what reaches the model.",
+          "commonActions": [
+            "/pipe cmd=fix mode=on",
+            "/pipe cmd=\"tr a-z A-Z\" mode=auto",
+            "/fix on|off|auto"
+          ],
+          "sourceOfTruth": "extensions/pipe.js"
+        },
+        {
           "name": "Effort and fast-model switch Pi extension",
           "command": "/effort, /fast, self_set_effort",
           "audience": "operators, Pi agents",

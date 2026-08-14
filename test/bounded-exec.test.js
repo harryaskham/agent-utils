@@ -29,20 +29,30 @@ function fakeChild({ stdout = "", stderr = "", exitCode = 0, autoClose = true } 
   return proc;
 }
 
-test("runBoundedSubprocess resolves { code, stdout, stderr } on close and runs onSpawn", async () => {
+test("runBoundedSubprocess resolves output, forwards spawn options, and runs onSpawn", async () => {
   const proc = fakeChild({ stdout: "hello", stderr: "warn", exitCode: 0 });
   let onSpawnProc = null;
+  let spawned;
   const res = await runBoundedSubprocess({
     command: "x",
     args: ["a"],
-    spawnImpl: () => proc,
+    spawnImpl: (command, args, options) => {
+      spawned = { command, args, options };
+      return proc;
+    },
     stdio: ["pipe", "pipe", "pipe"],
+    spawnOptions: { cwd: "/work", shell: true },
     onSpawn: (p) => { onSpawnProc = p; },
   });
   assert.equal(res.code, 0);
   assert.equal(res.stdout.toString(), "hello");
   assert.equal(res.stderr.toString(), "warn");
   assert.ok(Buffer.isBuffer(res.stdout) && Buffer.isBuffer(res.stderr));
+  assert.deepEqual(spawned, {
+    command: "x",
+    args: ["a"],
+    options: { cwd: "/work", shell: true, stdio: ["pipe", "pipe", "pipe"] },
+  });
   assert.equal(onSpawnProc, proc, "onSpawn receives the spawned proc after listeners attach");
 });
 

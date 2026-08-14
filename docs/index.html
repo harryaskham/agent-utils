@@ -25,7 +25,7 @@
         <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
         <div class="hero-stats" aria-label="Inventory summary">
           <span><strong>4</strong> sections</span>
-          <span><strong>34</strong> tools and surfaces</span>
+          <span><strong>35</strong> tools and surfaces</span>
           <span><strong>2026-06-25</strong> reviewed</span>
         </div>
       </div>
@@ -806,6 +806,32 @@
               <li><code>/m &lt;provider/model&gt;</code></li>
               <li><code>/m (Tab to browse)</code></li>
               <li><code>/m anthropic/claude-opus-4-7</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>User-input pipe Pi extension</h3>
+              <code>/pipe, /fix</code>
+            </div>
+            <p>Transform interactively submitted user text through any shell command on stdin, with preview/send-raw/cancel or automatic-send modes; runs before read-aloud so on-send TTS speaks exactly what reaches the model.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/pipe.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/pipe cmd=fix mode=on</code></li>
+              <li><code>/pipe cmd=&quot;tr a-z A-Z&quot; mode=auto</code></li>
+              <li><code>/fix on|off|auto</code></li>
               </ul>
             </details>
           </article>
