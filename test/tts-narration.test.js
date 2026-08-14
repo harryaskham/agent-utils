@@ -1,0 +1,206 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  DEFAULT_NARRATION_MODEL,
+  TOOL_SUMMARY_CUSTOM_TYPE,
+  assistantPlainText,
+  assistantToolCalls,
+  buildNarrationRequest,
+  createAgentSpeechController,
+  normalizeNarrationText,
+  redactNarrationText,
+  resolveNarrationModel,
+  sanitizeNarrationValue,
+  toolResultText,
+} from "../extensions/lib/tts-narration.js";
+import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
+
+function harness({ runTextTurn, speech } = {}) {
+  const commands = new Map();
+  const handlers = new Map();
+  const sent = [];
+  const notifications = [];
+  const renderers = new Map();
+  const model = { provider: "github-copilot", id: "gpt-5.6-luna" };
+  const ctx = {
+    modelRegistry: {
+      find(provider, id) { return provider === model.provider && id === model.id ? model : undefined; },
+    },
+    ui: { notify(message, level = "info") { notifications.push({ message, level }); } },
+  };
+  const pi = {
+    registerCommand(name, def) { commands.set(name, def); },
+    registerMessageRenderer(name, fn) { renderers.set(name, fn); },
+    on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
+    sendMessage(message, options) { sent.push({ message, options }); },
+  };
+  createTtsNarrationExtension({ runTextTurn, speech, env: {} })(pi);
+  const emit = (name, event) => { for (const fn of handlers.get(name) || []) fn(event, ctx); };
+  return { pi, ctx, commands, handlers, sent, notifications, renderers, emit };
+}
+
+async function waitFor(predicate, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+  return predicate();
+}
+
+test("assistant TTS extracts only plain text while tool batches retain parallel calls", () => {
+  const message = {
+    role: "assistant",
+    timestamp: 1,
+    content: [
+      { type: "thinking", thinking: "private" },
+      { type: "text", text: "I will inspect both." },
+      { type: "toolCall", id: "a", name: "read", arguments: { path: "a", apiKey: "secret" } },
+      { type: "toolCall", id: "b", name: "search", arguments: { query: "q" } },
+    ],
+  };
+  assert.equal(assistantPlainText(message), "I will inspect both.");
+  const calls = assistantToolCalls(message);
+  assert.deepEqual(calls.map((call) => call.id), ["a", "b"]);
+  assert.equal(calls[0].arguments.apiKey, "[REDACTED]");
+});
+
+test("narration helpers redact secrets, bound output, and force first-person one-line text", () => {
+  assert.equal(redactNarrationText("Authorization: abc token=xyz Bearer top.secret"), "Authorization: [REDACTED] token=[REDACTED] Bearer [REDACTED]");
+  assert.deepEqual(sanitizeNarrationValue({ password: "x", nested: { token: "y", ok: "z" } }), { password: "[REDACTED]", nested: { token: "[REDACTED]", ok: "z" } });
+  assert.equal(toolResultText({ content: [{ type: "text", text: "api_key=hidden found 3 rows" }] }), "api_key=[REDACTED] found 3 rows");
+  assert.equal(normalizeNarrationText("checking the files", "before"), "I am checking the files.");
+  assert.equal(normalizeNarrationText("three rows matched", "after"), "I found three rows matched.");
+  const request = buildNarrationRequest({ phase: "before", calls: [{ name: "read", arguments: { path: "a" } }] });
+  assert.match(request.systemPrompt, /exactly one short plain-text sentence/);
+  assert.match(request.systemPrompt, /untrusted data/);
+});
+
+test("narration model resolves exact provider/id and refuses unavailable models", () => {
+  const registry = { find: (provider, id) => provider === "github-copilot" && id === "gpt-5.6-luna" ? { provider, id } : undefined };
+  assert.deepEqual(resolveNarrationModel(registry), { provider: "github-copilot", id: "gpt-5.6-luna" });
+  assert.throws(() => resolveNarrationModel(registry, "gpt"), /provider\/id/);
+  assert.throws(() => resolveNarrationModel(registry, "github-copilot/missing"), /not available/);
+  assert.equal(DEFAULT_NARRATION_MODEL, "github-copilot/gpt-5.6-luna");
+});
+
+test("shared /tts speech controller inherits /read defaults and interrupts stale synthesis/playback", async () => {
+  const synthCalls = [];
+  const synthesize = (text, options) => new Promise((resolve, reject) => {
+    const call = { text, options, resolve, reject };
+    synthCalls.push(call);
+    options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    if (text === "second") resolve(Buffer.from(text));
+  });
+  const player = {
+    interrupts: 0,
+    plays: [],
+    interrupt() { this.interrupts += 1; },
+    async play(pcm, options) { this.plays.push({ text: String(pcm), options }); return { interrupted: false }; },
+    isPlaying() { return false; },
+  };
+  const speech = createAgentSpeechController({ env: { PULSE_SINK: "hw_output" }, synthesize, player });
+  assert.equal(speech.getConfig().voice, "MAI-Voice-2");
+  assert.equal(speech.getConfig().speed, 2);
+  const first = speech.speak("first").catch((error) => error.message);
+  const second = speech.speak("second");
+  assert.equal(await first, "aborted");
+  await second;
+  assert.equal(player.plays.length, 1);
+  assert.equal(player.plays[0].text, "second");
+  assert.equal(player.plays[0].options.streamName, "/tts");
+  assert.equal(player.plays[0].options.device, "hw_output");
+  speech.apply({ voice: "AnotherVoice", speed: "1.5" });
+  assert.equal(speech.getConfig().voice, "AnotherVoice");
+  assert.equal(speech.getConfig().speed, 1.5);
+  assert.throws(() => speech.apply({ delay: "10" }), /belongs to \/read/);
+});
+
+test("/tts speaks every plain assistant message verbatim without a speak tool call", async () => {
+  const spoken = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "MAI-Voice-2", lang: "en-GB", speed: 2, embedding: "set", style: null, styleDegree: null, backend: "pulse", device: "hw_output" }),
+    apply() {}, interrupt() {}, dispose() {},
+    async speak(text) { spoken.push(text); },
+  };
+  const h = harness({ speech, runTextTurn: async () => ({ text: "", model: DEFAULT_NARRATION_MODEL }) });
+  await h.commands.get("tts").handler("on", h.ctx);
+  h.emit("message_end", { message: { role: "assistant", timestamp: 1, content: [{ type: "text", text: "Exact plain response." }, { type: "thinking", thinking: "not spoken" }] } });
+  await waitFor(() => spoken.length === 1);
+  assert.deepEqual(spoken, ["Exact plain response."]);
+  // Same finalized message re-emission is deduplicated.
+  h.emit("message_end", { message: { role: "assistant", timestamp: 1, content: [{ type: "text", text: "Exact plain response." }] } });
+  await Promise.resolve();
+  assert.equal(spoken.length, 1);
+});
+
+test("/narrate batches parallel tools into one pre/post summary, speaks both, and injects no-trigger next-turn context", async () => {
+  const spoken = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "MAI-Voice-2", lang: "en-GB", speed: 2, embedding: "set", style: null, styleDegree: null, backend: "pulse", device: "hw_output" }),
+    apply() {}, interrupt() {}, dispose() {},
+    async speak(text) { spoken.push(text); },
+  };
+  const inference = [];
+  const runTextTurn = async (_ctx, request) => {
+    inference.push(request);
+    const before = request.systemPrompt.includes("Begin with 'I am'");
+    return { text: before ? "I am checking both sources." : "I found two matching records.", model: DEFAULT_NARRATION_MODEL };
+  };
+  const h = harness({ speech, runTextTurn });
+  await h.commands.get("narrate").handler("on", h.ctx);
+  h.emit("message_end", { message: { role: "assistant", content: [
+    { type: "toolCall", id: "a", name: "read", arguments: { path: "a" } },
+    { type: "toolCall", id: "b", name: "search", arguments: { query: "b" } },
+  ] } });
+  h.emit("tool_execution_end", { toolCallId: "a", toolName: "read", result: { content: [{ type: "text", text: "one" }] }, isError: false });
+  await Promise.resolve();
+  assert.ok(h.sent.length <= 1, "post narration waits for every parallel sibling result");
+  h.emit("tool_execution_end", { toolCallId: "b", toolName: "search", result: { content: [{ type: "text", text: "two" }] }, isError: false });
+  await waitFor(() => h.sent.length === 2);
+
+  assert.equal(inference.length, 2, "one inference before and one after the complete parallel batch");
+  assert.deepEqual(h.sent.map((entry) => entry.message.content), [
+    "[tool summary][before] I am checking both sources.",
+    "[tool summary][after] I found two matching records.",
+  ]);
+  for (const entry of h.sent) {
+    assert.equal(entry.message.customType, TOOL_SUMMARY_CUSTOM_TYPE);
+    assert.deepEqual(entry.options, { deliverAs: "nextTurn", triggerTurn: false });
+  }
+  assert.deepEqual(spoken, ["I am checking both sources.", "I found two matching records."]);
+});
+
+test("a newer final assistant message aborts stale narration and its verbatim /tts wins", async () => {
+  const spoken = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "v", lang: "en", speed: 1, embedding: null, style: null, styleDegree: null, backend: "pulse", device: "d" }),
+    apply() {}, interrupt() {}, dispose() {}, async speak(text) { spoken.push(text); },
+  };
+  let narrationSignal;
+  const runTextTurn = async (_ctx, request) => new Promise((resolve, reject) => {
+    narrationSignal = request.signal;
+    request.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  const h = harness({ speech, runTextTurn });
+  await h.commands.get("tts").handler("on", h.ctx);
+  await h.commands.get("narrate").handler("on", h.ctx);
+  h.emit("message_end", { message: { role: "assistant", content: [{ type: "toolCall", id: "a", name: "read", arguments: {} }] } });
+  await waitFor(() => !!narrationSignal);
+  h.emit("message_end", { message: { role: "assistant", timestamp: 9, content: [{ type: "text", text: "Final answer wins." }] } });
+  await waitFor(() => narrationSignal.aborted && spoken.includes("Final answer wins."));
+  assert.equal(narrationSignal.aborted, true);
+  assert.deepEqual(spoken, ["Final answer wins."]);
+  assert.equal(h.sent.length, 0, "aborted stale narration injects no custom context");
+});
+
+test("narration failures are best-effort and never throw from tool/message hooks", async () => {
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "v", lang: "en", speed: 1, embedding: null, style: null, styleDegree: null, backend: "pulse", device: "d" }),
+    apply() {}, interrupt() {}, dispose() {}, async speak() {},
+  };
+  const h = harness({ speech, runTextTurn: async () => { throw new Error("model down"); } });
+  await h.commands.get("narrate").handler("on", h.ctx);
+  assert.doesNotThrow(() => h.emit("message_end", { message: { role: "assistant", content: [{ type: "toolCall", id: "a", name: "read", arguments: {} }] } }));
+  h.emit("tool_execution_end", { toolCallId: "a", toolName: "read", result: {}, isError: false });
+  await waitFor(() => h.notifications.some((entry) => /model down/.test(entry.message)));
+  assert.equal(h.sent.length, 0);
+});

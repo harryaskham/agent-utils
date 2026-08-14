@@ -56,6 +56,7 @@
       "./extensions/realtime-agent.js",
       "./extensions/pipe.js",
       "./extensions/read-aloud.js",
+      "./extensions/tts-narration.js",
       "./extensions/choice.js",
       "./extensions/ring-input.js",
       "./extensions/force-agent-speech.js",
