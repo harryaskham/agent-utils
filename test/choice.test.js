@@ -29,6 +29,7 @@ function harness() {
   const events = eventBus();
   const widgets = new Map();
   const notifications = [];
+  const sentMessages = [];
   const terminalHandlers = [];
   const editor = { value: "" };
   const ctx = {
@@ -44,10 +45,12 @@ function harness() {
     events,
     registerCommand(name, def) { commands.set(name, def); },
     registerTool(def) { tools.set(def.name, def); },
+    registerMessageRenderer() {},
+    sendMessage(message, options) { sentMessages.push({ message, options }); },
     on(name, fn) { handlers.set(name, fn); },
   };
   const input = (data) => [...terminalHandlers].map((fn) => fn(data));
-  return { pi, ctx, commands, tools, handlers, widgets, notifications, editor, input, events };
+  return { pi, ctx, commands, tools, handlers, widgets, notifications, sentMessages, editor, input, events };
 }
 
 const choices = [
@@ -147,6 +150,19 @@ test("choice timeout resolves without inventing a selection", async () => {
   assert.equal(h.widgets.has("agent-utils-choice"), false);
 });
 
+test("timeoutMs=0 leaves choice active indefinitely until explicit input", async () => {
+  const h = harness();
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, persistedSettings: { choice: {}, tts: {} } })(h.pi);
+  let settled = false;
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 0 }, null, null, h.ctx);
+  pending.then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false);
+  h.input("q");
+  const result = await pending;
+  assert.equal(result.details.status, "cancelled");
+});
+
 test("choice extension honors persisted agentUtils.choice defaults", async () => {
   const spoken = [];
   const h = harness();
@@ -160,6 +176,27 @@ test("choice extension honors persisted agentUtils.choice defaults", async () =>
   const timed = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2) }, null, null, h.ctx);
   assert.equal(timed.details.status, "timeout");
   assert.deepEqual(spoken, [], "persisted speechEnabled=false suppresses choice TTS");
+});
+
+test("/force-choice injects once at agent_end, requires interactive_choice, then rearms", async () => {
+  const h = harness();
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
+  })(h.pi);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 1);
+  assert.match(h.sentMessages[0].message.content, /Present interactive_choice now/);
+  assert.deepEqual(h.sentMessages[0].options, { deliverAs: "followUp", triggerTurn: true });
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 1, "unsatisfied force request does not hot-loop");
+
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Next?", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  h.input("1");
+  await pending;
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 2, "a real choice satisfies and rearms the next end-of-agent request");
 });
 
 test("choice speaker inherits persisted agentUtils.tts and interrupts stale speech/player", async () => {

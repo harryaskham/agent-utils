@@ -27,6 +27,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
   return function ringInputExtension(pi) {
     const ringConfig = { ...(persistedSettings?.ringInput ?? readPersistedRingInputSettings(settingsPath)) };
     let current = null;
+    let activeSession = null;
     let lastStatus = { state: "idle", error: null, event: null };
 
     const emitStatus = (status) => {
@@ -62,7 +63,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
         emitStatus({ state: "error", error: error?.message || String(error), sessionId: session.sessionId });
         return false;
       }
-      const record = { proc, sessionId: session.sessionId, ring: session.ring || env.PI_RING_CHOICE_RING || ringConfig.ring || null, stdout: "", stderr: "", stopped: false };
+      const record = { proc, session, sessionId: session.sessionId, ring: session.ring || env.PI_RING_CHOICE_RING || ringConfig.ring || null, stdout: "", stderr: "", stopped: false };
       current = record;
       emitStatus({ state: "listening", error: null, sessionId: record.sessionId, ring: record.ring });
 
@@ -92,16 +93,27 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
         if (current !== record || record.stopped) return;
         current = null;
         const detail = record.stderr.trim();
-        if (/timed out waiting/i.test(detail)) emitStatus({ state: "idle", reason: "timeout", error: null, sessionId: record.sessionId });
-        else if (code === 0) emitStatus({ state: "idle", reason: "ended", error: null, sessionId: record.sessionId });
+        if (/timed out waiting/i.test(detail)) {
+          if (Number(record.session.timeoutMs) === 0 && activeSession?.sessionId === record.sessionId) {
+            emitStatus({ state: "restarting", reason: "bounded-client-timeout", error: null, sessionId: record.sessionId });
+            queueMicrotask(() => {
+              if (activeSession?.sessionId === record.sessionId && !current) start(activeSession);
+            });
+          } else emitStatus({ state: "idle", reason: "timeout", error: null, sessionId: record.sessionId });
+        } else if (code === 0) emitStatus({ state: "idle", reason: "ended", error: null, sessionId: record.sessionId });
         else emitStatus({ state: "error", error: `ring get exited ${code ?? "?"}${signal ? `/${signal}` : ""}${detail ? `: ${detail}` : ""}`, sessionId: record.sessionId });
       });
       return true;
     };
 
     const choiceSessionHandler = (session = {}) => {
-      if (session.status === "started") start(session);
-      else if (session.status === "ended" && (!current || current.sessionId === session.sessionId)) stop("choice-ended");
+      if (session.status === "started") {
+        activeSession = session;
+        start(session);
+      } else if (session.status === "ended" && activeSession?.sessionId === session.sessionId) {
+        activeSession = null;
+        stop("choice-ended");
+      }
     };
     pi.events?.on?.(CHOICE_SESSION_EVENT, choiceSessionHandler);
 
@@ -168,6 +180,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
     });
 
     pi.on("session_shutdown", () => {
+      activeSession = null;
       stop("shutdown");
       try { pi.events?.off?.(CHOICE_SESSION_EVENT, choiceSessionHandler); } catch {}
     });

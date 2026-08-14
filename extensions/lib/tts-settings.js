@@ -8,7 +8,7 @@ export const PERSISTED_TTS_FIELDS = Object.freeze([
   "styleDegree", "endpoint", "backend", "server", "device",
 ]);
 export const PERSISTED_NARRATE_FIELDS = Object.freeze(["enabled", "model"]);
-export const PERSISTED_CHOICE_FIELDS = Object.freeze(["timeoutMs", "wrap", "maxChoices", "speechEnabled"]);
+export const PERSISTED_CHOICE_FIELDS = Object.freeze(["timeoutMs", "wrap", "maxChoices", "speechEnabled", "forceAtAgentEnd"]);
 export const PERSISTED_RING_INPUT_FIELDS = Object.freeze(["enabled", "ring", "command", "previousEvents", "nextEvents", "selectEvents", "cancelEvents"]);
 const TTS_FIELDS = new Set(PERSISTED_TTS_FIELDS);
 const NARRATE_FIELDS = new Set(PERSISTED_NARRATE_FIELDS);

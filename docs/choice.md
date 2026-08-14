@@ -55,15 +55,45 @@ wrap=true max=9 speech=true`:
       "timeoutMs": 30000,
       "wrap": true,
       "maxChoices": 9,
-      "speechEnabled": true
+      "speechEnabled": true,
+      "forceAtAgentEnd": false
     }
   }
 }
 ```
 
+Set `timeoutMs` to `0` (or run `/choice settings timeout=0`) to disable
+automatic choice timeout entirely. Escape, explicit cancellation, session
+shutdown, or a selection still terminates the choice normally. The ring adapter
+keeps listening indefinitely by renewing its bounded `ring get` smart client
+every five minutes while that no-timeout choice remains active; navigation can
+continue for any number of gestures before selection.
+
 Choice speech resolves the same `agentUtils.tts` voice, embedding, language,
 speed, style, endpoint, backend, server, and device used by `/read`, `/tts`, and
 the `speak` tool. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
+
+## Continuous control with `/force-choice`
+
+```text
+/force-choice on
+/force-choice status
+/force-choice off
+```
+
+When enabled, the extension waits for Pi's `agent_end` event—the point after all
+tools and the final assistant message, where the agent would otherwise stop—and
+injects one tagged custom control message with `deliverAs: followUp` and
+`triggerTurn: true`. It requires the next run to call `interactive_choice` with
+2–5 concrete next actions, allowing continuous keyboard/ring control.
+
+The request is deduplicated: if the next run fails to present a choice, the
+extension warns and does not inject repeatedly. Presenting a real choice satisfies
+and rearms it for the next agent end. A selected option labelled exactly `Stop
+continuous choices` (also simple `stop`, `idle`, `pause`, or `finish`) disables
+and persists the mode, so continuous operation can itself be ended from the ring.
+Durable configuration is `agentUtils.choice.forceAtAgentEnd` or
+`PI_FORCE_CHOICE` (env wins).
 
 Escape is the freeform escape hatch: it invalidates the visible choice, consumes
 only the Escape key, leaves the editor untouched, stops input adapters/TTS, and

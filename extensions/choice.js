@@ -22,6 +22,8 @@ import {
   readPersistedTtsSettings,
 } from "./lib/tts-settings.js";
 
+export const FORCE_CHOICE_CUSTOM_TYPE = "agent-utils-force-choice";
+
 function boolSetting(value, fallback) {
   if (value == null || String(value).trim() === "") return fallback;
   const normalized = String(value).trim().toLowerCase();
@@ -37,10 +39,11 @@ function resolveChoiceSettings(env, persisted = {}) {
     return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.trunc(parsed))) : fallback;
   };
   return {
-    timeoutMs: number("PI_CHOICE_TIMEOUT_MS", "timeoutMs", DEFAULT_CHOICE_TIMEOUT_MS, 1, 300000),
+    timeoutMs: number("PI_CHOICE_TIMEOUT_MS", "timeoutMs", DEFAULT_CHOICE_TIMEOUT_MS, 0, 300000),
     maxChoices: number("PI_CHOICE_MAX_CHOICES", "maxChoices", 9, 2, 9),
     wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
     speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
+    forceAtAgentEnd: boolSetting(env.PI_FORCE_CHOICE, boolSetting(persisted.forceAtAgentEnd, false)),
   };
 }
 
@@ -68,6 +71,8 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
     let active = null;
     let lastResult = null;
     let nextSessionId = 1;
+    let forcedRequestOutstanding = false;
+    let warnedUnsatisfiedForce = false;
 
     const emitSession = (payload) => {
       try { pi.events?.emit?.(CHOICE_SESSION_EVENT, payload); } catch {}
@@ -97,6 +102,14 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       record.signal?.removeEventListener?.("abort", record.onAbort);
       if (active === record) active = null;
       lastResult = result;
+      if (
+        choiceConfig.forceAtAgentEnd && result?.status === "selected" &&
+        /^(?:stop|idle|pause|finish|stop continuous choices)$/i.test(String(result.choice?.label || "").trim())
+      ) {
+        choiceConfig.forceAtAgentEnd = false;
+        forcedRequestOutstanding = false;
+        persistChoiceSetting("forceAtAgentEnd", false, settingsPath);
+      }
       endInputSession(record, result);
       record.resolve(result);
     };
@@ -142,14 +155,21 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
 
     const eventInputHandler = (input) => { handleInput(input); };
     pi.events?.on?.(INPUT_ACTION_EVENT, eventInputHandler);
+    pi.registerMessageRenderer?.(FORCE_CHOICE_CUSTOM_TYPE, (message, _options, theme) => ({
+      render: (width) => [theme.fg("dim", String(message.content || "").slice(0, width))],
+      invalidate() {},
+    }));
 
     const elicit = async (params, ctx, signal, onUpdate) => {
       const question = String(params?.question ?? params?.prompt ?? "").trim();
       if (!question) throw new Error("choice: question is required");
+      // Any real choice presentation satisfies a pending /force-choice request.
+      forcedRequestOutstanding = false;
+      warnedUnsatisfiedForce = false;
       const choices = normalizeChoices(params?.choices);
       if (choices.length > choiceConfig.maxChoices) throw new Error(`choice: at most ${choiceConfig.maxChoices} choices are configured (maximum 9 for numeric selection)`);
       const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
-        ? Math.max(1, Math.min(300_000, Math.trunc(Number(params.timeoutMs))))
+        ? Math.max(0, Math.min(300_000, Math.trunc(Number(params.timeoutMs))))
         : choiceConfig.timeoutMs;
       cancelActive();
       const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
@@ -185,7 +205,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }) || null;
         // Keep the process alive while an interactive tool is awaiting input;
         // unlike background refresh timers, this timeout resolves a live call.
-        record.timer = setTimeout(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
+        if (timeoutMs > 0) record.timer = setTimeout(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
         try { ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(question, choices, state.index), { placement: "belowEditor" }); } catch {}
         emitSession({
           status: "started",
@@ -222,7 +242,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
             summary: ToolSchema.Optional(ToolSchema.String({ description: "Optional short explanation spoken in the initial list." })),
             value: ToolSchema.Optional(ToolSchema.Any({ description: "Optional caller value returned in details." })),
           }), { minItems: 2, maxItems: 9 }),
-          timeoutMs: ToolSchema.Optional(ToolSchema.Integer({ minimum: 1, maximum: 300000, description: "Selection timeout in milliseconds (default 30000)." })),
+          timeoutMs: ToolSchema.Optional(ToolSchema.Integer({ minimum: 0, maximum: 300000, description: "Selection timeout in milliseconds (default 30000); 0 disables timeout." })),
           initialIndex: ToolSchema.Optional(ToolSchema.Integer({ minimum: 0, maximum: 8, description: "Initially highlighted zero-based index." })),
           wrap: ToolSchema.Optional(ToolSchema.Boolean({ description: "Wrap navigation at list ends (default true); false clamps." })),
           ring: ToolSchema.Optional(ToolSchema.String({ description: "Optional ring name accepted by the ring input adapter." })),
@@ -249,14 +269,14 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs}ms · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled}`, "info");
+          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
           try {
             const parsed = parseEnvStyleArgs(raw.replace(/^settings\s*/i, ""));
             if (parsed.positionals.length) throw new Error(`/choice settings: unexpected '${parsed.positionals[0]}'`);
-            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled"]);
+            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "force", "force_at_end"]);
             for (const key of Object.keys(parsed.values)) if (!allowed.has(key)) throw new Error(`/choice settings: unknown '${key}'`);
             const number = (keys, field, min, max) => {
               const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
@@ -274,11 +294,12 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
               choiceConfig[field] = ["1", "true", "yes", "on"].includes(rawValue);
               persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
-            number(["timeout", "timeout_ms"], "timeoutMs", 1, 300000);
+            number(["timeout", "timeout_ms"], "timeoutMs", 0, 300000);
             number(["max", "max_choices"], "maxChoices", 2, 9);
             boolean(["wrap"], "wrap");
             boolean(["speech", "speech_enabled"], "speechEnabled");
-            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs}ms wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled}`, "info");
+            boolean(["force", "force_at_end"], "forceAtAgentEnd");
+            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }
@@ -291,6 +312,44 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         const result = await elicit({ question, choices: labels.map((label) => ({ label })) }, ctx);
         ctx.ui.notify(resultText(result), result.status === "selected" ? "info" : "warning");
       },
+    });
+
+    pi.registerCommand("force-choice", {
+      description: "Require an interactive choice whenever the agent would otherwise stop. Usage: /force-choice [on|off|status]",
+      handler: async (args, ctx) => {
+        const action = String(args || "on").trim().toLowerCase() || "on";
+        if (action === "status") {
+          ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"}${forcedRequestOutstanding ? " · awaiting choice" : ""}`, "info");
+          return;
+        }
+        if (!["on", "off"].includes(action)) { ctx.ui.notify("Usage: /force-choice [on|off|status]", "warning"); return; }
+        choiceConfig.forceAtAgentEnd = action === "on";
+        persistChoiceSetting("forceAtAgentEnd", choiceConfig.forceAtAgentEnd, settingsPath);
+        if (!choiceConfig.forceAtAgentEnd) {
+          forcedRequestOutstanding = false;
+          warnedUnsatisfiedForce = false;
+        }
+        ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"} (persisted)`, "info");
+      },
+    });
+
+    pi.on("agent_end", (_event, ctx) => {
+      if (!choiceConfig.forceAtAgentEnd || active) return;
+      if (forcedRequestOutstanding) {
+        if (!warnedUnsatisfiedForce) {
+          warnedUnsatisfiedForce = true;
+          try { ctx?.ui?.notify?.("force-choice request ended without presenting interactive_choice; standing down to avoid a retry loop.", "warning"); } catch {}
+        }
+        return;
+      }
+      forcedRequestOutstanding = true;
+      warnedUnsatisfiedForce = false;
+      pi.sendMessage({
+        customType: FORCE_CHOICE_CUSTOM_TYPE,
+        content: "[force choice] I have reached an otherwise stopping point. Present interactive_choice now with 2–5 concise, concrete next actions. Include an option labelled exactly 'Stop continuous choices' when stopping is reasonable. Do not answer this control message in prose before the choice.",
+        display: true,
+        details: { source: "/force-choice", requiredTool: "interactive_choice" },
+      }, { deliverAs: "followUp", triggerTurn: true });
     });
 
     pi.on("input", () => {

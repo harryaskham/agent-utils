@@ -52,6 +52,8 @@ test("ring input parses daemon event JSON and builds only a bounded ring get sma
   assert.ok(args.includes("--after"));
   assert.ok(args.includes("now"));
   assert.equal(args[args.indexOf("--timeout-ms") + 1], "1234");
+  const indefinite = buildRingInputArgs({ timeoutMs: 0, eventMap: resolveRingInputEventMap({}, {}) });
+  assert.equal(indefinite[indefinite.indexOf("--timeout-ms") + 1], "300000", "no-timeout choices use renewable bounded clients");
   assert.ok(!args.includes("daemon"));
   assert.ok(!args.includes("on"));
 });
@@ -117,6 +119,21 @@ test("separate choice and ring extensions compose only through pi.events", async
   assert.equal(result.details.choice.label, "two");
   assert.equal(result.details.source, "ring");
   assert.equal(proc.killed, "SIGTERM", "generic choice end tells the independent ring adapter to stop its smart client");
+});
+
+test("timeout=0 keeps ring listening indefinitely by renewing bounded smart clients", async () => {
+  const events = bus();
+  const processes = [];
+  const pi = { events, registerCommand() {}, on() {} };
+  createRingInputExtension({ spawnImpl: () => { const proc = fakeProcess(); processes.push(proc); return proc; }, env: {}, persistedSettings: { ringInput: {} } })(pi);
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "choice-infinite", timeoutMs: 0 });
+  assert.equal(processes.length, 1);
+  processes[0].stderr.emit("data", "timed out waiting for matching ring events");
+  processes[0].emit("exit", 1, null);
+  await Promise.resolve();
+  assert.equal(processes.length, 2, "adapter renews after its defensive five-minute client bound");
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "choice-infinite" });
+  assert.equal(processes[1].killed, "SIGTERM");
 });
 
 test("ring adapter disabled mode never spawns and timeout exits stay non-fatal", () => {

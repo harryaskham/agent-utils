@@ -83,7 +83,11 @@ export function ringEventToInputAction(eventLike, eventMap = resolveRingInputEve
 
 export function buildRingInputArgs({ eventMap = resolveRingInputEventMap(), timeoutMs = 30_000 } = {}) {
   const events = [...new Set(Object.values(eventMap).flat())];
-  const timeout = Math.max(1, Math.trunc(Number(timeoutMs) || 30_000));
+  const requested = Number(timeoutMs);
+  // `ring get` itself requires a finite timeout. A choice timeout of 0 means
+  // disabled; the adapter runs this bounded five-minute read repeatedly for as
+  // long as the generic choice session remains active.
+  const timeout = requested === 0 ? 300_000 : Math.max(1, Math.trunc(requested || 30_000));
   return [
     "get",
     "--events", events.join(","),
