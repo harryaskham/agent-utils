@@ -56,7 +56,7 @@ wrap=true max=9 speech=true`:
       "wrap": true,
       "maxChoices": 9,
       "speechEnabled": true,
-      "forceAtAgentEnd": false
+      "forceAtAgentEnd": true
     }
   }
 }
@@ -92,18 +92,21 @@ The request is deduplicated: if the next run fails to present a choice, the
 extension warns and does not inject repeatedly. Presenting a real choice satisfies
 and rearms it for the next agent end. A selected option labelled exactly `Stop
 continuous choices` (also simple `stop`, `idle`, `pause`, or `finish`) disables
-and persists the mode, so continuous operation can itself be ended from the ring.
-Durable configuration is `agentUtils.choice.forceAtAgentEnd` or
-`PI_FORCE_CHOICE` (env wins).
+the mode for the current session, so continuous operation can itself be ended
+from the ring. Durable configuration is `agentUtils.choice.forceAtAgentEnd` or
+`PI_FORCE_CHOICE` (env wins), and defines startup behavior only. Runtime
+`/force-choice on|off`, `/choice settings force=...`, Stop selections, and Escape
+never rewrite that startup policy.
 
 The TUI implementation is a true `ctx.ui.custom` modal, not a below-editor
 widget: it owns focus, captures arrow sequences before the editor, and swallows
 unmapped typing. Numbers and the selected item use accent styling, while summaries,
 controls, timeout state, and the border use distinct theme colors.
 
-Under `/force-choice`, Escape is a hard stop: it disables persisted force mode,
-resolves the choice immediately, and returns a terminating final tool result so
-Pi skips the automatic follow-up model call and the agent actually ends. Outside force mode,
+Under `/force-choice`, Escape is a hard stop: it disables force mode for the
+current session without changing its startup setting, resolves the choice
+immediately, and returns a terminating final tool result so Pi skips the
+automatic follow-up model call and the agent actually ends. Outside force mode,
 Escape is the freeform escape hatch: it invalidates the visible choice, consumes
 only the Escape key, leaves the editor untouched, stops input adapters/TTS, and
 removes terminal interception. Crucially, Escape alone does **not** resolve the

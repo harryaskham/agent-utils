@@ -15,6 +15,7 @@ import {
   normalizeChoices,
 } from "../extensions/lib/choice.js";
 import { createChoiceExtension } from "../extensions/choice.js";
+import { persistChoiceSetting } from "../extensions/lib/tts-settings.js";
 
 function eventBus() {
   const handlers = new Map();
@@ -229,26 +230,43 @@ test("/force-choice injects once at agent_end, requires interactive_choice, then
   assert.equal(h.sentMessages.length, 2, "a real choice satisfies and rearms the next end-of-agent request");
 });
 
-test("Escape in force-choice mode disables persistence and lets the agent stop immediately", async () => {
+test("force-choice runtime controls and Escape preserve startup policy while letting the agent stop", async () => {
   const dir = mkdtempSync(join(tmpdir(), "force-choice-escape-"));
   const settingsPath = join(dir, "settings.json");
   writeFileSync(settingsPath, JSON.stringify({ agentUtils: { choice: { forceAtAgentEnd: true } } }, null, 2));
   try {
+    assert.equal(persistChoiceSetting("forceAtAgentEnd", false, settingsPath), false, "startup-only field is rejected by the persistence helper");
     const h = harness();
     createChoiceExtension({
       speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
       settingsPath,
       persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
     })(h.pi);
+    await h.commands.get("force-choice").handler("off", h.ctx);
+    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, true, "runtime command does not rewrite startup policy");
+    await h.commands.get("force-choice").handler("on", h.ctx);
+    await h.commands.get("choice").handler("settings force=false", h.ctx);
+    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, true, "choice settings force toggle is runtime-only");
+    await h.commands.get("choice").handler("settings force=true", h.ctx);
+
+    const stopPending = h.tools.get("interactive_choice").execute("stop", { question: "Next?", choices: [{ label: "Stop continuous choices" }, { label: "Continue" }], timeoutMs: 0 }, null, null, h.ctx);
+    await Promise.resolve();
+    h.input("1");
+    await stopPending;
+    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, true, "Stop selection does not rewrite startup policy");
+    h.handlers.get("agent_end")({}, h.ctx);
+    assert.equal(h.sentMessages.length, 0, "Stop selection disables force mode for this session");
+
+    await h.commands.get("force-choice").handler("on", h.ctx);
     const pending = h.tools.get("interactive_choice").execute("id", { question: "Next?", choices: choices.slice(0, 2), timeoutMs: 0 }, null, null, h.ctx);
     await Promise.resolve();
     h.input("\u001b");
     const result = await pending;
     assert.equal(result.details.reason, "escape-stop");
     assert.equal(result.terminate, true, "Escape marks the forced choice as a terminating final tool result");
-    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, false);
+    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, true, "Escape preserves startup policy");
     h.handlers.get("agent_end")({}, h.ctx);
-    assert.equal(h.sentMessages.length, 0, "force-choice remains off so agent_end may stop");
+    assert.equal(h.sentMessages.length, 0, "force-choice remains off for this session so agent_end may stop");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

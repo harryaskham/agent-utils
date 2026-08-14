@@ -138,7 +138,6 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       ) {
         choiceConfig.forceAtAgentEnd = false;
         forcedRequestOutstanding = false;
-        persistChoiceSetting("forceAtAgentEnd", false, settingsPath);
       }
       endInputSession(record, result);
       record.resolve(result);
@@ -180,11 +179,10 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       } else if (outcome.type === "cancelled") {
         if (input?.source === "keyboard" && input?.raw === "\u001b") {
           if (choiceConfig.forceAtAgentEnd) {
-            // Under /force-choice, Escape is the operator's hard stop: disable
-            // persistence and resolve immediately so the agent may end.
+            // Under /force-choice, Escape is the operator's hard stop for this
+            // session. The durable setting is startup policy and stays untouched.
             choiceConfig.forceAtAgentEnd = false;
             forcedRequestOutstanding = false;
-            persistChoiceSetting("forceAtAgentEnd", false, settingsPath);
             finish(record, { status: "cancelled", reason: "escape-stop", index: outcome.index, choice: outcome.choice });
           } else awaitFreeformAfterEscape(record);
         } else finish(record, { status: "cancelled", reason: input?.source || "event", index: outcome.index, choice: outcome.choice });
@@ -356,19 +354,19 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
               choiceConfig[field] = Math.trunc(value);
               persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
-            const boolean = (keys, field) => {
+            const boolean = (keys, field, { persist = true } = {}) => {
               const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
               if (!key) return;
               const rawValue = String(parsed.values[key]).toLowerCase();
               if (!["1", "true", "yes", "on", "0", "false", "no", "off"].includes(rawValue)) throw new Error(`/choice settings: ${key} must be true or false`);
               choiceConfig[field] = ["1", "true", "yes", "on"].includes(rawValue);
-              persistChoiceSetting(field, choiceConfig[field], settingsPath);
+              if (persist) persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
             number(["timeout", "timeout_ms"], "timeoutMs", 0, 300000);
             number(["max", "max_choices"], "maxChoices", 2, 9);
             boolean(["wrap"], "wrap");
             boolean(["speech", "speech_enabled"], "speechEnabled");
-            boolean(["force", "force_at_end"], "forceAtAgentEnd");
+            boolean(["force", "force_at_end"], "forceAtAgentEnd", { persist: false });
             ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
@@ -394,12 +392,11 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }
         if (!["on", "off"].includes(action)) { ctx.ui.notify("Usage: /force-choice [on|off|status]", "warning"); return; }
         choiceConfig.forceAtAgentEnd = action === "on";
-        persistChoiceSetting("forceAtAgentEnd", choiceConfig.forceAtAgentEnd, settingsPath);
         if (!choiceConfig.forceAtAgentEnd) {
           forcedRequestOutstanding = false;
           warnedUnsatisfiedForce = false;
         }
-        ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"} (persisted)`, "info");
+        ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"} (runtime; startup setting unchanged)`, "info");
       },
     });
 
