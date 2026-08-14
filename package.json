@@ -56,6 +56,8 @@
       "./extensions/realtime-agent.js",
       "./extensions/pipe.js",
       "./extensions/read-aloud.js",
+      "./extensions/choice.js",
+      "./extensions/ring-input.js",
       "./extensions/force-agent-speech.js",
       "./extensions/compaction-continue-guard.js",
       "./extensions/self-compact.js",
