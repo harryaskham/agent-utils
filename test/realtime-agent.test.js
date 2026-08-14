@@ -176,7 +176,9 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const notifications = [];
   const editorText = { value: "" };
   const terminalInputHandlers = [];
-  const sendTerminalInput = (data) => { for (const cb of [...terminalInputHandlers]) { try { cb(data); } catch {} } };
+  const sendTerminalInput = (data) => [...terminalInputHandlers].map((cb) => {
+    try { return cb(data); } catch { return undefined; }
+  });
   const editorTextSets = [];
   const setModelCalls = [];
   const forkCalls = [];
@@ -809,7 +811,7 @@ test("legacy realtime aliases reject unexpected arguments before state changes",
   assert.equal(pi.realtime.snapshot().state.micMode, null);
 });
 
-test("STT legacy aliases pass arguments through unified /rt stt handling", async () => {
+test("STT aliases stop legacy Realtime and reject unsupported local modes", async () => {
   const { pi, commands, handlers, widgets, notifications, ctx } = makeHarness();
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
@@ -823,7 +825,7 @@ test("STT legacy aliases pass arguments through unified /rt stt handling", async
 
   pi.realtime.setSttOnly(true, ctx);
   await commands.get("stt").handler("banana", ctx);
-  assert.match(notifications.at(-1).message, /Unsupported realtime STT mode/);
+  assert.match(notifications.at(-1).message, /Unsupported \/stt mode/);
 });
 
 test("/rt help reports unified usage and /rt stt stop exits transcription mode", async () => {
@@ -1854,6 +1856,121 @@ test("/rt stt=local-vad (k=v form) routes to local-vad, not regular stt-vad (bd-
   }
 });
 
+test("/stt and /rt-stt default to local VAD + mai-transcribe-1.5 without opening Realtime", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "local" });
+  try {
+    FakeWebSocket.instances = [];
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+
+    await h.commands.get("stt").handler("", h.ctx);
+    assert.equal(captures.length, 1, "/stt starts local PCM capture");
+    assert.equal(FakeWebSocket.instances.length, 0, "/stt does not open the Realtime WebSocket");
+    assert.match(String(h.widgets.get("realtime-status")?.[0]), /model=mai-transcribe-1\.5/);
+    await h.commands.get("stt").handler("stop", h.ctx);
+    assert.ok(captures[0].killed, "/stt stop kills local capture");
+
+    await h.commands.get("rt-stt").handler("", h.ctx);
+    assert.equal(captures.length, 2, "/rt-stt compatibility alias also uses local capture");
+    assert.equal(FakeWebSocket.instances.length, 0, "legacy alias cannot silently re-enter Realtime");
+    await h.commands.get("rt-stt").handler("stop", h.ctx);
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
+
+test("empty-editor Space starts local PTT; Ctrl-Space toggles local VAD; ordinary Space passes through", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  const previous = process.env.PI_RT_STT_SHORTCUTS_ENABLED;
+  delete process.env.PI_RT_STT_SHORTCUTS_ENABLED;
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "shortcut" });
+  try {
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+
+    const pttResults = h.sendTerminalInput(" ");
+    await waitFor(() => captures.length === 1);
+    assert.ok(pttResults.some((r) => r?.consume), "empty-editor PTT shortcut consumes Space");
+    assert.match(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
+    h.sendTerminalInput("\u0003");
+    await waitFor(() => captures[0].killed);
+
+    h.ctx.ui.setEditorText("already typing");
+    const passResults = h.sendTerminalInput(" ");
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(captures.length, 1, "Space with non-empty editor does not start capture");
+    assert.ok(passResults.every((r) => !r?.consume), "ordinary Space passes through");
+
+    h.ctx.ui.setEditorText("");
+    const vadResults = h.sendTerminalInput("\u0000");
+    await waitFor(() => captures.length === 2);
+    assert.ok(vadResults.some((r) => r?.consume), "Ctrl-Space consumes and starts local VAD");
+    assert.doesNotMatch(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
+    h.sendTerminalInput("\u0000");
+    await waitFor(() => captures[1].killed);
+  } finally {
+    if (previous === undefined) delete process.env.PI_RT_STT_SHORTCUTS_ENABLED;
+    else process.env.PI_RT_STT_SHORTCUTS_ENABLED = previous;
+    __setLocalVadHooksForTest({});
+  }
+});
+
+test("/ptt alias uses local VAD hold mode and never sends on the commit timeout", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "held words" });
+  try {
+    FakeWebSocket.instances = [];
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+    await h.commands.get("ptt").handler("", h.ctx);
+    const cap = captures.at(-1);
+    const pcm = (ms, speech) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+      return b;
+    };
+    cap.stdout.emit("data", pcm(500, true));
+    for (let i = 0; i < 30; i++) cap.stdout.emit("data", pcm(100, false));
+    await waitFor(() => h.editorText.value === "held words", { timeoutMs: 2000 });
+    assert.equal(h.sentUserMessages.length, 0, "PTT VAD commit chunks into the editor but does not send");
+    assert.equal(FakeWebSocket.instances.length, 0, "/ptt uses no Realtime WebSocket");
+    h.sendTerminalInput(" ");
+    await waitFor(() => h.sentUserMessages.length === 1, { timeoutMs: 2000 });
+    assert.match(h.sentUserMessages[0].content, /held words$/);
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
+
 test("agent_end with speak-thinking on does not throw (bd-551e93: thinkingSummaryText import regression)", async () => {
   // speakThinking called thinkingSummaryText, which was NOT imported into
   // realtime-agent.js — enabling it threw ReferenceError and broke speak-replies
@@ -1968,7 +2085,7 @@ test("local-vad-ptt Esc releases the held transcript to the editor without sendi
     const h = makeHarness();
     realtimeAgentExtension(h.pi);
     h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
-    await h.commands.get("rt").handler("stt local-vad-ptt", h.ctx);
+    await h.commands.get("ptt").handler("", h.ctx);
     const cap = captures.at(-1);
     const pcm = (ms, speech) => {
       const n = Math.round((ms / 1000) * 24000);

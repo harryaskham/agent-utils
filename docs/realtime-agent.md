@@ -178,37 +178,47 @@ Start listening later with:
 
 ### Speech-to-text into the current model
 
+The short commands use local VAD and batch transcription by default:
+
 ```text
-/rt stt
-/rt stt ptt
-# or legacy alias:
-/stt
+/stt                 # always-listening local VAD
+/stt ptt             # local VAD, held until release
+/ptt                 # shorter alias for the same PTT mode
+/stt stop
 ```
 
-STT mode keeps the current Pi model instead of switching to the realtime model. The realtime WebSocket is used only for microphone transcription, and the transcript is sent into Pi as a normal user message.
+They keep the current Pi model and never open a Realtime WebSocket. Full
+Realtime transcription remains available only through the explicit `/rt`
+surface:
 
-This is useful when you want voice input but still want another model/provider to answer.
+```text
+/rt stt vad
+/rt stt ptt
+```
+
+The prior `/stt` compatibility handler simply forwarded to bare `/rt stt`, whose
+legacy default is server VAD. That routing—not a dependency rollback—caused the
+incremental-editor regression in bd-24d679: using the convenient command silently
+selected the Realtime API instead of the already-implemented local two-timer
+controller. `/stt` and the old `/rt-stt` alias now both select local VAD.
 
 ### Local-VAD speech-to-text (WebSocket-free)
 
-```text
-/rt stt local-vad
-# stop with:
-/rt stt stop
-```
+`/stt` captures audio locally, runs an energy VAD to segment speech, and
+transcribes each turn-so-far with a single first-party HTTP call: PCM is wrapped
+as WAV and POSTed as one file to `<base>/v1/audio/transcriptions` (the
+OpenAI-compatible endpoint on `OPENAI_BASE_URL`). Because local VAD already has
+the whole candidate turn, this one-shot request—which the extension fully
+controls with a bounded timeout and explicit errors—replaces the older opaque
+`stt --stdin` subprocess that could stall and hang "transcribing" forever
+(bd-adde03).
 
-`local-vad` is an opt-in, WebSocket-free STT mode. Instead of streaming the
-microphone to the OpenAI realtime WebSocket, it captures audio locally, runs a
-local energy VAD to segment speech, and transcribes each complete turn with a
-single first-party HTTP call: the committed PCM is wrapped as a WAV and POSTed
-as one file to `<base>/v1/audio/transcriptions` (the OpenAI-compatible endpoint
-on `OPENAI_BASE_URL`). Because local-vad already has the whole turn, this one-shot
-request — which the extension fully controls (bounded timeout, explicit errors) —
-replaces the older opaque `stt --stdin` subprocess that could stall and hang
-"transcribing" forever (bd-adde03). It inserts a provisional partial after a short
-trailing silence and sends the whole turn into Pi as a user message after a longer
-silence. It is fully isolated from the WebSocket modes (`/rt stt [vad|ptt]`,
-`/rt start`), so enabling it never disturbs them.
+There are two independent trailing-silence clocks. After the shorter insert
+silence, the whole turn-so-far is re-transcribed and replaces the provisional
+text in the editor. If speech resumes before the longer commit silence, both
+clocks reset; the next pause produces a new whole-turn draft. Only the longer
+commit silence sends the finished editor contents as a Pi user message. Explicit
+`/rt stt local-vad` remains supported, but `/stt` is the normal entry point.
 
 The transcription model is independent of the realtime `trans` model: it
 defaults to `mai-transcribe-1.5` and is overridden with `PI_RT_LOCAL_VAD_MODEL`
@@ -223,10 +233,12 @@ by default (bd-678c58) — it is noise in a personal single-operator voice loop.
 `PI_RT_STT_UNTRUSTED_LABEL=1` (or `PI_RT_UNTRUSTED_TRANSCRIPT_LABEL=1`) to restore
 the wrapper if mic audio may be untrusted or multi-speaker.
 
-Partial transcripts stream **into the input editor** as you speak (bd-0c008d), not
-just a status line — so you watch your words appear and can edit them. Manual edits
-are never clobbered by a later partial, and the committed turn sends the editor's
-current text (your edits included), then clears it.
+Partial transcripts stream **into the input editor** after each short speech
+pause (bd-0c008d), not just a status line. When speech resumes before the commit
+timeout, the next result replaces the previous draft with a re-transcription of
+the whole open turn. Manual edits are never clobbered by a later partial, and the
+committed turn sends the editor's current text (your edits included), then clears
+it.
 
 The energy threshold can be tuned **live** (without restarting) via `/rt energy=<0..1>`
 (higher = less sensitive), parallel to `/rt thresh=` for server VAD. While listening,
@@ -244,6 +256,7 @@ Tuning knobs (all optional):
 | `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` | `1000` | trailing silence (ms) that inserts a provisional partial |
 | `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS` | `3000` | trailing silence (ms) that finalizes/sends the turn |
 | `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS` | `200` | minimum speech (ms) before a turn can insert/commit |
+| `PI_RT_STT_SHORTCUTS_ENABLED` | `1` | empty-editor Space starts PTT; Ctrl-Space toggles local VAD (`0` disables both) |
 
 **Troubleshooting (first-run validation):**
 
@@ -265,7 +278,7 @@ Tuning knobs (all optional):
   above the threshold, so it never sees the silence gap it needs to commit —
   usually the threshold sits below your mic's noise floor. Raise it live with
   `/rt energy=0.05` (or higher); a one-time hint also prompts you. If raising it
-  changes nothing, the capture may have died — `/rt stt stop` then `/rt stt local-vad`.
+  changes nothing, the capture may have died — `/stt stop` then `/stt`.
 - *The assistant's spoken reply is re-captured as a new turn (echo).* Only happens
   if Pi replies are spoken aloud. With `force-agent-speech`, local-vad shares its
   speaking signal and drops the mic while a reply plays (plus a short release tail),
@@ -320,8 +333,8 @@ starts. `backend=sox` and `backend=ffplay` remain available for local output.
 
 ### Spoken replies (force-agent-speech)
 
-`force-agent-speech` closes the other half of the hands-free loop: with `/rt stt
-local-vad` turning your *speech* into turns, this speaks the assistant's *reply*
+`force-agent-speech` closes the other half of the hands-free loop: with `/stt`
+turning your *speech* into turns, this speaks the assistant's *reply*
 aloud as a short precis (markdown/code stripped, truncated) so the conversation is
 heard, not just shown.
 
@@ -345,12 +358,13 @@ text are skipped.
 > length (~15 chars/s); on a slow TTS voice you can still raise `/rt energy=` if any
 > tail leaks through.
 
-### Push-to-talk hold mode (`/rt stt local-vad-ptt`)
+### Push-to-talk hold mode (`/ptt`)
 
-`local-vad-ptt` is the push-to-talk variant of local-vad (bd-9e06ae): VAD still runs
-and transcribes incrementally into the input editor as you speak, but per-segment
-silence does **not** send. Instead segments accumulate and the whole turn is
-controlled by a key when you finish:
+`/ptt` (also `/stt ptt` and `/rt stt local-vad-ptt`) is the push-to-talk variant
+of local VAD (bd-9e06ae): VAD still runs and transcribes incrementally into the
+input editor while held, but even the longer per-segment commit silence does
+**not** send. Instead segments accumulate and the whole turn is controlled by a
+key when you finish:
 
 - **`Enter` / `Space`** — send the accumulated turn now (the editor's text, honoring
   any edits), then clear the editor.
@@ -358,12 +372,19 @@ controlled by a key when you finish:
   editor without sending**. The text stays there, fully editable; press `Enter` to
   send it manually. Nothing is lost if you release before you meant to send.
 - **`Ctrl-C`** — cancel and discard the held transcript.
-- `/rt stt stop` ends the mode.
+- `/ptt stop` preserves the accumulated transcript in the editor and ends the mode;
+  `/ptt cancel` discards it.
+
+When the editor is empty, pressing **Space** starts `/ptt` directly; ordinary
+Space remains untouched when the editor already contains text. **Ctrl-Space**
+starts or stops always-listening `/stt` (terminals deliver this chord as NUL).
+Set `PI_RT_STT_SHORTCUTS_ENABLED=0` to disable both global shortcuts. Full
+Realtime mode never starts from these shortcuts.
 
 Because partials mirror into the editor throughout (see bd-0c008d above), you can
 edit at any point; a manual edit is never clobbered by a later partial, and whatever
-is in the editor is what sends. `hchat-ptt` launches this mode with the full voiced
-loop (`/rt stt local-vad-ptt` + speak-replies).
+is in the editor is what sends. `hchat-ptt` may continue to launch the explicit
+compatibility mode (`/rt stt local-vad-ptt` + speak-replies).
 
 A color-coded state indicator (bd-081267) renders a truecolor bar under the input
 box and tracks the live state: **orange** while listening/recording, **magenta**
@@ -387,7 +408,7 @@ agent can call directly: it synthesizes via the direct Azure Speech REST path
   selected voice. Azure credentials come from `AZURE_SPEECH_API_KEY` and
   `AZURE_SPEECH_ENDPOINT` in the environment.
 
-Pair it with `/rt stt local-vad` so your speech becomes agent turns and the
+Pair it with `/stt` so your speech becomes agent turns and the
 loaded Pi agent replies out loud in the configured voice with low latency — the
 Pi agent IS the cascade brain (bd-15beec).
 
@@ -395,7 +416,7 @@ Pi agent IS the cascade brain (bd-15beec).
 
 `speak-replies` is the low-latency completion of the hands-free loop: it auto-
 speaks the **real** Pi agent's replies through the direct-Azure path (no daemon
-round-trip, the configured cascade voice), so `/rt stt local-vad` + `speak-replies`
+round-trip, the configured cascade voice), so `/stt` + `speak-replies`
 gives you a genuine voiced agent — your speech drives your actual agent (with your
 tools, MCP, and session history via `sendUserMessage`), and its reply is spoken
 back. Unlike `force-agent-speech` (which speaks a truncated precis via the TTS
@@ -569,7 +590,9 @@ Unified `/rt` controls:
 /rt listen [vad|ptt|continuous]
                               start microphone capture using listen API modes
 /rt audio [on|off|toggle]      control audio output
-/rt stt [vad|ptt|local-vad|stop]  speech-to-text into the current model (local-vad = WebSocket-free local capture + batch stt), or stop STT mode
+/rt stt [vad|ptt|local-vad|stop]  explicit Realtime STT, or local-vad compatibility mode
+/stt [vad|ptt|stop|status]     local-VAD batch STT (default mai-transcribe-1.5)
+/ptt [start|stop|cancel|status] local-VAD hold mode with incremental editor drafts
 /rt widget [show|hide]         show or hide the realtime widget
 /rt status [compact|full]      compact or full status
 /rt doctor                     diagnostics
@@ -600,7 +623,7 @@ Env-style `/rt` arguments normalize into the same shape used by the agent tool s
 /rt action=stop
 ```
 
-Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/stt`, `/rt-stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`). STT aliases pass their arguments through the unified `/rt stt` path, so `/stt stop` and `/rt-stt stop` are equivalent to `/rt stt stop`. No-argument aliases such as `/rt-on`, `/rt-off`, `/rt-doctor`, and `/rt-hide-status` reject unexpected arguments instead of silently ignoring them.
+Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/stt`, `/rt-stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`). `/stt` and `/rt-stt` now deliberately share the local-VAD path; they no longer forward to Realtime. Use explicit `/rt stt vad` or `/rt stt ptt` for WebSocket transcription. No-argument aliases such as `/rt-on`, `/rt-off`, `/rt-doctor`, and `/rt-hide-status` reject unexpected arguments instead of silently ignoring them.
 
 ### Summary context mode
 

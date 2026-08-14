@@ -101,6 +101,36 @@ test("insert re-drafts the whole turn; commit re-transcribes and sends (bd-9399e
   assert.ok(transcribedLengths[1] >= transcribedLengths[0], "commit re-draft >= the insert re-draft");
 });
 
+test("speech resuming between insert and commit rewrites the editor draft without premature send (bd-24d679)", async () => {
+  const partials = [];
+  const sent = [];
+  let call = 0;
+  const controller = new LocalVadController({
+    config: { insertSilenceMs: 200, commitSilenceMs: 600, minTurnSpeechMs: 100 },
+    transcribe: async () => ["first phrase", "first phrase continued", "final complete phrase"][call++] || "final complete phrase",
+    insertPartial: (text) => partials.push(text),
+    sendTurn: (text) => sent.push(text),
+  });
+
+  await controller.pushFrame(frame(300, { speech: true }));
+  for (let ms = 0; ms < 200; ms += 100) await controller.pushFrame(frame(100));
+  await controller._drain();
+  assert.deepEqual(partials, ["first phrase"], "first timeout inserts a provisional editor draft");
+  assert.deepEqual(sent, [], "the shorter insert timeout never submits the turn");
+
+  // Speech resumes before the longer commit timeout. That resets the silence
+  // clock, keeps the same turn open, and re-drafts the whole accumulated audio.
+  await controller.pushFrame(frame(300, { speech: true }));
+  for (let ms = 0; ms < 200; ms += 100) await controller.pushFrame(frame(100));
+  await controller._drain();
+  assert.deepEqual(partials, ["first phrase", "first phrase continued"], "a later pause replaces the draft with a whole-turn re-transcription");
+  assert.deepEqual(sent, [], "resumed speech prevents premature submission");
+
+  for (let ms = 200; ms < 600; ms += 100) await controller.pushFrame(frame(100));
+  await controller._drain();
+  assert.deepEqual(sent, ["final complete phrase"], "the independent longer timeout eventually submits the completed turn");
+});
+
 test("blank transcripts insert/send nothing; transcribe errors go to onError (bd-9399e7)", async () => {
   const out = [];
   const errors = [];
