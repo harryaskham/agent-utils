@@ -13,6 +13,8 @@ import {
   ChoiceStateMachine,
   createChoiceSpeaker,
   formatChoiceIntroduction,
+  isChoiceEscapeKey,
+  isChoiceQuitKey,
   keyboardChoiceAction,
   normalizeChoices,
 } from "./lib/choice.js";
@@ -52,7 +54,7 @@ function renderChoiceWidget(question, choices, index, status = "listening") {
   return [
     `◇ ${String(question || "Choose one").trim()} · ${status}`,
     ...normalized.map((choice, i) => `${i === index ? "▶" : " "} ${i + 1}. ${choice.headline}${choice.summary ? ` — ${choice.summary}` : ""}`),
-    "↑/k previous · ↓/j next · Enter choose · 1-9 direct · Esc/q cancel",
+    "↑/k previous · ↓/j next · Enter choose · 1-9 direct · Esc/q cancel (hard stop in force mode)",
   ];
 }
 
@@ -75,7 +77,7 @@ function renderChoiceDialog(question, choices, index, timeoutMs, width, theme) {
     if (choices[i].summary) lines.push(`    ${color(selected ? "muted" : "dim", fit(choices[i].summary, Math.max(4, maxWidth - 4)))}`);
   }
   lines.push("");
-  lines.push(`${color("accent", "↑/k")} ${color("dim", "previous")}  ${color("accent", "↓/j")} ${color("dim", "next")}  ${color("success", "Enter / 1–9")} ${color("dim", "choose")}  ${color("warning", "Esc")} ${color("dim", "cancel")}`);
+  lines.push(`${color("accent", "↑/k")} ${color("dim", "previous")}  ${color("accent", "↓/j")} ${color("dim", "next")}  ${color("success", "Enter / 1–9")} ${color("dim", "choose")}  ${color("warning", "Esc/q")} ${color("dim", "cancel · hard stop in force mode")}`);
   lines.push(color("dim", timeoutMs === 0 ? "No timeout · editor input is suspended while this choice is open" : `Timeout: ${timeoutMs}ms · editor input is suspended while this choice is open`));
   lines.push(color("accent", "━".repeat(maxWidth)));
   return lines;
@@ -177,15 +179,16 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       } else if (outcome.type === "selected") {
         finish(record, { status: "selected", index: outcome.index, choice: outcome.choice, source: outcome.source || input?.source || "event" });
       } else if (outcome.type === "cancelled") {
-        if (input?.source === "keyboard" && input?.raw === "\u001b") {
-          if (choiceConfig.forceAtAgentEnd) {
-            // Under /force-choice, Escape is the operator's hard stop for this
-            // session. The durable setting is startup policy and stays untouched.
-            choiceConfig.forceAtAgentEnd = false;
-            forcedRequestOutstanding = false;
-            finish(record, { status: "cancelled", reason: "escape-stop", index: outcome.index, choice: outcome.choice });
-          } else awaitFreeformAfterEscape(record);
-        } else finish(record, { status: "cancelled", reason: input?.source || "event", index: outcome.index, choice: outcome.choice });
+        const keyboardEscape = input?.source === "keyboard" && isChoiceEscapeKey(input?.raw);
+        const keyboardQuit = input?.source === "keyboard" && isChoiceQuitKey(input?.raw);
+        if (choiceConfig.forceAtAgentEnd && (keyboardEscape || keyboardQuit)) {
+          // Escape and q/Q are hard stops for this session. The durable setting
+          // is startup policy and stays untouched.
+          choiceConfig.forceAtAgentEnd = false;
+          forcedRequestOutstanding = false;
+          finish(record, { status: "cancelled", reason: keyboardQuit ? "quit-stop" : "escape-stop", index: outcome.index, choice: outcome.choice });
+        } else if (keyboardEscape) awaitFreeformAfterEscape(record);
+        else finish(record, { status: "cancelled", reason: input?.source || "event", index: outcome.index, choice: outcome.choice });
       }
       return outcome;
     };
@@ -315,9 +318,9 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
               content: [{ type: "text", text: resultText(result) }],
               details: result,
               // In a forced-choice run the choice is the sole final tool. Escape
-              // disables force mode and terminates the automatic follow-up LLM
-              // call, so the agent actually stops rather than narrating cancel.
-              terminate: result.reason === "escape-stop",
+              // or q disables runtime force mode and terminates the automatic
+              // follow-up LLM call, so the agent actually stops.
+              terminate: result.reason === "escape-stop" || result.reason === "quit-stop",
             };
           } catch (error) {
             const result = { status: "error", error: error?.message || String(error) };

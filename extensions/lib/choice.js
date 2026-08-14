@@ -93,6 +93,22 @@ export class ChoiceStateMachine {
   }
 }
 
+function kittyKeyCode(data) {
+  const match = /^\u001b\[(\d+)(?:;[\d:]+)?u$/.exec(String(data ?? ""));
+  return match ? Number(match[1]) : null;
+}
+
+export function isChoiceEscapeKey(data) {
+  const key = String(data ?? "");
+  return key === "\u001b" || kittyKeyCode(key) === 27;
+}
+
+export function isChoiceQuitKey(data) {
+  const key = String(data ?? "");
+  const code = kittyKeyCode(key);
+  return key === "q" || key === "Q" || code === 113 || code === 81;
+}
+
 // Map terminal input to the same semantic actions used by device adapters.
 // Numeric keys are one-indexed: "1" chooses index 0; "9" chooses index 8.
 export function keyboardChoiceAction(data, choiceCount = 0) {
@@ -100,7 +116,7 @@ export function keyboardChoiceAction(data, choiceCount = 0) {
   if (key === "\u001b[A" || key === "k" || key === "K") return { action: CHOICE_INPUT_ACTIONS.PREVIOUS, source: "keyboard", raw: key };
   if (key === "\u001b[B" || key === "j" || key === "J") return { action: CHOICE_INPUT_ACTIONS.NEXT, source: "keyboard", raw: key };
   if (key === "\r" || key === "\n") return { action: CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, source: "keyboard", raw: key };
-  if (key === "\u001b" || key === "q" || key === "Q" || key === "\u0003") return { action: CHOICE_INPUT_ACTIONS.CANCEL, source: "keyboard", raw: key };
+  if (isChoiceEscapeKey(key) || isChoiceQuitKey(key) || key === "\u0003") return { action: CHOICE_INPUT_ACTIONS.CANCEL, source: "keyboard", raw: key };
   if (/^[1-9]$/.test(key)) {
     const index = Number(key) - 1;
     if (index < choiceCount) return { action: CHOICE_INPUT_ACTIONS.CHOOSE_INDEX, index, source: "keyboard", raw: key };

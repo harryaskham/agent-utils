@@ -103,11 +103,13 @@ widget: it owns focus, captures arrow sequences before the editor, and swallows
 unmapped typing. Numbers and the selected item use accent styling, while summaries,
 controls, timeout state, and the border use distinct theme colors.
 
-Under `/force-choice`, Escape is a hard stop: it disables force mode for the
-current session without changing its startup setting, resolves the choice
-immediately, and returns a terminating final tool result so Pi skips the
-automatic follow-up model call and the agent actually ends. Outside force mode,
-Escape is the freeform escape hatch: it invalidates the visible choice, consumes
+Under `/force-choice`, **q**, **Q**, and Escape are hard stops: they disable force
+mode for the current session without changing its startup setting, resolve the
+choice immediately, and return a terminating final tool result so Pi skips the
+automatic follow-up model call and the agent actually ends. `q`/`Q` are the
+reliable terminal fallback when Escape is intercepted or encoded by the active
+terminal protocol; common Kitty CSI-u Escape and q encodings are recognized too.
+Outside force mode, Escape is the freeform escape hatch: it invalidates the visible choice, consumes
 only the Escape key, leaves the editor untouched, stops input adapters/TTS, and
 removes terminal interception. Crucially, Escape alone does **not** resolve the
 pending tool or resume the agent. The choice waits silently until the user submits

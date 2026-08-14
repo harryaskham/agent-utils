@@ -84,6 +84,10 @@ test("keyboard input maps arrows, j/k, Enter, Escape, and one-indexed numeric ch
   assert.equal(keyboardChoiceAction("j", 3).action, CHOICE_INPUT_ACTIONS.NEXT);
   assert.equal(keyboardChoiceAction("\r", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT);
   assert.equal(keyboardChoiceAction("\u001b", 3).action, CHOICE_INPUT_ACTIONS.CANCEL);
+  assert.equal(keyboardChoiceAction("q", 3).action, CHOICE_INPUT_ACTIONS.CANCEL);
+  assert.equal(keyboardChoiceAction("Q", 3).action, CHOICE_INPUT_ACTIONS.CANCEL);
+  assert.equal(keyboardChoiceAction("\u001b[27u", 3).action, CHOICE_INPUT_ACTIONS.CANCEL, "Kitty CSI-u Escape is recognized");
+  assert.equal(keyboardChoiceAction("\u001b[113u", 3).action, CHOICE_INPUT_ACTIONS.CANCEL, "Kitty CSI-u q is recognized");
   assert.deepEqual(keyboardChoiceAction("3", 3), { action: CHOICE_INPUT_ACTIONS.CHOOSE_INDEX, index: 2, source: "keyboard", raw: "3" });
   assert.equal(keyboardChoiceAction("4", 3), null, "out-of-range numeric key passes through");
   assert.equal(keyboardChoiceAction("x", 3), null);
@@ -228,6 +232,27 @@ test("/force-choice injects once at agent_end, requires interactive_choice, then
   await pending;
   h.handlers.get("agent_end")({}, h.ctx);
   assert.equal(h.sentMessages.length, 2, "a real choice satisfies and rearms the next end-of-agent request");
+});
+
+test("q in the true TUI modal hard-stops force-choice and terminates the follow-up", async () => {
+  const h = harness();
+  let component;
+  h.ctx.mode = "tui";
+  h.ctx.ui.custom = (factory) => new Promise((resolve) => {
+    component = factory({ requestRender() {} }, { fg: (_name, text) => text, bold: (text) => text }, null, resolve);
+  });
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
+  })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Next?", choices: choices.slice(0, 2), timeoutMs: 0 }, null, null, h.ctx);
+  await Promise.resolve();
+  component.handleInput("q");
+  const result = await pending;
+  assert.equal(result.details.reason, "quit-stop");
+  assert.equal(result.terminate, true);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 0, "q leaves runtime force mode off so the agent may stop");
 });
 
 test("force-choice runtime controls and Escape preserve startup policy while letting the agent stop", async () => {
