@@ -15,9 +15,17 @@ import {
   buildNarrationRequest,
   createAgentSpeechController,
   normalizeNarrationText,
+  resolveAgentTtsSettings,
+  resolveNarrateSettings,
   resolveNarrationModel,
   toolResultText,
 } from "./lib/tts-narration.js";
+import {
+  persistNarrateSetting,
+  persistTtsSetting,
+  readPersistedNarrateSettings,
+  readPersistedTtsSettings,
+} from "./lib/tts-settings.js";
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -31,11 +39,21 @@ function source(value, envKey, env) {
   return env[envKey] ? "env" : "missing";
 }
 
-function ttsStatus(enabled, speech, env) {
+const TTS_SETTING_FIELDS = Object.freeze({
+  provider: "provider", voice: "voice", lang: "lang", speed: "speed",
+  embedding: "embedding", speaker: "embedding", speakerprofileid: "embedding", speaker_profile_id: "embedding",
+  style: "style", styledegree: "styleDegree", style_degree: "styleDegree",
+  endpoint: "endpoint", base_url: "endpoint", baseurl: "endpoint",
+  backend: "backend", server: "server", device: "device", sink: "device",
+});
+const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
+
+function ttsStatus(enabled, speech, env, enabledSource = "runtime") {
   const config = speech.getConfig();
   const optional = (value) => value == null || value === "" ? "none" : String(value);
   return [
     `tts:${enabled ? "on" : "off"}`,
+    `enabled-source:${enabledSource}`,
     `provider:${config.provider}`,
     `voice:${optional(config.voice)}`,
     `lang:${optional(config.lang)}`,
@@ -52,13 +70,23 @@ function ttsStatus(enabled, speech, env) {
 
 export function createTtsNarrationExtension({
   env = process.env,
-  speech = createAgentSpeechController({ env }),
+  speech,
   runTextTurn = runPiTextTurn,
+  settingsPath,
+  persistedSettings,
 } = {}) {
   return function ttsNarrationExtension(pi) {
-    let ttsEnabled = false;
-    let narrateEnabled = false;
-    let narrationModel = env.PI_NARRATE_MODEL || DEFAULT_NARRATION_MODEL;
+    const persistedTts = persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath);
+    const persistedNarrate = persistedSettings?.narrate ?? readPersistedNarrateSettings(settingsPath);
+    const resolvedTts = resolveAgentTtsSettings({ env, persisted: persistedTts });
+    const resolvedNarrate = resolveNarrateSettings({ env, persisted: persistedNarrate });
+    const speechController = speech || createAgentSpeechController({ env, initialConfig: resolvedTts.config });
+    let ttsEnabled = resolvedTts.enabled;
+    let ttsEnabledSource = resolvedTts.enabledSource;
+    let narrateEnabled = resolvedNarrate.enabled;
+    let narrateEnabledSource = resolvedNarrate.enabledSource;
+    let narrationModel = resolvedNarrate.model;
+    let narrationModelSource = resolvedNarrate.modelSource;
     let lastPlainKey = null;
     let nextBatchId = 1;
     let narrationGeneration = 0;
@@ -73,7 +101,7 @@ export function createTtsNarrationExtension({
     };
 
     const speakBestEffort = (text, ctx, kind = "tts") => {
-      void speech.speak(text).catch((error) => warnOnce(kind, error, ctx));
+      void speechController.speak(text).catch((error) => warnOnce(kind, error, ctx));
     };
 
     const supersedeNarrationWork = ({ clearBatches = false } = {}) => {
@@ -185,25 +213,36 @@ export function createTtsNarrationExtension({
         const simple = raw.toLowerCase();
         if (!raw || simple === "on") {
           ttsEnabled = true;
-          ctx.ui.notify(ttsStatus(ttsEnabled, speech, env), "info");
+          ttsEnabledSource = "runtime/settings";
+          persistTtsSetting("enabled", true, settingsPath);
+          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
           return;
         }
         if (simple === "off") {
           ttsEnabled = false;
-          speech.interrupt();
-          ctx.ui.notify("tts:off", "info");
+          ttsEnabledSource = "runtime/settings";
+          persistTtsSetting("enabled", false, settingsPath);
+          speechController.interrupt();
+          ctx.ui.notify("tts:off · enabled-source:runtime/settings", "info");
           return;
         }
         if (simple === "status") {
-          ctx.ui.notify(ttsStatus(ttsEnabled, speech, env), "info");
+          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
           return;
         }
         try {
           const parsed = parseEnvStyleArgs(raw);
           if (parsed.positionals.length) throw new Error(`/tts: unexpected argument '${parsed.positionals[0]}'`);
-          speech.apply(parsed.values);
+          const config = speechController.apply(parsed.values);
+          for (const [key, rawValue] of Object.entries(parsed.values)) {
+            const field = TTS_SETTING_FIELDS[key];
+            if (!field || ENV_REFERENCE.test(String(rawValue))) continue; // never materialize env-derived values
+            persistTtsSetting(field, config[field], settingsPath);
+          }
           ttsEnabled = true;
-          ctx.ui.notify(ttsStatus(ttsEnabled, speech, env), "info");
+          ttsEnabledSource = "runtime/settings";
+          persistTtsSetting("enabled", true, settingsPath);
+          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
         } catch (error) {
           ctx.ui.notify(error?.message || String(error), "warning");
         }
@@ -215,21 +254,40 @@ export function createTtsNarrationExtension({
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
-        if (!raw || simple === "on") narrateEnabled = true;
-        else if (simple === "off") { narrateEnabled = false; stopNarrationWork(); }
-        else if (simple !== "status") {
+        if (!raw || simple === "on") {
+          narrateEnabled = true;
+          narrateEnabledSource = "runtime/settings";
+          persistNarrateSetting("enabled", true, settingsPath);
+        } else if (simple === "off") {
+          narrateEnabled = false;
+          narrateEnabledSource = "runtime/settings";
+          persistNarrateSetting("enabled", false, settingsPath);
+          stopNarrationWork();
+        } else if (simple !== "status") {
           try {
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             for (const key of Object.keys(parsed.values)) {
               if (!new Set(["model", "enabled", "on"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
-            if (parsed.values.model) narrationModel = String(parsed.values.model).trim();
-            if (parsed.values.enabled !== undefined) narrateEnabled = boolValue(parsed.values.enabled, "/narrate enabled");
-            if (parsed.values.on !== undefined) narrateEnabled = boolValue(parsed.values.on, "/narrate on");
+            if (parsed.values.model) {
+              narrationModel = String(parsed.values.model).trim();
+              narrationModelSource = "runtime/settings";
+              persistNarrateSetting("model", narrationModel, settingsPath);
+            }
+            if (parsed.values.enabled !== undefined) {
+              narrateEnabled = boolValue(parsed.values.enabled, "/narrate enabled");
+              narrateEnabledSource = "runtime/settings";
+              persistNarrateSetting("enabled", narrateEnabled, settingsPath);
+            }
+            if (parsed.values.on !== undefined) {
+              narrateEnabled = boolValue(parsed.values.on, "/narrate on");
+              narrateEnabledSource = "runtime/settings";
+              persistNarrateSetting("enabled", narrateEnabled, settingsPath);
+            }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
-        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · model:${narrationModel} · context:custom nextTurn/no-trigger · speech:/tts settings`, "info");
+        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · context:custom nextTurn/no-trigger · speech:/tts settings`, "info");
       },
     });
 
@@ -237,7 +295,7 @@ export function createTtsNarrationExtension({
       ttsEnabled = false;
       narrateEnabled = false;
       stopNarrationWork();
-      speech.dispose();
+      speechController.dispose();
     });
   };
 }

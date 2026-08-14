@@ -115,6 +115,50 @@ export function defaultAgentTtsConfig(env = process.env) {
   return { ...defaultReadConfig(env), streamName: "/tts" };
 }
 
+function enabledValue(value, fallback = false) {
+  if (value == null || String(value).trim() === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+// Resolve env > persisted > shared defaults. API keys are deliberately absent
+// from the persisted shape and remain environment/runtime-only.
+export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = {}) {
+  let config = defaultAgentTtsConfig({});
+  const persistedValues = {};
+  for (const key of ["provider", "voice", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device"]) {
+    if (Object.hasOwn(persisted, key)) persistedValues[key === "styleDegree" ? "styledegree" : key] = persisted[key];
+  }
+  config = applyAgentTtsConfig(config, persistedValues, {});
+  const envValues = {};
+  const envMap = {
+    PI_TTS_PROVIDER: "provider", PI_TTS_VOICE: "voice", PI_TTS_LANG: "lang",
+    PI_TTS_SPEED: "speed", PI_TTS_EMBEDDING: "embedding", PI_TTS_STYLE: "style",
+    PI_TTS_STYLEDEGREE: "styledegree", AZURE_SPEECH_ENDPOINT: "endpoint",
+    PI_RT_AUDIO_BACKEND: "backend", PULSE_SERVER: "server", PULSE_SINK: "device",
+  };
+  for (const [envKey, configKey] of Object.entries(envMap)) {
+    if (env[envKey] != null && String(env[envKey]).trim() !== "") envValues[configKey] = env[envKey];
+  }
+  config = applyAgentTtsConfig(config, envValues, env);
+  return {
+    config,
+    enabled: enabledValue(env.PI_TTS_ENABLED, enabledValue(persisted.enabled, false)),
+    enabledSource: env.PI_TTS_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
+  };
+}
+
+export function resolveNarrateSettings({ env = process.env, persisted = {} } = {}) {
+  return {
+    enabled: enabledValue(env.PI_NARRATE_ENABLED, enabledValue(persisted.enabled, false)),
+    model: String(env.PI_NARRATE_MODEL || persisted.model || DEFAULT_NARRATION_MODEL).trim(),
+    enabledSource: env.PI_NARRATE_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
+    modelSource: env.PI_NARRATE_MODEL ? "env" : persisted.model ? "settings" : "default",
+  };
+}
+
 export function applyAgentTtsConfig(current, values = {}, env = process.env) {
   const unsupported = ["delay", "on_delay", "ondelay", "on_send", "onsend"].filter((key) => Object.hasOwn(values, key));
   if (unsupported.length) throw new Error(`/tts: editor-only setting '${unsupported[0]}' belongs to /read`);
@@ -126,8 +170,9 @@ export function createAgentSpeechController({
   env = process.env,
   synthesize = synthesizeSpeechDirect,
   player = createInterruptiblePcmPlayer(),
+  initialConfig,
 } = {}) {
-  let config = defaultAgentTtsConfig(env);
+  let config = initialConfig ? { ...initialConfig, streamName: "/tts" } : defaultAgentTtsConfig(env);
   let generation = 0;
   let synthesisAbort = null;
 
@@ -146,7 +191,7 @@ export function createAgentSpeechController({
     const controller = new AbortController();
     synthesisAbort = controller;
     try {
-      const pcm = await synthesize(body, {
+      const options = {
         provider: config.provider,
         voice: config.voice,
         lang: config.lang,
@@ -154,11 +199,12 @@ export function createAgentSpeechController({
         speakerProfileId: config.embedding,
         style: config.style,
         styleDegree: config.styleDegree,
-        endpoint: config.endpoint,
-        apiKey: config.apiKey,
         signal: controller.signal,
         env,
-      });
+      };
+      if (config.endpoint !== undefined) options.endpoint = config.endpoint;
+      if (config.apiKey !== undefined) options.apiKey = config.apiKey;
+      const pcm = await synthesize(body, options);
       if (mine !== generation || controller.signal.aborted) return { interrupted: true };
       return await player.play(pcm, {
         backend: config.backend,

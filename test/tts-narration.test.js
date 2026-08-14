@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   DEFAULT_NARRATION_MODEL,
@@ -10,13 +13,21 @@ import {
   createAgentSpeechController,
   normalizeNarrationText,
   redactNarrationText,
+  resolveAgentTtsSettings,
+  resolveNarrateSettings,
   resolveNarrationModel,
   sanitizeNarrationValue,
   toolResultText,
 } from "../extensions/lib/tts-narration.js";
+import {
+  persistNarrateSetting,
+  persistTtsSetting,
+  readPersistedNarrateSettings,
+  readPersistedTtsSettings,
+} from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
 
-function harness({ runTextTurn, speech } = {}) {
+function harness({ runTextTurn, speech, settingsPath, persistedSettings = { tts: {}, narrate: {} } } = {}) {
   const commands = new Map();
   const handlers = new Map();
   const sent = [];
@@ -35,7 +46,7 @@ function harness({ runTextTurn, speech } = {}) {
     on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
     sendMessage(message, options) { sent.push({ message, options }); },
   };
-  createTtsNarrationExtension({ runTextTurn, speech, env: {} })(pi);
+  createTtsNarrationExtension({ runTextTurn, speech, env: {}, settingsPath, persistedSettings })(pi);
   const emit = (name, event) => { for (const fn of handlers.get(name) || []) fn(event, ctx); };
   return { pi, ctx, commands, handlers, sent, notifications, renderers, emit };
 }
@@ -82,6 +93,85 @@ test("narration model resolves exact provider/id and refuses unavailable models"
   assert.equal(DEFAULT_NARRATION_MODEL, "github-copilot/gpt-5.6-luna");
 });
 
+test("durable TTS/narrate settings use env > persisted > defaults", () => {
+  const tts = resolveAgentTtsSettings({
+    persisted: { enabled: true, voice: "PersistedVoice", speed: 1.25, device: "persisted-sink" },
+    env: { PI_TTS_VOICE: "EnvVoice", PULSE_SINK: "env-sink", PI_TTS_ENABLED: "0" },
+  });
+  assert.equal(tts.enabled, false);
+  assert.equal(tts.enabledSource, "env");
+  assert.equal(tts.config.voice, "EnvVoice");
+  assert.equal(tts.config.speed, 1.25);
+  assert.equal(tts.config.device, "env-sink");
+  assert.equal(tts.config.apiKey, undefined, "API keys are never part of persisted resolution");
+
+  const narrate = resolveNarrateSettings({
+    persisted: { enabled: true, model: "github-copilot/persisted" },
+    env: { PI_NARRATE_MODEL: "github-copilot/env" },
+  });
+  assert.equal(narrate.enabled, true);
+  assert.equal(narrate.enabledSource, "settings");
+  assert.equal(narrate.model, "github-copilot/env");
+  assert.equal(narrate.modelSource, "env");
+});
+
+test("settings read/write is scoped, rejects secret fields, and tolerates malformed input", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tts-settings-"));
+  const path = join(dir, "settings.json");
+  try {
+    writeFileSync(path, JSON.stringify({ untouched: { keep: true }, agentUtils: { other: { x: 1 } } }, null, 2));
+    assert.equal(persistTtsSetting("voice", "MAI-Voice-2", path), true);
+    assert.equal(persistTtsSetting("apiKey", "must-not-write", path), false);
+    assert.equal(persistNarrateSetting("enabled", true, path), true);
+    assert.equal(persistNarrateSetting("model", DEFAULT_NARRATION_MODEL, path), true);
+    const all = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(all.untouched, { keep: true });
+    assert.deepEqual(all.agentUtils.other, { x: 1 });
+    assert.equal(all.agentUtils.tts.voice, "MAI-Voice-2");
+    assert.equal(all.agentUtils.tts.apiKey, undefined);
+    assert.deepEqual(readPersistedTtsSettings(path), { voice: "MAI-Voice-2" });
+    assert.deepEqual(readPersistedNarrateSettings(path), { enabled: true, model: DEFAULT_NARRATION_MODEL });
+
+    writeFileSync(path, "not json");
+    assert.deepEqual(readPersistedTtsSettings(path), {});
+    assert.deepEqual(readPersistedNarrateSettings(path), {});
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("explicit /tts and /narrate setters persist only non-secret runtime values", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tts-command-settings-"));
+  const path = join(dir, "settings.json");
+  writeFileSync(path, JSON.stringify({ unrelated: 7 }, null, 2));
+  const config = { provider: "azure", voice: "Default", lang: "en-GB", speed: 2, embedding: "embed", style: null, styleDegree: null, endpoint: undefined, apiKey: undefined, backend: "pulse", server: undefined, device: "sink" };
+  const speech = {
+    getConfig: () => ({ ...config }),
+    apply(values) {
+      if (values.voice) config.voice = values.voice;
+      if (values.speed) config.speed = Number(values.speed);
+      if (values.api_key) config.apiKey = values.api_key;
+      return { ...config };
+    },
+    interrupt() {}, dispose() {}, async speak() {},
+  };
+  try {
+    const h = harness({ speech, runTextTurn: async () => ({ text: "" }), settingsPath: path, persistedSettings: undefined });
+    await h.commands.get("tts").handler("voice=SavedVoice speed=1.6 api_key=temporary", h.ctx);
+    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL}`, h.ctx);
+    const all = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(all.unrelated, 7);
+    assert.equal(all.agentUtils.tts.enabled, true);
+    assert.equal(all.agentUtils.tts.voice, "SavedVoice");
+    assert.equal(all.agentUtils.tts.speed, 1.6);
+    assert.equal(all.agentUtils.tts.apiKey, undefined, "runtime API key is never persisted");
+    assert.equal(all.agentUtils.narrate.enabled, true);
+    assert.equal(all.agentUtils.narrate.model, DEFAULT_NARRATION_MODEL);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("shared /tts speech controller inherits /read defaults and interrupts stale synthesis/playback", async () => {
   const synthCalls = [];
   const synthesize = (text, options) => new Promise((resolve, reject) => {
@@ -112,6 +202,28 @@ test("shared /tts speech controller inherits /read defaults and interrupts stale
   assert.equal(speech.getConfig().voice, "AnotherVoice");
   assert.equal(speech.getConfig().speed, 1.5);
   assert.throws(() => speech.apply({ delay: "10" }), /belongs to \/read/);
+});
+
+test("persisted enabled modes are active immediately at extension startup", async () => {
+  const spoken = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "MAI-Voice-2", lang: "en-GB", speed: 2, embedding: "set", style: null, styleDegree: null, backend: "pulse", device: "hw_output" }),
+    apply() {}, interrupt() {}, dispose() {}, async speak(text) { spoken.push(text); },
+  };
+  const runTextTurn = async (_ctx, request) => ({
+    text: request.systemPrompt.includes("Begin with 'I am'") ? "I am checking." : "I found it healthy.",
+    model: DEFAULT_NARRATION_MODEL,
+  });
+  const h = harness({ speech, runTextTurn, persistedSettings: { tts: { enabled: true }, narrate: { enabled: true, model: DEFAULT_NARRATION_MODEL } } });
+  h.emit("message_end", { message: { role: "assistant", timestamp: 1, content: [{ type: "text", text: "Auto spoken." }] } });
+  await waitFor(() => spoken.includes("Auto spoken."));
+  h.emit("message_end", { message: { role: "assistant", content: [{ type: "toolCall", id: "a", name: "read", arguments: {} }] } });
+  h.emit("tool_execution_end", { toolCallId: "a", toolName: "read", result: { content: [{ type: "text", text: "healthy" }] } });
+  await waitFor(() => h.sent.length === 2);
+  assert.deepEqual(h.sent.map((entry) => entry.message.content), [
+    "[tool summary][before] I am checking.",
+    "[tool summary][after] I found it healthy.",
+  ]);
 });
 
 test("/tts speaks every plain assistant message verbatim without a speak tool call", async () => {

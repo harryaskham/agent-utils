@@ -45,6 +45,40 @@ message always wins. Failures produce a warning but never block an agent turn.
 `/tts` is off by default. Avoid enabling legacy `speak-replies` simultaneously,
 since it is a separate historical auto-speech surface.
 
+### Durable settings
+
+Both modes support the standard `env > settings.json > default` precedence.
+Explicit `/tts` and `/narrate` setters persist non-secret values by updating only
+their own `agentUtils` slices. Environment overrides are never written back, and
+API keys are never persisted.
+
+```json
+{
+  "agentUtils": {
+    "tts": {
+      "enabled": true,
+      "provider": "azure",
+      "voice": "MAI-Voice-2",
+      "lang": "en-GB",
+      "speed": 2,
+      "embedding": "0daec43c-911f-4529-820a-16dab73630d3",
+      "style": null,
+      "styleDegree": null,
+      "backend": "pulse",
+      "device": "@DEFAULT_SINK@"
+    },
+    "narrate": {
+      "enabled": true,
+      "model": "github-copilot/gpt-5.6-luna"
+    }
+  }
+}
+```
+
+Credentials remain in `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_API_KEY`; Pulse
+server/sink environment overrides remain available. Persisted `enabled: true`
+activates the corresponding hook immediately when the extension loads.
+
 ## `/narrate`: tool batches
 
 ```text
