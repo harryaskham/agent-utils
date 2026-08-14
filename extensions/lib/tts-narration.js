@@ -213,6 +213,9 @@ export function createAgentSpeechController({
         streamName: "/tts",
         env,
       });
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === "AbortError") return { interrupted: true };
+      throw error;
     } finally {
       if (synthesisAbort === controller) synthesisAbort = null;
     }

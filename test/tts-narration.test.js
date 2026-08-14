@@ -214,9 +214,9 @@ test("shared /tts speech controller inherits /read defaults and interrupts stale
   const speech = createAgentSpeechController({ env: { PULSE_SINK: "hw_output" }, synthesize, player });
   assert.equal(speech.getConfig().voice, "MAI-Voice-2");
   assert.equal(speech.getConfig().speed, 2);
-  const first = speech.speak("first").catch((error) => error.message);
+  const first = speech.speak("first");
   const second = speech.speak("second");
-  assert.equal(await first, "aborted");
+  assert.deepEqual(await first, { interrupted: true });
   await second;
   assert.equal(player.plays.length, 1);
   assert.equal(player.plays[0].text, "second");

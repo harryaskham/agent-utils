@@ -59,16 +59,28 @@ export async function runPiTextTurn(ctx, {
   abortedMessage = "Pi inference turn aborted.",
 } = {}) {
   if (!model) throw new Error("runPiTextTurn: no model available");
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) {
-    throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
+  let response;
+  if (typeof completeImpl !== "function" && typeof ctx?.modelRegistry?.complete === "function") {
+    // Pi 0.84+ owns provider/auth resolution and completion through the model
+    // registry. Prefer this first-party runtime surface; modern pi-ai no longer
+    // exports the historical top-level `complete` function.
+    response = await ctx.modelRegistry.complete(
+      model,
+      { systemPrompt, messages },
+      { signal, maxTokens, cacheRetention: "none" },
+    );
+  } else {
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok || !auth.apiKey) {
+      throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
+    }
+    const complete = await resolvePiComplete(completeImpl);
+    response = await complete(
+      model,
+      { systemPrompt, messages },
+      { apiKey: auth.apiKey, headers: auth.headers, signal, maxTokens },
+    );
   }
-  const complete = await resolvePiComplete(completeImpl);
-  const response = await complete(
-    model,
-    { systemPrompt, messages },
-    { apiKey: auth.apiKey, headers: auth.headers, signal, maxTokens },
-  );
   if (response?.stopReason === "aborted") throw new Error(abortedMessage);
   return {
     text: extractPiText(response),

@@ -61,6 +61,16 @@ test("runPiTextTurn resolves auth, calls complete with the expected shape, and r
   assert.deepEqual(calls[0].opts, { apiKey: "K", headers: { A: "1" }, signal: undefined, maxTokens: 1200 });
 });
 
+test("runPiTextTurn prefers modelRegistry.complete without importing legacy pi-ai", async () => {
+  const calls = [];
+  const ctx = { modelRegistry: { complete: async (...args) => { calls.push(args); return { content: [{ type: "text", text: "registry" }], stopReason: "stop" }; } } };
+  const model = { provider: "github-copilot", id: "gpt-5.6-luna" };
+  const result = await runPiTextTurn(ctx, { model, systemPrompt: "system", messages: [], maxTokens: 100 });
+  assert.equal(result.text, "registry");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], [model, { systemPrompt: "system", messages: [] }, { signal: undefined, maxTokens: 100, cacheRetention: "none" }]);
+});
+
 test("runPiTextTurn requires a model", async () => {
   await assert.rejects(
     () => runPiTextTurn({}, { messages: [], completeImpl: async () => ({}) }),

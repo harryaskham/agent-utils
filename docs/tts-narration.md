@@ -95,7 +95,9 @@ playback where applicable; credentials are still never read from settings.
 ```
 
 The default narration model is `github-copilot/gpt-5.6-luna`, overridable with
-`PI_NARRATE_MODEL` or the runtime command.
+`PI_NARRATE_MODEL` or the runtime command. Inference goes through Pi's first-party
+`ctx.modelRegistry.complete` surface, which owns provider authentication; the
+extension does not import the removed legacy `pi-ai` top-level `complete` export.
 
 When an assistant message contains one or more tool calls, all sibling calls in
 that assistant message form one batch—even when Pi executes them in parallel:

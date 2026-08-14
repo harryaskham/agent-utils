@@ -56,6 +56,31 @@ function renderChoiceWidget(question, choices, index, status = "listening") {
   ];
 }
 
+function renderChoiceDialog(question, choices, index, timeoutMs, width, theme) {
+  const color = (name, text) => { try { return theme?.fg?.(name, text) ?? text; } catch { return text; } };
+  const bold = (text) => { try { return theme?.bold?.(text) ?? text; } catch { return text; } };
+  const maxWidth = Math.max(20, width || 80);
+  const fit = (text, limit = maxWidth) => {
+    const raw = String(text ?? "");
+    return raw.length <= limit ? raw : `${raw.slice(0, Math.max(1, limit - 1))}…`;
+  };
+  const lines = [color("accent", "━".repeat(maxWidth)), color("text", bold(fit(`◇ ${question}`, maxWidth))) , ""];
+  for (let i = 0; i < choices.length; i++) {
+    const selected = i === index;
+    const marker = selected ? color("accent", "◆") : color("dim", "·");
+    const number = selected ? color("accent", bold(`${i + 1}.`)) : color("muted", `${i + 1}.`);
+    const room = Math.max(4, maxWidth - 7);
+    const label = fit(choices[i].headline, room);
+    lines.push(`${marker} ${number} ${selected ? color("accent", bold(label)) : color("text", label)}`);
+    if (choices[i].summary) lines.push(`    ${color(selected ? "muted" : "dim", fit(choices[i].summary, Math.max(4, maxWidth - 4)))}`);
+  }
+  lines.push("");
+  lines.push(`${color("accent", "↑/k")} ${color("dim", "previous")}  ${color("accent", "↓/j")} ${color("dim", "next")}  ${color("success", "Enter / 1–9")} ${color("dim", "choose")}  ${color("warning", "Esc")} ${color("dim", "cancel")}`);
+  lines.push(color("dim", timeoutMs === 0 ? "No timeout · editor input is suspended while this choice is open" : `Timeout: ${timeoutMs}ms · editor input is suspended while this choice is open`));
+  lines.push(color("accent", "━".repeat(maxWidth)));
+  return lines;
+}
+
 function resultText(result) {
   if (result?.status === "selected") return `selected ${result.index + 1}: ${result.choice?.label}`;
   if (result?.status === "timeout") return `choice timed out after ${result.timeoutMs}ms`;
@@ -84,11 +109,16 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       emitSession({ status: "ended", sessionId: record.sessionId, result });
     };
 
-    const releaseChoiceUi = (record) => {
+    const releaseChoiceUi = (record, result = null) => {
       if (record.timer) clearTimeout(record.timer);
       record.timer = null;
       try { record.terminalUnsub?.(); } catch {}
       record.terminalUnsub = null;
+      if (record.customDone) {
+        const done = record.customDone;
+        record.customDone = null;
+        try { done(result); } catch {}
+      }
       // Cancellation/selection must stop an in-flight spoken prompt immediately;
       // Escape should not leave the old question talking over freeform input.
       try { speakerController.interrupt?.(); } catch {}
@@ -98,7 +128,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
     const finish = (record, result) => {
       if (!record || record.finished) return;
       record.finished = true;
-      releaseChoiceUi(record);
+      releaseChoiceUi(record, result);
       record.signal?.removeEventListener?.("abort", record.onAbort);
       if (active === record) active = null;
       lastResult = result;
@@ -117,7 +147,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
     const awaitFreeformAfterEscape = (record) => {
       if (!record || record.finished || record.awaitingFreeform) return;
       record.awaitingFreeform = true;
-      releaseChoiceUi(record);
+      releaseChoiceUi(record, { status: "dismissed", reason: "freeform-pending" });
       // Stop every external adapter now, but deliberately keep the interactive
       // tool unresolved. It resumes only when Pi receives the next real user
       // input, so Escape itself never causes another agent turn.
@@ -137,7 +167,8 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       if (input?.sessionId && input.sessionId !== record.sessionId) return null;
       const outcome = record.state.apply(input);
       if (outcome.type === "navigate") {
-        try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, outcome.index), { placement: "belowEditor" }); } catch {}
+        if (record.requestRender) { try { record.requestRender(); } catch {} }
+        else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, outcome.index), { placement: "belowEditor" }); } catch {} }
         try { record.onUpdate?.({ content: [{ type: "text", text: `highlighted ${outcome.index + 1}: ${outcome.choice.headline}` }] }); } catch {}
         if (outcome.changed && choiceConfig.speechEnabled) speakerController.speak(outcome.choice.headline).catch((error) => {
           if (record.warnedSpeech) return;
@@ -147,8 +178,16 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       } else if (outcome.type === "selected") {
         finish(record, { status: "selected", index: outcome.index, choice: outcome.choice, source: outcome.source || input?.source || "event" });
       } else if (outcome.type === "cancelled") {
-        if (input?.source === "keyboard" && input?.raw === "\u001b") awaitFreeformAfterEscape(record);
-        else finish(record, { status: "cancelled", reason: input?.source || "event", index: outcome.index, choice: outcome.choice });
+        if (input?.source === "keyboard" && input?.raw === "\u001b") {
+          if (choiceConfig.forceAtAgentEnd) {
+            // Under /force-choice, Escape is the operator's hard stop: disable
+            // persistence and resolve immediately so the agent may end.
+            choiceConfig.forceAtAgentEnd = false;
+            forcedRequestOutstanding = false;
+            persistChoiceSetting("forceAtAgentEnd", false, settingsPath);
+            finish(record, { status: "cancelled", reason: "escape-stop", index: outcome.index, choice: outcome.choice });
+          } else awaitFreeformAfterEscape(record);
+        } else finish(record, { status: "cancelled", reason: input?.source || "event", index: outcome.index, choice: outcome.choice });
       }
       return outcome;
     };
@@ -168,9 +207,13 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       warnedUnsatisfiedForce = false;
       const choices = normalizeChoices(params?.choices);
       if (choices.length > choiceConfig.maxChoices) throw new Error(`choice: at most ${choiceConfig.maxChoices} choices are configured (maximum 9 for numeric selection)`);
-      const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
-        ? Math.max(0, Math.min(300_000, Math.trunc(Number(params.timeoutMs))))
-        : choiceConfig.timeoutMs;
+      // A durable timeoutMs=0 is an operator policy, not merely a default: it
+      // must defeat model-generated timeoutMs=30000 arguments.
+      const timeoutMs = choiceConfig.timeoutMs === 0
+        ? 0
+        : Number.isFinite(Number(params?.timeoutMs))
+          ? Math.max(0, Math.min(300_000, Math.trunc(Number(params.timeoutMs))))
+          : choiceConfig.timeoutMs;
       cancelActive();
       const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
       const sessionId = `choice-${nextSessionId++}`;
@@ -196,17 +239,37 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         active = record;
         record.onAbort = () => finish(record, { status: "cancelled", reason: "aborted", index: state.index, choice: state.current() });
         signal?.addEventListener?.("abort", record.onAbort, { once: true });
-        record.terminalUnsub = ctx?.ui?.onTerminalInput?.((data) => {
+        const dispatchKeyboard = (data) => {
           const input = keyboardChoiceAction(data, choices.length);
-          if (!input) return undefined;
+          if (!input) return false;
           // Keyboard is another event producer, not a privileged state-machine path.
           try { pi.events?.emit?.(INPUT_ACTION_EVENT, { ...input, sessionId }); } catch { handleInput({ ...input, sessionId }); }
-          return { consume: true };
-        }) || null;
+          return true;
+        };
+        if (ctx?.mode === "tui" && typeof ctx?.ui?.custom === "function") {
+          // A true modal component owns terminal focus. Unknown keys are
+          // deliberately swallowed instead of leaking into the editor; Escape
+          // closes the modal and restores normal editor focus.
+          void ctx.ui.custom((tui, theme, _kb, done) => {
+            record.customDone = done;
+            record.requestRender = () => tui.requestRender();
+            return {
+              render: (width) => renderChoiceDialog(question, choices, state.index, timeoutMs, width, theme),
+              invalidate() { tui.requestRender(); },
+              handleInput(data) { dispatchKeyboard(data); },
+            };
+          }).catch((error) => {
+            if (!record.finished) finish(record, { status: "error", error: error?.message || String(error), index: state.index, choice: state.current() });
+          });
+        } else {
+          // RPC/older-runtime fallback: consume recognized controls through the
+          // terminal-input hook and render a normal widget.
+          record.terminalUnsub = ctx?.ui?.onTerminalInput?.((data) => dispatchKeyboard(data) ? { consume: true } : undefined) || null;
+          try { ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(question, choices, state.index), { placement: "belowEditor" }); } catch {}
+        }
         // Keep the process alive while an interactive tool is awaiting input;
         // unlike background refresh timers, this timeout resolves a live call.
         if (timeoutMs > 0) record.timer = setTimeout(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
-        try { ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(question, choices, state.index), { placement: "belowEditor" }); } catch {}
         emitSession({
           status: "started",
           sessionId,

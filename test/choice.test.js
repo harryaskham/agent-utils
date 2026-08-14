@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   CHOICE_INPUT_ACTIONS,
@@ -118,10 +121,37 @@ test("choice extension resolves keyboard and external event inputs through one b
   assert.equal(sessions.at(-1).status, "ended");
 });
 
+test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and renders colored selection", async () => {
+  const h = harness();
+  let component;
+  let renders = 0;
+  h.ctx.mode = "tui";
+  h.ctx.ui.custom = (factory) => new Promise((resolve) => {
+    const tui = { requestRender() { renders += 1; } };
+    const theme = { fg: (name, text) => `<${name}>${text}</${name}>`, bold: (text) => `<b>${text}</b>` };
+    component = factory(tui, theme, null, resolve);
+  });
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, persistedSettings: { choice: {}, tts: {} } })(h.pi);
+  h.editor.value = "editor must stay untouched";
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  const first = component.render(80).join("\n");
+  assert.match(first, /<accent>.*1\./, "selected number is colored");
+  assert.match(first, /<accent>.*Alpha/, "selected headline is colored");
+  component.handleInput("x");
+  assert.equal(h.editor.value, "editor must stay untouched", "ordinary keys never leak into editor while modal is open");
+  component.handleInput("\u001b[B");
+  assert.ok(renders > 0, "arrow navigation requests modal redraw");
+  assert.match(component.render(80).join("\n"), /<accent>.*2\./);
+  component.handleInput("2");
+  const result = await pending;
+  assert.equal(result.details.choice.label, "beta");
+});
+
 test("Escape dismisses the choice, preserves editor text, and waits for the next freeform submission", async () => {
   const h = harness();
   const speaker = { speak: async () => {}, interrupt() {}, dispose() {} };
-  createChoiceExtension({ speaker })(h.pi);
+  createChoiceExtension({ speaker, persistedSettings: { choice: { forceAtAgentEnd: false }, tts: {} } })(h.pi);
   h.editor.value = "draft freeform";
   let settled = false;
   const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
@@ -144,17 +174,17 @@ test("Escape dismisses the choice, preserves editor text, and waits for the next
 
 test("choice timeout resolves without inventing a selection", async () => {
   const h = harness();
-  createChoiceExtension({ speaker: { speak: async () => {}, dispose() {} } })(h.pi);
+  createChoiceExtension({ speaker: { speak: async () => {}, dispose() {} }, persistedSettings: { choice: { timeoutMs: 30000 }, tts: {} } })(h.pi);
   const result = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 5 }, null, null, h.ctx);
   assert.equal(result.details.status, "timeout");
   assert.equal(h.widgets.has("agent-utils-choice"), false);
 });
 
-test("timeoutMs=0 leaves choice active indefinitely until explicit input", async () => {
+test("persisted timeoutMs=0 is a hard no-timeout policy even if the model passes 30000", async () => {
   const h = harness();
-  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, persistedSettings: { choice: {}, tts: {} } })(h.pi);
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, persistedSettings: { choice: { timeoutMs: 0 }, tts: {} } })(h.pi);
   let settled = false;
-  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 0 }, null, null, h.ctx);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 30000 }, null, null, h.ctx);
   pending.then(() => { settled = true; });
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(settled, false);
@@ -197,6 +227,28 @@ test("/force-choice injects once at agent_end, requires interactive_choice, then
   await pending;
   h.handlers.get("agent_end")({}, h.ctx);
   assert.equal(h.sentMessages.length, 2, "a real choice satisfies and rearms the next end-of-agent request");
+});
+
+test("Escape in force-choice mode disables persistence and lets the agent stop immediately", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "force-choice-escape-"));
+  const settingsPath = join(dir, "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ agentUtils: { choice: { forceAtAgentEnd: true } } }, null, 2));
+  try {
+    const h = harness();
+    createChoiceExtension({
+      speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+      settingsPath,
+      persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
+    })(h.pi);
+    const pending = h.tools.get("interactive_choice").execute("id", { question: "Next?", choices: choices.slice(0, 2), timeoutMs: 0 }, null, null, h.ctx);
+    await Promise.resolve();
+    h.input("\u001b");
+    const result = await pending;
+    assert.equal(result.details.reason, "escape-stop");
+    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, false);
+    h.handlers.get("agent_end")({}, h.ctx);
+    assert.equal(h.sentMessages.length, 0, "force-choice remains off so agent_end may stop");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("choice speaker inherits persisted agentUtils.tts and interrupts stale speech/player", async () => {

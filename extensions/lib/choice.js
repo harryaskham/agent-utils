@@ -160,6 +160,9 @@ export function createChoiceSpeaker({
         streamName,
         env,
       });
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === "AbortError") return { interrupted: true };
+      throw error;
     } finally {
       if (synthesis === controller) synthesis = null;
     }

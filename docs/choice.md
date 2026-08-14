@@ -63,7 +63,8 @@ wrap=true max=9 speech=true`:
 ```
 
 Set `timeoutMs` to `0` (or run `/choice settings timeout=0`) to disable
-automatic choice timeout entirely. Escape, explicit cancellation, session
+automatic choice timeout entirely. Zero is a durable operator policy: it also
+ignores a model-generated per-call `timeoutMs: 30000` argument. Escape, explicit cancellation, session
 shutdown, or a selection still terminates the choice normally. The ring adapter
 keeps listening indefinitely by renewing its bounded `ring get` smart client
 every five minutes while that no-timeout choice remains active; navigation can
@@ -95,6 +96,13 @@ and persists the mode, so continuous operation can itself be ended from the ring
 Durable configuration is `agentUtils.choice.forceAtAgentEnd` or
 `PI_FORCE_CHOICE` (env wins).
 
+The TUI implementation is a true `ctx.ui.custom` modal, not a below-editor
+widget: it owns focus, captures arrow sequences before the editor, and swallows
+unmapped typing. Numbers and the selected item use accent styling, while summaries,
+controls, timeout state, and the border use distinct theme colors.
+
+Under `/force-choice`, Escape is a hard stop: it disables persisted force mode,
+resolves the choice immediately, and allows the agent to end. Outside force mode,
 Escape is the freeform escape hatch: it invalidates the visible choice, consumes
 only the Escape key, leaves the editor untouched, stops input adapters/TTS, and
 removes terminal interception. Crucially, Escape alone does **not** resolve the
