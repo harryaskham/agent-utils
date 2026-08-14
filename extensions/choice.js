@@ -313,7 +313,14 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
           try {
             const result = await elicit(params, ctx, signal, onUpdate);
-            return { content: [{ type: "text", text: resultText(result) }], details: result };
+            return {
+              content: [{ type: "text", text: resultText(result) }],
+              details: result,
+              // In a forced-choice run the choice is the sole final tool. Escape
+              // disables force mode and terminates the automatic follow-up LLM
+              // call, so the agent actually stops rather than narrating cancel.
+              terminate: result.reason === "escape-stop",
+            };
           } catch (error) {
             const result = { status: "error", error: error?.message || String(error) };
             return { content: [{ type: "text", text: resultText(result) }], details: result };

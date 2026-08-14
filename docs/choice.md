@@ -102,7 +102,8 @@ unmapped typing. Numbers and the selected item use accent styling, while summari
 controls, timeout state, and the border use distinct theme colors.
 
 Under `/force-choice`, Escape is a hard stop: it disables persisted force mode,
-resolves the choice immediately, and allows the agent to end. Outside force mode,
+resolves the choice immediately, and returns a terminating final tool result so
+Pi skips the automatic follow-up model call and the agent actually ends. Outside force mode,
 Escape is the freeform escape hatch: it invalidates the visible choice, consumes
 only the Escape key, leaves the editor untouched, stops input adapters/TTS, and
 removes terminal interception. Crucially, Escape alone does **not** resolve the

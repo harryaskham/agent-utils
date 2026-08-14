@@ -245,6 +245,7 @@ test("Escape in force-choice mode disables persistence and lets the agent stop i
     h.input("\u001b");
     const result = await pending;
     assert.equal(result.details.reason, "escape-stop");
+    assert.equal(result.terminate, true, "Escape marks the forced choice as a terminating final tool result");
     assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, false);
     h.handlers.get("agent_end")({}, h.ctx);
     assert.equal(h.sentMessages.length, 0, "force-choice remains off so agent_end may stop");
