@@ -11,7 +11,7 @@
 //   node scripts/coverage-summary.mjs --all        # show every file
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,6 +108,13 @@ export function parseArgs(argv) {
 function runCoverageToLcov() {
   const dir = mkdtempSync(join(tmpdir(), "agent-utils-cov-"));
   const lcovPath = join(dir, "coverage.lcov");
+  // Pass the root JS suite explicitly. Newer Node releases also auto-discover
+  // nested *.test.ts files, but pi-wasm is an independent Vitest subproject
+  // with its own dependency install and CI job.
+  const testFiles = readdirSync(join(repoRoot, "test"))
+    .filter((name) => name.endsWith(".test.js"))
+    .sort()
+    .map((name) => join("test", name));
   const result = spawnSync(
     process.execPath,
     [
@@ -115,6 +122,7 @@ function runCoverageToLcov() {
       "--experimental-test-coverage",
       "--test-reporter=lcov",
       `--test-reporter-destination=${lcovPath}`,
+      ...testFiles,
     ],
     { cwd: repoRoot, encoding: "utf8" },
   );

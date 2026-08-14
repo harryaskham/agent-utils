@@ -174,10 +174,13 @@ test("extension reapplies settings and runtime defaults on session_start", async
     },
     models: [{ provider: "litellm-openai", id: "gpt-5.5" }],
   });
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = h.dir;
   try {
-    trueDefaultsExtension(h.pi);
+    // Inject a clean launcher environment: managed Pi sessions export PI_MODEL
+    // and PI_PROVIDER, but this test is specifically for the no-override path.
+    trueDefaultsExtension(h.pi, {
+      argv: [],
+      env: { PI_CODING_AGENT_DIR: h.dir },
+    });
     await h.handlers.get("session_start")({ reason: "startup" }, h.ctx);
 
     assert.equal(h.readSettings().defaultProvider, "litellm-openai");
@@ -186,8 +189,6 @@ test("extension reapplies settings and runtime defaults on session_start", async
     assert.deepEqual(h.setModelCalls, [{ provider: "litellm-openai", id: "gpt-5.5" }]);
     assert.deepEqual(h.thinkingCalls, ["high"]);
   } finally {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
     h.cleanup();
   }
 });

@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -9,6 +9,16 @@ import tendrilShareExtension, {
   setTendrilShareCompleteForTest,
 } from "../extensions/tendril-share.js";
 import { resolveTendrilSubcommand } from "../extensions/tendril-command.js";
+
+// Tests must not inherit the operator's live Tendril model setting. In a Pi
+// session PI_CODING_AGENT_DIR points at ~/.pi/agent, whose settings.json may
+// intentionally select a model the test registry does not provide.
+const originalDescribeModel = process.env.TENDRIL_SHARE_DESCRIBE_MODEL;
+process.env.TENDRIL_SHARE_DESCRIBE_MODEL = "github-copilot/claude-opus-4.8";
+after(() => {
+  if (originalDescribeModel === undefined) delete process.env.TENDRIL_SHARE_DESCRIBE_MODEL;
+  else process.env.TENDRIL_SHARE_DESCRIBE_MODEL = originalDescribeModel;
+});
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lDL+WQAAAABJRU5ErkJggg==",
@@ -122,7 +132,7 @@ test("tendril tool registry exposes command-tree operations", async () => {
 
   const settings = await tools.get("tendril_pi_settings").execute("call-1", {}, new AbortController().signal);
   assert.match(settings.content[0].text, /tendril command=tendril/);
-  assert.match(settings.content[0].text, /describeModel=github-copilot\/claude-opus-4\.8 source=(default|settings\.json)/);
+  assert.match(settings.content[0].text, /describeModel=github-copilot\/claude-opus-4\.8 source=(default|settings\.json|TENDRIL_SHARE_DESCRIBE_MODEL)/);
   assert.match(settings.content[0].text, /preview=on source=/);
 });
 
