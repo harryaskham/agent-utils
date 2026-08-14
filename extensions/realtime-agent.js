@@ -172,6 +172,7 @@ export { buildServerVadTurnDetection };
 import { AssistantMessageEventStream } from "./lib/realtime-event-stream.js";
 import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
+import { normalizedRms } from "./lib/realtime-vad-segmenter.js";
 import { fileQuickfileUtterance } from "./lib/realtime-quickfile.js";
 import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
 import { makePttIndicator } from "./lib/realtime-ptt-indicator.js";
@@ -3092,7 +3093,7 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
-  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null, meter: null, inputLevel: 0, lastMeterRenderAt: 0 };
+  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null, meter: null, inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 };
 
   // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
   // VAD). Updates the running segmenter immediately and persists for next start.
@@ -3116,7 +3117,7 @@ export default function realtimeAgentExtension(pi) {
       if (isAssistantSpeaking()) parts.push("mic muted (agent speaking)");
       else {
         const threshold = rmsToLevel(localVad.cfg?.energyThreshold ?? 0.012);
-        parts.push(`mic ${formatLevelBar(localVad.inputLevel, { width: 12, threshold })} ${String(Math.round(localVad.inputLevel * 100)).padStart(3, " ")}% threshold=${Math.round(threshold * 100)}%`);
+        parts.push(`mic ${formatLevelBar(localVad.inputLevel, { width: 12, threshold })} meter=${String(Math.round(localVad.inputLevel * 100)).padStart(3, " ")}% raw=${localVad.rawInputRms.toFixed(4)} energy(raw)=${Number(localVad.cfg?.energyThreshold ?? 0.012).toFixed(4)}`);
       }
     }
     if (localVad.cfg) parts.push(describeLocalVadConfig(localVad.cfg).replace(/^local-vad: /, ""));
@@ -3144,6 +3145,7 @@ export default function realtimeAgentExtension(pi) {
     try { localVad.meter?.reset?.(); } catch {}
     localVad.meter = null;
     localVad.inputLevel = 0;
+    localVad.rawInputRms = 0;
     localVad.lastMeterRenderAt = 0;
     if (flush && ctrl) { ctrl.flush().catch((e) => { localVad.lastError = e?.message || String(e); }); }
     if (speechInputState.mode === SPEECH_INPUT_MODES.PTT || speechInputState.mode === SPEECH_INPUT_MODES.VAD) {
@@ -3161,7 +3163,7 @@ export default function realtimeAgentExtension(pi) {
     const cfg = parseLocalVadConfig(process.env, persistedStt);
     const model = resolveBatchSttModel(process.env, persistedStt);
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
-    Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, lastMeterRenderAt: 0 });
+    Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
 
     // bd-0c008d: stream partial transcripts into the input editor (live voice
     // editing) instead of only a status widget; commit sends the editor's text
@@ -3274,7 +3276,11 @@ export default function realtimeAgentExtension(pi) {
         if (isAssistantSpeaking()) {
           localVad.meter.reset();
           localVad.inputLevel = 0;
-        } else localVad.inputLevel = localVad.meter.pushFrame(chunk);
+          localVad.rawInputRms = 0;
+        } else {
+          localVad.rawInputRms = normalizedRms(chunk);
+          localVad.inputLevel = localVad.meter.pushFrame(chunk);
+        }
         const now = Date.now();
         if (now - localVad.lastMeterRenderAt > 150) {
           localVad.lastMeterRenderAt = now;

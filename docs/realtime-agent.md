@@ -354,8 +354,10 @@ shared voice/playback fields in `agentUtils.tts`):
 
 Set the delay with `agentUtils.read.delayMs` or `/read delay=750`; set an
 independent read speech rate with `agentUtils.read.speed` or `/read speed=1.6`.
-Explicit `/read` setters persist `delayMs`, `speed`, `onDelay`, `onSend`, and
-enabled state. Env `PI_READ_DELAY_MS`, `PI_READ_SPEED`, `PI_READ_ON_DELAY`,
+Explicit `/read` setters persist `delayMs`, `speed`, `onDelay`, and `onSend`.
+`/read on|off` is runtime-only: `agentUtils.read.enabled` defines startup behavior
+and is never rewritten by a session toggle. Env `PI_READ_DELAY_MS`,
+`PI_READ_SPEED`, `PI_READ_ON_DELAY`,
 `PI_READ_ON_SEND`, and `PI_READ_ENABLED` override settings.
 
 While the mode is active:
@@ -437,8 +439,11 @@ A color-coded state indicator (bd-081267) renders a truecolor bar under the inpu
 box and tracks the live state: **orange** while listening/recording, **magenta**
 while transcribing, a **yellow** flash when a transcription chunk completes, and a
 **green** flash when a turn is committed/sent. The status line also shows a live
-mic energy bar, percentage, and threshold marker at a bounded refresh rate for
-sensitivity debugging in both `/stt` and `/ptt`. It needs a 24-bit-color terminal.
+mic energy bar at a bounded refresh rate for sensitivity debugging in both
+`/stt` and `/ptt`. The percentage is a gain-scaled visible meter, while `raw=`
+and `energy(raw)=` use the actual normalized RMS scale consumed by VAD. For
+example, a 10% visual meter is roughly raw 0.008; energy 0.4 scales/clamps its
+marker to 100% and will reject ordinary speech. It needs a 24-bit-color terminal.
 
 ### The `speak` tool (low-latency direct-Azure agent voice)
 

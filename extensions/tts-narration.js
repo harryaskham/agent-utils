@@ -221,17 +221,15 @@ export function createTtsNarrationExtension({
         const simple = raw.toLowerCase();
         if (!raw || simple === "on") {
           ttsEnabled = true;
-          ttsEnabledSource = "runtime/settings";
-          persistTtsSetting("enabled", true, settingsPath);
+          ttsEnabledSource = "runtime";
           ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
           return;
         }
         if (simple === "off") {
           ttsEnabled = false;
-          ttsEnabledSource = "runtime/settings";
-          persistTtsSetting("enabled", false, settingsPath);
+          ttsEnabledSource = "runtime";
           speechController.interrupt();
-          ctx.ui.notify("tts:off · enabled-source:runtime/settings", "info");
+          ctx.ui.notify("tts:off · enabled-source:runtime (startup setting unchanged)", "info");
           return;
         }
         if (simple === "status") {
@@ -248,8 +246,7 @@ export function createTtsNarrationExtension({
             persistTtsSetting(field, config[field], settingsPath);
           }
           ttsEnabled = true;
-          ttsEnabledSource = "runtime/settings";
-          persistTtsSetting("enabled", true, settingsPath);
+          ttsEnabledSource = "runtime";
           ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
         } catch (error) {
           ctx.ui.notify(error?.message || String(error), "warning");
@@ -264,12 +261,10 @@ export function createTtsNarrationExtension({
         const simple = raw.toLowerCase();
         if (!raw || simple === "on") {
           narrateEnabled = true;
-          narrateEnabledSource = "runtime/settings";
-          persistNarrateSetting("enabled", true, settingsPath);
+          narrateEnabledSource = "runtime";
         } else if (simple === "off") {
           narrateEnabled = false;
-          narrateEnabledSource = "runtime/settings";
-          persistNarrateSetting("enabled", false, settingsPath);
+          narrateEnabledSource = "runtime";
           stopNarrationWork();
         } else if (simple !== "status") {
           try {
@@ -292,13 +287,11 @@ export function createTtsNarrationExtension({
             }
             if (parsed.values.enabled !== undefined) {
               narrateEnabled = boolValue(parsed.values.enabled, "/narrate enabled");
-              narrateEnabledSource = "runtime/settings";
-              persistNarrateSetting("enabled", narrateEnabled, settingsPath);
+              narrateEnabledSource = "runtime";
             }
             if (parsed.values.on !== undefined) {
               narrateEnabled = boolValue(parsed.values.on, "/narrate on");
-              narrateEnabledSource = "runtime/settings";
-              persistNarrateSetting("enabled", narrateEnabled, settingsPath);
+              narrateEnabledSource = "runtime";
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }

@@ -391,8 +391,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
         const action = String(parsed.positionals[0] || "").toLowerCase();
         if (["off", "stop", "disable"].includes(action)) {
           controller.disable(ctx);
-          persistReadSetting("enabled", false, settingsPath);
-          ctx.ui.notify("/read off (persisted)", "info");
+          ctx.ui.notify("/read off (runtime; startup setting unchanged)", "info");
           return;
         }
         if (action === "status") {
@@ -400,7 +399,6 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
           return;
         }
         controller.enable(ctx);
-        persistReadSetting("enabled", true, settingsPath);
         if (["on", "start", "enable"].includes(action) || parsed.positionals.length === 0) {
           ctx.ui.notify(controller.status(), "info");
           return;

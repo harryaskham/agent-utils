@@ -48,8 +48,9 @@ since it is a separate historical auto-speech surface.
 ### Durable settings
 
 Both modes support the standard `env > settings.json > default` precedence.
-Explicit `/tts` and `/narrate` setters persist non-secret values by updating only
-their own `agentUtils` slices. Environment overrides are never written back, and
+Explicit `/tts` and `/narrate` value setters persist non-secret voice/model/speed
+values by updating only their own `agentUtils` slices. Runtime `on|off` toggles do
+**not** persist: `enabled` in settings defines startup behavior only. Environment overrides are never written back, and
 API keys are never persisted.
 
 ```json

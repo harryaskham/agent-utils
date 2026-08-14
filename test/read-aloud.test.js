@@ -222,7 +222,7 @@ test("a newer synthesis aborts the stale request and interrupts playback", async
   assert.ok(interrupts >= 2);
 });
 
-test("/read command persists delay/speed/on-delay/on-send/enabled in agentUtils.read", async () => {
+test("/read command persists timing/speed but keeps runtime enabled toggle out of settings", async () => {
   const dir = mkdtempSync(join(tmpdir(), "read-settings-"));
   const settingsPath = join(dir, "settings.json");
   const commands = new Map();
@@ -234,10 +234,10 @@ test("/read command persists delay/speed/on-delay/on-send/enabled in agentUtils.
     handlers.get("session_start")({}, harness.ctx);
     await commands.get("read").handler("delay=123 speed=1.6 on_delay=false on_send=false", harness.ctx);
     let settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    assert.deepEqual(settings.agentUtils.read, { delayMs: 123, speed: 1.6, onDelay: false, onSend: false, enabled: true });
+    assert.deepEqual(settings.agentUtils.read, { delayMs: 123, speed: 1.6, onDelay: false, onSend: false });
     await commands.get("read").handler("off", harness.ctx);
     settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    assert.equal(settings.agentUtils.read.enabled, false);
+    assert.equal(settings.agentUtils.read.enabled, undefined, "runtime toggles never mutate startup enabled policy");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -182,7 +182,7 @@ test("settings persistence writes through Home Manager-style symlinks without re
 test("explicit /tts and /narrate setters persist only non-secret runtime values", async () => {
   const dir = mkdtempSync(join(tmpdir(), "tts-command-settings-"));
   const path = join(dir, "settings.json");
-  writeFileSync(path, JSON.stringify({ unrelated: 7 }, null, 2));
+  writeFileSync(path, JSON.stringify({ unrelated: 7, agentUtils: { tts: { enabled: false }, narrate: { enabled: false } } }, null, 2));
   const config = { provider: "azure", voice: "Default", lang: "en-GB", speed: 2, embedding: "embed", style: null, styleDegree: null, endpoint: undefined, apiKey: undefined, backend: "pulse", server: undefined, device: "sink" };
   const speech = {
     getConfig: () => ({ ...config }),
@@ -200,11 +200,11 @@ test("explicit /tts and /narrate setters persist only non-secret runtime values"
     await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2`, h.ctx);
     const all = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(all.unrelated, 7);
-    assert.equal(all.agentUtils.tts.enabled, true);
+    assert.equal(all.agentUtils.tts.enabled, false, "runtime /tts toggle does not change startup policy");
     assert.equal(all.agentUtils.tts.voice, "SavedVoice");
     assert.equal(all.agentUtils.tts.speed, 1.6);
     assert.equal(all.agentUtils.tts.apiKey, undefined, "runtime API key is never persisted");
-    assert.equal(all.agentUtils.narrate.enabled, true);
+    assert.equal(all.agentUtils.narrate.enabled, false, "runtime /narrate toggle does not change startup policy");
     assert.equal(all.agentUtils.narrate.model, DEFAULT_NARRATION_MODEL);
     assert.equal(all.agentUtils.narrate.speed, 2);
   } finally {

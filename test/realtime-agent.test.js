@@ -19,6 +19,12 @@ import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
 // which reads PI_RT_LOCAL_VAD_* env. Clear those here so the audio-driven assertions
 // use the default segmenter config and stay deterministic regardless of any ambient
 // host setting (e.g. an operator's /rt energy= persisted on the box, or the gate env).
+// Isolate settings.json too: local-VAD wiring reads agentUtils.stt at each start,
+// and the operator's live sensitivity tuning must not redefine test defaults.
+const isolatedAgentSettingsDir = mkdtempSync(join(tmpdir(), "rt-agent-settings-"));
+process.env.PI_CODING_AGENT_DIR = isolatedAgentSettingsDir;
+process.on("exit", () => { try { rmSync(isolatedAgentSettingsDir, { recursive: true, force: true }); } catch {} });
+
 for (const k of [
   "PI_RT_LOCAL_VAD_ENERGY_THRESHOLD",
   "PI_RT_LOCAL_VAD_INSERT_SILENCE_MS",
@@ -2154,7 +2160,7 @@ test("local-vad drives the color-coded state indicator widget and clears it on s
     await new Promise((resolve) => setTimeout(resolve, 170));
     cap.stdout.emit("data", pcm(100, true));
     const status = String(h.widgets.get("realtime-status")?.[0] || "");
-    assert.match(status, /mic .*% threshold=.*%/, "live status includes input level and threshold marker");
+    assert.match(status, /mic .*meter=.*% raw=0\.\d+ energy\(raw\)=0\.\d+/, "live status disambiguates gain-scaled meter from raw RMS threshold");
     // Stop tears the indicator down.
     await h.commands.get("rt").handler("stt stop", h.ctx);
     assert.equal(h.widgets.get("realtime-ptt-indicator"), undefined, "indicator cleared on stop");
