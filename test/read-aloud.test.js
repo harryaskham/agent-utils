@@ -46,8 +46,9 @@ function makeCtx(initial = "") {
 }
 
 test("/read durable timing resolves env > agentUtils.read > defaults", () => {
-  const persisted = defaultReadConfig({}, {}, { enabled: true, delayMs: 750, onDelay: false, onSend: false });
+  const persisted = defaultReadConfig({}, { speed: 1.4 }, { enabled: true, delayMs: 750, onDelay: false, onSend: false, speed: 1.6 });
   assert.equal(persisted.delay, 750);
+  assert.equal(persisted.speed, 1.6, "read speed overrides shared tts speed");
   assert.equal(persisted.onDelay, false);
   assert.equal(persisted.onSend, false);
   const env = defaultReadConfig({ PI_READ_DELAY_MS: "900", PI_READ_ON_DELAY: "1" }, {}, { delayMs: 750, onDelay: false });
@@ -221,7 +222,7 @@ test("a newer synthesis aborts the stale request and interrupts playback", async
   assert.ok(interrupts >= 2);
 });
 
-test("/read command persists delay/on-delay/on-send/enabled in agentUtils.read", async () => {
+test("/read command persists delay/speed/on-delay/on-send/enabled in agentUtils.read", async () => {
   const dir = mkdtempSync(join(tmpdir(), "read-settings-"));
   const settingsPath = join(dir, "settings.json");
   const commands = new Map();
@@ -231,9 +232,9 @@ test("/read command persists delay/on-delay/on-send/enabled in agentUtils.read",
   try {
     createReadAloudExtension({ persistedTts: {}, persistedRead: {}, settingsPath })(pi);
     handlers.get("session_start")({}, harness.ctx);
-    await commands.get("read").handler("delay=123 on_delay=false on_send=false", harness.ctx);
+    await commands.get("read").handler("delay=123 speed=1.6 on_delay=false on_send=false", harness.ctx);
     let settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    assert.deepEqual(settings.agentUtils.read, { delayMs: 123, onDelay: false, onSend: false, enabled: true });
+    assert.deepEqual(settings.agentUtils.read, { delayMs: 123, speed: 1.6, onDelay: false, onSend: false, enabled: true });
     await commands.get("read").handler("off", harness.ctx);
     settings = JSON.parse(readFileSync(settingsPath, "utf8"));
     assert.equal(settings.agentUtils.read.enabled, false);

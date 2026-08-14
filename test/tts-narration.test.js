@@ -120,13 +120,15 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(tts.config.apiKey, undefined, "API keys are never part of persisted resolution");
 
   const narrate = resolveNarrateSettings({
-    persisted: { enabled: true, model: "github-copilot/persisted" },
+    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2 },
     env: { PI_NARRATE_MODEL: "github-copilot/env" },
   });
   assert.equal(narrate.enabled, true);
   assert.equal(narrate.enabledSource, "settings");
   assert.equal(narrate.model, "github-copilot/env");
   assert.equal(narrate.modelSource, "env");
+  assert.equal(narrate.speed, 2);
+  assert.equal(narrate.speedSource, "settings");
 });
 
 test("settings read/write is scoped, rejects secret fields, and tolerates malformed input", () => {
@@ -195,7 +197,7 @@ test("explicit /tts and /narrate setters persist only non-secret runtime values"
   try {
     const h = harness({ speech, runTextTurn: async () => ({ text: "" }), settingsPath: path, persistedSettings: undefined });
     await h.commands.get("tts").handler("voice=SavedVoice speed=1.6 api_key=temporary", h.ctx);
-    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL}`, h.ctx);
+    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2`, h.ctx);
     const all = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(all.unrelated, 7);
     assert.equal(all.agentUtils.tts.enabled, true);
@@ -204,6 +206,7 @@ test("explicit /tts and /narrate setters persist only non-secret runtime values"
     assert.equal(all.agentUtils.tts.apiKey, undefined, "runtime API key is never persisted");
     assert.equal(all.agentUtils.narrate.enabled, true);
     assert.equal(all.agentUtils.narrate.model, DEFAULT_NARRATION_MODEL);
+    assert.equal(all.agentUtils.narrate.speed, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -215,7 +218,7 @@ test("shared /tts speech controller inherits /read defaults and interrupts stale
     const call = { text, options, resolve, reject };
     synthCalls.push(call);
     options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-    if (text === "second") resolve(Buffer.from(text));
+    if (text === "second" || text === "override") resolve(Buffer.from(text));
   });
   const player = {
     interrupts: 0,
@@ -238,6 +241,9 @@ test("shared /tts speech controller inherits /read defaults and interrupts stale
   speech.apply({ voice: "AnotherVoice", speed: "1.5" });
   assert.equal(speech.getConfig().voice, "AnotherVoice");
   assert.equal(speech.getConfig().speed, 1.5);
+  await speech.speak("override", { speed: 2 });
+  assert.equal(synthCalls.at(-1).options.speed, 2, "per-call narration speed overrides shared tts speed");
+  assert.equal(speech.getConfig().speed, 1.5, "override does not mutate shared /tts config");
   assert.throws(() => speech.apply({ delay: "10" }), /belongs to \/read/);
 });
 
@@ -283,10 +289,11 @@ test("/tts speaks every plain assistant message verbatim without a speak tool ca
 
 test("/narrate batches parallel tools into one pre/post summary, speaks both, and injects no-trigger next-turn context", async () => {
   const spoken = [];
+  const spokenOverrides = [];
   const speech = {
-    getConfig: () => ({ provider: "azure", voice: "MAI-Voice-2", lang: "en-GB", speed: 2, embedding: "set", style: null, styleDegree: null, backend: "pulse", device: "hw_output" }),
+    getConfig: () => ({ provider: "azure", voice: "MAI-Voice-2", lang: "en-GB", speed: 1.4, embedding: "set", style: null, styleDegree: null, backend: "pulse", device: "hw_output" }),
     apply() {}, interrupt() {}, dispose() {},
-    async speak(text) { spoken.push(text); },
+    async speak(text, overrides) { spoken.push(text); spokenOverrides.push(overrides); },
   };
   const inference = [];
   const runTextTurn = async (_ctx, request) => {
@@ -294,7 +301,7 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
     const before = request.systemPrompt.includes("Begin with 'I am'");
     return { text: before ? "I am checking both sources." : "I found two matching records.", model: DEFAULT_NARRATION_MODEL };
   };
-  const h = harness({ speech, runTextTurn });
+  const h = harness({ speech, runTextTurn, persistedSettings: { tts: { speed: 1.4 }, narrate: { speed: 2 } } });
   await h.commands.get("narrate").handler("on", h.ctx);
   h.emit("message_end", { message: { role: "assistant", content: [
     { type: "toolCall", id: "a", name: "read", arguments: { path: "a" } },
@@ -316,6 +323,7 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
     assert.deepEqual(entry.options, { deliverAs: "nextTurn", triggerTurn: false });
   }
   assert.deepEqual(spoken, ["I am checking both sources.", "I found two matching records."]);
+  assert.deepEqual(spokenOverrides, [{ speed: 2 }, { speed: 2 }], "narration overrides shared tts speed per call");
 });
 
 test("a newer final assistant message aborts stale narration and its verbatim /tts wins", async () => {

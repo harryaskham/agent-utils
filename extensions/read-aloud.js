@@ -45,11 +45,19 @@ export function defaultReadConfig(env = process.env, persisted = {}, persistedRe
     const number = Number(value);
     return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : fallback;
   };
+  const positive = (value, fallback) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : fallback;
+  };
   return {
     provider: env.PI_TTS_PROVIDER || configured("provider", DEFAULT_TTS_PROVIDER),
     voice: env.PI_TTS_VOICE || configured("voice", DEFAULT_TTS_VOICE),
     lang: env.PI_TTS_LANG || configured("lang", DEFAULT_TTS_LANG),
-    speed: env.PI_TTS_SPEED != null ? Number(env.PI_TTS_SPEED) : configured("speed", DEFAULT_TTS_SPEED),
+    speed: env.PI_READ_SPEED != null
+      ? positive(env.PI_READ_SPEED, DEFAULT_TTS_SPEED)
+      : persistedRead.speed != null
+        ? positive(persistedRead.speed, DEFAULT_TTS_SPEED)
+        : env.PI_TTS_SPEED != null ? positive(env.PI_TTS_SPEED, DEFAULT_TTS_SPEED) : configured("speed", DEFAULT_TTS_SPEED),
     embedding: env.PI_TTS_EMBEDDING || configured("embedding", DEFAULT_TTS_EMBEDDING),
     style: env.PI_TTS_STYLE ?? configured("style", null),
     styleDegree: env.PI_TTS_STYLEDEGREE != null ? Number(env.PI_TTS_STYLEDEGREE) : configured("styleDegree", null),
@@ -377,6 +385,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
         const parsed = parseEnvStyleArgs(String(args || ""));
         const updated = controller.updateConfig(parsed.values, ctx);
         if (Object.hasOwn(parsed.values, "delay")) persistReadSetting("delayMs", updated.delay, settingsPath);
+        if (Object.hasOwn(parsed.values, "speed")) persistReadSetting("speed", updated.speed, settingsPath);
         if (Object.hasOwn(parsed.values, "on_delay") || Object.hasOwn(parsed.values, "ondelay")) persistReadSetting("onDelay", updated.onDelay, settingsPath);
         if (Object.hasOwn(parsed.values, "on_send") || Object.hasOwn(parsed.values, "onsend")) persistReadSetting("onSend", updated.onSend, settingsPath);
         const action = String(parsed.positionals[0] || "").toLowerCase();

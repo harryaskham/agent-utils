@@ -87,6 +87,8 @@ export function createTtsNarrationExtension({
     let narrateEnabledSource = resolvedNarrate.enabledSource;
     let narrationModel = resolvedNarrate.model;
     let narrationModelSource = resolvedNarrate.modelSource;
+    let narrationSpeed = resolvedNarrate.speed;
+    let narrationSpeedSource = resolvedNarrate.speedSource;
     try {
       pi.ttsNarration = {
         isEnabled: () => ttsEnabled,
@@ -106,8 +108,8 @@ export function createTtsNarrationExtension({
       try { ctx?.ui?.notify?.(`${kind}: ${error?.message || String(error)}`, "warning"); } catch {}
     };
 
-    const speakBestEffort = (text, ctx, kind = "tts") => {
-      void speechController.speak(text).catch((error) => warnOnce(kind, error, ctx));
+    const speakBestEffort = (text, ctx, kind = "tts", overrides = {}) => {
+      void speechController.speak(text, overrides).catch((error) => warnOnce(kind, error, ctx));
     };
 
     const supersedeNarrationWork = ({ clearBatches = false } = {}) => {
@@ -146,7 +148,7 @@ export function createTtsNarrationExtension({
           display: true,
           details: { phase, batchId: batch.id, model: response.model, toolNames: batch.calls.map((call) => call.name) },
         }, { deliverAs: "nextTurn", triggerTurn: false });
-        speakBestEffort(text, ctx, "narrate speech");
+        speakBestEffort(text, ctx, "narrate speech", narrationSpeed ? { speed: narrationSpeed } : {});
         return text;
       } catch (error) {
         if (!controller.signal.aborted && narrateEnabled) warnOnce("narrate", error, ctx);
@@ -256,7 +258,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("narrate", {
-      description: "Asynchronously narrate complete tool batches before/after with a fast model. Usage: /narrate [on|off|status|model=provider/id].",
+      description: "Asynchronously narrate complete tool batches before/after with a fast model. Usage: /narrate [on|off|status|model=provider/id speed=2].",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
@@ -274,12 +276,19 @@ export function createTtsNarrationExtension({
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             for (const key of Object.keys(parsed.values)) {
-              if (!new Set(["model", "enabled", "on"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!new Set(["model", "enabled", "on", "speed"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
             if (parsed.values.model) {
               narrationModel = String(parsed.values.model).trim();
               narrationModelSource = "runtime/settings";
               persistNarrateSetting("model", narrationModel, settingsPath);
+            }
+            if (parsed.values.speed !== undefined) {
+              const speed = Number(parsed.values.speed);
+              if (!Number.isFinite(speed) || speed <= 0) throw new Error("/narrate: speed must be greater than zero");
+              narrationSpeed = speed;
+              narrationSpeedSource = "runtime/settings";
+              persistNarrateSetting("speed", speed, settingsPath);
             }
             if (parsed.values.enabled !== undefined) {
               narrateEnabled = boolValue(parsed.values.enabled, "/narrate enabled");
@@ -293,7 +302,7 @@ export function createTtsNarrationExtension({
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
-        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · context:custom nextTurn/no-trigger · speech:/tts settings`, "info");
+        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · context:custom nextTurn/no-trigger · speech:/tts settings`, "info");
       },
     });
 

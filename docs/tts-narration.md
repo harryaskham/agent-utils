@@ -70,7 +70,8 @@ API keys are never persisted.
     },
     "narrate": {
       "enabled": true,
-      "model": "github-copilot/gpt-5.6-luna"
+      "model": "github-copilot/gpt-5.6-luna",
+      "speed": 2
     }
   }
 }
@@ -102,7 +103,10 @@ playback where applicable; credentials are still never read from settings.
 ```
 
 The default narration model is `github-copilot/gpt-5.6-luna`, overridable with
-`PI_NARRATE_MODEL` or the runtime command. Inference goes through Pi's first-party
+`PI_NARRATE_MODEL` or the runtime command. Narration normally inherits
+`agentUtils.tts.speed`, but `agentUtils.narrate.speed`, `PI_NARRATE_SPEED`, or
+`/narrate speed=2` applies a per-call speech-rate override without changing
+verbatim `/tts` speed. Inference goes through Pi's first-party
 `ctx.modelRegistry.complete` surface, which owns provider authentication; the
 extension does not import the removed legacy `pi-ai` top-level `complete` export.
 

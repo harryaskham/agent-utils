@@ -344,6 +344,7 @@ shared voice/playback fields in `agentUtils.tts`):
     "read": {
       "enabled": false,
       "delayMs": 2000,
+      "speed": 1.6,
       "onDelay": true,
       "onSend": true
     }
@@ -351,10 +352,11 @@ shared voice/playback fields in `agentUtils.tts`):
 }
 ```
 
-Set the delay with `agentUtils.read.delayMs` or `/read delay=750`; explicit
-`/read` setters persist `delayMs`, `onDelay`, `onSend`, and enabled state. Env
-`PI_READ_DELAY_MS`, `PI_READ_ON_DELAY`, `PI_READ_ON_SEND`, and
-`PI_READ_ENABLED` override settings.
+Set the delay with `agentUtils.read.delayMs` or `/read delay=750`; set an
+independent read speech rate with `agentUtils.read.speed` or `/read speed=1.6`.
+Explicit `/read` setters persist `delayMs`, `speed`, `onDelay`, `onSend`, and
+enabled state. Env `PI_READ_DELAY_MS`, `PI_READ_SPEED`, `PI_READ_ON_DELAY`,
+`PI_READ_ON_SEND`, and `PI_READ_ENABLED` override settings.
 
 While the mode is active:
 

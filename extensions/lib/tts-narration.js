@@ -151,11 +151,15 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = 
 }
 
 export function resolveNarrateSettings({ env = process.env, persisted = {} } = {}) {
+  const speedRaw = env.PI_NARRATE_SPEED ?? persisted.speed;
+  const speedNumber = Number(speedRaw);
   return {
     enabled: enabledValue(env.PI_NARRATE_ENABLED, enabledValue(persisted.enabled, false)),
     model: String(env.PI_NARRATE_MODEL || persisted.model || DEFAULT_NARRATION_MODEL).trim(),
+    speed: Number.isFinite(speedNumber) && speedNumber > 0 ? speedNumber : undefined,
     enabledSource: env.PI_NARRATE_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
     modelSource: env.PI_NARRATE_MODEL ? "env" : persisted.model ? "settings" : "default",
+    speedSource: env.PI_NARRATE_SPEED != null ? "env" : persisted.speed != null ? "settings" : "tts",
   };
 }
 
@@ -183,33 +187,34 @@ export function createAgentSpeechController({
     try { player.interrupt?.(); } catch {}
   };
 
-  const speak = async (text) => {
+  const speak = async (text, overrides = {}) => {
     const body = String(text ?? "");
     if (!body.trim()) return { skipped: true };
     interrupt();
     const mine = generation;
+    const effective = { ...config, ...overrides, streamName: "/tts" };
     const controller = new AbortController();
     synthesisAbort = controller;
     try {
       const options = {
-        provider: config.provider,
-        voice: config.voice,
-        lang: config.lang,
-        speed: config.speed,
-        speakerProfileId: config.embedding,
-        style: config.style,
-        styleDegree: config.styleDegree,
+        provider: effective.provider,
+        voice: effective.voice,
+        lang: effective.lang,
+        speed: effective.speed,
+        speakerProfileId: effective.embedding,
+        style: effective.style,
+        styleDegree: effective.styleDegree,
         signal: controller.signal,
         env,
       };
-      if (config.endpoint !== undefined) options.endpoint = config.endpoint;
-      if (config.apiKey !== undefined) options.apiKey = config.apiKey;
+      if (effective.endpoint !== undefined) options.endpoint = effective.endpoint;
+      if (effective.apiKey !== undefined) options.apiKey = effective.apiKey;
       const pcm = await synthesize(body, options);
       if (mine !== generation || controller.signal.aborted) return { interrupted: true };
       return await player.play(pcm, {
-        backend: config.backend,
-        server: config.server,
-        device: config.device,
+        backend: effective.backend,
+        server: effective.server,
+        device: effective.device,
         streamName: "/tts",
         env,
       });
