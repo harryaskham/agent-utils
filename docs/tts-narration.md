@@ -79,6 +79,12 @@ Credentials remain in `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_API_KEY`; Pulse
 server/sink environment overrides remain available. Persisted `enabled: true`
 activates the corresponding hook immediately when the extension loads.
 
+The same `agentUtils.tts` slice is resolved by `/read`, automatic `/tts`, the
+agent-callable `speak` tool, realtime speak-replies, and spoken choices. Per-call
+`speak` overrides win, then `PI_CASCADE_*` / `PI_TTS_*` env, then this slice, then
+the shared built-in defaults. These direct surfaces share interruptible `/tts`
+playback where applicable; credentials are still never read from settings.
+
 ## `/narrate`: tool batches
 
 ```text

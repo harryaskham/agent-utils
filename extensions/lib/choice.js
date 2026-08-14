@@ -6,6 +6,7 @@
 // the same bus.
 
 import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "./input-actions.js";
+import { resolveAgentTtsSettings } from "./tts-narration.js";
 import {
   DEFAULT_TTS_BACKEND,
   DEFAULT_TTS_DEVICE,
@@ -117,10 +118,12 @@ export function formatChoiceIntroduction(question, choices, initialIndex = 0) {
 
 export function createChoiceSpeaker({
   env = process.env,
+  persisted = {},
   synthesize = synthesizeSpeechDirect,
   player = createInterruptiblePcmPlayer(),
   streamName = DEFAULT_CHOICE_STREAM_NAME,
 } = {}) {
+  const shared = resolveAgentTtsSettings({ env, persisted }).config;
   let synthesis = null;
 
   const interrupt = () => {
@@ -135,9 +138,9 @@ export function createChoiceSpeaker({
     interrupt();
     const controller = new AbortController();
     synthesis = controller;
-    const resolved = resolveSpeakToolParams({ text: body }, { env });
+    const resolved = resolveSpeakToolParams({ text: body }, { env, persisted });
     try {
-      const pcm = await synthesize(body, {
+      const options = {
         voice: resolved.voice,
         lang: resolved.lang,
         speed: resolved.speed,
@@ -146,12 +149,14 @@ export function createChoiceSpeaker({
         styleDegree: resolved.styleDegree,
         signal: controller.signal,
         env,
-      });
+      };
+      if (!env.AZURE_SPEECH_ENDPOINT && shared.endpoint !== undefined) options.endpoint = shared.endpoint;
+      const pcm = await synthesize(body, options);
       if (synthesis !== controller || controller.signal.aborted) return { interrupted: true };
       return await player.play(pcm, {
-        backend: env.PI_RT_AUDIO_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || DEFAULT_TTS_BACKEND,
-        server: env.PULSE_SERVER,
-        device: env.PULSE_SINK || DEFAULT_TTS_DEVICE,
+        backend: env.PI_RT_AUDIO_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,
+        server: env.PULSE_SERVER || shared.server,
+        device: env.PULSE_SINK || shared.device || DEFAULT_TTS_DEVICE,
         streamName,
         env,
       });

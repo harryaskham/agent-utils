@@ -20,26 +20,28 @@ import {
 } from "./lib/tts.js";
 import { audioDurationMs } from "./lib/realtime-audio.js";
 import { markAssistantSpeaking } from "./lib/half-duplex-state.js";
+import { readPersistedTtsSettings } from "./lib/tts-settings.js";
 
 export const DEFAULT_READ_DELAY_MS = 2000;
 
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const NONE = /^(none|null|unset)$/i;
 
-export function defaultReadConfig(env = process.env) {
+export function defaultReadConfig(env = process.env, persisted = {}) {
+  const configured = (key, fallback) => persisted[key] !== undefined ? persisted[key] : fallback;
   return {
-    provider: DEFAULT_TTS_PROVIDER,
-    voice: DEFAULT_TTS_VOICE,
-    lang: DEFAULT_TTS_LANG,
-    speed: DEFAULT_TTS_SPEED,
-    embedding: DEFAULT_TTS_EMBEDDING,
-    style: null,
-    styleDegree: null,
-    endpoint: undefined,
+    provider: env.PI_TTS_PROVIDER || configured("provider", DEFAULT_TTS_PROVIDER),
+    voice: env.PI_TTS_VOICE || configured("voice", DEFAULT_TTS_VOICE),
+    lang: env.PI_TTS_LANG || configured("lang", DEFAULT_TTS_LANG),
+    speed: env.PI_TTS_SPEED != null ? Number(env.PI_TTS_SPEED) : configured("speed", DEFAULT_TTS_SPEED),
+    embedding: env.PI_TTS_EMBEDDING || configured("embedding", DEFAULT_TTS_EMBEDDING),
+    style: env.PI_TTS_STYLE ?? configured("style", null),
+    styleDegree: env.PI_TTS_STYLEDEGREE != null ? Number(env.PI_TTS_STYLEDEGREE) : configured("styleDegree", null),
+    endpoint: env.AZURE_SPEECH_ENDPOINT || configured("endpoint", undefined),
     apiKey: undefined,
-    backend: DEFAULT_TTS_BACKEND,
-    server: env.PULSE_SERVER || undefined,
-    device: env.PULSE_SINK || DEFAULT_TTS_DEVICE,
+    backend: env.PI_RT_AUDIO_BACKEND || configured("backend", DEFAULT_TTS_BACKEND),
+    server: env.PULSE_SERVER || configured("server", undefined),
+    device: env.PULSE_SINK || configured("device", DEFAULT_TTS_DEVICE),
     streamName: DEFAULT_TTS_STREAM_NAME,
     delay: DEFAULT_READ_DELAY_MS,
     onDelay: true,
@@ -169,8 +171,9 @@ export function createReadModeController({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   defer = queueMicrotask,
+  persistedTts = {},
 } = {}) {
-  let config = defaultReadConfig(env);
+  let config = defaultReadConfig(env, persistedTts);
   let enabled = false;
   let timer = null;
   let generation = 0;
@@ -323,7 +326,7 @@ export function createReadModeController({
 }
 
 export default function readAloudExtension(pi) {
-  const controller = createReadModeController();
+  const controller = createReadModeController({ persistedTts: readPersistedTtsSettings() });
   let terminalInputUnsubscribe = null;
   let sessionCtx = null;
 

@@ -147,7 +147,7 @@ ${renderRows(SERVER_VAD_PROVENANCE, { withPersisted: false })}
 ## Persisted settings.json slices (agentUtils.<slice>)
 
 - \`agentUtils.realtime\`: ${PERSISTED_SLICES.realtime.join(", ")}
-- \`agentUtils.stt\` (fallback below realtime for transcriptionModel/vadThreshold): ${PERSISTED_SLICES.stt.join(", ")}
+- \`agentUtils.stt\` (local-VAD source for model/timers/energy/shortcuts; fallback below realtime only for transcriptionModel/vadThreshold): ${PERSISTED_SLICES.stt.join(", ")}
 - \`agentUtils.cascade\` (feeds cascadeRosterFromArgs in realtime-cascade-session.js; env/default provenance lives there): ${PERSISTED_SLICES.cascade.join(", ")}
 `;
 }

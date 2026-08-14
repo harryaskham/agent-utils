@@ -50,7 +50,7 @@ Order does not matter. Values may be quoted with shell-like single or double quo
 **Durable cascade + STT defaults (bd-b45224).** Alongside `agentUtils.realtime`, two sibling slices let you keep durable defaults in `settings.json` and drop the matching env vars:
 
 - `agentUtils.cascade` — `voice`, `model`, `baseUrl`, `ttsModel`, `provider`, `speakerProfileId`, `lang`, `speed`, `azure`. A `/cascade` arg wins; otherwise this slice supplies the cascade main defaults; otherwise the env/built-in default applies. So you can move `PI_CASCADE_VOICE` (and speaker/lang/azure) into `settings.json`.
-- `agentUtils.stt` — `transcriptionModel`, `vadThreshold`, `backend`. Read as a fallback *below* `agentUtils.realtime` for the STT fields, so an operator can keep an explicit stt block. Same runtime contract: env still wins for the run and is never written back.
+- `agentUtils.stt` — the shared local-VAD settings for both `/stt` and `/ptt`: `model`, `timeoutMs`, `energyThreshold`, `insertSilenceMs`, `commitSilenceMs`, `minTurnSpeechMs`, and `shortcutsEnabled`. It also retains the older Realtime compatibility fields `transcriptionModel`, `vadThreshold`, and `backend` below `agentUtils.realtime`. There is deliberately no duplicate `agentUtils.ptt` acoustic tree: PTT is a hold/release mode over the exact same capture, VAD, and batch-transcription pipeline. Env still wins and is never written back.
 
 You can override the backend for local-device testing:
 
@@ -245,7 +245,13 @@ The energy threshold can be tuned **live** (without restarting) via `/rt energy=
 the status widget reacts in real time: `🎤 listening…` the instant speech is detected,
 `✍️ transcribing…` while a batch runs, then your transcript firming up as you speak.
 
-Tuning knobs (all optional):
+Durable defaults live under `agentUtils.stt`; explicit setters such as
+`/stt model=mai-transcribe-1.5 insert=1000 commit=3000 energy=0.012`
+read-merge-write that slice and start local VAD. `/ptt` accepts the same setters
+but starts hold mode. PTT intentionally shares these settings rather than
+copying them into an `agentUtils.ptt` tree.
+
+Tuning knobs (all optional; env overrides the matching `agentUtils.stt` value):
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
@@ -257,6 +263,22 @@ Tuning knobs (all optional):
 | `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS` | `3000` | trailing silence (ms) that finalizes/sends the turn |
 | `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS` | `200` | minimum speech (ms) before a turn can insert/commit |
 | `PI_RT_STT_SHORTCUTS_ENABLED` | `1` | empty-editor Space starts PTT; Ctrl-Space toggles local VAD (`0` disables both) |
+
+```json
+{
+  "agentUtils": {
+    "stt": {
+      "model": "mai-transcribe-1.5",
+      "timeoutMs": 30000,
+      "energyThreshold": 0.012,
+      "insertSilenceMs": 1000,
+      "commitSilenceMs": 3000,
+      "minTurnSpeechMs": 200,
+      "shortcutsEnabled": true
+    }
+  }
+}
+```
 
 **Troubleshooting (first-run validation):**
 
@@ -401,8 +423,9 @@ agent can call directly: it synthesizes via the direct Azure Speech REST path
 
 - Defaults come from the shared TTS library: `MAI-Voice-2`, embedding
   `0daec43c-911f-4529-820a-16dab73630d3`, `en-GB`, and speed `2`.
-  `PI_CASCADE_VOICE`, `PI_CASCADE_SPEAKER`, `PI_CASCADE_LANG`, and
-  `PI_CASCADE_SPEED` override those defaults; the agent can override any per
+  Durable overrides come from `agentUtils.tts`; `PI_CASCADE_VOICE`,
+  `PI_CASCADE_SPEAKER`, `PI_CASCADE_LANG`, `PI_CASCADE_SPEED`, and `PI_TTS_*`
+  override that slice; the agent can override voice/speaker/lang/speed/style per
   call. `PI_CASCADE_SPEAK_VOICE` overrides just the speak-tool voice.
 - `style` and `styledegree` add Azure `<mstts:express-as>` without changing the
   selected voice. Azure credentials come from `AZURE_SPEECH_API_KEY` and
@@ -435,8 +458,9 @@ daemon), this speaks the full reply via the fast direct-Azure REST path.
 - Off by default. Both are **durable in `settings.json`** (`agentUtils.realtime.speakReplies`
   / `.speakThinking`) and toggleable at runtime, with env > persisted > default
   (`PI_RT_SPEAK_REPLIES` / `PI_RT_SPEAK_THINKING`); env is never written back.
-- Voice/speaker/lang/speed come from the same `PI_CASCADE_*` / `speak`-tool creds
-  above; speed is applied as an Azure SSML `<prosody rate>` (speed 1.2 → `+20%`).
+- Voice/speaker/lang/speed/style and playback routing come from the shared
+  `agentUtils.tts` slice, with `PI_CASCADE_*` / `PI_TTS_*` / Pulse env overrides;
+  speed is applied as an Azure SSML `<prosody rate>` (speed 1.2 → `+20%`).
 - Fired on the `agent_end` event; tool-call-only / empty turns are skipped and a
   reply is de-duplicated so it is never spoken twice. Requires audio enabled.
 

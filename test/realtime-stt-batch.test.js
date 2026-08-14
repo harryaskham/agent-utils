@@ -20,6 +20,8 @@ test("resolveBatchSttModel reads PI_RT_LOCAL_VAD_MODEL or the batch default, dec
   assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "  spaced  " }), "spaced");
   assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "   " }), DEFAULT_STT_BATCH_MODEL);
   assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "" }), DEFAULT_STT_BATCH_MODEL);
+  assert.equal(resolveBatchSttModel({}, { model: "persisted-batch" }), "persisted-batch");
+  assert.equal(resolveBatchSttModel({ PI_RT_LOCAL_VAD_MODEL: "env-wins" }, { model: "persisted-batch" }), "env-wins");
 });
 
 test("buildSttBatchArgs builds stdin/model argv with optional language (bd-9399e7)", () => {
@@ -87,6 +89,8 @@ test("resolveBatchSttTimeoutMs reads PI_RT_LOCAL_VAD_TIMEOUT_MS, else default; 0
   assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "0" }), 0);
   assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "-1" }), DEFAULT_STT_BATCH_TIMEOUT_MS);
   assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "abc" }), DEFAULT_STT_BATCH_TIMEOUT_MS);
+  assert.equal(resolveBatchSttTimeoutMs({}, { timeoutMs: 4321 }), 4321);
+  assert.equal(resolveBatchSttTimeoutMs({ PI_RT_LOCAL_VAD_TIMEOUT_MS: "1234" }, { timeoutMs: 4321 }), 1234);
 });
 
 test("transcribePcmBuffer times out + kills a stalled subprocess instead of hanging (bd-adde03)", async () => {

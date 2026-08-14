@@ -162,7 +162,7 @@ import {
   isSpeedRejectionError,
 } from "./lib/realtime-response-errors.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
-import { persistRealtimeSetting } from "./lib/realtime-settings.js";
+import { persistRealtimeSetting, persistSttSetting, readPersistedSttSettings } from "./lib/realtime-settings.js";
 import { createGlobalWebSocketAdapter, setRealtimeWebSocketImplKind } from "./lib/realtime-ws-fallback.js";
 import { InputLevelTracker } from "./lib/realtime-input-level.js";
 import { buildRealtimeValueParams, normalizeRealtimeValueParams, applyRealtimeValueParams } from "./lib/realtime-settings.js";
@@ -175,7 +175,7 @@ import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from 
 import { fileQuickfileUtterance } from "./lib/realtime-quickfile.js";
 import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
 import { makePttIndicator } from "./lib/realtime-ptt-indicator.js";
-import { transcribePcmBuffer, resolveBatchSttModel, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
+import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
 import { AudioLevelMeter, formatLevelBar, rmsToLevel, shouldRefreshMeter, DEFAULT_METER_REFRESH_MS } from "./lib/realtime-audio-meter.js";
@@ -190,11 +190,15 @@ import {
   cascadeRosterFromArgs,
 } from "./lib/realtime-cascade-session.js";
 import {
+  DEFAULT_TTS_BACKEND,
+  DEFAULT_TTS_DEVICE,
+  createInterruptiblePcmPlayer,
   synthesizeAzureSpeechDirect,
   resolveAzureSpeechCreds,
   resolveSpeakToolParams,
   cascadeSpeechEnabled,
 } from "./lib/tts.js";
+import { readPersistedTtsSettings } from "./lib/tts-settings.js";
 import {
   assistantReplyText,
   pickLastAssistantReply,
@@ -331,7 +335,7 @@ function defaultLocalVadTranscribe(buffer, opts = {}) {
   if (e.PI_RT_LOCAL_VAD_USE_STT_CLI === "1") return transcribePcmBuffer(buffer, opts);
   const baseUrl = e.PI_RT_BASE_URL || e.OPENAI_BASE_URL || "https://api.openai.com";
   const apiKey = e.PI_RT_API_KEY || e.OPENAI_API_KEY || "";
-  return transcribeAudioDirect({ pcm: buffer, model: opts.model, language: opts.language, baseUrl, apiKey });
+  return transcribeAudioDirect({ pcm: buffer, model: opts.model, language: opts.language, timeoutMs: opts.timeoutMs, baseUrl, apiKey });
 }
 let localVadTranscribe = defaultLocalVadTranscribe;
 
@@ -2816,6 +2820,20 @@ export default function realtimeAgentExtension(pi) {
   try { pi.events?.emit?.("realtime:controls", controls); } catch {}
   let terminalInputUnsub = null;
   const speechInputState = new SpeechInputStateMachine();
+  const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
+  const resolvedFastTts = () => {
+    const persisted = readPersistedTtsSettings();
+    return {
+      persisted,
+      backend: process.env.PI_RT_AUDIO_BACKEND || persisted.backend || DEFAULT_TTS_BACKEND,
+      server: process.env.PULSE_SERVER || persisted.server,
+      device: process.env.PULSE_SINK || persisted.device || DEFAULT_TTS_DEVICE,
+    };
+  };
+  const localSttShortcutsEnabled = () => {
+    if (process.env.PI_RT_STT_SHORTCUTS_ENABLED != null) return envBool("PI_RT_STT_SHORTCUTS_ENABLED", true);
+    return readPersistedSttSettings().shortcutsEnabled !== false;
+  };
 
   // Register provider immediately during extension factory startup. Pi queues
   // dynamic provider registrations made while loading extensions and flushes
@@ -2857,7 +2875,7 @@ export default function realtimeAgentExtension(pi) {
           if (!localVad.hold) {
             speechInputState.transition(SPEECH_INPUT_MODES.VAD);
             const action = speechInputState.terminalAction(data, {
-              shortcutsEnabled: envBool("PI_RT_STT_SHORTCUTS_ENABLED", true),
+              shortcutsEnabled: localSttShortcutsEnabled(),
             });
             if (action.action === "stop-vad") {
               stopLocalVad();
@@ -2872,7 +2890,7 @@ export default function realtimeAgentExtension(pi) {
         speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
         const action = speechInputState.terminalAction(data, {
           editorEmpty: String(ctx.ui.getEditorText?.() ?? "") === "",
-          shortcutsEnabled: envBool("PI_RT_STT_SHORTCUTS_ENABLED", true),
+          shortcutsEnabled: localSttShortcutsEnabled(),
         });
         if (action.action === "start-ptt") {
           void startLocalVad(ctx, { hold: true }).catch((e) => {
@@ -2913,14 +2931,17 @@ export default function realtimeAgentExtension(pi) {
   async function speakTextDirect(text, ctx) {
     const body = String(text || "").trim();
     if (!body || !cascadeSpeechEnabled({ env: process.env })) return;
-    const { voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams({ text: body }, { env: process.env });
+    const output = resolvedFastTts();
+    const { voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams({ text: body }, { env: process.env, persisted: output.persisted });
     if (!voice) return; // no concrete Azure voice configured; stay silent rather than throw
-    const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
+    const credentialOptions = { env: process.env };
+    if (!process.env.AZURE_SPEECH_ENDPOINT && output.persisted.endpoint !== undefined) credentialOptions.endpoint = output.persisted.endpoint;
+    const { endpoint, apiKey } = resolveAzureSpeechCreds(credentialOptions);
     try {
       const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey });
       if (pcm && pcm.length) {
         markAssistantSpeaking(audioDurationMs(pcm));
-        await playPcmBuffer(pcm, ttsStream(config.playbackCommand || defaultPlaybackCommand()), (m, l) => { try { ctx?.ui?.notify?.(m, l); } catch {} }, config.debug);
+        await fastDirectTtsPlayer.play(pcm, { backend: output.backend, server: output.server, device: output.device, streamName: "/tts", env: process.env });
       }
     } catch (e) {
       try { ctx?.ui?.notify?.(`speak-replies failed: ${e?.message || String(e)}`, "warning"); } catch {}
@@ -2949,6 +2970,7 @@ export default function realtimeAgentExtension(pi) {
     terminalInputUnsub = null;
     stopLocalVad({ flush: false });
     speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
+    try { fastDirectTtsPlayer.dispose(); } catch {}
     await session.close(false).catch(() => {});
   });
 
@@ -3123,9 +3145,11 @@ export default function realtimeAgentExtension(pi) {
     try { await controls.disable(ctx, { restoreModel: true }); } catch {}
     stopLocalVad({ flush: false });
 
-    const cfg = parseLocalVadConfig();
-    const model = resolveBatchSttModel();
-    Object.assign(localVad, { cfg, model, hold, quickfile, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now() });
+    const persistedStt = readPersistedSttSettings();
+    const cfg = parseLocalVadConfig(process.env, persistedStt);
+    const model = resolveBatchSttModel(process.env, persistedStt);
+    const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
+    Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now() });
 
     // bd-0c008d: stream partial transcripts into the input editor (live voice
     // editing) instead of only a status widget; commit sends the editor's text
@@ -3149,7 +3173,7 @@ export default function realtimeAgentExtension(pi) {
       placeholder: "…",
       overlongHintMs: 7000,
       isSuppressed: () => isAssistantSpeaking(),
-      transcribe: (buf) => localVadTranscribe(buf, { model }),
+      transcribe: (buf) => localVadTranscribe(buf, { model, timeoutMs }),
       insertPartial: (text) => {
         // bd-0c008d: live partial goes into the editable input box (clobber-safe).
         try { editorMirror.showPartial(text); } catch {}
@@ -3408,14 +3432,16 @@ export default function realtimeAgentExtension(pi) {
     try { await controls.disable(ctx, { restoreModel: true }); } catch {}
     stopLocalVad({ flush: false });
     stopCascade();
-    const cfg = parseLocalVadConfig();
-    const model = resolveBatchSttModel();
-    cascade.cfg = cfg; cascade.model = model; cascade.lastError = null;
+    const persistedStt = readPersistedSttSettings();
+    const cfg = parseLocalVadConfig(process.env, persistedStt);
+    const model = resolveBatchSttModel(process.env, persistedStt);
+    const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
+    cascade.cfg = cfg; cascade.model = model; cascade.timeoutMs = timeoutMs; cascade.lastError = null;
     cascade.meter = new AudioLevelMeter({ width: 10 }); cascade.inputLevel = 0; cascade.lastMeterRenderAt = 0;
     const controller = new LocalVadController({
       config: cfg,
       isSuppressed: () => isAssistantSpeaking(),
-      transcribe: (buf) => localVadTranscribe(buf, { model }),
+      transcribe: (buf) => localVadTranscribe(buf, { model, timeoutMs }),
       insertPartial: (text) => { try { ctx.ui.setWidget("realtime-status", [`cascade ~ ${text}`], { placement: "belowEditor" }); } catch {} },
       sendTurn: (text) => {
         cascade.lastText = text;
@@ -3822,29 +3848,32 @@ export default function realtimeAgentExtension(pi) {
     pi.registerTool({
       name: "speak",
       label: "Speak (fast direct-Azure)",
-      description: "Speak text aloud immediately in the configured cascade voice via a fast direct-Azure REST call (no daemon round-trip). Use this to reply out loud when voice/cascade output is active.",
+      description: "Speak text aloud immediately via the shared agentUtils.tts voice/playback defaults and fast direct-Azure REST path (no daemon round-trip). Per-call overrides win.",
       promptSnippet: "Use the speak tool to talk to the user out loud: call speak with your reply text and it is synthesized in the cascade voice with low latency.",
       promptGuidelines: ["When voice/cascade mode is active, respond by calling speak with your spoken reply so the user hears you. Keep spoken text concise and natural; do not read out tool mechanics, code, or URLs."],
       parameters: ToolSchema.object({
         text: ToolSchema.string({ description: "The text to speak aloud." }),
-        voice: ToolSchema.optional(ToolSchema.string({ description: "Azure voice name override (e.g. MAI-Voice-2). Defaults to PI_CASCADE_VOICE." })),
-        speaker: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts ttsembedding speakerProfileId for a personal/embedding voice. Defaults to PI_CASCADE_SPEAKER." })),
+        voice: ToolSchema.optional(ToolSchema.string({ description: "Azure voice override. Defaults through env then agentUtils.tts.voice." })),
+        speaker: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts ttsembedding profile override. Defaults through env then agentUtils.tts.embedding." })),
         lang: ToolSchema.optional(ToolSchema.string({ description: "xml:lang locale, e.g. en-GB." })),
         speed: ToolSchema.optional(ToolSchema.number({ description: "Speech rate multiplier, e.g. 1.6." })),
         style: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts express-as style, e.g. hopeful." })),
         styledegree: ToolSchema.optional(ToolSchema.number({ description: "Azure express-as style degree from 0.01 to 2; only used with style." })),
       }),
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-        const { text, voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams(params, { env: process.env });
+        const output = resolvedFastTts();
+        const { text, voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams(params, { env: process.env, persisted: output.persisted });
         if (!text) return { content: [{ type: "text", text: "speak: empty text" }] };
         if (!cascadeSpeechEnabled({ env: process.env })) return { content: [{ type: "text", text: "speak: disabled by Cacophony node policy (speech.enabled=false)" }] };
-        if (!voice) return { content: [{ type: "text", text: "speak: no voice — pass voice= or set PI_CASCADE_VOICE to a concrete Azure voice (e.g. MAI-Voice-2)" }] };
-        const { endpoint, apiKey } = resolveAzureSpeechCreds({ env: process.env });
+        if (!voice) return { content: [{ type: "text", text: "speak: no voice — pass voice= or configure agentUtils.tts.voice" }] };
+        const credentialOptions = { env: process.env };
+        if (!process.env.AZURE_SPEECH_ENDPOINT && output.persisted.endpoint !== undefined) credentialOptions.endpoint = output.persisted.endpoint;
+        const { endpoint, apiKey } = resolveAzureSpeechCreds(credentialOptions);
         try {
           const pcm = await synthesizeAzureSpeechDirect({ text, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey });
           if (pcm && pcm.length) {
             markAssistantSpeaking(audioDurationMs(pcm));
-            await playPcmBuffer(pcm, ttsStream(config.playbackCommand || defaultPlaybackCommand()), (m, l) => { try { ctx.ui.notify(m, l); } catch {} }, config.debug);
+            await fastDirectTtsPlayer.play(pcm, { backend: output.backend, server: output.server, device: output.device, streamName: "/tts", env: process.env });
           }
           return { content: [{ type: "text", text: `spoke (${text.length} chars, ${voice})` }] };
         } catch (e) {
@@ -3918,14 +3947,57 @@ export default function realtimeAgentExtension(pi) {
     },
   });
 
+  function applyLocalSttSettings(values, ctx) {
+    const allowed = new Set([
+      "model", "timeout", "timeout_ms", "energy", "energy_threshold",
+      "insert", "insert_ms", "insert_silence_ms", "commit", "commit_ms",
+      "commit_silence_ms", "min_speech", "min_speech_ms", "shortcuts", "shortcuts_enabled",
+    ]);
+    for (const key of Object.keys(values)) if (!allowed.has(key)) throw new Error(`/stt: unknown setting '${key}'`);
+    const numberSetting = (keys, field, { min = 0, max = Infinity } = {}) => {
+      const key = keys.find((candidate) => Object.hasOwn(values, candidate));
+      if (!key) return;
+      const value = Number(values[key]);
+      if (!Number.isFinite(value) || value < min || value > max) throw new Error(`/stt: ${key} must be between ${min} and ${max}`);
+      persistSttSetting(field, value);
+    };
+    if (Object.hasOwn(values, "model")) {
+      const model = String(values.model).trim();
+      if (!model) throw new Error("/stt: model cannot be empty");
+      persistSttSetting("model", model);
+    }
+    numberSetting(["timeout", "timeout_ms"], "timeoutMs");
+    numberSetting(["energy", "energy_threshold"], "energyThreshold", { min: 0, max: 1 });
+    numberSetting(["insert", "insert_ms", "insert_silence_ms"], "insertSilenceMs");
+    numberSetting(["commit", "commit_ms", "commit_silence_ms"], "commitSilenceMs");
+    numberSetting(["min_speech", "min_speech_ms"], "minTurnSpeechMs");
+    const shortcutsKey = ["shortcuts", "shortcuts_enabled"].find((key) => Object.hasOwn(values, key));
+    if (shortcutsKey) persistSttSetting("shortcutsEnabled", parseBooleanValue(values[shortcutsKey]));
+    const persisted = readPersistedSttSettings();
+    const cfg = parseLocalVadConfig(process.env, persisted);
+    const model = resolveBatchSttModel(process.env, persisted);
+    const timeoutMs = resolveBatchSttTimeoutMs(process.env, persisted);
+    ctx?.ui?.notify?.(`stt settings: model=${model} timeout=${timeoutMs}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
+  }
+
   async function handleLocalSpeechCommand(args, ctx, { defaultHold = false, commandName = "/stt" } = {}) {
-    const value = String(args || "").trim().toLowerCase();
+    const parsed = parseEnvStyleArgs(String(args || ""));
+    if (Object.keys(parsed.values).length) {
+      if (parsed.positionals.length) { ctx.ui.notify(`${commandName}: unexpected positional '${parsed.positionals[0]}' with settings`, "warning"); return; }
+      try { applyLocalSttSettings(parsed.values, ctx); }
+      catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
+      return startLocalVad(ctx, { hold: defaultHold });
+    }
+    const value = parsed.positionals.join(" ").trim().toLowerCase();
     if (["help", "usage", "?"].includes(value)) {
-      ctx.ui.notify(`${commandName} [start|vad|ptt|stop|cancel|status]. Local batch STT uses ${resolveBatchSttModel()} with independent PI_RT_LOCAL_VAD_INSERT_SILENCE_MS / PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS timers.`, "info");
+      const persisted = readPersistedSttSettings();
+      ctx.ui.notify(`${commandName} [start|vad|ptt|stop|cancel|status|key=value]. Local batch STT uses ${resolveBatchSttModel(process.env, persisted)} with shared agentUtils.stt settings for /stt and /ptt.`, "info");
       return;
     }
     if (value === "status") {
-      ctx.ui.notify(localVadStatusLine(), "info");
+      const persisted = readPersistedSttSettings();
+      const cfg = parseLocalVadConfig(process.env, persisted);
+      ctx.ui.notify(`${localVadStatusLine()} | configured model=${resolveBatchSttModel(process.env, persisted)} timeout=${resolveBatchSttTimeoutMs(process.env, persisted)}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
       return;
     }
     if (["stop", "off"].includes(value)) {

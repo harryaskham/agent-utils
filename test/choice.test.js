@@ -147,20 +147,40 @@ test("choice timeout resolves without inventing a selection", async () => {
   assert.equal(h.widgets.has("agent-utils-choice"), false);
 });
 
-test("choice speaker interrupts stale speech and uses shared native synthesis/player", async () => {
+test("choice extension honors persisted agentUtils.choice defaults", async () => {
+  const spoken = [];
+  const h = harness();
+  createChoiceExtension({
+    speaker: { speak: async (text) => { spoken.push(text); }, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { timeoutMs: 5, wrap: false, maxChoices: 2, speechEnabled: false }, tts: {} },
+  })(h.pi);
+  const tooMany = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices }, null, null, h.ctx);
+  assert.equal(tooMany.details.status, "error");
+  assert.match(tooMany.details.error, /at most 2/);
+  const timed = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2) }, null, null, h.ctx);
+  assert.equal(timed.details.status, "timeout");
+  assert.deepEqual(spoken, [], "persisted speechEnabled=false suppresses choice TTS");
+});
+
+test("choice speaker inherits persisted agentUtils.tts and interrupts stale speech/player", async () => {
   const calls = [];
+  const synthOptions = [];
   const player = {
     interrupt() { calls.push("interrupt"); },
     async play(pcm, options) { calls.push({ pcm: String(pcm), options }); return { interrupted: false }; },
   };
   const speaker = createChoiceSpeaker({
-    env: { AZURE_SPEECH_ENDPOINT: "https://speech", AZURE_SPEECH_API_KEY: "secret", PULSE_SINK: "hw_output" },
-    synthesize: async (text) => Buffer.from(text),
+    env: { AZURE_SPEECH_API_KEY: "secret" },
+    persisted: { voice: "PersistedVoice", embedding: "profile", lang: "cy-GB", speed: 1.4, endpoint: "https://speech", backend: "pulse", device: "persisted_sink" },
+    synthesize: async (text, options) => { synthOptions.push(options); return Buffer.from(text); },
     player,
   });
   await speaker.speak("hello");
   assert.equal(calls[0], "interrupt");
   assert.equal(calls[1].pcm, "hello");
-  assert.equal(calls[1].options.device, "hw_output");
+  assert.equal(synthOptions[0].voice, "PersistedVoice");
+  assert.equal(synthOptions[0].speakerProfileId, "profile");
+  assert.equal(synthOptions[0].endpoint, "https://speech");
+  assert.equal(calls[1].options.device, "persisted_sink");
   assert.equal(calls[1].options.streamName, "/choice");
 });

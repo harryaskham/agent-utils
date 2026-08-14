@@ -50,12 +50,24 @@ function numFromEnv(env, key, fallback, { min, max } = {}) {
 
 /// Resolve a VadSegmenter config from PI_RT_LOCAL_VAD_* env knobs, falling back
 /// to the segmenter defaults. Pure over `env`; invalid/blank values fall back.
-export function parseLocalVadConfig(env = process.env) {
+export function parseLocalVadConfig(env = process.env, persisted = {}) {
+  const persistedNumber = (key, fallback, bounds) => numFromEnv(
+    { persisted: persisted?.[key] },
+    "persisted",
+    fallback,
+    bounds,
+  );
+  const fallback = {
+    energyThreshold: persistedNumber("energyThreshold", DEFAULT_VAD_SEGMENTER_CONFIG.energyThreshold, { min: 0, max: 1 }),
+    insertSilenceMs: persistedNumber("insertSilenceMs", DEFAULT_VAD_SEGMENTER_CONFIG.insertSilenceMs, { min: 0 }),
+    commitSilenceMs: persistedNumber("commitSilenceMs", DEFAULT_VAD_SEGMENTER_CONFIG.commitSilenceMs, { min: 0 }),
+    minTurnSpeechMs: persistedNumber("minTurnSpeechMs", DEFAULT_VAD_SEGMENTER_CONFIG.minTurnSpeechMs, { min: 0 }),
+  };
   return {
-    energyThreshold: numFromEnv(env, LOCAL_VAD_ENV_KEYS.energyThreshold, DEFAULT_VAD_SEGMENTER_CONFIG.energyThreshold, { min: 0, max: 1 }),
-    insertSilenceMs: numFromEnv(env, LOCAL_VAD_ENV_KEYS.insertSilenceMs, DEFAULT_VAD_SEGMENTER_CONFIG.insertSilenceMs, { min: 0 }),
-    commitSilenceMs: numFromEnv(env, LOCAL_VAD_ENV_KEYS.commitSilenceMs, DEFAULT_VAD_SEGMENTER_CONFIG.commitSilenceMs, { min: 0 }),
-    minTurnSpeechMs: numFromEnv(env, LOCAL_VAD_ENV_KEYS.minTurnSpeechMs, DEFAULT_VAD_SEGMENTER_CONFIG.minTurnSpeechMs, { min: 0 }),
+    energyThreshold: numFromEnv(env, LOCAL_VAD_ENV_KEYS.energyThreshold, fallback.energyThreshold, { min: 0, max: 1 }),
+    insertSilenceMs: numFromEnv(env, LOCAL_VAD_ENV_KEYS.insertSilenceMs, fallback.insertSilenceMs, { min: 0 }),
+    commitSilenceMs: numFromEnv(env, LOCAL_VAD_ENV_KEYS.commitSilenceMs, fallback.commitSilenceMs, { min: 0 }),
+    minTurnSpeechMs: numFromEnv(env, LOCAL_VAD_ENV_KEYS.minTurnSpeechMs, fallback.minTurnSpeechMs, { min: 0 }),
   };
 }
 

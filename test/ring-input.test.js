@@ -124,7 +124,7 @@ test("ring adapter disabled mode never spawns and timeout exits stay non-fatal",
     const events = bus();
     let spawnCount = 0;
     const pi = { events, registerCommand() {}, on() {} };
-    createRingInputExtension({ spawnImpl: () => { spawnCount += 1; return fakeProcess(); }, env: { PI_RING_CHOICE_ENABLED: "0" } })(pi);
+    createRingInputExtension({ spawnImpl: () => { spawnCount += 1; return fakeProcess(); }, env: {}, persistedSettings: { ringInput: { enabled: false } } })(pi);
     events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "choice-x", timeoutMs: 10 });
     assert.equal(spawnCount, 0);
   }

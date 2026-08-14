@@ -31,6 +31,16 @@ test("parseLocalVadConfig returns segmenter defaults for an empty env (bd-9399e7
   });
 });
 
+test("parseLocalVadConfig reads persisted agentUtils.stt below PI_RT_LOCAL_VAD_* env", () => {
+  assert.deepEqual(parseLocalVadConfig({}, {
+    energyThreshold: 0.04, insertSilenceMs: 700, commitSilenceMs: 2100, minTurnSpeechMs: 120,
+  }), {
+    energyThreshold: 0.04, insertSilenceMs: 700, commitSilenceMs: 2100, minTurnSpeechMs: 120,
+  });
+  assert.equal(parseLocalVadConfig({ PI_RT_LOCAL_VAD_INSERT_SILENCE_MS: "900" }, { insertSilenceMs: 700 }).insertSilenceMs, 900);
+  assert.equal(parseLocalVadConfig({}, { energyThreshold: "bad" }).energyThreshold, DEFAULT_VAD_SEGMENTER_CONFIG.energyThreshold);
+});
+
 test("parseLocalVadConfig reads PI_RT_LOCAL_VAD_* knobs, clamps, and falls back (bd-9399e7)", () => {
   assert.deepEqual(
     parseLocalVadConfig({

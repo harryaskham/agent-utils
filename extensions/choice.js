@@ -4,6 +4,7 @@
 // timeout, and keyboard controls; device adapters (such as ring-input.js) emit
 // the same semantic actions on CHOICE_INPUT_EVENT.
 
+import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import {
   INPUT_ACTION_EVENT,
@@ -15,6 +16,33 @@ import {
   keyboardChoiceAction,
   normalizeChoices,
 } from "./lib/choice.js";
+import {
+  persistChoiceSetting,
+  readPersistedChoiceSettings,
+  readPersistedTtsSettings,
+} from "./lib/tts-settings.js";
+
+function boolSetting(value, fallback) {
+  if (value == null || String(value).trim() === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function resolveChoiceSettings(env, persisted = {}) {
+  const number = (envKey, field, fallback, min, max) => {
+    const raw = env[envKey] ?? persisted[field];
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.trunc(parsed))) : fallback;
+  };
+  return {
+    timeoutMs: number("PI_CHOICE_TIMEOUT_MS", "timeoutMs", DEFAULT_CHOICE_TIMEOUT_MS, 1, 300000),
+    maxChoices: number("PI_CHOICE_MAX_CHOICES", "maxChoices", 9, 2, 9),
+    wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
+    speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
+  };
+}
 
 function renderChoiceWidget(question, choices, index, status = "listening") {
   const normalized = normalizeChoices(choices);
@@ -32,8 +60,11 @@ function resultText(result) {
   return `choice failed: ${result?.error || "unknown error"}`;
 }
 
-export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) {
+export function createChoiceExtension({ speaker, env = process.env, settingsPath, persistedSettings } = {}) {
   return function choiceExtension(pi) {
+    const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
+    const choiceConfig = resolveChoiceSettings(env, persistedChoice);
+    const speakerController = speaker || createChoiceSpeaker({ env, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
     let active = null;
     let lastResult = null;
     let nextSessionId = 1;
@@ -55,7 +86,7 @@ export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) 
       record.terminalUnsub = null;
       // Cancellation/selection must stop an in-flight spoken prompt immediately;
       // Escape should not leave the old question talking over freeform input.
-      try { speaker.interrupt?.(); } catch {}
+      try { speakerController.interrupt?.(); } catch {}
       try { record.ctx?.ui?.setWidget?.("agent-utils-choice", undefined); } catch {}
     };
 
@@ -95,7 +126,7 @@ export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) 
       if (outcome.type === "navigate") {
         try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, outcome.index), { placement: "belowEditor" }); } catch {}
         try { record.onUpdate?.({ content: [{ type: "text", text: `highlighted ${outcome.index + 1}: ${outcome.choice.headline}` }] }); } catch {}
-        if (outcome.changed) speaker.speak(outcome.choice.headline).catch((error) => {
+        if (outcome.changed && choiceConfig.speechEnabled) speakerController.speak(outcome.choice.headline).catch((error) => {
           if (record.warnedSpeech) return;
           record.warnedSpeech = true;
           try { record.ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
@@ -116,12 +147,12 @@ export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) 
       const question = String(params?.question ?? params?.prompt ?? "").trim();
       if (!question) throw new Error("choice: question is required");
       const choices = normalizeChoices(params?.choices);
-      if (choices.length > 9) throw new Error("choice: at most nine choices are supported so numeric selection stays unambiguous");
+      if (choices.length > choiceConfig.maxChoices) throw new Error(`choice: at most ${choiceConfig.maxChoices} choices are configured (maximum 9 for numeric selection)`);
       const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
         ? Math.max(1, Math.min(300_000, Math.trunc(Number(params.timeoutMs))))
-        : DEFAULT_CHOICE_TIMEOUT_MS;
+        : choiceConfig.timeoutMs;
       cancelActive();
-      const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap !== false });
+      const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
       const sessionId = `choice-${nextSessionId++}`;
 
       const result = await new Promise((resolve) => {
@@ -164,7 +195,7 @@ export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) 
           timeoutMs,
           ring: params?.ring ?? null,
         });
-        speaker.speak(formatChoiceIntroduction(question, choices, state.index)).catch((error) => {
+        if (choiceConfig.speechEnabled) speakerController.speak(formatChoiceIntroduction(question, choices, state.index)).catch((error) => {
           if (record.warnedSpeech || record.finished) return;
           record.warnedSpeech = true;
           try { ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
@@ -209,7 +240,7 @@ export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) 
     }
 
     pi.registerCommand("choice", {
-      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice cancel|status",
+      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice cancel|status|settings key=value",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         if (raw.toLowerCase() === "cancel") {
@@ -217,7 +248,38 @@ export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) 
           return;
         }
         if (raw.toLowerCase() === "status") {
-          ctx.ui.notify(active ? "choice active" : lastResult ? resultText(lastResult) : "no choice has run", "info");
+          const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
+          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs}ms · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled}`, "info");
+          return;
+        }
+        if (/^settings(?:\s|$)/i.test(raw)) {
+          try {
+            const parsed = parseEnvStyleArgs(raw.replace(/^settings\s*/i, ""));
+            if (parsed.positionals.length) throw new Error(`/choice settings: unexpected '${parsed.positionals[0]}'`);
+            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled"]);
+            for (const key of Object.keys(parsed.values)) if (!allowed.has(key)) throw new Error(`/choice settings: unknown '${key}'`);
+            const number = (keys, field, min, max) => {
+              const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
+              if (!key) return;
+              const value = Number(parsed.values[key]);
+              if (!Number.isFinite(value) || value < min || value > max) throw new Error(`/choice settings: ${key} must be ${min}..${max}`);
+              choiceConfig[field] = Math.trunc(value);
+              persistChoiceSetting(field, choiceConfig[field], settingsPath);
+            };
+            const boolean = (keys, field) => {
+              const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
+              if (!key) return;
+              const rawValue = String(parsed.values[key]).toLowerCase();
+              if (!["1", "true", "yes", "on", "0", "false", "no", "off"].includes(rawValue)) throw new Error(`/choice settings: ${key} must be true or false`);
+              choiceConfig[field] = ["1", "true", "yes", "on"].includes(rawValue);
+              persistChoiceSetting(field, choiceConfig[field], settingsPath);
+            };
+            number(["timeout", "timeout_ms"], "timeoutMs", 1, 300000);
+            number(["max", "max_choices"], "maxChoices", 2, 9);
+            boolean(["wrap"], "wrap");
+            boolean(["speech", "speech_enabled"], "speechEnabled");
+            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs}ms wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled}`, "info");
+          } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }
         const parts = raw.split("|").map((part) => part.trim()).filter(Boolean);
@@ -244,7 +306,7 @@ export function createChoiceExtension({ speaker = createChoiceSpeaker() } = {}) 
     pi.on("session_shutdown", () => {
       cancelActive("shutdown");
       try { pi.events?.off?.(INPUT_ACTION_EVENT, eventInputHandler); } catch {}
-      try { speaker.dispose?.(); } catch {}
+      try { speakerController.dispose?.(); } catch {}
     });
   };
 }

@@ -136,27 +136,30 @@ export function resolveAzureSpeechCreds({ env = process.env, endpoint, baseUrl, 
   };
 }
 
-export function resolveSpeakToolParams(params = {}, { env = process.env } = {}) {
-  const resolveOptional = (key, envKeys, fallback) => {
+export function resolveSpeakToolParams(params = {}, { env = process.env, persisted = {} } = {}) {
+  const resolveOptional = (key, envKeys, persistedKeys, fallback) => {
     if (own(params, key)) return params[key] == null || params[key] === "" ? undefined : params[key];
     for (const envKey of envKeys) {
       if (env[envKey] != null && String(env[envKey]).trim() !== "") return env[envKey];
     }
+    for (const persistedKey of persistedKeys) {
+      if (persisted[persistedKey] !== undefined && persisted[persistedKey] !== "") return persisted[persistedKey];
+    }
     return fallback;
   };
   const text = String(params.text ?? "").trim();
-  const voice = resolveCascadeTtsVoice(resolveOptional("voice", ["PI_CASCADE_SPEAK_VOICE", "PI_CASCADE_VOICE"], DEFAULT_TTS_VOICE))
+  const voice = resolveCascadeTtsVoice(resolveOptional("voice", ["PI_CASCADE_SPEAK_VOICE", "PI_CASCADE_VOICE", "PI_TTS_VOICE"], ["voice"], DEFAULT_TTS_VOICE))
     ?? DEFAULT_TTS_VOICE;
-  const speakerProfileId = resolveOptional("speaker", ["PI_CASCADE_SPEAKER", "PI_CASCADE_SPEAKER_PROFILE_ID"],
+  const speakerProfileId = resolveOptional("speaker", ["PI_CASCADE_SPEAKER", "PI_CASCADE_SPEAKER_PROFILE_ID", "PI_TTS_EMBEDDING"], ["embedding"],
     own(params, "speakerProfileId") && params.speakerProfileId !== undefined
       ? params.speakerProfileId
       : DEFAULT_TTS_EMBEDDING);
-  const lang = resolveOptional("lang", ["PI_CASCADE_LANG"], DEFAULT_TTS_LANG);
-  const speedSource = resolveOptional("speed", ["PI_CASCADE_SPEED"], DEFAULT_TTS_SPEED);
+  const lang = resolveOptional("lang", ["PI_CASCADE_LANG", "PI_TTS_LANG"], ["lang"], DEFAULT_TTS_LANG);
+  const speedSource = resolveOptional("speed", ["PI_CASCADE_SPEED", "PI_TTS_SPEED"], ["speed"], DEFAULT_TTS_SPEED);
   const speedNumber = speedSource == null ? undefined : Number(speedSource);
   const speed = Number.isFinite(speedNumber) && speedNumber > 0 ? speedNumber : undefined;
-  const style = resolveOptional("style", ["PI_CASCADE_STYLE"], undefined);
-  const styleDegree = resolveOptional("styleDegree", ["PI_CASCADE_STYLEDEGREE"], params.styledegree);
+  const style = resolveOptional("style", ["PI_CASCADE_STYLE", "PI_TTS_STYLE"], ["style"], undefined);
+  const styleDegree = resolveOptional("styleDegree", ["PI_CASCADE_STYLEDEGREE", "PI_TTS_STYLEDEGREE"], ["styleDegree"], params.styledegree);
   return { text, voice, speakerProfileId, lang, speed, style, styleDegree };
 }
 

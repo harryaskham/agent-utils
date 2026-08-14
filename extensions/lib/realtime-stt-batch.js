@@ -19,8 +19,8 @@ export const DEFAULT_STT_BATCH_TIMEOUT_MS = 30000;
 /// Resolve the batch stt timeout (ms) from PI_RT_LOCAL_VAD_TIMEOUT_MS, else the
 /// default. A value of 0 disables the timeout; non-numeric/negative falls back
 /// to the default. Pure. (bd-adde03)
-export function resolveBatchSttTimeoutMs(env = process.env) {
-  const raw = env.PI_RT_LOCAL_VAD_TIMEOUT_MS;
+export function resolveBatchSttTimeoutMs(env = process.env, persisted = {}) {
+  const raw = env.PI_RT_LOCAL_VAD_TIMEOUT_MS ?? persisted?.timeoutMs;
   if (raw == null || String(raw).trim() === "") return DEFAULT_STT_BATCH_TIMEOUT_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_STT_BATCH_TIMEOUT_MS;
@@ -31,8 +31,8 @@ export function resolveBatchSttTimeoutMs(env = process.env) {
 /// default. Deliberately INDEPENDENT of the realtime-WebSocket transcription
 /// model (config.transcriptionModel), which may be a realtime-only model
 /// (e.g. gpt-realtime-whisper) that a batch REST `stt` call cannot use.
-export function resolveBatchSttModel(env = process.env) {
-  const raw = env.PI_RT_LOCAL_VAD_MODEL;
+export function resolveBatchSttModel(env = process.env, persisted = {}) {
+  const raw = env.PI_RT_LOCAL_VAD_MODEL ?? persisted?.model;
   return typeof raw === "string" && raw.trim() ? raw.trim() : DEFAULT_STT_BATCH_MODEL;
 }
 

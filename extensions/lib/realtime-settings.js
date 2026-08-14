@@ -181,7 +181,11 @@ export const PERSISTED_CASCADE_FIELDS = [
   "speakerProfileId", "lang", "speed", "azure",
 ];
 export const PERSISTED_STT_FIELDS = [
+  // Realtime/server-STT compatibility fields.
   "transcriptionModel", "vadThreshold", "backend",
+  // Local-VAD batch STT shared by /stt and /ptt.
+  "model", "timeoutMs", "energyThreshold", "insertSilenceMs",
+  "commitSilenceMs", "minTurnSpeechMs", "shortcutsEnabled",
 ];
 
 const PERSISTED_CASCADE_SET = new Set(PERSISTED_CASCADE_FIELDS);

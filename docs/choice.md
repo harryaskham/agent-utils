@@ -44,7 +44,26 @@ While a choice is visible:
 - **Escape**, **q**, or **Ctrl-C** — cancel
 
 Navigation wraps by default; `wrap: false` clamps at the ends. Choices are capped
-at nine so direct numeric selection is unambiguous.
+at nine so direct numeric selection is unambiguous. Durable defaults live under
+`agentUtils.choice` and can be changed with `/choice settings timeout=30000
+wrap=true max=9 speech=true`:
+
+```json
+{
+  "agentUtils": {
+    "choice": {
+      "timeoutMs": 30000,
+      "wrap": true,
+      "maxChoices": 9,
+      "speechEnabled": true
+    }
+  }
+}
+```
+
+Choice speech resolves the same `agentUtils.tts` voice, embedding, language,
+speed, style, endpoint, backend, server, and device used by `/read`, `/tts`, and
+the `speak` tool. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
 
 Escape is the freeform escape hatch: it invalidates the visible choice, consumes
 only the Escape key, leaves the editor untouched, stops input adapters/TTS, and
@@ -85,14 +104,30 @@ Override comma-separated mappings with:
 - `PI_RING_CHOICE_SELECT_EVENTS`
 - `PI_RING_CHOICE_CANCEL_EVENTS`
 
-Other settings:
+Durable defaults live under `agentUtils.ringInput`:
 
-- `PI_RING_CHOICE_ENABLED=0` disables the adapter while retaining keyboard choices.
-- `PI_RING_CHOICE_RING=<name>` filters events to one configured ring.
-- `PI_RING_COMMAND=<path>` overrides the smart-client executable.
+```json
+{
+  "agentUtils": {
+    "ringInput": {
+      "enabled": true,
+      "command": "ring",
+      "previousEvents": ["EVENT_RING_CCW", "scroll-up", "previous", "prev", "left"],
+      "nextEvents": ["EVENT_RING_CW", "scroll-down", "next", "right"],
+      "selectEvents": ["EVENT_RING_SELECT", "yes", "select", "confirm"],
+      "cancelEvents": ["EVENT_RING_CANCEL", "no", "cancel", "back"]
+    }
+  }
+}
+```
 
-Use `/ring-input status`, `/ring-input mappings`, `/ring-input on`, and
-`/ring-input off` for runtime inspection/control.
+Optional `ring` filters one configured ring. Environment variables
+`PI_RING_CHOICE_ENABLED`, `PI_RING_CHOICE_RING`, `PI_RING_COMMAND`, and the
+`PI_RING_CHOICE_*_EVENTS` mapping variables override settings.
+
+Use `/ring-input status`, `/ring-input mappings`, `/ring-input on`,
+`/ring-input off`, or `/ring-input settings key=value` for durable runtime
+inspection/control.
 
 ## Calling choices
 

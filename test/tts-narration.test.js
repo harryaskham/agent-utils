@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,9 +20,13 @@ import {
   toolResultText,
 } from "../extensions/lib/tts-narration.js";
 import {
+  persistChoiceSetting,
   persistNarrateSetting,
+  persistRingInputSetting,
   persistTtsSetting,
+  readPersistedChoiceSettings,
   readPersistedNarrateSettings,
+  readPersistedRingInputSettings,
   readPersistedTtsSettings,
 } from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
@@ -124,6 +128,8 @@ test("settings read/write is scoped, rejects secret fields, and tolerates malfor
     assert.equal(persistTtsSetting("apiKey", "must-not-write", path), false);
     assert.equal(persistNarrateSetting("enabled", true, path), true);
     assert.equal(persistNarrateSetting("model", DEFAULT_NARRATION_MODEL, path), true);
+    assert.equal(persistChoiceSetting("timeoutMs", 30000, path), true);
+    assert.equal(persistRingInputSetting("selectEvents", ["EVENT_RING_SELECT"], path), true);
     const all = JSON.parse(readFileSync(path, "utf8"));
     assert.deepEqual(all.untouched, { keep: true });
     assert.deepEqual(all.agentUtils.other, { x: 1 });
@@ -131,13 +137,31 @@ test("settings read/write is scoped, rejects secret fields, and tolerates malfor
     assert.equal(all.agentUtils.tts.apiKey, undefined);
     assert.deepEqual(readPersistedTtsSettings(path), { voice: "MAI-Voice-2" });
     assert.deepEqual(readPersistedNarrateSettings(path), { enabled: true, model: DEFAULT_NARRATION_MODEL });
+    assert.deepEqual(readPersistedChoiceSettings(path), { timeoutMs: 30000 });
+    assert.deepEqual(readPersistedRingInputSettings(path), { selectEvents: ["EVENT_RING_SELECT"] });
 
     writeFileSync(path, "not json");
     assert.deepEqual(readPersistedTtsSettings(path), {});
     assert.deepEqual(readPersistedNarrateSettings(path), {});
+    assert.deepEqual(readPersistedChoiceSettings(path), {});
+    assert.deepEqual(readPersistedRingInputSettings(path), {});
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("settings persistence writes through Home Manager-style symlinks without replacing them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tts-settings-link-"));
+  const target = join(dir, "source.json");
+  const link = join(dir, "settings.json");
+  try {
+    writeFileSync(target, JSON.stringify({ agentUtils: {} }, null, 2));
+    symlinkSync(target, link);
+    assert.equal(persistTtsSetting("enabled", true, link), true);
+    assert.equal(lstatSync(link).isSymbolicLink(), true);
+    assert.equal(readlinkSync(link), target);
+    assert.equal(JSON.parse(readFileSync(target, "utf8")).agentUtils.tts.enabled, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("explicit /tts and /narrate setters persist only non-secret runtime values", async () => {

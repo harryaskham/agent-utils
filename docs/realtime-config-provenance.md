@@ -53,5 +53,5 @@ Sent on `session.update`; env-only, call-site options override.
 ## Persisted settings.json slices (agentUtils.<slice>)
 
 - `agentUtils.realtime`: baseUrl, model, voice, transcriptionModel, speed, vadThreshold, directAzure, azureEndpoint, azureDeployment, azureApiVersion, azureProtocol, speakReplies, speakThinking
-- `agentUtils.stt` (fallback below realtime for transcriptionModel/vadThreshold): transcriptionModel, vadThreshold, backend
+- `agentUtils.stt` (local-VAD source for model/timers/energy/shortcuts; fallback below realtime only for transcriptionModel/vadThreshold): transcriptionModel, vadThreshold, backend, model, timeoutMs, energyThreshold, insertSilenceMs, commitSilenceMs, minTurnSpeechMs, shortcutsEnabled
 - `agentUtils.cascade` (feeds cascadeRosterFromArgs in realtime-cascade-session.js; env/default provenance lives there): voice, model, baseUrl, ttsModel, provider, speakerProfileId, lang, speed, azure

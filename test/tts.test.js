@@ -96,6 +96,13 @@ test("credential and speak resolution use env then shared defaults", () => {
     style: undefined,
     styleDegree: undefined,
   });
+  assert.deepEqual(resolveSpeakToolParams({ text: "hi" }, { env: {}, persisted: {
+    voice: "PersistedVoice", embedding: "persisted-profile", lang: "cy-GB", speed: 1.4, style: "hopeful", styleDegree: 1.2,
+  } }), {
+    text: "hi", voice: "PersistedVoice", speakerProfileId: "persisted-profile", lang: "cy-GB", speed: 1.4, style: "hopeful", styleDegree: 1.2,
+  });
+  assert.equal(resolveSpeakToolParams({ text: "hi", voice: "Explicit" }, { env: { PI_TTS_VOICE: "Env" }, persisted: { voice: "Persisted" } }).voice, "Explicit");
+  assert.equal(resolveSpeakToolParams({ text: "hi" }, { env: { PI_TTS_VOICE: "Env" }, persisted: { voice: "Persisted" } }).voice, "Env");
 });
 
 test("native Azure synthesis posts SSML directly and returns raw PCM", async () => {

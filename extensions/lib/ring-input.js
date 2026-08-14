@@ -26,19 +26,19 @@ function normalizeList(value, fallback = []) {
 export function resolveRingInputEventMap(config = {}, env = process.env) {
   return {
     [INPUT_ACTIONS.SELECT_PREVIOUS]: normalizeList(
-      config[INPUT_ACTIONS.SELECT_PREVIOUS] ?? config.previous ?? env.PI_RING_CHOICE_PREVIOUS_EVENTS,
+      env.PI_RING_CHOICE_PREVIOUS_EVENTS ?? config[INPUT_ACTIONS.SELECT_PREVIOUS] ?? config.previous ?? config.previousEvents,
       DEFAULT_RING_INPUT_EVENT_MAP[INPUT_ACTIONS.SELECT_PREVIOUS],
     ),
     [INPUT_ACTIONS.SELECT_NEXT]: normalizeList(
-      config[INPUT_ACTIONS.SELECT_NEXT] ?? config.next ?? env.PI_RING_CHOICE_NEXT_EVENTS,
+      env.PI_RING_CHOICE_NEXT_EVENTS ?? config[INPUT_ACTIONS.SELECT_NEXT] ?? config.next ?? config.nextEvents,
       DEFAULT_RING_INPUT_EVENT_MAP[INPUT_ACTIONS.SELECT_NEXT],
     ),
     [INPUT_ACTIONS.CHOOSE_CURRENT]: normalizeList(
-      config[INPUT_ACTIONS.CHOOSE_CURRENT] ?? config.select ?? env.PI_RING_CHOICE_SELECT_EVENTS,
+      env.PI_RING_CHOICE_SELECT_EVENTS ?? config[INPUT_ACTIONS.CHOOSE_CURRENT] ?? config.select ?? config.selectEvents,
       DEFAULT_RING_INPUT_EVENT_MAP[INPUT_ACTIONS.CHOOSE_CURRENT],
     ),
     [INPUT_ACTIONS.CANCEL]: normalizeList(
-      config[INPUT_ACTIONS.CANCEL] ?? config.cancel ?? env.PI_RING_CHOICE_CANCEL_EVENTS,
+      env.PI_RING_CHOICE_CANCEL_EVENTS ?? config[INPUT_ACTIONS.CANCEL] ?? config.cancel ?? config.cancelEvents,
       DEFAULT_RING_INPUT_EVENT_MAP[INPUT_ACTIONS.CANCEL],
     ),
   };

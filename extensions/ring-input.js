@@ -6,6 +6,7 @@
 // on pi.events. It never scans, pairs, connects, enables, or starts a ring daemon.
 
 import { spawn } from "node:child_process";
+import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { CHOICE_SESSION_EVENT } from "./lib/choice.js";
 import { INPUT_ACTION_EVENT } from "./lib/input-actions.js";
 import {
@@ -14,15 +15,17 @@ import {
   resolveRingInputEventMap,
   ringEventToInputAction,
 } from "./lib/ring-input.js";
+import { persistRingInputSetting, readPersistedRingInputSettings } from "./lib/tts-settings.js";
 
-function envEnabled(env = process.env) {
-  const raw = env.PI_RING_CHOICE_ENABLED;
+function envEnabled(env = process.env, persisted = {}) {
+  const raw = env.PI_RING_CHOICE_ENABLED ?? persisted.enabled;
   if (raw == null || String(raw).trim() === "") return true;
   return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
 }
 
-export function createRingInputExtension({ spawnImpl = spawn, env = process.env } = {}) {
+export function createRingInputExtension({ spawnImpl = spawn, env = process.env, settingsPath, persistedSettings } = {}) {
   return function ringInputExtension(pi) {
+    const ringConfig = { ...(persistedSettings?.ringInput ?? readPersistedRingInputSettings(settingsPath)) };
     let current = null;
     let lastStatus = { state: "idle", error: null, event: null };
 
@@ -43,12 +46,12 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env 
 
     const start = (session) => {
       stop("replaced");
-      if (!envEnabled(env)) {
+      if (!envEnabled(env, ringConfig)) {
         emitStatus({ state: "disabled", error: null, sessionId: session.sessionId });
         return false;
       }
-      const eventMap = resolveRingInputEventMap({}, env);
-      const command = env.PI_RING_COMMAND || "ring";
+      const eventMap = resolveRingInputEventMap(ringConfig, env);
+      const command = env.PI_RING_COMMAND || ringConfig.command || "ring";
       let proc;
       try {
         proc = spawnImpl(command, buildRingInputArgs({ eventMap, timeoutMs: session.timeoutMs }), {
@@ -59,7 +62,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env 
         emitStatus({ state: "error", error: error?.message || String(error), sessionId: session.sessionId });
         return false;
       }
-      const record = { proc, sessionId: session.sessionId, ring: session.ring || env.PI_RING_CHOICE_RING || null, stdout: "", stderr: "", stopped: false };
+      const record = { proc, sessionId: session.sessionId, ring: session.ring || env.PI_RING_CHOICE_RING || ringConfig.ring || null, stdout: "", stderr: "", stopped: false };
       current = record;
       emitStatus({ state: "listening", error: null, sessionId: record.sessionId, ring: record.ring });
 
@@ -103,30 +106,64 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env 
     pi.events?.on?.(CHOICE_SESSION_EVENT, choiceSessionHandler);
 
     pi.registerCommand("ring-input", {
-      description: "Inspect/configure the ring choice-input adapter. Usage: /ring-input status|mappings|on|off",
+      description: "Inspect/configure the ring choice-input adapter. Usage: /ring-input status|mappings|on|off|settings key=value",
       handler: async (args, ctx) => {
-        const action = String(args || "status").trim().toLowerCase() || "status";
+        const raw = String(args || "status").trim() || "status";
+        const action = raw.toLowerCase();
         if (action === "status") {
-          ctx.ui.notify(`ring input: ${lastStatus.state}${lastStatus.sessionId ? ` session=${lastStatus.sessionId}` : ""}${lastStatus.event ? ` event=${lastStatus.event}` : ""}${lastStatus.error ? ` error=${lastStatus.error}` : ""}`, lastStatus.state === "error" ? "warning" : "info");
+          ctx.ui.notify(`ring input: ${lastStatus.state} enabled=${envEnabled(env, ringConfig)} ring=${env.PI_RING_CHOICE_RING || ringConfig.ring || "any"} command=${env.PI_RING_COMMAND || ringConfig.command || "ring"}${lastStatus.sessionId ? ` session=${lastStatus.sessionId}` : ""}${lastStatus.event ? ` event=${lastStatus.event}` : ""}${lastStatus.error ? ` error=${lastStatus.error}` : ""}`, lastStatus.state === "error" ? "warning" : "info");
           return;
         }
         if (action === "mappings") {
-          const map = resolveRingInputEventMap({}, env);
+          const map = resolveRingInputEventMap(ringConfig, env);
           ctx.ui.notify(Object.entries(map).map(([semantic, events]) => `${semantic}: ${events.join(",")}`).join("\n"), "info");
           return;
         }
         if (action === "off") {
           env.PI_RING_CHOICE_ENABLED = "0";
+          ringConfig.enabled = false;
+          persistRingInputSetting("enabled", false, settingsPath);
           stop("disabled");
-          ctx.ui.notify("ring choice input disabled for this process", "info");
+          ctx.ui.notify("ring choice input disabled and persisted", "info");
           return;
         }
         if (action === "on") {
           env.PI_RING_CHOICE_ENABLED = "1";
-          ctx.ui.notify("ring choice input enabled; it will attach to the next choice session", "info");
+          ringConfig.enabled = true;
+          persistRingInputSetting("enabled", true, settingsPath);
+          ctx.ui.notify("ring choice input enabled and persisted; it will attach to the next choice session", "info");
           return;
         }
-        ctx.ui.notify("Usage: /ring-input status|mappings|on|off", "warning");
+        if (/^settings(?:\s|$)/i.test(raw)) {
+          try {
+            const parsed = parseEnvStyleArgs(raw.replace(/^settings\s*/i, ""));
+            if (parsed.positionals.length) throw new Error(`/ring-input settings: unexpected '${parsed.positionals[0]}'`);
+            const aliases = {
+              enabled: "enabled", ring: "ring", command: "command",
+              previous: "previousEvents", previous_events: "previousEvents",
+              next: "nextEvents", next_events: "nextEvents",
+              select: "selectEvents", select_events: "selectEvents",
+              cancel: "cancelEvents", cancel_events: "cancelEvents",
+            };
+            for (const [key, value] of Object.entries(parsed.values)) {
+              const field = aliases[key];
+              if (!field) throw new Error(`/ring-input settings: unknown '${key}'`);
+              let resolved = String(value).trim();
+              if (field === "enabled") {
+                const normalized = resolved.toLowerCase();
+                if (!["1", "true", "yes", "on", "0", "false", "no", "off"].includes(normalized)) throw new Error("/ring-input settings: enabled must be true or false");
+                resolved = ["1", "true", "yes", "on"].includes(normalized);
+              } else if (field.endsWith("Events")) {
+                resolved = resolved.split(",").map((item) => item.trim()).filter(Boolean);
+              }
+              ringConfig[field] = resolved;
+              persistRingInputSetting(field, resolved, settingsPath);
+            }
+            ctx.ui.notify("ring input settings persisted; use /ring-input mappings or status", "info");
+          } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
+          return;
+        }
+        ctx.ui.notify("Usage: /ring-input status|mappings|on|off|settings key=value", "warning");
       },
     });
 

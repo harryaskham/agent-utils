@@ -218,12 +218,20 @@ test("persistCascadeSetting / persistSttSetting round-trip their own agentUtils 
     assert.equal(persistCascadeSetting("speakerProfileId", "0daec43c", path), true);
     assert.equal(persistSttSetting("transcriptionModel", "whisper-1", path), true);
     assert.equal(persistSttSetting("vadThreshold", 0, path), true); // 0 is valid
+    assert.equal(persistSttSetting("model", "mai-transcribe-1.5", path), true);
+    assert.equal(persistSttSetting("insertSilenceMs", 1000, path), true);
+    assert.equal(persistSttSetting("commitSilenceMs", 3000, path), true);
+    assert.equal(persistSttSetting("shortcutsEnabled", true, path), true);
     const cascade = readPersistedCascadeSettings(path);
     const stt = readPersistedSttSettings(path);
     assert.equal(cascade.voice, "embedding:default");
     assert.equal(cascade.speakerProfileId, "0daec43c");
     assert.equal(stt.transcriptionModel, "whisper-1");
     assert.equal(stt.vadThreshold, 0);
+    assert.equal(stt.model, "mai-transcribe-1.5");
+    assert.equal(stt.insertSilenceMs, 1000);
+    assert.equal(stt.commitSilenceMs, 3000);
+    assert.equal(stt.shortcutsEnabled, true);
     // Unknown fields rejected.
     assert.equal(persistCascadeSetting("notAField", "x", path), false);
     assert.equal(persistSttSetting("notAField", "x", path), false);
