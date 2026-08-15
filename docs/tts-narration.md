@@ -49,7 +49,7 @@ since it is a separate historical auto-speech surface.
 
 Both modes support the standard `env > settings.json > default` precedence.
 Explicit `/tts` and `/narrate` value setters persist non-secret voice/model/speed
-values by updating only their own `agentUtils` slices. Runtime `on|off` toggles do
+and narration-text policy values by updating only their own `agentUtils` slices. Runtime `on|off` toggles do
 **not** persist: `enabled` in settings defines startup behavior only. Environment overrides are never written back, and
 API keys are never persisted.
 
@@ -72,7 +72,8 @@ API keys are never persisted.
     "narrate": {
       "enabled": true,
       "model": "github-copilot/gpt-5.6-luna",
-      "speed": 2
+      "speed": 2,
+      "textEnabled": false
     }
   }
 }
@@ -99,6 +100,7 @@ playback where applicable; credentials are still never read from settings.
 ```text
 /narrate
 /narrate model=github-copilot/gpt-5.6-luna
+/narrate text=false       # keep speech; omit retained text/context summaries
 /narrate off
 /narrate status
 ```
@@ -126,10 +128,15 @@ that assistant message form one batch—even when Pi executes them in parallel:
 A newer tool batch or a final plain assistant answer aborts stale narration model
 requests. Errors and unavailable narration models are warnings only.
 
-### Conversation injection without a model turn
+### Optional conversation injection without a model turn
 
-Each completed narration is appended with `pi.sendMessage` as a tagged custom
-message:
+Set `agentUtils.narrate.textEnabled=false`, `PI_NARRATE_TEXT_ENABLED=0`, or run
+`/narrate text=false` to keep spoken narration while omitting transcript and
+next-turn context entries entirely. The setting uses `env > settings > true`;
+the runtime setter persists this non-secret preference.
+
+When text is enabled, each completed narration is appended with `pi.sendMessage`
+as a tagged custom message:
 
 ```text
 [tool summary][before] I am checking the configuration and current process state.

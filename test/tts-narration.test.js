@@ -120,7 +120,7 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(tts.config.apiKey, undefined, "API keys are never part of persisted resolution");
 
   const narrate = resolveNarrateSettings({
-    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2 },
+    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2, textEnabled: false },
     env: { PI_NARRATE_MODEL: "github-copilot/env" },
   });
   assert.equal(narrate.enabled, true);
@@ -129,6 +129,11 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(narrate.modelSource, "env");
   assert.equal(narrate.speed, 2);
   assert.equal(narrate.speedSource, "settings");
+  assert.equal(narrate.textEnabled, false);
+  assert.equal(narrate.textEnabledSource, "settings");
+  const envText = resolveNarrateSettings({ persisted: { textEnabled: false }, env: { PI_NARRATE_TEXT_ENABLED: "true" } });
+  assert.equal(envText.textEnabled, true, "env text policy overrides settings");
+  assert.equal(envText.textEnabledSource, "env");
 });
 
 test("settings read/write is scoped, rejects secret fields, and tolerates malformed input", () => {
@@ -197,7 +202,7 @@ test("explicit /tts and /narrate setters persist only non-secret runtime values"
   try {
     const h = harness({ speech, runTextTurn: async () => ({ text: "" }), settingsPath: path, persistedSettings: undefined });
     await h.commands.get("tts").handler("voice=SavedVoice speed=1.6 api_key=temporary", h.ctx);
-    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2`, h.ctx);
+    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2 text=false`, h.ctx);
     const all = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(all.unrelated, 7);
     assert.equal(all.agentUtils.tts.enabled, false, "runtime /tts toggle does not change startup policy");
@@ -207,6 +212,7 @@ test("explicit /tts and /narrate setters persist only non-secret runtime values"
     assert.equal(all.agentUtils.narrate.enabled, false, "runtime /narrate toggle does not change startup policy");
     assert.equal(all.agentUtils.narrate.model, DEFAULT_NARRATION_MODEL);
     assert.equal(all.agentUtils.narrate.speed, 2);
+    assert.equal(all.agentUtils.narrate.textEnabled, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -324,6 +330,24 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
   }
   assert.deepEqual(spoken, ["I am checking both sources.", "I found two matching records."]);
   assert.deepEqual(spokenOverrides, [{ speed: 2 }, { speed: 2 }], "narration overrides shared tts speed per call");
+});
+
+test("textEnabled=false speaks tool narration without retaining custom summary messages", async () => {
+  const spoken = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "v", lang: "en", speed: 1.4, embedding: null, style: null, styleDegree: null, backend: "pulse", device: "d" }),
+    apply() {}, interrupt() {}, dispose() {}, async speak(text) { spoken.push(text); },
+  };
+  const runTextTurn = async (_ctx, request) => ({
+    text: request.systemPrompt.includes("Begin with 'I am'") ? "I am checking it." : "I found it healthy.",
+    model: DEFAULT_NARRATION_MODEL,
+  });
+  const h = harness({ speech, runTextTurn, persistedSettings: { tts: {}, narrate: { enabled: true, textEnabled: false } } });
+  h.emit("message_end", { message: { role: "assistant", content: [{ type: "toolCall", id: "a", name: "read", arguments: {} }] } });
+  h.emit("tool_execution_end", { toolCallId: "a", toolName: "read", result: { content: [{ type: "text", text: "healthy" }] }, isError: false });
+  await waitFor(() => spoken.length === 2);
+  assert.deepEqual(spoken, ["I am checking it.", "I found it healthy."]);
+  assert.deepEqual(h.sent, [], "speech-only narration leaves no transcript or next-turn context entries");
 });
 
 test("a newer final assistant message aborts stale narration and its verbatim /tts wins", async () => {

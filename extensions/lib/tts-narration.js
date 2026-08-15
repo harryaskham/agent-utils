@@ -157,9 +157,11 @@ export function resolveNarrateSettings({ env = process.env, persisted = {} } = {
     enabled: enabledValue(env.PI_NARRATE_ENABLED, enabledValue(persisted.enabled, false)),
     model: String(env.PI_NARRATE_MODEL || persisted.model || DEFAULT_NARRATION_MODEL).trim(),
     speed: Number.isFinite(speedNumber) && speedNumber > 0 ? speedNumber : undefined,
+    textEnabled: enabledValue(env.PI_NARRATE_TEXT_ENABLED, enabledValue(persisted.textEnabled, true)),
     enabledSource: env.PI_NARRATE_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
     modelSource: env.PI_NARRATE_MODEL ? "env" : persisted.model ? "settings" : "default",
     speedSource: env.PI_NARRATE_SPEED != null ? "env" : persisted.speed != null ? "settings" : "tts",
+    textEnabledSource: env.PI_NARRATE_TEXT_ENABLED != null ? "env" : Object.hasOwn(persisted, "textEnabled") ? "settings" : "default",
   };
 }
 

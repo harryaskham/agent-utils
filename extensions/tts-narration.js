@@ -89,6 +89,8 @@ export function createTtsNarrationExtension({
     let narrationModelSource = resolvedNarrate.modelSource;
     let narrationSpeed = resolvedNarrate.speed;
     let narrationSpeedSource = resolvedNarrate.speedSource;
+    let narrationTextEnabled = resolvedNarrate.textEnabled;
+    let narrationTextEnabledSource = resolvedNarrate.textEnabledSource;
     try {
       pi.ttsNarration = {
         isEnabled: () => ttsEnabled,
@@ -140,14 +142,16 @@ export function createTtsNarrationExtension({
         if (!narrateEnabled || generation !== narrationGeneration || controller.signal.aborted) return "";
         const text = normalizeNarrationText(response.text, phase);
         if (!text) return "";
-        // Custom next-turn context participates in history but never impersonates
-        // the user and cannot trigger/steer the in-flight tool loop.
-        pi.sendMessage({
-          customType: TOOL_SUMMARY_CUSTOM_TYPE,
-          content: `[tool summary][${phase}] ${text}`,
-          display: true,
-          details: { phase, batchId: batch.id, model: response.model, toolNames: batch.calls.map((call) => call.name) },
-        }, { deliverAs: "nextTurn", triggerTurn: false });
+        if (narrationTextEnabled) {
+          // Optional custom next-turn context participates in history but never
+          // impersonates the user or triggers the in-flight tool loop.
+          pi.sendMessage({
+            customType: TOOL_SUMMARY_CUSTOM_TYPE,
+            content: `[tool summary][${phase}] ${text}`,
+            display: true,
+            details: { phase, batchId: batch.id, model: response.model, toolNames: batch.calls.map((call) => call.name) },
+          }, { deliverAs: "nextTurn", triggerTurn: false });
+        }
         speakBestEffort(text, ctx, "narrate speech", narrationSpeed ? { speed: narrationSpeed } : {});
         return text;
       } catch (error) {
@@ -255,7 +259,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("narrate", {
-      description: "Asynchronously narrate complete tool batches before/after with a fast model. Usage: /narrate [on|off|status|model=provider/id speed=2].",
+      description: "Asynchronously narrate complete tool batches before/after with a fast model. Usage: /narrate [on|off|status|model=provider/id speed=2 text=false].",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
@@ -271,7 +275,7 @@ export function createTtsNarrationExtension({
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             for (const key of Object.keys(parsed.values)) {
-              if (!new Set(["model", "enabled", "on", "speed"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!new Set(["model", "enabled", "on", "speed", "text", "text_enabled"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
             if (parsed.values.model) {
               narrationModel = String(parsed.values.model).trim();
@@ -285,6 +289,12 @@ export function createTtsNarrationExtension({
               narrationSpeedSource = "runtime/settings";
               persistNarrateSetting("speed", speed, settingsPath);
             }
+            const textRaw = parsed.values.text ?? parsed.values.text_enabled;
+            if (textRaw !== undefined) {
+              narrationTextEnabled = boolValue(textRaw, "/narrate text");
+              narrationTextEnabledSource = "runtime/settings";
+              persistNarrateSetting("textEnabled", narrationTextEnabled, settingsPath);
+            }
             if (parsed.values.enabled !== undefined) {
               narrateEnabled = boolValue(parsed.values.enabled, "/narrate enabled");
               narrateEnabledSource = "runtime";
@@ -295,7 +305,7 @@ export function createTtsNarrationExtension({
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
-        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · context:custom nextTurn/no-trigger · speech:/tts settings`, "info");
+        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
       },
     });
 
