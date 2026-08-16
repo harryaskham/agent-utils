@@ -19,13 +19,11 @@ import {
   normalizeChoices,
 } from "./lib/choice.js";
 import {
-  persistChoiceSetting,
   readPersistedChoiceSettings,
   readPersistedTtsSettings,
 } from "./lib/tts-settings.js";
 
 export const FORCE_CHOICE_CUSTOM_TYPE = "agent-utils-force-choice";
-const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
 
 function boolSetting(value, fallback) {
   if (value == null || String(value).trim() === "") return fallback;
@@ -401,28 +399,23 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
               const value = Number(parsed.values[key]);
               if (!Number.isFinite(value) || value < min || value > max) throw new Error(`/choice settings: ${key} must be ${min}..${max}`);
               choiceConfig[field] = Math.trunc(value);
-              persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
-            const boolean = (keys, field, { persist = true } = {}) => {
+            const boolean = (keys, field) => {
               const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
               if (!key) return;
               const rawValue = String(parsed.values[key]).toLowerCase();
               if (!["1", "true", "yes", "on", "0", "false", "no", "off"].includes(rawValue)) throw new Error(`/choice settings: ${key} must be true or false`);
               choiceConfig[field] = ["1", "true", "yes", "on"].includes(rawValue);
-              if (persist) persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
             const affix = (key, field) => {
               if (!Object.hasOwn(parsed.values, key)) return;
               choiceConfig[field] = expandEnvReferences(parsed.values[key], env, `/choice ${key}`);
-              if (!ENV_REFERENCE.test(String(parsed.values[key]))) persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
-            let repeatChanged = false;
             const repeatIntervalKey = ["repeat.interval", "repeat_interval"].find((key) => Object.hasOwn(parsed.values, key));
             if (repeatIntervalKey) {
               const value = Number(parsed.values[repeatIntervalKey]);
               if (!Number.isFinite(value) || value <= 0 || value > 86400) throw new Error(`/choice settings: ${repeatIntervalKey} must be greater than zero and at most 86400 seconds`);
               choiceConfig.repeat.interval = value;
-              repeatChanged = true;
             }
             const repeatLimitKey = ["repeat.limit", "repeat_limit"].find((key) => Object.hasOwn(parsed.values, key));
             if (repeatLimitKey) {
@@ -433,17 +426,15 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
                 if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) throw new Error(`/choice settings: ${repeatLimitKey} must be a non-negative integer or null`);
                 choiceConfig.repeat.limit = value;
               }
-              repeatChanged = true;
             }
             number(["timeout", "timeout_ms"], "timeoutMs", 0, 300000);
             number(["max", "max_choices"], "maxChoices", 2, 9);
             boolean(["wrap"], "wrap");
             boolean(["speech", "speech_enabled"], "speechEnabled");
             boolean(["description", "descriptions", "description_on_navigate"], "descriptionOnNavigate");
-            boolean(["force", "force_at_end"], "forceAtAgentEnd", { persist: false });
+            boolean(["force", "force_at_end"], "forceAtAgentEnd");
             affix("prefix", "prefix");
             affix("suffix", "suffix");
-            if (repeatChanged) persistChoiceSetting("repeat", { ...choiceConfig.repeat }, settingsPath);
             ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;

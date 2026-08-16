@@ -15,7 +15,6 @@ import {
   normalizeChoices,
 } from "../extensions/lib/choice.js";
 import { createChoiceExtension, resolveChoiceSettings } from "../extensions/choice.js";
-import { persistChoiceSetting } from "../extensions/lib/tts-settings.js";
 
 function eventBus() {
   const handlers = new Map();
@@ -292,10 +291,11 @@ test("choice extension honors persisted agentUtils.choice defaults", async () =>
   assert.deepEqual(spoken, [], "persisted speechEnabled=false suppresses choice TTS");
 });
 
-test("choice settings expand env affixes, persist literals, and leave option speech unmodified", async () => {
+test("choice settings are runtime-only, expand env affixes, and leave startup settings immutable", async () => {
   const dir = mkdtempSync(join(tmpdir(), "choice-affixes-"));
   const settingsPath = join(dir, "settings.json");
-  writeFileSync(settingsPath, JSON.stringify({ agentUtils: { choice: {} } }, null, 2));
+  const startup = JSON.stringify({ agentUtils: { choice: { descriptionOnNavigate: true, prefix: "", suffix: "", repeat: { interval: 300, limit: null } } }, unrelated: 7 }, null, 2) + "\n";
+  writeFileSync(settingsPath, startup);
   try {
     const spoken = [];
     const h = harness();
@@ -306,11 +306,7 @@ test("choice settings expand env affixes, persist literals, and leave option spe
       persistedSettings: { choice: {}, tts: {} },
     })(h.pi);
     await h.commands.get("choice").handler("settings descriptions=false prefix='$AGENT_ID' suffix=' now' repeat.interval=1.5 repeat.limit=2", h.ctx);
-    const saved = JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice;
-    assert.equal(saved.prefix, undefined, "env-derived prefix is runtime-only");
-    assert.equal(saved.suffix, " now");
-    assert.equal(saved.descriptionOnNavigate, false);
-    assert.deepEqual(saved.repeat, { interval: 1.5, limit: 2 });
+    assert.equal(readFileSync(settingsPath, "utf8"), startup, "runtime choice settings never rewrite startup policy");
     const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
     await Promise.resolve();
     assert.match(spoken[0], /^agent-9: Pick now Option 1: Alpha/);
@@ -369,7 +365,6 @@ test("force-choice runtime controls and Escape preserve startup policy while let
   const settingsPath = join(dir, "settings.json");
   writeFileSync(settingsPath, JSON.stringify({ agentUtils: { choice: { forceAtAgentEnd: true } } }, null, 2));
   try {
-    assert.equal(persistChoiceSetting("forceAtAgentEnd", false, settingsPath), false, "startup-only field is rejected by the persistence helper");
     const h = harness();
     createChoiceExtension({
       speaker: { speak: async () => {}, interrupt() {}, dispose() {} },

@@ -18,7 +18,7 @@ import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
 // Local-vad wiring tests drive audio through startLocalVad -> parseLocalVadConfig,
 // which reads PI_RT_LOCAL_VAD_* env. Clear those here so the audio-driven assertions
 // use the default segmenter config and stay deterministic regardless of any ambient
-// host setting (e.g. an operator's /rt energy= persisted on the box, or the gate env).
+// host setting (e.g. an operator's startup setting or the gate env).
 // Isolate settings.json too: local-VAD wiring reads agentUtils.stt at each start,
 // and the operator's live sensitivity tuning must not redefine test defaults.
 const isolatedAgentSettingsDir = mkdtempSync(join(tmpdir(), "rt-agent-settings-"));
@@ -2211,6 +2211,25 @@ test("/rt stt local-vad surfaces the first transcribe failure to the operator (b
   }
 });
 
+test("/rt and local-STT value commands are runtime-only and preserve settings.json", async () => {
+  const settingsPath = join(isolatedAgentSettingsDir, "settings.json");
+  const startup = JSON.stringify({ agentUtils: { realtime: { voice: "marin", speed: 1 }, stt: { energyThreshold: 0.01, model: "mai-transcribe-1.5" } }, unrelated: 11 }, null, 2) + "\n";
+  writeFileSync(settingsPath, startup);
+  const previousEnergy = process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;
+  try {
+    const { pi, commands, handlers, ctx } = makeHarness();
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+    await commands.get("rt").handler("voice=verse speed=1.3 energy=0.2", ctx);
+    assert.equal(process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD, "0.2", "energy override applies to this process");
+    assert.equal(readFileSync(settingsPath, "utf8"), startup, "runtime realtime/STT commands never rewrite startup policy");
+  } finally {
+    if (previousEnergy === undefined) delete process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;
+    else process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD = previousEnergy;
+    rmSync(settingsPath, { force: true });
+  }
+});
+
 test("/rt energy= reaches applyLocalVadEnergy through the full command path (bd-a5e1d4)", async () => {
   // Regression: the env-args->params mapping (envArgsToRealtimeParams) must carry
   // `energy` through, or /rt energy= is silently dropped before it is applied.
@@ -2223,7 +2242,7 @@ test("/rt energy= reaches applyLocalVadEnergy through the full command path (bd-
     assert.equal(
       process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD,
       "0.05",
-      "/rt energy= flows handler -> envArgsToRealtimeParams -> applyLocalVadEnergy and persists the knob",
+      "/rt energy= flows handler -> envArgsToRealtimeParams -> applyLocalVadEnergy as a runtime override",
     );
   } finally {
     if (prev === undefined) delete process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;

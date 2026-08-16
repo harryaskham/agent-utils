@@ -15,7 +15,7 @@ import {
   resolveRingInputEventMap,
   ringEventToInputAction,
 } from "./lib/ring-input.js";
-import { persistRingInputSetting, readPersistedRingInputSettings } from "./lib/tts-settings.js";
+import { readPersistedRingInputSettings } from "./lib/tts-settings.js";
 
 function envEnabled(env = process.env, persisted = {}) {
   const raw = env.PI_RING_CHOICE_ENABLED ?? persisted.enabled;
@@ -134,16 +134,14 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
         if (action === "off") {
           env.PI_RING_CHOICE_ENABLED = "0";
           ringConfig.enabled = false;
-          persistRingInputSetting("enabled", false, settingsPath);
           stop("disabled");
-          ctx.ui.notify("ring choice input disabled and persisted", "info");
+          ctx.ui.notify("ring choice input disabled for this session; startup settings unchanged", "info");
           return;
         }
         if (action === "on") {
           env.PI_RING_CHOICE_ENABLED = "1";
           ringConfig.enabled = true;
-          persistRingInputSetting("enabled", true, settingsPath);
-          ctx.ui.notify("ring choice input enabled and persisted; it will attach to the next choice session", "info");
+          ctx.ui.notify("ring choice input enabled for this session; startup settings unchanged; it will attach to the next choice session", "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
@@ -169,9 +167,8 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
                 resolved = resolved.split(",").map((item) => item.trim()).filter(Boolean);
               }
               ringConfig[field] = resolved;
-              persistRingInputSetting(field, resolved, settingsPath);
             }
-            ctx.ui.notify("ring input settings persisted; use /ring-input mappings or status", "info");
+            ctx.ui.notify("ring input settings updated for this session; startup settings unchanged", "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }

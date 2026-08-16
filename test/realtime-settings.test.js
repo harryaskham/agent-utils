@@ -9,13 +9,10 @@ import {
   buildRealtimeValueParams,
   normalizeRealtimeValueParams,
   PERSISTED_REALTIME_FIELDS,
-  persistRealtimeSetting,
   readPersistedRealtimeSettings,
   PERSISTED_CASCADE_FIELDS,
   PERSISTED_STT_FIELDS,
-  persistCascadeSetting,
   readPersistedCascadeSettings,
-  persistSttSetting,
   readPersistedSttSettings,
 } from "../extensions/lib/realtime-settings.js";
 import { makeInitialConfig } from "../extensions/lib/realtime-config.js";
@@ -102,44 +99,19 @@ test("applyRealtimeValueParams dispatches each param to its setter; energy speci
   assert.ok(applied.includes("model") && applied.includes("energy") && !applied.includes("fork"));
 });
 
-// --- Persistence (bd-7217db) ---
+// --- Immutable startup settings (bd-7217db) ---
 
-test("persistRealtimeSetting round-trips via settings.json and reads back (0 + false safe)", () => {
+test("realtime startup settings reader preserves zero/false values without writing", () => {
   const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
   const path = join(dir, "settings.json");
+  const startup = JSON.stringify({ agentUtils: { realtime: { voice: "cedar", vadThreshold: 0, directAzure: false } }, unrelated: 4 }, null, 2) + "\n";
   try {
     assert.deepEqual(readPersistedRealtimeSettings(path), {}, "missing file -> {}");
-    assert.equal(persistRealtimeSetting("voice", "cedar", path), true);
-    assert.equal(persistRealtimeSetting("vadThreshold", 0, path), true); // 0 is a valid threshold
-    assert.equal(persistRealtimeSetting("directAzure", false, path), true);
-    const got = readPersistedRealtimeSettings(path);
-    assert.equal(got.voice, "cedar");
-    assert.equal(got.vadThreshold, 0);
-    assert.equal(got.directAzure, false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("persistRealtimeSetting never clobbers other settings.json slices + rejects unknown fields", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
-  const path = join(dir, "settings.json");
-  try {
-    // Pre-existing pi-graphics slice + a top-level key must survive a realtime write.
-    writeFileSync(path, JSON.stringify({ agentUtils: { graphics: { eink: true } }, theme: "nord" }, null, 2));
-    assert.equal(persistRealtimeSetting("model", "gpt-realtime-2", path), true);
-    const all = JSON.parse(readFileSync(path, "utf8"));
-    assert.equal(all.agentUtils.graphics.eink, true, "pi-graphics slice preserved");
-    assert.equal(all.theme, "nord", "top-level key preserved");
-    assert.equal(all.agentUtils.realtime.model, "gpt-realtime-2");
-    // Unknown field rejected (not in PERSISTED_REALTIME_FIELDS).
-    assert.equal(persistRealtimeSetting("notAField", "x", path), false);
+    writeFileSync(path, startup);
+    assert.deepEqual(readPersistedRealtimeSettings(path), { voice: "cedar", vadThreshold: 0, directAzure: false });
+    assert.equal(readFileSync(path, "utf8"), startup);
     assert.ok(!PERSISTED_REALTIME_FIELDS.includes("notAField"));
-    const after = JSON.parse(readFileSync(path, "utf8"));
-    assert.equal(after.agentUtils.realtime.notAField, undefined);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("makeInitialConfig precedence: env > persisted > default", () => {
@@ -206,59 +178,26 @@ test("config resolution honors env at runtime but NEVER writes env values back t
   }
 });
 
-// --- Durable cascade + STT slices (bd-b45224) ---
+// --- Immutable cascade + STT startup slices (bd-b45224) ---
 
-test("persistCascadeSetting / persistSttSetting round-trip their own agentUtils slice, reject unknown fields", () => {
+test("cascade and STT startup readers are independent and never mutate settings", () => {
   const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
   const path = join(dir, "settings.json");
+  const startup = JSON.stringify({ agentUtils: {
+    cascade: { voice: "embedding:default", speakerProfileId: "0daec43c" },
+    stt: { transcriptionModel: "whisper-1", vadThreshold: 0, model: "mai-transcribe-1.5", insertSilenceMs: 1000, shortcutsEnabled: true },
+  }, theme: "nord" }, null, 2) + "\n";
   try {
     assert.deepEqual(readPersistedCascadeSettings(path), {}, "missing -> {}");
     assert.deepEqual(readPersistedSttSettings(path), {}, "missing -> {}");
-    assert.equal(persistCascadeSetting("voice", "embedding:default", path), true);
-    assert.equal(persistCascadeSetting("speakerProfileId", "0daec43c", path), true);
-    assert.equal(persistSttSetting("transcriptionModel", "whisper-1", path), true);
-    assert.equal(persistSttSetting("vadThreshold", 0, path), true); // 0 is valid
-    assert.equal(persistSttSetting("model", "mai-transcribe-1.5", path), true);
-    assert.equal(persistSttSetting("insertSilenceMs", 1000, path), true);
-    assert.equal(persistSttSetting("commitSilenceMs", 3000, path), true);
-    assert.equal(persistSttSetting("shortcutsEnabled", true, path), true);
-    const cascade = readPersistedCascadeSettings(path);
-    const stt = readPersistedSttSettings(path);
-    assert.equal(cascade.voice, "embedding:default");
-    assert.equal(cascade.speakerProfileId, "0daec43c");
-    assert.equal(stt.transcriptionModel, "whisper-1");
-    assert.equal(stt.vadThreshold, 0);
-    assert.equal(stt.model, "mai-transcribe-1.5");
-    assert.equal(stt.insertSilenceMs, 1000);
-    assert.equal(stt.commitSilenceMs, 3000);
-    assert.equal(stt.shortcutsEnabled, true);
-    // Unknown fields rejected.
-    assert.equal(persistCascadeSetting("notAField", "x", path), false);
-    assert.equal(persistSttSetting("notAField", "x", path), false);
+    writeFileSync(path, startup);
+    assert.deepEqual(readPersistedCascadeSettings(path), { voice: "embedding:default", speakerProfileId: "0daec43c" });
+    assert.equal(readPersistedSttSettings(path).vadThreshold, 0);
+    assert.equal(readPersistedSttSettings(path).shortcutsEnabled, true);
+    assert.equal(readFileSync(path, "utf8"), startup);
     assert.ok(!PERSISTED_CASCADE_FIELDS.includes("notAField"));
     assert.ok(!PERSISTED_STT_FIELDS.includes("notAField"));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("cascade/stt/realtime slice writes never clobber each other or other settings.json slices", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rt-settings-"));
-  const path = join(dir, "settings.json");
-  try {
-    writeFileSync(path, JSON.stringify({ agentUtils: { graphics: { eink: true } }, theme: "nord" }, null, 2));
-    persistRealtimeSetting("voice", "marin", path);
-    persistCascadeSetting("voice", "embedding:default", path);
-    persistSttSetting("transcriptionModel", "whisper-1", path);
-    const all = JSON.parse(readFileSync(path, "utf8"));
-    assert.equal(all.agentUtils.graphics.eink, true, "graphics slice preserved");
-    assert.equal(all.theme, "nord", "top-level preserved");
-    assert.equal(all.agentUtils.realtime.voice, "marin");
-    assert.equal(all.agentUtils.cascade.voice, "embedding:default");
-    assert.equal(all.agentUtils.stt.transcriptionModel, "whisper-1");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("makeInitialConfig speakReplies/speakThinking: env > persisted > default (bd-095b3d)", () => {

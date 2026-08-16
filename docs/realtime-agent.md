@@ -45,7 +45,14 @@ At runtime, the unified `/rt` command also accepts env-style key/value arguments
 
 Order does not matter. Values may be quoted with shell-like single or double quotes. Empty runtime values unset the corresponding Pulse variable for future spawns. If a mic capture or playback process is already running, stop/cancel it and start again so the new Pulse environment is used.
 
-**Runtime value settings persist across restarts.** When you change a connection/tuning value setting at runtime — `voice`, `speed`, `thresh`, `model`, `baseUrl`, `trans`, or the Azure settings (`azure`, `endpoint`, `deployment`, `api_version`, `protocol`) — the new value is saved to the Pi agent `settings.json` (under `agentUtils.realtime.*`) and restored on the next `/rt` start, so you do not have to re-set it every session. Precedence is env (`PI_RT_*` / `OPENAI_*` / `AZURE_*`) > persisted settings > built-in default, so an explicit env override always wins **for the running session**. Crucially, an env override is *runtime-only*: resolving config from env never writes those env values back into `settings.json` (bd-b45224) — only an explicit `/rt` value change persists. So a hand-edited `settings.json` stays authoritative and is never silently clobbered by an env default; you can drop an env var and the persisted value fills the gap. Audio `backend` and Pulse routing (`server`/`source`/`sink`) are process-environment only and are **not** persisted — set them via env or per-`/rt` k=v each session.
+**Runtime value settings never persist.** `settings.json` is immutable startup
+policy. Connection/tuning commands such as `voice`, `speed`, `thresh`, `energy`,
+`model`, `baseUrl`, `trans`, Azure settings, local-STT settings, audio routing,
+and all other `/rt`, `/stt`, and `/ptt` `setting=value` forms affect only the
+current process. Precedence at startup remains env (`PI_RT_*` / `OPENAI_*` /
+`AZURE_*`) > settings > built-in default. To change a future startup, edit the
+corresponding `agentUtils` slice explicitly; commands and environment resolution
+never rewrite it.
 
 **Durable cascade + STT defaults (bd-b45224).** Alongside `agentUtils.realtime`, two sibling slices let you keep durable defaults in `settings.json` and drop the matching env vars:
 
@@ -354,9 +361,9 @@ shared voice/playback fields in `agentUtils.tts`):
 
 Set the delay with `agentUtils.read.delayMs` or `/read delay=750`; set an
 independent read speech rate with `agentUtils.read.speed` or `/read speed=1.6`.
-Explicit `/read` setters persist `delayMs`, `speed`, `onDelay`, and `onSend`.
-`/read on|off` is runtime-only: `agentUtils.read.enabled` defines startup behavior
-and is never rewritten by a session toggle. Env `PI_READ_DELAY_MS`,
+Every `/read` setter—including `delayMs`, speed, `onDelay`, `onSend`, and
+`on|off`—is runtime-only. `agentUtils.read` defines immutable startup behavior
+and is never rewritten by a command. Env `PI_READ_DELAY_MS`,
 `PI_READ_SPEED`, `PI_READ_ON_DELAY`,
 `PI_READ_ON_SEND`, and `PI_READ_ENABLED` override settings.
 
@@ -487,9 +494,10 @@ daemon), this speaks the full reply via the fast direct-Azure REST path.
   trace — and only when the loaded model/provider actually surfaces thinking
   content in the turn (thinking-enabled models; nothing is spoken otherwise).
 
-- Off by default. Both are **durable in `settings.json`** (`agentUtils.realtime.speakReplies`
-  / `.speakThinking`) and toggleable at runtime, with env > persisted > default
-  (`PI_RT_SPEAK_REPLIES` / `PI_RT_SPEAK_THINKING`); env is never written back.
+- Off by default. Startup values live in `settings.json`
+  (`agentUtils.realtime.speakReplies` / `.speakThinking`) with env > settings >
+  default (`PI_RT_SPEAK_REPLIES` / `PI_RT_SPEAK_THINKING`). Runtime toggles and
+  env are never written back.
 - Voice/speaker/lang/speed/style and playback routing come from the shared
   `agentUtils.tts` slice, with `PI_CASCADE_*` / `PI_TTS_*` / Pulse env overrides;
   speed is applied as an Azure SSML `<prosody rate>` (speed 1.2 → `+20%`).

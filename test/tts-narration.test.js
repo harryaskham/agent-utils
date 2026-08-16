@@ -20,11 +20,6 @@ import {
   toolResultText,
 } from "../extensions/lib/tts-narration.js";
 import {
-  persistChoiceSetting,
-  persistNarrateSetting,
-  persistReadSetting,
-  persistRingInputSetting,
-  persistTtsSetting,
   readPersistedChoiceSettings,
   readPersistedNarrateSettings,
   readPersistedReadSettings,
@@ -140,58 +135,48 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(envText.textEnabledSource, "env");
 });
 
-test("settings read/write is scoped, rejects secret fields, and tolerates malformed input", () => {
+test("immutable startup settings readers are scoped and tolerate malformed input", () => {
   const dir = mkdtempSync(join(tmpdir(), "tts-settings-"));
   const path = join(dir, "settings.json");
+  const startup = JSON.stringify({ untouched: { keep: true }, agentUtils: {
+    tts: { voice: "MAI-Voice-2" }, narrate: { model: DEFAULT_NARRATION_MODEL },
+    read: { delayMs: 2000 }, choice: { timeoutMs: 30000 }, ringInput: { selectEvents: ["EVENT_RING_SELECT"] },
+  } }, null, 2) + "\n";
   try {
-    writeFileSync(path, JSON.stringify({ untouched: { keep: true }, agentUtils: { other: { x: 1 } } }, null, 2));
-    assert.equal(persistTtsSetting("voice", "MAI-Voice-2", path), true);
-    assert.equal(persistTtsSetting("apiKey", "must-not-write", path), false);
-    assert.equal(persistNarrateSetting("enabled", true, path), true);
-    assert.equal(persistNarrateSetting("model", DEFAULT_NARRATION_MODEL, path), true);
-    assert.equal(persistReadSetting("delayMs", 2000, path), true);
-    assert.equal(persistChoiceSetting("timeoutMs", 30000, path), true);
-    assert.equal(persistRingInputSetting("selectEvents", ["EVENT_RING_SELECT"], path), true);
-    const all = JSON.parse(readFileSync(path, "utf8"));
-    assert.deepEqual(all.untouched, { keep: true });
-    assert.deepEqual(all.agentUtils.other, { x: 1 });
-    assert.equal(all.agentUtils.tts.voice, "MAI-Voice-2");
-    assert.equal(all.agentUtils.tts.apiKey, undefined);
+    writeFileSync(path, startup);
     assert.deepEqual(readPersistedTtsSettings(path), { voice: "MAI-Voice-2" });
-    assert.deepEqual(readPersistedNarrateSettings(path), { enabled: true, model: DEFAULT_NARRATION_MODEL });
+    assert.deepEqual(readPersistedNarrateSettings(path), { model: DEFAULT_NARRATION_MODEL });
     assert.deepEqual(readPersistedReadSettings(path), { delayMs: 2000 });
     assert.deepEqual(readPersistedChoiceSettings(path), { timeoutMs: 30000 });
     assert.deepEqual(readPersistedRingInputSettings(path), { selectEvents: ["EVENT_RING_SELECT"] });
-
+    assert.equal(readFileSync(path, "utf8"), startup);
     writeFileSync(path, "not json");
     assert.deepEqual(readPersistedTtsSettings(path), {});
     assert.deepEqual(readPersistedNarrateSettings(path), {});
     assert.deepEqual(readPersistedReadSettings(path), {});
     assert.deepEqual(readPersistedChoiceSettings(path), {});
     assert.deepEqual(readPersistedRingInputSettings(path), {});
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("settings persistence writes through Home Manager-style symlinks without replacing them", () => {
+test("startup settings readers follow Home Manager-style symlinks without replacing them", () => {
   const dir = mkdtempSync(join(tmpdir(), "tts-settings-link-"));
   const target = join(dir, "source.json");
   const link = join(dir, "settings.json");
   try {
-    writeFileSync(target, JSON.stringify({ agentUtils: {} }, null, 2));
+    writeFileSync(target, JSON.stringify({ agentUtils: { tts: { enabled: true } } }, null, 2));
     symlinkSync(target, link);
-    assert.equal(persistTtsSetting("enabled", true, link), true);
+    assert.equal(readPersistedTtsSettings(link).enabled, true);
     assert.equal(lstatSync(link).isSymbolicLink(), true);
     assert.equal(readlinkSync(link), target);
-    assert.equal(JSON.parse(readFileSync(target, "utf8")).agentUtils.tts.enabled, true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("explicit /tts and /narrate setters persist only non-secret runtime values", async () => {
+test("explicit /tts and /narrate setters are runtime-only and never rewrite startup settings", async () => {
   const dir = mkdtempSync(join(tmpdir(), "tts-command-settings-"));
   const path = join(dir, "settings.json");
-  writeFileSync(path, JSON.stringify({ unrelated: 7, agentUtils: { tts: { enabled: false }, narrate: { enabled: false } } }, null, 2));
+  const startup = JSON.stringify({ unrelated: 7, agentUtils: { tts: { enabled: false, voice: "StartupVoice", speed: 1.4, prefix: "", suffix: "" }, narrate: { enabled: false, model: "startup/model", speed: 1, textEnabled: true, prefix: "", suffix: "" } } }, null, 2) + "\n";
+  writeFileSync(path, startup);
   const config = { provider: "azure", voice: "Default", lang: "en-GB", speed: 2, embedding: "embed", style: null, styleDegree: null, endpoint: undefined, apiKey: undefined, backend: "pulse", server: undefined, device: "sink" };
   const speech = {
     getConfig: () => ({ ...config }),
@@ -207,20 +192,10 @@ test("explicit /tts and /narrate setters persist only non-secret runtime values"
     const h = harness({ speech, runTextTurn: async () => ({ text: "" }), settingsPath: path, persistedSettings: undefined });
     await h.commands.get("tts").handler("voice=SavedVoice speed=1.6 prefix='T: ' suffix=' done' api_key=temporary", h.ctx);
     await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2 text=false prefix='N: ' suffix=' over'`, h.ctx);
-    const all = JSON.parse(readFileSync(path, "utf8"));
-    assert.equal(all.unrelated, 7);
-    assert.equal(all.agentUtils.tts.enabled, false, "runtime /tts toggle does not change startup policy");
-    assert.equal(all.agentUtils.tts.voice, "SavedVoice");
-    assert.equal(all.agentUtils.tts.speed, 1.6);
-    assert.equal(all.agentUtils.tts.prefix, "T: ");
-    assert.equal(all.agentUtils.tts.suffix, " done");
-    assert.equal(all.agentUtils.tts.apiKey, undefined, "runtime API key is never persisted");
-    assert.equal(all.agentUtils.narrate.enabled, false, "runtime /narrate toggle does not change startup policy");
-    assert.equal(all.agentUtils.narrate.model, DEFAULT_NARRATION_MODEL);
-    assert.equal(all.agentUtils.narrate.speed, 2);
-    assert.equal(all.agentUtils.narrate.textEnabled, false);
-    assert.equal(all.agentUtils.narrate.prefix, "N: ");
-    assert.equal(all.agentUtils.narrate.suffix, " over");
+    assert.equal(readFileSync(path, "utf8"), startup, "all startup values remain byte-for-byte immutable");
+    assert.equal(config.voice, "SavedVoice");
+    assert.equal(config.speed, 1.6);
+    assert.ok(h.notifications.some(({ message }) => /model:github-copilot\/gpt-5\.6-luna/.test(message) && /speed:2/.test(message) && /text:off/.test(message)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

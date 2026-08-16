@@ -162,7 +162,7 @@ import {
   isSpeedRejectionError,
 } from "./lib/realtime-response-errors.js";
 import { makeInitialConfig, buildServerVadTurnDetection } from "./lib/realtime-config.js";
-import { persistRealtimeSetting, persistSttSetting, readPersistedSttSettings } from "./lib/realtime-settings.js";
+import { readPersistedSttSettings } from "./lib/realtime-settings.js";
 import { createGlobalWebSocketAdapter, setRealtimeWebSocketImplKind } from "./lib/realtime-ws-fallback.js";
 import { InputLevelTracker } from "./lib/realtime-input-level.js";
 import { buildRealtimeValueParams, normalizeRealtimeValueParams, applyRealtimeValueParams } from "./lib/realtime-settings.js";
@@ -2570,18 +2570,15 @@ export function createRealtimeControls({ pi, session, config }) {
     },
 
     // bd-095b3d: auto-speak the REAL agent's replies (and, opt-in, its thinking
-    // summaries) aloud. Persisted (agentUtils.realtime) so they are durable in
-    // settings.json and survive restarts, like voice/speed.
+    // summaries) aloud. Command changes are runtime-only; settings are startup policy.
     setSpeakReplies(enabled, ctx) {
       config.speakReplies = !!enabled;
-      persistRealtimeSetting("speakReplies", config.speakReplies);
       session.updateStatus(ctx);
       return this.snapshot();
     },
 
     setSpeakThinking(enabled, ctx) {
       config.speakThinking = !!enabled;
-      persistRealtimeSetting("speakThinking", config.speakThinking);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2590,7 +2587,6 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeBaseUrl(String(baseUrl || "").trim());
       if (!next) throw new Error("Realtime baseUrl cannot be empty");
       config.baseUrl = next;
-      persistRealtimeSetting("baseUrl", config.baseUrl);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2603,7 +2599,6 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeRealtimeModelId(String(model || "").trim());
       if (!next) throw new Error("Realtime model cannot be empty");
       config.model = next;
-      persistRealtimeSetting("model", config.model);
       session.audioModeApplied = null;
       session.updateStatus(ctx);
       return this.snapshot();
@@ -2611,21 +2606,18 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setDirectAzure(enabled, ctx) {
       config.directAzure = !!enabled;
-      persistRealtimeSetting("directAzure", config.directAzure);
       session.updateStatus(ctx);
       return this.snapshot();
     },
 
     setAzureEndpoint(endpoint, ctx) {
       config.azureEndpoint = String(endpoint || "").trim() || undefined;
-      persistRealtimeSetting("azureEndpoint", config.azureEndpoint);
       session.updateStatus(ctx);
       return this.snapshot();
     },
 
     setAzureDeployment(deployment, ctx) {
       config.azureDeployment = String(deployment || "").trim() || undefined;
-      persistRealtimeSetting("azureDeployment", config.azureDeployment);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2634,7 +2626,6 @@ export function createRealtimeControls({ pi, session, config }) {
       // Blank / "none" / "ga" => omit api-version (GA realtime path). Stored as-is;
       // azureRealtimeUrl normalizes none/ga/blank to the unversioned GA URL.
       config.azureApiVersion = String(version ?? "").trim();
-      persistRealtimeSetting("azureApiVersion", config.azureApiVersion);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2645,7 +2636,6 @@ export function createRealtimeControls({ pi, session, config }) {
         throw new Error(`Unsupported azure protocol: ${protocol} (use v1 or beta)`);
       }
       config.azureProtocol = next || "v1";
-      persistRealtimeSetting("azureProtocol", config.azureProtocol);
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2654,7 +2644,6 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeTranscriptionModel(String(model || "").trim());
       if (!next) throw new Error("Realtime transcription model cannot be empty");
       config.transcriptionModel = next;
-      persistRealtimeSetting("transcriptionModel", config.transcriptionModel);
       session.systemPromptApplied = null;
       session.toolsAppliedKey = null;
       session.audioModeApplied = null;
@@ -2664,7 +2653,6 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setSpeed(speed, ctx) {
       config.speed = parseRealtimeSpeed(speed, config.speed || 1.0);
-      persistRealtimeSetting("speed", config.speed);
       session.speedRejected = false;
       session.audioModeApplied = null;
       session.updateStatus(ctx);
@@ -2673,7 +2661,6 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setVadThreshold(threshold, ctx) {
       config.vadThreshold = parseVadThreshold(threshold, config.vadThreshold ?? 0.7);
-      persistRealtimeSetting("vadThreshold", config.vadThreshold);
       process.env.PI_RT_VAD_THRESHOLD = String(config.vadThreshold);
       session.sendTurnDetectionUpdate();
       session.updateStatus(ctx);
@@ -2684,7 +2671,6 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = String(voice || "").trim().toLowerCase();
       if (!REALTIME_VOICES.has(next)) throw new Error(`Unsupported realtime voice: ${voice}`);
       config.voice = next;
-      persistRealtimeSetting("voice", config.voice);
       // Voice is part of session.update but not part of the old update cache key;
       // force the next turn/listen setup to refresh session config.
       session.audioModeApplied = null;
@@ -3096,7 +3082,7 @@ export default function realtimeAgentExtension(pi) {
   const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null, meter: null, inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 };
 
   // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
-  // VAD). Updates the running segmenter immediately and persists for next start.
+  // VAD). Updates this process and the running segmenter without rewriting startup settings.
   function applyLocalVadEnergy(value, ctx) {
     const current = localVad.cfg?.energyThreshold ?? parseLocalVadConfig().energyThreshold;
     const v = parseVadThreshold(value, current);
@@ -3985,17 +3971,24 @@ export default function realtimeAgentExtension(pi) {
       "commit_silence_ms", "min_speech", "min_speech_ms", "shortcuts", "shortcuts_enabled",
     ]);
     for (const key of Object.keys(values)) if (!allowed.has(key)) throw new Error(`/stt: unknown setting '${key}'`);
+    const envByField = {
+      timeoutMs: "PI_RT_LOCAL_VAD_TIMEOUT_MS",
+      energyThreshold: "PI_RT_LOCAL_VAD_ENERGY_THRESHOLD",
+      insertSilenceMs: "PI_RT_LOCAL_VAD_INSERT_SILENCE_MS",
+      commitSilenceMs: "PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS",
+      minTurnSpeechMs: "PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS",
+    };
     const numberSetting = (keys, field, { min = 0, max = Infinity } = {}) => {
       const key = keys.find((candidate) => Object.hasOwn(values, candidate));
       if (!key) return;
       const value = Number(values[key]);
       if (!Number.isFinite(value) || value < min || value > max) throw new Error(`/stt: ${key} must be between ${min} and ${max}`);
-      persistSttSetting(field, value);
+      process.env[envByField[field]] = String(value);
     };
     if (Object.hasOwn(values, "model")) {
       const model = String(values.model).trim();
       if (!model) throw new Error("/stt: model cannot be empty");
-      persistSttSetting("model", model);
+      process.env.PI_RT_LOCAL_VAD_MODEL = model;
     }
     numberSetting(["timeout", "timeout_ms"], "timeoutMs");
     numberSetting(["energy", "energy_threshold"], "energyThreshold", { min: 0, max: 1 });
@@ -4003,7 +3996,7 @@ export default function realtimeAgentExtension(pi) {
     numberSetting(["commit", "commit_ms", "commit_silence_ms"], "commitSilenceMs");
     numberSetting(["min_speech", "min_speech_ms"], "minTurnSpeechMs");
     const shortcutsKey = ["shortcuts", "shortcuts_enabled"].find((key) => Object.hasOwn(values, key));
-    if (shortcutsKey) persistSttSetting("shortcutsEnabled", parseBooleanValue(values[shortcutsKey]));
+    if (shortcutsKey) process.env.PI_RT_STT_SHORTCUTS_ENABLED = parseBooleanValue(values[shortcutsKey]) ? "1" : "0";
     const persisted = readPersistedSttSettings();
     const cfg = parseLocalVadConfig(process.env, persisted);
     const model = resolveBatchSttModel(process.env, persisted);

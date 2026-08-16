@@ -52,10 +52,12 @@ since it is a separate historical auto-speech surface.
 ### Durable settings
 
 Both modes support the standard `env > settings.json > default` precedence.
-Explicit `/tts` and `/narrate` value setters persist non-secret voice/model/speed
-and narration-text policy values by updating only their own `agentUtils` slices. Runtime `on|off` toggles do
-**not** persist: `enabled` in settings defines startup behavior only. Environment overrides are never written back, and
-API keys are never persisted.
+`settings.json` is immutable startup policy. Every `/tts` and `/narrate`
+`setting=value` change—including voice, model, speed, affixes, and narration-text
+policy—is a runtime-only override, just like `on|off`; commands never rewrite the
+file. Environment overrides are also runtime-only, and API keys are never
+persisted. To change the next startup, edit the corresponding `agentUtils` slice
+explicitly.
 
 ```json
 {
@@ -144,7 +146,7 @@ requests. Errors and unavailable narration models are warnings only.
 Set `agentUtils.narrate.textEnabled=false`, `PI_NARRATE_TEXT_ENABLED=0`, or run
 `/narrate text=false` to keep spoken narration while omitting transcript and
 next-turn context entries entirely. The setting uses `env > settings > true`;
-the runtime setter persists this non-secret preference.
+the runtime setter changes this preference for the current session only.
 
 When text is enabled, each completed narration is appended with `pi.sendMessage`
 as a tagged custom message:

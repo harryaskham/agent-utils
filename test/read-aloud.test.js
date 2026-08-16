@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -222,22 +222,21 @@ test("a newer synthesis aborts the stale request and interrupts playback", async
   assert.ok(interrupts >= 2);
 });
 
-test("/read command persists timing/speed but keeps runtime enabled toggle out of settings", async () => {
+test("/read command settings are runtime-only and leave startup settings byte-for-byte unchanged", async () => {
   const dir = mkdtempSync(join(tmpdir(), "read-settings-"));
   const settingsPath = join(dir, "settings.json");
+  const startup = JSON.stringify({ agentUtils: { read: { enabled: false, delayMs: 2000, speed: 1.6, onDelay: true, onSend: true } }, unrelated: 7 }, null, 2) + "\n";
+  writeFileSync(settingsPath, startup);
   const commands = new Map();
   const handlers = new Map();
   const pi = { registerCommand: (name, definition) => commands.set(name, definition), on: (event, handler) => handlers.set(event, handler) };
   const harness = makeCtx("");
   try {
-    createReadAloudExtension({ persistedTts: {}, persistedRead: {}, settingsPath })(pi);
+    createReadAloudExtension({ persistedTts: {}, persistedRead: { enabled: false, delayMs: 2000, speed: 1.6, onDelay: true, onSend: true }, settingsPath })(pi);
     handlers.get("session_start")({}, harness.ctx);
-    await commands.get("read").handler("delay=123 speed=1.6 on_delay=false on_send=false", harness.ctx);
-    let settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    assert.deepEqual(settings.agentUtils.read, { delayMs: 123, speed: 1.6, onDelay: false, onSend: false });
+    await commands.get("read").handler("delay=123 speed=1.8 on_delay=false on_send=false", harness.ctx);
     await commands.get("read").handler("off", harness.ctx);
-    settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    assert.equal(settings.agentUtils.read.enabled, undefined, "runtime toggles never mutate startup enabled policy");
+    assert.equal(readFileSync(settingsPath, "utf8"), startup);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

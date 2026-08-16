@@ -6,7 +6,7 @@
 
 Answers "where does each realtime config value come from, and is it written back to `settings.json`?" without tracing across `makeInitialConfig` (realtime-config.js), the `/rt` setters (realtime-agent.js / realtime-settings.js), and the env helpers.
 
-**Precedence for every field: `env > persisted (settings.json) > default`.** A non-empty env value always wins; persisted (`agentUtils.<slice>`) only fills the gap; env is NEVER written back (durable-settings contract, bd-b45224). To make a value durable, set it via the `/rt` setter (persists to `agentUtils.realtime.<field>`) rather than an env var — and remove the env override so the persisted value is visible.
+**Startup precedence for every field: `env > settings.json > default`.** A non-empty env value wins for the process and `agentUtils.<slice>` fills the startup gap. Settings are immutable startup policy: environment resolution and explicit `/rt`, `/stt`, and `/ptt` command overrides are runtime-only and NEVER write back. To make a value durable, edit settings.json explicitly and remove any env override so the startup value is visible.
 
 ## Realtime fields (makeInitialConfig)
 

@@ -21,7 +21,6 @@ import {
 import { audioDurationMs } from "./lib/realtime-audio.js";
 import { markAssistantSpeaking } from "./lib/half-duplex-state.js";
 import {
-  persistReadSetting,
   readPersistedReadSettings,
   readPersistedTtsSettings,
 } from "./lib/tts-settings.js";
@@ -383,11 +382,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
     handler: async (args, ctx) => {
       try {
         const parsed = parseEnvStyleArgs(String(args || ""));
-        const updated = controller.updateConfig(parsed.values, ctx);
-        if (Object.hasOwn(parsed.values, "delay")) persistReadSetting("delayMs", updated.delay, settingsPath);
-        if (Object.hasOwn(parsed.values, "speed")) persistReadSetting("speed", updated.speed, settingsPath);
-        if (Object.hasOwn(parsed.values, "on_delay") || Object.hasOwn(parsed.values, "ondelay")) persistReadSetting("onDelay", updated.onDelay, settingsPath);
-        if (Object.hasOwn(parsed.values, "on_send") || Object.hasOwn(parsed.values, "onsend")) persistReadSetting("onSend", updated.onSend, settingsPath);
+        controller.updateConfig(parsed.values, ctx);
         const action = String(parsed.positionals[0] || "").toLowerCase();
         if (["off", "stop", "disable"].includes(action)) {
           controller.disable(ctx);

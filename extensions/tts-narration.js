@@ -21,8 +21,6 @@ import {
   toolResultText,
 } from "./lib/tts-narration.js";
 import {
-  persistNarrateSetting,
-  persistTtsSetting,
   readPersistedNarrateSettings,
   readPersistedTtsSettings,
 } from "./lib/tts-settings.js";
@@ -38,16 +36,6 @@ function source(value, envKey, env) {
   if (value !== undefined && value !== null && value !== "") return "override";
   return env[envKey] ? "env" : "missing";
 }
-
-const TTS_SETTING_FIELDS = Object.freeze({
-  provider: "provider", voice: "voice", lang: "lang", speed: "speed",
-  embedding: "embedding", speaker: "embedding", speakerprofileid: "embedding", speaker_profile_id: "embedding",
-  style: "style", styledegree: "styleDegree", style_degree: "styleDegree",
-  endpoint: "endpoint", base_url: "endpoint", baseurl: "endpoint",
-  backend: "backend", server: "server", device: "device", sink: "device",
-  prefix: "prefix", suffix: "suffix",
-});
-const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
 
 function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "", suffix = "" } = {}) {
   const config = speech.getConfig();
@@ -253,14 +241,7 @@ export function createTtsNarrationExtension({
           const { prefix, suffix, ...speechValues } = parsed.values;
           if (prefix !== undefined) ttsPrefix = expandEnvReferences(prefix, env, "/tts prefix");
           if (suffix !== undefined) ttsSuffix = expandEnvReferences(suffix, env, "/tts suffix");
-          const config = speechController.apply(speechValues);
-          for (const [key, rawValue] of Object.entries(speechValues)) {
-            const field = TTS_SETTING_FIELDS[key];
-            if (!field || ENV_REFERENCE.test(String(rawValue))) continue; // never materialize env-derived values
-            persistTtsSetting(field, config[field], settingsPath);
-          }
-          if (prefix !== undefined && !ENV_REFERENCE.test(String(prefix))) persistTtsSetting("prefix", ttsPrefix, settingsPath);
-          if (suffix !== undefined && !ENV_REFERENCE.test(String(suffix))) persistTtsSetting("suffix", ttsSuffix, settingsPath);
+          speechController.apply(speechValues);
           ttsEnabled = true;
           ttsEnabledSource = "runtime";
           ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
@@ -291,29 +272,26 @@ export function createTtsNarrationExtension({
             }
             if (parsed.values.prefix !== undefined) {
               narrationPrefix = expandEnvReferences(parsed.values.prefix, env, "/narrate prefix");
-              if (!ENV_REFERENCE.test(String(parsed.values.prefix))) persistNarrateSetting("prefix", narrationPrefix, settingsPath);
+
             }
             if (parsed.values.suffix !== undefined) {
               narrationSuffix = expandEnvReferences(parsed.values.suffix, env, "/narrate suffix");
-              if (!ENV_REFERENCE.test(String(parsed.values.suffix))) persistNarrateSetting("suffix", narrationSuffix, settingsPath);
+
             }
             if (parsed.values.model) {
               narrationModel = String(parsed.values.model).trim();
-              narrationModelSource = "runtime/settings";
-              persistNarrateSetting("model", narrationModel, settingsPath);
+              narrationModelSource = "runtime";
             }
             if (parsed.values.speed !== undefined) {
               const speed = Number(parsed.values.speed);
               if (!Number.isFinite(speed) || speed <= 0) throw new Error("/narrate: speed must be greater than zero");
               narrationSpeed = speed;
-              narrationSpeedSource = "runtime/settings";
-              persistNarrateSetting("speed", speed, settingsPath);
+              narrationSpeedSource = "runtime";
             }
             const textRaw = parsed.values.text ?? parsed.values.text_enabled;
             if (textRaw !== undefined) {
               narrationTextEnabled = boolValue(textRaw, "/narrate text");
-              narrationTextEnabledSource = "runtime/settings";
-              persistNarrateSetting("textEnabled", narrationTextEnabled, settingsPath);
+              narrationTextEnabledSource = "runtime";
             }
             if (parsed.values.enabled !== undefined) {
               narrateEnabled = boolValue(parsed.values.enabled, "/narrate enabled");

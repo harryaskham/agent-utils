@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { CHOICE_INPUT_ACTIONS, CHOICE_INPUT_EVENT, CHOICE_SESSION_EVENT } from "../extensions/lib/choice.js";
 import {
@@ -134,6 +137,23 @@ test("timeout=0 keeps ring listening indefinitely by renewing bounded smart clie
   assert.equal(processes.length, 2, "adapter renews after its defensive five-minute client bound");
   events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "choice-infinite" });
   assert.equal(processes[1].killed, "SIGTERM");
+});
+
+test("ring-input commands are runtime-only and preserve startup settings", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ring-runtime-settings-"));
+  const settingsPath = join(dir, "settings.json");
+  const startup = JSON.stringify({ agentUtils: { ringInput: { enabled: true, command: "ring" } }, unrelated: 9 }, null, 2) + "\n";
+  writeFileSync(settingsPath, startup);
+  try {
+    const events = bus();
+    const commands = new Map();
+    const pi = { events, registerCommand(name, def) { commands.set(name, def); }, on() {} };
+    createRingInputExtension({ env: {}, settingsPath, persistedSettings: { ringInput: { enabled: true, command: "ring" } } })(pi);
+    const ctx = { ui: { notify() {} } };
+    await commands.get("ring-input").handler("off", ctx);
+    await commands.get("ring-input").handler("settings command=other enabled=true", ctx);
+    assert.equal(readFileSync(settingsPath, "utf8"), startup);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("ring adapter disabled mode never spawns and timeout exits stay non-fatal", () => {

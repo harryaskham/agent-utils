@@ -44,9 +44,8 @@ While a choice is visible:
 - **Escape**, **q**, or **Ctrl-C** — cancel
 
 Navigation wraps by default; `wrap: false` clamps at the ends. Choices are capped
-at nine so direct numeric selection is unambiguous. Durable defaults live under
-`agentUtils.choice` and can be changed with `/choice settings timeout=30000
-wrap=true max=9 speech=true`:
+at nine so direct numeric selection is unambiguous. Immutable startup defaults
+live under `agentUtils.choice`:
 
 ```json
 {
@@ -69,15 +68,21 @@ wrap=true max=9 speech=true`:
 }
 ```
 
+`settings.json` is startup policy and is never rewritten by `/choice`,
+`/force-choice`, or `/ring-input`. Their setters and toggles affect only the
+current session; edit the JSON explicitly to change the next startup.
+
 Pending choices re-read the complete spoken introduction every
 `repeat.interval` seconds (default `300`). `repeat.limit` is the maximum number
 of re-reads after the initial announcement; its default `null` is unlimited and
-`0` disables repeats. Configure them with `/choice settings repeat.interval=60
-repeat.limit=3`; use `repeat.limit=null` to restore unlimited repeats. Environment
-overrides are `PI_CHOICE_REPEAT_INTERVAL` and `PI_CHOICE_REPEAT_LIMIT`.
+`0` disables repeats. `/choice settings repeat.interval=60 repeat.limit=3`
+overrides them for the current session; `repeat.limit=null` restores unlimited
+runtime repeats. Environment overrides are `PI_CHOICE_REPEAT_INTERVAL` and
+`PI_CHOICE_REPEAT_LIMIT`.
 
-Set `timeoutMs` to `0` (or run `/choice settings timeout=0`) to disable
-automatic choice timeout entirely. Zero is a durable operator policy: it also
+Set startup `timeoutMs` to `0` (or run `/choice settings timeout=0` for this
+session) to disable automatic choice timeout entirely. A startup zero is an
+operator policy: it also
 ignores a model-generated per-call `timeoutMs: 30000` argument. Escape, explicit cancellation, session
 shutdown, or a selection still terminates the choice normally. The ring adapter
 keeps listening indefinitely by renewing its bounded `ring get` smart client
@@ -195,8 +200,9 @@ Optional `ring` filters one configured ring. Environment variables
 `PI_RING_CHOICE_*_EVENTS` mapping variables override settings.
 
 Use `/ring-input status`, `/ring-input mappings`, `/ring-input on`,
-`/ring-input off`, or `/ring-input settings key=value` for durable runtime
-inspection/control.
+`/ring-input off`, or `/ring-input settings key=value` for runtime-only
+inspection/control. Commands never rewrite `agentUtils.ringInput`; edit the file
+explicitly to change startup behavior.
 
 ## Calling choices
 
