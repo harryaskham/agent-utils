@@ -59,11 +59,22 @@ wrap=true max=9 speech=true`:
       "descriptionOnNavigate": true,
       "prefix": "",
       "suffix": "",
+      "repeat": {
+        "interval": 300,
+        "limit": null
+      },
       "forceAtAgentEnd": true
     }
   }
 }
 ```
+
+Pending choices re-read the complete spoken introduction every
+`repeat.interval` seconds (default `300`). `repeat.limit` is the maximum number
+of re-reads after the initial announcement; its default `null` is unlimited and
+`0` disables repeats. Configure them with `/choice settings repeat.interval=60
+repeat.limit=3`; use `repeat.limit=null` to restore unlimited repeats. Environment
+overrides are `PI_CHOICE_REPEAT_INTERVAL` and `PI_CHOICE_REPEAT_LIMIT`.
 
 Set `timeoutMs` to `0` (or run `/choice settings timeout=0`) to disable
 automatic choice timeout entirely. Zero is a durable operator policy: it also

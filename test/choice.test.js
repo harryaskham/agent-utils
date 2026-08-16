@@ -14,7 +14,7 @@ import {
   keyboardChoiceAction,
   normalizeChoices,
 } from "../extensions/lib/choice.js";
-import { createChoiceExtension } from "../extensions/choice.js";
+import { createChoiceExtension, resolveChoiceSettings } from "../extensions/choice.js";
 import { persistChoiceSetting } from "../extensions/lib/tts-settings.js";
 
 function eventBus() {
@@ -62,6 +62,12 @@ const choices = [
   { label: "beta", headline: "Beta" },
   { label: "gamma", headline: "Gamma" },
 ];
+
+test("choice repeat settings resolve defaults and env overrides", () => {
+  assert.deepEqual(resolveChoiceSettings({}, {}).repeat, { interval: 300, limit: null });
+  assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_INTERVAL: "12.5", PI_CHOICE_REPEAT_LIMIT: "3" }, { repeat: { interval: 90, limit: null } }).repeat, { interval: 12.5, limit: 3 });
+  assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_LIMIT: "null" }, { repeat: { interval: 45, limit: 2 } }).repeat, { interval: 45, limit: null });
+});
 
 test("choice state machine supports wrap, clamp, direct index, select, cancel, and invalid actions", () => {
   const state = new ChoiceStateMachine({ choices, wrap: true });
@@ -152,6 +158,51 @@ test("choice navigation speaks descriptions by default and can preserve headline
   assert.equal(enabled.at(-1), "Beta. second description", "default announces headline plus description");
   const disabled = await navigate({ descriptionOnNavigate: false });
   assert.equal(disabled.at(-1), "Beta", "disabled setting exactly preserves prior headline-only navigation");
+});
+
+test("pending choices repeat at the configured interval with finite and unlimited limits", async () => {
+  const exercise = async (repeat, repeatRuns) => {
+    const jobs = [];
+    const setTimer = (fn, ms) => { const job = { fn, ms, cancelled: false }; jobs.push(job); return job; };
+    const clearTimer = (job) => { if (job) job.cancelled = true; };
+    const runNext = () => {
+      const job = jobs.shift();
+      assert.ok(job && !job.cancelled, "a live repeat timer is queued");
+      job.fn();
+      return job.ms;
+    };
+    const spoken = [];
+    const h = harness();
+    createChoiceExtension({
+      speaker: { speak: async (text) => { spoken.push(text); }, interrupt() {}, dispose() {} },
+      persistedSettings: { choice: { timeoutMs: 0, repeat }, tts: {} },
+      setTimer,
+      clearTimer,
+    })(h.pi);
+    const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 0 }, null, null, h.ctx);
+    await Promise.resolve();
+    assert.equal(spoken.length, 1, "initial announcement is not counted as a repeat");
+    const delays = [];
+    for (let i = 0; i < repeatRuns; i += 1) {
+      delays.push(runNext());
+      await Promise.resolve();
+    }
+    return { h, pending, jobs, spoken, delays };
+  };
+
+  const finite = await exercise({ interval: 2.5, limit: 2 }, 2);
+  assert.deepEqual(finite.delays, [2500, 2500]);
+  assert.equal(finite.spoken.length, 3, "initial plus exactly two repeats");
+  assert.equal(finite.jobs.length, 0, "finite limit schedules no extra repeat");
+  finite.h.input("1");
+  await finite.pending;
+
+  const unlimited = await exercise({ interval: 1, limit: null }, 3);
+  assert.equal(unlimited.spoken.length, 4, "null limit remains unbounded");
+  assert.equal(unlimited.jobs.length, 1, "unlimited mode keeps the next repeat scheduled");
+  unlimited.h.input("1");
+  await unlimited.pending;
+  assert.equal(unlimited.jobs[0].cancelled, true, "selection clears the pending repeat timer");
 });
 
 test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and renders colored selection", async () => {
@@ -254,11 +305,12 @@ test("choice settings expand env affixes, persist literals, and leave option spe
       settingsPath,
       persistedSettings: { choice: {}, tts: {} },
     })(h.pi);
-    await h.commands.get("choice").handler("settings descriptions=false prefix='$AGENT_ID' suffix=' now'", h.ctx);
+    await h.commands.get("choice").handler("settings descriptions=false prefix='$AGENT_ID' suffix=' now' repeat.interval=1.5 repeat.limit=2", h.ctx);
     const saved = JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice;
     assert.equal(saved.prefix, undefined, "env-derived prefix is runtime-only");
     assert.equal(saved.suffix, " now");
     assert.equal(saved.descriptionOnNavigate, false);
+    assert.deepEqual(saved.repeat, { interval: 1.5, limit: 2 });
     const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
     await Promise.resolve();
     assert.match(spoken[0], /^agent-9: Pick now Option 1: Alpha/);

@@ -35,12 +35,19 @@ function boolSetting(value, fallback) {
   return fallback;
 }
 
-function resolveChoiceSettings(env, persisted = {}) {
+export function resolveChoiceSettings(env, persisted = {}) {
   const number = (envKey, field, fallback, min, max) => {
     const raw = env[envKey] ?? persisted[field];
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.trunc(parsed))) : fallback;
   };
+  const repeatIntervalRaw = env.PI_CHOICE_REPEAT_INTERVAL ?? persisted.repeat?.interval ?? 300;
+  const repeatInterval = Number(repeatIntervalRaw);
+  const repeatLimitRaw = env.PI_CHOICE_REPEAT_LIMIT ?? persisted.repeat?.limit ?? null;
+  const repeatLimitNumber = Number(repeatLimitRaw);
+  const repeatLimit = repeatLimitRaw == null || ["", "none", "null", "unlimited"].includes(String(repeatLimitRaw).trim().toLowerCase())
+    ? null
+    : Number.isFinite(repeatLimitNumber) && repeatLimitNumber >= 0 ? Math.trunc(repeatLimitNumber) : null;
   return {
     timeoutMs: number("PI_CHOICE_TIMEOUT_MS", "timeoutMs", DEFAULT_CHOICE_TIMEOUT_MS, 0, 300000),
     maxChoices: number("PI_CHOICE_MAX_CHOICES", "maxChoices", 9, 2, 9),
@@ -50,6 +57,10 @@ function resolveChoiceSettings(env, persisted = {}) {
     forceAtAgentEnd: boolSetting(env.PI_FORCE_CHOICE, boolSetting(persisted.forceAtAgentEnd, false)),
     prefix: expandEnvReferences(env.PI_CHOICE_PREFIX ?? persisted.prefix ?? "", env, "/choice prefix"),
     suffix: expandEnvReferences(env.PI_CHOICE_SUFFIX ?? persisted.suffix ?? "", env, "/choice suffix"),
+    repeat: {
+      interval: Number.isFinite(repeatInterval) && repeatInterval > 0 ? repeatInterval : 300,
+      limit: repeatLimit,
+    },
   };
 }
 
@@ -94,7 +105,7 @@ function resultText(result) {
   return `choice failed: ${result?.error || "unknown error"}`;
 }
 
-export function createChoiceExtension({ speaker, env = process.env, settingsPath, persistedSettings } = {}) {
+export function createChoiceExtension({ speaker, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   return function choiceExtension(pi) {
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
@@ -116,8 +127,10 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
     };
 
     const releaseChoiceUi = (record, result = null) => {
-      if (record.timer) clearTimeout(record.timer);
+      if (record.timer) clearTimer(record.timer);
       record.timer = null;
+      if (record.repeatTimer) clearTimer(record.repeatTimer);
+      record.repeatTimer = null;
       try { record.terminalUnsub?.(); } catch {}
       record.terminalUnsub = null;
       if (record.customDone) {
@@ -241,6 +254,8 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
           resolve,
           timeoutMs,
           timer: null,
+          repeatTimer: null,
+          repeatCount: 0,
           terminalUnsub: null,
           onAbort: null,
           warnedSpeech: false,
@@ -281,7 +296,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }
         // Keep the process alive while an interactive tool is awaiting input;
         // unlike background refresh timers, this timeout resolves a live call.
-        if (timeoutMs > 0) record.timer = setTimeout(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
+        if (timeoutMs > 0) record.timer = setTimer(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
         emitSession({
           status: "started",
           sessionId,
@@ -291,12 +306,28 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
           ring: params?.ring ?? null,
           prefix: promptPrefix,
           suffix: promptSuffix,
+          repeat: { ...choiceConfig.repeat },
         });
-        if (choiceConfig.speechEnabled) speakerController.speak(formatChoiceIntroduction(question, choices, state.index, { prefix: promptPrefix, suffix: promptSuffix })).catch((error) => {
+        const speakIntroduction = () => speakerController.speak(formatChoiceIntroduction(question, choices, state.index, { prefix: promptPrefix, suffix: promptSuffix })).catch((error) => {
           if (record.warnedSpeech || record.finished) return;
           record.warnedSpeech = true;
           try { ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
         });
+        const scheduleRepeat = () => {
+          if (!choiceConfig.speechEnabled || record.finished) return;
+          if (choiceConfig.repeat.limit != null && record.repeatCount >= choiceConfig.repeat.limit) return;
+          record.repeatTimer = setTimer(() => {
+            record.repeatTimer = null;
+            if (record.finished) return;
+            record.repeatCount += 1;
+            void speakIntroduction();
+            scheduleRepeat();
+          }, choiceConfig.repeat.interval * 1000);
+        };
+        if (choiceConfig.speechEnabled) {
+          void speakIntroduction();
+          scheduleRepeat();
+        }
       });
       return result;
     };
@@ -355,14 +386,14 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
           try {
             const parsed = parseEnvStyleArgs(raw.replace(/^settings\s*/i, ""));
             if (parsed.positionals.length) throw new Error(`/choice settings: unexpected '${parsed.positionals[0]}'`);
-            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "description", "descriptions", "description_on_navigate", "force", "force_at_end", "prefix", "suffix"]);
+            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "description", "descriptions", "description_on_navigate", "force", "force_at_end", "prefix", "suffix", "repeat.interval", "repeat_interval", "repeat.limit", "repeat_limit"]);
             for (const key of Object.keys(parsed.values)) if (!allowed.has(key)) throw new Error(`/choice settings: unknown '${key}'`);
             const number = (keys, field, min, max) => {
               const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
@@ -385,6 +416,25 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
               choiceConfig[field] = expandEnvReferences(parsed.values[key], env, `/choice ${key}`);
               if (!ENV_REFERENCE.test(String(parsed.values[key]))) persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
+            let repeatChanged = false;
+            const repeatIntervalKey = ["repeat.interval", "repeat_interval"].find((key) => Object.hasOwn(parsed.values, key));
+            if (repeatIntervalKey) {
+              const value = Number(parsed.values[repeatIntervalKey]);
+              if (!Number.isFinite(value) || value <= 0 || value > 86400) throw new Error(`/choice settings: ${repeatIntervalKey} must be greater than zero and at most 86400 seconds`);
+              choiceConfig.repeat.interval = value;
+              repeatChanged = true;
+            }
+            const repeatLimitKey = ["repeat.limit", "repeat_limit"].find((key) => Object.hasOwn(parsed.values, key));
+            if (repeatLimitKey) {
+              const rawLimit = String(parsed.values[repeatLimitKey]).trim().toLowerCase();
+              if (["", "none", "null", "unlimited"].includes(rawLimit)) choiceConfig.repeat.limit = null;
+              else {
+                const value = Number(rawLimit);
+                if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) throw new Error(`/choice settings: ${repeatLimitKey} must be a non-negative integer or null`);
+                choiceConfig.repeat.limit = value;
+              }
+              repeatChanged = true;
+            }
             number(["timeout", "timeout_ms"], "timeoutMs", 0, 300000);
             number(["max", "max_choices"], "maxChoices", 2, 9);
             boolean(["wrap"], "wrap");
@@ -393,7 +443,8 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
             boolean(["force", "force_at_end"], "forceAtAgentEnd", { persist: false });
             affix("prefix", "prefix");
             affix("suffix", "suffix");
-            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+            if (repeatChanged) persistChoiceSetting("repeat", { ...choiceConfig.repeat }, settingsPath);
+            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }
