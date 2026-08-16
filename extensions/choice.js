@@ -46,6 +46,7 @@ function resolveChoiceSettings(env, persisted = {}) {
     maxChoices: number("PI_CHOICE_MAX_CHOICES", "maxChoices", 9, 2, 9),
     wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
     speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
+    descriptionOnNavigate: boolSetting(env.PI_CHOICE_DESCRIPTION_ON_NAVIGATE, boolSetting(persisted.descriptionOnNavigate, true)),
     forceAtAgentEnd: boolSetting(env.PI_FORCE_CHOICE, boolSetting(persisted.forceAtAgentEnd, false)),
     prefix: expandEnvReferences(env.PI_CHOICE_PREFIX ?? persisted.prefix ?? "", env, "/choice prefix"),
     suffix: expandEnvReferences(env.PI_CHOICE_SUFFIX ?? persisted.suffix ?? "", env, "/choice suffix"),
@@ -174,11 +175,16 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         if (record.requestRender) { try { record.requestRender(); } catch {} }
         else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, outcome.index), { placement: "belowEditor" }); } catch {} }
         try { record.onUpdate?.({ content: [{ type: "text", text: `highlighted ${outcome.index + 1}: ${outcome.choice.headline}` }] }); } catch {}
-        if (outcome.changed && choiceConfig.speechEnabled) speakerController.speak(outcome.choice.headline).catch((error) => {
-          if (record.warnedSpeech) return;
-          record.warnedSpeech = true;
-          try { record.ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
-        });
+        if (outcome.changed && choiceConfig.speechEnabled) {
+          const navigationSpeech = choiceConfig.descriptionOnNavigate && outcome.choice.summary
+            ? `${outcome.choice.headline}. ${outcome.choice.summary}`
+            : outcome.choice.headline;
+          speakerController.speak(navigationSpeech).catch((error) => {
+            if (record.warnedSpeech) return;
+            record.warnedSpeech = true;
+            try { record.ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
+          });
+        }
       } else if (outcome.type === "selected") {
         finish(record, { status: "selected", index: outcome.index, choice: outcome.choice, source: outcome.source || input?.source || "event" });
       } else if (outcome.type === "cancelled") {
@@ -349,14 +355,14 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
           try {
             const parsed = parseEnvStyleArgs(raw.replace(/^settings\s*/i, ""));
             if (parsed.positionals.length) throw new Error(`/choice settings: unexpected '${parsed.positionals[0]}'`);
-            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "force", "force_at_end", "prefix", "suffix"]);
+            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "description", "descriptions", "description_on_navigate", "force", "force_at_end", "prefix", "suffix"]);
             for (const key of Object.keys(parsed.values)) if (!allowed.has(key)) throw new Error(`/choice settings: unknown '${key}'`);
             const number = (keys, field, min, max) => {
               const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
@@ -383,10 +389,11 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
             number(["max", "max_choices"], "maxChoices", 2, 9);
             boolean(["wrap"], "wrap");
             boolean(["speech", "speech_enabled"], "speechEnabled");
+            boolean(["description", "descriptions", "description_on_navigate"], "descriptionOnNavigate");
             boolean(["force", "force_at_end"], "forceAtAgentEnd", { persist: false });
             affix("prefix", "prefix");
             affix("suffix", "suffix");
-            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }

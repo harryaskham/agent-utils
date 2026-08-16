@@ -12,7 +12,7 @@ export const PERSISTED_NARRATE_FIELDS = Object.freeze(["enabled", "model", "spee
 export const PERSISTED_READ_FIELDS = Object.freeze(["enabled", "delayMs", "onDelay", "onSend", "speed"]);
 // forceAtAgentEnd is deliberately absent: it is read as startup policy, but
 // runtime choice controls must never rewrite it.
-export const PERSISTED_CHOICE_FIELDS = Object.freeze(["timeoutMs", "wrap", "maxChoices", "speechEnabled", "prefix", "suffix"]);
+export const PERSISTED_CHOICE_FIELDS = Object.freeze(["timeoutMs", "wrap", "maxChoices", "speechEnabled", "descriptionOnNavigate", "prefix", "suffix"]);
 export const PERSISTED_RING_INPUT_FIELDS = Object.freeze(["enabled", "ring", "command", "previousEvents", "nextEvents", "selectEvents", "cancelEvents"]);
 const TTS_FIELDS = new Set(PERSISTED_TTS_FIELDS);
 const NARRATE_FIELDS = new Set(PERSISTED_NARRATE_FIELDS);

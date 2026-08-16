@@ -128,6 +128,32 @@ test("choice extension resolves keyboard and external event inputs through one b
   assert.equal(sessions.at(-1).status, "ended");
 });
 
+test("choice navigation speaks descriptions by default and can preserve headline-only behavior", async () => {
+  const describedChoices = [
+    { label: "alpha", headline: "Alpha", summary: "first description" },
+    { label: "beta", headline: "Beta", summary: "second description" },
+  ];
+  const navigate = async (persistedChoice) => {
+    const spoken = [];
+    const h = harness();
+    createChoiceExtension({
+      speaker: { speak: async (text) => { spoken.push(text); }, interrupt() {}, dispose() {} },
+      persistedSettings: { choice: persistedChoice, tts: {} },
+    })(h.pi);
+    const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: describedChoices, timeoutMs: 1000 }, null, null, h.ctx);
+    await Promise.resolve();
+    h.input("j");
+    await Promise.resolve();
+    h.input("2");
+    await pending;
+    return spoken;
+  };
+  const enabled = await navigate({});
+  assert.equal(enabled.at(-1), "Beta. second description", "default announces headline plus description");
+  const disabled = await navigate({ descriptionOnNavigate: false });
+  assert.equal(disabled.at(-1), "Beta", "disabled setting exactly preserves prior headline-only navigation");
+});
+
 test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and renders colored selection", async () => {
   const h = harness();
   let component;
@@ -228,10 +254,11 @@ test("choice settings expand env affixes, persist literals, and leave option spe
       settingsPath,
       persistedSettings: { choice: {}, tts: {} },
     })(h.pi);
-    await h.commands.get("choice").handler("settings prefix='$AGENT_ID' suffix=' now'", h.ctx);
+    await h.commands.get("choice").handler("settings descriptions=false prefix='$AGENT_ID' suffix=' now'", h.ctx);
     const saved = JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice;
     assert.equal(saved.prefix, undefined, "env-derived prefix is runtime-only");
     assert.equal(saved.suffix, " now");
+    assert.equal(saved.descriptionOnNavigate, false);
     const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
     await Promise.resolve();
     assert.match(spoken[0], /^agent-9: Pick now Option 1: Alpha/);

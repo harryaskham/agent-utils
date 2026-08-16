@@ -56,6 +56,7 @@ wrap=true max=9 speech=true`:
       "wrap": true,
       "maxChoices": 9,
       "speechEnabled": true,
+      "descriptionOnNavigate": true,
       "prefix": "",
       "suffix": "",
       "forceAtAgentEnd": true
@@ -71,6 +72,12 @@ shutdown, or a selection still terminates the choice normally. The ring adapter
 keeps listening indefinitely by renewing its bounded `ring get` smart client
 every five minutes while that no-timeout choice remains active; navigation can
 continue for any number of gestures before selection.
+
+By default, moving the highlight speaks both the option headline and its
+`summary` description. Set `/choice settings descriptions=false`,
+`agentUtils.choice.descriptionOnNavigate=false`, or
+`PI_CHOICE_DESCRIPTION_ON_NAVIGATE=0` to restore headline-only navigation; the
+initial spoken option list still includes descriptions in either mode.
 
 Choice speech resolves the same `agentUtils.tts` voice, embedding, language,
 speed, style, endpoint, backend, server, and device used by `/read`, `/tts`, and
