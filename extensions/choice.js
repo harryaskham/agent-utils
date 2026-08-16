@@ -4,7 +4,7 @@
 // timeout, and keyboard controls; device adapters (such as ring-input.js) emit
 // the same semantic actions on CHOICE_INPUT_EVENT.
 
-import { parseEnvStyleArgs } from "./lib/env-args.js";
+import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import {
   INPUT_ACTION_EVENT,
@@ -25,6 +25,7 @@ import {
 } from "./lib/tts-settings.js";
 
 export const FORCE_CHOICE_CUSTOM_TYPE = "agent-utils-force-choice";
+const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
 
 function boolSetting(value, fallback) {
   if (value == null || String(value).trim() === "") return fallback;
@@ -46,6 +47,8 @@ function resolveChoiceSettings(env, persisted = {}) {
     wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
     speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
     forceAtAgentEnd: boolSetting(env.PI_FORCE_CHOICE, boolSetting(persisted.forceAtAgentEnd, false)),
+    prefix: expandEnvReferences(env.PI_CHOICE_PREFIX ?? persisted.prefix ?? "", env, "/choice prefix"),
+    suffix: expandEnvReferences(env.PI_CHOICE_SUFFIX ?? persisted.suffix ?? "", env, "/choice suffix"),
   };
 }
 
@@ -207,6 +210,8 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
       forcedRequestOutstanding = false;
       warnedUnsatisfiedForce = false;
       const choices = normalizeChoices(params?.choices);
+      const promptPrefix = params?.prefix !== undefined ? expandEnvReferences(params.prefix, env, "interactive_choice prefix") : choiceConfig.prefix;
+      const promptSuffix = params?.suffix !== undefined ? expandEnvReferences(params.suffix, env, "interactive_choice suffix") : choiceConfig.suffix;
       if (choices.length > choiceConfig.maxChoices) throw new Error(`choice: at most ${choiceConfig.maxChoices} choices are configured (maximum 9 for numeric selection)`);
       // A durable timeoutMs=0 is an operator policy, not merely a default: it
       // must defeat model-generated timeoutMs=30000 arguments.
@@ -278,8 +283,10 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
           choiceCount: choices.length,
           timeoutMs,
           ring: params?.ring ?? null,
+          prefix: promptPrefix,
+          suffix: promptSuffix,
         });
-        if (choiceConfig.speechEnabled) speakerController.speak(formatChoiceIntroduction(question, choices, state.index)).catch((error) => {
+        if (choiceConfig.speechEnabled) speakerController.speak(formatChoiceIntroduction(question, choices, state.index, { prefix: promptPrefix, suffix: promptSuffix })).catch((error) => {
           if (record.warnedSpeech || record.finished) return;
           record.warnedSpeech = true;
           try { ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
@@ -310,6 +317,8 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
           initialIndex: ToolSchema.Optional(ToolSchema.Integer({ minimum: 0, maximum: 8, description: "Initially highlighted zero-based index." })),
           wrap: ToolSchema.Optional(ToolSchema.Boolean({ description: "Wrap navigation at list ends (default true); false clamps." })),
           ring: ToolSchema.Optional(ToolSchema.String({ description: "Optional ring name accepted by the ring input adapter." })),
+          prefix: ToolSchema.Optional(ToolSchema.String({ description: "Speech-only text placed before the initial choice question." })),
+          suffix: ToolSchema.Optional(ToolSchema.String({ description: "Speech-only text placed after the initial choice question, before the unmodified options." })),
         }),
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
           try {
@@ -331,7 +340,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
     }
 
     pi.registerCommand("choice", {
-      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice cancel|status|settings key=value",
+      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice cancel|status|settings prefix='...' suffix='...' key=value",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         if (raw.toLowerCase() === "cancel") {
@@ -340,14 +349,14 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
           try {
             const parsed = parseEnvStyleArgs(raw.replace(/^settings\s*/i, ""));
             if (parsed.positionals.length) throw new Error(`/choice settings: unexpected '${parsed.positionals[0]}'`);
-            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "force", "force_at_end"]);
+            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "force", "force_at_end", "prefix", "suffix"]);
             for (const key of Object.keys(parsed.values)) if (!allowed.has(key)) throw new Error(`/choice settings: unknown '${key}'`);
             const number = (keys, field, min, max) => {
               const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
@@ -365,12 +374,19 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
               choiceConfig[field] = ["1", "true", "yes", "on"].includes(rawValue);
               if (persist) persistChoiceSetting(field, choiceConfig[field], settingsPath);
             };
+            const affix = (key, field) => {
+              if (!Object.hasOwn(parsed.values, key)) return;
+              choiceConfig[field] = expandEnvReferences(parsed.values[key], env, `/choice ${key}`);
+              if (!ENV_REFERENCE.test(String(parsed.values[key]))) persistChoiceSetting(field, choiceConfig[field], settingsPath);
+            };
             number(["timeout", "timeout_ms"], "timeoutMs", 0, 300000);
             number(["max", "max_choices"], "maxChoices", 2, 9);
             boolean(["wrap"], "wrap");
             boolean(["speech", "speech_enabled"], "speechEnabled");
             boolean(["force", "force_at_end"], "forceAtAgentEnd", { persist: false });
-            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+            affix("prefix", "prefix");
+            affix("suffix", "suffix");
+            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }

@@ -3,6 +3,14 @@
 // single/double quotes and backslash escaping. It is intentionally strict so
 // command handlers can report malformed input instead of silently guessing.
 
+export function expandEnvReferences(value, env = process.env, context = "arguments") {
+  return String(value ?? "").replace(/\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/g, (_match, plain, braced) => {
+    const name = plain || braced;
+    if (env[name] == null) throw new Error(`${context}: environment variable ${name} is not set`);
+    return String(env[name]);
+  });
+}
+
 export function parseEnvStyleArgs(input) {
   const text = String(input || "");
   const tokens = [];

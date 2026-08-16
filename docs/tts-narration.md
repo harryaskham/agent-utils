@@ -15,6 +15,7 @@ Neither mode requires the agent to call the `speak` tool.
 /tts off
 /tts status
 /tts voice=MAI-Voice-2 speed=2 style=hopeful styledegree=1.5
+/tts prefix='Agent: ' suffix=' End.'
 ```
 
 The extension listens to Pi's `message_end` lifecycle and joins only assistant
@@ -35,7 +36,10 @@ and defaults as `/read`:
 - Pulse output through `$PULSE_SERVER` and `$PULSE_SINK` / `@DEFAULT_SINK@`
 
 The command accepts the same voice, embedding, language, endpoint/key, and
-playback key/value settings as `/read`. Editor-only delay/on-send settings remain
+playback key/value settings as `/read`. Optional `prefix` and `suffix` wrap only
+the text sent to speech synthesis. They support safe shell-style environment
+expansion, for example `/tts prefix="$AGENT_ID"`; command substitutions are never
+executed. `PI_TTS_PREFIX` and `PI_TTS_SUFFIX` override durable values. Editor-only delay/on-send settings remain
 owned by `/read` and are rejected by `/tts`.
 
 The Pulse client/stream is named `/tts`. New synthesis aborts old synthesis and
@@ -67,13 +71,17 @@ API keys are never persisted.
       "styleDegree": null,
       "backend": "pulse",
       "device": "@DEFAULT_SINK@",
-      "speakToolEnabled": false
+      "speakToolEnabled": false,
+      "prefix": "",
+      "suffix": ""
     },
     "narrate": {
       "enabled": true,
       "model": "github-copilot/gpt-5.6-luna",
       "speed": 2,
-      "textEnabled": false
+      "textEnabled": false,
+      "prefix": "",
+      "suffix": ""
     }
   }
 }
@@ -100,6 +108,7 @@ playback where applicable; credentials are still never read from settings.
 ```text
 /narrate
 /narrate model=github-copilot/gpt-5.6-luna
+/narrate prefix="$AGENT_ID: " suffix=" done"
 /narrate text=false       # keep speech; omit retained text/context summaries
 /narrate off
 /narrate status
@@ -109,7 +118,9 @@ The default narration model is `github-copilot/gpt-5.6-luna`, overridable with
 `PI_NARRATE_MODEL` or the runtime command. Narration normally inherits
 `agentUtils.tts.speed`, but `agentUtils.narrate.speed`, `PI_NARRATE_SPEED`, or
 `/narrate speed=2` applies a per-call speech-rate override without changing
-verbatim `/tts` speed. Inference goes through Pi's first-party
+verbatim `/tts` speed. `prefix` and `suffix` independently wrap narration speech
+without changing retained summary text; `PI_NARRATE_PREFIX` and
+`PI_NARRATE_SUFFIX` override settings. Inference goes through Pi's first-party
 `ctx.modelRegistry.complete` surface, which owns provider authentication; the
 extension does not import the removed legacy `pi-ai` top-level `complete` export.
 

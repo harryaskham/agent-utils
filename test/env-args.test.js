@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
+import { expandEnvReferences, parseEnvStyleArgs } from "../extensions/lib/env-args.js";
 
 // Dedicated unit tests for the shared env/shell-like arg parser (bd-c18f9e).
 // NOTE on escapes: a JS string literal "a\\ b" is the 4-char runtime input
@@ -51,6 +51,12 @@ test("backslash escapes the next char, including space and trailing backslash", 
   assert.deepEqual(parseEnvStyleArgs("a\\\\b").positionals, ["a\\b"]);
   // A trailing backslash is appended literally.
   assert.deepEqual(parseEnvStyleArgs("ab\\").positionals, ["ab\\"]);
+});
+
+test("expands safe shell-style environment references without command substitution", () => {
+  assert.equal(expandEnvReferences("[$AGENT_ID] ${NODE}", { AGENT_ID: "worker-1", NODE: "ms-mac" }, "/narrate"), "[worker-1] ms-mac");
+  assert.equal(expandEnvReferences("plain text", {}, "/narrate"), "plain text");
+  assert.throws(() => expandEnvReferences("$MISSING", {}, "/narrate"), /\/narrate: environment variable MISSING is not set/);
 });
 
 test("an unclosed quote throws with a descriptive message", () => {

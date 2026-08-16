@@ -124,8 +124,8 @@ export function keyboardChoiceAction(data, choiceCount = 0) {
   return null;
 }
 
-export function formatChoiceIntroduction(question, choices, initialIndex = 0) {
-  const prompt = String(question ?? "").trim();
+export function formatChoiceIntroduction(question, choices, initialIndex = 0, { prefix = "", suffix = "" } = {}) {
+  const prompt = `${String(prefix ?? "")}${String(question ?? "").trim()}${String(suffix ?? "")}`;
   const normalized = normalizeChoices(choices);
   const index = Math.min(normalized.length - 1, Math.max(0, Math.trunc(Number(initialIndex) || 0)));
   const options = normalized.map((choice, i) => `Option ${i + 1}: ${choice.headline}${choice.summary ? `. ${choice.summary}` : ""}`);

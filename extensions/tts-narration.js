@@ -5,7 +5,7 @@
 // batches before/after with a cheap model and queues tagged custom context for
 // the next user turn without triggering or steering the active agent.
 
-import { parseEnvStyleArgs } from "./lib/env-args.js";
+import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
 import { runPiTextTurn } from "./lib/pi-inference.js";
 import {
   DEFAULT_NARRATION_MODEL,
@@ -45,10 +45,11 @@ const TTS_SETTING_FIELDS = Object.freeze({
   style: "style", styledegree: "styleDegree", style_degree: "styleDegree",
   endpoint: "endpoint", base_url: "endpoint", baseurl: "endpoint",
   backend: "backend", server: "server", device: "device", sink: "device",
+  prefix: "prefix", suffix: "suffix",
 });
 const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
 
-function ttsStatus(enabled, speech, env, enabledSource = "runtime") {
+function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "", suffix = "" } = {}) {
   const config = speech.getConfig();
   const optional = (value) => value == null || value === "" ? "none" : String(value);
   return [
@@ -64,6 +65,8 @@ function ttsStatus(enabled, speech, env, enabledSource = "runtime") {
     `endpoint:${source(config.endpoint, "AZURE_SPEECH_ENDPOINT", env)}`,
     `api-key:${source(config.apiKey, "AZURE_SPEECH_API_KEY", env)}`,
     `output:${config.backend}/${optional(config.device)}`,
+    `prefix:${prefix ? "set" : "none"}`,
+    `suffix:${suffix ? "set" : "none"}`,
     "stream:/tts",
   ].join(" · ");
 }
@@ -83,6 +86,8 @@ export function createTtsNarrationExtension({
     const speechController = speech || createAgentSpeechController({ env, initialConfig: resolvedTts.config });
     let ttsEnabled = resolvedTts.enabled;
     let ttsEnabledSource = resolvedTts.enabledSource;
+    let ttsPrefix = expandEnvReferences(resolvedTts.prefix, env, "/tts prefix");
+    let ttsSuffix = expandEnvReferences(resolvedTts.suffix, env, "/tts suffix");
     let narrateEnabled = resolvedNarrate.enabled;
     let narrateEnabledSource = resolvedNarrate.enabledSource;
     let narrationModel = resolvedNarrate.model;
@@ -91,6 +96,8 @@ export function createTtsNarrationExtension({
     let narrationSpeedSource = resolvedNarrate.speedSource;
     let narrationTextEnabled = resolvedNarrate.textEnabled;
     let narrationTextEnabledSource = resolvedNarrate.textEnabledSource;
+    let narrationPrefix = expandEnvReferences(resolvedNarrate.prefix, env, "/narrate prefix");
+    let narrationSuffix = expandEnvReferences(resolvedNarrate.suffix, env, "/narrate suffix");
     try {
       pi.ttsNarration = {
         isEnabled: () => ttsEnabled,
@@ -152,7 +159,7 @@ export function createTtsNarrationExtension({
             details: { phase, batchId: batch.id, model: response.model, toolNames: batch.calls.map((call) => call.name) },
           }, { deliverAs: "nextTurn", triggerTurn: false });
         }
-        speakBestEffort(text, ctx, "narrate speech", narrationSpeed ? { speed: narrationSpeed } : {});
+        speakBestEffort(`${narrationPrefix}${text}${narrationSuffix}`, ctx, "narrate speech", narrationSpeed ? { speed: narrationSpeed } : {});
         return text;
       } catch (error) {
         if (!controller.signal.aborted && narrateEnabled) warnOnce("narrate", error, ctx);
@@ -190,7 +197,7 @@ export function createTtsNarrationExtension({
           const key = `${message?.timestamp ?? ""}:${text}`;
           if (key !== lastPlainKey) {
             lastPlainKey = key;
-            speakBestEffort(text, ctx, "tts");
+            speakBestEffort(`${ttsPrefix}${text}${ttsSuffix}`, ctx, "tts");
           }
         }
       }
@@ -219,14 +226,14 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("tts", {
-      description: "Automatically speak every plain assistant text message verbatim. Usage: /tts [on|off|status|key=value ...]. Uses /read's native Azure settings/defaults.",
+      description: "Automatically speak every plain assistant text message verbatim. Usage: /tts [on|off|status|prefix='...' suffix='...' key=value ...]. Uses /read's native Azure settings/defaults.",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
         if (!raw || simple === "on") {
           ttsEnabled = true;
           ttsEnabledSource = "runtime";
-          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
+          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
           return;
         }
         if (simple === "off") {
@@ -237,21 +244,26 @@ export function createTtsNarrationExtension({
           return;
         }
         if (simple === "status") {
-          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
+          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
           return;
         }
         try {
           const parsed = parseEnvStyleArgs(raw);
           if (parsed.positionals.length) throw new Error(`/tts: unexpected argument '${parsed.positionals[0]}'`);
-          const config = speechController.apply(parsed.values);
-          for (const [key, rawValue] of Object.entries(parsed.values)) {
+          const { prefix, suffix, ...speechValues } = parsed.values;
+          if (prefix !== undefined) ttsPrefix = expandEnvReferences(prefix, env, "/tts prefix");
+          if (suffix !== undefined) ttsSuffix = expandEnvReferences(suffix, env, "/tts suffix");
+          const config = speechController.apply(speechValues);
+          for (const [key, rawValue] of Object.entries(speechValues)) {
             const field = TTS_SETTING_FIELDS[key];
             if (!field || ENV_REFERENCE.test(String(rawValue))) continue; // never materialize env-derived values
             persistTtsSetting(field, config[field], settingsPath);
           }
+          if (prefix !== undefined && !ENV_REFERENCE.test(String(prefix))) persistTtsSetting("prefix", ttsPrefix, settingsPath);
+          if (suffix !== undefined && !ENV_REFERENCE.test(String(suffix))) persistTtsSetting("suffix", ttsSuffix, settingsPath);
           ttsEnabled = true;
           ttsEnabledSource = "runtime";
-          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource), "info");
+          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
         } catch (error) {
           ctx.ui.notify(error?.message || String(error), "warning");
         }
@@ -259,7 +271,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("narrate", {
-      description: "Asynchronously narrate complete tool batches before/after with a fast model. Usage: /narrate [on|off|status|model=provider/id speed=2 text=false].",
+      description: "Asynchronously narrate complete tool batches before/after with a fast model. Usage: /narrate [on|off|status|model=provider/id speed=2 text=false prefix='...' suffix='...'].",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
@@ -275,7 +287,15 @@ export function createTtsNarrationExtension({
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             for (const key of Object.keys(parsed.values)) {
-              if (!new Set(["model", "enabled", "on", "speed", "text", "text_enabled"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!new Set(["model", "enabled", "on", "speed", "text", "text_enabled", "prefix", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+            }
+            if (parsed.values.prefix !== undefined) {
+              narrationPrefix = expandEnvReferences(parsed.values.prefix, env, "/narrate prefix");
+              if (!ENV_REFERENCE.test(String(parsed.values.prefix))) persistNarrateSetting("prefix", narrationPrefix, settingsPath);
+            }
+            if (parsed.values.suffix !== undefined) {
+              narrationSuffix = expandEnvReferences(parsed.values.suffix, env, "/narrate suffix");
+              if (!ENV_REFERENCE.test(String(parsed.values.suffix))) persistNarrateSetting("suffix", narrationSuffix, settingsPath);
             }
             if (parsed.values.model) {
               narrationModel = String(parsed.values.model).trim();
@@ -305,7 +325,7 @@ export function createTtsNarrationExtension({
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
-        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
+        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
       },
     });
 

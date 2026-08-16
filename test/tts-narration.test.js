@@ -34,7 +34,7 @@ import {
 } from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
 
-function harness({ runTextTurn, speech, settingsPath, persistedSettings = { tts: {}, narrate: {} } } = {}) {
+function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSettings = { tts: {}, narrate: {} } } = {}) {
   const commands = new Map();
   const handlers = new Map();
   const sent = [];
@@ -53,7 +53,7 @@ function harness({ runTextTurn, speech, settingsPath, persistedSettings = { tts:
     on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
     sendMessage(message, options) { sent.push({ message, options }); },
   };
-  createTtsNarrationExtension({ runTextTurn, speech, env: {}, settingsPath, persistedSettings })(pi);
+  createTtsNarrationExtension({ runTextTurn, speech, env, settingsPath, persistedSettings })(pi);
   const emit = (name, event) => { for (const fn of handlers.get(name) || []) fn(event, ctx); };
   return { pi, ctx, commands, handlers, sent, notifications, renderers, emit };
 }
@@ -109,7 +109,7 @@ test("speak tool enablement resolves env > agentUtils.tts > default", () => {
 
 test("durable TTS/narrate settings use env > persisted > defaults", () => {
   const tts = resolveAgentTtsSettings({
-    persisted: { enabled: true, voice: "PersistedVoice", speed: 1.25, device: "persisted-sink" },
+    persisted: { enabled: true, voice: "PersistedVoice", speed: 1.25, device: "persisted-sink", prefix: "Agent: ", suffix: " done" },
     env: { PI_TTS_VOICE: "EnvVoice", PULSE_SINK: "env-sink", PI_TTS_ENABLED: "0" },
   });
   assert.equal(tts.enabled, false);
@@ -118,9 +118,11 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(tts.config.speed, 1.25);
   assert.equal(tts.config.device, "env-sink");
   assert.equal(tts.config.apiKey, undefined, "API keys are never part of persisted resolution");
+  assert.equal(tts.prefix, "Agent: ");
+  assert.equal(tts.suffix, " done");
 
   const narrate = resolveNarrateSettings({
-    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2, textEnabled: false },
+    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2, textEnabled: false, prefix: "N: ", suffix: " end" },
     env: { PI_NARRATE_MODEL: "github-copilot/env" },
   });
   assert.equal(narrate.enabled, true);
@@ -131,6 +133,8 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(narrate.speedSource, "settings");
   assert.equal(narrate.textEnabled, false);
   assert.equal(narrate.textEnabledSource, "settings");
+  assert.equal(narrate.prefix, "N: ");
+  assert.equal(narrate.suffix, " end");
   const envText = resolveNarrateSettings({ persisted: { textEnabled: false }, env: { PI_NARRATE_TEXT_ENABLED: "true" } });
   assert.equal(envText.textEnabled, true, "env text policy overrides settings");
   assert.equal(envText.textEnabledSource, "env");
@@ -201,18 +205,22 @@ test("explicit /tts and /narrate setters persist only non-secret runtime values"
   };
   try {
     const h = harness({ speech, runTextTurn: async () => ({ text: "" }), settingsPath: path, persistedSettings: undefined });
-    await h.commands.get("tts").handler("voice=SavedVoice speed=1.6 api_key=temporary", h.ctx);
-    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2 text=false`, h.ctx);
+    await h.commands.get("tts").handler("voice=SavedVoice speed=1.6 prefix='T: ' suffix=' done' api_key=temporary", h.ctx);
+    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2 text=false prefix='N: ' suffix=' over'`, h.ctx);
     const all = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(all.unrelated, 7);
     assert.equal(all.agentUtils.tts.enabled, false, "runtime /tts toggle does not change startup policy");
     assert.equal(all.agentUtils.tts.voice, "SavedVoice");
     assert.equal(all.agentUtils.tts.speed, 1.6);
+    assert.equal(all.agentUtils.tts.prefix, "T: ");
+    assert.equal(all.agentUtils.tts.suffix, " done");
     assert.equal(all.agentUtils.tts.apiKey, undefined, "runtime API key is never persisted");
     assert.equal(all.agentUtils.narrate.enabled, false, "runtime /narrate toggle does not change startup policy");
     assert.equal(all.agentUtils.narrate.model, DEFAULT_NARRATION_MODEL);
     assert.equal(all.agentUtils.narrate.speed, 2);
     assert.equal(all.agentUtils.narrate.textEnabled, false);
+    assert.equal(all.agentUtils.narrate.prefix, "N: ");
+    assert.equal(all.agentUtils.narrate.suffix, " over");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -283,10 +291,10 @@ test("/tts speaks every plain assistant message verbatim without a speak tool ca
     async speak(text) { spoken.push(text); },
   };
   const h = harness({ speech, runTextTurn: async () => ({ text: "", model: DEFAULT_NARRATION_MODEL }) });
-  await h.commands.get("tts").handler("on", h.ctx);
+  await h.commands.get("tts").handler("prefix='Agent says: ' suffix=' End.'", h.ctx);
   h.emit("message_end", { message: { role: "assistant", timestamp: 1, content: [{ type: "text", text: "Exact plain response." }, { type: "thinking", thinking: "not spoken" }] } });
   await waitFor(() => spoken.length === 1);
-  assert.deepEqual(spoken, ["Exact plain response."]);
+  assert.deepEqual(spoken, ["Agent says: Exact plain response. End."]);
   // Same finalized message re-emission is deduplicated.
   h.emit("message_end", { message: { role: "assistant", timestamp: 1, content: [{ type: "text", text: "Exact plain response." }] } });
   await Promise.resolve();
@@ -307,8 +315,8 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
     const before = request.systemPrompt.includes("Begin with 'I am'");
     return { text: before ? "I am checking both sources." : "I found two matching records.", model: DEFAULT_NARRATION_MODEL };
   };
-  const h = harness({ speech, runTextTurn, persistedSettings: { tts: { speed: 1.4 }, narrate: { speed: 2 } } });
-  await h.commands.get("narrate").handler("on", h.ctx);
+  const h = harness({ speech, runTextTurn, env: { AGENT_ID: "worker-7" }, persistedSettings: { tts: { speed: 1.4 }, narrate: { enabled: true, speed: 2 } } });
+  await h.commands.get("narrate").handler("prefix='$AGENT_ID: ' suffix=' done'", h.ctx);
   h.emit("message_end", { message: { role: "assistant", content: [
     { type: "toolCall", id: "a", name: "read", arguments: { path: "a" } },
     { type: "toolCall", id: "b", name: "search", arguments: { query: "b" } },
@@ -328,7 +336,7 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
     assert.equal(entry.message.customType, TOOL_SUMMARY_CUSTOM_TYPE);
     assert.deepEqual(entry.options, { deliverAs: "nextTurn", triggerTurn: false });
   }
-  assert.deepEqual(spoken, ["I am checking both sources.", "I found two matching records."]);
+  assert.deepEqual(spoken, ["worker-7: I am checking both sources. done", "worker-7: I found two matching records. done"]);
   assert.deepEqual(spokenOverrides, [{ speed: 2 }, { speed: 2 }], "narration overrides shared tts speed per call");
 });
 

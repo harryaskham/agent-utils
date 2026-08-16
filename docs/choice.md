@@ -56,6 +56,8 @@ wrap=true max=9 speech=true`:
       "wrap": true,
       "maxChoices": 9,
       "speechEnabled": true,
+      "prefix": "",
+      "suffix": "",
       "forceAtAgentEnd": true
     }
   }
@@ -72,7 +74,12 @@ continue for any number of gestures before selection.
 
 Choice speech resolves the same `agentUtils.tts` voice, embedding, language,
 speed, style, endpoint, backend, server, and device used by `/read`, `/tts`, and
-the `speak` tool. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
+the `speak` tool. `agentUtils.choice.prefix` and `suffix` wrap only the initial
+question; option headlines and navigation speech remain unmodified. Set them with
+`/choice settings prefix="$AGENT_ID: " suffix=" please"`, override them per
+`interactive_choice` call with `prefix`/`suffix`, or use `PI_CHOICE_PREFIX` and
+`PI_CHOICE_SUFFIX`. Safe `$VAR`/`${VAR}` expansion is supported without command
+substitution. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
 
 ## Continuous control with `/force-choice`
 

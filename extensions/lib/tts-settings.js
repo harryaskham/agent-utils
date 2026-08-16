@@ -6,12 +6,13 @@ import { readJsonIfExists, agentSettingsPath } from "../pi-graphics/agent-io.js"
 export const PERSISTED_TTS_FIELDS = Object.freeze([
   "enabled", "provider", "voice", "lang", "speed", "embedding", "style",
   "styleDegree", "endpoint", "backend", "server", "device", "speakToolEnabled",
+  "prefix", "suffix",
 ]);
-export const PERSISTED_NARRATE_FIELDS = Object.freeze(["enabled", "model", "speed", "textEnabled"]);
+export const PERSISTED_NARRATE_FIELDS = Object.freeze(["enabled", "model", "speed", "textEnabled", "prefix", "suffix"]);
 export const PERSISTED_READ_FIELDS = Object.freeze(["enabled", "delayMs", "onDelay", "onSend", "speed"]);
 // forceAtAgentEnd is deliberately absent: it is read as startup policy, but
 // runtime choice controls must never rewrite it.
-export const PERSISTED_CHOICE_FIELDS = Object.freeze(["timeoutMs", "wrap", "maxChoices", "speechEnabled"]);
+export const PERSISTED_CHOICE_FIELDS = Object.freeze(["timeoutMs", "wrap", "maxChoices", "speechEnabled", "prefix", "suffix"]);
 export const PERSISTED_RING_INPUT_FIELDS = Object.freeze(["enabled", "ring", "command", "previousEvents", "nextEvents", "selectEvents", "cancelEvents"]);
 const TTS_FIELDS = new Set(PERSISTED_TTS_FIELDS);
 const NARRATE_FIELDS = new Set(PERSISTED_NARRATE_FIELDS);

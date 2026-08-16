@@ -96,6 +96,7 @@ test("keyboard input maps arrows, j/k, Enter, Escape, and one-indexed numeric ch
 test("choice normalization and spoken introduction include every option", () => {
   assert.deepEqual(normalizeChoices(["A", { label: "b", headline: "Bee", summary: "second" }]).map((c) => c.label), ["A", "b"]);
   assert.match(formatChoiceIntroduction("Pick", choices), /Pick Option 1: Alpha Option 2: Beta Option 3: Gamma Selected: Alpha/);
+  assert.match(formatChoiceIntroduction("Pick", choices, 0, { prefix: "Agent: ", suffix: " please" }), /^Agent: Pick please Option 1: Alpha/, "affixes wrap only the question before unmodified options");
   assert.throws(() => normalizeChoices(["one"]), /at least two/);
 });
 
@@ -107,9 +108,10 @@ test("choice extension resolves keyboard and external event inputs through one b
   const sessions = [];
   h.events.on(CHOICE_SESSION_EVENT, (event) => sessions.push(event));
 
-  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000, prefix: "Agent: ", suffix: " please" }, null, null, h.ctx);
   await Promise.resolve();
   assert.ok(h.widgets.has("agent-utils-choice"));
+  assert.match(spoken[0], /^Agent: Pick please Option 1: Alpha/, "interactive choice affixes wrap only the initial question");
   h.input("j");
   await Promise.resolve();
   assert.match(String(h.widgets.get("agent-utils-choice")?.[2]), /▶ 2\. Beta/);
@@ -211,6 +213,34 @@ test("choice extension honors persisted agentUtils.choice defaults", async () =>
   const timed = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2) }, null, null, h.ctx);
   assert.equal(timed.details.status, "timeout");
   assert.deepEqual(spoken, [], "persisted speechEnabled=false suppresses choice TTS");
+});
+
+test("choice settings expand env affixes, persist literals, and leave option speech unmodified", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "choice-affixes-"));
+  const settingsPath = join(dir, "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ agentUtils: { choice: {} } }, null, 2));
+  try {
+    const spoken = [];
+    const h = harness();
+    createChoiceExtension({
+      speaker: { speak: async (text) => { spoken.push(text); }, interrupt() {}, dispose() {} },
+      env: { AGENT_ID: "agent-9: " },
+      settingsPath,
+      persistedSettings: { choice: {}, tts: {} },
+    })(h.pi);
+    await h.commands.get("choice").handler("settings prefix='$AGENT_ID' suffix=' now'", h.ctx);
+    const saved = JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice;
+    assert.equal(saved.prefix, undefined, "env-derived prefix is runtime-only");
+    assert.equal(saved.suffix, " now");
+    const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+    await Promise.resolve();
+    assert.match(spoken[0], /^agent-9: Pick now Option 1: Alpha/);
+    h.input("j");
+    await Promise.resolve();
+    assert.equal(spoken.at(-1), "Beta", "navigation option speech has no prompt prefix/suffix");
+    h.input("2");
+    await pending;
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("/force-choice injects once at agent_end, requires interactive_choice, then rearms", async () => {
