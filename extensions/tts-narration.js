@@ -11,6 +11,7 @@ import {
   DEFAULT_NARRATION_MODEL,
   TOOL_SUMMARY_CUSTOM_TYPE,
   assistantPlainText,
+  assistantReasoningSummary,
   assistantToolCalls,
   buildNarrationRequest,
   createAgentSpeechController,
@@ -84,6 +85,8 @@ export function createTtsNarrationExtension({
     let narrationSpeedSource = resolvedNarrate.speedSource;
     let narrationTextEnabled = resolvedNarrate.textEnabled;
     let narrationTextEnabledSource = resolvedNarrate.textEnabledSource;
+    let narrationReasoningSummaries = resolvedNarrate.reasoningSummaries;
+    let narrationReasoningSummariesSource = resolvedNarrate.reasoningSummariesSource;
     let narrationPrefix = expandEnvReferences(resolvedNarrate.prefix, env, "/narrate prefix");
     let narrationSuffix = expandEnvReferences(resolvedNarrate.suffix, env, "/narrate suffix");
     try {
@@ -118,6 +121,20 @@ export function createTtsNarrationExtension({
 
     const stopNarrationWork = () => supersedeNarrationWork({ clearBatches: true });
 
+    const publishNarration = (batch, phase, text, ctx, model, source = "generated") => {
+      if (!text) return "";
+      if (narrationTextEnabled) {
+        pi.sendMessage({
+          customType: TOOL_SUMMARY_CUSTOM_TYPE,
+          content: `[tool summary][${phase}] ${text}`,
+          display: true,
+          details: { phase, source, batchId: batch.id, model, toolNames: batch.calls.map((call) => call.name) },
+        }, { deliverAs: "nextTurn", triggerTurn: false });
+      }
+      speakBestEffort(`${narrationPrefix}${text}${narrationSuffix}`, ctx, "narrate speech", narrationSpeed ? { speed: narrationSpeed } : {});
+      return text;
+    };
+
     const narratePhase = async (batch, phase, ctx) => {
       const generation = batch.generation;
       if (!narrateEnabled || batch.cancelled || generation !== narrationGeneration) return "";
@@ -137,18 +154,7 @@ export function createTtsNarrationExtension({
         if (!narrateEnabled || generation !== narrationGeneration || controller.signal.aborted) return "";
         const text = normalizeNarrationText(response.text, phase);
         if (!text) return "";
-        if (narrationTextEnabled) {
-          // Optional custom next-turn context participates in history but never
-          // impersonates the user or triggers the in-flight tool loop.
-          pi.sendMessage({
-            customType: TOOL_SUMMARY_CUSTOM_TYPE,
-            content: `[tool summary][${phase}] ${text}`,
-            display: true,
-            details: { phase, batchId: batch.id, model: response.model, toolNames: batch.calls.map((call) => call.name) },
-          }, { deliverAs: "nextTurn", triggerTurn: false });
-        }
-        speakBestEffort(`${narrationPrefix}${text}${narrationSuffix}`, ctx, "narrate speech", narrationSpeed ? { speed: narrationSpeed } : {});
-        return text;
+        return publishNarration(batch, phase, text, ctx, response.model);
       } catch (error) {
         if (!controller.signal.aborted && narrateEnabled) warnOnce("narrate", error, ctx);
         return "";
@@ -157,7 +163,7 @@ export function createTtsNarrationExtension({
       }
     };
 
-    const startToolBatch = (calls, ctx) => {
+    const startToolBatch = (calls, ctx, nativeBefore = null) => {
       if (!narrateEnabled || !calls.length) return;
       // A newer tool batch supersedes still-running summaries from an older one.
       // Tool execution itself remains untouched; only best-effort narration is
@@ -168,7 +174,9 @@ export function createTtsNarrationExtension({
       // Fire and retain the promise, but never return it from the Pi hook: tool
       // preflight/execution proceeds immediately. Post narration chains behind it
       // only to preserve audible before→after ordering.
-      batch.before = narratePhase(batch, "before", ctx);
+      batch.before = nativeBefore?.text
+        ? Promise.resolve(publishNarration(batch, "before", nativeBefore.text, ctx, nativeBefore.model, nativeBefore.source))
+        : narratePhase(batch, "before", ctx);
     };
 
     pi.registerMessageRenderer?.(TOOL_SUMMARY_CUSTOM_TYPE, (message, _options, theme) => ({
@@ -180,7 +188,9 @@ export function createTtsNarrationExtension({
       const message = event?.message;
       const calls = assistantToolCalls(message);
       const text = assistantPlainText(message);
-      if (ttsEnabled) {
+      const reasoningSummary = narrationReasoningSummaries ? normalizeNarrationText(assistantReasoningSummary(message), "before") : "";
+      const preamble = normalizeNarrationText(text, "before");
+      if (ttsEnabled && !(narrateEnabled && calls.length)) {
         if (text) {
           const key = `${message?.timestamp ?? ""}:${text}`;
           if (key !== lastPlainKey) {
@@ -190,7 +200,12 @@ export function createTtsNarrationExtension({
         }
       }
       if (narrateEnabled) {
-        if (calls.length) startToolBatch(calls, ctx);
+        if (calls.length) {
+          const nativeBefore = reasoningSummary
+            ? { text: reasoningSummary, source: "main-reasoning-summary", model: `${message?.provider || "main"}/${message?.model || "active"}` }
+            : preamble ? { text: preamble, source: "main-preamble", model: `${message?.provider || "main"}/${message?.model || "active"}` } : null;
+          startToolBatch(calls, ctx, nativeBefore);
+        }
         else if (text) supersedeNarrationWork(); // the final verbatim answer wins over stale narration
       }
       return undefined;
@@ -252,7 +267,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("narrate", {
-      description: "Asynchronously narrate complete tool batches before/after with a fast model. Usage: /narrate [on|off|status|model=provider/id speed=2 text=false prefix='...' suffix='...'].",
+      description: "Asynchronously narrate complete tool batches before/after. Usage: /narrate [on|off|status|reasoning_summaries=true model=provider/id speed=2 text=false prefix='...' suffix='...'].",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
@@ -268,7 +283,7 @@ export function createTtsNarrationExtension({
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             for (const key of Object.keys(parsed.values)) {
-              if (!new Set(["model", "enabled", "on", "speed", "text", "text_enabled", "prefix", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!new Set(["model", "enabled", "on", "speed", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
             if (parsed.values.prefix !== undefined) {
               narrationPrefix = expandEnvReferences(parsed.values.prefix, env, "/narrate prefix");
@@ -288,6 +303,11 @@ export function createTtsNarrationExtension({
               narrationSpeed = speed;
               narrationSpeedSource = "runtime";
             }
+            const reasoningRaw = parsed.values.reasoning_summaries ?? parsed.values.reasoningsummaries ?? parsed.values.reasoning;
+            if (reasoningRaw !== undefined) {
+              narrationReasoningSummaries = boolValue(reasoningRaw, "/narrate reasoning_summaries");
+              narrationReasoningSummariesSource = "runtime";
+            }
             const textRaw = parsed.values.text ?? parsed.values.text_enabled;
             if (textRaw !== undefined) {
               narrationTextEnabled = boolValue(textRaw, "/narrate text");
@@ -303,7 +323,7 @@ export function createTtsNarrationExtension({
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
-        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
+        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · reasoning-summaries:${narrationReasoningSummaries ? "prefer" : "off"} · reasoning-source:${narrationReasoningSummariesSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
       },
     });
 

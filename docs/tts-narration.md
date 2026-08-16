@@ -82,6 +82,7 @@ explicitly.
       "model": "github-copilot/gpt-5.6-luna",
       "speed": 2,
       "textEnabled": false,
+      "reasoningSummaries": true,
       "prefix": "",
       "suffix": ""
     }
@@ -111,6 +112,7 @@ playback where applicable; credentials are still never read from settings.
 /narrate
 /narrate model=github-copilot/gpt-5.6-luna
 /narrate prefix="$AGENT_ID: " suffix=" done"
+/narrate reasoning_summaries=true
 /narrate text=false       # keep speech; omit retained text/context summaries
 /narrate off
 /narrate status
@@ -127,16 +129,30 @@ without changing retained summary text; `PI_NARRATE_PREFIX` and
 extension does not import the removed legacy `pi-ai` top-level `complete` export.
 
 When an assistant message contains one or more tool calls, all sibling calls in
-that assistant message form one batch—even when Pi executes them in parallel:
+that assistant message form one batch—even when Pi executes them in parallel.
+Before tools run, narration uses this preference order:
 
-1. A non-blocking model request creates one short first-person preface beginning
-   with “I am …” for the complete batch.
-2. Pi executes tools normally; narration is never awaited by the tool lifecycle.
-3. After every sibling emits `tool_execution_end`, one non-blocking request
-   creates a short first-person outcome beginning with “I found …”, “I completed
-   …”, or “I learned …”.
-4. Each available narration is spoken immediately through the shared `/tts`
-   speech controller. Newer speech interrupts older playback.
+1. The main model's native visible reasoning-summary `thinking` block when
+   `reasoningSummaries` is enabled (the default).
+2. The main model's plain-text tool preamble.
+3. A non-blocking request to the configured narration model using the isolated
+   sanitized tool-batch payload.
+
+This lets GPT-5.6 Responses reasoning summaries benefit from the main agent's
+full context and avoids a redundant before-model call. `/narrate
+reasoning_summaries=false` disables only the first preference for the current
+session; `PI_NARRATE_REASONING_SUMMARIES` overrides the immutable startup value.
+Redacted thinking blocks are never narrated, and reasoning-summary reuse is
+restricted to OpenAI/Azure Responses messages so raw thinking from other
+provider protocols is never mistaken for a shareable summary. When `/tts` and `/narrate` are both
+enabled, `/narrate` owns tool-batch preambles so they are spoken only once.
+
+Pi executes tools normally; narration is never awaited by the tool lifecycle.
+After every sibling emits `tool_execution_end`, one non-blocking request creates
+a short natural outcome. Prompts ask for varied, non-formulaic sentence
+structure rather than forcing every message to begin with “I am” or “I found.”
+Each available narration is spoken immediately through the shared `/tts` speech
+controller; newer speech interrupts older playback.
 
 A newer tool batch or a final plain assistant answer aborts stale narration model
 requests. Errors and unavailable narration models are warnings only.

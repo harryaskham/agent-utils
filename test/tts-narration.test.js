@@ -8,6 +8,7 @@ import {
   DEFAULT_NARRATION_MODEL,
   TOOL_SUMMARY_CUSTOM_TYPE,
   assistantPlainText,
+  assistantReasoningSummary,
   assistantToolCalls,
   buildNarrationRequest,
   createAgentSpeechController,
@@ -76,14 +77,27 @@ test("assistant TTS extracts only plain text while tool batches retain parallel 
   assert.equal(calls[0].arguments.apiKey, "[REDACTED]");
 });
 
-test("narration helpers redact secrets, bound output, and force first-person one-line text", () => {
+test("assistant reasoning summaries extract visible native thinking and skip redacted blocks", () => {
+  const message = { role: "assistant", api: "openai-responses", content: [
+    { type: "thinking", thinking: "**Plan** I will inspect the active settings." },
+    { type: "thinking", thinking: "hidden", redacted: true },
+    { type: "text", text: "Working." },
+  ] };
+  assert.equal(assistantReasoningSummary(message), "**Plan** I will inspect the active settings.");
+  assert.equal(assistantReasoningSummary({ role: "user", api: "openai-responses", content: message.content }), "");
+  assert.equal(assistantReasoningSummary({ role: "assistant", api: "anthropic-messages", content: message.content }), "", "raw non-Responses thinking is never spoken as a reasoning summary");
+});
+
+test("narration helpers redact secrets, bound output, and produce one natural sentence", () => {
   assert.equal(redactNarrationText("Authorization: abc token=xyz Bearer top.secret"), "Authorization: [REDACTED] token=[REDACTED] Bearer [REDACTED]");
   assert.deepEqual(sanitizeNarrationValue({ password: "x", nested: { token: "y", ok: "z" } }), { password: "[REDACTED]", nested: { token: "[REDACTED]", ok: "z" } });
   assert.equal(toolResultText({ content: [{ type: "text", text: "api_key=hidden found 3 rows" }] }), "api_key=[REDACTED] found 3 rows");
-  assert.equal(normalizeNarrationText("checking the files", "before"), "I am checking the files.");
-  assert.equal(normalizeNarrationText("three rows matched", "after"), "I found three rows matched.");
+  assert.equal(normalizeNarrationText("checking the files", "before"), "checking the files.");
+  assert.equal(normalizeNarrationText("three rows matched", "after"), "three rows matched.");
+  assert.equal(normalizeNarrationText("**Planning the check** I will inspect the configuration. Then I will report it.", "before"), "I will inspect the configuration.");
   const request = buildNarrationRequest({ phase: "before", calls: [{ name: "read", arguments: { path: "a" } }] });
-  assert.match(request.systemPrompt, /exactly one short plain-text sentence/);
+  assert.match(request.systemPrompt, /exactly one short natural plain-text sentence/);
+  assert.match(request.systemPrompt, /avoid formulaic repeated openings/);
   assert.match(request.systemPrompt, /untrusted data/);
 });
 
@@ -117,7 +131,7 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(tts.suffix, " done");
 
   const narrate = resolveNarrateSettings({
-    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2, textEnabled: false, prefix: "N: ", suffix: " end" },
+    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2, textEnabled: false, reasoningSummaries: true, prefix: "N: ", suffix: " end" },
     env: { PI_NARRATE_MODEL: "github-copilot/env" },
   });
   assert.equal(narrate.enabled, true);
@@ -128,6 +142,8 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(narrate.speedSource, "settings");
   assert.equal(narrate.textEnabled, false);
   assert.equal(narrate.textEnabledSource, "settings");
+  assert.equal(narrate.reasoningSummaries, true);
+  assert.equal(narrate.reasoningSummariesSource, "settings");
   assert.equal(narrate.prefix, "N: ");
   assert.equal(narrate.suffix, " end");
   const envText = resolveNarrateSettings({ persisted: { textEnabled: false }, env: { PI_NARRATE_TEXT_ENABLED: "true" } });
@@ -191,11 +207,11 @@ test("explicit /tts and /narrate setters are runtime-only and never rewrite star
   try {
     const h = harness({ speech, runTextTurn: async () => ({ text: "" }), settingsPath: path, persistedSettings: undefined });
     await h.commands.get("tts").handler("voice=SavedVoice speed=1.6 prefix='T: ' suffix=' done' api_key=temporary", h.ctx);
-    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2 text=false prefix='N: ' suffix=' over'`, h.ctx);
+    await h.commands.get("narrate").handler(`enabled=true model=${DEFAULT_NARRATION_MODEL} speed=2 text=false reasoning_summaries=false prefix='N: ' suffix=' over'`, h.ctx);
     assert.equal(readFileSync(path, "utf8"), startup, "all startup values remain byte-for-byte immutable");
     assert.equal(config.voice, "SavedVoice");
     assert.equal(config.speed, 1.6);
-    assert.ok(h.notifications.some(({ message }) => /model:github-copilot\/gpt-5\.6-luna/.test(message) && /speed:2/.test(message) && /text:off/.test(message)));
+    assert.ok(h.notifications.some(({ message }) => /model:github-copilot\/gpt-5\.6-luna/.test(message) && /speed:2/.test(message) && /text:off/.test(message) && /reasoning-summaries:off/.test(message)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -243,7 +259,7 @@ test("persisted enabled modes are active immediately at extension startup", asyn
     apply() {}, interrupt() {}, dispose() {}, async speak(text) { spoken.push(text); },
   };
   const runTextTurn = async (_ctx, request) => ({
-    text: request.systemPrompt.includes("Begin with 'I am'") ? "I am checking." : "I found it healthy.",
+    text: request.systemPrompt.includes("immediate work") ? "I am checking." : "I found it healthy.",
     model: DEFAULT_NARRATION_MODEL,
   });
   const h = harness({ speech, runTextTurn, persistedSettings: { tts: { enabled: true }, narrate: { enabled: true, model: DEFAULT_NARRATION_MODEL } } });
@@ -276,6 +292,51 @@ test("/tts speaks every plain assistant message verbatim without a speak tool ca
   assert.equal(spoken.length, 1);
 });
 
+test("/narrate prefers the main model reasoning summary before tools and generates only the outcome", async () => {
+  const spoken = [];
+  const inference = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "v", lang: "en", speed: 1, embedding: null, style: null, styleDegree: null, backend: "pulse", device: "d" }),
+    apply() {}, interrupt() {}, dispose() {}, async speak(text) { spoken.push(text); },
+  };
+  const runTextTurn = async (_ctx, request) => { inference.push(request); return { text: "The configuration is healthy.", model: DEFAULT_NARRATION_MODEL }; };
+  const h = harness({ speech, runTextTurn, persistedSettings: { tts: {}, narrate: { enabled: true, textEnabled: false, reasoningSummaries: true } } });
+  h.emit("message_end", { message: { role: "assistant", api: "openai-responses", provider: "github-copilot", model: "gpt-5.6-sol", content: [
+    { type: "thinking", thinking: "**Checking configuration** I will inspect the active startup settings. Then I will verify the runtime." },
+    { type: "text", text: "I’ll take a look." },
+    { type: "toolCall", id: "a", name: "read", arguments: {} },
+  ] } });
+  await waitFor(() => spoken.length === 1);
+  assert.equal(spoken[0], "I will inspect the active startup settings.");
+  assert.equal(inference.length, 0, "native reasoning summary avoids a redundant before-model call");
+  h.emit("tool_execution_end", { toolCallId: "a", toolName: "read", result: { content: [{ type: "text", text: "healthy" }] }, isError: false });
+  await waitFor(() => spoken.length === 2);
+  assert.equal(spoken[1], "The configuration is healthy.");
+  assert.equal(inference.length, 1, "after-tool outcome still uses the configured narration model");
+});
+
+test("/narrate falls back from missing reasoning summary to the main model preamble", async () => {
+  const spoken = [];
+  const inference = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "v", lang: "en", speed: 1, embedding: null, style: null, styleDegree: null, backend: "pulse", device: "d" }),
+    apply() {}, interrupt() {}, dispose() {}, async speak(text) { spoken.push(text); },
+  };
+  const runTextTurn = async (_ctx, request) => { inference.push(request); return { text: "Everything passed.", model: DEFAULT_NARRATION_MODEL }; };
+  const h = harness({ speech, runTextTurn, persistedSettings: { tts: { enabled: true }, narrate: { enabled: true, textEnabled: false, reasoningSummaries: true } } });
+  h.emit("message_end", { message: { role: "assistant", content: [
+    { type: "text", text: "I’ll verify the focused checks." },
+    { type: "toolCall", id: "a", name: "bash", arguments: {} },
+  ] } });
+  await waitFor(() => spoken.length === 1);
+  assert.equal(spoken[0], "I’ll verify the focused checks.");
+  assert.equal(spoken.length, 1, "automatic /tts does not duplicate a tool-batch preamble owned by /narrate");
+  assert.equal(inference.length, 0);
+  h.emit("tool_execution_end", { toolCallId: "a", toolName: "bash", result: { content: [{ type: "text", text: "pass" }] }, isError: false });
+  await waitFor(() => spoken.length === 2);
+  assert.equal(inference.length, 1);
+});
+
 test("/narrate batches parallel tools into one pre/post summary, speaks both, and injects no-trigger next-turn context", async () => {
   const spoken = [];
   const spokenOverrides = [];
@@ -287,7 +348,7 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
   const inference = [];
   const runTextTurn = async (_ctx, request) => {
     inference.push(request);
-    const before = request.systemPrompt.includes("Begin with 'I am'");
+    const before = request.systemPrompt.includes("immediate work");
     return { text: before ? "I am checking both sources." : "I found two matching records.", model: DEFAULT_NARRATION_MODEL };
   };
   const h = harness({ speech, runTextTurn, env: { AGENT_ID: "worker-7" }, persistedSettings: { tts: { speed: 1.4 }, narrate: { enabled: true, speed: 2 } } });
@@ -322,7 +383,7 @@ test("textEnabled=false speaks tool narration without retaining custom summary m
     apply() {}, interrupt() {}, dispose() {}, async speak(text) { spoken.push(text); },
   };
   const runTextTurn = async (_ctx, request) => ({
-    text: request.systemPrompt.includes("Begin with 'I am'") ? "I am checking it." : "I found it healthy.",
+    text: request.systemPrompt.includes("immediate work") ? "I am checking it." : "I found it healthy.",
     model: DEFAULT_NARRATION_MODEL,
   });
   const h = harness({ speech, runTextTurn, persistedSettings: { tts: {}, narrate: { enabled: true, textEnabled: false } } });
