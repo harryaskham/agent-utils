@@ -64,6 +64,7 @@
       "./extensions/endless.js",
       "./extensions/interactive-shell.js",
       "./extensions/self-compact.js",
+      "./extensions/scrub.js",
       "./extensions/git-behind-warning.js",
       "./extensions/copilot-auth-refresh.js",
       "./extensions/pi-self-update.js",

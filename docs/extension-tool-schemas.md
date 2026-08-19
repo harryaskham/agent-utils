@@ -57,6 +57,7 @@ by importing the extension module itself.
 | `pi-self-update.js` | `lib/tool-schema.js` shim | Yes |
 | `realtime-agent.js` | `lib/tool-schema.js` shim | Yes |
 | `self-compact.js` | `lib/tool-schema.js` shim | Yes |
+| `scrub.js` | `lib/tool-schema.js` shim | Yes |
 | `xvfb.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `firecracker-vm.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `app-automation.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
