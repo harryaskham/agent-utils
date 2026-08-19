@@ -12,12 +12,16 @@ import scrubExtension, {
   inspectSessionFile,
   undoPathFor,
   listArchivedUndos,
+  isForeignItemOwnershipError,
+  SCRUB_RETRY_PREFIX,
 } from "../extensions/scrub.js";
 
 function makeHarness() {
   const tools = new Map();
   const commands = new Map();
   const notifications = [];
+  const handlers = new Map();
+  const sent = [];
 
   const pi = {
     registerTool(definition) {
@@ -25,6 +29,12 @@ function makeHarness() {
     },
     registerCommand(name, definition) {
       commands.set(name, definition);
+    },
+    on(name, handler) {
+      handlers.set(name, handler);
+    },
+    sendUserMessage(text, options) {
+      sent.push({ text, options });
     },
   };
 
@@ -45,7 +55,7 @@ function makeHarness() {
     },
   });
 
-  return { pi, tools, commands, notifications, createCtx };
+  return { pi, tools, commands, handlers, notifications, sent, createCtx };
 }
 
 test("sanitizeMessage strips thinkingSignature, textSignature, thoughtSignature, and pipes in tool IDs", () => {
@@ -219,7 +229,7 @@ test("registers /scrub command and scrub_session tool with undo, status, and scr
 
   // Status via slash command
   await h.commands.get("scrub").handler("status", ctx);
-  assert.ok(h.notifications.some((n) => n.msg.includes("Session has stale signatures: 1 entries")));
+  assert.ok(h.notifications.some((n) => n.msg.includes("contains connection-bound Responses metadata in 1 entries")));
 
   // Scrub via tool
   const tool = h.tools.get("scrub_session");
@@ -240,6 +250,84 @@ test("registers /scrub command and scrub_session tool with undo, status, and scr
   const inspectAfterUndo = inspectSessionFile(sessionFile);
   assert.equal(inspectAfterUndo.clean, false);
 
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("ownership-error classifier is exact and ignores unrelated provider errors", () => {
+  assert.equal(isForeignItemOwnershipError({ role: "assistant", stopReason: "error", errorMessage: "OpenAI API error (401): input item ID does not belong to this connection" }), true);
+  assert.equal(isForeignItemOwnershipError({ role: "assistant", stopReason: "error", errorMessage: "OpenAI API error (401): invalid API key" }), false);
+  assert.equal(isForeignItemOwnershipError({ role: "assistant", stopReason: "stop", content: "input item ID does not belong to this connection" }), false);
+});
+
+test("restart/session_start preserves healthy Responses continuity metadata", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scrub-restart-"));
+  const sessionFile = path.join(tmpDir, "s.jsonl");
+  const entry = {
+    type: "message", id: "m1", message: { role: "assistant", content: [
+      { type: "thinking", thinking: "summary", thinkingSignature: '{"type":"reasoning","id":"rs_live","encrypted_content":"opaque"}' },
+      { type: "toolCall", id: "call_live|fc_live", name: "read", arguments: {} },
+    ] },
+  };
+  const raw = JSON.stringify(entry) + "\n";
+  fs.writeFileSync(sessionFile, raw);
+  const h = makeHarness();
+  scrubExtension(h.pi);
+  assert.equal(h.handlers.has("session_start"), false, "restart is deliberately not a scrub boundary");
+  assert.equal(fs.readFileSync(sessionFile, "utf8"), raw);
+  assert.equal(entry.message.content[0].thinkingSignature.includes("rs_live"), true);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("exact ownership rejection scrubs live/disk state and queues one bounded retry", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scrub-recovery-"));
+  const sessionFile = path.join(tmpDir, "s.jsonl");
+  const entry = {
+    type: "message", id: "m1", message: { role: "assistant", content: [
+      { type: "thinking", thinking: "summary", thinkingSignature: "rs_foreign" },
+      { type: "toolCall", id: "call_1|fc_foreign", name: "read", arguments: {} },
+    ] },
+  };
+  fs.writeFileSync(sessionFile, JSON.stringify(entry) + "\n");
+  const h = makeHarness();
+  scrubExtension(h.pi);
+  const ctx = h.createCtx(sessionFile, [entry]);
+  const event = { messages: [
+    { role: "user", content: [{ type: "text", text: "continue work" }] },
+    { role: "assistant", stopReason: "error", errorMessage: "OpenAI API error (401): input item ID does not belong to this connection", timestamp: 1 },
+  ] };
+  await h.handlers.get("agent_end")(event, ctx);
+  assert.equal(entry.message.content[0].thinkingSignature, undefined);
+  assert.equal(entry.message.content[1].id, "call_1");
+  assert.equal(inspectSessionFile(sessionFile).clean, true);
+  assert.deepEqual(h.sent, [{ text: `${SCRUB_RETRY_PREFIX}continue work`, options: { deliverAs: "followUp" } }]);
+
+  // A fresh provider error timestamp for the injected retry still shares the
+  // original request's one-retry budget and cannot create a loop.
+  const retryEvent = { messages: [
+    { role: "user", content: [{ type: "text", text: `${SCRUB_RETRY_PREFIX}continue work` }] },
+    { role: "assistant", stopReason: "error", errorMessage: "input item ID does not belong to this connection", timestamp: 2 },
+  ] };
+  await h.handlers.get("agent_end")(retryEvent, ctx);
+  assert.equal(h.sent.length, 1);
+  assert.ok(h.notifications.some((n) => /already retried/.test(n.msg)));
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("unrelated 401 does not scrub or retry", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scrub-unrelated-"));
+  const sessionFile = path.join(tmpDir, "s.jsonl");
+  const entry = { type: "message", id: "m1", message: { role: "assistant", content: [{ type: "text", text: "x", textSignature: "valid" }] } };
+  const raw = JSON.stringify(entry) + "\n";
+  fs.writeFileSync(sessionFile, raw);
+  const h = makeHarness();
+  scrubExtension(h.pi);
+  await h.handlers.get("agent_end")({ messages: [
+    { role: "user", content: [{ type: "text", text: "work" }] },
+    { role: "assistant", stopReason: "error", errorMessage: "OpenAI API error (401): invalid token", timestamp: 1 },
+  ] }, h.createCtx(sessionFile, [entry]));
+  assert.equal(fs.readFileSync(sessionFile, "utf8"), raw);
+  assert.equal(entry.message.content[0].textSignature, "valid");
+  assert.deepEqual(h.sent, []);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

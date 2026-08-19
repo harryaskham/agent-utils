@@ -1,11 +1,12 @@
 // Pi extension: `/scrub` slash command & `scrub_session` tool.
 //
-// Cleans stale Responses API item signatures (thinkingSignature, textSignature,
-// thoughtSignature) and foreign tool-call item IDs ("callId|itemId" -> "callId")
-// from session JSONL and live context entries.
+// Removes Responses API connection-bound item signatures (thinkingSignature,
+// textSignature, thoughtSignature) and tool-call item IDs ("callId|itemId" ->
+// "callId") from session JSONL and live context entries after an exact provider
+// ownership rejection. Their presence is normal and preserves encrypted
+// reasoning/tool continuity; restart is deliberately not a scrub boundary.
 //
-// This enables sessions to continue across Copilot account switches or
-// model/transport migrations without failing upstream with:
+// This recovers sessions when a provider/account/transport migration fails with:
 // "401/400: input item ID does not belong to this connection" (earendil-works/pi#3139).
 //
 // Supports:
@@ -21,6 +22,28 @@ import path from "node:path";
 import { ToolSchema } from "./lib/tool-schema.js";
 
 const FALSE_RE = /^(0|false|off|no|disabled)$/i;
+export const SCRUB_RETRY_PREFIX =
+  "Responses session portability recovery removed item IDs rejected by the current provider connection. Retry the previous request now:\n\n";
+export const MAX_SCRUB_RECOVERY_RETRIES = 1;
+
+export function isForeignItemOwnershipError(message) {
+  const text = String(message?.errorMessage || message?.content || "");
+  return message?.role === "assistant" && message?.stopReason === "error" &&
+    /input item ID does not belong to this connection/i.test(text);
+}
+
+function messageText(message) {
+  const content = message?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((part) => part?.type === "text").map((part) => part.text || "").join("\n").trim();
+}
+
+export function underlyingScrubRetryText(text) {
+  let value = String(text || "");
+  while (value.startsWith(SCRUB_RETRY_PREFIX)) value = value.slice(SCRUB_RETRY_PREFIX.length);
+  return value;
+}
 
 function envBool(name, fallback = true) {
   const value = process.env[name];
@@ -430,6 +453,9 @@ export function scrubInMemorySession(ctx) {
 
 export default function scrubExtension(pi) {
   if (!envBool("PI_SCRUB_TOOL", true)) return;
+  let recoveryBudgetText = null;
+  let recoveryBudgetCount = 0;
+  let lastRecoveryKey = null;
 
   function resolveCurrentSessionPath(ctx) {
     const sm = ctx?.sessionManager;
@@ -440,9 +466,42 @@ export default function scrubExtension(pi) {
     return null;
   }
 
+  // Do not scrub on session_start or reload. Responses reasoning signatures
+  // intentionally preserve continuity across Pi restarts. Scrubbing is a
+  // recovery action only after the provider explicitly rejects ownership.
+  pi.on?.("agent_end", async (event, ctx) => {
+    const messages = Array.isArray(event?.messages) ? event.messages : [];
+    const lastAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
+    if (!isForeignItemOwnershipError(lastAssistant)) return;
+    const lastUser = [...messages].reverse().find((message) => message?.role === "user");
+    const retryText = underlyingScrubRetryText(messageText(lastUser));
+    if (!retryText) return;
+    const recoveryKey = `${lastAssistant?.timestamp || ""}:${retryText}`;
+    if (recoveryKey === lastRecoveryKey) return;
+    lastRecoveryKey = recoveryKey;
+    if (retryText !== recoveryBudgetText) {
+      recoveryBudgetText = retryText;
+      recoveryBudgetCount = 0;
+    }
+    if (recoveryBudgetCount >= MAX_SCRUB_RECOVERY_RETRIES) {
+      ctx?.ui?.notify?.("Responses item ownership recovery already retried this request once; not creating a loop. Run /scrub manually only after inspecting provider/session state.", "error");
+      return;
+    }
+    recoveryBudgetCount += 1;
+    scrubInMemorySession(ctx);
+    const sessionPath = resolveCurrentSessionPath(ctx);
+    const disk = sessionPath ? scrubSessionFile(sessionPath) : { ok: true, changed: false };
+    if (!disk.ok) {
+      ctx?.ui?.notify?.(`Responses ownership recovery could not scrub the session file: ${disk.error}`, "error");
+      return;
+    }
+    ctx?.ui?.notify?.(`Responses provider rejected connection-bound item IDs; scrubbed rejected continuity metadata and queued one retry (${recoveryBudgetCount}/${MAX_SCRUB_RECOVERY_RETRIES}).`, "warning");
+    pi.sendUserMessage?.(`${SCRUB_RETRY_PREFIX}${retryText}`, { deliverAs: "followUp" });
+  });
+
   // Register the /scrub slash command
   pi.registerCommand?.("scrub", {
-    description: "Scrub stale Responses API item IDs and signatures from session history to allow account switching. Usage: /scrub [undo|status|<file>]. Idempotent: a clean session is left untouched and its undo backup is never replaced.",
+    description: "Manually remove Responses API connection-bound item IDs/signatures after an ownership rejection. Usage: /scrub [undo|status|<file>]. Restart alone does not require scrubbing; idempotent clean sessions are untouched.",
     handler: async (args, ctx) => {
       const trimmed = String(args || "").trim();
       const firstArg = trimmed.split(/\s+/)[0]?.toLowerCase();
@@ -480,10 +539,10 @@ export default function scrubExtension(pi) {
           : "";
         if (status.clean) {
           const undoMsg = status.hasUndo ? ` (Undo available: ${path.basename(status.undoPath)})` : "";
-          ctx.ui?.notify?.(`Session is clean: 0 stale item IDs or signatures.${undoMsg}${archiveMsg}`, "info");
+          ctx.ui?.notify?.(`Session contains no connection-bound Responses item IDs or signatures.${undoMsg}${archiveMsg}`, "info");
         } else {
           ctx.ui?.notify?.(
-            `Session has stale signatures: ${status.stats.entriesNeedingScrub} entries (${status.stats.thinkingSignatures} thinking, ${status.stats.textSignatures} text, ${status.stats.toolCallIds} tool calls). Run /scrub to clean.${archiveMsg}`,
+            `Session contains connection-bound Responses metadata in ${status.stats.entriesNeedingScrub} entries (${status.stats.thinkingSignatures} thinking signatures, ${status.stats.textSignatures} text signatures, ${status.stats.toolCallIds} tool IDs). This is normal in a healthy session; scrub only after an ownership rejection.${archiveMsg}`,
             "warning"
           );
         }
@@ -518,10 +577,10 @@ export default function scrubExtension(pi) {
       name: "scrub_session",
       label: "Scrub Session",
       description:
-        "Scrub stale Responses API item signatures (thinkingSignature, textSignature, thoughtSignature) and foreign tool-call item IDs (callId|itemId) from session history. Fixes '401/400: input item ID does not belong to this connection' after Copilot account switching. Supports action='scrub', 'undo', or 'status'.",
+        "Manually scrub Responses API connection-bound signatures and tool item IDs after an exact ownership rejection. Their presence is normal and preserves reasoning continuity; Pi restart alone must not trigger scrubbing. Supports action='scrub', 'undo', or 'status'.",
       parameters: ToolSchema.object({
         action: ToolSchema.stringEnum(["scrub", "undo", "status"], {
-          description: "Action to perform: scrub (default), undo (restore from backup), or status (check for stale signatures).",
+          description: "Action: scrub after an ownership rejection, undo the last scrub, or status to inspect connection-bound metadata without diagnosing it as stale.",
         }),
         sessionFile: ToolSchema.string({
           description: "Optional session JSONL file path. Defaults to the current active session file.",
@@ -554,8 +613,8 @@ export default function scrubExtension(pi) {
                 type: "text",
                 text: res.ok
                   ? res.clean
-                    ? `Session is clean. No stale signatures or item IDs found.${res.hasUndo ? " (Undo backup exists)" : ""}`
-                    : `Session has stale signatures: ${res.stats.entriesNeedingScrub} entries need scrubbing (${res.stats.thinkingSignatures} thinking, ${res.stats.textSignatures} text, ${res.stats.toolCallIds} tool calls).`
+                    ? `Session contains no connection-bound Responses signatures or item IDs.${res.hasUndo ? " (Undo backup exists)" : ""}`
+                    : `Session contains connection-bound Responses metadata in ${res.stats.entriesNeedingScrub} entries (${res.stats.thinkingSignatures} thinking signatures, ${res.stats.textSignatures} text signatures, ${res.stats.toolCallIds} tool IDs). This is normal unless the provider rejected ownership.`
                   : `Error: ${res.error}`,
               },
             ],
