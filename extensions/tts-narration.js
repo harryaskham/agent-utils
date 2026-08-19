@@ -25,6 +25,7 @@ import {
   readPersistedNarrateSettings,
   readPersistedTtsSettings,
 } from "./lib/tts-settings.js";
+import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js";
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -66,6 +67,7 @@ export function createTtsNarrationExtension({
   runTextTurn = runPiTextTurn,
   settingsPath,
   persistedSettings,
+  runtimeSettings,
 } = {}) {
   return function ttsNarrationExtension(pi) {
     const persistedTts = persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath);
@@ -89,6 +91,51 @@ export function createTtsNarrationExtension({
     let narrationReasoningSummariesSource = resolvedNarrate.reasoningSummariesSource;
     let narrationPrefix = expandEnvReferences(resolvedNarrate.prefix, env, "/narrate prefix");
     let narrationSuffix = expandEnvReferences(resolvedNarrate.suffix, env, "/narrate suffix");
+
+    // Session-durable runtime overrides (bd-4dd60f). `/tts on` is scoped to this
+    // session, not written to settings.json — but a `/restart` does not end the
+    // session, so the toggle has to survive one. Accumulated k=v speech values
+    // are stored raw and replayed through the same `apply()` the command uses,
+    // so restore cannot drift from the live path.
+    const durable = runtimeSettings || createSessionRuntimeSettings(pi);
+    let ttsSpeechValues = {};
+
+    const rememberTts = (patch) => { try { durable.merge("tts", patch); } catch {} };
+    const rememberNarrate = (patch) => { try { durable.merge("narrate", patch); } catch {} };
+
+    const rememberTtsSpeechValues = (values) => {
+      if (!values || Object.keys(values).length === 0) return;
+      ttsSpeechValues = { ...ttsSpeechValues, ...values };
+      rememberTts({ speech: ttsSpeechValues });
+    };
+
+    pi.on?.("session_start", (_event, ctx) => {
+      let saved;
+      try { saved = durable.restore(ctx); } catch { return; }
+      if (!saved) return;
+
+      const tts = saved.tts || {};
+      if (tts.speech && typeof tts.speech === "object") {
+        ttsSpeechValues = { ...tts.speech };
+        try { speechController.apply(ttsSpeechValues); } catch {}
+      }
+      if (typeof tts.prefix === "string") ttsPrefix = tts.prefix;
+      if (typeof tts.suffix === "string") ttsSuffix = tts.suffix;
+      if (typeof tts.enabled === "boolean") {
+        ttsEnabled = tts.enabled;
+        ttsEnabledSource = "session";
+      }
+
+      const narrate = saved.narrate || {};
+      if (typeof narrate.model === "string") { narrationModel = narrate.model; narrationModelSource = "session"; }
+      if (typeof narrate.speed === "number") { narrationSpeed = narrate.speed; narrationSpeedSource = "session"; }
+      if (typeof narrate.textEnabled === "boolean") { narrationTextEnabled = narrate.textEnabled; narrationTextEnabledSource = "session"; }
+      if (typeof narrate.reasoningSummaries === "boolean") { narrationReasoningSummaries = narrate.reasoningSummaries; narrationReasoningSummariesSource = "session"; }
+      if (typeof narrate.prefix === "string") narrationPrefix = narrate.prefix;
+      if (typeof narrate.suffix === "string") narrationSuffix = narrate.suffix;
+      if (typeof narrate.enabled === "boolean") { narrateEnabled = narrate.enabled; narrateEnabledSource = "session"; }
+    });
+
     try {
       pi.ttsNarration = {
         isEnabled: () => ttsEnabled,
@@ -236,12 +283,14 @@ export function createTtsNarrationExtension({
         if (!raw || simple === "on") {
           ttsEnabled = true;
           ttsEnabledSource = "runtime";
+          rememberTts({ enabled: true });
           ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
           return;
         }
         if (simple === "off") {
           ttsEnabled = false;
           ttsEnabledSource = "runtime";
+          rememberTts({ enabled: false });
           speechController.interrupt();
           ctx.ui.notify("tts:off · enabled-source:runtime (startup setting unchanged)", "info");
           return;
@@ -254,11 +303,19 @@ export function createTtsNarrationExtension({
           const parsed = parseEnvStyleArgs(raw);
           if (parsed.positionals.length) throw new Error(`/tts: unexpected argument '${parsed.positionals[0]}'`);
           const { prefix, suffix, ...speechValues } = parsed.values;
-          if (prefix !== undefined) ttsPrefix = expandEnvReferences(prefix, env, "/tts prefix");
-          if (suffix !== undefined) ttsSuffix = expandEnvReferences(suffix, env, "/tts suffix");
+          if (prefix !== undefined) {
+            ttsPrefix = expandEnvReferences(prefix, env, "/tts prefix");
+            rememberTts({ prefix: ttsPrefix });
+          }
+          if (suffix !== undefined) {
+            ttsSuffix = expandEnvReferences(suffix, env, "/tts suffix");
+            rememberTts({ suffix: ttsSuffix });
+          }
           speechController.apply(speechValues);
+          rememberTtsSpeechValues(speechValues);
           ttsEnabled = true;
           ttsEnabledSource = "runtime";
+          rememberTts({ enabled: true });
           ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
         } catch (error) {
           ctx.ui.notify(error?.message || String(error), "warning");
@@ -274,9 +331,11 @@ export function createTtsNarrationExtension({
         if (!raw || simple === "on") {
           narrateEnabled = true;
           narrateEnabledSource = "runtime";
+          rememberNarrate({ enabled: true });
         } else if (simple === "off") {
           narrateEnabled = false;
           narrateEnabledSource = "runtime";
+          rememberNarrate({ enabled: false });
           stopNarrationWork();
         } else if (simple !== "status") {
           try {
@@ -287,39 +346,45 @@ export function createTtsNarrationExtension({
             }
             if (parsed.values.prefix !== undefined) {
               narrationPrefix = expandEnvReferences(parsed.values.prefix, env, "/narrate prefix");
-
+              rememberNarrate({ prefix: narrationPrefix });
             }
             if (parsed.values.suffix !== undefined) {
               narrationSuffix = expandEnvReferences(parsed.values.suffix, env, "/narrate suffix");
-
+              rememberNarrate({ suffix: narrationSuffix });
             }
             if (parsed.values.model) {
               narrationModel = String(parsed.values.model).trim();
               narrationModelSource = "runtime";
+              rememberNarrate({ model: narrationModel });
             }
             if (parsed.values.speed !== undefined) {
               const speed = Number(parsed.values.speed);
               if (!Number.isFinite(speed) || speed <= 0) throw new Error("/narrate: speed must be greater than zero");
               narrationSpeed = speed;
               narrationSpeedSource = "runtime";
+              rememberNarrate({ speed });
             }
             const reasoningRaw = parsed.values.reasoning_summaries ?? parsed.values.reasoningsummaries ?? parsed.values.reasoning;
             if (reasoningRaw !== undefined) {
               narrationReasoningSummaries = boolValue(reasoningRaw, "/narrate reasoning_summaries");
               narrationReasoningSummariesSource = "runtime";
+              rememberNarrate({ reasoningSummaries: narrationReasoningSummaries });
             }
             const textRaw = parsed.values.text ?? parsed.values.text_enabled;
             if (textRaw !== undefined) {
               narrationTextEnabled = boolValue(textRaw, "/narrate text");
               narrationTextEnabledSource = "runtime";
+              rememberNarrate({ textEnabled: narrationTextEnabled });
             }
             if (parsed.values.enabled !== undefined) {
               narrateEnabled = boolValue(parsed.values.enabled, "/narrate enabled");
               narrateEnabledSource = "runtime";
+              rememberNarrate({ enabled: narrateEnabled });
             }
             if (parsed.values.on !== undefined) {
               narrateEnabled = boolValue(parsed.values.on, "/narrate on");
               narrateEnabledSource = "runtime";
+              rememberNarrate({ enabled: narrateEnabled });
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
@@ -328,6 +393,11 @@ export function createTtsNarrationExtension({
     });
 
     pi.on("session_shutdown", () => {
+      // In-memory teardown only. This is process lifecycle, not operator intent,
+      // so it must NOT be recorded as a runtime override — otherwise every exit
+      // would durably "turn off" tts for the session it is leaving. Flush any
+      // coalesced write first so a k=v burst right before exit is not lost.
+      try { durable.flush(); } catch {}
       ttsEnabled = false;
       narrateEnabled = false;
       stopNarrationWork();

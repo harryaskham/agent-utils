@@ -166,6 +166,7 @@ import { readPersistedSttSettings } from "./lib/realtime-settings.js";
 import { createGlobalWebSocketAdapter, setRealtimeWebSocketImplKind } from "./lib/realtime-ws-fallback.js";
 import { InputLevelTracker } from "./lib/realtime-input-level.js";
 import { buildRealtimeValueParams, normalizeRealtimeValueParams, applyRealtimeValueParams } from "./lib/realtime-settings.js";
+import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> buildServerVadTurnDetection) is preserved after extraction.
 export { buildServerVadTurnDetection };
@@ -2805,6 +2806,24 @@ export default function realtimeAgentExtension(pi) {
   const controls = createRealtimeControls({ pi, session, config });
   try { pi.realtime = controls; } catch {}
   try { pi.events?.emit?.("realtime:controls", controls); } catch {}
+
+  // Session-durable runtime overrides (bd-4dd60f). `/rt voice=alloy` and
+  // `/stt energy=0.02` are runtime-only with respect to settings.json, but they
+  // are session-scoped intent, and a `/restart` does not end the session. The
+  // raw operator-supplied values are stored and replayed through the SAME apply
+  // functions the commands use, so restore can never drift from the live path.
+  //
+  // Lifecycle is deliberately excluded: an open microphone is not a setting, and
+  // silently re-arming capture on restart is not a decision an extension should
+  // make for the operator.
+  const durableSettings = createSessionRuntimeSettings(pi);
+  const rememberRealtimeValues = (values) => {
+    try { durableSettings.merge("realtime", values); } catch {}
+  };
+  const rememberSttValues = (values) => {
+    try { durableSettings.merge("stt", values); } catch {}
+  };
+
   let terminalInputUnsub = null;
   const speechInputState = new SpeechInputStateMachine();
   const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
@@ -2845,6 +2864,26 @@ export default function realtimeAgentExtension(pi) {
   pi.on("session_start", (_event, ctx) => {
     session.lastCtx = ctx;
     capturePiAudioSessionId(ctx); // bd-c201e6/bd-4e1182: name pulse streams per session
+
+    // bd-4dd60f: replay this session's runtime overrides above config/env.
+    // Values only — never lifecycle, so a restart never re-opens the mic.
+    try {
+      const saved = durableSettings.restore(ctx) || {};
+      const stt = saved.stt;
+      if (stt && Object.keys(stt).length) {
+        try { applyLocalSttSettings(stt, ctx); } catch {}
+      }
+      const realtime = saved.realtime;
+      if (realtime && Object.keys(realtime).length) {
+        const replay = normalizeRealtimeValueParams(buildRealtimeValueParams(realtime), {
+          bool: parseBooleanValue,
+          speed: parseRealtimeSpeed,
+          thresh: parseVadThreshold,
+        });
+        try { applyRealtimeValueParams(replay, controls, ctx, { applyLocalVadEnergy }); } catch {}
+      }
+    } catch {}
+
     if (isRealtimeModel(ctx.model)) {
       config.model = normalizeRealtimeModelId(ctx.model.id);
       session.showStatusWidget(ctx);
@@ -3548,7 +3587,14 @@ export default function realtimeAgentExtension(pi) {
     }
     // bd-25f291: registry drives every value-setting setter (backend/baseUrl/
     // model/azure*/voice/trans/speed/thresh/energy/reasoning/summary/chime).
-    applyRealtimeValueParams(params, controls, ctx, { applyLocalVadEnergy });
+    const appliedValueParams = applyRealtimeValueParams(params, controls, ctx, { applyLocalVadEnergy });
+    // bd-4dd60f: remember exactly what was applied, so a restart replays the
+    // same params rather than a re-derived guess.
+    if (appliedValueParams.length) {
+      const remembered = {};
+      for (const name of appliedValueParams) remembered[name] = params[name];
+      rememberRealtimeValues(remembered);
+    }
     if (params.audio) {
       if (!REALTIME_AUDIO_MODES.has(params.audio)) throw new Error("Unsupported realtime audio mode");
       if (params.audio === "toggle") controls.toggleAudio(ctx);
@@ -4010,6 +4056,7 @@ export default function realtimeAgentExtension(pi) {
       if (parsed.positionals.length) { ctx.ui.notify(`${commandName}: unexpected positional '${parsed.positionals[0]}' with settings`, "warning"); return; }
       try { applyLocalSttSettings(parsed.values, ctx); }
       catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
+      rememberSttValues(parsed.values);
       return startLocalVad(ctx, { hold: defaultHold });
     }
     const value = parsed.positionals.join(" ").trim().toLowerCase();
