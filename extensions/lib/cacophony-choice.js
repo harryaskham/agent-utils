@@ -109,7 +109,7 @@ export function createCacophonyChoiceBridge({
         "--preamble", question,
         "--choices", JSON.stringify(mirroredChoices),
         "--allow-freeform", "false",
-        "--notify-mode", config.notifyMode,
+        `--notify-mode=${config.notifyMode}`,
       ]).then((response) => {
         const data = response?.data || response;
         state.choiceId = data?.choice_id || data?.choiceId || null;

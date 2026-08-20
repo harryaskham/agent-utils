@@ -45,7 +45,7 @@ test("Cacophony resolution selects the matching Pi choice", async () => {
   bridge.start({ question: "Pick", choices: [{ label: "a", headline: "Alpha" }, { label: "b", headline: "Beta", summary: "second" }], onResolution: (r) => resolutions.push(r) });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(calls[0].slice(0, 2), ["choices", "present"]);
-  assert.ok(calls[0].includes("direct-message"), "Pi owns speech; Cacophony uses a silent notification mode");
+  assert.ok(calls[0].includes("--notify-mode=direct-message"), "Pi owns speech; Cacophony uses a silent notification mode");
   assert.equal(JSON.parse(calls[0][calls[0].indexOf("--choices") + 1])[1].label, "Beta");
   assert.equal(clock.jobs[0].ms, 2000);
   await clock.runNext();
