@@ -36,4 +36,8 @@ export function readPersistedRingInputSettings(path = agentSettingsPath()) {
   return readSlice("ringInput", path);
 }
 
+export function readPersistedOmniInputSettings(path = agentSettingsPath()) {
+  return readSlice("omniInput", path);
+}
+
 export { agentSettingsPath as ttsSettingsPath };

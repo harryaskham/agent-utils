@@ -14,6 +14,9 @@ import {
 } from "../extensions/lib/ring-input.js";
 import { createRingInputExtension } from "../extensions/ring-input.js";
 import { createChoiceExtension } from "../extensions/choice.js";
+import { OMNI_INPUT_STATUS_EVENT } from "../extensions/lib/omni-input.js";
+
+process.env.PI_CHOICE_CACO_ENABLED = "0";
 
 function bus() {
   const handlers = new Map();
@@ -73,7 +76,7 @@ test("ring adapter starts for a choice session, emits generic actions, filters r
     registerCommand(name, def) { commands.set(name, def); },
     on(name, fn) { handlers.set(name, fn); },
   };
-  createRingInputExtension({ spawnImpl, env: {} })(pi);
+  createRingInputExtension({ spawnImpl, env: {}, persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } } })(pi);
   const inputs = [];
   events.on(CHOICE_INPUT_EVENT, (input) => inputs.push(input));
 
@@ -110,7 +113,7 @@ test("separate choice and ring extensions compose only through pi.events", async
     on(name, fn) { handlers.set(name, fn); },
   };
   createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} } })(pi);
-  createRingInputExtension({ spawnImpl: () => proc, env: {} })(pi);
+  createRingInputExtension({ spawnImpl: () => proc, env: {}, persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } } })(pi);
 
   const pending = tools.get("interactive_choice").execute("id", {
     question: "Pick", choices: [{ label: "one" }, { label: "two" }], timeoutMs: 1000,
@@ -124,11 +127,25 @@ test("separate choice and ring extensions compose only through pi.events", async
   assert.equal(proc.killed, "SIGTERM", "generic choice end tells the independent ring adapter to stop its smart client");
 });
 
+test("auto source keeps direct ring idle while Omni listens and falls back on Omni failure", () => {
+  const events = bus();
+  const processes = [];
+  const pi = { events, registerCommand() {}, on() {} };
+  createRingInputExtension({ spawnImpl: () => { const proc = fakeProcess(); processes.push(proc); return proc; }, env: {}, persistedSettings: { choice: { inputSource: "auto" }, ringInput: { enabled: true } } })(pi);
+  events.emit(OMNI_INPUT_STATUS_EVENT, { state: "listening" });
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "choice-omni", timeoutMs: 0 });
+  assert.equal(processes.length, 0, "Omni is primary; no CPU-heavy direct ring client is spawned");
+  events.emit(OMNI_INPUT_STATUS_EVENT, { state: "error", error: "tail unavailable" });
+  assert.equal(processes.length, 1, "direct ring client starts only as automatic fallback");
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "choice-omni" });
+  assert.equal(processes[0].killed, "SIGTERM");
+});
+
 test("timeout=0 keeps ring listening indefinitely by renewing bounded smart clients", async () => {
   const events = bus();
   const processes = [];
   const pi = { events, registerCommand() {}, on() {} };
-  createRingInputExtension({ spawnImpl: () => { const proc = fakeProcess(); processes.push(proc); return proc; }, env: {}, persistedSettings: { ringInput: {} } })(pi);
+  createRingInputExtension({ spawnImpl: () => { const proc = fakeProcess(); processes.push(proc); return proc; }, env: {}, persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } } })(pi);
   events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "choice-infinite", timeoutMs: 0 });
   assert.equal(processes.length, 1);
   processes[0].stderr.emit("data", "timed out waiting for matching ring events");
@@ -170,7 +187,7 @@ test("ring adapter disabled mode never spawns and timeout exits stay non-fatal",
     const proc = fakeProcess();
     const commands = new Map();
     const pi = { events, registerCommand(name, def) { commands.set(name, def); }, on() {} };
-    createRingInputExtension({ spawnImpl: () => proc, env: {} })(pi);
+    createRingInputExtension({ spawnImpl: () => proc, env: {}, persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } } })(pi);
     events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "choice-y", timeoutMs: 10 });
     proc.stderr.emit("data", "Error: execution error: timed out waiting for matching ring events");
     proc.emit("exit", 1, null);

@@ -16,6 +16,10 @@ import {
 } from "../extensions/lib/choice.js";
 import { createChoiceExtension, resolveChoiceSettings } from "../extensions/choice.js";
 
+// Managed test processes inherit CACO_AGENT_ID/CACO_PROJECT. Never mirror unit
+// test choices into the operator's durable Cacophony choice queue.
+process.env.PI_CHOICE_CACO_ENABLED = "0";
+
 function eventBus() {
   const handlers = new Map();
   return {
@@ -103,6 +107,27 @@ test("choice normalization and spoken introduction include every option", () => 
   assert.match(formatChoiceIntroduction("Pick", choices), /Pick Option 1: Alpha Option 2: Beta Option 3: Gamma Selected: Alpha/);
   assert.match(formatChoiceIntroduction("Pick", choices, 0, { prefix: "Agent: ", suffix: " please" }), /^Agent: Pick please Option 1: Alpha/, "affixes wrap only the question before unmodified options");
   assert.throws(() => normalizeChoices(["one"]), /at least two/);
+});
+
+test("choice extension synchronizes its modal with an injected Cacophony bridge", async () => {
+  const h = harness();
+  const settled = [];
+  let externalResolve;
+  const cacophonyBridge = {
+    config: { enabled: true },
+    start({ onResolution }) {
+      externalResolve = onResolution;
+      return { settleLocal(result) { settled.push(result); } };
+    },
+  };
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, cacophonyBridge })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  externalResolve({ status: "selected", index: 1, source: "cacophony" });
+  const result = await pending;
+  assert.equal(result.details.choice.label, "beta");
+  assert.equal(result.details.source, "cacophony");
+  assert.equal(settled[0].source, "cacophony", "bridge sees terminal result but does not resolve itself again");
 });
 
 test("choice extension resolves keyboard and external event inputs through one bus", async () => {

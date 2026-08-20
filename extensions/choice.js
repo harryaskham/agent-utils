@@ -6,8 +6,10 @@
 
 import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
 import { ToolSchema } from "./lib/tool-schema.js";
+import { createCacophonyChoiceBridge } from "./lib/cacophony-choice.js";
 import {
   INPUT_ACTION_EVENT,
+  INPUT_ACTIONS,
   CHOICE_SESSION_EVENT,
   DEFAULT_CHOICE_TIMEOUT_MS,
   ChoiceStateMachine,
@@ -103,11 +105,12 @@ function resultText(result) {
   return `choice failed: ${result?.error || "unknown error"}`;
 }
 
-export function createChoiceExtension({ speaker, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+export function createChoiceExtension({ speaker, cacophonyBridge, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   return function choiceExtension(pi) {
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
     const speakerController = speaker || createChoiceSpeaker({ env, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
+    const cacoBridge = cacophonyBridge === false ? null : cacophonyBridge || createCacophonyChoiceBridge({ env, persisted: persistedChoice.cacophony || {}, setTimer, clearTimer });
     let active = null;
     let lastResult = null;
     let nextSessionId = 1;
@@ -157,6 +160,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         forcedRequestOutstanding = false;
       }
       endInputSession(record, result);
+      void record.cacophony?.settleLocal?.(result);
       record.resolve(result);
     };
 
@@ -253,6 +257,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
           timeoutMs,
           timer: null,
           repeatTimer: null,
+          cacophony: null,
           repeatCount: 0,
           terminalUnsub: null,
           onAbort: null,
@@ -262,6 +267,23 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
           finished: false,
         };
         active = record;
+        record.cacophony = cacoBridge?.start?.({
+          question,
+          choices,
+          onResolution(external) {
+            if (record.finished) return;
+            if (external?.status === "selected" && Number.isInteger(external.index) && external.index >= 0 && external.index < choices.length) {
+              handleInput({ action: INPUT_ACTIONS.CHOOSE_INDEX, index: external.index, source: "cacophony", sessionId });
+            } else if (external?.status === "cancelled") {
+              finish(record, { status: "cancelled", reason: external.reason || "cacophony", index: state.index, choice: state.current(), source: "cacophony" });
+            }
+          },
+          onWarning(message) {
+            if (record.warnedCacophony) return;
+            record.warnedCacophony = true;
+            try { ctx?.ui?.notify?.(`Cacophony choice mirror unavailable; Pi choice remains active: ${message}`, "warning"); } catch {}
+          },
+        }) || null;
         record.onAbort = () => finish(record, { status: "cancelled", reason: "aborted", index: state.index, choice: state.current() });
         signal?.addEventListener?.("abort", record.onAbort, { once: true });
         const dispatchKeyboard = (data) => {
@@ -384,7 +406,7 @@ export function createChoiceExtension({ speaker, env = process.env, settingsPath
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
