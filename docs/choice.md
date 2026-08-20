@@ -178,9 +178,42 @@ pending tool or resume the agent. The choice waits silently until the user submi
 the next ordinary freeform editor message; that input stays on Pi's normal path,
 then the old choice resolves as cancelled.
 
-## Ring input adapter
+## Omni and direct-ring input adapters
 
-The adapter starts this smart client for each active choice:
+`agentUtils.choice.inputSource` selects `"auto"` (default), `"omni"`, or
+`"ring"`. In auto mode, [`extensions/omni-input.js`](../extensions/omni-input.js)
+runs `omni listen --daemon 127.0.0.1:8766` as a subscriber to the always-on
+local Omni daemon only while a choice is active. The daemon exclusively owns the
+single Helsinki relay registration, local injection, and fan-out to unlimited
+app subscribers; Agent Utils starts no daemon, listener, or relay registration. Semantic cast events and generic
+Omni `InjectionCommand` key/scroll events map onto the same
+`agent-utils:input-action` bus as keyboard input. If `omni tail` is unavailable
+or exits, the direct ring adapter becomes the fallback for that choice; when
+Omni is listening, no `ring get` process runs, avoiding its idle CPU cost.
+
+Startup configuration:
+
+```json
+{
+  "agentUtils": {
+    "choice": { "inputSource": "auto" },
+    "omniInput": {
+      "enabled": true,
+      "command": "omni",
+      "daemon": "127.0.0.1:8766"
+    }
+  }
+}
+```
+
+The optional local-daemon token remains in `OMNI_RELAY_TOKEN`; it is inherited
+by the smart client and never placed in argv or settings. Use
+`PI_CHOICE_INPUT_SOURCE=omni|ring|auto`, `PI_OMNI_CHOICE_ENABLED`,
+`PI_OMNI_DAEMON`, or `PI_OMNI_COMMAND` for process overrides. `/omni-input status` reports the active
+subscription. The direct ring adapter remains available as an explicit source
+or auto fallback.
+
+The direct adapter starts this smart client for each active choice:
 
 ```text
 ring get --events <configured-events> --count 100000 \

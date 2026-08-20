@@ -15,7 +15,8 @@ import {
   resolveRingInputEventMap,
   ringEventToInputAction,
 } from "./lib/ring-input.js";
-import { readPersistedRingInputSettings } from "./lib/tts-settings.js";
+import { readPersistedChoiceSettings, readPersistedRingInputSettings } from "./lib/tts-settings.js";
+import { OMNI_INPUT_STATUS_EVENT } from "./lib/omni-input.js";
 
 function envEnabled(env = process.env, persisted = {}) {
   const raw = env.PI_RING_CHOICE_ENABLED ?? persisted.enabled;
@@ -26,6 +27,9 @@ function envEnabled(env = process.env, persisted = {}) {
 export function createRingInputExtension({ spawnImpl = spawn, env = process.env, settingsPath, persistedSettings } = {}) {
   return function ringInputExtension(pi) {
     const ringConfig = { ...(persistedSettings?.ringInput ?? readPersistedRingInputSettings(settingsPath)) };
+    const choiceConfig = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
+    const inputSource = String(env.PI_CHOICE_INPUT_SOURCE ?? choiceConfig.inputSource ?? "auto").trim().toLowerCase();
+    let omniState = "idle";
     let current = null;
     let activeSession = null;
     let lastStatus = { state: "idle", error: null, event: null };
@@ -47,6 +51,10 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
 
     const start = (session) => {
       stop("replaced");
+      if (inputSource === "omni" || (inputSource === "auto" && omniState === "listening")) {
+        emitStatus({ state: "standby", reason: "omni-primary", error: null, sessionId: session.sessionId });
+        return false;
+      }
       if (!envEnabled(env, ringConfig)) {
         emitStatus({ state: "disabled", error: null, sessionId: session.sessionId });
         return false;
@@ -116,6 +124,13 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
       }
     };
     pi.events?.on?.(CHOICE_SESSION_EVENT, choiceSessionHandler);
+    const omniStatusHandler = (status = {}) => {
+      omniState = status.state || "idle";
+      if (inputSource !== "auto" || !activeSession) return;
+      if (omniState === "listening") stop("omni-primary");
+      else if (["error", "disabled", "idle"].includes(omniState) && !current) start(activeSession);
+    };
+    pi.events?.on?.(OMNI_INPUT_STATUS_EVENT, omniStatusHandler);
 
     pi.registerCommand("ring-input", {
       description: "Inspect/configure the ring choice-input adapter. Usage: /ring-input status|mappings|on|off|settings key=value",
@@ -123,7 +138,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
         const raw = String(args || "status").trim() || "status";
         const action = raw.toLowerCase();
         if (action === "status") {
-          ctx.ui.notify(`ring input: ${lastStatus.state} enabled=${envEnabled(env, ringConfig)} ring=${env.PI_RING_CHOICE_RING || ringConfig.ring || "any"} command=${env.PI_RING_COMMAND || ringConfig.command || "ring"}${lastStatus.sessionId ? ` session=${lastStatus.sessionId}` : ""}${lastStatus.event ? ` event=${lastStatus.event}` : ""}${lastStatus.error ? ` error=${lastStatus.error}` : ""}`, lastStatus.state === "error" ? "warning" : "info");
+          ctx.ui.notify(`ring input: ${lastStatus.state} source=${inputSource} omni=${omniState} enabled=${envEnabled(env, ringConfig)} ring=${env.PI_RING_CHOICE_RING || ringConfig.ring || "any"} command=${env.PI_RING_COMMAND || ringConfig.command || "ring"}${lastStatus.sessionId ? ` session=${lastStatus.sessionId}` : ""}${lastStatus.event ? ` event=${lastStatus.event}` : ""}${lastStatus.error ? ` error=${lastStatus.error}` : ""}`, lastStatus.state === "error" ? "warning" : "info");
           return;
         }
         if (action === "mappings") {
@@ -180,6 +195,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
       activeSession = null;
       stop("shutdown");
       try { pi.events?.off?.(CHOICE_SESSION_EVENT, choiceSessionHandler); } catch {}
+      try { pi.events?.off?.(OMNI_INPUT_STATUS_EVENT, omniStatusHandler); } catch {}
     });
   };
 }

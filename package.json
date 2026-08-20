@@ -58,6 +58,7 @@
       "./extensions/read-aloud.js",
       "./extensions/tts-narration.js",
       "./extensions/choice.js",
+      "./extensions/omni-input.js",
       "./extensions/ring-input.js",
       "./extensions/force-agent-speech.js",
       "./extensions/compaction-continue-guard.js",
