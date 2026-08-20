@@ -104,6 +104,38 @@ question; option headlines and navigation speech remain unmodified. Set them wit
 `PI_CHOICE_SUFFIX`. Safe `$VAR`/`${VAR}` expansion is supported without command
 substitution. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
 
+## Cacophony/mobile mirroring
+
+Managed Cacophony agents automatically mirror every Pi `interactive_choice` into
+Cacophony when both `CACO_AGENT_ID` (or `CACOPHONY_AGENT`) and `CACO_PROJECT`
+(or `CACOPHONY_PROJECT`) are present. Pi remains the modal and speech owner; the
+Cacophony copy uses `notifyMode: direct-message`, so it is visible to durable
+mobile/operator surfaces without speaking the question a second time.
+
+Resolution is bidirectional:
+
+- a mobile/Cacophony selection resolves the open Pi modal at the same index;
+- a Pi keyboard, ring, or adapter selection resolves the durable Cacophony copy;
+- Pi cancellation, timeout, supersession, abort, or shutdown discards the durable
+  copy rather than leaving a stale operator choice.
+
+The bridge presents asynchronously and polls only its exact choice ID with
+bounded non-overlapping calls, so a missing/backpressured daemon never blocks the
+Pi choice. Presentation and resolution races are idempotent. Startup policy lives
+under `agentUtils.choice.cacophony`:
+
+```json
+{
+  "enabled": true,
+  "pollMs": 2000,
+  "notifyMode": "direct-message"
+}
+```
+
+`PI_CHOICE_CACO_ENABLED`, `PI_CHOICE_CACO_POLL_MS`, and
+`PI_CHOICE_CACO_NOTIFY_MODE` override these values for the process. Setting
+`enabled: false` opts a managed agent out.
+
 ## Continuous control with `/force-choice`
 
 ```text
