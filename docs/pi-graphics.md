@@ -340,9 +340,12 @@ displayed using kitty Unicode placeholder cells, so:
   passthrough automatically.
 * All image ids are tracked in extension-owned state and freed via
   `buildScopedDeleteCommand`. The extension never issues a global
-  "delete all images" command. After session end or the `pi_graphics_clear`
-  tool, global placement tracking, editor/upload tracking, and box-chrome
-  upload caches are reset so later redraws re-upload their placeholder graphics
+  "delete all images" command. On Pi's documented `session_shutdown` event
+  (quit, reload, new, resume, and fork), teardown drains every registered
+  graphics timer, clears namespaced widgets, releases only graphics-owned
+  singleton surfaces, restores cursor policy, and deletes scoped image ids.
+  The same placement/editor/upload/box caches are reset by the
+  `pi_graphics_clear` tool so later redraws re-upload their placeholder graphics
   instead of leaving stale placeholder cells behind. This keeps it cooperative with bd-f89780's
   scoped image ownership work.
 * Caco-hosted cleanup has a reserved Pi graphics z-index band in

@@ -5,6 +5,7 @@ import {
   FULLSCREEN_MODE_MIGRATIONS,
   FULLSCREEN_SHUTDOWN_EVENT,
   FULLSCREEN_SURFACE_CONTRACT,
+  createFullscreenResourceOwner,
   createSurfaceLeaseStack,
   fullscreenQuietModeViolations,
   getOrCreateEditorChromeRegistry,
@@ -79,6 +80,25 @@ test("editor component wrapper delegates host methods, focus, input, invalidate,
   assert.equal(wrapped.getText(), "text");
   assert.deepEqual(wrapped.render(42), ["base", "width=42"]);
   assert.deepEqual(calls, [["input", "x"], ["invalidate"], ["dispose"]]);
+});
+
+test("resource owner drains timeout and interval handles idempotently", () => {
+  const cleared = [];
+  let next = 1;
+  const callbacks = new Map();
+  const owner = createFullscreenResourceOwner({
+    setTimeoutImpl(fn) { const id = `t${next++}`; callbacks.set(id, fn); return id; },
+    clearTimeoutImpl(id) { cleared.push(["timeout", id]); callbacks.delete(id); },
+    setIntervalImpl(fn) { const id = `i${next++}`; callbacks.set(id, fn); return id; },
+    clearIntervalImpl(id) { cleared.push(["interval", id]); callbacks.delete(id); },
+  });
+  const timeout = owner.timeout(() => {}, 1);
+  owner.interval(() => {}, 1);
+  assert.deepEqual(owner.counts(), { timeouts: 1, intervals: 1 });
+  assert.equal(owner.clear(timeout), true);
+  assert.deepEqual(owner.drain(), { timeouts: 0, intervals: 1 });
+  assert.deepEqual(owner.drain(), { timeouts: 0, intervals: 0 });
+  assert.deepEqual(cleared, [["timeout", "t1"], ["interval", "i2"]]);
 });
 
 test("legacy editor modes have explicit deterministic fullscreen migrations", () => {

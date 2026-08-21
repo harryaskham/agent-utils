@@ -176,6 +176,47 @@ export function wrapEditorComponent(base, { renderRows } = {}) {
   });
 }
 
+export function createFullscreenResourceOwner({
+  setTimeoutImpl = setTimeout,
+  clearTimeoutImpl = clearTimeout,
+  setIntervalImpl = setInterval,
+  clearIntervalImpl = clearInterval,
+} = {}) {
+  const timeouts = new Set();
+  const intervals = new Set();
+  return {
+    timeout(fn, delay) {
+      let timer;
+      timer = setTimeoutImpl(() => { timeouts.delete(timer); fn(); }, delay);
+      timeouts.add(timer);
+      timer?.unref?.();
+      return timer;
+    },
+    interval(fn, delay) {
+      const timer = setIntervalImpl(fn, delay);
+      intervals.add(timer);
+      timer?.unref?.();
+      return timer;
+    },
+    clear(timer) {
+      if (!timer) return false;
+      let removed = false;
+      if (timeouts.delete(timer)) { clearTimeoutImpl(timer); removed = true; }
+      if (intervals.delete(timer)) { clearIntervalImpl(timer); removed = true; }
+      return removed;
+    },
+    drain() {
+      const result = { timeouts: timeouts.size, intervals: intervals.size };
+      for (const timer of timeouts) clearTimeoutImpl(timer);
+      for (const timer of intervals) clearIntervalImpl(timer);
+      timeouts.clear();
+      intervals.clear();
+      return result;
+    },
+    counts: () => ({ timeouts: timeouts.size, intervals: intervals.size }),
+  };
+}
+
 export function fullscreenQuietModeViolations(resources = {}) {
   const violations = [];
   for (const [surface, contract] of Object.entries(FULLSCREEN_SURFACE_CONTRACT)) {

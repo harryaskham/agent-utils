@@ -101,7 +101,7 @@ import {
   resetPlacementTracking,
 } from "./pi-graphics/runtime.js";
 import { PI_GRAPHICS_RESERVED_Z_INDICES, PI_GRAPHICS_Z } from "./pi-graphics/z-index.js";
-import { getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
+import { createFullscreenResourceOwner, getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
 
 const TOOL_PREFIX = "pi_graphics";
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
@@ -171,6 +171,11 @@ export default async function piGraphicsExtension(pi) {
   const gfxEnv = () => ({ ...settingsEnv, ...process.env });
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "");
   const state = makeState();
+  const resourceOwner = createFullscreenResourceOwner();
+  const ownedTimeout = (fn, delay) => resourceOwner.timeout(fn, delay);
+  const ownedInterval = (fn, delay) => resourceOwner.interval(fn, delay);
+  const clearOwnedTimer = (timer) => resourceOwner.clear(timer);
+  const clearOwnedTimers = () => resourceOwner.drain();
   const footerState = {
     model: null,
     provider: null,
@@ -381,6 +386,12 @@ export default async function piGraphicsExtension(pi) {
   let hardwareCursorTui = null;
   let editorChromeRegistry = null;
   let editorChromeLease = null;
+  let segmentedFooterFactory = null;
+  let ownsSegmentedFooter = false;
+  let ownedWorkingMessage = null;
+  let ownsWorkingMessage = false;
+  let ownedWorkingIndicator = null;
+  let ownsWorkingIndicator = false;
   function resolveGraphicsWriter(ctx) {
     if (typeof ctx?.ui?.write === "function") return ctx.ui.write.bind(ctx.ui);
     if (typeof ctx?.ui?.terminal?.write === "function") return ctx.ui.terminal.write.bind(ctx.ui.terminal);
@@ -394,8 +405,7 @@ export default async function piGraphicsExtension(pi) {
 
   function deferGraphicsCommand(command) {
     if (!command) return;
-    const timer = setTimeout(() => emitGraphicsCommand(command), 0);
-    if (typeof timer.unref === "function") timer.unref();
+    ownedTimeout(() => emitGraphicsCommand(command), 0);
   }
 
   function cursorStylingEnabled() {
@@ -410,14 +420,15 @@ export default async function piGraphicsExtension(pi) {
     if (!tui.__piGraphicsHardwareCursorGuard) {
       const originalSet = tui.setShowHardwareCursor.bind(tui);
       const originalGet = tui.getShowHardwareCursor.bind(tui);
-      const guard = { active: false, previous: undefined, originalSet, originalGet };
-      tui.setShowHardwareCursor = (enabled) => {
+      const guard = { active: false, previous: undefined, originalSet, originalGet, patchedSet: null };
+      guard.patchedSet = (enabled) => {
         if (guard.active) {
           guard.previous = Boolean(enabled);
           return guard.originalSet(false);
         }
         return guard.originalSet(Boolean(enabled));
       };
+      tui.setShowHardwareCursor = guard.patchedSet;
       tui.__piGraphicsHardwareCursorGuard = guard;
     }
     return tui.__piGraphicsHardwareCursorGuard;
@@ -446,6 +457,9 @@ export default async function piGraphicsExtension(pi) {
       guard.originalSet(Boolean(guard.previous));
       guard.previous = undefined;
     }
+    if (tui.setShowHardwareCursor === guard.patchedSet) tui.setShowHardwareCursor = guard.originalSet;
+    delete tui.__piGraphicsHardwareCursorGuard;
+    if (hardwareCursorTui === tui) hardwareCursorTui = null;
   }
 
   function applyTheme(ctx) {
@@ -489,7 +503,7 @@ export default async function piGraphicsExtension(pi) {
   const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_PG][\s\S]*?\x1b\\/g;
 
   function stopManualAnimationLoops() {
-    for (const timer of animationTimers.values()) clearInterval(timer);
+    for (const timer of animationTimers.values()) clearOwnedTimer(timer);
     animationTimers.clear();
   }
 
@@ -500,8 +514,8 @@ export default async function piGraphicsExtension(pi) {
 
   function resetGraphicsUploadCaches() {
     stopManualAnimationLoops();
-    if (editorHeatRenderTimer) clearTimeout(editorHeatRenderTimer);
-    if (editorContextTimer) clearTimeout(editorContextTimer);
+    if (editorHeatRenderTimer) clearOwnedTimer(editorHeatRenderTimer);
+    if (editorContextTimer) clearOwnedTimer(editorContextTimer);
     editorHeatRenderTimer = null;
     editorContextTimer = null;
     uploadedImages.clear();
@@ -551,12 +565,12 @@ export default async function piGraphicsExtension(pi) {
     if (!editorDynamicHeatEnabled()) return;
     if (editorHeatRenderTimer || !editorRenderTui) return;
     if (editorCursorHeat <= 0.01 && editorCursorHeatTarget <= 0.01) return;
-    editorHeatRenderTimer = setTimeout(() => {
+    editorHeatRenderTimer = ownedTimeout(() => {
       editorHeatRenderTimer = null;
       requestEditorDecorativeRender();
       if (editorCursorHeat > 0.01 || editorCursorHeatTarget > 0.01) requestEditorHeatFrame();
     }, editorAnimationDelayMs());
-    editorHeatRenderTimer.unref?.();
+
   }
 
   function editorContextRedrawEnabled() {
@@ -572,14 +586,14 @@ export default async function piGraphicsExtension(pi) {
     // default because repeated editor redraws can trigger full-screen flicker.
     if (!editorDynamicHeatEnabled() || editorAnimationEnabled() || !editorContextRedrawEnabled()) return;
     if (editorContextTimer || !editorRenderTui || editorContextMode !== "thinking") return;
-    editorContextTimer = setTimeout(() => {
+    editorContextTimer = ownedTimeout(() => {
       editorContextTimer = null;
       if (editorContextMode !== "thinking") return;
       editorContextTick = (editorContextTick + 1) % 4096;
       requestEditorDecorativeRender();
       requestEditorContextFrame();
     }, Math.max(80, editorAnimationDelayMs() * 5));
-    editorContextTimer.unref?.();
+
   }
 
   function setEditorContextMode(mode = "idle") {
@@ -590,7 +604,7 @@ export default async function piGraphicsExtension(pi) {
     }
     editorContextMode = next;
     editorContextTick = (editorContextTick + 1) % 4096;
-    if (editorContextTimer) clearTimeout(editorContextTimer);
+    if (editorContextTimer) clearOwnedTimer(editorContextTimer);
     editorContextTimer = null;
     if (editorDynamicHeatEnabled()) requestEditorDecorativeRender();
     if (next === "thinking" && editorDynamicHeatEnabled()) requestEditorContextFrame();
@@ -624,7 +638,7 @@ export default async function piGraphicsExtension(pi) {
     // stable per (theme, font-geometry) and is re-used when the cursor returns,
     // so freeing the data here would force an immediate re-upload on every
     // clear/return. The id stays tracked in state.ownedImageIds and is reclaimed
-    // by the freeData:true session_end teardown (bd-b94fa1). Bounded, not a leak.
+    // by the freeData:true session_shutdown teardown (bd-b94fa1). Bounded, not a leak.
     emitGraphicsCommand(buildDeleteCommand({
       imageId: editorCursorRelativePlacement.imageId,
       placementId: editorCursorRelativePlacement.placementId,
@@ -790,11 +804,11 @@ export default async function piGraphicsExtension(pi) {
         }));
       } catch {
         const timer = animationTimers.get(imageId);
-        if (timer) clearInterval(timer);
+        if (timer) clearOwnedTimer(timer);
         animationTimers.delete(imageId);
       }
     };
-    animationTimers.set(imageId, keepTimerFromHoldingProcess(setInterval(tick, intervalMs)));
+    animationTimers.set(imageId, keepTimerFromHoldingProcess(ownedInterval(tick, intervalMs)));
   }
 
   function buildManualAnimatedPlacement(options) {
@@ -1391,7 +1405,7 @@ export default async function piGraphicsExtension(pi) {
         // Genuine eviction when the frame image id itself changed (theme or
         // font-geometry change): the prior halo frames will not be reused, so
         // free their image data (d=I) and drop the upload-cache / ownership
-        // entries instead of waiting for session_end reclaim (bd-15ea4f). The
+        // entries instead of waiting for session_shutdown reclaim (bd-15ea4f). The
         // replacement-id guard keeps a placement-only change from freeing the
         // still-live frame image (bd-f4d277).
         evictOwnedImage({
@@ -1739,7 +1753,9 @@ export default async function piGraphicsExtension(pi) {
     factory.__piGraphicsNoWrap = true;
     factory.piGraphics = false;
     try { ctx.ui.setStatus?.("pi-graphics-footer", undefined); } catch {}
-    try { ctx.ui.setFooter(factory, { piGraphics: false }); } catch { return false; }
+    segmentedFooterFactory = factory;
+    try { ctx.ui.setFooter(factory, { piGraphics: false }); } catch { segmentedFooterFactory = null; return false; }
+    ownsSegmentedFooter = true;
     return true;
   }
 
@@ -1850,12 +1866,12 @@ export default async function piGraphicsExtension(pi) {
     if (!tui) return;
     walkAndPatch(tui, 0);
     let attempts = 0;
-    const id = setInterval(() => {
+    const id = ownedInterval(() => {
       attempts += 1;
       try { walkAndPatch(tui, 0); } catch {}
-      if (attempts >= 40) clearInterval(id);
+      if (attempts >= 40) clearOwnedTimer(id);
     }, 500);
-    if (typeof id.unref === "function") id.unref();
+
   }
 
 
@@ -2040,6 +2056,7 @@ export default async function piGraphicsExtension(pi) {
       const patchedSetFooter = function (componentOrFactory, ...rest) {
         const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
         const next = shouldSkipGraphicsOptions(options) ? componentOrFactory : wrapRenderableFactory(componentOrFactory, "footer");
+        if (componentOrFactory !== segmentedFooterFactory) ownsSegmentedFooter = false;
         return originals.setFooter.call(this, next, ...rest);
       };
       patchedSetFooter.__piGraphicsPatchedSurface = true;
@@ -2077,6 +2094,7 @@ export default async function piGraphicsExtension(pi) {
         const options = rest.find((item) => item && typeof item === "object" && ("piGraphics" in item));
         if (valueLooksLikeThinking(value)) setEditorContextMode("thinking");
         const next = shouldSkipGraphicsOptions(options) ? value : decorateWorkingMessage(value);
+        if (value !== ownedWorkingMessage) ownsWorkingMessage = false;
         return originals.setWorkingMessage.call(this, next, ...rest);
       };
       patchedSetWorkingMessage.__piGraphicsPatchedSurface = true;
@@ -2085,6 +2103,7 @@ export default async function piGraphicsExtension(pi) {
     if (originals.setWorkingIndicator) {
       const patchedSetWorkingIndicator = function (config, ...rest) {
         const next = decorateWorkingIndicatorConfig(config);
+        if (config !== ownedWorkingIndicator) ownsWorkingIndicator = false;
         return originals.setWorkingIndicator.call(this, next, ...rest);
       };
       patchedSetWorkingIndicator.__piGraphicsPatchedSurface = true;
@@ -2269,6 +2288,20 @@ export default async function piGraphicsExtension(pi) {
     patchUiGraphicsSurfaces(ctx);
   }
 
+  function installWorkingSurfaces(ctx) {
+    try {
+      ownedWorkingIndicator = {
+        intervalMs: 110,
+        frames: buildWorkingIndicatorFrames(ctx.ui.theme || activeThemeRef),
+      };
+      ctx.ui?.setWorkingIndicator?.(ownedWorkingIndicator);
+      ownsWorkingIndicator = true;
+      ownedWorkingMessage = buildWorkingMessage({ stage: "working" }, ctx.ui.theme || activeThemeRef);
+      ctx.ui?.setWorkingMessage?.(ownedWorkingMessage);
+      ownsWorkingMessage = true;
+    } catch {}
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     writeGraphicsCommand = resolveGraphicsWriter(ctx);
@@ -2278,13 +2311,7 @@ export default async function piGraphicsExtension(pi) {
     installEditorSurface(ctx);
     mountEditorRails(ctx);
     installSegmentedFooter(ctx, pi, _event);
-    try {
-      ctx.ui?.setWorkingIndicator?.({
-        intervalMs: 110,
-        frames: buildWorkingIndicatorFrames(ctx.ui.theme || activeThemeRef),
-      });
-      ctx.ui?.setWorkingMessage?.(buildWorkingMessage({ stage: "working" }, ctx.ui.theme || activeThemeRef));
-    } catch {}
+    installWorkingSurfaces(ctx);
     installBoxChromeOnce(ctx);
     setDebugPanel(ctx, settings);
   });
@@ -2490,14 +2517,29 @@ export default async function piGraphicsExtension(pi) {
       if (themeName) ctx?.ui?.setTheme?.(themeName);
       activeThemeRef = ctx?.ui?.theme || activeThemeRef;
     } catch {}
-    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true) && !envBool("PI_GRAPHICS_AUTO_BOX_RAILS", false))) {
+    const off = modeIsOff(gfxEnv().PI_GRAPHICS_MODE);
+    if (off) {
+      releaseEditorSurface();
+      releaseOwnedUiSurfaces(ctx);
       teardownBoxChrome(ctx);
+      restoreHardwareCursorPolicy();
+      clearOwnedTimers();
+      try {
+        const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds, freeData: true });
+        if (command) resolveGraphicsWriter(ctx)?.(command);
+      } catch {}
+      resetGraphicsUploadCaches();
+      resetPlacementTracking(state);
     } else {
-      installBoxChromeOnce(ctx, { force: true });
+      installEditorSurface(ctx);
+      mountEditorRails(ctx);
+      installSegmentedFooter(ctx, pi);
+      installWorkingSurfaces(ctx);
+      if (!envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true) && !envBool("PI_GRAPHICS_AUTO_BOX_RAILS", false)) teardownBoxChrome(ctx);
+      else installBoxChromeOnce(ctx, { force: true });
+      applyHardwareCursorPolicy();
+      setDebugPanel(ctx, settings);
     }
-    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) releaseEditorSurface();
-    else installEditorSurface(ctx);
-    applyHardwareCursorPolicy();
     mountEditorRails(ctx);
     try { ctx?.ui?.requestRender?.(true); } catch {}
   }
@@ -3262,20 +3304,43 @@ export default async function piGraphicsExtension(pi) {
   });
 
 
-  pi.on("session_shutdown", async (_event, ctx) => {
-    releaseEditorSurface();
-    try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined, { piGraphics: false }); } catch {}
-    try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined, { piGraphics: false }); } catch {}
-  });
+  function releaseOwnedUiSurfaces(ctx) {
+    const ui = ctx?.ui;
+    const originals = ui?.__piGraphicsOriginalSurfaces;
+    const setWidget = originals?.setWidget || ui?.setWidget;
+    const setFooter = originals?.setFooter || ui?.setFooter;
+    const setWorkingMessage = originals?.setWorkingMessage || ui?.setWorkingMessage;
+    const setWorkingIndicator = originals?.setWorkingIndicator || ui?.setWorkingIndicator;
+    try { setWidget?.call(ui, "pi-graphics-editor-top", undefined, { piGraphics: false }); } catch {}
+    try { setWidget?.call(ui, "pi-graphics-editor-bottom", undefined, { piGraphics: false }); } catch {}
+    try { setWidget?.call(ui, "pi-graphics-debug", undefined, { piGraphics: false }); } catch {}
+    if (ownsSegmentedFooter) {
+      try { setFooter?.call(ui, undefined, { piGraphics: false }); } catch {}
+    }
+    if (ownsWorkingMessage) {
+      try { setWorkingMessage?.call(ui); } catch {}
+    }
+    if (ownsWorkingIndicator) {
+      try { setWorkingIndicator?.call(ui); } catch {}
+    }
+    segmentedFooterFactory = null;
+    ownsSegmentedFooter = false;
+    ownedWorkingMessage = null;
+    ownsWorkingMessage = false;
+    ownedWorkingIndicator = null;
+    ownsWorkingIndicator = false;
+  }
 
-  pi.on("session_end", async (_event, ctx) => {
+  let shutdownComplete = false;
+  pi.on("session_shutdown", async (_event, ctx) => {
+    if (shutdownComplete) return;
+    shutdownComplete = true;
     releaseEditorSurface();
+    releaseOwnedUiSurfaces(ctx);
     teardownBoxChrome(ctx);
     restoreHardwareCursorPolicy();
+    clearOwnedTimers();
     writeGraphicsCommand = null;
-    try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined); } catch {}
-    try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined); } catch {}
-    try { if (envBool("PI_GRAPHICS_AUTO_FOOTER", true)) ctx.ui?.setFooter?.(undefined, { piGraphics: false }); } catch {}
     try {
       const command = buildScopedDeleteCommand({ ownedImageIds: state.ownedImageIds, freeData: true });
       if (command) resolveGraphicsWriter(ctx)?.(command);

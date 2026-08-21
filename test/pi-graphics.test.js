@@ -1645,7 +1645,9 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /renderEditorCursorVline/);
   assert.match(source, /function ensureManualAnimationLoop\(\{ imageId, frames, delayMs \}\)/);
   assert.match(source, /function keepTimerFromHoldingProcess\(timer\)/);
-  assert.match(source, /animationTimers\.set\(imageId, keepTimerFromHoldingProcess\(setInterval/);
+  assert.match(source, /animationTimers\.set\(imageId, keepTimerFromHoldingProcess\(ownedInterval/);
+  assert.match(source, /const resourceOwner = createFullscreenResourceOwner\(\)/);
+  assert.match(source, /clearOwnedTimers\(\)/);
   assert.match(source, /animationTimers\.delete\(imageId\)/);
   assert.match(source, /buildAnimationFrameCommand\(\{/);
   assert.match(source, /function buildManualAnimatedPlacement\(options\)/);
@@ -2128,6 +2130,11 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /owner: "pi-graphics"/);
   assert.match(source, /wrapEditorComponent\(base/);
   assert.match(source, /pi\.on\("session_shutdown"/);
+  assert.doesNotMatch(source, /pi\.on\("session_end"/);
+  assert.match(source, /function releaseOwnedUiSurfaces\(ctx\)/);
+  assert.match(source, /if \(ownsSegmentedFooter\)/);
+  assert.match(source, /if \(ownsWorkingMessage\)/);
+  assert.match(source, /if \(ownsWorkingIndicator\)/);
   assert.match(source, /renderEditorBorderFramesPngs\(/);
   assert.match(source, /buildPlacement\(state/);
   assert.match(source, /envBool\("PI_GRAPHICS_EXPOSE_RENDER_TOOLS", false\)/);
