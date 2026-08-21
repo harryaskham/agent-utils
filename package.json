@@ -51,6 +51,7 @@
     "extensions": [
       "./extensions/web-search.js",
       "./extensions/kitty-image-preview.js",
+      "./extensions/image-413-recovery.js",
       "./extensions/pi-graphics.js",
       "./extensions/editor-chips.js",
       "./extensions/cacophony-runtime.js",
