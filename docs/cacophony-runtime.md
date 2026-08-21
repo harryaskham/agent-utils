@@ -59,6 +59,41 @@ Only a receipt containing a non-empty durable agent ID and project is accepted. 
 
 On reload or restart, the latest matching session receipt restores the runtime identity without rerunning the CLI or duplicating the registration message. `/caco-runtime` shows the current managed, visiting, disabled, in-progress, or unregistered state.
 
+## Transient Cacophony MCP
+
+When `pi-mcp-adapter` is installed, `extensions/cacophony-mcp.js` consumes the
+same shared identity and registers one session-scoped server named
+`cacophony-runtime` through the adapter's public `registerMcpServer()` API:
+
+```text
+caco mcp stdio
+```
+
+The server uses `lifecycle: "keep-alive"`, so the adapter owns connection,
+metadata discovery, health recovery, proxy-tool refresh, and shutdown. Dynamic
+registration updates the existing `mcp` proxy surface in-process; no Pi restart
+or settings rewrite is required. Runtime-registered servers remain proxy-only,
+matching the adapter's safety contract.
+
+Only the child definition receives:
+
+```text
+CACO_AGENT_ID=<resolved managed-or-visiting id>
+CACO_PROJECT=<resolved project>
+```
+
+The extension never writes those values into `process.env` or `settings.json`.
+It does nothing when `DISABLE_PI_CACO=1`, identity/project is incomplete, or
+visiting registration was skipped (including the no-tmux case). Registration is
+serialized and deduplicated per identity. A changed visiting identity disposes
+the previous registration before creating its replacement; `session_shutdown`
+disposes the exact owned registration once. Adapter absence or transport failure
+leaves Pi functional and produces one bounded warning.
+
+Use `/caco-mcp` to inspect whether the transient server is disabled, waiting for
+identity/adapter registration, or registered for a concrete project and agent.
+Use `/mcp status` for adapter-level connection/tool metadata.
+
 ## Security and lifecycle
 
 - Settings and parent-process startup environment are never rewritten.
@@ -66,3 +101,5 @@ On reload or restart, the latest matching session receipt restores the runtime i
 - No identity is inferred from a timeout, malformed response, or failed command.
 - A project-less session never registers.
 - The visiting identity is scoped to the Pi session and child integrations that explicitly consume the shared runtime context.
+- The transient MCP uses the canonical `caco mcp stdio` child process; Agent Utils does not implement an MCP protocol client.
+- Child identity is explicit and scoped. Existing parent identity variables are read but never rewritten.
