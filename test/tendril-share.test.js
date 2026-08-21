@@ -9,6 +9,7 @@ import tendrilShareExtension, {
   setTendrilShareCompleteForTest,
 } from "../extensions/tendril-share.js";
 import { resolveTendrilSubcommand } from "../extensions/tendril-command.js";
+import { registerKittyImagePreviewRuntime } from "../extensions/kitty-image-preview/runtime.js";
 
 // Tests must not inherit the operator's live Tendril model setting. In a Pi
 // session PI_CODING_AGENT_DIR points at ~/.pi/agent, whose settings.json may
@@ -738,4 +739,38 @@ test("concurrent remote captures from different machines produce distinct artifa
     else process.env.TENDRIL_SHARE_SCREENSHOT_DIR = oldDir;
     await rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("Tendril preview hands captures to the fullscreen image owner without stdout graphics", async () => {
+  const pi = {};
+  const requests = [];
+  const unregister = registerKittyImagePreviewRuntime(pi, async (request) => {
+    requests.push(request);
+    return { imageId: 42, mode: "fullscreen-widget", placement: "rightOverlay" };
+  });
+  const originalWrite = process.stdout.write;
+  let writes = 0;
+  process.stdout.write = () => { writes += 1; return true; };
+  try {
+    const result = await __tendrilShareTest.previewInKitty(pi, ONE_PIXEL_PNG.toString("base64"), "/capture/window-123.png", {
+      label: "Tendril window 123",
+      streamKey: "window:123",
+    });
+    assert.deepEqual(result, { imageId: 42, mode: "fullscreen-widget", placement: "rightOverlay" });
+    assert.deepEqual(requests, [{
+      path: "/capture/window-123.png",
+      label: "Tendril window 123",
+      replace: true,
+      streamKey: "window:123",
+    }]);
+    assert.equal(writes, 0, "fullscreen preview must not emit raw Kitty APC bytes to stdout");
+  } finally {
+    process.stdout.write = originalWrite;
+    unregister();
+  }
+});
+
+test("Tendril preview degrades quietly when kitty-image-preview is absent", async () => {
+  const result = await __tendrilShareTest.previewInKitty({}, ONE_PIXEL_PNG.toString("base64"), "/capture/window-123.png");
+  assert.equal(result, null);
 });

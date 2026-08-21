@@ -2,12 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  buildPngDisplayCommand,
-  estimateRowsForImage,
-  readPngDimensions,
-  stableKittyImageId,
-} from "./kitty-graphics.js";
+import { showInKittyImagePreview } from "./kitty-image-preview/runtime.js";
 import {
   buildTendrilCommand,
   tendrilCommandSummary,
@@ -357,25 +352,21 @@ function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, desc
   });
 }
 
-async function previewInKitty(pngBase64, outputPath, { streamKey } = {}) {
-  if (!previewConfig().enabled || !process.stdout?.isTTY) return null;
+async function previewInKitty(pi, _pngBase64, outputPath, { streamKey, label } = {}) {
+  if (!previewConfig().enabled) return null;
   try {
-    const columns = clampInteger(process.env.TENDRIL_SHARE_PREVIEW_COLUMNS, 64, 8, 200);
-    const dims = await readPngDimensions(outputPath).catch(() => ({ width: 1280, height: 720 }));
-    const rows = estimateRowsForImage({ imageWidth: dims.width, imageHeight: dims.height, columns, maxRows: 24, minRows: 4 });
-    const imageId = stableKittyImageId(streamKey ? `tendril-share-stream:${streamKey}` : `tendril-share:${outputPath}`);
-    const sequence = buildPngDisplayCommand({
-      imageId,
-      placementId: 1,
-      pngBase64,
-      columns,
-      rows,
-      passthrough: "auto",
+    // Fullscreen Pi owns terminal layout. Hand the already-captured PNG to the
+    // kitty-image-preview runtime instead of writing cursor-positioned APC bytes
+    // to stdout, which fullscreen rendering can collapse into the footer row.
+    return await showInKittyImagePreview(pi, {
+      path: outputPath,
+      label,
+      replace: true,
+      streamKey: streamKey || null,
     });
-    process.stdout.write(`\n${sequence}\n`);
-    return { imageId, columns, rows, outputPath, streamKey: streamKey || null };
   } catch {
-    // best-effort preview; ignore failures (non-kitty terminal, etc.)
+    // Best-effort preview: model delivery still succeeds when the preview
+    // extension is absent, not yet started, or cannot load the captured file.
     return null;
   }
 }
@@ -441,7 +432,9 @@ async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = 
     ];
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(content, options);
-  await previewInKitty(captured.data, captured.outputPath);
+  await previewInKitty(pi, captured.data, captured.outputPath, {
+    label: `Tendril ${kind} ${captured.target.label || captured.target.id}`,
+  });
   emitCaptureHistory(pi, { action: pathOnly ? "screenshot path" : "screenshot", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options });
   return { ...captured, queued: !!options, pathOnly, includeList };
 }
@@ -481,7 +474,9 @@ async function describeTarget(pi, ctx, { kind, target, id, prompt, includeList =
   const message = await buildShareMessageText(pi, signal, { baseText: base, captured, includeList, pathOnly: false, override });
   const options = ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined;
   pi.sendUserMessage(message, options);
-  await previewInKitty(captured.data, captured.outputPath);
+  await previewInKitty(pi, captured.data, captured.outputPath, {
+    label: `Tendril ${kind} ${captured.target.label || captured.target.id}`,
+  });
   emitCaptureHistory(pi, { action: "description", kind, target: captured.target, outputPath: captured.outputPath, queued: !!options, descriptionModel: description.model, sourceMachine: captured.sourceMachine });
   return { ...captured, description, queued: !!options, includeList };
 }
@@ -509,7 +504,10 @@ async function sendStreamFrame(pi, ctx, stream) {
     { type: "text", text },
     { type: "image", data: captured.data, mimeType: PNG_MIME },
   ], options);
-  const preview = await previewInKitty(captured.data, captured.outputPath, { streamKey: `${stream.kind}:${stream.target.id}` });
+  const preview = await previewInKitty(pi, captured.data, captured.outputPath, {
+    streamKey: `${stream.kind}:${stream.target.id}`,
+    label: `Tendril stream ${stream.kind} ${stream.target.label || stream.target.id}`,
+  });
   emitCaptureHistory(pi, { action: stream.pathOnly ? `stream frame ${stream.frame} path` : `stream frame ${stream.frame}`, kind: stream.kind, target: stream.target, outputPath: captured.outputPath, queued: !!options });
   stream.lastFrameAt = Date.now();
   stream.lastOutputPath = captured.outputPath;
@@ -990,6 +988,7 @@ export const __tendrilShareTest = {
   configuredDescribeModelFromSettings,
   describeModelConfig,
   previewConfig,
+  previewInKitty,
   showTendrilSettingsWindow,
   resolveSourceMachine,
   sourceMachineLabel,

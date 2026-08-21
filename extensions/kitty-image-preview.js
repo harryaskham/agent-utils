@@ -105,6 +105,7 @@ import {
   renderSidePanelPageLines,
   KittyImagePreviewWidget,
 } from "./kitty-image-preview/widget.js";
+import { registerKittyImagePreviewRuntime } from "./kitty-image-preview/runtime.js";
 
 import {
   fullResolutionDescribeParams,
@@ -1179,8 +1180,41 @@ export default function kittyImagePreviewExtension(pi) {
       widthRatio: undefined,
     },
   };
+  let activeCtx = null;
+  let unregisterRuntime = null;
+
+  const installRuntimeBridge = () => {
+    if (unregisterRuntime) return;
+    unregisterRuntime = registerKittyImagePreviewRuntime(pi, async (request = {}) => {
+      const ctx = activeCtx;
+      if (!ctx?.hasUI || !request.path) return null;
+      applyConfig(state, request.config);
+      const item = await buildItem(ctx.cwd, request.path, request.label);
+      if (request.replace !== false) {
+        stopAnimation(state);
+        stopCycle(state);
+        state.items = [];
+      }
+      pushItems(state, [item]);
+      state.index = state.items.length - 1;
+      state.visible = true;
+      await prepareCurrentImage(state, ctx, { forceReload: true });
+      syncWidget(ctx, state);
+      return {
+        imageId: item.id,
+        outputPath: item.path,
+        label: item.label,
+        placement: resolvePlacement(state),
+        mode: "fullscreen-widget",
+        streamKey: request.streamKey || null,
+      };
+    });
+  };
+  installRuntimeBridge();
 
   pi.on("session_start", async (_event, ctx) => {
+    activeCtx = ctx;
+    installRuntimeBridge();
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName?.startsWith(TOOL_PREFIX)) {
         restorePublicState(state, entry.message.details);
@@ -1222,6 +1256,9 @@ export default function kittyImagePreviewExtension(pi) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    unregisterRuntime?.();
+    unregisterRuntime = null;
+    activeCtx = null;
     stopAnimation(state);
     stopCycle(state);
     void stopStream(state, { cleanup: true });

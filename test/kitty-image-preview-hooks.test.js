@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { createStrictMockPi } from "./helpers/strict-mock-pi.js";
 import kittyImagePreviewExtension from "../extensions/kitty-image-preview.js";
+import { showInKittyImagePreview } from "../extensions/kitty-image-preview/runtime.js";
 
 // pi.on hook-wiring coverage for kitty-image-preview.js (bd-aacc0c, follow-up to
 // bd-e3a282). session_start (cross-generation reclaim + transmit-guard reset)
@@ -47,4 +51,27 @@ test("kitty-image-preview session_shutdown hook fires without throwing, UI + hea
   await assert.doesNotReject(async () => { await shutdown({}, makeCtx(false)); }, "session_shutdown (headless) must not throw");
   // Defensive: the hook guards on ctx?.hasUI, so a missing ctx must also be safe.
   await assert.doesNotReject(async () => { await shutdown({}, undefined); }, "session_shutdown (no ctx) must not throw");
+});
+
+test("runtime handoff mounts a captured PNG through the fullscreen widget owner", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "kitty-preview-runtime-"));
+  const file = path.join(tmp, "window-123.png");
+  await writeFile(file, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lDL+WQAAAABJRU5ErkJggg==", "base64"));
+  const widgets = [];
+  const { pi, handlers } = createStrictMockPi();
+  kittyImagePreviewExtension(pi);
+  const ctx = makeCtx(true);
+  ctx.cwd = tmp;
+  ctx.ui.setWidget = (id, component, options) => widgets.push({ id, component, options });
+  try {
+    await handlers.get("session_start")[0]({}, ctx);
+    const result = await showInKittyImagePreview(pi, { path: file, label: "Tendril window 123", replace: true });
+    assert.equal(result.mode, "fullscreen-widget");
+    assert.equal(result.label, "Tendril window 123");
+    assert.ok(widgets.some((entry) => entry.id === "kitty-image-preview" && typeof entry.component === "function"));
+    await handlers.get("session_shutdown")[0]({}, ctx);
+    assert.equal(await showInKittyImagePreview(pi, { path: file }), null, "shutdown removes the runtime bridge");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 });
