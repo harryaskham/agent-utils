@@ -175,6 +175,7 @@ import { AudioPlayer } from "./lib/realtime-audio-player.js";
 import { LocalVadController, parseLocalVadConfig, describeLocalVadConfig } from "./lib/realtime-local-vad.js";
 import { normalizedRms } from "./lib/realtime-vad-segmenter.js";
 import { fileQuickfileUtterance } from "./lib/realtime-quickfile.js";
+import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./lib/cacophony-runtime.js";
 import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
 import { makePttIndicator } from "./lib/realtime-ptt-indicator.js";
 import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
@@ -3266,8 +3267,13 @@ export default function realtimeAgentExtension(pi) {
         if (localVad.quickfile) {
           // bd-dddd7a: quickfile mode routes the utterance to a caco DRAFT bead
           // (hands-free capture) instead of the chat buffer / the real agent.
-          const project = process.env.CACO_PROJECT || process.env.CACOPHONY_PROJECT || undefined;
-          fileQuickfileUtterance(finalText, { project })
+          if (isPiCacoDisabled()) {
+            localVad.lastError = "quickfile disabled by DISABLE_PI_CACO";
+            try { ctx.ui.notify(localVad.lastError, "warning"); } catch {}
+            return;
+          }
+          const identity = getCacophonyRuntimeIdentity();
+          fileQuickfileUtterance(finalText, { project: identity.project || undefined, agentId: identity.agentId || undefined })
             .then((res) => {
               if (res.ok) {
                 localVad.lastTranscript = `filed ${res.beadId || "draft"}: ${res.title}`;

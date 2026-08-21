@@ -79,6 +79,7 @@ test("plannedSpeech is empty when disabled, the precis when enabled (bd-9c9877)"
   const ev = { message: { role: "assistant", content: "Done — landed the fix." } };
   assert.equal(plannedSpeech(ev, {}), "");
   assert.equal(plannedSpeech(ev, { PI_FORCE_AGENT_SPEECH: "1" }), "Done — landed the fix.");
+  assert.equal(plannedSpeech(ev, { PI_FORCE_AGENT_SPEECH: "1", DISABLE_PI_CACO: "1" }), "", "global Cacophony opt-out wins");
   // enabled but tool-only -> empty
   assert.equal(plannedSpeech({ message: { content: [] } }, { PI_FORCE_AGENT_SPEECH: "1" }), "");
 });

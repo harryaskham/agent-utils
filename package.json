@@ -53,6 +53,7 @@
       "./extensions/kitty-image-preview.js",
       "./extensions/pi-graphics.js",
       "./extensions/editor-chips.js",
+      "./extensions/cacophony-runtime.js",
       "./extensions/firecracker-vm.js",
       "./extensions/realtime-agent.js",
       "./extensions/pipe.js",

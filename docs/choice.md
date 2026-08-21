@@ -165,9 +165,12 @@ choice extension owns modal state and final resolution.
 
 ## Cacophony/mobile mirroring
 
-Managed Cacophony agents automatically mirror every Pi `interactive_choice` into
-Cacophony when both `CACO_AGENT_ID` (or `CACOPHONY_AGENT`) and `CACO_PROJECT`
-(or `CACOPHONY_PROJECT`) are present. Pi remains the modal and speech owner; the
+Managed and auto-registered visiting agents automatically mirror every Pi
+`interactive_choice` into Cacophony. Explicit identity recognizes `CACO_AGENT_ID`,
+`CACOPHONY_AGENT_ID`, or legacy `CACOPHONY_AGENT`, paired with `CACO_PROJECT` or
+`CACOPHONY_PROJECT`; visiting identity comes from the shared Agent Utils runtime.
+`DISABLE_PI_CACO=1` disables mirroring regardless of either identity. Pi remains
+the modal and speech owner; the
 Cacophony copy uses `notifyMode: direct-message`, so it is visible to durable
 mobile/operator surfaces without speaking the question a second time.
 

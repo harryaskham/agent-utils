@@ -15,6 +15,7 @@
 
 import { spawn } from "node:child_process";
 import { markAssistantSpeaking, estimateSpeechMs } from "./lib/half-duplex-state.js";
+import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./lib/cacophony-runtime.js";
 
 export const DEFAULT_MAX_CHARS = 240;
 
@@ -73,13 +74,20 @@ export function shortSpokenSummary(text, { maxChars = DEFAULT_MAX_CHARS } = {}) 
 }
 
 // Injectable speak runner (so the hook is testable without spawning caco).
-function defaultSpeakRunner(text, { project } = {}) {
+function defaultSpeakRunner(text, { project, agentId } = {}) {
   return new Promise((resolve) => {
     const args = ["msg", "speak", "--text", text];
     if (project) args.push("--project", project);
     let proc;
     try {
-      proc = spawn(process.env.CACO_BIN || "caco", args, { stdio: ["ignore", "ignore", "ignore"] });
+      proc = spawn(process.env.CACO_BIN || "caco", args, {
+        stdio: ["ignore", "ignore", "ignore"],
+        env: {
+          ...process.env,
+          ...(agentId ? { CACO_AGENT_ID: agentId } : {}),
+          ...(project ? { CACO_PROJECT: project } : {}),
+        },
+      });
     } catch {
       resolve(false);
       return;
@@ -99,7 +107,7 @@ export function __setForceSpeechRunnerForTest(fn) {
 /// Decide what (if anything) to speak for a finished turn. Pure: returns the
 /// spoken precis string, or "" to stay silent. Separated for testability.
 export function plannedSpeech(event, env = process.env) {
-  if (!isForceSpeechEnabled(env)) return "";
+  if (isPiCacoDisabled(env) || !isForceSpeechEnabled(env)) return "";
   const text = extractAssistantText(event?.message);
   return shortSpokenSummary(text, { maxChars: forceSpeechMaxChars(env) });
 }
@@ -107,7 +115,7 @@ export function plannedSpeech(event, env = process.env) {
 export default function forceAgentSpeechExtension(pi) {
   let runtimeOverride = null; // null = follow env; true/false = forced by command
 
-  const enabled = () => (runtimeOverride === null ? isForceSpeechEnabled() : runtimeOverride);
+  const enabled = () => !isPiCacoDisabled() && (runtimeOverride === null ? isForceSpeechEnabled() : runtimeOverride);
 
   pi.registerCommand?.("force-speech", {
     description: "Toggle speaking a short precis of each assistant reply (on|off|status|env).",
@@ -132,7 +140,8 @@ export default function forceAgentSpeechExtension(pi) {
       // /rt stt local-vad drops the mic for the spoken window + a release tail,
       // instead of transcribing the reply's echo back as a phantom turn.
       markAssistantSpeaking(estimateSpeechMs(spoken));
-      await speakRunner(spoken, { project: process.env.CACO_PROJECT || process.env.CACOPHONY_PROJECT });
+      const identity = getCacophonyRuntimeIdentity();
+      await speakRunner(spoken, { project: identity.project, agentId: identity.agentId });
     } catch {
       // best-effort: never break a turn because speech failed.
     }

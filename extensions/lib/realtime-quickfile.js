@@ -38,11 +38,11 @@ export function deriveQuickfileBead(text, { titleMax = DEFAULT_TITLE_MAX } = {})
 /// Build a caco runner: `(args:string[]) -> Promise<{stdout,stderr,code}>`.
 /// Defaults to execFile of CACO_BIN/caco; never throws (errors surface as a
 /// non-zero code so callers branch on the result, not exceptions).
-export function makeCacoRunner({ cacoBin = process.env.CACO_BIN || "caco", execImpl = execFile, timeoutMs = 15000 } = {}) {
+export function makeCacoRunner({ cacoBin = process.env.CACO_BIN || "caco", execImpl = execFile, timeoutMs = 15000, env = process.env } = {}) {
   return (args) =>
     new Promise((resolve) => {
       try {
-        execImpl(cacoBin, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+        execImpl(cacoBin, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env }, (err, stdout, stderr) => {
           resolve({ stdout: stdout || "", stderr: stderr || "", code: err ? (err.code ?? 1) : 0 });
         });
       } catch (e) {
@@ -57,10 +57,16 @@ export function makeCacoRunner({ cacoBin = process.env.CACO_BIN || "caco", execI
 ///   { ok:true, beadId, title, expand }        on success
 ///   { ok:false, skipped:true, error }          empty utterance (nothing filed)
 ///   { ok:false, error, title }                 caco failure
-export async function fileQuickfileUtterance(text, { runCaco, project, expand = false, titleMax } = {}) {
+export async function fileQuickfileUtterance(text, { runCaco, project, agentId, expand = false, titleMax } = {}) {
   const derived = deriveQuickfileBead(text, { titleMax });
   if (!derived) return { ok: false, skipped: true, error: "empty utterance" };
-  const run = typeof runCaco === "function" ? runCaco : makeCacoRunner();
+  const run = typeof runCaco === "function" ? runCaco : makeCacoRunner({
+    env: {
+      ...process.env,
+      ...(agentId ? { CACO_AGENT_ID: agentId } : {}),
+      ...(project ? { CACO_PROJECT: project } : {}),
+    },
+  });
   const projectArgs = project ? ["--project", project] : [];
   const args = expand
     ? ["bd", "expand", ...projectArgs, "--text", derived.description]

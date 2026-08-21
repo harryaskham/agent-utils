@@ -3,6 +3,8 @@
 
 import { execFile } from "node:child_process";
 
+import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./cacophony-runtime.js";
+
 const TRUE_RE = /^(1|true|yes|on|enabled)$/i;
 const FALSE_RE = /^(0|false|no|off|disabled)$/i;
 
@@ -14,13 +16,14 @@ function bool(value, fallback) {
 }
 
 export function resolveCacophonyChoiceConfig(env = process.env, persisted = {}) {
-  const agentId = env.CACO_AGENT_ID || env.CACOPHONY_AGENT || "";
-  const project = env.CACO_PROJECT || env.CACOPHONY_PROJECT || "";
+  const identity = getCacophonyRuntimeIdentity(env);
+  const agentId = identity.agentId;
+  const project = identity.project;
   const discovered = !!(agentId && project);
   const pollRaw = env.PI_CHOICE_CACO_POLL_MS ?? persisted.pollMs ?? 2000;
   const pollMs = Number.isFinite(Number(pollRaw)) ? Math.max(500, Math.min(60_000, Math.trunc(Number(pollRaw)))) : 2000;
   return {
-    enabled: bool(env.PI_CHOICE_CACO_ENABLED, bool(persisted.enabled, discovered)) && discovered,
+    enabled: !isPiCacoDisabled(env) && bool(env.PI_CHOICE_CACO_ENABLED, bool(persisted.enabled, discovered)) && discovered,
     command: String(env.CACO_BIN || persisted.command || "caco"),
     agentId,
     project,
@@ -50,12 +53,21 @@ export function createCacophonyChoiceBridge({
   clearTimer = clearTimeout,
 } = {}) {
   const config = resolveCacophonyChoiceConfig(env, persisted);
+  const refreshIdentity = () => {
+    const identity = getCacophonyRuntimeIdentity(env);
+    config.agentId = identity.agentId;
+    config.project = identity.project;
+    const discovered = Boolean(config.agentId && config.project);
+    config.enabled = !identity.disabled && bool(env.PI_CHOICE_CACO_ENABLED, bool(persisted.enabled, discovered)) && discovered;
+    return config;
+  };
 
   const call = (args) => execJson(execFileImpl, config.command, [...args, "--json"]);
 
   return {
     config,
     start({ question, choices, onResolution, onWarning }) {
+      refreshIdentity();
       if (!config.enabled) return null;
       const state = { choiceId: null, stopped: false, timer: null, localResult: null, settling: false };
       const warn = (error) => { try { onWarning?.(error?.message || String(error)); } catch {} };
