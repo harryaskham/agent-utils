@@ -6,6 +6,8 @@
 // copied into the parent process environment.
 
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   getCacophonyRuntimeIdentity,
@@ -72,15 +74,14 @@ async function loadRegisterMcpServer() {
     // isolated, and its extension loader does not guarantee that a dynamic bare
     // import can see nested dependencies even when npm installed them.
     const require = createRequire(import.meta.url);
+    const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const nodeModulesRoot = join(packageRoot, "node_modules");
     let createJiti;
-    try { ({ createJiti } = require("jiti")); }
+    try { ({ createJiti } = require(join(nodeModulesRoot, "jiti", "lib", "jiti.cjs"))); }
     catch { throw nativeError; }
-    const alias = {};
-    for (const dependency of ["typebox", "zod", "@earendil-works/pi-ai", "@earendil-works/pi-tui"]) {
-      try { alias[dependency] = require.resolve(dependency); } catch {}
-    }
-    const jiti = createJiti(import.meta.url, { alias });
-    try { adapter = await jiti.import(require.resolve("pi-mcp-adapter")); }
+    const entry = join(nodeModulesRoot, "pi-mcp-adapter", "index.ts");
+    const jiti = createJiti(entry);
+    try { adapter = await jiti.import(entry); }
     catch (fallbackError) {
       const error = new Error(`bundled pi-mcp-adapter compatibility load failed: ${fallbackError?.message || fallbackError}`);
       error.code = "PI_MCP_ADAPTER_COMPAT_UNAVAILABLE";

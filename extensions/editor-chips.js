@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,13 +43,13 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       try {
         const require = createRequire(import.meta.url);
         const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "@earendil-works", "pi-coding-agent");
-        const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
-        const alias = {};
-        for (const dependency of Object.keys({ ...(manifest.dependencies || {}), ...(manifest.peerDependencies || {}) })) {
-          try { alias[dependency] = require.resolve(dependency); } catch {}
-        }
-        const { createJiti } = require("jiti");
-        const module = await createJiti(import.meta.url, { alias }).import(join(packageRoot, "dist", "index.js"));
+        const nodeModulesRoot = join(packageRoot, "..", "..");
+        // Use absolute paths throughout. Pi's loader deliberately isolates
+        // package roots and can override both bare require resolution and
+        // import.meta.resolve for an extension module.
+        const { createJiti } = require(join(nodeModulesRoot, "jiti", "lib", "jiti.cjs"));
+        const entry = join(packageRoot, "dist", "index.js");
+        const module = await createJiti(entry).import(entry);
         ({ CustomEditor } = module);
       } catch (error) { hostImportError = error; }
       return CustomEditor;
