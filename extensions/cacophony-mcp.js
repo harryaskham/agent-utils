@@ -81,7 +81,11 @@ async function loadRegisterMcpServer() {
     }
     const jiti = createJiti(import.meta.url, { alias });
     try { adapter = await jiti.import(require.resolve("pi-mcp-adapter")); }
-    catch { throw nativeError; }
+    catch (fallbackError) {
+      const error = new Error(`bundled pi-mcp-adapter compatibility load failed: ${fallbackError?.message || fallbackError}`);
+      error.code = "PI_MCP_ADAPTER_COMPAT_UNAVAILABLE";
+      throw error;
+    }
   }
   if (typeof adapter.registerMcpServer === "function") return adapter.registerMcpServer;
   return createScopedAdapterRegistrar(adapter);
@@ -132,7 +136,11 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
           warned = false;
           try { sessionCtx?.ui?.notify?.(`Cacophony MCP connected for ${identity.agentId} in ${identity.project}.`, "info"); } catch {}
         } catch (error) {
-          warnOnce(error);
+          // Adapter 2.25 publishes TS source and its compatibility loader can be
+          // unavailable under Pi's bundled resolver. This optional integration
+          // must stay quiet rather than emitting the same warning every reload;
+          // /caco-mcp remains the explicit diagnostic surface.
+          if (error?.code !== "PI_MCP_ADAPTER_COMPAT_UNAVAILABLE") warnOnce(error);
         }
       });
       return operation;

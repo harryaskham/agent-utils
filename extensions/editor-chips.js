@@ -1,3 +1,8 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { readAgentSettings, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
 import { getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
@@ -37,8 +42,16 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     const loadCustomEditor = async () => {
       if (typeof CustomEditor === "function") return CustomEditor;
       try {
-        const specifier = new URL("../node_modules/@earendil-works/pi-coding-agent/dist/index.js", import.meta.url).href;
-        ({ CustomEditor } = await import(specifier));
+        const require = createRequire(import.meta.url);
+        const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "@earendil-works", "pi-coding-agent");
+        const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+        const alias = {};
+        for (const dependency of Object.keys({ ...(manifest.dependencies || {}), ...(manifest.peerDependencies || {}) })) {
+          try { alias[dependency] = require.resolve(dependency); } catch {}
+        }
+        const { createJiti } = require("jiti");
+        const module = await createJiti(import.meta.url, { alias }).import(join(packageRoot, "dist", "index.js"));
+        ({ CustomEditor } = module);
       } catch (error) { hostImportError = error; }
       return CustomEditor;
     };
