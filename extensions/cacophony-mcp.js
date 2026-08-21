@@ -5,6 +5,8 @@
 // listener after successful registration. Nothing is persisted to settings or
 // copied into the parent process environment.
 
+import { createRequire } from "node:module";
+
 import {
   getCacophonyRuntimeIdentity,
   isPiCacoDisabled,
@@ -65,15 +67,17 @@ async function loadRegisterMcpServer() {
   let adapter;
   try {
     adapter = await import("pi-mcp-adapter");
-  } catch (error) {
-    // pi-mcp-adapter intentionally publishes TypeScript source. Native Node ESM
-    // refuses type stripping under node_modules; Pi's loader usually handles it,
-    // while this explicit jiti fallback makes installed-layout resolution stable
-    // across runtimes.
-    const { createJiti } = await import("jiti");
+  } catch (nativeError) {
+    // Resolve from THIS package root. Pi package module roots are intentionally
+    // isolated, and its extension loader does not guarantee that a dynamic bare
+    // import can see nested dependencies even when npm installed them.
+    const require = createRequire(import.meta.url);
+    let createJiti;
+    try { ({ createJiti } = require("jiti")); }
+    catch { throw nativeError; }
     const jiti = createJiti(import.meta.url);
-    try { adapter = await jiti.import("pi-mcp-adapter"); }
-    catch { throw error; }
+    try { adapter = await jiti.import(require.resolve("pi-mcp-adapter")); }
+    catch { throw nativeError; }
   }
   if (typeof adapter.registerMcpServer === "function") return adapter.registerMcpServer;
   return createScopedAdapterRegistrar(adapter);

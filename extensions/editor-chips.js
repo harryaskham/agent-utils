@@ -29,17 +29,17 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
   const startupSettings = settings || readAgentSettings(agentSettingsPath()) || {};
   const config = resolveEditorChipsConfig(startupSettings, env);
 
-  return async function editorChipsExtension(pi) {
+  return function editorChipsExtension(pi) {
     if (!config.enabled) return;
 
     let CustomEditor = host?.CustomEditor;
-    if (typeof CustomEditor !== "function") {
-      try {
-        ({ CustomEditor } = await import("@earendil-works/pi-coding-agent"));
-      } catch {
-        return;
-      }
-    }
+    let hostImportError = null;
+    const loadCustomEditor = async () => {
+      if (typeof CustomEditor === "function") return CustomEditor;
+      try { ({ CustomEditor } = await import("@earendil-works/pi-coding-agent")); }
+      catch (error) { hostImportError = error; }
+      return CustomEditor;
+    };
 
     const state = {
       branch: "",
@@ -129,7 +129,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     };
 
     const installSurfaces = (ctx) => {
-      if (typeof ctx.ui?.setEditorComponent !== "function") return false;
+      if (typeof CustomEditor !== "function" || typeof ctx.ui?.setEditorComponent !== "function") return false;
       state.editorRegistry = getOrCreateEditorChromeRegistry(ctx.ui, {
         defaultFactory: (tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
       });
@@ -155,14 +155,21 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       description: "Show or repair configured editor rail chips.",
       handler: async (args, ctx) => {
         const action = String(args || "status").trim().toLowerCase();
-        if (action === "repair" || action === "reload") installSurfaces(ctx);
+        if (action === "repair" || action === "reload") {
+          await loadCustomEditor();
+          installSurfaces(ctx);
+        }
         const owners = state.editorRegistry?.owners?.() || [];
-        ctx.ui?.notify?.(`editor-chips:${config.enabled ? "enabled" : "disabled"} · mounted=${owners.includes("editor-chips")} · owners=${owners.join(",") || "none"} · footer=${config.hideFooter ? "hidden" : "normal"}`, "info");
+        ctx.ui?.notify?.(`editor-chips:${config.enabled ? "enabled" : "disabled"} · mounted=${owners.includes("editor-chips")} · owners=${owners.join(",") || "none"} · footer=${config.hideFooter ? "hidden" : "normal"}${hostImportError ? ` · host-import-error=${hostImportError.message || String(hostImportError)}` : ""}`, hostImportError ? "warning" : "info");
       },
     });
 
     pi.on("session_start", async (_event, ctx) => {
-      installSurfaces(ctx);
+      await loadCustomEditor();
+      if (!installSurfaces(ctx)) {
+        try { ctx.ui?.notify?.(`Editor chips could not mount: ${hostImportError?.message || "CustomEditor host API unavailable"}`, "warning"); } catch {}
+        return;
+      }
       // Some fullscreen/runtime extensions establish their singleton surfaces in
       // later session_start handlers. Reassert the lease after the startup event
       // drains; acquire() is owner-deduplicated, so this cannot stack wrappers.
