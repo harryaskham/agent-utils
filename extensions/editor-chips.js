@@ -36,8 +36,12 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     let hostImportError = null;
     const loadCustomEditor = async () => {
       if (typeof CustomEditor === "function") return CustomEditor;
-      try { ({ CustomEditor } = await import("@earendil-works/pi-coding-agent")); }
-      catch (error) { hostImportError = error; }
+      try {
+        const specifier = typeof import.meta.resolve === "function"
+          ? import.meta.resolve("@earendil-works/pi-coding-agent")
+          : "@earendil-works/pi-coding-agent";
+        ({ CustomEditor } = await import(specifier));
+      } catch (error) { hostImportError = error; }
       return CustomEditor;
     };
 
