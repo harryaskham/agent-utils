@@ -14,7 +14,7 @@ import {
   keyboardChoiceAction,
   normalizeChoices,
 } from "../extensions/lib/choice.js";
-import { createChoiceExtension, resolveChoiceSettings } from "../extensions/choice.js";
+import { createChoiceExtension, normalizeChoiceAppendEntries, resolveChoiceSettings } from "../extensions/choice.js";
 
 // Managed test processes inherit CACO_AGENT_ID/CACO_PROJECT. Never mirror unit
 // test choices into the operator's durable Cacophony choice queue.
@@ -70,6 +70,21 @@ test("choice repeat settings resolve defaults and env overrides", () => {
   assert.deepEqual(resolveChoiceSettings({}, {}).repeat, { interval: 300, limit: null });
   assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_INTERVAL: "12.5", PI_CHOICE_REPEAT_LIMIT: "3" }, { repeat: { interval: 90, limit: null } }).repeat, { interval: 12.5, limit: 3 });
   assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_LIMIT: "null" }, { repeat: { interval: 45, limit: 2 } }).repeat, { interval: 45, limit: null });
+});
+
+test("configured appended actions normalize without mutating startup settings", () => {
+  const append = [
+    { title: "Generate more", description: "Try another set", tts: false, cacophonyAction: "freeformReply" },
+    { title: "Stop", description: "End here", terminal: true, tts: false, cacophonyAction: "discard" },
+    { title: "Unknown", cacophonyAction: "unsupported" },
+  ];
+  const before = structuredClone(append);
+  assert.deepEqual(normalizeChoiceAppendEntries(append), [
+    { label: "Generate more", headline: "Generate more", summary: "Try another set", value: { cacophonyAction: "freeformReply" }, tts: false, terminal: false, cacophonyAction: "freeformReply", appended: true },
+    { label: "Stop", headline: "Stop", summary: "End here", value: { cacophonyAction: "discard" }, tts: false, terminal: true, cacophonyAction: "discard", appended: true },
+  ]);
+  assert.deepEqual(append, before);
+  assert.deepEqual(resolveChoiceSettings({}, { append }).append.map((choice) => choice.label), ["Generate more", "Stop"]);
 });
 
 test("choice state machine supports wrap, clamp, direct index, select, cancel, and invalid actions", () => {
@@ -156,6 +171,91 @@ test("choice extension resolves keyboard and external event inputs through one b
   assert.equal(result.details.source, "test-adapter");
   assert.equal(h.widgets.has("agent-utils-choice"), false);
   assert.equal(sessions.at(-1).status, "ended");
+});
+
+test("appended controls keep ordinary indices stable, remain visible, and honor tts:false", async () => {
+  const provided = choices.slice(0, 2).map((choice) => ({ ...choice }));
+  const before = structuredClone(provided);
+  const spoken = [];
+  const h = harness();
+  createChoiceExtension({
+    speaker: { speak: async (text) => { spoken.push(text); }, interrupt() {}, dispose() {} },
+    persistedSettings: {
+      choice: { append: [{ title: "Generate more", description: "Try another set", tts: false, cacophonyAction: "freeformReply" }] },
+      tts: {},
+    },
+  })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: provided, timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  assert.deepEqual(provided, before, "agent-provided choice array is never mutated");
+  assert.match(h.widgets.get("agent-utils-choice").join("\n"), /3\. Generate more — Try another set/);
+  assert.match(spoken[0], /Option 1: Alpha/);
+  assert.match(spoken[0], /Option 2: Beta/);
+  assert.doesNotMatch(spoken[0], /Generate more|Try another set/);
+  h.input("j");
+  h.input("j");
+  await Promise.resolve();
+  assert.equal(spoken.some((text) => /Generate more/.test(text)), false, "tts:false suppresses navigation speech too");
+  h.input("3");
+  const result = await pending;
+  assert.equal(result.details.status, "action");
+  assert.equal(result.details.action, "freeformReply");
+  assert.equal(result.details.index, 2);
+  assert.equal(result.details.choice.appended, true);
+  assert.equal(result.terminate, false);
+});
+
+test("terminal appended discard ends once without returning an ordinary selection", async () => {
+  const h = harness();
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: {
+      choice: {
+        forceAtAgentEnd: true,
+        append: [{ title: "Stop Choices", description: "Stop here", terminal: true, tts: false, cacophonyAction: "discard" }],
+      },
+      tts: {},
+    },
+  })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  h.input("3");
+  const result = await pending;
+  assert.equal(result.details.status, "cancelled");
+  assert.equal(result.details.reason, "appended-terminal");
+  assert.equal(result.details.action, "discard");
+  assert.equal(result.details.terminal, true);
+  assert.equal(result.terminate, true);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 0, "terminal discard disables runtime force mode and does not restart the flow");
+});
+
+test("Cacophony selection of an appended action uses the same single local outcome", async () => {
+  const h = harness();
+  const settled = [];
+  let resolveExternal;
+  const bridge = {
+    config: { enabled: true },
+    start({ choices: mirrored, onResolution }) {
+      assert.equal(mirrored[2].cacophonyAction, "freeformReply");
+      resolveExternal = onResolution;
+      return { settleLocal(result) { settled.push(result); } };
+    },
+  };
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    cacophonyBridge: bridge,
+    persistedSettings: { choice: { append: [{ title: "More", tts: false, cacophonyAction: "freeformReply" }] }, tts: {} },
+  })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  resolveExternal({ status: "selected", index: 2, source: "cacophony" });
+  resolveExternal({ status: "selected", index: 0, source: "cacophony" });
+  const result = await pending;
+  assert.equal(result.details.status, "action");
+  assert.equal(result.details.action, "freeformReply");
+  assert.equal(result.details.source, "cacophony");
+  assert.equal(settled.length, 1, "duplicate external resolution settles the local choice exactly once");
 });
 
 test("choice navigation speaks descriptions by default and can preserve headline-only behavior", async () => {

@@ -72,6 +72,36 @@ test("local Pi selection resolves the durable Cacophony choice", async () => {
   assert.equal(calls[1][calls[1].indexOf("--selected-index") + 1], "0");
 });
 
+test("appended action metadata is mirrored and local action resolution settles once", async () => {
+  const calls = [];
+  const clock = timers();
+  const bridge = createCacophonyChoiceBridge({
+    env: { CACO_AGENT_ID: "agent-1", CACO_PROJECT: "project-1" },
+    execFileImpl: fakeExec([
+      { data: { choice_id: "choice-action" } },
+      { data: { resolved: true, selected_label: "More" } },
+    ], calls),
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  const handle = bridge.start({
+    question: "Pick",
+    choices: [
+      { label: "a", headline: "Alpha" },
+      { label: "more", headline: "More", summary: "Another set", appended: true, tts: false, cacophonyAction: "freeformReply" },
+      { label: "stop", headline: "Stop", appended: true, terminal: true, tts: false, cacophonyAction: "discard" },
+    ],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const mirrored = JSON.parse(calls[0][calls[0].indexOf("--choices") + 1]);
+  assert.deepEqual(mirrored[1], { label: "More", summary: "Another set", appended: true, cacophonyAction: "freeformReply" });
+  assert.deepEqual(mirrored[2], { label: "Stop", appended: true, terminal: true, cacophonyAction: "discard" });
+  await handle.settleLocal({ status: "action", action: "freeformReply", index: 1, source: "keyboard" });
+  await handle.settleLocal({ status: "action", action: "freeformReply", index: 1, source: "keyboard" });
+  assert.equal(calls.filter((args) => args[1] === "resolve").length, 1);
+  assert.equal(calls[1][calls[1].indexOf("--selected-index") + 1], "1");
+});
+
 test("local cancellation discards the mirrored choice and presentation races settle", async () => {
   const calls = [];
   let presentCallback;

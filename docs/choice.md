@@ -62,6 +62,21 @@ live under `agentUtils.choice`:
         "interval": 300,
         "limit": null
       },
+      "append": [
+        {
+          "title": "Generate more options",
+          "description": "Present a different set of choices for the same question",
+          "tts": false,
+          "cacophonyAction": "freeformReply"
+        },
+        {
+          "title": "Stop Choices",
+          "description": "Stop here without choosing an item",
+          "terminal": true,
+          "tts": false,
+          "cacophonyAction": "discard"
+        }
+      ],
       "forceAtAgentEnd": true
     }
   }
@@ -71,6 +86,20 @@ live under `agentUtils.choice`:
 `settings.json` is startup policy and is never rewritten by `/choice`,
 `/force-choice`, or `/ring-input`. Their setters and toggles affect only the
 current session; edit the JSON explicitly to change the next startup.
+
+`agentUtils.choice.append` adds the same configured control rows after every
+agent-provided choice list without mutating that list or shifting its indices.
+Each row requires `title` and a supported `cacophonyAction` (`freeformReply` or
+`discard`); `description` is optional visible detail. `tts:false` keeps the row
+visible while excluding it from the initial announcement, repeats, and
+navigation speech. Selecting a non-terminal appended row returns a distinct
+`status: action` tool result with its `cacophonyAction`, rather than pretending
+it was an ordinary answer. `terminal:true` ends the choice with a terminating
+non-selection result; a terminal `discard` also disables runtime force-choice
+for the current session. Appended action metadata is copied into the mirrored
+Cacophony choice, and local/mobile races still settle the exact durable choice
+only once. Invalid append rows are ignored. The combined visible list remains
+subject to `maxChoices` (and the numeric-selection maximum of nine).
 
 Pending choices re-read the complete spoken introduction every
 `repeat.interval` seconds (default `300`). `repeat.limit` is the maximum number

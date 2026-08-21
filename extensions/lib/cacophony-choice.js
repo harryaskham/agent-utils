@@ -92,7 +92,7 @@ export function createCacophonyChoiceBridge({
         state.settling = true;
         stopTimer();
         try {
-          if (result?.status === "selected" && Number.isInteger(result.index)) {
+          if (["selected", "action"].includes(result?.status) && Number.isInteger(result.index)) {
             await call(["choices", "resolve", "--choice-id", state.choiceId, "--selected-index", String(result.index)]);
           } else {
             await call(["choices", "discard", "--choice-id", state.choiceId]);
@@ -101,7 +101,13 @@ export function createCacophonyChoiceBridge({
         state.stopped = true;
       };
 
-      const mirroredChoices = choices.map((choice) => ({ label: choice.headline || choice.label, ...(choice.summary ? { summary: choice.summary } : {}) }));
+      const mirroredChoices = choices.map((choice) => ({
+        label: choice.headline || choice.label,
+        ...(choice.summary ? { summary: choice.summary } : {}),
+        ...(choice.appended ? { appended: true } : {}),
+        ...(choice.terminal ? { terminal: true } : {}),
+        ...(choice.cacophonyAction ? { cacophonyAction: choice.cacophonyAction } : {}),
+      }));
       void call([
         "choices", "present",
         "--agent-id", config.agentId,

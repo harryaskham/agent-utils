@@ -26,6 +26,7 @@ import {
 } from "./lib/tts-settings.js";
 
 export const FORCE_CHOICE_CUSTOM_TYPE = "agent-utils-force-choice";
+export const CHOICE_CACOPHONY_ACTIONS = Object.freeze(["freeformReply", "discard"]);
 
 function boolSetting(value, fallback) {
   if (value == null || String(value).trim() === "") return fallback;
@@ -33,6 +34,27 @@ function boolSetting(value, fallback) {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
+}
+
+export function normalizeChoiceAppendEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const headline = String(entry.title ?? entry.headline ?? "").trim();
+    const summary = String(entry.description ?? entry.summary ?? "").trim();
+    const cacophonyAction = String(entry.cacophonyAction ?? "").trim();
+    if (!headline || !CHOICE_CACOPHONY_ACTIONS.includes(cacophonyAction)) return [];
+    return [{
+      label: headline,
+      headline,
+      summary,
+      value: { cacophonyAction },
+      tts: entry.tts !== false,
+      terminal: entry.terminal === true,
+      cacophonyAction,
+      appended: true,
+    }];
+  });
 }
 
 export function resolveChoiceSettings(env, persisted = {}) {
@@ -57,6 +79,7 @@ export function resolveChoiceSettings(env, persisted = {}) {
     forceAtAgentEnd: boolSetting(env.PI_FORCE_CHOICE, boolSetting(persisted.forceAtAgentEnd, false)),
     prefix: expandEnvReferences(env.PI_CHOICE_PREFIX ?? persisted.prefix ?? "", env, "/choice prefix"),
     suffix: expandEnvReferences(env.PI_CHOICE_SUFFIX ?? persisted.suffix ?? "", env, "/choice suffix"),
+    append: normalizeChoiceAppendEntries(persisted.append),
     repeat: {
       interval: Number.isFinite(repeatInterval) && repeatInterval > 0 ? repeatInterval : 300,
       limit: repeatLimit,
@@ -100,6 +123,7 @@ function renderChoiceDialog(question, choices, index, timeoutMs, width, theme) {
 
 function resultText(result) {
   if (result?.status === "selected") return `selected ${result.index + 1}: ${result.choice?.label}`;
+  if (result?.status === "action") return `choice action ${result.action}: ${result.choice?.label}`;
   if (result?.status === "timeout") return `choice timed out after ${result.timeoutMs}ms`;
   if (result?.status === "cancelled") return `choice cancelled (${result.reason || "cancelled"})`;
   return `choice failed: ${result?.error || "unknown error"}`;
@@ -153,8 +177,10 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       if (active === record) active = null;
       lastResult = result;
       if (
-        choiceConfig.forceAtAgentEnd && result?.status === "selected" &&
-        /^(?:stop|idle|pause|finish|stop continuous choices)$/i.test(String(result.choice?.label || "").trim())
+        choiceConfig.forceAtAgentEnd && (
+          (result?.status === "selected" && /^(?:stop|idle|pause|finish|stop continuous choices)$/i.test(String(result.choice?.label || "").trim()))
+          || (result?.terminal === true && result?.action === "discard")
+        )
       ) {
         choiceConfig.forceAtAgentEnd = false;
         forcedRequestOutstanding = false;
@@ -190,7 +216,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         if (record.requestRender) { try { record.requestRender(); } catch {} }
         else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, outcome.index), { placement: "belowEditor" }); } catch {} }
         try { record.onUpdate?.({ content: [{ type: "text", text: `highlighted ${outcome.index + 1}: ${outcome.choice.headline}` }] }); } catch {}
-        if (outcome.changed && choiceConfig.speechEnabled) {
+        if (outcome.changed && choiceConfig.speechEnabled && outcome.choice.tts !== false) {
           const navigationSpeech = choiceConfig.descriptionOnNavigate && outcome.choice.summary
             ? `${outcome.choice.headline}. ${outcome.choice.summary}`
             : outcome.choice.headline;
@@ -201,7 +227,29 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           });
         }
       } else if (outcome.type === "selected") {
-        finish(record, { status: "selected", index: outcome.index, choice: outcome.choice, source: outcome.source || input?.source || "event" });
+        const source = outcome.source || input?.source || "event";
+        if (outcome.choice?.appended && outcome.choice?.terminal) {
+          finish(record, {
+            status: "cancelled",
+            reason: "appended-terminal",
+            action: outcome.choice.cacophonyAction,
+            terminal: true,
+            index: outcome.index,
+            choice: outcome.choice,
+            source,
+          });
+        } else if (outcome.choice?.appended) {
+          finish(record, {
+            status: "action",
+            action: outcome.choice.cacophonyAction,
+            terminal: false,
+            index: outcome.index,
+            choice: outcome.choice,
+            source,
+          });
+        } else {
+          finish(record, { status: "selected", index: outcome.index, choice: outcome.choice, source });
+        }
       } else if (outcome.type === "cancelled") {
         const keyboardEscape = input?.source === "keyboard" && isChoiceEscapeKey(input?.raw);
         const keyboardQuit = input?.source === "keyboard" && isChoiceQuitKey(input?.raw);
@@ -230,7 +278,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       // Any real choice presentation satisfies a pending /force-choice request.
       forcedRequestOutstanding = false;
       warnedUnsatisfiedForce = false;
-      const choices = normalizeChoices(params?.choices);
+      const providedChoices = normalizeChoices(params?.choices);
+      const choices = normalizeChoices([...providedChoices, ...choiceConfig.append]);
       const promptPrefix = params?.prefix !== undefined ? expandEnvReferences(params.prefix, env, "interactive_choice prefix") : choiceConfig.prefix;
       const promptSuffix = params?.suffix !== undefined ? expandEnvReferences(params.suffix, env, "interactive_choice suffix") : choiceConfig.suffix;
       if (choices.length > choiceConfig.maxChoices) throw new Error(`choice: at most ${choiceConfig.maxChoices} choices are configured (maximum 9 for numeric selection)`);
@@ -386,7 +435,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
               // In a forced-choice run the choice is the sole final tool. Escape
               // or q disables runtime force mode and terminates the automatic
               // follow-up LLM call, so the agent actually stops.
-              terminate: result.reason === "escape-stop" || result.reason === "quit-stop",
+              terminate: result.reason === "escape-stop" || result.reason === "quit-stop" || result.terminal === true,
             };
           } catch (error) {
             const result = { status: "error", error: error?.message || String(error) };
@@ -406,7 +455,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · append=${choiceConfig.append.length} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
@@ -457,7 +506,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
             boolean(["force", "force_at_end"], "forceAtAgentEnd");
             affix("prefix", "prefix");
             affix("suffix", "suffix");
-            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} append=${choiceConfig.append.length} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }

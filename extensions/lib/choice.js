@@ -43,6 +43,10 @@ export function normalizeChoices(choices = []) {
       headline: String(choice?.headline ?? label).trim(),
       summary: String(choice?.summary ?? "").trim(),
       value: choice?.value ?? label,
+      ...(choice?.tts === false ? { tts: false } : {}),
+      ...(choice?.terminal === true ? { terminal: true } : {}),
+      ...(choice?.appended === true ? { appended: true } : {}),
+      ...(choice?.cacophonyAction ? { cacophonyAction: String(choice.cacophonyAction) } : {}),
     };
   }).filter((choice) => choice.label);
   if (out.length < 2) throw new Error("choice: at least two non-empty choices are required");
@@ -128,8 +132,12 @@ export function formatChoiceIntroduction(question, choices, initialIndex = 0, { 
   const prompt = `${String(prefix ?? "")}${String(question ?? "").trim()}${String(suffix ?? "")}`;
   const normalized = normalizeChoices(choices);
   const index = Math.min(normalized.length - 1, Math.max(0, Math.trunc(Number(initialIndex) || 0)));
-  const options = normalized.map((choice, i) => `Option ${i + 1}: ${choice.headline}${choice.summary ? `. ${choice.summary}` : ""}`);
-  return [prompt, ...options, `Selected: ${normalized[index].headline}.`].filter(Boolean).join(" ");
+  const options = normalized
+    .map((choice, i) => ({ choice, i }))
+    .filter(({ choice }) => choice.tts !== false)
+    .map(({ choice, i }) => `Option ${i + 1}: ${choice.headline}${choice.summary ? `. ${choice.summary}` : ""}`);
+  const selected = normalized[index]?.tts === false ? "" : `Selected: ${normalized[index].headline}.`;
+  return [prompt, ...options, selected].filter(Boolean).join(" ");
 }
 
 export function createChoiceSpeaker({
