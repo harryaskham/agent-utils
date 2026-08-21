@@ -1,9 +1,10 @@
 // Finger One ring input adapter for generic Agent Utils choices (bd-8b3005).
 //
-// The ring daemon is already external/daemonised. On choice-session start this
-// adapter launches only `ring get`, a bounded smart client over the daemon-owned
-// event log, maps configured ring events to generic input actions, and emits them
-// on pi.events. It never scans, pairs, connects, enables, or starts a ring daemon.
+// The ring daemon is already external/daemonised. While one or more choice
+// sessions are active, this adapter maintains at most one bounded `ring get`
+// smart client per Pi process, multiplexes sessions in memory, maps configured
+// ring events to generic input actions, and emits them on pi.events. It never
+// scans, pairs, connects, enables, or starts a ring daemon.
 
 import { spawn } from "node:child_process";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
@@ -24,64 +25,113 @@ function envEnabled(env = process.env, persisted = {}) {
   return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
 }
 
-export function createRingInputExtension({ spawnImpl = spawn, env = process.env, settingsPath, persistedSettings } = {}) {
+export function createRingInputExtension({
+  spawnImpl = spawn,
+  env = process.env,
+  settingsPath,
+  persistedSettings,
+  terminateGraceMs = 1_000,
+} = {}) {
   return function ringInputExtension(pi) {
     const ringConfig = { ...(persistedSettings?.ringInput ?? readPersistedRingInputSettings(settingsPath)) };
     const choiceConfig = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const inputSource = String(env.PI_CHOICE_INPUT_SOURCE ?? choiceConfig.inputSource ?? "auto").trim().toLowerCase();
     let omniState = "idle";
     let current = null;
-    let activeSession = null;
-    let lastStatus = { state: "idle", error: null, event: null };
+    const activeSessions = new Map();
+    let lastStatus = { state: "idle", error: null, event: null, connectionCount: 0, sessionCount: 0 };
 
     const emitStatus = (status) => {
-      lastStatus = { ...lastStatus, ...status };
+      lastStatus = {
+        ...lastStatus,
+        ...status,
+        connectionCount: current ? 1 : 0,
+        sessionCount: activeSessions.size,
+      };
       try { pi.events?.emit?.("agent-utils:ring-input-status", { ...lastStatus }); } catch {}
     };
 
-    const stop = (reason = "stopped") => {
+    const directInputWanted = () =>
+      inputSource !== "omni" &&
+      !(inputSource === "auto" && omniState === "listening") &&
+      envEnabled(env, ringConfig) &&
+      activeSessions.size > 0;
+
+    // Idempotent two-stage teardown. A child that ignores SIGTERM gets a short
+    // grace period, then SIGKILL. The stale record is detached immediately so
+    // its stdout and renewal callback cannot route events into a later choice.
+    const stop = (reason = "stopped", state = "idle") => {
       const record = current;
-      if (!record) return false;
+      if (!record) {
+        emitStatus({ state, reason });
+        return false;
+      }
       current = null;
+      if (record.stopped) return false;
       record.stopped = true;
       try { record.proc?.kill?.("SIGTERM"); } catch {}
-      emitStatus({ state: "idle", reason });
+      const grace = Math.max(0, Number(terminateGraceMs) || 0);
+      record.killTimer = setTimeout(() => {
+        if (record.exited) return;
+        try { record.proc?.kill?.("SIGKILL"); } catch {}
+      }, grace);
+      record.killTimer?.unref?.();
+      emitStatus({ state, reason });
       return true;
     };
 
-    const start = (session) => {
-      stop("replaced");
-      if (inputSource === "omni" || (inputSource === "auto" && omniState === "listening")) {
-        emitStatus({ state: "standby", reason: "omni-primary", error: null, sessionId: session.sessionId });
-        return false;
-      }
-      if (!envEnabled(env, ringConfig)) {
-        emitStatus({ state: "disabled", error: null, sessionId: session.sessionId });
+    // One transport per Pi process, independent of choice count. Session/ring
+    // filtering happens in memory below; starting a second simultaneous choice
+    // merely adds a route and never spawns another child.
+    const ensureConnection = () => {
+      if (current) return true;
+      if (!directInputWanted()) {
+        const disabled = !envEnabled(env, ringConfig);
+        emitStatus({
+          state: disabled ? "disabled" : activeSessions.size ? "standby" : "idle",
+          reason: disabled ? "disabled" : activeSessions.size ? "omni-primary" : "no-sessions",
+          error: null,
+        });
         return false;
       }
       const eventMap = resolveRingInputEventMap(ringConfig, env);
       const command = env.PI_RING_COMMAND || ringConfig.command || "ring";
       let proc;
       try {
-        proc = spawnImpl(command, buildRingInputArgs({ eventMap, timeoutMs: session.timeoutMs }), {
+        // Transport lifetime is process/session driven, not tied to one choice's
+        // UI timeout. The bounded client renews while any routed choice remains.
+        proc = spawnImpl(command, buildRingInputArgs({ eventMap, timeoutMs: 0 }), {
           stdio: ["ignore", "pipe", "pipe"],
           env,
         });
       } catch (error) {
-        emitStatus({ state: "error", error: error?.message || String(error), sessionId: session.sessionId });
+        emitStatus({ state: "error", error: error?.message || String(error) });
         return false;
       }
-      const record = { proc, session, sessionId: session.sessionId, ring: session.ring || env.PI_RING_CHOICE_RING || ringConfig.ring || null, stdout: "", stderr: "", stopped: false };
+      const record = {
+        proc,
+        eventMap,
+        stdout: "",
+        stderr: "",
+        stopped: false,
+        exited: false,
+        killTimer: null,
+      };
       current = record;
-      emitStatus({ state: "listening", error: null, sessionId: record.sessionId, ring: record.ring });
+      emitStatus({ state: "listening", error: null, reason: "connected" });
 
       const handleLine = (line) => {
+        if (record.stopped || current !== record) return;
         const parsed = parseRingInputLine(line);
-        if (!parsed || (record.ring && parsed.ring && String(parsed.ring) !== String(record.ring))) return;
+        if (!parsed) return;
         const input = ringEventToInputAction(parsed, eventMap);
         if (!input) return;
-        emitStatus({ state: "listening", event: parsed.event, sessionId: record.sessionId });
-        try { pi.events?.emit?.(INPUT_ACTION_EVENT, { ...input, sessionId: record.sessionId }); } catch {}
+        for (const session of activeSessions.values()) {
+          const ring = session.ring || env.PI_RING_CHOICE_RING || ringConfig.ring || null;
+          if (ring && parsed.ring && String(parsed.ring) !== String(ring)) continue;
+          emitStatus({ state: "listening", event: parsed.event, sessionId: session.sessionId });
+          try { pi.events?.emit?.(INPUT_ACTION_EVENT, { ...input, sessionId: session.sessionId }); } catch {}
+        }
       };
 
       proc.stdout?.on?.("data", (chunk) => {
@@ -94,41 +144,48 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
       proc.on?.("error", (error) => {
         if (current !== record || record.stopped) return;
         current = null;
-        emitStatus({ state: "error", error: error?.message || String(error), sessionId: record.sessionId });
+        record.stopped = true;
+        emitStatus({ state: "error", error: error?.message || String(error) });
       });
       proc.on?.("exit", (code, signal) => {
+        record.exited = true;
+        if (record.killTimer) clearTimeout(record.killTimer);
         if (record.stdout.trim()) handleLine(record.stdout);
         if (current !== record || record.stopped) return;
         current = null;
         const detail = record.stderr.trim();
-        if (/timed out waiting/i.test(detail)) {
-          if (Number(record.session.timeoutMs) === 0 && activeSession?.sessionId === record.sessionId) {
-            emitStatus({ state: "restarting", reason: "bounded-client-timeout", error: null, sessionId: record.sessionId });
-            queueMicrotask(() => {
-              if (activeSession?.sessionId === record.sessionId && !current) start(activeSession);
-            });
-          } else emitStatus({ state: "idle", reason: "timeout", error: null, sessionId: record.sessionId });
-        } else if (code === 0) emitStatus({ state: "idle", reason: "ended", error: null, sessionId: record.sessionId });
-        else emitStatus({ state: "error", error: `ring get exited ${code ?? "?"}${signal ? `/${signal}` : ""}${detail ? `: ${detail}` : ""}`, sessionId: record.sessionId });
+        if (/timed out waiting/i.test(detail) && directInputWanted()) {
+          emitStatus({ state: "restarting", reason: "bounded-client-timeout", error: null });
+          queueMicrotask(() => {
+            if (!current && directInputWanted()) ensureConnection();
+          });
+        } else if (code === 0) {
+          emitStatus({ state: "idle", reason: "ended", error: null });
+        } else {
+          emitStatus({ state: "error", error: `ring get exited ${code ?? "?"}${signal ? `/${signal}` : ""}${detail ? `: ${detail}` : ""}` });
+        }
       });
       return true;
     };
 
     const choiceSessionHandler = (session = {}) => {
+      const id = session.sessionId;
+      if (!id) return;
       if (session.status === "started") {
-        activeSession = session;
-        start(session);
-      } else if (session.status === "ended" && activeSession?.sessionId === session.sessionId) {
-        activeSession = null;
-        stop("choice-ended");
+        activeSessions.set(id, session);
+        ensureConnection();
+      } else if (session.status === "ended") {
+        activeSessions.delete(id);
+        if (activeSessions.size === 0) stop("choice-ended");
+        else emitStatus({ state: current ? "listening" : "standby", reason: "choice-ended" });
       }
     };
     pi.events?.on?.(CHOICE_SESSION_EVENT, choiceSessionHandler);
     const omniStatusHandler = (status = {}) => {
       omniState = status.state || "idle";
-      if (inputSource !== "auto" || !activeSession) return;
-      if (omniState === "listening") stop("omni-primary");
-      else if (["error", "disabled", "idle"].includes(omniState) && !current) start(activeSession);
+      if (inputSource !== "auto" || activeSessions.size === 0) return;
+      if (omniState === "listening") stop("omni-primary", "standby");
+      else if (["error", "disabled", "idle"].includes(omniState) && !current) ensureConnection();
     };
     pi.events?.on?.(OMNI_INPUT_STATUS_EVENT, omniStatusHandler);
 
@@ -138,7 +195,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
         const raw = String(args || "status").trim() || "status";
         const action = raw.toLowerCase();
         if (action === "status") {
-          ctx.ui.notify(`ring input: ${lastStatus.state} source=${inputSource} omni=${omniState} enabled=${envEnabled(env, ringConfig)} ring=${env.PI_RING_CHOICE_RING || ringConfig.ring || "any"} command=${env.PI_RING_COMMAND || ringConfig.command || "ring"}${lastStatus.sessionId ? ` session=${lastStatus.sessionId}` : ""}${lastStatus.event ? ` event=${lastStatus.event}` : ""}${lastStatus.error ? ` error=${lastStatus.error}` : ""}`, lastStatus.state === "error" ? "warning" : "info");
+          ctx.ui.notify(`ring input: ${lastStatus.state} source=${inputSource} omni=${omniState} enabled=${envEnabled(env, ringConfig)} connections=${current ? 1 : 0} sessions=${activeSessions.size} ring=${env.PI_RING_CHOICE_RING || ringConfig.ring || "any"} command=${env.PI_RING_COMMAND || ringConfig.command || "ring"}${lastStatus.sessionId ? ` last-session=${lastStatus.sessionId}` : ""}${lastStatus.event ? ` event=${lastStatus.event}` : ""}${lastStatus.error ? ` error=${lastStatus.error}` : ""}`, lastStatus.state === "error" ? "warning" : "info");
           return;
         }
         if (action === "mappings") {
@@ -156,7 +213,8 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
         if (action === "on") {
           env.PI_RING_CHOICE_ENABLED = "1";
           ringConfig.enabled = true;
-          ctx.ui.notify("ring choice input enabled for this session; startup settings unchanged; it will attach to the next choice session", "info");
+          if (activeSessions.size) ensureConnection();
+          ctx.ui.notify("ring choice input enabled for this session; startup settings unchanged", "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
@@ -192,7 +250,7 @@ export function createRingInputExtension({ spawnImpl = spawn, env = process.env,
     });
 
     pi.on("session_shutdown", () => {
-      activeSession = null;
+      activeSessions.clear();
       stop("shutdown");
       try { pi.events?.off?.(CHOICE_SESSION_EVENT, choiceSessionHandler); } catch {}
       try { pi.events?.off?.(OMNI_INPUT_STATUS_EVENT, omniStatusHandler); } catch {}

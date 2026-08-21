@@ -213,18 +213,25 @@ by the smart client and never placed in argv or settings. Use
 subscription. The direct ring adapter remains available as an explicit source
 or auto fallback.
 
-The direct adapter starts this smart client for each active choice:
+The direct adapter maintains **at most one** smart-client child per Pi process
+while any direct-ring choices are active:
 
 ```text
 ring get --events <configured-events> --count 100000 \
-  --timeout-ms <choice-timeout> --after now --format json
+  --timeout-ms 300000 --after now --format json
 ```
 
-`--after now` prevents historical gestures selecting a fresh question. Choice
-completion/cancellation terminates the `ring get` client; the external daemon and
-ring connection remain untouched. A disconnected ring therefore causes no
-special lifecycle work: keyboard input remains available and the bounded client
-quietly times out or is stopped when the choice ends.
+Choice sessions are multiplexed in memory and routed by session ID and optional
+ring name. Starting a replacement or simultaneous choice reuses the existing
+child instead of multiplying polling clients. `--after now` prevents historical
+gestures selecting a fresh question. The bounded five-minute transport renews
+only while a routed choice remains; ending the final choice terminates it.
+Teardown is idempotent and escalates from `SIGTERM` to `SIGKILL` after a short
+grace period, so a wedged CLI cannot survive selection, cancellation, timeout,
+or session shutdown. The external daemon and ring connection remain untouched.
+A disconnected ring therefore causes no special lifecycle work: keyboard input
+remains available and the bounded client quietly times out or is stopped when
+the choice ends.
 
 Default semantic mappings:
 
@@ -266,8 +273,10 @@ Optional `ring` filters one configured ring. Environment variables
 
 Use `/ring-input status`, `/ring-input mappings`, `/ring-input on`,
 `/ring-input off`, or `/ring-input settings key=value` for runtime-only
-inspection/control. Commands never rewrite `agentUtils.ringInput`; edit the file
-explicitly to change startup behavior.
+inspection/control. Status includes active connection and routed-session counts,
+which should never report more than one direct connection in a Pi process.
+Commands never rewrite `agentUtils.ringInput`; edit the file explicitly to
+change startup behavior.
 
 ## Calling choices
 

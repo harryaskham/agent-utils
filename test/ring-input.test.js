@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,7 +174,7 @@ test("ring-input commands are runtime-only and preserve startup settings", async
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("ring adapter disabled mode never spawns and timeout exits stay non-fatal", () => {
+test("ring adapter disabled mode never spawns and timeout exits stay non-fatal", async () => {
   {
     const events = bus();
     let spawnCount = 0;
@@ -185,15 +186,153 @@ test("ring adapter disabled mode never spawns and timeout exits stay non-fatal",
   {
     const events = bus();
     const proc = fakeProcess();
+    let spawnCount = 0;
     const commands = new Map();
     const pi = { events, registerCommand(name, def) { commands.set(name, def); }, on() {} };
-    createRingInputExtension({ spawnImpl: () => proc, env: {}, persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } } })(pi);
+    createRingInputExtension({ spawnImpl: () => { spawnCount += 1; return proc; }, env: {}, persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } } })(pi);
     events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "choice-y", timeoutMs: 10 });
     proc.stderr.emit("data", "Error: execution error: timed out waiting for matching ring events");
     proc.emit("exit", 1, null);
     const notifications = [];
     commands.get("ring-input").handler("status", { ui: { notify: (message, level) => notifications.push({ message, level }) } });
-    assert.match(notifications[0].message, /ring input: idle/);
+    assert.match(notifications[0].message, /ring input: restarting/);
     assert.doesNotMatch(notifications[0].message, /error=/);
+    // Ending before the queued renewal runs proves the renewal cannot race past
+    // the final session and leave a fresh orphan behind.
+    events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "choice-y" });
+    await Promise.resolve();
+    assert.equal(spawnCount, 1, "queued renewal observes the ended session and does not spawn an orphan");
   }
+});
+
+test("simultaneous choices share one child and route events by session/ring", () => {
+  const events = bus();
+  const processes = [];
+  const commands = new Map();
+  const pi = {
+    events,
+    registerCommand(name, def) { commands.set(name, def); },
+    on() {},
+  };
+  createRingInputExtension({
+    spawnImpl: () => { const proc = fakeProcess(); processes.push(proc); return proc; },
+    env: {},
+    persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } },
+  })(pi);
+  const inputs = [];
+  events.on(CHOICE_INPUT_EVENT, (input) => inputs.push(input));
+
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "one", timeoutMs: 0, ring: "r1" });
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "two", timeoutMs: 5000, ring: "r2" });
+  assert.equal(processes.length, 1, "one transport is shared across active choices");
+
+  processes[0].stdout.emit("data", '{"event":"event-ring-cw","ring":"r2"}\n');
+  assert.deepEqual(inputs.map((input) => input.sessionId), ["two"], "ring-scoped event routes only to the matching session");
+
+  processes[0].stdout.emit("data", '{"event":"event-ring-select"}\n');
+  assert.deepEqual(inputs.slice(1).map((input) => input.sessionId).sort(), ["one", "two"], "unscoped event fans out to both sessions");
+
+  const notifications = [];
+  commands.get("ring-input").handler("status", { ui: { notify: (message) => notifications.push(message) } });
+  assert.match(notifications[0], /connections=1 sessions=2/);
+
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "one" });
+  assert.equal(processes[0].killed, undefined, "transport stays up for the remaining choice");
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "two" });
+  assert.equal(processes[0].killed, "SIGTERM", "last choice tears down the shared transport");
+});
+
+test("starting a replacement choice before ending the old one never respawns", () => {
+  const events = bus();
+  const processes = [];
+  const pi = { events, registerCommand() {}, on() {} };
+  createRingInputExtension({
+    spawnImpl: () => { const proc = fakeProcess(); processes.push(proc); return proc; },
+    env: {},
+    persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } },
+  })(pi);
+
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "old", timeoutMs: 1000 });
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "new", timeoutMs: 1000 });
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "old" });
+  assert.equal(processes.length, 1);
+  assert.equal(processes[0].killed, undefined);
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "new" });
+  assert.equal(processes[0].killed, "SIGTERM");
+});
+
+test("teardown escalates to SIGKILL when a child ignores SIGTERM", async () => {
+  const events = bus();
+  const proc = fakeProcess();
+  const signals = [];
+  proc.kill = (signal) => { signals.push(signal); };
+  const pi = { events, registerCommand() {}, on() {} };
+  createRingInputExtension({
+    spawnImpl: () => proc,
+    env: {},
+    terminateGraceMs: 5,
+    persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } },
+  })(pi);
+
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "stubborn", timeoutMs: 1000 });
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "stubborn" });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("session shutdown unregisters handlers and tears down exactly once", () => {
+  const events = bus();
+  const proc = fakeProcess();
+  const signals = [];
+  proc.kill = (signal) => { signals.push(signal); };
+  const handlers = new Map();
+  const pi = {
+    events,
+    registerCommand() {},
+    on(name, fn) { handlers.set(name, fn); },
+  };
+  createRingInputExtension({
+    spawnImpl: () => proc,
+    env: {},
+    persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } },
+  })(pi);
+
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "shutdown", timeoutMs: 1000 });
+  handlers.get("session_shutdown")();
+  handlers.get("session_shutdown")();
+  assert.deepEqual(signals, ["SIGTERM"], "shutdown teardown is idempotent");
+
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "after-shutdown", timeoutMs: 1000 });
+  assert.deepEqual(signals, ["SIGTERM"], "choice handler was unregistered");
+});
+
+test("a real child process exits after the last choice ends", async () => {
+  const events = bus();
+  let child;
+  const pi = { events, registerCommand() {}, on() {} };
+  createRingInputExtension({
+    // Ignore the requested ring command in this integration test and run a real,
+    // intentionally long-lived Node child so process exit is observable rather
+    // than inferred from a fake `.kill()` call.
+    spawnImpl: () => {
+      child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      return child;
+    },
+    env: {},
+    terminateGraceMs: 100,
+    persistedSettings: { choice: { inputSource: "ring" }, ringInput: { enabled: true } },
+  })(pi);
+
+  events.emit(CHOICE_SESSION_EVENT, { status: "started", sessionId: "real-child", timeoutMs: 1000 });
+  assert.ok(child?.pid, "real child started");
+  const exited = once(child, "exit");
+  events.emit(CHOICE_SESSION_EVENT, { status: "ended", sessionId: "real-child" });
+  const [code, signal] = await Promise.race([
+    exited,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("child did not exit")), 1000)),
+  ]);
+  assert.equal(code, null);
+  assert.ok(["SIGTERM", "SIGKILL"].includes(signal));
 });
