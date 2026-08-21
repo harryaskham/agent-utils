@@ -75,7 +75,11 @@ async function loadRegisterMcpServer() {
     let createJiti;
     try { ({ createJiti } = require("jiti")); }
     catch { throw nativeError; }
-    const jiti = createJiti(import.meta.url);
+    const alias = {};
+    for (const dependency of ["typebox", "zod", "@earendil-works/pi-ai", "@earendil-works/pi-tui"]) {
+      try { alias[dependency] = require.resolve(dependency); } catch {}
+    }
+    const jiti = createJiti(import.meta.url, { alias });
     try { adapter = await jiti.import(require.resolve("pi-mcp-adapter")); }
     catch { throw nativeError; }
   }
