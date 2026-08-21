@@ -35,6 +35,17 @@ export const FULLSCREEN_MODE_MIGRATIONS = Object.freeze({
   relative: Object.freeze({ style: "relative", deprecated: false }),
 });
 
+export function resolveFullscreenDynamicPolicy({ tmux = false, liveEditor = false, dynamicInTmux = false, dynamic = true } = {}) {
+  const liveInTerminal = !tmux || liveEditor || dynamicInTmux;
+  return {
+    liveInTerminal,
+    dynamic: Boolean(dynamic) && liveInTerminal,
+    animation: liveInTerminal,
+    trailingWorkspace: liveInTerminal,
+    rowBackground: liveInTerminal,
+  };
+}
+
 export function resolveFullscreenEditorMode(value) {
   const key = String(value || "static").trim().toLowerCase();
   const resolved = FULLSCREEN_MODE_MIGRATIONS[key] || FULLSCREEN_MODE_MIGRATIONS.static;

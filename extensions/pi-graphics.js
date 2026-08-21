@@ -101,7 +101,7 @@ import {
   resetPlacementTracking,
 } from "./pi-graphics/runtime.js";
 import { PI_GRAPHICS_RESERVED_Z_INDICES, PI_GRAPHICS_Z } from "./pi-graphics/z-index.js";
-import { createFullscreenResourceOwner, getOrCreateEditorChromeRegistry, resolveFullscreenEditorMode, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
+import { createFullscreenResourceOwner, getOrCreateEditorChromeRegistry, resolveFullscreenDynamicPolicy, resolveFullscreenEditorMode, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
 
 const TOOL_PREFIX = "pi_graphics";
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
@@ -318,13 +318,21 @@ export default async function piGraphicsExtension(pi) {
     return Boolean(gfxEnv().TMUX) || /screen|tmux/i.test(String(gfxEnv().TERM || ""));
   }
 
+  function fullscreenDynamicPolicy() {
+    return resolveFullscreenDynamicPolicy({
+      tmux: runningInsideTmux(),
+      liveEditor: envBool("PI_GRAPHICS_TMUX_LIVE_EDITOR", false),
+      dynamicInTmux: envBool("PI_GRAPHICS_EDITOR_DYNAMIC_IN_TMUX", false),
+      dynamic: envBool("PI_GRAPHICS_EDITOR_DYNAMIC", true),
+    });
+  }
+
   function tmuxLiveEditorGraphicsEnabled() {
-    return !runningInsideTmux() || envBool("PI_GRAPHICS_TMUX_LIVE_EDITOR", false) || envBool("PI_GRAPHICS_EDITOR_DYNAMIC_IN_TMUX", false);
+    return fullscreenDynamicPolicy().liveInTerminal;
   }
 
   function editorDynamicHeatEnabled() {
-    if (!envBool("PI_GRAPHICS_EDITOR_DYNAMIC", true)) return false;
-    return tmuxLiveEditorGraphicsEnabled();
+    return fullscreenDynamicPolicy().dynamic;
   }
 
   function editorTrailingWorkspaceEnabled() {

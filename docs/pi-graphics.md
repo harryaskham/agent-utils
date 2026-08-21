@@ -249,7 +249,11 @@ npm run pi-graphics:animation-smoke
 npm run pi-graphics:tmux-smoke
 ```
 
-The pure suite covers editor lease ordering, exact-owner release, narrow/wide
-layout, mode migration, quiet-off invariants, timer draining, scoped protocol
-commands, renderer pixels, and repeated composition. Live Kitty smoke checks are
-explicit because terminal/tmux rendering is environment-dependent.
+`test/pi-graphics-fullscreen-matrix.test.js` is the compact fullscreen matrix:
+it snapshots deterministic renderer hashes across narrow/wide widths, multiple
+themes/styles, and tmux/direct policies; checks resize width bounds, theme
+invalidation, overlay/editor replacement, reload teardown, and repeated on/off
+resource draining. The broader pure suite covers editor lease ordering,
+exact-owner release, mode migration, quiet-off invariants, scoped protocol
+commands, and renderer pixels. Live Kitty smoke checks are explicit because
+terminal/tmux rendering is environment-dependent.
