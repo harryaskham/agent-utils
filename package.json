@@ -64,6 +64,7 @@
       "./extensions/force-agent-speech.js",
       "./extensions/compaction-continue-guard.js",
       "./extensions/endless.js",
+      "./extensions/after.js",
       "./extensions/interactive-shell.js",
       "./extensions/self-compact.js",
       "./extensions/portable-session.js",
