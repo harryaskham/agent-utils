@@ -1,770 +1,255 @@
-# Pi graphics theme + extension
+# Pi graphics
 
-See also [`kitty-graphics-protocol-audit.md`](kitty-graphics-protocol-audit.md) for the 2026-05-24 Kitty protocol audit findings and remaining follow-up, and [`design/pi-graphics-fullscreen-composition.md`](design/pi-graphics-fullscreen-composition.md) for the fullscreen-native surface inventory, ownership contract, mode migration map, and implementation sequence.
+Agent Utils ships a fullscreen-native Pi graphics extension at
+[`extensions/pi-graphics.js`](../extensions/pi-graphics.js), renderer helpers
+under [`extensions/pi-graphics/`](../extensions/pi-graphics/), and three themes:
 
-This package ships a **Pi theme** plus a **Pi extension** that together let
-agents draw freeform, kitty-graphics-backed UI affordances inside a
-Pi-coding-agent session.
+- `kitty-graphics-nord` — calm Nord palette;
+- `kitty-graphics-nord-transparent` — Nord foregrounds with transparent surfaces;
+- `kitty-graphics` — brighter neon palette;
+- `eink` — transparent greyscale tablet theme.
 
-The pieces:
+For protocol details, see
+[`kitty-graphics-protocol-audit.md`](kitty-graphics-protocol-audit.md). For the
+fullscreen ownership model and implementation sequence, see
+[`design/pi-graphics-fullscreen-composition.md`](design/pi-graphics-fullscreen-composition.md).
 
-| File | Role |
-|------|------|
-| `themes/kitty-graphics-nord.json` | Calm default theme that restricts Pi foregrounds and box backgrounds to the canonical 16 Nord colors. |
-| `themes/kitty-graphics-nord-transparent.json` | Same Nord foreground palette, but all Pi box/message/tool/selection backgrounds use the terminal default for a blank canvas behind Unicode or relative box chrome. |
-| `themes/kitty-graphics.json` | Maximal cyberpunk/neon color theme registered through `pi.themes` in `package.json`. |
-| `extensions/pi-graphics.js` | Pi extension entry point (registers tools + slash commands). |
-| `extensions/pi-graphics/affordances.js` | High-level renderers: prompt enclosure rules, gradient borders, accent bars, and glow panels. |
-| `extensions/pi-graphics/components.js` | TypeScript-side TUI component mirror: graphical card frames, rails, status chips, skeleton rows, pulse waveforms, and cache keys. |
-| `extensions/pi-graphics/auto-widget.js` | Startup-visible APNG pulse widget helpers and opt-out detection. |
-| `extensions/pi-graphics/png-renderer.js` | Tiny dependency-free RGBA → PNG/APNG encoder used by the affordance renderers. |
-| `extensions/pi-graphics/runtime.js` | Pi-runtime-agnostic placement helpers (kept testable without `@sinclair/typebox`). |
+## Current supported surface
+
+The normal extension deliberately stays smaller than the historical showcase:
+
+- optional theme application;
+- composable editor rails and cursor styling;
+- optional segmented footer and footer underlay;
+- optional box chrome or lighter top/bottom box rails;
+- scoped Kitty image and placement ownership;
+- bounded working-message/indicator styling;
+- `/gfx`, `/eink`, and `pi_graphics_clear` controls;
+- optional low-level render tools for diagnostics.
+
+Old startup splash, heartbeat, ambient scene, ANSI/Braille/cockpit/lighthouse,
+conversation-frame, terminal-palette, and proof-wall modes are no longer live
+extension surfaces. Old documentation for those modes was removed rather than
+leaving commands that silently do nothing. Standalone renderer/smoke scripts may
+still generate offline artifacts; they are tests and diagnostics, not automatic
+fullscreen UI.
 
 ## Installation
 
-Install agent-utils as a Pi package per the repo README. Pi auto-discovers
-themes via the `pi.themes` entry in [`package.json`](../package.json) and
-extensions via `pi.extensions`. The `pi-graphics` extension does **not** copy
-`kitty-graphics-nord.json`, `kitty-graphics-nord-transparent.json`, or
-`kitty-graphics.json` into user theme directories by default; leaving the bundled themes package-owned avoids package-plus-local
-duplicate theme-name warnings during Pi startup. Use `/gfx themes` to inspect
-the running theme registry and identify stale copied files or redundant
-`settings.json` `themes[]` entries if Pi reports duplicate theme exposure.
-
-To activate the theme:
+Install the package and select a bundled theme through Pi settings:
 
 ```bash
-pi /settings   # then choose "kitty-graphics-nord" for the calm default
-# choose "kitty-graphics-nord-transparent" for a no-background box canvas
-# or choose "kitty-graphics" for the neon/cyberpunk palette
-# or, equivalently, in settings.json:
-# { "theme": "kitty-graphics-nord-transparent" }
+pi install git:github.com/harryaskham/agent-utils@v1
 ```
-
-The companion extension (`./extensions/pi-graphics.js`) is loaded
-automatically by Pi when the package is installed. **Theme and graphics mode are
-separate controls**: the theme determines Pi's colors; `settings.json` under
-`piGraphics` (or env vars) determines whether kitty/PNG graphics are calm, off,
-or showcase. The default profile is now calm but still unmistakably graphical:
-it auto-applies the selected kitty graphics theme, requests a bounded OSC
-terminal palette change (reset on shutdown), installs footer/status cues and
-editor/input frame widgets, and mounts a bounded APNG **rendered TUI surface**
-above the editor. That ambient surface is a TypeScript-rendered mirror of Pi UI
-chrome — transcript cards, tool lane, input box, footer beacons, deep Nordic
-gradients, radial glow, scanlines, and a pulsing waveform — uploaded once as an
-efficient APNG. The huge startup splash, cockpit wall, Braille scene, validation
-report, ANSI takeover, photon rain, and lighthouse stay behind
-`/pi-graphics-showcase` or their explicit commands.
-
-Example settings:
 
 ```json
 {
   "theme": "kitty-graphics-nord",
   "piGraphics": {
-    "mode": "calm",
+    "mode": "on",
     "autoApplyTheme": true,
-    "features": {
-      "chrome": true,
-      "editorFrame": true,
-      "footer": true,
-      "nativeChrome": true,
-      "ambientChrome": false,
-      "ambientProof": false,
-      "showcaseWidgets": false,
-      "startupSplash": false,
-      "conversationFrame": false,
-      "brailleScene": false,
-      "validationReport": false,
-      "visualProof": false,
-      "cockpitWall": false,
-      "ansiScene": false,
-      "ansiTakeover": false,
-      "terminalPalette": true,
-      "transcriptChrome": false,
-      "editorSurface": true,
-      "rawBootstrap": false,
-      "headerChrome": false,
-      "heartbeat": false
-    },
-    "animation": { "targetFps": 60, "ambientFrames": 4, "ambientDelayMs": 90, "showcaseFrames": 32 },
+    "boxChrome": false,
+    "boxRails": false,
     "editor": {
       "style": "unicode",
+      "unicodeMode": "fill",
+      "animation": false,
+      "borderStyle": "gradient",
       "topBorderHeight": 1,
       "bottomBorderHeight": 1,
       "cursorStyle": "glow",
       "trailingWorkspace": false,
-      "rowBackground": false
+      "rowBackground": false,
+      "typingImpulse": true
     },
-    "cell": { "widthPx": 8, "lineHeightScale": 1.2 }
+    "footer": {
+      "underlay": true,
+      "glowToken": "editorBg",
+      "lineToken": "borderAccent"
+    },
+    "cell": {
+      "widthPx": 8,
+      "lineHeightScale": 1.2
+    }
   }
 }
 ```
 
-Set `PI_GRAPHICS_SHOWCASE=1` or use `/pi-graphics-showcase` when you want the
-maximal debug/demo mode. Individual env vars such as `PI_GRAPHICS_AUTO_WIDGET=1`
-still override settings for one run. Calm mode keeps theme/palette application
-and the editor-surface replacement enabled, but leaves transcript/header/raw
-bootstrap/ambient proof/showcase surfaces off by default. Use
-`PI_GRAPHICS_AUTO_EDITOR_SURFACE=0` to restore the default editor surface, or
-set `PI_GRAPHICS_AUTO_AMBIENT_PROOF=1`, `PI_GRAPHICS_AUTO_AMBIENT_CHROME=1`,
-`PI_GRAPHICS_AUTO_TRANSCRIPT_CHROME=1`, `PI_GRAPHICS_AUTO_RAW_BOOTSTRAP=1`, or
-`PI_GRAPHICS_AUTO_HEADER_CHROME=1` when you explicitly want those verbose proof
-surfaces for a run. Editor-surface chrome best-effort wraps any existing custom
-input editor and replaces Pi's ASCII separator lines with kitty PNG placeholder
-rules; when no editor factory is exposed, the separate above/below editor frame
-widgets remain active so the extension still loads without importing Pi
-internals. Configure PNG source-cell metrics with `piGraphics.cell.widthPx`,
-`piGraphics.cell.heightPx`, and `piGraphics.cell.lineHeightScale` (or the env
-vars `PI_GRAPHICS_CELL_WIDTH_PX`, `PI_GRAPHICS_CELL_HEIGHT_PX`, and
-`PI_GRAPHICS_LINE_HEIGHT_SCALE`). If `cellHeightPx` is omitted, the renderer uses
-`16 * lineHeightScale`; the default line-height scale is `1.2` to match Pi's
-120% line spacing. Tune the opt-in APNG animation's frame count and inter-frame delay with
-`PI_GRAPHICS_EDITOR_FRAMES` (default 24, max 256) and `PI_GRAPHICS_EDITOR_DELAY_MS`
-(default 17ms); the separate ambient chrome is toggled with
-`PI_GRAPHICS_AUTO_AMBIENT_CHROME`. Use
-`/pi-graphics-tui-surface-scene` or `pi_graphics_render_tui_surface_scene` to
-force the full TypeScript-rendered Pi TUI scene manually. For an inspectable file
-artefact outside Pi, run `npm run pi-graphics:smoke -- --out=artifacts/pi-graphics-smoke.png`.
-Use `/pi-graphics-native-chrome-demo` to preview the intended next direction:
-PNG-backed translucent placeholder borders/backgrounds for input, user/assistant
-messages, tool output, and info/system surfaces. Use `/pi-graphics-visual-contract` (or the
-`pi_graphics_visual_contract` tool) to show an explicit checklist of all expected
-visible cues when judging whether the mode is active. Use
-`/pi-graphics-theme-swatch` (or `pi_graphics_theme_swatch`) to render actual
-runtime theme-token calibration bars; if those bars look ordinary, the running
-session has not picked up the `kitty-graphics` theme/package yet. The extension
-also sends a transcript-visible `pi-graphics-theme-swatch` message on startup by
-default; opt out with `PI_GRAPHICS_AUTO_THEME_SWATCH=0` or
-`PI_KITTY_GRAPHICS_AUTO_THEME_SWATCH=off`. Use `/pi-graphics-photon-rain` or
-`pi_graphics_photon_rain` for an all-text pulsing high-tech render field that is
-visible even when kitty image placeholders are unavailable. Use
-`pi_graphics_render_terminal_scene` for the pixel-rendered Cacophony-style
-terminal scene: cell grid, aurora glow, status chips, scanlines, and APNG pulse.
-When kitty placeholder placement is active, the extension auto-mounts this
-rendered terminal scene above the editor on startup; opt out with
-`PI_GRAPHICS_AUTO_TERMINAL_SCENE=0` or `PI_KITTY_GRAPHICS_AUTO_TERMINAL_SCENE=off`.
-If a running session still looks unchanged, run `/pi-graphics-live-probe` (or
-`pi_graphics_live_probe`) first. It emits the raw/bootstrap/header/editor/status
-surfaces and reports package version, configured theme/mode, UI API availability,
-settings-derived flags, theme sync counts, Unicode placement status, and the
-reload sentinel. Then run `/pi-graphics-doctor` (or
-`/pi-graphics-takeover`) to re-apply the visible surfaces and report theme,
-kitty-placeholder, opt-out, and reload diagnostics. Use `/pi-graphics-theme-delta`
-or `pi_graphics_theme_delta` to print the exact reload sentinel and quantified
-RGB deltas against the built-in dark theme. Use `/pi-graphics-conversation-frame`
-or `pi_graphics_conversation_frame` to force normal transcript text through the
-high-contrast deep-Nordic conversation frame. Use `/pi-graphics-ansi-takeover`
-or `pi_graphics_ansi_takeover` for a raw truecolor terminal banner that does not
-depend on Pi theme activation or kitty image placement. Use `/pi-graphics-ansi-scene`
-or `pi_graphics_ansi_scene` for a half-block ANSI rendering sampled from the same
-TypeScript pixel terminal scene used by kitty/APNG output. Use `/pi-graphics-osc-palette`
-or `pi_graphics_osc_palette` to ask compatible terminals to change their actual
-foreground/background/cursor/ANSI palette to the deep-Nordic theme. Use
-`/pi-graphics-braille-scene` or `pi_graphics_braille_scene` to print a
-truecolor Unicode Braille image sampled from the TypeScript rendered terminal
-scene, so normal transcript output looks graphical even without kitty placement.
-Use `/pi-graphics-validation-report` or `pi_graphics_validation_report` to print real
-TypeScript renderer metrics (PNG/APNG sizes, unique color buckets, luminance
-range, frame/animation bounds) inspired by the Caco Rust visual validation style.
-Use `/pi-graphics-visual-proof` or `pi_graphics_visual_proof` for a transcript-visible
-truecolor proof block with palette chips, measured contrast/delta numbers, reload
-sentinel text, and remediation hints. Use `/pi-graphics-heartbeat` or `pi_graphics_heartbeat` to inspect the lightweight
-always-on status/title ticker that keeps idle sessions visibly pulsing without
-resending image payloads. Use `/pi-graphics-cockpit-wall` or
-`pi_graphics_cockpit_wall` for the largest normal-output takeover wall combining
-ANSI scene art, status panels, rails, and sentinel text. Use `/pi-graphics-lighthouse` or
-`pi_graphics_lighthouse` for the deliberately oversized normal-TUI beacon that
-should be visible even before image/APNG rendering succeeds.
+`mode: "off"` is genuinely quiet: graphics releases only its editor lease,
+namespaced widgets, footer/working surfaces it still owns, cursor policy, timers,
+and scoped Kitty ids. Independent editor decorators such as editor chips remain
+active.
 
-## How the extension cooperates with the theme
+## Editor composition
 
-The theme controls Pi's existing color tokens (borders, message backgrounds,
-markdown styles, etc.). It intentionally uses near-black void backgrounds plus
-neon cyan, violet, aurora, and acid-green accents so ordinary Pi widgets are
-visibly displaced from the built-in `dark` theme even before any kitty image is
-rendered. The extension complements those flat colors with graphical affordances:
+Pi graphics and editor chips share the registry in
+[`fullscreen-contract.js`](../extensions/pi-graphics/fullscreen-contract.js).
+The registry keeps the host editor as a base and applies owner-tagged decorators
+in stable priority/registration order. Later `setEditorComponent()` calls replace
+the undecorated base rather than erasing the stack. Disabling or reloading Pi
+graphics releases only the `pi-graphics` lease; it never reinstalls an obsolete
+captured factory over a newer modal/editor owner.
 
-* **Prompt enclosure rules** — a kitty-graphics gradient strip with a soft
-  cyan/violet halo that can replace plain ASCII separators like
-  `--------------------`.
-* **Translucent gradient borders** — a graphical frame that can be wrapped
-  around tables, agent messages, or code blocks.
-* **Nordic glow panels** — a full-cell rendered component with deep-blue fill,
-  cyan/violet aurora glows, bright corner ticks, scanlines, and a normalized
-  `phase` input for efficient pulse animation.
-* **Graphical TUI component frames** — a TypeScript mirror of Pi/Caco-style
-  component chrome: left activity rails, title strips, status chips, content
-  skeleton rows, bottom pulse waveforms, scanlines, tone palettes, and stable
-  layout cache keys that deliberately exclude animation phase.
-* **Animated-looking pulse assets** — multiple TUI component phases can still be
-  packaged into APNG files for offline/contact-sheet inspection, but live Pi/tmux
-  sessions should not rely on terminal-driven APNG playback. In practice the
-  reliable live path is Kitty's explicit current-frame control (`a=a,c=<frame>`)
-  driven by the extension; native `s=3` loops and APNG playback are treated as
-  diagnostic/experimental until they are proven to repaint in the target terminal.
-  Manual live animation timers are unref'd, stopped on graphics reset/session end,
-  and self-stop if the side-channel graphics writer fails.
-* **Rendered terminal scenes** — `pi_graphics_render_terminal_scene` draws a
-  full pixel-level terminal surface (cell grid, deep-Nordic vertical gradient,
-  aurora radial glows, status chips, scanlines, and bottom waveform) as PNG or
-  APNG. It is available as an explicit showcase/diagnostic surface; calm mode
-  no longer auto-mounts the large scene above the editor. This is the closest
-  TypeScript mirror of a graphical Cacophony-style TUI surface and is covered
-  by pixel-inspection tests.
-* **Conversation stage panels** — the lifecycle-visible widget used during
-  normal turns. It combines an APNG TUI component with explicit neon text
-  chrome and a text-only fallback, making graphical mode noticeable even when
-  the theme was not selected or kitty placeholders are unavailable.
-* **Persistent session accents** — pure TypeScript components installed via
-  `ctx.ui.setFooter`, `ctx.ui.setWidget`, and the editor component API. Calm
-  mode is intentionally quiet: large branded header/HUD/transcript/proof blocks
-  are showcase-only by default, the footer is reduced to tiny glyph accents plus
-  the branch name, editor rails avoid text labels, and the working row/window
-  title use short muted labels. Explicit diagnostics such as
-  `/pi-graphics-showcase`, `/pi-graphics-theme-status`, and the opt-in render tools
-  still expose the verbose branded proof surfaces when an operator asks for
-  them.
-* **Startup splash** — on `session_start`, the extension sends a bounded
-  `pi-graphics-message` into the transcript so graphics mode leaves a visible
-  neon block in normal conversation history even if terminal theme changes are
-  subtle.
-* **Braille pixel scene** — `/pi-graphics-braille-scene` and
-  `pi_graphics_braille_scene` map rendered RGBA terminal-scene pixels into
-  Unicode Braille cells with truecolor ANSI foregrounds. This gives normal
-  transcript output an image-like deep-Nordic cyan/violet scene without relying
-  on kitty image placement. It is printed on startup by default unless
-  `PI_GRAPHICS_AUTO_BRAILLE_SCENE=0` (or
-  `PI_KITTY_GRAPHICS_AUTO_BRAILLE_SCENE=off`) is set.
-* **Rendered validation report** — `/pi-graphics-validation-report` and
-  `pi_graphics_validation_report` compute metrics from the TypeScript RGBA
-  renderer and print them as normal transcript output. The report includes
-  component PNG dimensions/bytes, estimated kitty wire bytes, unique color
-  buckets, luminance range, terminal-scene metrics, and bounded APNG pulse
-  frame/byte totals. It is printed on startup by default unless
-  `PI_GRAPHICS_AUTO_VALIDATION_REPORT=0` (or
-  `PI_KITTY_GRAPHICS_AUTO_VALIDATION_REPORT=off`) is set.
-* **Visual proof block** — `/pi-graphics-visual-proof` and
-  `pi_graphics_visual_proof` print normal terminal output with truecolor
-  deep-Nordic chips, contrast ratios, RGB deltas, the reload sentinel, and a
-  warning for terminals that do not render the chips as cyan/violet/gold. It is
-  printed on startup by default unless `PI_GRAPHICS_AUTO_VISUAL_PROOF=0` (or
-  `PI_KITTY_GRAPHICS_AUTO_VISUAL_PROOF=off`) is set.
-* **Live heartbeat ticker** — `/pi-graphics-heartbeat` and `pi_graphics_heartbeat`
-  expose the same lightweight ticker that runs on a bounded interval during the
-  session. It updates `pi-gfx-heart` status and the terminal title with rotating
-  deep-Nordic glyph phases instead of re-uploading large images, so the session
-  visibly pulses even while idle. Disable it with `PI_GRAPHICS_AUTO_HEARTBEAT=0`
-  (or `PI_KITTY_GRAPHICS_AUTO_HEARTBEAT=off`); tune the bounded interval with
-  `PI_GRAPHICS_HEARTBEAT_MS` / `PI_KITTY_GRAPHICS_HEARTBEAT_MS`.
-* **Terminal cockpit wall** — `/pi-graphics-cockpit-wall` and
-  `pi_graphics_cockpit_wall` print a large normal-output wall combining the ANSI
-  scene shader, truecolor rails, status panels, pulse-bus labels, and reload
-  sentinel. It is printed on startup by default unless
-  `PI_GRAPHICS_AUTO_COCKPIT_WALL=0` (or `PI_KITTY_GRAPHICS_AUTO_COCKPIT_WALL=off`)
-  is set. This is the loudest non-kitty path for terminals that still hide theme
-  changes.
-* **OSC terminal palette takeover** — `/pi-graphics-osc-palette` and
-  `pi_graphics_osc_palette` emit OSC 10/11/12 and OSC 4 palette sequences that
-  ask compatible terminals to switch foreground, background, cursor, and ANSI
-  palette slots to the deep-Nordic kitty graphics palette. The extension applies
-  this on startup by default and sends OSC 110/111/112 reset sequences on
-  shutdown; opt out with `PI_GRAPHICS_AUTO_TERMINAL_PALETTE=0` (or
-  `PI_KITTY_GRAPHICS_AUTO_TERMINAL_PALETTE=off`).
-* **ANSI scene shader** — `/pi-graphics-ansi-scene` and `pi_graphics_ansi_scene`
-  sample the TypeScript-rendered terminal scene pixels and convert them into
-  truecolor ANSI half-block cells (`▀`) with independent foreground/background
-  colors. It is printed on session start by default unless
-  `PI_GRAPHICS_AUTO_ANSI_SCENE=0` (or `PI_KITTY_GRAPHICS_AUTO_ANSI_SCENE=off`)
-  is set, giving a rendered-gfx fallback even without kitty image placement.
-* **Raw ANSI takeover banner** — `/pi-graphics-ansi-takeover` and
-  `pi_graphics_ansi_takeover` emit a five-line truecolor ANSI gradient banner
-  directly to the terminal. It uses deep-Nordic void, cyan, violet, and aurora
-  blocks plus the reload sentinel, and it is written on session start by default
-  unless `PI_GRAPHICS_AUTO_ANSI_TAKEOVER=0` (or
-  `PI_KITTY_GRAPHICS_AUTO_ANSI_TAKEOVER=off`) is set. This surface is intended as
-  the last-resort visibility check because it does not rely on theme APIs,
-  message renderers, widgets, or kitty image placement.
-* **Conversation frame renderer** — `/pi-graphics-conversation-frame` and
-  `pi_graphics_conversation_frame` render ordinary transcript text inside a
-  deep-Nordic frame with cyan/violet rails, animated-looking block gradients,
-  and the reload sentinel. A startup sample and an assistant-turn completion
-  sample are sent by default unless `PI_GRAPHICS_AUTO_CONVERSATION_FRAME=0` (or
-  `PI_KITTY_GRAPHICS_AUTO_CONVERSATION_FRAME=off`) is set.
-* **Custom message chrome** — a `pi-graphics-message` renderer that returns a
-  pure TypeScript TUI component (no external `pi-tui` import) with neon rails,
-  themed backgrounds, and bounded viewport rendering for displayed custom
-  messages.
-* **Lighthouse beacon** — `/pi-graphics-lighthouse` and `pi_graphics_lighthouse`
-  render a deliberately oversized five-line beacon with full-width block-gradient
-  bars and `PI KITTY GRAPHICS LIGHTHOUSE // GRAPHICAL MODE IS ACTIVE`. It is
-  mounted above the editor by default, giving a non-subtle normal-TUI surface that
-  does not depend on kitty image placeholders.
-* **Photon rain text renderer** — `/pi-graphics-photon-rain` and
-  `pi_graphics_photon_rain` render a phase-shifting TypeScript TUI component
-  made from deep-Nordic glyph rows (`⬢◆✦✺▰▱◢◣`) and runtime theme tokens. It is
-  also mounted above the editor by default so the session has an unmistakable
-  high-tech text surface even without kitty image support.
-* **Theme calibration swatch** — `/pi-graphics-theme-swatch` and
-  `pi_graphics_theme_swatch` render block bars using the runtime theme's
-  `selectedBg`, `customMessageBg`, `toolPendingBg`, `borderAccent`,
-  `thinkingXhigh`, and semantic success/warning/error tokens, making theme
-  activation auditable in ordinary text UI chrome. `pi_graphics_send_theme_swatch`
-  and `/pi-graphics-theme-swatch-message` send the same swatch into the transcript,
-  and session start does this automatically unless disabled by env.
-* **Reload sentinel + theme delta** — `/pi-graphics-theme-delta` and
-  `pi_graphics_theme_delta` print `PI-GFX-RELOAD-SENTINEL/2026-05-18/NEON-LIGHTHOUSE`
-  and quantified RGB deltas for key `kitty-graphics` tokens versus the built-in
-  dark theme. The sentinel is also included in the persistent header/status
-  chrome so a stale Pi package/session can be spotted immediately.
-* **Doctor / takeover diagnostics** — `/pi-graphics-doctor`,
+The wrapper forwards focus, input, invalidation, disposal, and unknown host
+methods/properties to the base editor. This preserves Pi's editor API and IME
+focus behavior while adding graphical rows.
 
-  `/pi-graphics-takeover`, and `pi_graphics_doctor` report the active theme,
-  kitty placeholder state, auto-surface opt-outs, and remediation steps. The
-  command also re-applies the visible surfaces and sends the transcript theme
-  swatch, giving a single in-session check when graphics mode appears unchanged.
-* **Visual contract self-test** — `/pi-graphics-visual-contract` and
-  `pi_graphics_visual_contract` render a checklist covering theme request,
-  kitty placeholder state, header/footer/HUD/floodlight, editor frame + APNG
-  aura, working row + terminal title, and startup splash state.
-* **Accent bars** — single-cell-tall accent strips suitable for highlighting
-  table rows or section headers.
+## Editor modes
 
-Each rendered affordance is transmitted as an in-memory PNG/APNG via
-`buildPngVirtualPlacementCommand` (see `extensions/kitty-graphics.js`) and
-displayed using kitty Unicode placeholder cells, so:
+Canonical fullscreen modes:
 
-* Placement does not move the real terminal cursor (Pi's differential
-  redraw remains intact).
-* Placement is tmux-safe — escape sequences are wrapped in tmux DCS
-  passthrough automatically.
-* All image ids are tracked in extension-owned state and freed via
-  `buildScopedDeleteCommand`. The extension never issues a global
-  "delete all images" command. On Pi's documented `session_shutdown` event
-  (quit, reload, new, resume, and fork), teardown drains every registered
-  graphics timer, clears namespaced widgets, releases only graphics-owned
-  singleton surfaces, restores cursor policy, and deletes scoped image ids.
-  The same placement/editor/upload/box caches are reset by the
-  `pi_graphics_clear` tool so later redraws re-upload their placeholder graphics
-  instead of leaving stale placeholder cells behind. This keeps it cooperative with bd-f89780's
-  scoped image ownership work.
-* Caco-hosted cleanup has a reserved Pi graphics z-index band in
-  `extensions/pi-graphics/z-index.js`: `-1073741827..-1073741823` (the explicit
-  set exported as `PI_GRAPHICS_RESERVED_Z_INDICES`). Pi-owned real and relative
-  kitty placements use this band so a host view switch/blur can issue kitty
-  delete-by-z-index commands for those values instead of a global clear or a
-  caco↔Pi image registry. Kitty's protocol does **not** apply `d=z`/`d=Z`
-  deletion to Unicode virtual placements (`U=1`): virtual placeholder graphics
-  must still be cleaned up by deleting their owning image ids. The
-  `pi_graphics_clear` tool therefore defaults to per-image scoped deletes; pass
-  `hostedBand: true` only when a host also needs to scrub stale real/relative
-  reserved-band placements.
-* Pi graphics image ids deliberately use the kitty protocol's full 32-bit
-  namespace: Unicode placeholders encode the low 24 bits as foreground
-  truecolor and the most-significant byte as the third row/column diacritic.
-  Placeholder-selectable virtual placements stay in the high half of the
-  24-bit underline-color subspace, while non-placeholder relative placements
-  use full 32-bit placement ids. The id scope includes the live process id even
-  when `PI_GRAPHICS_ID_NAMESPACE` is configured, because multiple Pi instances
-  in tmux share one terminal-global kitty id space. Set
-  `PI_GRAPHICS_ID_NAMESPACE_EXACT=1` only for tests/debugging that require exact
-  historical ids. This avoids low-id and cross-process collisions with other
-  kitty graphics consumers in the same tty.
-* Message and TUI box chrome has per-surface effects (`glass`, `aurora`,
-  `scanline`, `circuit`, `sparkle`, `cloud`, `compose`, `facet`, `prism`, `veil`, `scrim`, `frost`, `holo`, `lattice`,
-  `contour`, `folio`, `manuscript`, `note`, `tapestry`, `weave`, `glyph`, `blueprint`, `grove`, `vine`, `dendrite`, `fork`, `helix`, `braid`,
-  `metronome`, `shuttle`, `hourglass`, `signal`, `halo`, `margin`, `caret`, `frame`, `bevel`, `chamfer`, `studio`, `atelier`, `constellation`, `swatch`, `palette`, `beacon`, `satellite`, `orbit`, `emblem`, `crest`,
-  `recipe`, `sigil`, `rune`, `workbench`, `panel`, `fold`, `capsule`, `archive`, `candle`, `lantern`, `ballot`, `choice`, `nebula`, `ticker`, `waveform`, `masthead`, `marquee`, `ribbon`, `logbook`, `ledger`, `crop`, `lens`, `aperture`, `gauge`, `dial`,
-  `console`, `slider`, `caliper`, `dashboard`, `tile`, `mosaic`, `gate`, `portal`, `token`, `keyring`, `keystone`, `tag`, `badge`, `picker`, `sextant`, `compass`, `shell`, `terminal`, `prompt`,
-  `rig`, and `schematic`) and caches both uploads and relative placements so ordinary rerenders do not re-place identical
-  box strips. Thinking blocks are detected from assistant message content and get
-  candle wick rails, flame panes, and thought glints, thinking selector surfaces get ballot voting cards, decision holes, and ranked ticks, assistant surfaces get folio page margins, annotation tabs, and reading guide marks, skill surfaces get recipe capability rails, ingredient cards, and activation ticks,
-  custom-TUI surfaces get workbench dock rails, resize grips, and widget sockets, tool surfaces get rig harness rails, output sockets, and execution bolts,
-  bash surfaces get shell prompt rails, command slots, and exit-status ticks, tree surfaces get grove trunk rails, branch forks, and leaf nodes,
-  branch surfaces get fork commit rails, fork joints, and merge stops, loader surfaces get
-  shuttle launch rails, docking gates, and progress pips, compaction summaries get capsule archive rails, compression bands, and sealed checkpoint ticks,
-  agent surfaces get beacon status beams, presence pips, and identity rails, mascot surfaces get emblem plates, ribbon cuts, and identity studs, custom surfaces
-  get studio work rails, canvas cards, and tool registration ticks, theme surfaces get swatch color cards, sample chips, and calibration ticks, user surfaces get note margins, folded corner tabs, and input emphasis marks,
-  user-selector surfaces get tag tabs, punched holes, and selection stitch ticks, login surfaces get
-  gate access rails, threshold blocks, and entry checks, OAuth provider selectors get token exchange rails, token chips, and consent pips,
-  selector surfaces get picker option rails, selection brackets, and index pips, image
-  surfaces get crop corners, focus rails, and thumbnail stops, editor surfaces get manuscript gutters, edit pins, and draft guide marks, border surfaces get frame rails, miter pins, and shadow stops, input surfaces get
-  compose entry rails, prompt brackets, and caret pads, overlay surfaces get scrim dimmer curtains, focus brackets, and modal edge ticks,
-  header surfaces get masthead title rails, cap blocks, and locator ticks, footer surfaces get ticker status rails, beat ticks, and terminal edge markers, session surfaces get logbook binding rails, page tabs, and checkpoint marks, model surfaces get gauge meter bands, calibration notches, and tiny needle marks, settings surfaces get console control rails, toggle sockets, and calibration pips, and widget surfaces get dashboard pane rails, status tiles, and corner indicators. `atelier` remains available as an explicit custom-atelier variant, `archive` remains available as an explicit compaction-archive variant, `terminal` remains available as an explicit broad bash-terminal variant, `aperture` remains available as an explicit shutter variant, `bevel` remains available as an explicit raised-border variant, `braid` remains available as an explicit interlaced-branch variant, `chamfer` remains available as an explicit cut-corner border variant, `compass` remains available as an explicit directional-selector variant, `constellation` remains available as an explicit star-chart custom variant, `crest` remains available as an explicit mascot-crest variant, `badge` remains available as an explicit identity-card variant, `choice` remains available as an explicit selector-choice variant, `dendrite` remains available as an explicit branching-tree variant, `dial` remains available as an explicit instrument variant, `frost` remains available as an explicit cold-overlay variant, `helix` remains available as an explicit branch-helix variant, `hourglass` remains available as an explicit loader-wait variant, `keyring` remains available as an explicit OAuth-keyring variant, `facet` remains available as an explicit input-facet variant, `lens` remains available as an explicit image-lens variant, `tapestry` remains available as an explicit user-tapestry variant, `tile` remains available as an explicit widget-tile variant, `lantern` remains available as an explicit thinking-lantern variant, `ledger` remains available as an explicit session-ledger variant, `manuscript` remains available as an explicit assistant-manuscript variant, `marquee` remains available as an explicit theatre-header variant, `mosaic` remains available as an explicit assembled-tile variant, `orbit` remains available as an explicit agent-orbit variant, `palette` remains available as an explicit broad theme-selector variant, `portal` remains available as an explicit login-portal variant, `panel` remains available as an explicit custom-TUI panel variant, `prism` remains available as an explicit glass-facet variant, `prompt` remains available as an explicit shell-prompt variant, `sigil` remains available as an explicit skill-sigil variant, `rune` remains available as an explicit compact-rune variant, `schematic` remains available as an explicit tool-schematic variant, `satellite` remains available as an explicit agent-satellite variant, `sextant` remains available as an explicit measured-selector variant, `slider` remains available as an explicit settings-slider variant, `vine` remains available as an explicit tree-vine variant, `waveform` remains available as an explicit footer-signal variant, `weave` remains available as an explicit tactile-thread variant, `caret` remains available as an explicit editor-caret variant, and `keystone` remains available as an explicit gateway variant. If a box moves or resizes, stale relative
-  placements are explicitly deleted before the replacement is placed. Coverage
-  includes transcript messages, tool/bash output, skill/custom messages,
-  branch/compaction summaries, footer, dynamic borders, loaders, extension
-  inputs/editors/selectors, login/OAuth/model/session/settings/theme/thinking
-  dialogs, image chooser, tree selector, user-message selector, mascot/agent
-  announcement components, notifications, hidden thinking labels, working messages,
-  working-indicator frames, and generic extension-owned `custom`, widget, footer,
-  header, editor, and overlay components returned through Pi's public UI registration APIs. The generic
-  wrappers cover components, plain string-array surfaces, and promises resolving
-  to either shape. One-cell graphical status/notification indicators are opt-in
-  with `PI_GRAPHICS_STATUS_INDICATORS=1`; they default off so diagnostic output
-  such as `/gfx status` stays plain text and does not show visible placeholder
-  prefixes when a terminal cannot paint the image immediately. Components/factories/status registrations can opt out with
-  `__piGraphicsNoWrap`, `piGraphics: false`, or registration options such as
-  `{ piGraphics: false }`; Pi graphics' own internal rail widgets use that opt-out
-  so they are not skinned twice. The generic API
-  wrappers are restored on session end so reloads do not accumulate nested
-  wrappers, and restoration only replaces methods still owned by Pi graphics so
-  later extension wrappers are not clobbered. Box chrome widths are capped at
-  512 cells before kitty upload/placement to avoid pathological oversized image
-  payloads from malformed render widths while still covering ordinary fullscreen
-  terminals. Built-in Pi component class patches
-  are also reload-safe: reinstallation updates the active graphics runtime rather
-  than leaving old box modes/effects captured in global prototypes, and teardown
-  restores prototypes only when Pi graphics still owns that runtime. Live `/gfx`
-  changes on runtimes without `ctx.reload` force-refresh the wrapper runtime or
-  tear it down when graphics/box chrome is disabled, so mode changes do not leave
-  stale chrome active. Relative box mode assigns the first, middle, and last
-  rendered rows to top/mid/bottom strip art for one coherent component-sized box,
-  and textual border rows are covered by that same strip sequence rather than
-  being skipped as isolated rows.
-* Box chrome is opt-in because live box placements can be visually janky in some
-  terminals; enable it with `piGraphics.boxChrome: true` or `/gfx box on` when you
-  specifically want to inspect the effect set. For transparent themes that should
-  keep subtle structure without side chrome, set `piGraphics.boxRails: true` or
-  use `/gfx box-rails on` while leaving box chrome off. Box rails draw only
-  top/bottom rails around native Pi boxes, using the same style names as the
-  editor border renderer via `piGraphics.boxRailStyle` (`gradient`, `glass`,
-  `chrome`, or `geometric`), optional animation, and Unicode anchoring modes
-  `fill` or `topLeft`. Use `kitty-graphics-nord-transparent` when Unicode or
-  relative box chrome/rails should be drawn on a blank terminal canvas;
-  the normal `kitty-graphics-nord` theme keeps ordinary Pi box backgrounds but
-  limits them to the canonical Nord palette. Unicode box mode clamps rendered rows
-  to Pi's width hint before adding side placeholders, preventing the first/right
-  placeholder from wrapping onto a separate terminal line in padded containers.
-  `Ctrl+t` cycles only the active
-  theme and leaves editor style, cursor style, trailing workspace, and box chrome
-  choices unchanged; `/gfx` with no arguments opens a Pi-native settings overlay
-  with quick previews and cursor controls. The overlay explicitly opts
-  out of Pi graphics wrapping so it stays text/ANSI-only and does not emit
-  additional Kitty placement escapes while the modal is open; `/gfx status` prints the text summary, including
-  the live cursor anchoring diagnostic line and the opt-in box chrome state (`on`
-  only when `piGraphics.boxChrome` is explicitly `true`); its box-effect line and
-  unknown-effect warnings stay compact and point to `/gfx box effects` for the full
-  selectable list.
-- **Runtime-only by default; persist only on save.** `/gfx` CLI mutations
-  (`/gfx mode on|off|debug`, `/gfx editor ...`, `/gfx box ...`, `/gfx preset`,
-  `/gfx next`/`/gfx prev`, `/gfx debug`, and `/eink on|off`) apply **live for the
-  current runtime only** and are *not* written to `settings.json`. This lets you
-  try modes ad hoc — e.g. `pi '/gfx mode on'` — without mangling your home config.
-  Successive runtime mutations compose. Persist the pending runtime state with
-  `/gfx save`, or by pressing **Enter** in the `/gfx` settings overlay (Esc/`q`
-  closes without saving). `/gfx status` shows an `unsaved:` line indicating
-  whether runtime-only changes are pending.
-  `/gfx box-effect <name>` can select a specific effect or
-  `/gfx box-effect auto` can return to per-message-type effects.
-  `/gfx debug` toggles a graphics diagnostics panel and visible `U`
-  placeholder cells (runtime-only; `/gfx save` to persist). `/gfx box status` prints box mode, forced-vs-per-type effect
-  state, mapped surface count, unique effect count, and the registry mapping without
-  emitting preview graphics or changing settings. Ordinary `/gfx status` includes
-  mapped surface, unique-effect, and theme-token counts with a pointer to the full
-  box audit ladder. `/gfx box audit` is a no-render command index for `/gfx box status`,
-  `summary`, `effects`, `tokens`, `doctor`, and `preview`.
-  `/gfx box summary` is the compact
-  no-render view: it groups mapped surfaces by effect for quick registry audits.
-  `/gfx box effects` lists all selectable effects and splits currently mapped
-  effects from explicit variants that remain available by name. `/gfx box tokens`
-  groups mapped surfaces by `BOX_TYPE_THEME_TOKENS` color token without rendering.
-  `/gfx box doctor` explains which of status, summary, preview, `box-effect auto`,
-  and relative/unicode mode to use next without rendering or mutating settings.
-  `/gfx box preview` emits bounded representative per-surface
-  box strips by deriving its sample list from `BOX_TYPE_EFFECTS`, with a compact
-  legend labeling each row's surface, effect, theme token, and rendered strip, so every mapped
-  surface appears automatically as new chrome families are added. The preview
-  includes a generated mapped-surface and unique-effect count, then uses compact
-  paired rows with shorter cached strips so the expanded surface set stays
-  scannable. It does not change `piGraphics.boxEffect`, so the mapped styles can
-  be compared quickly.
-  `/gfx cursor preview` emits a bounded anchor-relative sample that uses the same
-  transparent-anchor/relative-placement path as the live cursor, followed by
-  cool/warm/hot cursor PNG variants plus a compact live-alignment diagnostic line
-  for fresh anchor placement ids, centered cell offsets, image+placement-id stale deletion,
-  and reverse-video reset matching. `/gfx cursor status` prints the same live
-  cursor diagnostics without emitting preview graphics or changing settings/state.
-  `/gfx cursor audit` is a no-render command index for cursor status, doctor,
-  preview, clear, and debug diagnostics. `/gfx cursor doctor` is also read-only and explains how to interpret the cursor
-  diagnostic plus when to use status, preview, clear, or reload. `/gfx cursor clear`
-  deletes only the current live visible cursor placement and resets anchor
-  diagnostics, giving operators a scoped recovery path if a terminal keeps stale
-  cursor art after layout drift. This lets the heat glow, directional trail, frame
-  ticks, and anchor centering be inspected without typing at a precise speed.
-  `/gfx box-mode unicode` uses only placeholder-tied graphics for
-  box side borders instead of relative placements.
-* Box wrapping is ANSI/OSC/APC/DCS-safe: placeholder insertion, unicode side
-  borders, width truncation, and padding preserve terminal controls instead of
-  slicing inside color/style escapes, Pi IME cursor markers, or tmux/kitty
-  passthrough sequences. Unicode box mode also leaves render-width slack for Pi
-  containers that pass widths including outer padding, preventing settings and
-  selector dialogs from exceeding pi-tui's hard terminal-width guard.
-* Editor border chrome spans the full editor/terminal width instead of being
-  capped and center-aligned, so fullscreen terminals keep a visible full-width
-  input frame. Editor placement/layout is controlled by `piGraphics.editor.style`
-  (`static`, `unicode`, or `relative`; legacy aliases `joinedUnicode` and
-  `animated` are migrated at runtime), while `piGraphics.editor.animation` /
-  `PI_GRAPHICS_EDITOR_ANIMATION` controls animation independently and
-  `piGraphics.editor.unicodeMode` / `PI_GRAPHICS_EDITOR_UNICODE_MODE` controls
-  Unicode anchoring (`fill` or `topLeft`). The independent
-  `piGraphics.editor.borderStyle` / `PI_GRAPHICS_EDITOR_BORDER_STYLE` controls
-  what is drawn into the reserved space. `gradient` is the existing
-  glow-gradient look; `glass`, `chrome`, and `geometric` add different translucent
-  separators and theme-colored responsive accents. All border styles include the
-  same typing-speed rail heat in their cache keys and rendering inputs outside
-  tmux, so they compose with every placement mode. Inside tmux, live editor heat
-  and in-editor Unicode cursor/trailing/background placeholders default off
-  (`PI_GRAPHICS_TMUX_LIVE_EDITOR=1` opts back in) because changing placeholder
-  text on every keypress can make tmux invalidate and repaint the whole screen.
-  Static editor rails, box rails/chrome, and frame-command animations still remain
-  enabled.
-  The top and bottom border heights are independently configurable
-  with `piGraphics.editor.topBorderHeight` / `PI_GRAPHICS_EDITOR_TOP_BORDER_HEIGHT`
-  and `piGraphics.editor.bottomBorderHeight` / `PI_GRAPHICS_EDITOR_BOTTOM_BORDER_HEIGHT`.
-  Height `1` preserves the default in-flow Unicode rail replacement. In Unicode
-  editor mode, heights above `1` add same-ID placeholder widget rows above or
-  below the editor so the terminal sees one contiguous `width × height` rectangle
-  for the single border image when `unicodeMode` is `fill`. `unicodeMode:
-  "topLeft"` (legacy `joinedUnicode`) is the single-anchor variant. Single-row
-  rails use one top-left Unicode placeholder. Taller top borders cannot grow
-  upward from a top-left virtual placement without a detached above-editor widget,
-  so they automatically use the same relative upward placement as `relative`
-  style (`V=-(height-1)`) while preserving `topLeft` for single-row and bottom
-  rails. Bottom top-left borders put the single placeholder on the editor rail and
-  reserve empty rows in the below-editor widget. These editor graphics widgets
-  mark themselves as full-width surfaces so right-side preview panels do not
-  shrink the render width; if an image preview overlaps the right half of the
-  terminal, the editor chrome still renders at 100% terminal width and wins those
-  rows. This avoids filling the whole reserved widget with placeholder cells,
-  leaving text cells usable around the singleton anchor. Its
-  render key includes the same rail heat buckets as
-  `unicode`, so typing-speed heat redraws are at parity with the existing Unicode
-  border effects. Because animation is now separate from placement, Unicode
-  `fill`, Unicode `topLeft`, and relative placement can all be paired with
-  animation. Animated editor and box-rail placements upload their PNG frame set
-  once and then advance frames with Kitty `a=a,c=<frame>` commands from a small
-  unref'd timer; they deliberately avoid re-rendering Unicode placeholder rows on
-  each animation tick. Thinking-mode animation also uses the pre-rendered frame
-  set when editor animation is enabled, instead of scheduling repeated full TUI
-  redraws. When Pi reports assistant thinking/reasoning through its
-  working-message UI surface or an active structured hidden-thinking state, the
-  same editor border renderer enters a contextual thinking mode: top rails use a
-  cosine-squared thought-bubble mask,
-  bottom rails use the inverted companion mask, and a bounded timer scrolls small
-  bubble ticks through the cached render key until the message/turn ends. During
-  typing, the border render spec also tracks the cursor column and decaying heat
-  to draw a cursor-local bell-curve energy impulse into the rail PNG. This
-  impulse is configurable with `piGraphics.editor.typingImpulse` (or
-  `PI_GRAPHICS_EDITOR_TYPING_IMPULSE`) and can be toggled live with
-  `/gfx typing-impulse on|off`. It composes with
-  `gradient`/`glass`/`chrome`/`geometric` border drawing and every
-  placement mode because only the rendered PNG phase/context/impulse inputs
-  change. In `relative` editor mode, the extra height is drawn as a relative
-  placement without reflowing text; top borders are offset upward by `height - 1`,
-  while bottom borders grow downward from the rail. Legacy `animated` mode maps
-  to relative placement plus `editor.animation=true`.
-  The focused editor cursor is configurable with
-  `piGraphics.editor.cursorStyle` (or `PI_GRAPHICS_EDITOR_CURSOR_STYLE`): `glow`
-  is the default speed-responsive direct Unicode-placeholder cursor plus a best-effort
-  large relative halo, `cell` is the conservative one-cell placeholder cursor,
-  and `off` disables the graphics cursor while the broader editor surface stays
-  enabled. When graphics cursor styling is active, the extension asks Pi's TUI
-  to hide the hardware cursor so the terminal blink does not fight the styled
-  placeholder; disabling graphics cursor/editor styling restores the previous
-  hardware-cursor setting. In live `glow` mode, Pi uses the same direct Unicode
-  placement path as trailing workspace fill for the actual cursor cell: a one-cell
-  PNG placeholder replaces the reverse-video cursor cell exactly in the editor
-  text flow. It then attempts the intended larger 11×5 relative halo against that
-  same visible placement with `H=-5,V=-2`, drawn at an under-text z-index that is
-  still above non-default editor cell backgrounds. The direct glow keeps a bright
-  vertical core in the cursor cell while the relative halo, when Kitty/tmux honors
-  it, expands beyond the cell bounds. The glow colour/radius is
-  smoothly interpolated toward a heat target inferred from recent
-  inter-character typing speed; after typing stops Pi schedules lightweight
-  editor redraws so the glow and trailing workspace fade out instead of freezing
-  at the last keypress intensity. This live in-editor path is disabled by default
-  when `TMUX` is set to avoid full-screen tmux redraw/flicker on every keypress;
-  set `PI_GRAPHICS_TMUX_LIVE_EDITOR=1` to opt back into the dynamic cursor,
-  trailing workspace, row background, and heat-redraw behavior inside tmux. Fast cursor motion also selects a deterministic
-  left/right heat-trail variant: forward typing leaves a short afterimage behind
-  the cursor, while backspacing or leftward movement flips the trail to the other
-  side. At medium and high heat, the cursor silhouette gains small graphical
-  bracket ticks and ember caps around the vertical core, so the frame itself
-  visibly changes rather than only the colour. Live heat/context dynamics are
-  disabled by default inside tmux (`PI_GRAPHICS_EDITOR_DYNAMIC_IN_TMUX=1` opts
-  back in) so keypresses do not rewrite editor Unicode placeholder rows or
-  animated heat images on every frame. Outside tmux, heat/context decay redraws
-  are scroll-safe by default: they use a coalescible non-forced TUI render
-  request so reading terminal scrollback is not pulled back to the live bottom by
-  decorative graphics. `PI_GRAPHICS_EDITOR_FORCE_REDRAW=1` restores the old
-  forced redraw path for diagnostics only. Optional editor fill effects are
-  separate settings: `piGraphics.editor.trailingWorkspace` /
-  `PI_GRAPHICS_EDITOR_TRAILING_WORKSPACE` fills empty cells after the cursor with
-  the same animated heat envelope and a right-only opacity falloff like the
-  editor top/bottom border chrome. Once heat passes the midpoint, the editor
-  top/bottom rails also warm toward white-hot colours over a wider 50%→150%
-  spread, making the heat appear to propagate from the cursor into the frame.
-  The trailing workspace PNG uses the configured editor cell line-height scale
-  (default `1.2`, or `piGraphics.cell.lineHeightScale`) so Ghostty rows align
-  with the top/bottom editor border graphics. `piGraphics.editor.rowBackground` /
-  `PI_GRAPHICS_EDITOR_ROW_BACKGROUND` enables the row-wide background. Both are
-  off by default because they can visually compete with live typing in narrow or
-  frequently redrawn editors. These are visible in the `/gfx` settings overlay and
-  can also be changed directly with `/gfx editor static|unicode|relative`,
-  `/gfx editor-animation on|off`, `/gfx unicode-mode fill|topLeft`, `/gfx
-  border-height <1-16>`, `/gfx top-border-height <1-16>`, `/gfx
-  bottom-border-height <1-16>`, `/gfx cursor-style glow|cell|off`, `/gfx
-  trailing-workspace on|off`, `/gfx row-background on|off`, and `/gfx
-  typing-impulse on|off`. The settings path normalizes incompatible editor
-  combinations: choosing `unicode-mode` switches placement to `unicode`, choosing
-  `editor static` clears Unicode anchor mode, and enabling editor animation from
-  `static` promotes placement to `relative`. Legacy `/gfx editor joinedUnicode`
-  sets `editor.style=unicode` and `editor.unicodeMode=topLeft`; legacy `/gfx
-  editor animated` sets `editor.style=relative` and `editor.animation=true`.
-* Box borders are directional: top/bottom caps and left/right side cells render
-  different edge-specific PNGs, while box rails are horizontal-only and can be
-  used with `boxChrome: false`. Unicode rail mode `fill` paints placeholder cells
-  across the reserved rail rows; `topLeft` uses a single top-left placeholder as
-  an anchor for a full-width rail image, consuming fewer text cells and allowing
-  more overlap in Unicode mode. Full box unicode mode keeps the same line count as
-  the source text to avoid stacked one-line boxes between content rows. Relative
-  box mode anchors each full-row strip directly at its one-cell Unicode placeholder
-  origin and intentionally emits no `H`/`V` offset, avoiding the cell-vs-pixel
-  offset class that affected the centered cursor glow. Relative box mode now
-  leaves textual border rows unwrapped and avoids full-row solid fills,
-  so it does not paint top and bottom strokes into the same border line or obscure
-  text with a low-z background sheet.
-* The built-in footer can be replaced with a compact one-line segmented footer
-  (`PI_GRAPHICS_AUTO_FOOTER`, default on with graphics). It preserves the useful
-  cwd/branch/context/compaction/model/thinking layout while inserting stable
-  three-cell Unicode-placeholder divider images with no literal spaces around the
-  divider. The divider uses a dedicated 3×1 PNG renderer with transparent edge
-  padding, a centered thin vertical bar, and mild glow to either side so Kitty
-  resampling does not clip the glow at the cell boundary. Each divider anchors a low-z relative background behind the following
-  segment so the footer remains caco/tmux-compatible and width-bounded. In wide
-  terminals the footer lays out cwd/branch/context/compaction as a left group and
-  keeps model plus thinking level together as a right-aligned group, leaving open
-  space between the groups rather than inserting a divider after compaction. Long
-  paths compact generically by collapsing earlier directories to initials while
-  keeping the final directory, e.g. `~/c/a/m/checkout`, rather than special-casing
-  any one checkout layout. Footer segments avoid ellipsis glyphs; when a non-model
-  segment must shrink it is hard-clipped, and the model segment is reserved at its
-  compacted width so the actual model text remains visible. Footer provider names
-  are shortened before model layout (`github-copilot` → `ghcp`, `openai` → `oai`,
-  `anthropic` → `ant`, `litellm-openai` → `loai`, `litellm-anthropic` → `lant`,
-  `openrouter` → `oprt`, and `azure-*` → `az`) and common model prefixes/suffixes
-  are removed (`claude-*` → `*`, `-1m-internal` dropped, non-Copilot `gpt-*` →
-  `*`). Copilot GPT-5 models keep their `gpt-` prefix for clarity, so examples
-  render as `ghcp/gpt-5.5`, `lant/opus-4.7`, or `lant/sonnet-4-6`.
-* The `⠼ Working...` indicator receives themed Pi graphics flair via custom
-  working-indicator frames while preserving Pi's normal loader lifecycle.
-* The segmented footer draws a mild full-width **underlay** behind the footer
-  line — a soft upward glow with a solid hline along the bottom edge, rendered
-  as a single 1×1 Unicode placeholder transmitted at full terminal width. The
-  underlay is tunable without touching code: toggle it with `/gfx footer-underlay
-  on|off` (or `piGraphics.footer.underlay`), pick theme tokens for the glow and
-  hline colors with `/gfx footer-underlay-glow <token>` /
-  `/gfx footer-underlay-line <token>` (defaults `editorBg` and `borderAccent`;
-  pass `default` to reset), and set intensities with
-  `/gfx footer-underlay-glow-alpha <0-1>` / `/gfx footer-underlay-line-alpha
-  <0-1>` (the glow alpha defaults to `editorAlpha × 0.42`, the hline alpha to
-  `0.7`). These map to `piGraphics.footer.{underlay,glowToken,lineToken,glowAlpha,
-  lineAlpha}` and the `PI_GRAPHICS_FOOTER_UNDERLAY*` env keys.
+| Mode | Behavior |
+|---|---|
+| `static` | Text-safe/static rails without live placeholder placement. |
+| `unicode` | Kitty Unicode-placeholder rails; `unicodeMode` is `fill` or `topLeft`. |
+| `relative` | Anchor-relative Kitty rails, intended as an explicit opt-in. |
+
+Animation is independent (`editor.animation`). Cursor styles are `glow`, `cell`,
+or `off`. Dynamic heat, workspace fill, and row background default off inside
+tmux unless explicitly enabled because frequent placeholder changes can cause
+fullscreen repaint/flicker.
+
+Legacy names remain readable for compatibility but produce a one-time warning:
+
+| Legacy | Canonical mapping |
+|---|---|
+| `joinedUnicode`, `joined-unicode`, `joined_unicode`, `joined` | `unicode` + `topLeft` |
+| `placeholder`, `caco` | `unicode` + `fill` |
+| `overlay` | `relative` |
+| `animated` | `relative` + `animation=true` |
+
+Unknown values fall back to `static`. Runtime normalization does not write
+`settings.json`; only explicit `/gfx save` persists canonical values.
+
+## Commands
+
+`/gfx` with no arguments opens the settings UI. Useful direct forms include:
+
+```text
+/gfx status
+/gfx mode on|off|debug
+/gfx editor static|unicode|relative
+/gfx editor-animation on|off
+/gfx unicode-mode fill|topLeft
+/gfx border-style gradient|glass|chrome|geometric
+/gfx border-height 1
+/gfx cursor-style glow|cell|off
+/gfx trailing-workspace on|off
+/gfx row-background on|off
+/gfx typing-impulse on|off
+/gfx box on|off
+/gfx box-rails on|off
+/gfx box-mode unicode|relative
+/gfx box-effect <name|auto>
+/gfx footer-underlay on|off
+/gfx presets
+/gfx next
+/gfx prev
+/gfx themes
+/gfx save
+```
+
+Box inspection commands are read-only unless named `preview`:
+
+```text
+/gfx box audit
+/gfx box status
+/gfx box summary
+/gfx box effects
+/gfx box tokens
+/gfx box doctor
+/gfx box preview
+/gfx cursor audit
+/gfx cursor status
+/gfx cursor doctor
+/gfx cursor preview
+/gfx cursor clear
+```
+
+`/eink on|off|status` applies a low-motion, one-cell-cursor profile at runtime.
+Changes remain runtime-only until `/gfx save`.
+
+## Runtime-only policy
+
+`/gfx` and `/eink` mutations are in-memory by default. Successive commands
+compose against the pending runtime settings. They never rewrite
+`settings.json` implicitly. Use `/gfx save` (or Enter in the settings UI) to
+persist intentionally; Escape/q closes without saving.
+
+Environment variables override settings for one process. Important controls:
+
+- `PI_GRAPHICS_AUTO_THEME`
+- `PI_GRAPHICS_AUTO_EDITOR_SURFACE`
+- `PI_GRAPHICS_AUTO_EDITOR_CURSOR`
+- `PI_GRAPHICS_AUTO_FOOTER`
+- `PI_GRAPHICS_AUTO_BOX_CHROME`
+- `PI_GRAPHICS_AUTO_BOX_RAILS`
+- `PI_GRAPHICS_EDITOR_STYLE`
+- `PI_GRAPHICS_EDITOR_UNICODE_MODE`
+- `PI_GRAPHICS_EDITOR_ANIMATION`
+- `PI_GRAPHICS_TMUX_LIVE_EDITOR`
+- `PI_GRAPHICS_EXPOSE_RENDER_TOOLS`
+
+## Kitty ownership and fullscreen lifecycle
+
+Every image uses a process-scoped id and every placement uses a scoped placement
+id. Unicode virtual placements are deleted by owned image id. Relative/real
+placements also use the reserved z-index band from `z-index.js`; z-index cleanup
+is supplemental and never replaces image-id deletion.
+
+Teardown runs on Pi's documented `session_shutdown` event, covering quit,
+reload, new, resume, and fork. It is idempotent and:
+
+1. releases the graphics editor lease;
+2. clears namespaced graphics widgets;
+3. clears footer and working surfaces only if graphics still owns them;
+4. restores cursor policy only if its wrapper is still current;
+5. restores conditional UI/component wrappers;
+6. drains animation, heat, context, discovery, and deferred-write timers;
+7. deletes owned Kitty image data and resets upload/placement caches.
+
+Decorative updates request coalescible redraws. Forced fullscreen redraw remains a
+diagnostic opt-in only.
 
 ## Tools
 
-The default agent-facing tool surface is intentionally small:
+The default agent-facing surface contains one tool:
 
-* `pi_graphics_clear` — release every kitty image owned by the extension. It
-  also accepts `hostedBand: true` for caco-hosted cleanup, which additionally
-  emits delete-by-z-index commands for the reserved Pi graphics z-index band.
-  The hosted-band sweep is supplemental: Kitty z-index deletion affects real /
-  relative placements, not Unicode virtual placements, so the scoped per-image
-  delete remains the authoritative cleanup for placeholder graphics.
+- `pi_graphics_clear` — deletes every image owned by this extension. Pass
+  `hostedBand: true` only when a Cacophony host must additionally clear stale
+  real/relative placements in the reserved z-index band.
 
-Low-level drawing primitives stay client-side by default because their schemas
-and raw kitty payloads are noisy in the agent context. Operators who explicitly
-want the model to synthesize arbitrary graphics can opt in with
-`PI_GRAPHICS_EXPOSE_RENDER_TOOLS=1` or `piGraphics.exposeRenderTools: true`; that
-adds:
+Set `PI_GRAPHICS_EXPOSE_RENDER_TOOLS=1` or
+`piGraphics.exposeRenderTools: true` to expose low-level prompt-enclosure and
+message-border render tools for diagnostics. Normal editor/footer/box behavior
+does not depend on those tools.
 
-* `pi_graphics_render_prompt_enclosure` — render a graphical separator.
-* `pi_graphics_render_message_border` — render a gradient frame sized in cells.
+## Fallbacks
 
-Normal graphical coverage does **not** depend on those opt-in tools: editor
-rails, message/box chrome, dialogs, selectors, notifications, working rows,
-status/footer/header/widget/custom surfaces, and extension-owned components are
-all handled inside the extension as TUI/client-side details.
-
-And the discoverability slash commands include:
-
-* `/pi-graphics-status` — report how many images are owned, whether Unicode
-  placeholder placement is active, whether the automatic pulse and startup
-  splash are enabled, and whether the session header/footer/HUD/editor frame and
-  APNG editor aura are installed, and whether the neon working row and lifecycle
-  title branding and the high-contrast floodlight banner are enabled.
-* `/pi-graphics-show` — show the automatic APNG pulse widget immediately.
-* `/pi-graphics-hide` — hide the automatic APNG pulse widget for this session.
-* `/pi-graphics-message [text]` — display a custom message rendered with Pi kitty graphics message chrome.
-* `/pi-graphics-braille-scene [label]` — write an image-like truecolor Braille rendering of the terminal scene.
-* `/pi-graphics-validation-report` — write rendered-pixel metrics proving the TypeScript graphical renderer is active.
-* `/pi-graphics-visual-proof [label]` — write the visual proof block with color chips and measured deltas.
-* `/pi-graphics-heartbeat` — refresh and show the live heartbeat ticker line.
-* `/pi-graphics-cockpit-wall [label]` — write the full truecolor terminal cockpit wall.
-* `/pi-graphics-osc-palette` — apply the OSC terminal palette takeover.
-* `/pi-graphics-ansi-scene [label]` — write the truecolor ANSI scene shader sampled from rendered pixels.
-* `/pi-graphics-ansi-takeover [label]` — write the raw truecolor terminal banner.
-* `/pi-graphics-conversation-frame [text]` — send a graphical conversation-frame transcript message.
-* `/gfx themes` — print the running Pi theme registry with paths grouped by name so duplicate `kitty-graphics` exposure can be traced without deleting collective/user theme assets.
-* `/pi-graphics-theme-delta` — print the reload sentinel and theme delta report.
-* `/pi-graphics-demo` — print a sample rule, border, glow panel, graphical TUI component frame, and animated APNG pulse into the active UI.
-
-Interactive terminal animation smoke is intentionally outside default `node --test` discovery; run it explicitly with `npm run pi-graphics:animation-smoke` when you want raw Kitty animation output in the terminal.
-
-## Example
-
-```
-> pi_graphics_render_prompt_enclosure({ columns: 60, leftColor: "#00d8ff", rightColor: "#b48cff" })
-> pi_graphics_render_glow_panel({ columns: 48, rows: 9, phase: 0.18 })
-> pi_graphics_render_tui_component({ columns: 56, rows: 9, tone: "assistant", phase: 0.2, caption: "graphical TUI" })
-> pi_graphics_render_tui_pulse({ columns: 56, rows: 9, tone: "tool", frames: 8, delayMs: 90, caption: "animated APNG pulse" })
-> pi_graphics_render_stage_panel({ tone: "assistant", caption: "agent thinking", columns: 58, rows: 7 })
-> pi_graphics_send_message({ content: "render this message with neon chrome", title: "visible message" })
-> pi_graphics_render_contact_sheet({ columns: 36, rows: 6 })
-```
-
-The returned tool output text contains both the kitty-graphics transmit
-sequence (an APC escape) and the Unicode placeholder cells that anchor it
-into the line.
-
-## Falling back outside kitty/tmux
-
-If the active terminal does not support Unicode placeholder placement, the
-extension reports a textual fallback (e.g. `pi-graphics: Unicode placeholder
-placement is not active in this terminal; falling back to plain '─' rule.`)
-instead of emitting raw escape sequences. This keeps tool output readable in
-non-graphical terminals.
+Without Kitty Unicode placement, textual rails remain readable and raw escape
+payloads are not emitted into normal content. Inside tmux, escape commands use
+DCS passthrough and high-frequency editor dynamics default off.
 
 ## Testing
 
-```bash
-npm test
-```
-
-For a standalone visual-regression artefact, run:
+Focused deterministic coverage:
 
 ```bash
-node scripts/render-pi-graphics-contact-sheet.mjs ./pi-graphics-contact-sheet.png
-node scripts/render-pi-theme-swatch.mjs ./pi-kitty-theme-swatch.png
+node --test --test-reporter=spec \
+  test/pi-graphics-fullscreen-contract.test.js \
+  test/editor-chips.test.js \
+  test/pi-graphics.test.js
 ```
 
-The test suite under `test/pi-graphics.test.js` covers PNG byte output,
-canvas drawing primitives, affordance footprints, kitty graphics command
-generation, package manifest discovery, and theme schema completeness. It also
-round-trips generated PNGs back to RGBA pixels and asserts visible contrast,
-glow coverage, scanline variation, APNG animation chunks, automatic startup and
-lifecycle widget wiring, high-contrast floodlight rendering, live footer branch/status beacon rendering, theme calibration swatch rendering, photon-rain component phase variation, rendered terminal-scene pixel/APNG validation, doctor/takeover diagnostic rendering, live-probe diagnostics, lighthouse beacon rendering, Braille pixel-scene rendering, rendered validation-report metrics, visual proof block rendering, live heartbeat ticker rendering, terminal cockpit-wall takeover, OSC terminal-palette takeover, ANSI scene-shader rendering, raw ANSI takeover rendering, conversation-frame and bounded transcript-chrome rendering, reload-sentinel/theme-delta diagnostics, visual-contract checklist rendering, component-backed HUD, editor-frame, editor-surface rendering, and raw stdout/stderr/notification bootstrap rendering, APNG editor-aura rendering, neon working-row/hidden-thinking labels, lifecycle terminal title branding, startup splash and transcript theme-swatch message construction, default-on persistent header/footer component rendering, automatic theme activation diagnostics, themed working-indicator frames, custom message renderer chrome, stage-panel text fallback and APNG chrome, contact-sheet generation, theme swatch wiring, measured deltas from the built-in dark palette, bounded PNG/APNG wire size, tone-palette differences,
-phase-independent component cache keys, and stable-layout / different-pixels
-pulse frames so graphical changes cannot silently degrade into a theme that
-looks the same as plain text.
+Optional visual artifacts and terminal smoke checks:
+
+```bash
+npm run pi-graphics:smoke -- --out=artifacts/pi-graphics-smoke.png
+npm run pi-graphics:animation-smoke
+npm run pi-graphics:tmux-smoke
+```
+
+The pure suite covers editor lease ordering, exact-owner release, narrow/wide
+layout, mode migration, quiet-off invariants, timer draining, scoped protocol
+commands, renderer pixels, and repeated composition. Live Kitty smoke checks are
+explicit because terminal/tmux rendering is environment-dependent.

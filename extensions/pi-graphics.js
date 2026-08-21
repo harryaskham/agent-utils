@@ -101,7 +101,7 @@ import {
   resetPlacementTracking,
 } from "./pi-graphics/runtime.js";
 import { PI_GRAPHICS_RESERVED_Z_INDICES, PI_GRAPHICS_Z } from "./pi-graphics/z-index.js";
-import { createFullscreenResourceOwner, getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
+import { createFullscreenResourceOwner, getOrCreateEditorChromeRegistry, resolveFullscreenEditorMode, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
 
 const TOOL_PREFIX = "pi_graphics";
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
@@ -279,26 +279,21 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function editorStyle() {
-    const raw = rawEditorStyle();
-    if (raw === "animated") return "relative";
-    if (raw === "relative" || raw === "overlay") return "relative";
-    if (["joinedunicode", "joined-unicode", "joined_unicode", "joined"].includes(raw)) return "unicode";
-    if (raw === "unicode" || raw === "placeholder" || raw === "caco") return "unicode";
-    return "static";
+    return resolveFullscreenEditorMode(rawEditorStyle()).style;
   }
 
   function editorUnicodeMode() {
     const rawMode = String(gfxEnv().PI_GRAPHICS_EDITOR_UNICODE_MODE || "").trim().toLowerCase();
-    const rawStyle = rawEditorStyle();
-    if (["joinedunicode", "joined-unicode", "joined_unicode", "joined", "topleft", "top-left", "top_left", "anchor", "single", "single-anchor"].includes(rawMode || rawStyle)) return "topLeft";
-    return "fill";
+    const resolvedStyle = resolveFullscreenEditorMode(rawEditorStyle());
+    if (["topleft", "top-left", "top_left", "anchor", "single", "single-anchor"].includes(rawMode)) return "topLeft";
+    return resolvedStyle.unicodeMode || "fill";
   }
 
   function editorAnimationEnabled() {
     const raw = String(gfxEnv().PI_GRAPHICS_EDITOR_ANIMATION ?? "").trim().toLowerCase();
     if (["1", "true", "yes", "on", "enabled", "animate", "animated"].includes(raw)) return true;
     if (["0", "false", "no", "off", "disabled", "none", "static"].includes(raw)) return false;
-    return rawEditorStyle() === "animated";
+    return resolveFullscreenEditorMode(rawEditorStyle()).animation === true;
   }
 
   function editorBorderHeight(edge) {
@@ -2288,6 +2283,15 @@ export default async function piGraphicsExtension(pi) {
     patchUiGraphicsSurfaces(ctx);
   }
 
+  let warnedLegacyEditorMode = false;
+  function warnLegacyEditorMode(ctx) {
+    if (warnedLegacyEditorMode) return;
+    const resolved = resolveFullscreenEditorMode(rawEditorStyle());
+    if (!resolved.warning) return;
+    warnedLegacyEditorMode = true;
+    try { ctx?.ui?.notify?.(`Pi Graphics: ${resolved.warning}; use /gfx save to persist canonical settings.`, "warning"); } catch {}
+  }
+
   function installWorkingSurfaces(ctx) {
     try {
       ownedWorkingIndicator = {
@@ -2307,6 +2311,7 @@ export default async function piGraphicsExtension(pi) {
     writeGraphicsCommand = resolveGraphicsWriter(ctx);
     activeThemeRef = ctx?.ui?.theme || null;
     clearStaleStartupGraphics();
+    warnLegacyEditorMode(ctx);
     applyTheme(ctx);
     installEditorSurface(ctx);
     mountEditorRails(ctx);
@@ -2518,6 +2523,7 @@ export default async function piGraphicsExtension(pi) {
       activeThemeRef = ctx?.ui?.theme || activeThemeRef;
     } catch {}
     const off = modeIsOff(gfxEnv().PI_GRAPHICS_MODE);
+    warnLegacyEditorMode(ctx);
     if (off) {
       releaseEditorSurface();
       releaseOwnedUiSurfaces(ctx);
@@ -2910,16 +2916,10 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function normalizeEditorGraphicsCombination(editor = {}) {
-    const raw = String(editor.style || "static").trim();
-    if (["joinedUnicode", "joinedunicode", "joined-unicode", "joined_unicode", "joined"].includes(raw)) {
-      editor.style = "unicode";
-      editor.unicodeMode = "topLeft";
-    } else if (raw === "animated") {
-      editor.style = "relative";
-      editor.animation = true;
-    } else if (!["static", "unicode", "relative"].includes(raw)) {
-      editor.style = "static";
-    }
+    const resolved = resolveFullscreenEditorMode(editor.style);
+    editor.style = resolved.style;
+    if (resolved.unicodeMode) editor.unicodeMode = resolved.unicodeMode;
+    if (resolved.animation) editor.animation = true;
     if (editor.animation && editor.style === "static") editor.style = "relative";
     if (editor.style !== "unicode") delete editor.unicodeMode;
     if (editor.style === "unicode" && !["fill", "topLeft"].includes(editor.unicodeMode || "fill")) editor.unicodeMode = "fill";
