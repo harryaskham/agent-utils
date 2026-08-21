@@ -103,13 +103,26 @@ export class ChoiceStateMachine {
 }
 
 function kittyKeyCode(data) {
-  const match = /^\u001b\[(\d+)(?:;[\d:]+)?u$/.exec(String(data ?? ""));
+  // CSI unicode-key-code[:alternate-key-codes][;modifiers:event][;text] u
+  // Keep only the primary key code; later fields describe modifiers, event type,
+  // and optionally composed text. Kitty may emit any or all of them.
+  const match = /^\u001b\[(\d+)(?::\d+)*(?:;[\d:]+)*u$/.exec(String(data ?? ""));
   return match ? Number(match[1]) : null;
 }
 
 export function isChoiceEscapeKey(data) {
   const key = String(data ?? "");
   return key === "\u001b" || kittyKeyCode(key) === 27;
+}
+
+// Modern terminals can report Enter through Kitty's CSI-u keyboard protocol
+// (`ESC [ 13 u`, optionally with modifier/event fields) rather than the legacy
+// CR/LF bytes. Pi's custom modal receives the raw terminal sequence, so direct
+// `key === "\r"` checks silently stopped working when extended-key reporting was
+// enabled. Keypad Enter in application mode is ESC O M.
+export function isChoiceEnterKey(data) {
+  const key = String(data ?? "");
+  return key === "\r" || key === "\n" || key === "\u001bOM" || kittyKeyCode(key) === 13;
 }
 
 export function isChoiceQuitKey(data) {
@@ -124,7 +137,7 @@ export function keyboardChoiceAction(data, choiceCount = 0) {
   const key = String(data ?? "");
   if (key === "\u001b[A" || key === "k" || key === "K") return { action: CHOICE_INPUT_ACTIONS.PREVIOUS, source: "keyboard", raw: key };
   if (key === "\u001b[B" || key === "j" || key === "J") return { action: CHOICE_INPUT_ACTIONS.NEXT, source: "keyboard", raw: key };
-  if (key === "\r" || key === "\n") return { action: CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, source: "keyboard", raw: key };
+  if (isChoiceEnterKey(key)) return { action: CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, source: "keyboard", raw: key };
   if (isChoiceEscapeKey(key) || isChoiceQuitKey(key) || key === "\u0003") return { action: CHOICE_INPUT_ACTIONS.CANCEL, source: "keyboard", raw: key };
   if (/^[1-9]$/.test(key)) {
     const index = Number(key) - 1;

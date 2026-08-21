@@ -107,6 +107,12 @@ test("keyboard input maps arrows, j/k, Enter, Escape, and one-indexed numeric ch
   assert.equal(keyboardChoiceAction("\u001b[B", 3).action, CHOICE_INPUT_ACTIONS.NEXT);
   assert.equal(keyboardChoiceAction("j", 3).action, CHOICE_INPUT_ACTIONS.NEXT);
   assert.equal(keyboardChoiceAction("\r", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT);
+  assert.equal(keyboardChoiceAction("\n", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT);
+  assert.equal(keyboardChoiceAction("\u001b[13u", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, "Kitty CSI-u Enter is recognized");
+  assert.equal(keyboardChoiceAction("\u001b[13;1u", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, "Kitty Enter with modifier field is recognized");
+  assert.equal(keyboardChoiceAction("\u001b[13;1:1u", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, "Kitty Enter with event field is recognized");
+  assert.equal(keyboardChoiceAction("\u001b[13;1:1;13u", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, "Kitty Enter with text field is recognized");
+  assert.equal(keyboardChoiceAction("\u001bOM", 3).action, CHOICE_INPUT_ACTIONS.CHOOSE_CURRENT, "application keypad Enter is recognized");
   assert.equal(keyboardChoiceAction("\u001b", 3).action, CHOICE_INPUT_ACTIONS.CANCEL);
   assert.equal(keyboardChoiceAction("q", 3).action, CHOICE_INPUT_ACTIONS.CANCEL);
   assert.equal(keyboardChoiceAction("Q", 3).action, CHOICE_INPUT_ACTIONS.CANCEL);
@@ -277,7 +283,7 @@ test("choice PTT emits generic start/commit/cancel actions and accepts successfu
   await Promise.resolve();
   assert.equal(inputs.at(-1).action, CHOICE_INPUT_ACTIONS.FREEFORM_ENTER);
   assert.equal(inputs.at(-1).mode, "ptt");
-  h.input(" ");
+  h.input("\u001b[13;1u");
   assert.equal(inputs.at(-1).action, CHOICE_INPUT_ACTIONS.FREEFORM_PTT_COMMIT);
   h.events.emit(CHOICE_INPUT_EVENT, { action: CHOICE_INPUT_ACTIONS.FREEFORM_SUBMIT, text: "spoken reply", source: "ptt", sessionId: inputs[0].sessionId });
   const result = await pending;
@@ -433,9 +439,9 @@ test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and
   component.handleInput("\u001b[B");
   assert.ok(renders > 0, "arrow navigation requests modal redraw");
   assert.match(component.render(80).join("\n"), /<accent>.*2\./);
-  component.handleInput("2");
+  component.handleInput("\u001b[13;1u");
   const result = await pending;
-  assert.equal(result.details.choice.label, "beta");
+  assert.equal(result.details.choice.label, "beta", "raw Kitty Enter selects the highlighted modal row");
 });
 
 test("TUI freeform field owns focus, renders typed text, and submits without touching the editor", async () => {
@@ -453,7 +459,7 @@ test("TUI freeform field owns focus, renders typed text, and submits without tou
   component.handleInput("typed reply");
   assert.match(component.render(80).join("\n"), /Reply: typed reply/);
   assert.equal(h.editor.value, "main editor draft");
-  component.handleInput("\r");
+  component.handleInput("\u001b[13;1u");
   const result = await pending;
   assert.equal(result.details.status, "freeform");
   assert.equal(result.details.text, "typed reply");

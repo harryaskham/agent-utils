@@ -15,6 +15,7 @@ import {
   ChoiceStateMachine,
   createChoiceSpeaker,
   formatChoiceIntroduction,
+  isChoiceEnterKey,
   isChoiceEscapeKey,
   isChoiceQuitKey,
   keyboardChoiceAction,
@@ -425,7 +426,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           const key = String(data ?? "");
           if (record.freeformMode === "text") {
             if (isChoiceEscapeKey(key)) emitInput({ action: INPUT_ACTIONS.FREEFORM_CANCEL, source: "keyboard", reason: "escape" });
-            else if (key === "\r" || key === "\n") emitInput({ action: INPUT_ACTIONS.FREEFORM_SUBMIT, text: record.freeformText, source: "keyboard" });
+            else if (isChoiceEnterKey(key)) emitInput({ action: INPUT_ACTIONS.FREEFORM_SUBMIT, text: record.freeformText, source: "keyboard" });
             else if (key === "\u007f" || key === "\b") {
               record.freeformText = [...record.freeformText].slice(0, -1).join("");
               try { record.requestRender?.(); } catch {}
@@ -438,7 +439,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           }
           if (record.freeformMode === "ptt") {
             if (isChoiceEscapeKey(key) || key === "\u0003") emitInput({ action: INPUT_ACTIONS.FREEFORM_CANCEL, source: "keyboard", reason: key === "\u0003" ? "ctrl-c" : "escape" });
-            else if (key === "\r" || key === "\n" || key === " ") emitInput({ action: INPUT_ACTIONS.FREEFORM_PTT_COMMIT, source: "keyboard" });
+            else if (isChoiceEnterKey(key) || key === " ") emitInput({ action: INPUT_ACTIONS.FREEFORM_PTT_COMMIT, source: "keyboard" });
             return true;
           }
           if (key === "i" || key === "I") {
