@@ -30,9 +30,10 @@ function fields(value, fallback) {
 
 export function resolveEditorChipsConfig(settings = {}, env = process.env) {
   const raw = settings?.agentUtils?.editorChips || settings?.editorChips || {};
-  const enabled = env.PI_EDITOR_CHIPS_ENABLED == null
+  const envEnabled = String(env.PI_EDITOR_CHIPS_ENABLED ?? "").trim();
+  const enabled = envEnabled === ""
     ? bool(raw.enabled ?? raw.enable, false)
-    : bool(env.PI_EDITOR_CHIPS_ENABLED, false);
+    : bool(envEnabled, false);
   return {
     enabled,
     topRight: fields(raw.topRight, DEFAULT_FIELDS.topRight),

@@ -64,6 +64,8 @@ test("editor chip settings resolve the requested immutable startup layout", () =
   assert.deepEqual(config.bottomCenter, ["branch", "diff"]);
   assert.equal(config.hideFooter, true);
   assert.equal(resolveEditorChipsConfig({}, {}).enabled, false);
+  assert.equal(resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true } } }, { PI_EDITOR_CHIPS_ENABLED: "" }).enabled, true, "empty launcher env does not disable settings policy");
+  assert.equal(resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true } } }, { PI_EDITOR_CHIPS_ENABLED: "0" }).enabled, false);
 });
 
 test("directory collapse progressively shortens earlier path components to one cell", () => {
