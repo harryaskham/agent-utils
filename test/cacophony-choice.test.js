@@ -102,6 +102,44 @@ test("appended action metadata is mirrored and local action resolution settles o
   assert.equal(calls[1][calls[1].indexOf("--selected-index") + 1], "1");
 });
 
+test("Cacophony freeform resolution is bidirectional and first-writer-wins", async () => {
+  const calls = [];
+  const clock = timers();
+  const resolutions = [];
+  const bridge = createCacophonyChoiceBridge({
+    env: { CACO_AGENT_ID: "agent-1", CACO_PROJECT: "project-1" },
+    execFileImpl: fakeExec([
+      { data: { choice_id: "choice-freeform" } },
+      { data: { status: "resolved", resolution: { freeform_text: "mobile answer" } } },
+    ], calls),
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  const inbound = bridge.start({ question: "Reply", choices: [{ label: "a" }, { label: "b" }], onResolution: (result) => resolutions.push(result) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls[0][calls[0].indexOf("--allow-freeform") + 1], "true");
+  await clock.runNext();
+  assert.deepEqual(resolutions, [{ status: "freeform", text: "mobile answer", source: "cacophony" }]);
+  await inbound.settleLocal({ status: "freeform", text: "late local answer", source: "keyboard" });
+  assert.equal(calls.filter((args) => args[1] === "resolve").length, 0, "remote winner prevents a second local resolution");
+
+  const outboundCalls = [];
+  const outbound = createCacophonyChoiceBridge({
+    env: { CACO_AGENT_ID: "agent-1", CACO_PROJECT: "project-1" },
+    execFileImpl: fakeExec([
+      { data: { choice_id: "choice-outbound" } },
+      { data: { resolved: true } },
+    ], outboundCalls),
+  }).start({ question: "Reply", choices: [{ label: "a" }, { label: "b" }] });
+  await new Promise((resolve) => setImmediate(resolve));
+  await Promise.all([
+    outbound.settleLocal({ status: "freeform", text: "local answer", source: "keyboard" }),
+    outbound.settleLocal({ status: "freeform", text: "duplicate", source: "ptt" }),
+  ]);
+  assert.equal(outboundCalls.filter((args) => args[1] === "resolve").length, 1);
+  assert.equal(outboundCalls[1][outboundCalls[1].indexOf("--freeform-text") + 1], "local answer");
+});
+
 test("local cancellation discards the mirrored choice and presentation races settle", async () => {
   const calls = [];
   let presentCallback;

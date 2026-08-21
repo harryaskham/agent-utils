@@ -75,7 +75,12 @@ export function createCacophonyChoiceBridge({
           if (status === "resolved") {
             state.stopped = true;
             const resolution = data.resolution || {};
-            onResolution?.({ status: "selected", index: resolution.selected_index, label: resolution.selected_label, source: "cacophony" });
+            const freeformText = resolution.freeform_text ?? resolution.freeformText;
+            if (typeof freeformText === "string") {
+              onResolution?.({ status: "freeform", text: freeformText, source: "cacophony" });
+            } else {
+              onResolution?.({ status: "selected", index: resolution.selected_index, label: resolution.selected_label, source: "cacophony" });
+            }
             return;
           }
           if (["timed_out", "unavailable", "discarded"].includes(status)) {
@@ -88,11 +93,13 @@ export function createCacophonyChoiceBridge({
       };
       const settleLocal = async (result) => {
         state.localResult = result;
-        if (!state.choiceId || state.settling || result?.source === "cacophony") return;
+        if (!state.choiceId || state.stopped || state.settling || result?.source === "cacophony") return;
         state.settling = true;
         stopTimer();
         try {
-          if (["selected", "action"].includes(result?.status) && Number.isInteger(result.index)) {
+          if (result?.status === "freeform" && typeof result.text === "string" && result.text.trim()) {
+            await call(["choices", "resolve", "--choice-id", state.choiceId, "--freeform-text", result.text.trim()]);
+          } else if (["selected", "action"].includes(result?.status) && Number.isInteger(result.index)) {
             await call(["choices", "resolve", "--choice-id", state.choiceId, "--selected-index", String(result.index)]);
           } else {
             await call(["choices", "discard", "--choice-id", state.choiceId]);
@@ -114,7 +121,7 @@ export function createCacophonyChoiceBridge({
         "--project", config.project,
         "--preamble", question,
         "--choices", JSON.stringify(mirroredChoices),
-        "--allow-freeform", "false",
+        "--allow-freeform", "true",
         `--notify-mode=${config.notifyMode}`,
       ]).then((response) => {
         const data = response?.data || response;

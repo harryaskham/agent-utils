@@ -96,7 +96,7 @@ function renderChoiceWidget(question, choices, index, status = "listening") {
   ];
 }
 
-function renderChoiceDialog(question, choices, index, timeoutMs, width, theme) {
+function renderChoiceDialog(question, choices, index, timeoutMs, width, theme, freeform = {}) {
   const color = (name, text) => { try { return theme?.fg?.(name, text) ?? text; } catch { return text; } };
   const bold = (text) => { try { return theme?.bold?.(text) ?? text; } catch { return text; } };
   const maxWidth = Math.max(20, width || 80);
@@ -115,7 +115,15 @@ function renderChoiceDialog(question, choices, index, timeoutMs, width, theme) {
     if (choices[i].summary) lines.push(`    ${color(selected ? "muted" : "dim", fit(choices[i].summary, Math.max(4, maxWidth - 4)))}`);
   }
   lines.push("");
-  lines.push(`${color("accent", "↑/k")} ${color("dim", "previous")}  ${color("accent", "↓/j")} ${color("dim", "next")}  ${color("success", "Enter / 1–9")} ${color("dim", "choose")}  ${color("warning", "Esc/q")} ${color("dim", "cancel · hard stop in force mode")}`);
+  if (freeform.mode === "text") {
+    lines.push(`${color("accent", "Reply:")} ${color("text", fit(freeform.text || "", Math.max(4, maxWidth - 9)))}${color("accent", "▏")}`);
+    lines.push(`${color("success", "Enter")} ${color("dim", "submit reply")}  ${color("warning", "Esc")} ${color("dim", "back to choices")}  ${color("muted", "Backspace")} ${color("dim", "delete")}`);
+  } else if (freeform.mode === "ptt") {
+    lines.push(color("accent", "🎤 Push-to-talk reply is recording/transcribing…"));
+    lines.push(`${color("success", "Enter / Space")} ${color("dim", "finish")}  ${color("warning", "Esc / Ctrl-C")} ${color("dim", "cancel and return")}`);
+  } else {
+    lines.push(`${color("accent", "↑/k")} ${color("dim", "previous")}  ${color("accent", "↓/j")} ${color("dim", "next")}  ${color("success", "Enter / 1–9")} ${color("dim", "choose")}  ${color("accent", "i")} ${color("dim", "type reply")}  ${color("accent", "Space")} ${color("dim", "PTT reply")}  ${color("warning", "Esc/q")} ${color("dim", "cancel")}`);
+  }
   lines.push(color("dim", timeoutMs === 0 ? "No timeout · editor input is suspended while this choice is open" : `Timeout: ${timeoutMs}ms · editor input is suspended while this choice is open`));
   lines.push(color("accent", "━".repeat(maxWidth)));
   return lines;
@@ -123,6 +131,7 @@ function renderChoiceDialog(question, choices, index, timeoutMs, width, theme) {
 
 function resultText(result) {
   if (result?.status === "selected") return `selected ${result.index + 1}: ${result.choice?.label}`;
+  if (result?.status === "freeform") return `freeform reply: ${result.text}`;
   if (result?.status === "action") return `choice action ${result.action}: ${result.choice?.label}`;
   if (result?.status === "timeout") return `choice timed out after ${result.timeoutMs}ms`;
   if (result?.status === "cancelled") return `choice cancelled (${result.reason || "cancelled"})`;
@@ -207,10 +216,70 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       return true;
     };
 
+    const pauseChoiceActivity = (record) => {
+      if (record.timer) clearTimer(record.timer);
+      record.timer = null;
+      if (record.deadline) record.remainingTimeoutMs = Math.max(1, record.deadline - Date.now());
+      if (record.repeatTimer) clearTimer(record.repeatTimer);
+      record.repeatTimer = null;
+      try { speakerController.interrupt?.(); } catch {}
+    };
+
+    const enterFreeform = (record, mode = "text") => {
+      if (!record || record.finished) return;
+      pauseChoiceActivity(record);
+      record.freeformMode = mode === "ptt" ? "ptt" : "text";
+      record.freeformText = "";
+      if (record.requestRender) { try { record.requestRender(); } catch {} }
+      else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index, `${record.freeformMode} reply`), { placement: "belowEditor" }); } catch {} }
+      emitSession({ status: "freeform", phase: "start", mode: record.freeformMode, sessionId: record.sessionId });
+    };
+
+    const resumeChoiceList = (record, reason = "cancelled") => {
+      if (!record || record.finished) return;
+      const oldMode = record.freeformMode;
+      record.freeformMode = null;
+      record.freeformText = "";
+      emitSession({ status: "freeform", phase: "cancel", mode: oldMode, reason, sessionId: record.sessionId });
+      if (record.timeoutMs > 0 && record.remainingTimeoutMs > 0) {
+        record.deadline = Date.now() + record.remainingTimeoutMs;
+        record.timer = setTimer(() => finish(record, { status: "timeout", timeoutMs: record.timeoutMs, index: record.state.index, choice: record.state.current() }), record.remainingTimeoutMs);
+      }
+      record.scheduleRepeat?.();
+      if (record.requestRender) { try { record.requestRender(); } catch {} }
+      else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index), { placement: "belowEditor" }); } catch {} }
+    };
+
     const handleInput = (input) => {
       const record = active;
       if (!record || record.finished) return null;
       if (input?.sessionId && input.sessionId !== record.sessionId) return null;
+      const action = String(input?.action ?? "").trim().toLowerCase();
+      if (action === INPUT_ACTIONS.FREEFORM_ENTER) {
+        enterFreeform(record, input?.mode);
+        return { type: "freeform-enter", mode: record.freeformMode };
+      }
+      if (action === INPUT_ACTIONS.FREEFORM_UPDATE) {
+        if (record.freeformMode) {
+          record.freeformText = String(input?.text ?? "");
+          if (record.requestRender) { try { record.requestRender(); } catch {} }
+        }
+        return { type: "freeform-update", text: record.freeformText };
+      }
+      if (action === INPUT_ACTIONS.FREEFORM_SUBMIT) {
+        const text = String(input?.text ?? "").trim();
+        if (!text) {
+          if (record.freeformMode) resumeChoiceList(record, "empty");
+          return { type: "ignored", reason: "empty-freeform" };
+        }
+        finish(record, { status: "freeform", text, source: input?.source || "event" });
+        return { type: "freeform", text };
+      }
+      if (action === INPUT_ACTIONS.FREEFORM_CANCEL) {
+        if (record.freeformMode) resumeChoiceList(record, input?.reason || "cancelled");
+        return { type: "freeform-cancel" };
+      }
+      if (action === INPUT_ACTIONS.FREEFORM_PTT_COMMIT) return { type: "freeform-ptt-commit" };
       const outcome = record.state.apply(input);
       if (outcome.type === "navigate") {
         if (record.requestRender) { try { record.requestRender(); } catch {} }
@@ -238,6 +307,12 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
             choice: outcome.choice,
             source,
           });
+        } else if (outcome.choice?.appended && outcome.choice.cacophonyAction === "freeformReply") {
+          // A control row enters a sub-flow; it is not itself a completed
+          // ordinary selection. Re-arm the state machine so Escape can return
+          // to the same list and choose again.
+          record.state.done = false;
+          enterFreeform(record, "text");
         } else if (outcome.choice?.appended) {
           finish(record, {
             status: "action",
@@ -308,6 +383,11 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           repeatTimer: null,
           cacophony: null,
           repeatCount: 0,
+          deadline: timeoutMs > 0 ? Date.now() + timeoutMs : null,
+          remainingTimeoutMs: timeoutMs,
+          freeformMode: null,
+          freeformText: "",
+          scheduleRepeat: null,
           terminalUnsub: null,
           onAbort: null,
           warnedSpeech: false,
@@ -321,7 +401,9 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           choices,
           onResolution(external) {
             if (record.finished) return;
-            if (external?.status === "selected" && Number.isInteger(external.index) && external.index >= 0 && external.index < choices.length) {
+            if (external?.status === "freeform") {
+              handleInput({ action: INPUT_ACTIONS.FREEFORM_SUBMIT, text: external.text, source: "cacophony", sessionId });
+            } else if (external?.status === "selected" && Number.isInteger(external.index) && external.index >= 0 && external.index < choices.length) {
               handleInput({ action: INPUT_ACTIONS.CHOOSE_INDEX, index: external.index, source: "cacophony", sessionId });
             } else if (external?.status === "cancelled") {
               finish(record, { status: "cancelled", reason: external.reason || "cacophony", index: state.index, choice: state.current(), source: "cacophony" });
@@ -335,11 +417,42 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         }) || null;
         record.onAbort = () => finish(record, { status: "cancelled", reason: "aborted", index: state.index, choice: state.current() });
         signal?.addEventListener?.("abort", record.onAbort, { once: true });
+        const emitInput = (input) => {
+          try { pi.events?.emit?.(INPUT_ACTION_EVENT, { ...input, sessionId }); }
+          catch { handleInput({ ...input, sessionId }); }
+        };
         const dispatchKeyboard = (data) => {
-          const input = keyboardChoiceAction(data, choices.length);
+          const key = String(data ?? "");
+          if (record.freeformMode === "text") {
+            if (isChoiceEscapeKey(key)) emitInput({ action: INPUT_ACTIONS.FREEFORM_CANCEL, source: "keyboard", reason: "escape" });
+            else if (key === "\r" || key === "\n") emitInput({ action: INPUT_ACTIONS.FREEFORM_SUBMIT, text: record.freeformText, source: "keyboard" });
+            else if (key === "\u007f" || key === "\b") {
+              record.freeformText = [...record.freeformText].slice(0, -1).join("");
+              try { record.requestRender?.(); } catch {}
+            } else if (key === "\u0003") emitInput({ action: INPUT_ACTIONS.FREEFORM_CANCEL, source: "keyboard", reason: "ctrl-c" });
+            else if (key && !key.startsWith("\u001b")) {
+              record.freeformText += key.replace(/[\r\n\u0000-\u001f\u007f]+/g, " ");
+              try { record.requestRender?.(); } catch {}
+            }
+            return true;
+          }
+          if (record.freeformMode === "ptt") {
+            if (isChoiceEscapeKey(key) || key === "\u0003") emitInput({ action: INPUT_ACTIONS.FREEFORM_CANCEL, source: "keyboard", reason: key === "\u0003" ? "ctrl-c" : "escape" });
+            else if (key === "\r" || key === "\n" || key === " ") emitInput({ action: INPUT_ACTIONS.FREEFORM_PTT_COMMIT, source: "keyboard" });
+            return true;
+          }
+          if (key === "i" || key === "I") {
+            emitInput({ action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "text", source: "keyboard" });
+            return true;
+          }
+          if (key === " ") {
+            emitInput({ action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "ptt", source: "keyboard" });
+            return true;
+          }
+          const input = keyboardChoiceAction(key, choices.length);
           if (!input) return false;
           // Keyboard is another event producer, not a privileged state-machine path.
-          try { pi.events?.emit?.(INPUT_ACTION_EVENT, { ...input, sessionId }); } catch { handleInput({ ...input, sessionId }); }
+          emitInput(input);
           return true;
         };
         if (ctx?.mode === "tui" && typeof ctx?.ui?.custom === "function") {
@@ -350,7 +463,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
             record.customDone = done;
             record.requestRender = () => tui.requestRender();
             return {
-              render: (width) => renderChoiceDialog(question, choices, state.index, timeoutMs, width, theme),
+              render: (width) => renderChoiceDialog(question, choices, state.index, timeoutMs, width, theme, { mode: record.freeformMode, text: record.freeformText }),
               invalidate() { tui.requestRender(); },
               handleInput(data) { dispatchKeyboard(data); },
             };
@@ -383,7 +496,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           try { ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
         });
         const scheduleRepeat = () => {
-          if (!choiceConfig.speechEnabled || record.finished) return;
+          if (!choiceConfig.speechEnabled || record.finished || record.freeformMode) return;
           if (choiceConfig.repeat.limit != null && record.repeatCount >= choiceConfig.repeat.limit) return;
           record.repeatTimer = setTimer(() => {
             record.repeatTimer = null;
@@ -393,6 +506,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
             scheduleRepeat();
           }, choiceConfig.repeat.interval * 1000);
         };
+        record.scheduleRepeat = scheduleRepeat;
         if (choiceConfig.speechEnabled) {
           void speakIntroduction();
           scheduleRepeat();
@@ -405,7 +519,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       pi.registerTool({
         name: "interactive_choice",
         label: "Interactive Choice",
-        description: "Present a spoken multiple-choice question. Supports arrows, j/k, Enter, one-indexed numeric keys, cancellation, and external input adapters such as Finger One ring events.",
+        description: "Present a spoken choice with keyboard, freeform text (i), push-to-talk (Space), numeric selection, cancellation, and external input adapters such as Finger One ring events.",
         promptSnippet: "Use interactive_choice for bounded user decisions that can be answered by keyboard or configured input adapters such as the Finger One ring.",
         promptGuidelines: [
           "Keep choice headlines short and distinct for speech and gesture navigation.",

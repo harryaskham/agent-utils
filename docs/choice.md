@@ -27,6 +27,11 @@ controls can consume the same input modules:
 | `choose-current` | Confirm the highlighted option. |
 | `choose-index` | Confirm zero-based `index` directly. |
 | `cancel` | Cancel without selecting. |
+| `freeform-enter` | Enter choice-owned text or PTT reply mode (`mode: text|ptt`). |
+| `freeform-update` | Update the choice-owned PTT transcript preview without touching the main editor. |
+| `freeform-submit` | Resolve with a non-empty text reply. |
+| `freeform-cancel` | Leave text/PTT reply mode and return to the choice list. |
+| `freeform-ptt-commit` | Finish choice-owned PTT and request its final transcription. |
 
 Payloads may include `source`, `raw`, and the active `sessionId`. A mismatched
 `sessionId` is ignored. The choice extension emits
@@ -133,6 +138,31 @@ question; option headlines and navigation speech remain unmodified. Set them wit
 `PI_CHOICE_SUFFIX`. Safe `$VAR`/`${VAR}` expansion is supported without command
 substitution. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
 
+## Freeform text and push-to-talk replies
+
+A choice is not limited to its numbered rows:
+
+- Press **i** while the choice modal is focused to open its single-line reply
+  field. Type normally, use Backspace to edit, and press Enter to submit.
+- Press **Escape** in the reply field to return to the unchanged choice list.
+  The draft is discarded, the choice remains pending, and no key leaks into the
+  main Pi editor.
+- Press **Space** from the choice list to start a local-VAD push-to-talk reply.
+  Speak, then press Enter or Space to finish. Escape or Ctrl-C cancels the
+  capture and returns to the choice.
+
+Text and successful PTT transcription resolve `interactive_choice` with
+`status: "freeform"`, the exact non-empty `text`, and its source. PTT partials
+render inside the choice flow; they do not populate or submit the main editor.
+Empty, cancelled, or failed captures return to the choice list without inventing
+an answer. The choice timeout and spoken-repeat timers pause while text or PTT
+entry owns the modal and resume if entry is cancelled.
+
+These transitions use the generic `agent-utils:input-action` bus:
+`freeform-enter`, `freeform-update`, `freeform-submit`, `freeform-cancel`, and
+`freeform-ptt-commit`. Realtime owns microphone capture and transcription; the
+choice extension owns modal state and final resolution.
+
 ## Cacophony/mobile mirroring
 
 Managed Cacophony agents automatically mirror every Pi `interactive_choice` into
@@ -144,6 +174,10 @@ mobile/operator surfaces without speaking the question a second time.
 Resolution is bidirectional:
 
 - a mobile/Cacophony selection resolves the open Pi modal at the same index;
+- a Cacophony `freeform_text` resolution returns the identical text to the local
+  pending choice;
+- a local text or PTT reply resolves the exact durable choice with
+  `--freeform-text`;
 - a Pi keyboard, ring, or adapter selection resolves the durable Cacophony copy;
 - Pi cancellation, timeout, supersession, abort, or shutdown discards the durable
   copy rather than leaving a stale operator choice.

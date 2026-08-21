@@ -14,6 +14,7 @@ import realtimeAgentExtension, {
 } from "../extensions/realtime-agent.js";
 import { EventEmitter } from "node:events";
 import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
+import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "../extensions/lib/input-actions.js";
 
 // Local-vad wiring tests drive audio through startLocalVad -> parseLocalVadConfig,
 // which reads PI_RT_LOCAL_VAD_* env. Clear those here so the audio-driven assertions
@@ -189,6 +190,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
   const setModelCalls = [];
   const forkCalls = [];
   const emittedEvents = [];
+  const eventHandlers = new Map();
   const sentMessages = [];
   const sentUserMessages = [];
   let reloadCount = 0;
@@ -227,7 +229,14 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     },
     unregisterProvider(provider) { providers.delete(provider); },
     registerTool(definition) { tools.set(definition.name, definition); },
-    events: { emit: (name, payload) => emittedEvents.push({ name, payload }) },
+    events: {
+      on(name, handler) { const list = eventHandlers.get(name) || []; list.push(handler); eventHandlers.set(name, list); },
+      off(name, handler) { eventHandlers.set(name, (eventHandlers.get(name) || []).filter((item) => item !== handler)); },
+      emit(name, payload) {
+        emittedEvents.push({ name, payload });
+        for (const handler of [...(eventHandlers.get(name) || [])]) handler(payload);
+      },
+    },
     on(event, handler) { handlers.set(event, handler); },
     setModel: async (model) => {
       setModelCalls.push(model);
@@ -1980,6 +1989,77 @@ test("/ptt alias uses local VAD hold mode and never sends on the commit timeout"
     h.sendTerminalInput(" ");
     await waitFor(() => h.sentUserMessages.length === 1, { timeoutMs: 2000 });
     assert.match(h.sentUserMessages[0].content, /held words$/);
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
+
+test("choice PTT returns successful transcription through the input bus without sending a user turn", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "spoken choice reply" });
+  try {
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+    h.pi.events.emit(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "ptt", sessionId: "choice-1" });
+    await waitFor(() => captures.length === 1);
+    const pcm = (ms, speech) => {
+      const n = Math.round((ms / 1000) * 24000);
+      const b = Buffer.alloc(n * 2);
+      if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+      return b;
+    };
+    captures[0].stdout.emit("data", pcm(500, true));
+    for (let i = 0; i < 12; i++) captures[0].stdout.emit("data", pcm(100, false));
+    await waitFor(() => h.emittedEvents.some((event) => event.payload?.action === INPUT_ACTIONS.FREEFORM_UPDATE && event.payload?.text === "spoken choice reply"), { timeoutMs: 2000 });
+    assert.equal(h.editorText.value, "", "choice PTT partials stay inside the modal and never leak into the main editor");
+    h.pi.events.emit(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_PTT_COMMIT, sessionId: "choice-1" });
+    await waitFor(() => h.emittedEvents.some((event) => event.payload?.action === INPUT_ACTIONS.FREEFORM_SUBMIT), { timeoutMs: 2000 });
+    const submit = h.emittedEvents.find((event) => event.payload?.action === INPUT_ACTIONS.FREEFORM_SUBMIT);
+    assert.equal(submit.payload.text, "spoken choice reply");
+    assert.equal(submit.payload.sessionId, "choice-1");
+    assert.equal(submit.payload.source, "ptt");
+    assert.equal(h.sentUserMessages.length, 0, "choice PTT never injects a second user turn");
+    assert.equal(captures[0].killed, true);
+  } finally {
+    __setLocalVadHooksForTest({});
+  }
+});
+
+test("empty and cancelled choice PTT return to the choice without inventing text", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "" });
+  try {
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+    h.pi.events.emit(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "ptt", sessionId: "empty-choice" });
+    await waitFor(() => captures.length === 1);
+    h.pi.events.emit(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_PTT_COMMIT, sessionId: "empty-choice" });
+    await waitFor(() => h.emittedEvents.some((event) => event.payload?.action === INPUT_ACTIONS.FREEFORM_CANCEL && event.payload?.sessionId === "empty-choice"));
+    assert.equal(h.emittedEvents.some((event) => event.payload?.action === INPUT_ACTIONS.FREEFORM_SUBMIT), false);
+
+    h.pi.events.emit(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "ptt", sessionId: "cancel-choice" });
+    await waitFor(() => captures.length === 2);
+    h.pi.events.emit(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_CANCEL, reason: "escape", sessionId: "cancel-choice" });
+    assert.equal(captures[1].killed, true);
+    assert.equal(h.sentUserMessages.length, 0);
   } finally {
     __setLocalVadHooksForTest({});
   }

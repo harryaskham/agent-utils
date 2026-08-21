@@ -12,4 +12,9 @@ export const INPUT_ACTIONS = Object.freeze({
   CHOOSE_CURRENT: "choose-current",
   CHOOSE_INDEX: "choose-index",
   CANCEL: "cancel",
+  FREEFORM_ENTER: "freeform-enter",
+  FREEFORM_UPDATE: "freeform-update",
+  FREEFORM_SUBMIT: "freeform-submit",
+  FREEFORM_CANCEL: "freeform-cancel",
+  FREEFORM_PTT_COMMIT: "freeform-ptt-commit",
 });

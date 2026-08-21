@@ -209,6 +209,7 @@ import {
 } from "./lib/realtime-tts-batch.js";
 import { RealtimeStateController } from "./lib/realtime-state-controller.js";
 import { SPEECH_INPUT_MODES, SpeechInputStateMachine } from "./lib/realtime-speech-input-state.js";
+import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "./lib/input-actions.js";
 // Re-exported so the public test/runtime contract import path
 // (realtime-agent.js -> RealtimeStateController) is preserved after extraction.
 export { RealtimeStateController };
@@ -2993,6 +2994,7 @@ export default function realtimeAgentExtension(pi) {
 
   pi.on("session_shutdown", async () => {
     config.autoReconnect = false;
+    try { pi.events?.off?.(INPUT_ACTION_EVENT, choiceFreeformInputHandler); } catch {}
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = null;
     stopLocalVad({ flush: false });
@@ -3118,7 +3120,7 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
-  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null, meter: null, inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 };
+  const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, freeformSessionId: null, freeformDelivery: null, freeformCommitting: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null, meter: null, inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 };
 
   // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
   // VAD). Updates this process and the running segmenter without rewriting startup settings.
@@ -3179,7 +3181,7 @@ export default function realtimeAgentExtension(pi) {
     return wasActive;
   }
 
-  async function startLocalVad(ctx, { hold = false, quickfile = false } = {}) {
+  async function startLocalVad(ctx, { hold = false, quickfile = false, freeformSessionId = null } = {}) {
     // Free the mic: stop any active WSS realtime session and any prior local-vad.
     try { await controls.disable(ctx, { restoreModel: true }); } catch {}
     stopLocalVad({ flush: false });
@@ -3188,7 +3190,8 @@ export default function realtimeAgentExtension(pi) {
     const cfg = parseLocalVadConfig(process.env, persistedStt);
     const model = resolveBatchSttModel(process.env, persistedStt);
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
-    Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
+    const freeformDelivery = { submitted: false };
+    Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, freeformSessionId, freeformDelivery, freeformCommitting: false, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
 
     // bd-0c008d: stream partial transcripts into the input editor (live voice
     // editing) instead of only a status widget; commit sends the editor's text
@@ -3214,6 +3217,10 @@ export default function realtimeAgentExtension(pi) {
       isSuppressed: () => isAssistantSpeaking(),
       transcribe: (buf) => localVadTranscribe(buf, { model, timeoutMs }),
       insertPartial: (text) => {
+        if (freeformSessionId) {
+          try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_UPDATE, text, source: "ptt", sessionId: freeformSessionId }); } catch {}
+          return;
+        }
         // bd-0c008d: live partial goes into the editable input box (clobber-safe).
         try { editorMirror.showPartial(text); } catch {}
       },
@@ -3246,9 +3253,16 @@ export default function realtimeAgentExtension(pi) {
       sendTurn: (text) => {
         // bd-0c008d: send the editor's current text (honoring any operator edits),
         // falling back to the raw transcript; then clear the editor.
-        const finalText = editorMirror.takeFinal(text);
+        const finalText = freeformSessionId ? String(text || "").trim() : editorMirror.takeFinal(text);
         localVad.lastTranscript = finalText;
         if (!finalText) { try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {} return; }
+        if (freeformSessionId) {
+          freeformDelivery.submitted = true;
+          try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_SUBMIT, text: finalText, source: "ptt", sessionId: freeformSessionId }); }
+          catch (e) { localVad.lastError = `choice freeform submit failed: ${e.message}`; ctx.ui.notify(localVad.lastError, "warning"); }
+          try { localVad.pttIndicator?.flash("commit"); } catch {}
+          return;
+        }
         if (localVad.quickfile) {
           // bd-dddd7a: quickfile mode routes the utterance to a caco DRAFT bead
           // (hands-free capture) instead of the chat buffer / the real agent.
@@ -3319,6 +3333,9 @@ export default function realtimeAgentExtension(pi) {
       if (localVad.capture !== capture) return;
       localVad.active = false;
       localVad.capture = null;
+      if (freeformSessionId && !freeformDelivery.submitted && !localVad.freeformCommitting) {
+        try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_CANCEL, reason: "ptt-capture-ended", source: "ptt", sessionId: freeformSessionId }); } catch {}
+      }
       speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
       if ((code || signal) && !localVad.lastError) localVad.lastError = `record exited ${code ?? "?"}${signal ? `/${signal}` : ""}`;
       try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
@@ -3379,6 +3396,61 @@ export default function realtimeAgentExtension(pi) {
     try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
     return true;
   }
+
+  // Choice-owned PTT uses the generic input-action bus so the modal keeps
+  // terminal focus. Realtime owns capture/transcription and returns only the
+  // successful transcript; empty, cancelled, and failed captures return the
+  // choice to its option list without inventing a reply (bd-6070dd).
+  let choicePttGeneration = 0;
+  let pendingChoicePttSessionId = null;
+  const choiceFreeformInputHandler = (input) => {
+    const sessionId = input?.sessionId;
+    if (!sessionId) return;
+    if (input.action === INPUT_ACTIONS.FREEFORM_ENTER && input.mode === "ptt") {
+      const ctx = session.lastCtx;
+      if (!ctx) return;
+      const generation = ++choicePttGeneration;
+      pendingChoicePttSessionId = sessionId;
+      void startLocalVad(ctx, { hold: true, freeformSessionId: sessionId }).then((started) => {
+        if (generation !== choicePttGeneration) {
+          if (localVad.freeformSessionId === sessionId) stopLocalVad({ flush: false });
+          return;
+        }
+        if (!started) {
+          pendingChoicePttSessionId = null;
+          try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_CANCEL, reason: "ptt-start-failed", source: "ptt", sessionId }); } catch {}
+        }
+      }).catch(() => {
+        if (generation !== choicePttGeneration) return;
+        pendingChoicePttSessionId = null;
+        try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_CANCEL, reason: "ptt-start-failed", source: "ptt", sessionId }); } catch {}
+      });
+      return;
+    }
+    if (input.action === INPUT_ACTIONS.FREEFORM_CANCEL && pendingChoicePttSessionId === sessionId) {
+      choicePttGeneration += 1;
+      pendingChoicePttSessionId = null;
+      const ctrl = localVad.controller;
+      stopLocalVad({ flush: false });
+      try { ctrl?.discardHeld?.(); } catch {}
+      return;
+    }
+    if (input.action === INPUT_ACTIONS.FREEFORM_PTT_COMMIT && pendingChoicePttSessionId === sessionId && localVad.freeformSessionId === sessionId && !localVad.freeformCommitting) {
+      pendingChoicePttSessionId = null;
+      localVad.freeformCommitting = true;
+      const ctrl = localVad.controller;
+      const delivery = localVad.freeformDelivery;
+      stopLocalVad({ flush: false });
+      Promise.resolve(ctrl?.commitHeld?.()).then(() => {
+        if (!delivery?.submitted) {
+          try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_CANCEL, reason: "empty-transcript", source: "ptt", sessionId }); } catch {}
+        }
+      }).catch(() => {
+        try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_CANCEL, reason: "transcription-failed", source: "ptt", sessionId }); } catch {}
+      });
+    }
+  };
+  pi.events?.on?.(INPUT_ACTION_EVENT, choiceFreeformInputHandler);
 
   // ---- Cascade group chat (bd-7c6790) -------------------------------------
   // A self-contained multi-agent voice room: the human speaks (mic -> stt), then

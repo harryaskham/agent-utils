@@ -197,12 +197,93 @@ test("appended controls keep ordinary indices stable, remain visible, and honor 
   await Promise.resolve();
   assert.equal(spoken.some((text) => /Generate more/.test(text)), false, "tts:false suppresses navigation speech too");
   h.input("3");
+  await Promise.resolve();
+  assert.match(h.widgets.get("agent-utils-choice").join("\n"), /text reply/);
+  h.input("new options please");
+  h.input("\u007f");
+  h.input("e");
+  h.input("\r");
   const result = await pending;
-  assert.equal(result.details.status, "action");
-  assert.equal(result.details.action, "freeformReply");
-  assert.equal(result.details.index, 2);
-  assert.equal(result.details.choice.appended, true);
+  assert.equal(result.details.status, "freeform");
+  assert.equal(result.details.text, "new options please");
+  assert.equal(result.details.source, "keyboard");
   assert.equal(result.terminate, false);
+});
+
+test("Escape from an appended freeform action re-arms the original choice list", async () => {
+  const h = harness();
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { append: [{ title: "More", tts: false, cacophonyAction: "freeformReply" }] }, tts: {} },
+  })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  h.input("3");
+  h.input("\u001b");
+  h.input("1");
+  const result = await pending;
+  assert.equal(result.details.status, "selected");
+  assert.equal(result.details.choice.label, "alpha");
+});
+
+test("text freeform Escape returns to the choice without leaking or resolving", async () => {
+  const h = harness();
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} } })(h.pi);
+  let settled = false;
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  pending.then(() => { settled = true; });
+  await Promise.resolve();
+  h.input("i");
+  h.input("draft");
+  h.input("\u001b");
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.match(h.widgets.get("agent-utils-choice").join("\n"), /1\. Alpha/);
+  h.input("2");
+  const result = await pending;
+  assert.equal(result.details.choice.label, "beta");
+});
+
+test("freeform entry pauses timeout and repeat timers, then resumes them on cancel", async () => {
+  const jobs = [];
+  const setTimer = (fn, ms) => { const job = { fn, ms, cancelled: false }; jobs.push(job); return job; };
+  const clearTimer = (job) => { if (job) job.cancelled = true; };
+  const h = harness();
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { repeat: { interval: 10, limit: 1 } }, tts: {} },
+    setTimer,
+    clearTimer,
+  })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  assert.equal(jobs.filter((job) => !job.cancelled).length, 2, "timeout and repeat begin active");
+  h.input("i");
+  assert.equal(jobs.filter((job) => !job.cancelled).length, 0, "both timers pause while typing");
+  h.input("\u001b");
+  assert.equal(jobs.filter((job) => !job.cancelled).length, 2, "timeout and repeat resume on return to choices");
+  h.input("1");
+  await pending;
+});
+
+test("choice PTT emits generic start/commit/cancel actions and accepts successful transcription", async () => {
+  const h = harness();
+  const inputs = [];
+  h.events.on(CHOICE_INPUT_EVENT, (input) => inputs.push(input));
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} } })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  h.input(" ");
+  await Promise.resolve();
+  assert.equal(inputs.at(-1).action, CHOICE_INPUT_ACTIONS.FREEFORM_ENTER);
+  assert.equal(inputs.at(-1).mode, "ptt");
+  h.input(" ");
+  assert.equal(inputs.at(-1).action, CHOICE_INPUT_ACTIONS.FREEFORM_PTT_COMMIT);
+  h.events.emit(CHOICE_INPUT_EVENT, { action: CHOICE_INPUT_ACTIONS.FREEFORM_SUBMIT, text: "spoken reply", source: "ptt", sessionId: inputs[0].sessionId });
+  const result = await pending;
+  assert.equal(result.details.status, "freeform");
+  assert.equal(result.details.text, "spoken reply");
+  assert.equal(result.details.source, "ptt");
 });
 
 test("terminal appended discard ends once without returning an ordinary selection", async () => {
@@ -250,10 +331,11 @@ test("Cacophony selection of an appended action uses the same single local outco
   const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
   await Promise.resolve();
   resolveExternal({ status: "selected", index: 2, source: "cacophony" });
-  resolveExternal({ status: "selected", index: 0, source: "cacophony" });
+  resolveExternal({ status: "freeform", text: "mobile reply", source: "cacophony" });
+  resolveExternal({ status: "freeform", text: "duplicate", source: "cacophony" });
   const result = await pending;
-  assert.equal(result.details.status, "action");
-  assert.equal(result.details.action, "freeformReply");
+  assert.equal(result.details.status, "freeform");
+  assert.equal(result.details.text, "mobile reply");
   assert.equal(result.details.source, "cacophony");
   assert.equal(settled.length, 1, "duplicate external resolution settles the local choice exactly once");
 });
@@ -354,6 +436,28 @@ test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and
   component.handleInput("2");
   const result = await pending;
   assert.equal(result.details.choice.label, "beta");
+});
+
+test("TUI freeform field owns focus, renders typed text, and submits without touching the editor", async () => {
+  const h = harness();
+  let component;
+  h.ctx.mode = "tui";
+  h.ctx.ui.custom = (factory) => new Promise((resolve) => {
+    component = factory({ requestRender() {} }, { fg: (_name, text) => text, bold: (text) => text }, null, resolve);
+  });
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} } })(h.pi);
+  h.editor.value = "main editor draft";
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  component.handleInput("i");
+  component.handleInput("typed reply");
+  assert.match(component.render(80).join("\n"), /Reply: typed reply/);
+  assert.equal(h.editor.value, "main editor draft");
+  component.handleInput("\r");
+  const result = await pending;
+  assert.equal(result.details.status, "freeform");
+  assert.equal(result.details.text, "typed reply");
+  assert.equal(h.editor.value, "main editor draft");
 });
 
 test("Escape dismisses the choice, preserves editor text, and waits for the next freeform submission", async () => {
