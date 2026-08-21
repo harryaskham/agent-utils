@@ -1,6 +1,6 @@
 # Pi graphics theme + extension
 
-See also [`kitty-graphics-protocol-audit.md`](kitty-graphics-protocol-audit.md) for the 2026-05-24 Kitty protocol audit findings and remaining follow-up.
+See also [`kitty-graphics-protocol-audit.md`](kitty-graphics-protocol-audit.md) for the 2026-05-24 Kitty protocol audit findings and remaining follow-up, and [`design/pi-graphics-fullscreen-composition.md`](design/pi-graphics-fullscreen-composition.md) for the fullscreen-native surface inventory, ownership contract, mode migration map, and implementation sequence.
 
 This package ships a **Pi theme** plus a **Pi extension** that together let
 agents draw freeform, kitty-graphics-backed UI affordances inside a
