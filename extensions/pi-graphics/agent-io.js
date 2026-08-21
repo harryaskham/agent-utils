@@ -5,6 +5,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { resolveAgentUtilsSpecialForms } from "../lib/settings-special-forms.js";
+
+const warnedSpecialForms = new Set();
+
 export function readJsonIfExists(path) {
   try {
     if (!path || !existsSync(path)) return null;
@@ -12,6 +16,21 @@ export function readJsonIfExists(path) {
   } catch {
     return null;
   }
+}
+
+export function readAgentSettings(path, options = {}) {
+  const settings = readJsonIfExists(path);
+  if (!settings) return settings;
+  return resolveAgentUtilsSpecialForms(settings, {
+    ...options,
+    onDiagnostic(detail) {
+      try { options.onDiagnostic?.(detail); } catch {}
+      const key = `${path}:${detail.path}:${detail.code}`;
+      if (options.silent || warnedSpecialForms.has(key)) return;
+      warnedSpecialForms.add(key);
+      try { process.emitWarning(`Agent Utils setting ${detail.path} failed (${detail.code}); using false.`, { code: "PI_AGENT_UTILS_SETTING" }); } catch {}
+    },
+  });
 }
 
 export function agentDir() {

@@ -9,7 +9,7 @@
 // fork) and pulse routing remain bespoke in realtime-agent.js; this registry
 // covers the simple value settings only.
 
-import { readJsonIfExists, agentSettingsPath } from "../pi-graphics/agent-io.js";
+import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 
 // coerce tags map to coercer fns supplied by the caller (realtime-agent.js owns
 // parseBooleanValue/parseRealtimeSpeed/parseVadThreshold), keeping this lib pure.
@@ -123,7 +123,7 @@ export const PERSISTED_REALTIME_FIELDS = [
 // when the file or slice is missing/malformed, so callers treat it as a plain
 // precedence layer.
 export function readPersistedRealtimeSettings(path = agentSettingsPath()) {
-  const all = readJsonIfExists(path);
+  const all = readAgentSettings(path);
   const rt = all && all.agentUtils && all.agentUtils.realtime;
   return rt && typeof rt === "object" && !Array.isArray(rt) ? rt : {};
 }
@@ -149,7 +149,7 @@ export const PERSISTED_STT_FIELDS = [
 
 // Read an agentUtils.<slice> object, or {} when missing/malformed.
 function readPersistedSlice(sliceKey, path) {
-  const all = readJsonIfExists(path);
+  const all = readAgentSettings(path);
   const s = all && all.agentUtils && all.agentUtils[sliceKey];
   return s && typeof s === "object" && !Array.isArray(s) ? s : {};
 }

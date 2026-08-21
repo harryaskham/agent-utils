@@ -55,7 +55,7 @@ import {
   renderBoxStripPng,
 } from "./pi-graphics/box-chrome.js";
 import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
-import { readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
+import { readAgentSettings, readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import { mixHexColor } from "./pi-graphics/color-utils.js";
 import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-truncate.js";
@@ -162,6 +162,9 @@ export default async function piGraphicsExtension(pi) {
   });
 
   const settings = readJsonIfExists(agentSettingsPath()) || {};
+  // Keep the raw object for /gfx save so special forms are never rewritten;
+  // only Agent Utils-owned reads consume the resolved clone.
+  const resolvedAgentSettings = readAgentSettings(agentSettingsPath()) || settings;
   let settingsEnv = settingsEnvFromPiGraphics(settings);
   // Runtime-only /gfx overlay (bd-a1853d): CLI mutations apply live without
   // writing settings.json. They are held here so they survive across /gfx
@@ -1558,9 +1561,10 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function configuredThinkingLevel() {
-    const scoped = settings.agentUtils?.trueDefaults || settings.agentUtils?.piTrueDefaults || settings.trueDefaults || {};
+    const owned = resolvedAgentSettings.agentUtils || {};
+    const scoped = owned.trueDefaults || owned.piTrueDefaults || settings.trueDefaults || {};
     return scoped.thinkingLevel ?? scoped.defaultThinkingLevel ?? scoped.effort ?? scoped.trueDefaultEffort ??
-      settings.agentUtils?.trueDefaultThinkingLevel ?? settings.agentUtils?.trueDefaultEffort ??
+      owned.trueDefaultThinkingLevel ?? owned.trueDefaultEffort ??
       settings.trueDefaultThinkingLevel ?? settings.trueDefaultEffort ?? settings.defaultThinkingLevel;
   }
 

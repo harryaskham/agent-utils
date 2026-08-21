@@ -15,6 +15,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+import { resolveAgentUtilsSpecialForms } from "./lib/settings-special-forms.js";
+
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "adaptive"]);
 
 function normalizeString(value) {
@@ -112,24 +114,25 @@ function selectSettingsSource(options = {}) {
   const existing = settingsFileCandidates(options)
     .map((entry) => ({ ...entry, settings: readSettingsFile(entry.path) }))
     .filter((entry) => entry.settings && typeof entry.settings === "object");
-  const withTrueDefaults = existing.filter((entry) => hasTrueDefaults(entry.settings));
+  const withTrueDefaults = existing.filter((entry) => hasTrueDefaults(entry.settings, options));
   if (withTrueDefaults.length > 0) return withTrueDefaults.at(-1);
   return existing[0] || settingsFileCandidates(options)[0];
 }
 
-export function extractTrueDefaults(settings = {}) {
-  const agentUtils = settings.agentUtils || {};
-  const scoped = agentUtils.trueDefaults || agentUtils.piTrueDefaults || settings.trueDefaults || {};
+export function extractTrueDefaults(settings = {}, options = {}) {
+  const resolved = resolveAgentUtilsSpecialForms(settings, options);
+  const agentUtils = resolved.agentUtils || {};
+  const scoped = agentUtils.trueDefaults || agentUtils.piTrueDefaults || resolved.trueDefaults || {};
   let provider = normalizeString(
-    scoped.provider ?? scoped.defaultProvider ?? agentUtils.trueDefaultProvider ?? settings.trueDefaultProvider,
+    scoped.provider ?? scoped.defaultProvider ?? agentUtils.trueDefaultProvider ?? resolved.trueDefaultProvider,
   );
   let model = normalizeString(
-    scoped.model ?? scoped.modelId ?? scoped.defaultModel ?? agentUtils.trueDefaultModel ?? settings.trueDefaultModel,
+    scoped.model ?? scoped.modelId ?? scoped.defaultModel ?? agentUtils.trueDefaultModel ?? resolved.trueDefaultModel,
   );
   const thinkingLevel = normalizeThinkingLevel(
     scoped.thinkingLevel ?? scoped.defaultThinkingLevel ?? scoped.effort ?? scoped.trueDefaultEffort ??
       agentUtils.trueDefaultThinkingLevel ?? agentUtils.trueDefaultEffort ??
-      settings.trueDefaultThinkingLevel ?? settings.trueDefaultEffort,
+      resolved.trueDefaultThinkingLevel ?? resolved.trueDefaultEffort,
   );
 
   if (model?.includes("/") && !provider) {
@@ -141,8 +144,8 @@ export function extractTrueDefaults(settings = {}) {
   return { provider, model, thinkingLevel };
 }
 
-export function hasTrueDefaults(settings = {}) {
-  const defaults = extractTrueDefaults(settings);
+export function hasTrueDefaults(settings = {}, options = {}) {
+  const defaults = extractTrueDefaults(settings, options);
   return Boolean(defaults.provider || defaults.model || defaults.thinkingLevel);
 }
 
@@ -167,8 +170,8 @@ function applyDefaultsToSettings(settings, defaults) {
 export function restoreTrueDefaultSettings(options = {}) {
   const source = selectSettingsSource(options);
   const settings = source.settings || readSettingsFile(source.path) || {};
-  const defaults = extractTrueDefaults(settings);
-  if (!hasTrueDefaults(settings)) {
+  const defaults = extractTrueDefaults(settings, options);
+  if (!hasTrueDefaults(settings, options)) {
     return { ok: true, changed: false, reason: "no true defaults configured", path: source.path, scope: source.scope, defaults };
   }
   const applied = applyDefaultsToSettings(settings, defaults);

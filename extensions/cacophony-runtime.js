@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 
-import { readJsonIfExists, agentSettingsPath } from "./pi-graphics/agent-io.js";
+import { readAgentSettings, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import {
   clearCacophonyRuntimeIdentity,
   explicitCacophonyIdentity,
@@ -51,7 +51,7 @@ function restoreVisitor(entries, project) {
 }
 
 export function createCacophonyRuntimeExtension({ env = process.env, settings, settingsPath, execFileImpl = execFile } = {}) {
-  const startupSettings = settings || readJsonIfExists(settingsPath || agentSettingsPath()) || {};
+  const startupSettings = settings || readAgentSettings(settingsPath || agentSettingsPath()) || {};
   const config = resolveCacophonyRuntimeConfig(env, startupSettings);
 
   return function cacophonyRuntimeExtension(pi) {

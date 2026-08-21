@@ -1,4 +1,4 @@
-import { readJsonIfExists, agentSettingsPath } from "./pi-graphics/agent-io.js";
+import { readAgentSettings, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
 import { getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
 import {
@@ -26,7 +26,7 @@ function sanitizeStatus(text) {
 }
 
 export function createEditorChipsExtension({ settings, env = process.env, host } = {}) {
-  const startupSettings = settings || readJsonIfExists(agentSettingsPath()) || {};
+  const startupSettings = settings || readAgentSettings(agentSettingsPath()) || {};
   const config = resolveEditorChipsConfig(startupSettings, env);
 
   return async function editorChipsExtension(pi) {

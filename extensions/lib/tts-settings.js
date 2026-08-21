@@ -2,10 +2,10 @@
 // Runtime slash-command overrides are intentionally held in memory and never
 // write settings.json.
 
-import { readJsonIfExists, agentSettingsPath } from "../pi-graphics/agent-io.js";
+import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 
 function readSlice(slice, path) {
-  const all = readJsonIfExists(path);
+  const all = readAgentSettings(path);
   const value = all?.agentUtils?.[slice];
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }

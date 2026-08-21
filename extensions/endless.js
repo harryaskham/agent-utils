@@ -3,7 +3,7 @@
 // loop is deliberately session-local.
 
 import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
-import { agentSettingsPath, readJsonIfExists } from "./pi-graphics/agent-io.js";
+import { agentSettingsPath, readAgentSettings } from "./pi-graphics/agent-io.js";
 
 export const DEFAULT_ENDLESS_MESSAGE = "You are in endless mode; stopping is disabled";
 export const DEFAULT_ENDLESS_DELAY_SECONDS = 60;
@@ -62,7 +62,7 @@ export function createEndlessExtension({
   clearTimer = clearTimeout,
 } = {}) {
   return function endlessExtension(pi) {
-    const persisted = persistedSettings ?? readJsonIfExists(settingsPath ?? agentSettingsPath())?.agentUtils?.endless ?? {};
+    const persisted = persistedSettings ?? readAgentSettings(settingsPath ?? agentSettingsPath())?.agentUtils?.endless ?? {};
     const defaults = resolveEndlessSettings({ env, persisted });
     let enabled = false;
     let message = defaults.defaultMessage;
