@@ -41,6 +41,10 @@
     "pi-graphics:widget-smoke": "node scripts/test-kitty-image-preview-widget-smoke.mjs",
     "kitty-image-preview:render-smoke": "node scripts/kitty-image-preview-multi-image-render-smoke.mjs"
   },
+  "dependencies": {
+    "jiti": "2.7.0",
+    "pi-mcp-adapter": "2.25.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",

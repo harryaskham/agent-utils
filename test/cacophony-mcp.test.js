@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 
-import { createCacophonyMcpExtension } from "../extensions/cacophony-mcp.js";
+import {
+  createCacophonyMcpExtension,
+  createScopedAdapterRegistrar,
+  scopedAdapterPi,
+} from "../extensions/cacophony-mcp.js";
 import { createCacophonyRuntimeExtension } from "../extensions/cacophony-runtime.js";
 import {
   clearCacophonyRuntimeIdentity,
@@ -34,6 +39,50 @@ function harness() {
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test("installed Agent Utils layout owns a resolvable TypeScript-capable adapter dependency", async () => {
+  const require = createRequire(import.meta.url);
+  assert.match(require.resolve("pi-mcp-adapter"), /node_modules[\\/]pi-mcp-adapter[\\/]index\.ts$/);
+  assert.match(require.resolve("jiti"), /node_modules[\\/]jiti/);
+  const { createJiti } = await import("jiti");
+  const adapter = await createJiti(import.meta.url).import("pi-mcp-adapter");
+  assert.equal(typeof adapter.createMcpAdapter, "function");
+});
+
+test("2.25 compatibility registrar isolates the Cacophony proxy tool and commands", () => {
+  const tools = [];
+  const commands = [];
+  const active = ["read", "mcp"];
+  const pi = {
+    registerTool(definition) { tools.push(definition); },
+    registerCommand(name) { commands.push(name); },
+    getActiveTools() { return active; },
+    setActiveTools(names) { this.active = names; },
+    getAllTools() { return [{ name: "caco_mcp" }, { name: "read" }]; },
+  };
+  const facade = scopedAdapterPi(pi);
+  facade.registerTool({ name: "mcp", label: "MCP" });
+  facade.registerCommand("mcp", {});
+  assert.equal(tools[0].name, "caco_mcp");
+  assert.equal(tools[0].label, "Cacophony MCP");
+  assert.deepEqual(commands, ["caco-mcp"]);
+  assert.deepEqual(facade.getActiveTools(), ["read", "mcp"]);
+  facade.setActiveTools(["read", "mcp"]);
+  assert.deepEqual(pi.active, ["read", "caco_mcp"]);
+  assert.deepEqual(facade.getAllTools().map((tool) => tool.name), ["mcp", "read"]);
+
+  let config;
+  const register = createScopedAdapterRegistrar({
+    createMcpAdapter(options) {
+      config = options.config;
+      return (scoped) => scoped.registerTool({ name: "mcp", label: "MCP" });
+    },
+  });
+  const handle = register({ pi, name: "cacophony-runtime", definition: { command: "caco", args: ["mcp", "stdio"] } });
+  assert.deepEqual(config, { mcpServers: { "cacophony-runtime": { command: "caco", args: ["mcp", "stdio"] } } });
+  assert.equal(typeof handle.dispose, "function");
+  assert.equal(handle.compatAdapter, true);
+});
 
 test("registration plan scopes managed identity to one keep-alive stdio child", () => {
   const env = { CACO_BIN: "/opt/caco", CACO_AGENT_ID: "managed-1", CACO_PROJECT: "agent-utils" };

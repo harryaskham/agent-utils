@@ -61,19 +61,25 @@ On reload or restart, the latest matching session receipt restores the runtime i
 
 ## Transient Cacophony MCP
 
-When `pi-mcp-adapter` is installed, `extensions/cacophony-mcp.js` consumes the
-same shared identity and registers one session-scoped server named
-`cacophony-runtime` through the adapter's public `registerMcpServer()` API:
+Agent Utils declares `pi-mcp-adapter` as its own runtime dependency, so package
+resolution does not depend on a sibling Pi package directory. Because adapter
+2.25 publishes TypeScript source, loading uses Pi's native loader when available
+and a bundled `jiti` fallback elsewhere.
+
+`extensions/cacophony-mcp.js` consumes the shared identity and registers one
+session-scoped server named `cacophony-runtime`:
 
 ```text
 caco mcp stdio
 ```
 
 The server uses `lifecycle: "keep-alive"`, so the adapter owns connection,
-metadata discovery, health recovery, proxy-tool refresh, and shutdown. Dynamic
-registration updates the existing `mcp` proxy surface in-process; no Pi restart
-or settings rewrite is required. Runtime-registered servers remain proxy-only,
-matching the adapter's safety contract.
+metadata discovery, health recovery, tool refresh, and shutdown. When the
+adapter exposes its newer `registerMcpServer()` API, registration updates that
+runtime directly. Adapter 2.25 falls back to its public isolated
+`createMcpAdapter({ config })` API through a scoped Pi facade: the proxy tool is
+named `caco_mcp` and adapter slash commands are `caco-*`, so the operator's
+ordinary multi-server `mcp` tool and commands are never overwritten.
 
 Only the child definition receives:
 
@@ -84,15 +90,18 @@ CACO_PROJECT=<resolved project>
 
 The extension never writes those values into `process.env` or `settings.json`.
 It does nothing when `DISABLE_PI_CACO=1`, identity/project is incomplete, or
-visiting registration was skipped (including the no-tmux case). Registration is
-serialized and deduplicated per identity. A changed visiting identity disposes
-the previous registration before creating its replacement; `session_shutdown`
-disposes the exact owned registration once. Adapter absence or transport failure
-leaves Pi functional and produces one bounded warning.
+visiting registration was skipped (including the no-tmux case). Registration is serialized and deduplicated per identity. The native runtime
+API disposes an old identity before replacement. The 2.25 compatibility adapter
+is session-owned and tears down through its own `session_shutdown` handler; an
+unexpected mid-session identity change asks for a reload instead of leaking a
+second adapter. Adapter or transport failure leaves Pi functional and produces
+one bounded warning.
 
 Use `/caco-mcp` to inspect whether the transient server is disabled, waiting for
 identity/adapter registration, or registered for a concrete project and agent.
-Use `/mcp status` for adapter-level connection/tool metadata.
+With the 2.25 compatibility path, use the `caco_mcp` tool and `caco-mcp`-prefixed
+adapter commands; the ordinary `/mcp status` continues to describe the separate
+ambient multi-server adapter.
 
 ## Security and lifecycle
 

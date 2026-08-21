@@ -72,7 +72,7 @@ Accepted true values are `1`, `true`, `yes`, and `on`. Accepted false values are
 }
 ```
 
-The command runs through bounded `bash -lc` with stdin closed, stderr discarded, a 64 KiB stdout cap, and a one-second timeout.
+The command runs through bounded `bash -lc` with stdin closed, stderr discarded, a 64 KiB stdout cap, and a three-second resolver timeout.
 
 Result precedence:
 
@@ -101,7 +101,7 @@ Diagnostics contain only the settings path and failure class, never command stdo
 
 `$numberCommand` trims stdout and requires one finite JavaScript number. Integers, decimals, and scientific notation are accepted. Empty, malformed, `NaN`, infinite, nonzero, timed-out, or failed results yield `0`.
 
-Both command forms use the same closed stdin, hidden stderr, 64 KiB output cap, one-second timeout, path-only diagnostics, recursive Agent Utils scope, and immutable source-file contract as `$boolCommand`.
+Both command forms use the same closed stdin, hidden stderr, 64 KiB output cap, three-second resolver timeout, path-only diagnostics, recursive Agent Utils scope, and immutable source-file contract as `$boolCommand`. Identical special forms are evaluated once per settings load, and the resolved settings clone is cached until the settings file size or modification time changes.
 
 ## Scope and trust
 

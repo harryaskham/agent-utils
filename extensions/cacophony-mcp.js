@@ -12,10 +12,71 @@ import {
 } from "./lib/cacophony-runtime.js";
 import { buildCacophonyMcpRegistration } from "./lib/cacophony-mcp.js";
 
+export function scopedAdapterPi(pi) {
+  const proxyToolName = "caco_mcp";
+  return new Proxy(pi, {
+    get(target, property) {
+      if (property === "registerTool") {
+        return (definition) => target.registerTool({
+          ...definition,
+          name: definition?.name === "mcp" ? proxyToolName : definition?.name,
+          label: definition?.name === "mcp" ? "Cacophony MCP" : definition?.label,
+        });
+      }
+      if (property === "registerCommand") {
+        return (name, definition) => target.registerCommand(`caco-${name}`, definition);
+      }
+      if (property === "getActiveTools") {
+        return () => (target.getActiveTools?.() || []).map((name) => name === proxyToolName ? "mcp" : name);
+      }
+      if (property === "setActiveTools") {
+        return (names) => target.setActiveTools?.((names || []).map((name) => name === "mcp" ? proxyToolName : name));
+      }
+      if (property === "getAllTools") {
+        return () => (target.getAllTools?.() || []).map((tool) => tool?.name === proxyToolName ? { ...tool, name: "mcp" } : tool);
+      }
+      const value = target[property];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+export function createScopedAdapterRegistrar(adapter) {
+  if (typeof adapter?.createMcpAdapter !== "function") throw new Error("pi-mcp-adapter exposes neither runtime registration nor createMcpAdapter");
+  // pi-mcp-adapter 2.25 exposes programmatic isolated configuration but not the
+  // newer runtime-registration helper. Activate a session-owned adapter through
+  // a scoped Pi facade: its single proxy tool is caco_mcp and its slash commands
+  // are caco-prefixed, so it composes with the operator's normal multi-server
+  // adapter instead of replacing the existing `mcp` surface.
+  return ({ pi, name, definition }) => {
+    const extension = adapter.createMcpAdapter({ config: { mcpServers: { [name]: definition } } });
+    extension(scopedAdapterPi(pi));
+    return {
+      compatAdapter: true,
+      // The adapter registers its own session_shutdown handler and owns the
+      // transport. This compatibility handle intentionally delegates teardown
+      // to that lifecycle rather than reaching into adapter internals.
+      async dispose() {},
+    };
+  };
+}
+
 async function loadRegisterMcpServer() {
-  const adapter = await import("pi-mcp-adapter");
-  if (typeof adapter.registerMcpServer !== "function") throw new Error("pi-mcp-adapter runtime registration API is unavailable");
-  return adapter.registerMcpServer;
+  let adapter;
+  try {
+    adapter = await import("pi-mcp-adapter");
+  } catch (error) {
+    // pi-mcp-adapter intentionally publishes TypeScript source. Native Node ESM
+    // refuses type stripping under node_modules; Pi's loader usually handles it,
+    // while this explicit jiti fallback makes installed-layout resolution stable
+    // across runtimes.
+    const { createJiti } = await import("jiti");
+    const jiti = createJiti(import.meta.url);
+    try { adapter = await jiti.import("pi-mcp-adapter"); }
+    catch { throw error; }
+  }
+  if (typeof adapter.registerMcpServer === "function") return adapter.registerMcpServer;
+  return createScopedAdapterRegistrar(adapter);
 }
 
 export function createCacophonyMcpExtension({ env = process.env, registerServer, loadRegister = loadRegisterMcpServer } = {}) {
@@ -41,6 +102,10 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
       operation = operation.then(async () => {
         if (stopped || requestedGeneration !== generation) return;
         if (registration && registrationKey === plan.identityKey) return;
+        if (registration?.compatAdapter) {
+          warnOnce(new Error("Cacophony MCP identity changed; reload Pi to replace the compatibility adapter cleanly"));
+          return;
+        }
         if (registration) {
           try { await registration.dispose(); } catch {}
           registration = null;

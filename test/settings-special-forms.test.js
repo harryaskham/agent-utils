@@ -95,6 +95,22 @@ test("string and number command forms resolve recursively with typed fallbacks",
   assert.ok(diagnostics.some((entry) => entry.code === "invalid-number-output"));
 });
 
+test("identical command forms execute once per recursive settings resolution", () => {
+  let calls = 0;
+  const resolved = resolveAgentUtilsSpecialForms({
+    agentUtils: {
+      globalShellExpansion: { enabled: true },
+      a: { $stringCommand: "same" },
+      nested: { b: { $stringCommand: "same" } },
+    },
+  }, {
+    stringCommandRunner: () => { calls += 1; return { value: "resolved", ok: true }; },
+  });
+  assert.equal(calls, 1);
+  assert.equal(resolved.agentUtils.a, "resolved");
+  assert.equal(resolved.agentUtils.nested.b, "resolved");
+});
+
 test("$boolCommand recognizes stdout booleans then falls back to exit status", () => {
   const fake = (stdout, status = 0) => () => ({ stdout, status });
   assert.equal(runBoolCommand("ignored", { spawnSyncImpl: fake("true\n", 7) }).value, true);

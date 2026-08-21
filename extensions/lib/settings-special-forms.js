@@ -8,6 +8,14 @@ function diagnostic(options, path, code) {
   try { options.onDiagnostic?.({ path, code }); } catch {}
 }
 
+function cachedResult(options, kind, input, run) {
+  const key = `${kind}:${JSON.stringify(input)}`;
+  if (options.resultCache?.has(key)) return options.resultCache.get(key);
+  const result = run();
+  options.resultCache?.set(key, result);
+  return result;
+}
+
 function envName(value, options, path) {
   const name = String(value || "").trim();
   if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return name;
@@ -156,7 +164,7 @@ function resolveSpecialForm(value, options, path) {
     return { matched: true, value: parsed };
   }
   if (key === "$envEq") {
-    const result = (options.envEqRunner || runEnvEq)(value[key], options);
+    const result = cachedResult(options, "env-eq", value[key], () => (options.envEqRunner || runEnvEq)(value[key], options));
     if (!result?.ok && result?.code !== "exit-status") diagnostic(options, path, result?.code || "env-eq-failed");
     return { matched: true, value: result?.value === true };
   }
@@ -166,16 +174,16 @@ function resolveSpecialForm(value, options, path) {
     return { matched: true, value: key === "$stringCommand" ? "" : key === "$numberCommand" ? 0 : false };
   }
   if (key === "$stringCommand") {
-    const result = (options.stringCommandRunner || runStringCommand)(command, options);
+    const result = cachedResult(options, "string", command, () => (options.stringCommandRunner || runStringCommand)(command, options));
     if (!result?.ok) diagnostic(options, path, result?.code || "string-command-failed");
     return { matched: true, value: result?.ok ? String(result.value ?? "") : "" };
   }
   if (key === "$numberCommand") {
-    const result = (options.numberCommandRunner || runNumberCommand)(command, options);
+    const result = cachedResult(options, "number", command, () => (options.numberCommandRunner || runNumberCommand)(command, options));
     if (!result?.ok) diagnostic(options, path, result?.code || "number-command-failed");
     return { matched: true, value: result?.ok && Number.isFinite(Number(result.value)) ? Number(result.value) : 0 };
   }
-  const result = (options.commandRunner || runBoolCommand)(command, options);
+  const result = cachedResult(options, "bool", command, () => (options.commandRunner || runBoolCommand)(command, options));
   if (!result?.ok) diagnostic(options, path, result?.code || "bool-command-failed");
   return { matched: true, value: result?.value === true };
 }
@@ -197,13 +205,13 @@ export function resolveAgentUtilsSpecialForms(settings = {}, {
   numberCommandRunner,
   envEqRunner,
   spawnSyncImpl,
-  timeoutMs = 1000,
+  timeoutMs = 3000,
   onDiagnostic,
 } = {}) {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) return settings;
   const agentUtils = settings.agentUtils;
   if (!agentUtils || typeof agentUtils !== "object" || Array.isArray(agentUtils)) return settings;
   if (agentUtils.globalShellExpansion?.enabled !== true) return settings;
-  const options = { env, commandRunner, stringCommandRunner, numberCommandRunner, envEqRunner, spawnSyncImpl, timeoutMs, onDiagnostic };
+  const options = { env, commandRunner, stringCommandRunner, numberCommandRunner, envEqRunner, spawnSyncImpl, timeoutMs, onDiagnostic, resultCache: new Map() };
   return { ...settings, agentUtils: resolveNode(agentUtils, options, "agentUtils") };
 }
