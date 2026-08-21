@@ -7,7 +7,9 @@ import {
   FULLSCREEN_SURFACE_CONTRACT,
   createSurfaceLeaseStack,
   fullscreenQuietModeViolations,
+  getOrCreateEditorChromeRegistry,
   resolveFullscreenEditorMode,
+  wrapEditorComponent,
 } from "../extensions/pi-graphics/fullscreen-contract.js";
 
 test("fullscreen contract uses Pi's supported shutdown event and declares every singleton/resource owner", () => {
@@ -22,11 +24,11 @@ test("fullscreen contract uses Pi's supported shutdown event and declares every 
 
 test("surface leases compose deterministically and release only the exact owner lease", () => {
   const stack = createSurfaceLeaseStack("editor");
-  const graphics = stack.acquire({ owner: "pi-graphics", priority: 20, decorate: (value) => `${value}|gfx` });
-  const chips = stack.acquire({ owner: "editor-chips", priority: 10, decorate: (value) => `${value}|chips` });
+  const graphics = stack.acquire({ owner: "pi-graphics", priority: 10, decorate: (value) => `${value}|gfx` });
+  const chips = stack.acquire({ owner: "editor-chips", priority: 20, decorate: (value) => `${value}|chips` });
   const modal = stack.acquire({ owner: "modal", priority: 30, decorate: (value) => `${value}|modal` });
-  assert.deepEqual(stack.owners(), ["editor-chips", "pi-graphics", "modal"]);
-  assert.equal(stack.compose(), "editor|chips|gfx|modal");
+  assert.deepEqual(stack.owners(), ["pi-graphics", "editor-chips", "modal"]);
+  assert.equal(stack.compose(), "editor|gfx|chips|modal");
   assert.equal(stack.release(graphics), true);
   assert.equal(stack.compose(), "editor|chips|modal", "graphics off preserves independent decorators");
   assert.equal(stack.release(graphics), false, "repeat teardown cannot remove another lease");
@@ -34,6 +36,49 @@ test("surface leases compose deterministically and release only the exact owner 
   assert.equal(stack.compose(), "editor|chips");
   assert.equal(stack.clearOwner("editor-chips"), 1);
   assert.equal(stack.compose(), "editor");
+});
+
+test("shared editor registry preserves later base owners and releases only one decorator", () => {
+  let installed = null;
+  const defaultFactory = () => ({ value: "default", render: () => ["default"], handleInput() {} });
+  const ui = {
+    setEditorComponent(factory) { installed = factory; },
+    getEditorComponent() { return null; },
+  };
+  const registry = getOrCreateEditorChromeRegistry(ui, { defaultFactory });
+  const gfx = registry.acquire({ owner: "pi-graphics", priority: 10, decorate: (base) => wrapEditorComponent(base, { renderRows: (rows) => [...rows, "gfx"] }) });
+  const chips = registry.acquire({ owner: "editor-chips", priority: 20, decorate: (base) => wrapEditorComponent(base, { renderRows: (rows) => [...rows, "chips"] }) });
+  assert.deepEqual(installed().render(80), ["default", "gfx", "chips"]);
+
+  const replacement = () => ({ value: "modal", render: () => ["modal"], handleInput() {} });
+  ui.setEditorComponent(replacement);
+  assert.equal(ui.getEditorComponent(), replacement, "other extensions see and replace the undecorated base factory");
+  assert.deepEqual(installed().render(80), ["modal", "gfx", "chips"], "registered chrome composes around a later editor owner");
+  assert.equal(registry.release(gfx), true);
+  assert.deepEqual(installed().render(80), ["modal", "chips"], "gfx off leaves editor chips and the replacement base alive");
+  assert.equal(registry.release(chips), true);
+  assert.deepEqual(installed().render(80), ["modal"]);
+});
+
+test("editor component wrapper delegates host methods, focus, input, invalidate, and dispose", () => {
+  const calls = [];
+  const base = {
+    focused: false,
+    render: () => ["base"],
+    handleInput: (data) => calls.push(["input", data]),
+    invalidate: () => calls.push(["invalidate"]),
+    dispose: () => calls.push(["dispose"]),
+    getText: () => "text",
+  };
+  const wrapped = wrapEditorComponent(base, { renderRows: (rows, width) => [...rows, `width=${width}`] });
+  wrapped.focused = true;
+  wrapped.handleInput("x");
+  wrapped.invalidate();
+  wrapped.dispose();
+  assert.equal(base.focused, true);
+  assert.equal(wrapped.getText(), "text");
+  assert.deepEqual(wrapped.render(42), ["base", "width=42"]);
+  assert.deepEqual(calls, [["input", "x"], ["invalidate"], ["dispose"]]);
 });
 
 test("legacy editor modes have explicit deterministic fullscreen migrations", () => {

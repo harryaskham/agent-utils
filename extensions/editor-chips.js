@@ -1,5 +1,6 @@
 import { readJsonIfExists, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
+import { getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
 import {
   buildEditorChipRails,
   parseMcpCount,
@@ -47,6 +48,8 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       footerData: null,
       tui: null,
       refreshingGit: false,
+      editorRegistry: null,
+      editorLease: null,
     };
 
     const refreshGit = async (ctx) => {
@@ -100,46 +103,21 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
 
     pi.on("session_start", async (_event, ctx) => {
       if (ctx.mode !== "tui" || typeof ctx.ui?.setEditorComponent !== "function") return;
-      const previous = ctx.ui.getEditorComponent?.();
-
-      class EditorChipsWrapper {
-        constructor(base, tui, theme) {
-          this.base = base;
-          this.tui = tui;
-          this.theme = theme;
-          this.wantsKeyRelease = base?.wantsKeyRelease;
-        }
-        get focused() { return Boolean(this.base?.focused); }
-        set focused(value) { if (this.base && "focused" in this.base) this.base.focused = value; }
-        handleInput(data) { return this.base?.handleInput?.(data); }
-        invalidate() { return this.base?.invalidate?.(); }
-        dispose() { return this.base?.dispose?.(); }
-        render(width) {
-          const baseLines = this.base?.render?.(width) || [];
-          const rails = buildEditorChipRails({ width, config, values: valuesFor(ctx), theme: this.theme });
-          return clampRenderedRowsToWidth(replaceEditorRails(baseLines, baseLines, rails), width);
-        }
-      }
-
-      ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-        state.tui = tui;
-        const base = previous?.(tui, theme, keybindings) || new CustomEditor(tui, theme, keybindings);
-        const wrapper = new EditorChipsWrapper(base, tui, theme);
-        // Pi's editor host calls methods beyond the minimal Component contract
-        // (getText/setText/cursor helpers). Preserve every method/property from
-        // an earlier custom editor without guessing that private surface.
-        return new Proxy(wrapper, {
-          get(target, property, receiver) {
-            if (property in target) return Reflect.get(target, property, receiver);
-            const value = base?.[property];
-            return typeof value === "function" ? value.bind(base) : value;
-          },
-          set(target, property, value, receiver) {
-            if (property in target) return Reflect.set(target, property, value, receiver);
-            if (base) { base[property] = value; return true; }
-            return Reflect.set(target, property, value, receiver);
-          },
-        });
+      state.editorRegistry = getOrCreateEditorChromeRegistry(ctx.ui, {
+        defaultFactory: (tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
+      });
+      state.editorLease = state.editorRegistry?.acquire({
+        owner: "editor-chips",
+        priority: 20,
+        decorate(base, { tui, theme }) {
+          state.tui = tui;
+          return wrapEditorComponent(base, {
+            renderRows(baseLines, width) {
+              const rails = buildEditorChipRails({ width, config, values: valuesFor(ctx), theme });
+              return clampRenderedRowsToWidth(replaceEditorRails(baseLines, baseLines, rails), width);
+            },
+          });
+        },
       });
 
       if (config.hideFooter && typeof ctx.ui.setFooter === "function") {
@@ -165,6 +143,14 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       }
 
       await refreshGit(ctx);
+    });
+
+    pi.on("session_shutdown", () => {
+      if (state.editorRegistry && state.editorLease) {
+        try { state.editorRegistry.release(state.editorLease); } catch {}
+      }
+      state.editorLease = null;
+      state.tui = null;
     });
 
     pi.on("model_select", async (_event, ctx) => { try { state.tui?.requestRender?.(); } catch {} });

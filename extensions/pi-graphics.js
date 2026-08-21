@@ -101,6 +101,7 @@ import {
   resetPlacementTracking,
 } from "./pi-graphics/runtime.js";
 import { PI_GRAPHICS_RESERVED_Z_INDICES, PI_GRAPHICS_Z } from "./pi-graphics/z-index.js";
+import { getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
 
 const TOOL_PREFIX = "pi_graphics";
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
@@ -378,6 +379,8 @@ export default async function piGraphicsExtension(pi) {
 
   let writeGraphicsCommand = null;
   let hardwareCursorTui = null;
+  let editorChromeRegistry = null;
+  let editorChromeLease = null;
   function resolveGraphicsWriter(ctx) {
     if (typeof ctx?.ui?.write === "function") return ctx.ui.write.bind(ctx.ui);
     if (typeof ctx?.ui?.terminal?.write === "function") return ctx.ui.terminal.write.bind(ctx.ui.terminal);
@@ -1766,32 +1769,49 @@ export default async function piGraphicsExtension(pi) {
     return /^[\s─━═╭╮╰╯╔╗╚╝┌┐└┘│┃┬┴┼·✧]+$/.test(text);
   }
 
+  function releaseEditorSurface() {
+    if (editorChromeRegistry && editorChromeLease) {
+      try { editorChromeRegistry.release(editorChromeLease); } catch {}
+    }
+    editorChromeLease = null;
+    editorRenderTui = null;
+  }
+
   function installEditorSurface(ctx) {
-    if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return false;
+    if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true) || modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) {
+      releaseEditorSurface();
+      return false;
+    }
     if (typeof ctx.ui?.setEditorComponent !== "function") return false;
     if (typeof CustomEditor !== "function") return false;
-    class KittyEditor extends CustomEditor {
-      render(width) {
-        const baseLines = super.render(width);
-        // The dash-rule detection + border/decoration/clamp composition is a pure
-        // seam (composeEditorRenderRows, bd-f5f802); the stateful pieces stay
-        // here and are injected as callbacks.
-        return composeEditorRenderRows(baseLines, {
-          width,
-          isDashLine: isEditorDashLine,
-          decorateLine: (line, lineWidth) => decorateEditorContentLine(line, lineWidth),
-          clampRows: (lines, lineWidth) => clampRenderedRowsToWidth(lines, lineWidth),
-          buildBorderRow: (lineWidth, edge) => buildEditorBorderRow(lineWidth, edge),
-          topLeftUnicode: editorStyle() === "unicode" && editorUnicodeMode() === "topLeft",
+    editorChromeRegistry = getOrCreateEditorChromeRegistry(ctx.ui, {
+      defaultFactory: (tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
+    });
+    if (!editorChromeRegistry) return false;
+    editorChromeLease = editorChromeRegistry.acquire({
+      owner: "pi-graphics",
+      priority: 10,
+      decorate(base, { tui, theme }) {
+        editorRenderTui = tui || editorRenderTui;
+        activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
+        writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
+        applyHardwareCursorPolicy(tui);
+        return wrapEditorComponent(base, {
+          renderRows(baseLines, width) {
+            // The dash-rule detection + border/decoration/clamp composition is a pure
+            // seam (composeEditorRenderRows, bd-f5f802); the stateful pieces stay
+            // here and are injected as callbacks.
+            return composeEditorRenderRows(baseLines, {
+              width,
+              isDashLine: isEditorDashLine,
+              decorateLine: (line, lineWidth) => decorateEditorContentLine(line, lineWidth),
+              clampRows: (lines, lineWidth) => clampRenderedRowsToWidth(lines, lineWidth),
+              buildBorderRow: (lineWidth, edge) => buildEditorBorderRow(lineWidth, edge),
+              topLeftUnicode: editorStyle() === "unicode" && editorUnicodeMode() === "topLeft",
+            });
+          },
         });
-      }
-    }
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      editorRenderTui = tui || editorRenderTui;
-      activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
-      writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
-      applyHardwareCursorPolicy(tui);
-      return new KittyEditor(tui, theme, keybindings);
+      },
     });
     return true;
   }
@@ -1840,8 +1860,12 @@ export default async function piGraphicsExtension(pi) {
 
 
   function mountEditorRails(ctx) {
-    if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true)) return;
     if (typeof ctx.ui?.setWidget !== "function") return;
+    if (!envBool("PI_GRAPHICS_AUTO_EDITOR_SURFACE", true) || modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) {
+      try { ctx.ui.setWidget("pi-graphics-editor-top", undefined, { placement: "aboveEditor", piGraphics: false }); } catch {}
+      try { ctx.ui.setWidget("pi-graphics-editor-bottom", undefined, { placement: "belowEditor", piGraphics: false }); } catch {}
+      return;
+    }
     const topNeedsWidget = editorBorderNeedsWidget("top");
     const bottomNeedsWidget = editorBorderNeedsWidget("bottom");
     const factory = (edge) => (tui, theme) => ({
@@ -2471,6 +2495,8 @@ export default async function piGraphicsExtension(pi) {
     } else {
       installBoxChromeOnce(ctx, { force: true });
     }
+    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) releaseEditorSurface();
+    else installEditorSurface(ctx);
     applyHardwareCursorPolicy();
     mountEditorRails(ctx);
     try { ctx?.ui?.requestRender?.(true); } catch {}
@@ -3236,7 +3262,14 @@ export default async function piGraphicsExtension(pi) {
   });
 
 
+  pi.on("session_shutdown", async (_event, ctx) => {
+    releaseEditorSurface();
+    try { ctx.ui?.setWidget?.("pi-graphics-editor-top", undefined, { piGraphics: false }); } catch {}
+    try { ctx.ui?.setWidget?.("pi-graphics-editor-bottom", undefined, { piGraphics: false }); } catch {}
+  });
+
   pi.on("session_end", async (_event, ctx) => {
+    releaseEditorSurface();
     teardownBoxChrome(ctx);
     restoreHardwareCursorPolicy();
     writeGraphicsCommand = null;

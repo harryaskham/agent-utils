@@ -6,6 +6,7 @@
 // obsolete factory over a newer extension owner.
 
 export const FULLSCREEN_SHUTDOWN_EVENT = "session_shutdown";
+export const EDITOR_CHROME_REGISTRY = Symbol.for("agent-utils.editor-chrome-registry");
 
 export const FULLSCREEN_SURFACE_CONTRACT = Object.freeze({
   editor: Object.freeze({ api: "setEditorComponent", ownership: "lease-stack", quietWhenOff: true }),
@@ -82,6 +83,97 @@ export function createSurfaceLeaseStack(baseValue = null) {
       return removed;
     },
   };
+}
+
+export function getOrCreateEditorChromeRegistry(ui, { defaultFactory = null } = {}) {
+  if (!ui || typeof ui.setEditorComponent !== "function") return null;
+  if (ui[EDITOR_CHROME_REGISTRY]) return ui[EDITOR_CHROME_REGISTRY];
+
+  const originalSet = ui.setEditorComponent.bind(ui);
+  const originalGet = typeof ui.getEditorComponent === "function" ? ui.getEditorComponent.bind(ui) : null;
+  let baseFactory = originalGet?.() || defaultFactory;
+  let sequence = 0;
+  const leases = [];
+  let compositeFactory = null;
+
+  const sorted = () => [...leases].sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
+  const apply = () => {
+    compositeFactory = (tui, theme, keybindings) => {
+      let component = typeof baseFactory === "function" ? baseFactory(tui, theme, keybindings) : null;
+      for (const lease of sorted()) component = lease.decorate(component, { tui, theme, keybindings });
+      return component;
+    };
+    compositeFactory.__agentUtilsEditorChromeComposite = true;
+    originalSet(compositeFactory);
+  };
+
+  const patchedSet = function (factory, ..._rest) {
+    if (factory?.__agentUtilsEditorChromeComposite) return originalSet(factory);
+    baseFactory = factory || defaultFactory;
+    apply();
+  };
+  patchedSet.__agentUtilsEditorChromeRegistry = true;
+  const patchedGet = () => baseFactory;
+  patchedGet.__agentUtilsEditorChromeRegistry = true;
+
+  const registry = {
+    acquire({ owner, decorate, priority = 0 } = {}) {
+      if (!owner || typeof decorate !== "function") throw new Error("editor chrome lease requires owner and decorate");
+      registry.releaseOwner(owner);
+      const lease = Object.freeze({ owner: String(owner), decorate, priority: Number(priority) || 0, sequence: sequence++ });
+      leases.push(lease);
+      apply();
+      return lease;
+    },
+    release(lease) {
+      const index = leases.indexOf(lease);
+      if (index < 0) return false;
+      leases.splice(index, 1);
+      apply();
+      return true;
+    },
+    releaseOwner(owner) {
+      let removed = 0;
+      for (let index = leases.length - 1; index >= 0; index -= 1) {
+        if (leases[index].owner === owner) { leases.splice(index, 1); removed += 1; }
+      }
+      if (removed) apply();
+      return removed;
+    },
+    owners: () => sorted().map((lease) => lease.owner),
+    baseFactory: () => baseFactory,
+  };
+  ui[EDITOR_CHROME_REGISTRY] = registry;
+  ui.setEditorComponent = patchedSet;
+  if (originalGet) ui.getEditorComponent = patchedGet;
+  apply();
+  return registry;
+}
+
+export function wrapEditorComponent(base, { renderRows } = {}) {
+  if (!base || typeof base.render !== "function" || typeof renderRows !== "function") return base;
+  const wrapper = {
+    base,
+    wantsKeyRelease: base.wantsKeyRelease,
+    get focused() { return Boolean(base.focused); },
+    set focused(value) { if ("focused" in base) base.focused = value; },
+    render(width) { return renderRows(base.render(width), width); },
+    handleInput(data) { return base.handleInput?.(data); },
+    invalidate() { return base.invalidate?.(); },
+    dispose() { return base.dispose?.(); },
+  };
+  return new Proxy(wrapper, {
+    get(target, property, receiver) {
+      if (property in target) return Reflect.get(target, property, receiver);
+      const value = base[property];
+      return typeof value === "function" ? value.bind(base) : value;
+    },
+    set(target, property, value, receiver) {
+      if (property in target) return Reflect.set(target, property, value, receiver);
+      base[property] = value;
+      return true;
+    },
+  });
 }
 
 export function fullscreenQuietModeViolations(resources = {}) {

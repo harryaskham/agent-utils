@@ -2124,7 +2124,10 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /mountEditorRails/);
   assert.match(source, /setWidget\("pi-graphics-editor-top"/);
   assert.match(source, /setWidget\("pi-graphics-editor-bottom"/);
-  assert.match(source, /class KittyEditor extends CustomEditor/);
+  assert.match(source, /getOrCreateEditorChromeRegistry\(ctx\.ui/);
+  assert.match(source, /owner: "pi-graphics"/);
+  assert.match(source, /wrapEditorComponent\(base/);
+  assert.match(source, /pi\.on\("session_shutdown"/);
   assert.match(source, /renderEditorBorderFramesPngs\(/);
   assert.match(source, /buildPlacement\(state/);
   assert.match(source, /envBool\("PI_GRAPHICS_EXPOSE_RENDER_TOOLS", false\)/);
