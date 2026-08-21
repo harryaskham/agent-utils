@@ -169,6 +169,38 @@ Box inspection commands are read-only unless named `preview`:
 `/eink on|off|status` applies a low-motion, one-cell-cursor profile at runtime.
 Changes remain runtime-only until `/gfx save`.
 
+## Cursor-relative fullscreen placement
+
+The `glow` cursor does not query or guess an absolute terminal row/column. The
+editor decorator locates Pi's reverse-video cursor span in each rendered editor
+row, measures the visible cells before it (ANSI controls and combining marks are
+zero-width; wide glyphs occupy two cells), and replaces that span with a
+transparent one-cell Kitty placeholder. A persistent `11×5` child image is
+parented to that cell at `H=-5,V=-2`. Pi therefore moves the physical anchor as
+it repaints wrapped lines, while Kitty keeps the child centred and clips it at
+terminal edges.
+
+This is deliberately a render-sequence contract, not a first-class Pi cursor
+coordinate API. A future host cursor-location hook would be cleaner, but the
+current path still avoids terminal cursor-position reports, absolute screen
+math, and forced fullscreen redraws. Kitty honours offsets from a virtual
+parent; Ghostty currently drops those offsets, so centred multi-cell glow is a
+Kitty-targeted feature and the one-cell cursor remains the portable fallback.
+
+Bounded live smoke in a direct Kitty window:
+
+1. Run `/gfx mode on`, `/gfx cursor-style glow`, then `/gfx cursor preview`.
+2. Type across short, CJK/emoji, wrapped, and multiline prompts; resize between
+   narrow and wide layouts.
+3. Confirm the halo follows the reverse-video edit cursor, remains centred away
+   from edges, and clips rather than shifting at the first/last columns.
+
+Inside tmux, first set `PI_GRAPHICS_TMUX_LIVE_EDITOR=1` for the Pi process, then
+repeat the same steps. Tmux live editor graphics are opt-in because placeholder
+repaints may flicker on some terminal/tmux combinations. `/gfx cursor status`
+shows whether a live placement exists; `/gfx cursor clear` deletes only that
+placement after the smoke run.
+
 ## Runtime-only policy
 
 `/gfx` and `/eink` mutations are in-memory by default. Successive commands
@@ -237,6 +269,7 @@ Focused deterministic coverage:
 ```bash
 node --test --test-reporter=spec \
   test/pi-graphics-fullscreen-contract.test.js \
+  test/pi-graphics-cursor-anchor.test.js \
   test/editor-chips.test.js \
   test/pi-graphics.test.js
 ```

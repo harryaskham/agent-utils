@@ -62,6 +62,12 @@ import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-tru
 import { FOOTER_DIVIDER_WIDTH, fitFooterSegments, footerSegmentsWidth } from "./pi-graphics/footer-layout.js";
 import { composeEditorRenderRows, isEditorDashLine } from "./pi-graphics/editor-render.js";
 import { approximateVisibleCells, clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
+import {
+  EDITOR_CURSOR_GLOW_COLUMNS,
+  EDITOR_CURSOR_GLOW_ROWS,
+  locateEditorCursorAnchor,
+  replaceLocatedEditorCursor,
+} from "./pi-graphics/cursor-anchor.js";
 import { normalizeUnicodeAnchorMode, valueLooksLikeThinking } from "./pi-graphics/anchor-thinking.js";
 import {
   formatFooterTokens,
@@ -1363,8 +1369,8 @@ export default async function piGraphicsExtension(pi) {
     // and no placement churn/stacking. kitty honors the relative H/V offset, so
     // the 11x5 halo centers on the cursor (this path targets kitty; Ghostty
     // drops offsets off a virtual parent).
-    const GLOW_COLS = 11;
-    const GLOW_ROWS = 5;
+    const GLOW_COLS = EDITOR_CURSOR_GLOW_COLUMNS;
+    const GLOW_ROWS = EDITOR_CURSOR_GLOW_ROWS;
     const GLOW_FRAMES = 24;
     const calmColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const warmColor = getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead");
@@ -1544,15 +1550,13 @@ export default async function piGraphicsExtension(pi) {
   function replaceEditorCursorChrome(line, rowWidth = 1) {
     if (!tmuxLiveEditorGraphicsEnabled()) return line;
     const text = String(line || "");
-    if (!text.includes("\x1b[7m")) return line;
-    const match = /\x1b\[7m[^\x1b]*\x1b\[(?:0|27)m/.exec(text);
-    if (!match) return line;
-    const cursorCol = approximateVisibleCells(text.slice(0, match.index));
-    const plainText = text.replace(match[0], "|").replace(ZERO_WIDTH_CONTROL_RE, "");
-    const { heat, wpm, trailDirection } = updateEditorTypingHeat(plainText, cursorCol);
-    const cursor = buildEditorCursorCell({ rowWidth, cursorCol, heat, wpm, trailDirection });
+    const anchor = locateEditorCursorAnchor(text, rowWidth);
+    if (!anchor) return line;
+    const plainText = text.replace(anchor.matchText, "|").replace(ZERO_WIDTH_CONTROL_RE, "");
+    const { heat, wpm, trailDirection } = updateEditorTypingHeat(plainText, anchor.cursorCol);
+    const cursor = buildEditorCursorCell({ rowWidth, cursorCol: anchor.cursorCol, heat, wpm, trailDirection });
     if (!cursor) return line;
-    return `${text.slice(0, match.index)}${cursor}${text.slice(match.index + match[0].length)}`;
+    return replaceLocatedEditorCursor(text, anchor, cursor);
   }
 
   function decorateEditorContentLine(line, rowWidth) {

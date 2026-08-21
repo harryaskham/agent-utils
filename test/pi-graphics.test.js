@@ -1872,8 +1872,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
-  assert.match(source, /\\x1b\\\[\(\?:0\|27\)m/);
-  assert.match(source, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
+  const cursorAnchorSource = await readFile(new URL("../extensions/pi-graphics/cursor-anchor.js", import.meta.url), "utf8");
+  assert.match(cursorAnchorSource, /\\x1b\\\[\(\?:0\|27\)m/);
+  assert.match(cursorAnchorSource, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
+  assert.match(source, /locateEditorCursorAnchor\(text, rowWidth\)/);
+  assert.match(source, /cursorCol: anchor\.cursorCol/);
   // decorateEditorContentLine is now invoked via the composeEditorRenderRows
   // decorateLine callback (bd-f5f802); the wiring is asserted here and the
   // composition behavior in the "editor render composition" tests above.
