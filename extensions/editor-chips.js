@@ -101,8 +101,35 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       };
     };
 
-    pi.on("session_start", async (_event, ctx) => {
-      if (ctx.mode !== "tui" || typeof ctx.ui?.setEditorComponent !== "function") return;
+    const installFooter = (ctx) => {
+      if (!config.hideFooter || typeof ctx.ui?.setFooter !== "function") return false;
+      const factory = (tui, theme, footerData) => {
+        state.footerData = footerData;
+        const unsubscribe = (() => {
+          try { return footerData?.onBranchChange?.(() => tui.requestRender()); } catch { return null; }
+        })();
+        return {
+          __agentUtilsEditorChipsFooter: true,
+          dispose() { try { unsubscribe?.(); } catch {} },
+          invalidate() {},
+          render(width) {
+            state.footerData = footerData;
+            const statuses = (() => {
+              try { return [...(footerData?.getExtensionStatuses?.() || new Map()).values()]; } catch { return []; }
+            })().map(sanitizeStatus).filter((text) => text && !/\bMCP\s*\(?\s*\d+/i.test(text));
+            if (statuses.length === 0) return [];
+            const line = theme.fg("dim", statuses.join(" "));
+            return [clampRenderedLineToWidth(line, width)];
+          },
+        };
+      };
+      factory.__agentUtilsEditorChipsFooter = true;
+      ctx.ui.setFooter(factory);
+      return true;
+    };
+
+    const installSurfaces = (ctx) => {
+      if (typeof ctx.ui?.setEditorComponent !== "function") return false;
       state.editorRegistry = getOrCreateEditorChromeRegistry(ctx.ui, {
         defaultFactory: (tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
       });
@@ -119,29 +146,30 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
           });
         },
       });
+      installFooter(ctx);
+      try { ctx.ui?.setStatus?.("editor-chips", undefined); } catch {}
+      return Boolean(state.editorLease);
+    };
 
-      if (config.hideFooter && typeof ctx.ui.setFooter === "function") {
-        ctx.ui.setFooter((tui, theme, footerData) => {
-          state.footerData = footerData;
-          const unsubscribe = (() => {
-            try { return footerData?.onBranchChange?.(() => tui.requestRender()); } catch { return null; }
-          })();
-          return {
-            dispose() { try { unsubscribe?.(); } catch {} },
-            invalidate() {},
-            render(width) {
-              state.footerData = footerData;
-              const statuses = (() => {
-                try { return [...(footerData?.getExtensionStatuses?.() || new Map()).values()]; } catch { return []; }
-              })().map(sanitizeStatus).filter((text) => text && !/\bMCP\s*\(?\s*\d+/i.test(text));
-              if (statuses.length === 0) return [];
-              const line = theme.fg("dim", statuses.join(" "));
-              return [clampRenderedLineToWidth(line, width)];
-            },
-          };
-        });
+    pi.registerCommand("editor-chips", {
+      description: "Show or repair configured editor rail chips.",
+      handler: async (args, ctx) => {
+        const action = String(args || "status").trim().toLowerCase();
+        if (action === "repair" || action === "reload") installSurfaces(ctx);
+        const owners = state.editorRegistry?.owners?.() || [];
+        ctx.ui?.notify?.(`editor-chips:${config.enabled ? "enabled" : "disabled"} · mounted=${owners.includes("editor-chips")} · owners=${owners.join(",") || "none"} · footer=${config.hideFooter ? "hidden" : "normal"}`, "info");
+      },
+    });
+
+    pi.on("session_start", async (_event, ctx) => {
+      installSurfaces(ctx);
+      // Some fullscreen/runtime extensions establish their singleton surfaces in
+      // later session_start handlers. Reassert the lease after the startup event
+      // drains; acquire() is owner-deduplicated, so this cannot stack wrappers.
+      for (const delay of [0, 100]) {
+        const timer = setTimeout(() => { try { installSurfaces(ctx); } catch {} }, delay);
+        timer.unref?.();
       }
-
       await refreshGit(ctx);
     });
 

@@ -151,7 +151,9 @@ test("editor extension wraps an existing gfx editor and draws chips after its ra
     },
   };
   class FakeCustomEditor {}
+  const commands = new Map();
   const pi = {
+    registerCommand(name, definition) { commands.set(name, definition); },
     on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
     getThinkingLevel: () => "low",
     exec: async (_command, args) => args[0] === "branch"
@@ -173,4 +175,52 @@ test("editor extension wraps an existing gfx editor and draws chips after its ra
   assert.match(stripAnsi(rendered.at(-1)), /MCP/);
   assert.match(stripAnsi(rendered.at(-1)), /\+3/);
   assert.equal(footer.render(180).length, 0, "moved MCP/footer data is not duplicated below the editor");
+  assert.equal(commands.has("editor-chips"), true);
+});
+
+test("editor chips mount without relying on ctx.mode and reassert after a later editor owner", async () => {
+  const handlers = new Map();
+  const commands = new Map();
+  let editorFactory;
+  let footerFactory;
+  const ui = {
+    getEditorComponent: () => null,
+    setEditorComponent(factory) { editorFactory = factory; },
+    setFooter(factory) { footerFactory = factory; },
+    setStatus() {},
+  };
+  const pi = {
+    registerCommand(name, definition) { commands.set(name, definition); },
+    on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+    getThinkingLevel: () => "low",
+    exec: async () => ({ code: 0, stdout: "" }),
+  };
+  class FakeCustomEditor {
+    render() { return ["────────", "", "────────"]; }
+    invalidate() {}
+  }
+  await createEditorChipsExtension({
+    settings: { agentUtils: { editorChips: { enabled: true } } },
+    env: { HOME: "/tmp" },
+    host: { CustomEditor: FakeCustomEditor },
+  })(pi);
+  const ctx = {
+    // Some host/reload paths have historically omitted or renamed mode; the
+    // concrete UI capability is the authoritative mount check.
+    mode: undefined,
+    cwd: "/tmp",
+    model: { provider: "p", id: "m", contextWindow: 100 },
+    getContextUsage: () => ({ percent: 1, contextWindow: 100 }),
+    sessionManager: { getEntries: () => [] },
+    ui,
+  };
+  await handlers.get("session_start")[0]({}, ctx);
+  assert.equal(typeof editorFactory, "function");
+  assert.equal(typeof footerFactory, "function");
+  const later = () => ({ render: () => ["later-top", "", "later-bottom"], invalidate() {} });
+  ui.setEditorComponent(later);
+  const rendered = editorFactory({ requestRender() {} }, theme, {}).render(100);
+  assert.match(stripAnsi(rendered[0]), /p/);
+  assert.match(stripAnsi(rendered.at(-1)), /MCP/);
+  await commands.get("editor-chips").handler("repair", { ...ctx, ui: { ...ui, notify() {} } });
 });
