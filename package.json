@@ -52,6 +52,7 @@
       "./extensions/web-search.js",
       "./extensions/kitty-image-preview.js",
       "./extensions/pi-graphics.js",
+      "./extensions/editor-chips.js",
       "./extensions/firecracker-vm.js",
       "./extensions/realtime-agent.js",
       "./extensions/pipe.js",
