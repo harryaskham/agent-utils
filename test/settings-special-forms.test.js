@@ -8,6 +8,8 @@ import {
   resolveAgentUtilsSpecialForms,
   runBoolCommand,
   runEnvEq,
+  runNumberCommand,
+  runStringCommand,
 } from "../extensions/lib/settings-special-forms.js";
 import { readAgentSettings } from "../extensions/pi-graphics/agent-io.js";
 
@@ -57,6 +59,40 @@ test("$envEq supports environment expansion and explicit command substitution", 
     agentUtils: { globalShellExpansion: { enabled: true }, narrate: { enabled: { $envEq: ["${NUMBER}", "$(printf 123)"] } } },
   }, { env });
   assert.equal(resolved.agentUtils.narrate.enabled, true);
+});
+
+test("$stringCommand supports direct commands and command-substitution value expressions", () => {
+  assert.equal(runStringCommand("printf 'hello\\n'").value, "hello");
+  assert.equal(runStringCommand("printf 'kept  \\n'").value, "kept  ", "only terminal newlines are removed");
+  assert.equal(runStringCommand("$(printf 123)").value, "123");
+  const expression = "$(env node=\"${CACO_NODE:-\"$(hostname)\"}\" repo=$(basename \"$(git rev-parse --show-toplevel)\") dir=$(basename \"$(pwd)\") bash -c 'echo \"$node ${repo:-\"$dir\"}\"')";
+  const result = runStringCommand(expression, { env: { ...process.env, CACO_NODE: "ms-mac" } });
+  assert.equal(result.ok, true);
+  assert.equal(result.value, "ms-mac checkout");
+});
+
+test("$numberCommand accepts finite integer, float, and scientific output", () => {
+  assert.deepEqual(runNumberCommand("echo 42"), { value: 42, ok: true, code: "stdout" });
+  assert.equal(runNumberCommand("echo 3.25").value, 3.25);
+  assert.equal(runNumberCommand("echo 1e3").value, 1000);
+  assert.equal(runNumberCommand("echo NaN").ok, false);
+  assert.equal(runNumberCommand("exit 2").value, 0);
+});
+
+test("string and number command forms resolve recursively with typed fallbacks", () => {
+  const diagnostics = [];
+  const resolved = resolveAgentUtilsSpecialForms({
+    agentUtils: {
+      globalShellExpansion: { enabled: true },
+      narrate: { prefix: { $stringCommand: "printf 'node\\n'" }, speed: { $numberCommand: "echo 2.5" } },
+      failed: [{ $stringCommand: "exit 1" }, { $numberCommand: "echo nope" }],
+    },
+  }, { onDiagnostic: (detail) => diagnostics.push(detail) });
+  assert.equal(resolved.agentUtils.narrate.prefix, "node");
+  assert.equal(resolved.agentUtils.narrate.speed, 2.5);
+  assert.deepEqual(resolved.agentUtils.failed, ["", 0]);
+  assert.ok(diagnostics.some((entry) => entry.code === "nonzero-exit"));
+  assert.ok(diagnostics.some((entry) => entry.code === "invalid-number-output"));
 });
 
 test("$boolCommand recognizes stdout booleans then falls back to exit status", () => {

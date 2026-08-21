@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 
 const TRUE_RE = /^(1|true|yes|on)$/i;
 const FALSE_RE = /^(0|false|no|off)$/i;
-const SPECIAL_KEYS = new Set(["$envAbsent", "$envPresent", "$envBool", "$envEq", "$boolCommand"]);
+const SPECIAL_KEYS = new Set(["$envAbsent", "$envPresent", "$envBool", "$envEq", "$boolCommand", "$stringCommand", "$numberCommand"]);
 
 function diagnostic(options, path, code) {
   try { options.onDiagnostic?.({ path, code }); } catch {}
@@ -22,23 +22,66 @@ function boolFromText(value) {
   return null;
 }
 
-export function runBoolCommand(command, {
+function runCommand(command, {
   env = process.env,
   timeoutMs = 1000,
   spawnSyncImpl = spawnSync,
 } = {}) {
-  const result = spawnSyncImpl("bash", ["-lc", String(command || "")], {
+  return spawnSyncImpl("bash", ["-lc", String(command || "")], {
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024,
     env,
     stdio: ["ignore", "pipe", "ignore"],
   });
+}
+
+export function runBoolCommand(command, options = {}) {
+  const result = runCommand(command, options);
   if (result?.error) return { value: false, ok: false, code: result.error.code === "ETIMEDOUT" ? "timeout" : "spawn-failed" };
   const explicit = boolFromText(result?.stdout);
   if (explicit !== null) return { value: explicit, ok: true, code: "stdout" };
   const status = Number(result?.status);
   return { value: status === 0, ok: Number.isInteger(status), code: Number.isInteger(status) ? "exit-status" : "no-exit-status" };
+}
+
+function runShellValueExpression(expression, {
+  env = process.env,
+  timeoutMs = 1000,
+  spawnSyncImpl = spawnSync,
+} = {}) {
+  const script = 'eval "printf %s \\"$1\\""';
+  return spawnSyncImpl("bash", ["-lc", script, "agent-utils-string-command", String(expression || "")], {
+    encoding: "utf8",
+    timeout: timeoutMs,
+    maxBuffer: 64 * 1024,
+    env,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+
+export function runStringCommand(command, options = {}) {
+  const source = String(command || "");
+  const trimmed = source.trim();
+  // A command-substitution expression such as $(hostname) is expanded as a
+  // value instead of treating its resulting text as another command name.
+  const result = /^\$\([\s\S]*\)$/.test(trimmed) || /^\$\{[^}]+\}$/.test(trimmed)
+    ? runShellValueExpression(source, options)
+    : runCommand(source, options);
+  if (result?.error) return { value: "", ok: false, code: result.error.code === "ETIMEDOUT" ? "timeout" : "spawn-failed" };
+  if (Number(result?.status) !== 0) return { value: "", ok: false, code: "nonzero-exit" };
+  return { value: String(result?.stdout || "").replace(/(?:\r?\n)+$/, ""), ok: true, code: "stdout" };
+}
+
+export function runNumberCommand(command, options = {}) {
+  const result = runCommand(command, options);
+  if (result?.error) return { value: 0, ok: false, code: result.error.code === "ETIMEDOUT" ? "timeout" : "spawn-failed" };
+  if (Number(result?.status) !== 0) return { value: 0, ok: false, code: "nonzero-exit" };
+  const text = String(result?.stdout || "").trim();
+  if (!text) return { value: 0, ok: false, code: "empty-number-output" };
+  const number = Number(text);
+  if (!Number.isFinite(number)) return { value: 0, ok: false, code: "invalid-number-output" };
+  return { value: number, ok: true, code: "stdout" };
 }
 
 export function runEnvEq(operands, {
@@ -119,8 +162,18 @@ function resolveSpecialForm(value, options, path) {
   }
   const command = String(value[key] || "");
   if (!command.trim()) {
-    diagnostic(options, path, "empty-bool-command");
-    return { matched: true, value: false };
+    diagnostic(options, path, `empty-${key.slice(1).replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`);
+    return { matched: true, value: key === "$stringCommand" ? "" : key === "$numberCommand" ? 0 : false };
+  }
+  if (key === "$stringCommand") {
+    const result = (options.stringCommandRunner || runStringCommand)(command, options);
+    if (!result?.ok) diagnostic(options, path, result?.code || "string-command-failed");
+    return { matched: true, value: result?.ok ? String(result.value ?? "") : "" };
+  }
+  if (key === "$numberCommand") {
+    const result = (options.numberCommandRunner || runNumberCommand)(command, options);
+    if (!result?.ok) diagnostic(options, path, result?.code || "number-command-failed");
+    return { matched: true, value: result?.ok && Number.isFinite(Number(result.value)) ? Number(result.value) : 0 };
   }
   const result = (options.commandRunner || runBoolCommand)(command, options);
   if (!result?.ok) diagnostic(options, path, result?.code || "bool-command-failed");
@@ -140,6 +193,8 @@ function resolveNode(value, options, path) {
 export function resolveAgentUtilsSpecialForms(settings = {}, {
   env = process.env,
   commandRunner,
+  stringCommandRunner,
+  numberCommandRunner,
   envEqRunner,
   spawnSyncImpl,
   timeoutMs = 1000,
@@ -149,6 +204,6 @@ export function resolveAgentUtilsSpecialForms(settings = {}, {
   const agentUtils = settings.agentUtils;
   if (!agentUtils || typeof agentUtils !== "object" || Array.isArray(agentUtils)) return settings;
   if (agentUtils.globalShellExpansion?.enabled !== true) return settings;
-  const options = { env, commandRunner, envEqRunner, spawnSyncImpl, timeoutMs, onDiagnostic };
+  const options = { env, commandRunner, stringCommandRunner, numberCommandRunner, envEqRunner, spawnSyncImpl, timeoutMs, onDiagnostic };
   return { ...settings, agentUtils: resolveNode(agentUtils, options, "agentUtils") };
 }
