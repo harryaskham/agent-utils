@@ -97,12 +97,14 @@ test("full-width rails render top-right and three-way bottom placement with sema
   assert.match(bottom, /\$498\.89/);
   assert.doesNotMatch(bottom, /\(sub\)/);
   assert.match(bottom, /12\.0%/);
-  assert.match(bottom, /\+27 ▌-13/);
-  assert.match(bottom, /12\.0% ▌1\.1M/);
-  assert.match(rails.bottom, /\x1b\[38;2;191;97;106m\x1b\[48;2;163;190;140m ▌/, "live half-block rendering requires fg=right red and bg=left green");
+  assert.match(bottom, /\+27▌-13/);
+  assert.match(bottom, /12\.0%▌1\.1M/);
+  assert.match(rails.bottom, /\x1b\[38;2;163;190;140m\x1b\[48;2;191;97;106m▌/, "half-block uses left background as fg and right background as bg with no spaces");
+  assert.match(rails.bottom, /\x1b\[38;2;248;248;248m\x1b\[48;2;/, "money text is white");
   assert.match(bottom, /  macos|  agent/);
   assert.match(rails.top, /\x1b\[38;2;94;129;172m─/);
-  assert.match(rails.top, /\x1b\[48;2;236;239;244m/, "model uses light Nord background");
+  assert.match(rails.top, /\x1b\[38;2;52;58;72m\x1b\[48;2;236;239;244m gpt-5\.6-sol/, "model uses dark Nord text on light Nord background");
+  assert.match(rails.bottom, /\x1b\[38;2;52;58;72m\x1b\[48;2;129;161;193m1\.1M/, "context total uses the same dark Nord text");
 });
 
 test("topCenter placement and editorPadding preserve rail cells at both edges", () => {

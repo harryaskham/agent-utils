@@ -174,7 +174,7 @@ function renderParts(parts, { divider = "chevron" } = {}) {
   let out = `${fg(safe[0].background)}${POWERLINE.left}`;
   safe.forEach((entry, index) => {
     if (index > 0) {
-      if (divider === "vertical") out += `${fg(entry.background)}${bg(safe[index - 1].background)} ${POWERLINE.vertical}`;
+      if (divider === "vertical") out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.vertical}`;
       else if (divider === "rounded") out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.right}`;
       else out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.chevron}`;
     }
@@ -201,6 +201,7 @@ function palette(theme, effort, contextPct) {
   // Deliberately distinct semantic ramp. Pi themes often map several thinking
   // tokens into the same cool family; chips need glanceable level changes.
   if (effort === "minimal") colors.effort = rgb(theme, "thinkingMinimal", colors.grey);
+  colors.dark = darken(colors.nord3, 0.68);
   colors.orange = colors.yellow.map((value, index) => Math.round((value + colors.red[index]) / 2));
   if (effort === "low") colors.effort = colors.blue;
   if (effort === "medium") colors.effort = colors.yellow;
@@ -215,13 +216,13 @@ function palette(theme, effort, contextPct) {
 function chipFor(field, values, theme) {
   const p = palette(theme, values.effort, values.contextPct);
   switch (field) {
-    case "model": return renderParts([part(values.provider || "model", p.nord3), part(values.model || "n/a", p.white, p.nord3)]);
+    case "model": return renderParts([part(values.provider || "model", p.nord3), part(values.model || "n/a", p.white, p.dark)]);
     case "effort": return renderParts([part(values.effort || "off", p.effort)]);
     case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
     case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
     case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
     case "mcp": return renderParts([part(`${values.mcpCount || 0}`, p.magenta), part("MCP", p.nord3)], { divider: "vertical" });
-    case "cost": return renderParts([part(`$${Number(values.cost || 0).toFixed(2)}`, darken(p.green), p.green)]);
+    case "cost": return renderParts([part(`$${Number(values.cost || 0).toFixed(2)}`, darken(p.green), [248, 248, 248])]);
     case "context": {
       const pct = Number(values.contextPct || 0);
       if (pct > 80) return renderParts([
@@ -230,7 +231,7 @@ function chipFor(field, values, theme) {
       ], { divider: "vertical" });
       return renderParts([
         part(`${pct.toFixed(1)}%`, pct < 40 ? p.green : p.context, pct < 40 ? darken(p.green, 0.42) : undefined),
-        part(formatChipTokens(values.contextMax), p.grey, p.nord3),
+        part(formatChipTokens(values.contextMax), p.grey, p.dark),
       ], { divider: "vertical" });
     }
     default: return "";

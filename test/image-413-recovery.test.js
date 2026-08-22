@@ -9,8 +9,10 @@ import {
   IMAGE_413_ENTRY_TYPE,
   createHalfImagePreview,
   halfDimensions,
+  imageMessageKey,
   imageRecoveryMessage,
   isImagePayload413,
+  latestImageToolCandidate,
   pngDimensions,
   replaceRecoveredImageMessage,
 } from "../extensions/lib/image-413-recovery.js";
@@ -70,7 +72,7 @@ test("replacement targets only the exact failed tool result", () => {
   assert.equal(replaced.details.image413Recovery.replaced, true);
 });
 
-function harness({ resize } = {}) {
+function harness({ resize, entries = [], cwd = process.cwd() } = {}) {
   const handlers = new Map();
   const appended = [];
   const sent = [];
@@ -83,8 +85,8 @@ function harness({ resize } = {}) {
     sendMessage(message, options) { sent.push({ message, options }); },
   };
   const ctx = {
-    cwd: "/work",
-    sessionManager: { getBranch: () => appended },
+    cwd,
+    sessionManager: { getBranch: () => [...entries, ...appended] },
     ui: { notify(message, level) { notifications.push({ message, level }); } },
   };
   createImage413RecoveryExtension({ resize })(pi);
@@ -100,7 +102,7 @@ test("provider 413 replaces the latest image read, queues one retry, and persist
   let resizeCalls = 0;
   const h = harness({ resize: async (path) => {
     resizeCalls += 1;
-    return { ok: true, originalPath: path, previewPath: "/work/.pi/image-guard/previews/half.png", originalWidth: 2480, originalHeight: 3508, width: 1240, height: 1754 };
+    return { ok: true, originalPath: path, previewPath: `${process.cwd()}/.pi/image-guard/previews/half.png`, originalWidth: 2480, originalHeight: 3508, width: 1240, height: 1754 };
   } });
   await h.emit("session_start");
   await h.emit("tool_execution_start", { toolName: "read", toolCallId: "read-2", args: { path: "briefing.png" } });
@@ -127,13 +129,16 @@ test("provider 413 replaces the latest image read, queues one retry, and persist
 });
 
 test("resize failure still prunes the image and reports bounded failure text", async () => {
-  const h = harness({ resize: async () => ({ ok: false, error: "no resize tool" }) });
-  await h.emit("session_start");
-  await h.emit("tool_execution_start", { toolName: "read", toolCallId: "read-fail", args: { path: "large.jpg" } });
-  await h.emit("tool_execution_end", { toolName: "read", toolCallId: "read-fail", result: { content: [{ type: "image", data: "large" }] } });
-  await h.emit("after_provider_response", { status: 413 });
-  const result = await h.emit("context", { messages: [{ role: "toolResult", toolCallId: "read-fail", content: [{ type: "image", data: "large" }] }] });
-  assert.match(result.messages[0].content[0].text, /Resizing also failed: no resize tool/);
+  const dir = mkdtempSync(join(tmpdir(), "image-413-fail-"));
+  try {
+    const h = harness({ cwd: dir, resize: async () => ({ ok: false, error: "no resize tool" }) });
+    await h.emit("session_start");
+    await h.emit("tool_execution_start", { toolName: "read", toolCallId: "read-fail", args: { path: "large.jpg" } });
+    await h.emit("tool_execution_end", { toolName: "read", toolCallId: "read-fail", result: { content: [{ type: "image", data: "large" }] } });
+    await h.emit("after_provider_response", { status: 413 });
+    const result = await h.emit("context", { messages: [{ role: "toolResult", toolCallId: "read-fail", content: [{ type: "image", data: "large" }] }] });
+    assert.match(result.messages[0].content[0].text, /Resizing also failed: no resize tool/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a successful provider response clears the candidate and unrelated later 413 is ignored", async () => {
@@ -146,6 +151,46 @@ test("a successful provider response clears the candidate and unrelated later 41
   await h.emit("after_provider_response", { status: 413 });
   assert.equal(calls, 0);
   assert.equal(h.sent.length, 0);
+});
+
+test("restored Tendril and user images are discovered without current-process tool events", async () => {
+  const tendril = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolCallId: "tendril-1",
+      toolName: "tendril_pi_capture",
+      content: [
+        { type: "text", text: "Captured.\nSaved screenshot: /tmp/tendril.png\n" },
+        { type: "image", data: "large-tendril" },
+      ],
+    },
+  };
+  const user = { type: "message", message: { role: "user", content: [{ type: "image", data: "clipboard-image" }] } };
+  assert.deepEqual(latestImageToolCandidate([tendril]), {
+    messageKey: "tool:tendril-1", toolCallId: "tendril-1", path: "/tmp/tendril.png", imageData: "large-tendril", mimeType: "image/png", toolName: "tendril_pi_capture",
+  });
+  assert.match(latestImageToolCandidate([tendril, user]).messageKey, /^image:/);
+
+  const h = harness({ entries: [tendril], resize: async () => ({ ok: true, previewPath: "/tmp/tendril-half.png" }) });
+  await h.emit("session_start");
+  await h.emit("after_provider_response", { status: 413 });
+  assert.equal(h.appended[0].data.toolCallId, "tendril-1");
+
+  const userDir = mkdtempSync(join(tmpdir(), "image-413-user-"));
+  try {
+    const userHarness = harness({ cwd: userDir, entries: [user], resize: async () => { throw new Error("resize failed after materialization"); } });
+    await userHarness.emit("session_start");
+    await userHarness.emit("after_provider_response", { status: 413 });
+    const context = await userHarness.emit("context", { messages: [user.message] });
+    assert.equal(context.messages[0].content[0].type, "text");
+    assert.match(context.messages[0].content[0].text, /resize failed after materialization/);
+  } finally { rmSync(userDir, { recursive: true, force: true }); }
+});
+
+test("image message keys are stable for the same attachment", () => {
+  const message = { role: "user", content: [{ type: "image", data: "abc" }] };
+  assert.equal(imageMessageKey(message), imageMessageKey(structuredClone(message)));
 });
 
 test("recovery message never embeds multiline provider or resize output", () => {

@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdir, open, stat } from "node:fs/promises";
+import { mkdir, open, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 
 export const IMAGE_413_ENTRY_TYPE = "agent-utils-image-413-recovery";
 export const IMAGE_413_MESSAGE_TYPE = "agent-utils-image-413-message";
 export const IMAGE_413_PREVIEW_DIR = ".pi/image-guard/previews";
+export const IMAGE_413_ORIGINAL_DIR = ".pi/image-guard/originals";
 
 export function isImagePayload413(status, errorMessage = "") {
   return Number(status) === 413 || /\b413\b.*(?:request entity too large|payload too large)|(?:request entity too large|payload too large).*\b413\b/i.test(String(errorMessage || ""));
@@ -13,6 +14,45 @@ export function isImagePayload413(status, errorMessage = "") {
 
 export function hasImageContent(content) {
   return Array.isArray(content) && content.some((block) => block?.type === "image");
+}
+
+export function imageMessageKey(message) {
+  if (message?.toolCallId) return `tool:${message.toolCallId}`;
+  const image = (message?.content || []).find((block) => block?.type === "image");
+  if (!image) return "";
+  const payload = String(image.data || image.source?.data || image.source?.path || image.path || "");
+  return `image:${createHash("sha256").update(`${message.role || "unknown"}\0${payload.length}\0${payload.slice(0, 4096)}`).digest("hex").slice(0, 20)}`;
+}
+
+export function imagePathFromToolMessage(message) {
+  const direct = message?.details?.path || message?.details?.originalPath || message?.details?.screenshotPath;
+  if (direct) return String(direct);
+  for (const block of message?.content || []) {
+    if (block?.type !== "text") continue;
+    const match = /(?:Saved screenshot|Saved image|Image path):\s*([^\r\n]+)/i.exec(String(block.text || ""));
+    if (match?.[1]) return match[1].trim();
+  }
+  return "";
+}
+
+export function latestImageToolCandidate(entries = []) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    const message = entry?.type === "message" ? entry.message : entry;
+    if (!hasImageContent(message?.content)) continue;
+    const messageKey = imageMessageKey(message);
+    if (!messageKey) continue;
+    const image = message.content.find((block) => block?.type === "image");
+    return {
+      messageKey,
+      toolCallId: message.toolCallId,
+      path: imagePathFromToolMessage(message),
+      imageData: image?.data || image?.source?.data || "",
+      mimeType: image?.mimeType || image?.source?.mediaType || "image/png",
+      toolName: message.toolName || message.role || "unknown",
+    };
+  }
+  return null;
 }
 
 export function pngDimensions(buffer) {
@@ -79,6 +119,20 @@ function previewName(path, info, dimensions) {
   return `${base}.${hash}.half.png`;
 }
 
+export async function materializeEmbeddedImage(candidate, { cwd = process.cwd(), originalDir = resolve(cwd, IMAGE_413_ORIGINAL_DIR) } = {}) {
+  const data = String(candidate?.imageData || "");
+  if (!data) return { ok: false, error: "embedded image data is unavailable" };
+  try {
+    await mkdir(originalDir, { recursive: true });
+    const extension = /jpe?g/i.test(candidate?.mimeType || "") ? "jpg" : /webp/i.test(candidate?.mimeType || "") ? "webp" : "png";
+    const path = join(originalDir, `${candidate.messageKey.replace(/[^a-zA-Z0-9._-]+/g, "-")}.${extension}`);
+    await writeFile(path, Buffer.from(data, "base64"));
+    return { ok: true, path };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
 export async function createHalfImagePreview(originalPath, {
   cwd = process.cwd(),
   previewDir = resolve(cwd, IMAGE_413_PREVIEW_DIR),
@@ -121,7 +175,8 @@ export function imageRecoveryMessage({ errorMessage, previewPath, resizeError })
 }
 
 export function replaceRecoveredImageMessage(message, recovery) {
-  if (!message || message.role !== "toolResult" || message.toolCallId !== recovery.toolCallId || !hasImageContent(message.content)) return message;
+  const recoveryKey = recovery.messageKey || (recovery.toolCallId ? `tool:${recovery.toolCallId}` : "");
+  if (!message || imageMessageKey(message) !== recoveryKey || !hasImageContent(message.content)) return message;
   return {
     ...message,
     content: [{ type: "text", text: recovery.message }],
