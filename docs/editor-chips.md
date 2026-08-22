@@ -12,8 +12,9 @@ Editor chips are immutable startup policy. Configure them in `settings.json` and
     "editorChips": {
       "enabled": true,
       "topRight": ["model", "effort"],
+      "topCenter": ["directory"],
       "bottomRight": ["mcp", "cost", "context"],
-      "bottomLeft": ["directory"],
+      "bottomLeft": [],
       "bottomCenter": ["branch", "diff"],
       "hideFooter": true
     }
@@ -38,20 +39,20 @@ Available fields are:
 
 ## Theme behavior
 
-Chip backgrounds are derived from the active Pi theme rather than fixed terminal palette assumptions:
+Chip backgrounds are derived from the active Pi theme rather than terminal ANSI defaults:
 
-- model: `borderMuted` and `borderAccent` (Nord-style dark blue and blue in the packaged theme)
-- effort: the matching `thinkingOff`, `thinkingMinimal`, `thinkingLow`, `thinkingMedium`, `thinkingHigh`, `thinkingXhigh`, or `thinkingMax` color
-- MCP: `thinkingHigh` and `borderMuted`
-- cost: darkened `success` and `success`
+- model: dark Nord provider segment followed by dark-Nord text on a light Nord-white model segment
+- effort: a deliberately distinct semantic ramp — low blue, medium yellow, high orange, xhigh red, max pink (off/minimal remain subdued)
+- MCP: magenta and dark Nord, separated with `▌`
+- cost: one plain green chip, formatted as `$5.33` with no subscription suffix
 - context: darkened `success` below 40%, darkened `warning` below 60%, full `warning` from 60% through 80%, and the high-contrast `text`/`error` pair above 80%
 - diff: `success` additions and `error` deletions
 
-Powerline rounded caps and transition dividers are painted with the adjacent chip backgrounds, giving the appearance that segments overlap and continue into the effort-colored editor rail.
+Powerline rounded caps and transition dividers are painted with the adjacent chip backgrounds. Provider-to-model keeps the chevron transition; icon-to-label uses a rounded ``; balanced data pairs such as additions/deletions and context percent/window use `▌`. This gives continuity without making unrelated segment types look identical.
 
 ## Responsive layout
 
-The top group stays right-aligned. The bottom row places directory at the left, branch/diff near the center, and MCP/cost/context at the right.
+Configured `topCenter` and `topRight` groups share the top rail. The bottom row places `bottomLeft`, `bottomCenter`, and `bottomRight` independently. `editorPaddingX` from Pi settings (or the same field inside `editorChips`) preserves that many visible rail cells at both the left and right edges.
 
 When space is constrained, fitting proceeds deterministically:
 

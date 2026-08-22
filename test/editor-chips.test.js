@@ -21,8 +21,8 @@ const COLORS = {
   thinkingOff: [76, 86, 106],
   thinkingMinimal: [129, 161, 193],
   thinkingMedium: [143, 188, 187],
-  thinkingXhigh: [191, 97, 106],
-  thinkingMax: [208, 135, 112],
+  thinkingXhigh: [180, 142, 173],
+  thinkingMax: [180, 142, 173],
   success: [163, 190, 140],
   warning: [208, 135, 112],
   error: [191, 97, 106],
@@ -59,6 +59,7 @@ const config = resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: 
 test("editor chip settings resolve the requested immutable startup layout", () => {
   assert.equal(config.enabled, true);
   assert.deepEqual(config.topRight, ["model", "effort"]);
+  assert.deepEqual(config.topCenter, []);
   assert.deepEqual(config.bottomRight, ["mcp", "cost", "context"]);
   assert.deepEqual(config.bottomLeft, ["directory"]);
   assert.deepEqual(config.bottomCenter, ["branch", "diff"]);
@@ -92,9 +93,36 @@ test("full-width rails render top-right and three-way bottom placement with sema
   assert.match(bottom, /-13/);
   assert.match(bottom, /14/);
   assert.match(bottom, /MCP/);
-  assert.match(bottom, /498\.893 \(sub\)/);
+  assert.match(bottom, /\$498\.89/);
+  assert.doesNotMatch(bottom, /\(sub\)/);
   assert.match(bottom, /12\.0%/);
-  assert.match(rails.top, /\x1b\[38;2;136;192;208m─/);
+  assert.match(bottom, /\+27 ▌ -13/);
+  assert.match(bottom, /12\.0% ▌ 1\.1M/);
+  assert.match(bottom, /  macos|  agent/);
+  assert.match(rails.top, /\x1b\[38;2;94;129;172m─/);
+  assert.match(rails.top, /\x1b\[48;2;236;239;244m/, "model uses light Nord background");
+});
+
+test("topCenter placement and editorPadding preserve rail cells at both edges", () => {
+  const placed = {
+    ...config,
+    topCenter: ["directory"],
+    bottomLeft: [],
+    editorPaddingX: 1,
+  };
+  const rails = buildEditorChipRails({ width: 220, config: placed, values: values(), theme });
+  assert.match(stripAnsi(rails.top), /^─.*.*checkout.*low.*─$/);
+  assert.equal(visibleCells(rails.top), 220);
+  assert.equal(visibleCells(rails.bottom), 220);
+});
+
+test("effort colors form distinct blue, yellow, orange, red, pink levels", () => {
+  const colors = [];
+  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+    const rail = buildEditorChipRails({ width: 100, config: { ...config, topRight: ["effort"] }, values: values({ effort }), theme }).top;
+    colors.push(/\x1b\[48;2;([^m]+)m low|\x1b\[48;2;([^m]+)m medium|\x1b\[48;2;([^m]+)m high|\x1b\[48;2;([^m]+)m xhigh|\x1b\[48;2;([^m]+)m max/.exec(rail)?.slice(1).find(Boolean));
+  }
+  assert.equal(new Set(colors).size, 5);
 });
 
 test("narrow rails collapse directory before reducing branch to its git icon", () => {

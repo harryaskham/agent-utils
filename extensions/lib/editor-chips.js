@@ -4,13 +4,14 @@ import { relative, resolve, sep } from "node:path";
 const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const DEFAULT_FIELDS = Object.freeze({
   topRight: ["model", "effort"],
+  topCenter: [],
   bottomRight: ["mcp", "cost", "context"],
   bottomLeft: ["directory"],
   bottomCenter: ["branch", "diff"],
 });
 const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "cost", "context", "directory", "branch", "diff"]);
 const FIELD_ALIASES = Object.freeze({ cwd: "directory", thinking: "effort" });
-const POWERLINE = Object.freeze({ left: "", right: "", join: "" });
+const POWERLINE = Object.freeze({ left: "", right: "", chevron: "", vertical: "▌" });
 
 function bool(value, fallback = false) {
   if (value == null) return fallback;
@@ -37,9 +38,11 @@ export function resolveEditorChipsConfig(settings = {}, env = process.env) {
   return {
     enabled,
     topRight: fields(raw.topRight, DEFAULT_FIELDS.topRight),
+    topCenter: fields(raw.topCenter, DEFAULT_FIELDS.topCenter),
     bottomRight: fields(raw.bottomRight, DEFAULT_FIELDS.bottomRight),
     bottomLeft: fields(raw.bottomLeft, DEFAULT_FIELDS.bottomLeft),
     bottomCenter: fields(raw.bottomCenter, DEFAULT_FIELDS.bottomCenter),
+    editorPaddingX: Math.max(0, Math.min(8, Math.trunc(Number(raw.editorPaddingX ?? settings.editorPaddingX ?? 0) || 0))),
     hideFooter: bool(raw.hideFooter, true),
   };
 }
@@ -47,6 +50,7 @@ export function resolveEditorChipsConfig(settings = {}, env = process.env) {
 export function editorChipFieldSet(config) {
   return new Set([
     ...(config?.topRight || []),
+    ...(config?.topCenter || []),
     ...(config?.bottomRight || []),
     ...(config?.bottomLeft || []),
     ...(config?.bottomCenter || []),
@@ -164,13 +168,18 @@ function part(text, background, foreground = contrast(background)) {
   return { text: String(text ?? ""), background, foreground };
 }
 
-function renderParts(parts) {
+function renderParts(parts, { divider = "chevron" } = {}) {
   const safe = parts.filter((entry) => entry && entry.text !== "");
   if (safe.length === 0) return "";
   let out = `${fg(safe[0].background)}${POWERLINE.left}`;
   safe.forEach((entry, index) => {
-    if (index > 0) out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.join}`;
-    out += `${fg(entry.foreground)}${bg(entry.background)} ${entry.text} `;
+    if (index > 0) {
+      if (divider === "vertical") out += `${fg(entry.foreground)}${bg(entry.background)} ${POWERLINE.vertical}`;
+      else if (divider === "rounded") out += `${reset()}${fg(safe[index - 1].background)}${POWERLINE.right}${reset()}`;
+      else out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.chevron}`;
+    }
+    const trailing = index < safe.length - 1 && divider === "vertical" ? "" : " ";
+    out += `${fg(entry.foreground)}${bg(entry.background)} ${entry.text}${trailing}`;
   });
   out += `${reset()}${fg(safe[safe.length - 1].background)}${POWERLINE.right}${reset()}`;
   return out;
@@ -182,15 +191,21 @@ function palette(theme, effort, contextPct) {
     blue: rgb(theme, "borderAccent", [94, 129, 172]),
     magenta: rgb(theme, "thinkingHigh", [180, 142, 173]),
     green: rgb(theme, "success", [163, 190, 140]),
-    orange: rgb(theme, "warning", [208, 135, 112]),
+    yellow: rgb(theme, "warning", [235, 203, 139]),
     red: rgb(theme, "error", [191, 97, 106]),
     grey: rgb(theme, "muted", [129, 161, 193]),
     white: rgb(theme, "text", [236, 239, 244]),
-    effort: rgb(theme, `thinking${String(effort || "off").replace(/^./, (c) => c.toUpperCase())}`, [94, 129, 172]),
+    effort: rgb(theme, "thinkingOff", [76, 86, 106]),
   };
-  if (effort === "off") colors.effort = rgb(theme, "thinkingOff", colors.nord3);
-  if (effort === "xhigh") colors.effort = rgb(theme, "thinkingXhigh", colors.magenta);
-  if (effort === "max") colors.effort = rgb(theme, "thinkingMax", colors.red);
+  // Deliberately distinct semantic ramp. Pi themes often map several thinking
+  // tokens into the same cool family; chips need glanceable level changes.
+  if (effort === "minimal") colors.effort = rgb(theme, "thinkingMinimal", colors.grey);
+  colors.orange = colors.yellow.map((value, index) => Math.round((value + colors.red[index]) / 2));
+  if (effort === "low") colors.effort = colors.blue;
+  if (effort === "medium") colors.effort = colors.yellow;
+  if (effort === "high") colors.effort = colors.orange;
+  if (effort === "xhigh") colors.effort = colors.red;
+  if (effort === "max") colors.effort = rgb(theme, "thinkingXhigh", colors.magenta);
   const pct = Number(contextPct || 0);
   colors.context = pct < 40 ? darken(colors.green) : pct < 60 ? darken(colors.orange) : pct <= 80 ? colors.orange : colors.red;
   return colors;
@@ -199,23 +214,23 @@ function palette(theme, effort, contextPct) {
 function chipFor(field, values, theme) {
   const p = palette(theme, values.effort, values.contextPct);
   switch (field) {
-    case "model": return renderParts([part(values.provider || "model", p.nord3), part(values.model || "n/a", p.blue)]);
+    case "model": return renderParts([part(values.provider || "model", p.nord3), part(values.model || "n/a", p.white, p.nord3)]);
     case "effort": return renderParts([part(values.effort || "off", p.effort)]);
-    case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)]);
-    case "branch": return renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch || "no-branch", p.nord3)])]);
-    case "diff": return renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)]);
-    case "mcp": return renderParts([part(`${values.mcpCount || 0}`, p.magenta), part("MCP", p.nord3)]);
-    case "cost": return renderParts([part("$", darken(p.green)), part(`${Number(values.cost || 0).toFixed(3)}${values.subscription ? " (sub)" : ""}`, p.green)]);
+    case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
+    case "branch": return renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch || "no-branch", p.nord3)])], { divider: "rounded" });
+    case "diff": return renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" });
+    case "mcp": return renderParts([part(`${values.mcpCount || 0}`, p.magenta), part("MCP", p.nord3)], { divider: "vertical" });
+    case "cost": return renderParts([part(`$${Number(values.cost || 0).toFixed(2)}`, p.green, darken(p.green, 0.42))]);
     case "context": {
       const pct = Number(values.contextPct || 0);
       if (pct > 80) return renderParts([
         part(`${pct.toFixed(1)}%`, p.white, darken(p.red, 0.7)),
         part(formatChipTokens(values.contextMax), p.red, [0, 0, 0]),
-      ]);
+      ], { divider: "vertical" });
       return renderParts([
         part(`${pct.toFixed(1)}%`, p.context),
         part(formatChipTokens(values.contextMax), p.grey),
-      ]);
+      ], { divider: "vertical" });
     }
     default: return "";
   }
@@ -231,49 +246,66 @@ function rail(theme, effort, width) {
   return `${fg(color)}${"─".repeat(width)}${reset()}`;
 }
 
-function fitBottomValues(width, config, initialValues, theme, separator) {
+function fitValues(width, config, initialValues, theme, separator) {
   const values = { ...initialValues };
   const candidates = directoryCollapseCandidates(values.directory);
   let candidateIndex = 0;
-  const totalWidth = () => {
-    const left = groupFor(config.bottomLeft, values, theme, separator);
-    const center = groupFor(config.bottomCenter, values, theme, separator);
-    const right = groupFor(config.bottomRight, values, theme, separator);
+  const totalWidth = (leftFields, centerFields, rightFields) => {
+    const left = groupFor(leftFields, values, theme, separator);
+    const center = groupFor(centerFields, values, theme, separator);
+    const right = groupFor(rightFields, values, theme, separator);
     return visibleCells(left) + visibleCells(center) + visibleCells(right) + 2;
   };
-  while (totalWidth() > width && candidateIndex + 1 < candidates.length) {
+  const exceeds = () => Math.max(
+    totalWidth([], config.topCenter, config.topRight),
+    totalWidth(config.bottomLeft, config.bottomCenter, config.bottomRight),
+  ) > width;
+  while (exceeds() && candidateIndex + 1 < candidates.length) {
     candidateIndex += 1;
     values.directory = candidates[candidateIndex];
   }
-  if (totalWidth() > width) values.branchCollapsed = true;
+  if (exceeds()) values.branchCollapsed = true;
   return values;
+}
+
+function composeRailRow({ width, padding, left, center, right, theme, effort }) {
+  const edge = Math.min(Math.max(0, padding), Math.floor(width / 2));
+  const innerWidth = Math.max(0, width - edge * 2);
+  const lw = visibleCells(left), cw = visibleCells(center), rw = visibleCells(right);
+  const centerStart = Math.max(lw, Math.floor((innerWidth - cw) / 2));
+  const rightStart = Math.max(centerStart + cw, innerWidth - rw);
+  const overlapping = rightStart + rw > innerWidth;
+  const inner = overlapping
+    ? `${left}${center}${right}`
+    : `${left}${rail(theme, effort, centerStart - lw)}${center}${rail(theme, effort, rightStart - centerStart - cw)}${right}${rail(theme, effort, innerWidth - rightStart - rw)}`;
+  return { line: `${rail(theme, effort, edge)}${inner}${rail(theme, effort, edge)}`, overlapping };
 }
 
 export function buildEditorChipRails({ width, config, values, theme }) {
   const safeWidth = Math.max(1, Math.trunc(Number(width) || 1));
+  const padding = Math.max(0, Math.trunc(Number(config.editorPaddingX) || 0));
+  const innerWidth = Math.max(1, safeWidth - padding * 2);
   const separator = rail(theme, values.effort, 1);
-  const topRight = groupFor(config.topRight, values, theme, separator);
-  const topRightWidth = visibleCells(topRight);
-  const top = topRightWidth < safeWidth
-    ? `${rail(theme, values.effort, safeWidth - topRightWidth)}${topRight}`
-    : topRight;
-
-  const fittedValues = fitBottomValues(safeWidth, config, values, theme, separator);
-  const left = groupFor(config.bottomLeft, fittedValues, theme, separator);
-  const center = groupFor(config.bottomCenter, fittedValues, theme, separator);
-  const right = groupFor(config.bottomRight, fittedValues, theme, separator);
-  const lw = visibleCells(left), cw = visibleCells(center), rw = visibleCells(right);
-  const centerStart = Math.max(lw, Math.floor((safeWidth - cw) / 2));
-  const rightStart = Math.max(centerStart + cw, safeWidth - rw);
-  let bottom;
-  let overlapping = false;
-  if (rightStart + rw <= safeWidth) {
-    bottom = `${left}${rail(theme, values.effort, centerStart - lw)}${center}${rail(theme, values.effort, rightStart - centerStart - cw)}${right}`;
-  } else {
-    overlapping = true;
-    bottom = `${left}${center}${right}`;
-  }
-  return { top, bottom, values: fittedValues, overlapping };
+  const fittedValues = fitValues(innerWidth, config, values, theme, separator);
+  const top = composeRailRow({
+    width: safeWidth,
+    padding,
+    left: "",
+    center: groupFor(config.topCenter, fittedValues, theme, separator),
+    right: groupFor(config.topRight, fittedValues, theme, separator),
+    theme,
+    effort: fittedValues.effort,
+  });
+  const bottom = composeRailRow({
+    width: safeWidth,
+    padding,
+    left: groupFor(config.bottomLeft, fittedValues, theme, separator),
+    center: groupFor(config.bottomCenter, fittedValues, theme, separator),
+    right: groupFor(config.bottomRight, fittedValues, theme, separator),
+    theme,
+    effort: fittedValues.effort,
+  });
+  return { top: top.line, bottom: bottom.line, values: fittedValues, overlapping: top.overlapping || bottom.overlapping };
 }
 
 export function replaceEditorRails(baseLines, renderedLines, rails) {
