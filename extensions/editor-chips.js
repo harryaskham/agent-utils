@@ -65,6 +65,9 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       refreshingGit: false,
       editorRegistry: null,
       editorLease: null,
+      footerFactory: null,
+      originalSetFooter: null,
+      patchedSetFooter: null,
     };
 
     const refreshGit = async (ctx) => {
@@ -142,7 +145,20 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         };
       };
       factory.__agentUtilsEditorChipsFooter = true;
-      ctx.ui.setFooter(factory);
+      state.footerFactory = factory;
+      if (!state.originalSetFooter) {
+        state.originalSetFooter = ctx.ui.setFooter.bind(ctx.ui);
+        state.patchedSetFooter = function (next, ...rest) {
+          if (next?.__agentUtilsEditorChipsFooter) return state.originalSetFooter(next, ...rest);
+          // Keep later core/status extensions from restoring the redundant
+          // default footer while hideFooter is active. Their status values still
+          // flow through the shared FooterData provider consumed by our chips.
+          return state.originalSetFooter(state.footerFactory, ...rest);
+        };
+        state.patchedSetFooter.__agentUtilsEditorChipsFooterGuard = true;
+        ctx.ui.setFooter = state.patchedSetFooter;
+      }
+      state.originalSetFooter(factory);
       return true;
     };
 
@@ -203,12 +219,23 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         try { state.editorRegistry.release(state.editorLease); } catch {}
       }
       state.editorLease = null;
+      if (state.originalSetFooter && state.patchedSetFooter && state.footerFactory) {
+        try { state.originalSetFooter(undefined); } catch {}
+      }
+      state.originalSetFooter = null;
+      state.patchedSetFooter = null;
+      state.footerFactory = null;
       state.tui = null;
     });
 
-    pi.on("model_select", async (_event, ctx) => { try { state.tui?.requestRender?.(); } catch {} });
-    pi.on("thinking_level_select", async (_event, ctx) => { try { state.tui?.requestRender?.(); } catch {} });
-    pi.on("turn_end", async (_event, ctx) => { await refreshGit(ctx); });
+    const reassertAfterCoreUpdate = (ctx) => {
+      installSurfaces(ctx);
+      const timer = setTimeout(() => { try { installSurfaces(ctx); state.tui?.requestRender?.(); } catch {} }, 0);
+      timer.unref?.();
+    };
+    pi.on("model_select", async (_event, ctx) => { reassertAfterCoreUpdate(ctx); });
+    pi.on("thinking_level_select", async (_event, ctx) => { reassertAfterCoreUpdate(ctx); });
+    pi.on("turn_end", async (_event, ctx) => { await refreshGit(ctx); installFooter(ctx); });
     pi.on("tool_execution_end", async (event, ctx) => {
       if (["edit", "write", "bash"].includes(String(event?.toolName || ""))) await refreshGit(ctx);
     });
