@@ -174,7 +174,7 @@ function renderParts(parts, { divider = "chevron" } = {}) {
   let out = `${fg(safe[0].background)}${POWERLINE.left}`;
   safe.forEach((entry, index) => {
     if (index > 0) {
-      if (divider === "vertical") out += `${fg(safe[index - 1].background)}${bg(entry.background)} ${POWERLINE.vertical}`;
+      if (divider === "vertical") out += `${fg(entry.background)}${bg(safe[index - 1].background)} ${POWERLINE.vertical}`;
       else if (divider === "rounded") out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.right}`;
       else out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.chevron}`;
     }

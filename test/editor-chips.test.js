@@ -99,7 +99,7 @@ test("full-width rails render top-right and three-way bottom placement with sema
   assert.match(bottom, /12\.0%/);
   assert.match(bottom, /\+27 ▌-13/);
   assert.match(bottom, /12\.0% ▌1\.1M/);
-  assert.match(rails.bottom, /\x1b\[38;2;163;190;140m\x1b\[48;2;191;97;106m ▌/, "diff divider is fg=left green and bg=right red");
+  assert.match(rails.bottom, /\x1b\[38;2;191;97;106m\x1b\[48;2;163;190;140m ▌/, "live half-block rendering requires fg=right red and bg=left green");
   assert.match(bottom, /  macos|  agent/);
   assert.match(rails.top, /\x1b\[38;2;94;129;172m─/);
   assert.match(rails.top, /\x1b\[48;2;236;239;244m/, "model uses light Nord background");
