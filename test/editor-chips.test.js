@@ -253,8 +253,13 @@ test("editor chips mount without relying on ctx.mode and reassert after a later 
   assert.equal(typeof footerFactory, "function");
   const later = () => ({ render: () => ["later-top", "", "later-bottom"], invalidate() {} });
   ui.setEditorComponent(later);
+  const redundantFooter = () => ({ render: () => ["redundant default footer"], invalidate() {} });
+  ui.setFooter(redundantFooter);
+  assert.notEqual(footerFactory, redundantFooter, "later footer owners cannot restore redundant footer while chips hide it");
   const rendered = editorFactory({ requestRender() {} }, theme, {}).render(100);
   assert.match(stripAnsi(rendered[0]), /p/);
   assert.match(stripAnsi(rendered.at(-1)), /MCP/);
   await commands.get("editor-chips").handler("repair", { ...ctx, ui: { ...ui, notify() {} } });
+  await handlers.get("thinking_level_select")[0]({ level: "high" }, ctx);
+  assert.equal(typeof editorFactory, "function");
 });
