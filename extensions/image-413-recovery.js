@@ -3,7 +3,11 @@ import {
   IMAGE_413_MESSAGE_TYPE,
   createHalfImagePreview,
   hasImageContent,
+  imageMessageKey,
+  imagePathFromToolMessage,
   imageRecoveryMessage,
+  latestImageToolCandidate,
+  materializeEmbeddedImage,
   isImagePayload413,
   replaceRecoveredImageMessage,
 } from "./lib/image-413-recovery.js";
@@ -25,13 +29,27 @@ export function createImage413RecoveryExtension({ resize = createHalfImagePrevie
       for (const entry of entries) {
         if (entry?.type !== "custom" || entry.customType !== IMAGE_413_ENTRY_TYPE) continue;
         const data = entry.data;
-        if (data?.status === "recovered" && data.toolCallId && data.message) recoveries.set(data.toolCallId, data);
+        const key = data?.messageKey || (data?.toolCallId ? `tool:${data.toolCallId}` : "");
+        if (data?.status === "recovered" && key && data.message) recoveries.set(key, { ...data, messageKey: key });
       }
     };
 
     const prepareRecovery = async (candidate, errorMessage, ctx) => {
-      if (!candidate || recoveries.has(candidate.toolCallId)) return null;
-      const preview = await resize(candidate.path, { cwd: ctx.cwd || process.cwd() });
+      if (!candidate || recoveries.has(candidate.messageKey)) return null;
+      const cwd = ctx.cwd || process.cwd();
+      const safeResize = async (path) => {
+        try { return await resize(path, { cwd }); }
+        catch (error) { return { ok: false, error: error?.message || String(error) }; }
+      };
+      let originalPath = candidate.path || "";
+      let preview = originalPath ? await safeResize(originalPath) : { ok: false, error: "original image path is unavailable" };
+      if (!preview?.ok && candidate.imageData) {
+        const materialized = await materializeEmbeddedImage(candidate, { cwd });
+        if (materialized.ok) {
+          originalPath = materialized.path;
+          preview = await safeResize(originalPath);
+        } else preview = { ok: false, error: materialized.error };
+      }
       const message = imageRecoveryMessage({
         errorMessage,
         previewPath: preview?.ok ? preview.previewPath : null,
@@ -40,8 +58,9 @@ export function createImage413RecoveryExtension({ resize = createHalfImagePrevie
       const recovery = {
         version: 1,
         status: "recovered",
+        messageKey: candidate.messageKey,
         toolCallId: candidate.toolCallId,
-        originalPath: candidate.path,
+        originalPath: originalPath || null,
         errorMessage,
         previewPath: preview?.ok ? preview.previewPath : null,
         originalWidth: preview?.originalWidth,
@@ -53,7 +72,7 @@ export function createImage413RecoveryExtension({ resize = createHalfImagePrevie
         recoveredAt: Date.now(),
         retryQueued: true,
       };
-      recoveries.set(candidate.toolCallId, recovery);
+      recoveries.set(candidate.messageKey, recovery);
       pi.appendEntry?.(IMAGE_413_ENTRY_TYPE, recovery);
       try { ctx.ui?.notify?.(message, "warning"); } catch {}
       // Trigger exactly one new model turn. The context hook strips this hidden
@@ -63,7 +82,7 @@ export function createImage413RecoveryExtension({ resize = createHalfImagePrevie
         customType: RETRY_TRIGGER_TYPE,
         content: "Oversized image attachment recovered; retry with the text replacement.",
         display: false,
-        details: { toolCallId: candidate.toolCallId },
+        details: { messageKey: candidate.messageKey, toolCallId: candidate.toolCallId },
       }, { deliverAs: "followUp", triggerTurn: true });
       return recovery;
     };
@@ -92,27 +111,35 @@ export function createImage413RecoveryExtension({ resize = createHalfImagePrevie
     });
 
     pi.on("tool_execution_start", (event) => {
-      if (event?.toolName !== "read") return;
-      const path = event?.args?.path || event?.input?.path;
-      if (event.toolCallId && path) readPaths.set(event.toolCallId, String(path));
+      const path = event?.args?.path || event?.input?.path || event?.args?.outputPath;
+      if (event?.toolCallId && path) readPaths.set(event.toolCallId, String(path));
     });
 
     pi.on("tool_execution_end", (event) => {
-      if (event?.toolName !== "read" || !event.toolCallId || !hasImageContent(event?.result?.content)) return;
-      const path = event?.args?.path || event?.input?.path || readPaths.get(event.toolCallId);
+      if (!event?.toolCallId || !hasImageContent(event?.result?.content)) return;
+      const path = event?.args?.path || event?.input?.path || event?.args?.outputPath || readPaths.get(event.toolCallId)
+        || imagePathFromToolMessage({ content: event.result.content, details: event.result.details });
       if (!path) return;
-      latestImageRead = { toolCallId: event.toolCallId, path: String(path) };
+      const image = event.result.content.find((block) => block?.type === "image");
+      latestImageRead = { messageKey: `tool:${event.toolCallId}`, toolCallId: event.toolCallId, path: String(path), imageData: image?.data || image?.source?.data || "", mimeType: image?.mimeType || image?.source?.mediaType || "image/png", toolName: event.toolName || "unknown" };
     });
 
     pi.on("message_end", (event) => {
       const message = event?.message;
-      if (message?.role !== "toolResult" || message?.toolName !== "read" || !hasImageContent(message.content)) return;
+      if (!hasImageContent(message?.content)) return;
+      const messageKey = imageMessageKey(message);
       const toolCallId = message.toolCallId;
-      const path = readPaths.get(toolCallId) || message?.details?.path || message?.details?.originalPath;
-      if (toolCallId && path) latestImageRead = { toolCallId, path: String(path) };
+      const path = readPaths.get(toolCallId) || imagePathFromToolMessage(message);
+      const image = message.content.find((block) => block?.type === "image");
+      if (messageKey) latestImageRead = { messageKey, toolCallId, path: path ? String(path) : "", imageData: image?.data || image?.source?.data || "", mimeType: image?.mimeType || image?.source?.mediaType || "image/png", toolName: message.toolName || message.role || "unknown" };
     });
 
     pi.on("after_provider_response", async (event, ctx) => {
+      if (!latestImageRead && isImagePayload413(event?.status)) {
+        let entries = [];
+        try { entries = (ctx || sessionCtx)?.sessionManager?.getBranch?.() || (ctx || sessionCtx)?.sessionManager?.getEntries?.() || []; } catch {}
+        latestImageRead = latestImageToolCandidate(entries);
+      }
       if (!latestImageRead) return;
       if (!isImagePayload413(event?.status)) {
         if (Number(event?.status) >= 200 && Number(event?.status) < 300) latestImageRead = null;
@@ -120,7 +147,7 @@ export function createImage413RecoveryExtension({ resize = createHalfImagePrevie
       }
       const candidate = latestImageRead;
       latestImageRead = null;
-      if (recoveries.has(candidate.toolCallId) || recoveryInFlight) return;
+      if (recoveries.has(candidate.messageKey) || recoveryInFlight) return;
       const errorMessage = `413 Request Entity Too Large`;
       recoveryInFlight = prepareRecovery(candidate, errorMessage, ctx || sessionCtx)
         .finally(() => { recoveryInFlight = null; });
