@@ -622,7 +622,7 @@ test("model_select shows realtime UI and non-realtime selection clears it", asyn
 
   handlers.get("model_select")?.({ model: realtimeModel, source: "set" }, ctx);
   assert.ok(widgets.has("realtime-status"));
-  assert.ok(statuses.has("realtime"));
+  assert.equal(statuses.has("realtime"), false, "disconnected realtime model does not occupy footer status");
 
   statuses.set("rt-audio", "cached clip");
   handlers.get("model_select")?.({ model: textModel, previousModel: realtimeModel, source: "set" }, ctx);

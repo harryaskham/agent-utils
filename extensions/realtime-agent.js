@@ -689,7 +689,8 @@ class RealtimeSession {
   }
 
   updateStatus(ctx = this.lastCtx) {
-    try { ctx?.ui?.setStatus?.("realtime", this.statusText()); } catch {}
+    const active = this.connected || this.connecting || Boolean(this.current) || Boolean(this.mic) || this.config.sttOnly;
+    try { ctx?.ui?.setStatus?.("realtime", active ? this.statusText() : undefined); } catch {}
     try {
       if (this.config.statusWidgetVisible) {
         ctx?.ui?.setWidget?.("realtime-status", realtimePanelLines(this, this.config), { placement: "belowEditor" });

@@ -57,6 +57,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
 
     const state = {
       branch: "",
+      inGitRepo: false,
       additions: 0,
       deletions: 0,
       footerData: null,
@@ -74,8 +75,10 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
           pi.exec("git", ["branch", "--show-current"], { timeout: 4000 }),
           pi.exec("git", ["diff", "--numstat", "HEAD", "--"], { timeout: 4000 }),
         ]);
-        if (branch?.code === 0) state.branch = String(branch.stdout || "").trim();
-        if (diff?.code === 0) Object.assign(state, parseNumstat(diff.stdout));
+        state.inGitRepo = branch?.code === 0 && Boolean(String(branch.stdout || "").trim());
+        state.branch = state.inGitRepo ? String(branch.stdout || "").trim() : "";
+        if (state.inGitRepo && diff?.code === 0) Object.assign(state, parseNumstat(diff.stdout));
+        else Object.assign(state, { additions: 0, deletions: 0 });
       } catch {
         // Non-git cwd or a transient command failure leaves the last stable data.
       } finally {
@@ -109,7 +112,8 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         contextPct: Number.isFinite(contextPct) ? contextPct : 0,
         contextMax: Number.isFinite(contextMax) ? contextMax : 0,
         directory: prettyDirectory(ctx.cwd || process.cwd(), env.HOME || env.USERPROFILE),
-        branch: footerBranch || state.branch || "no-branch",
+        branch: footerBranch || state.branch,
+        inGitRepo: state.inGitRepo || Boolean(footerBranch),
         additions: state.additions,
         deletions: state.deletions,
       };
@@ -130,7 +134,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
             state.footerData = footerData;
             const statuses = (() => {
               try { return [...(footerData?.getExtensionStatuses?.() || new Map()).values()]; } catch { return []; }
-            })().map(sanitizeStatus).filter((text) => text && !/\bMCP\s*\(?\s*\d+/i.test(text));
+            })().map(sanitizeStatus).filter((text) => text && !/(?:\bMCP\s*:?\s*\(?\s*\d+|🔌\s*MCP)/i.test(text));
             if (statuses.length === 0) return [];
             const line = theme.fg("dim", statuses.join(" "));
             return [clampRenderedLineToWidth(line, width)];

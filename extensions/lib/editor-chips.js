@@ -174,12 +174,13 @@ function renderParts(parts, { divider = "chevron" } = {}) {
   let out = `${fg(safe[0].background)}${POWERLINE.left}`;
   safe.forEach((entry, index) => {
     if (index > 0) {
-      if (divider === "vertical") out += `${fg(entry.foreground)}${bg(entry.background)} ${POWERLINE.vertical}`;
-      else if (divider === "rounded") out += `${reset()}${fg(safe[index - 1].background)}${POWERLINE.right}${reset()}`;
+      if (divider === "vertical") out += `${fg(safe[index - 1].background)}${bg(entry.background)} ${POWERLINE.vertical}`;
+      else if (divider === "rounded") out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.right}`;
       else out += `${fg(safe[index - 1].background)}${bg(entry.background)}${POWERLINE.chevron}`;
     }
+    const leading = index > 0 && divider === "vertical" ? "" : " ";
     const trailing = index < safe.length - 1 && divider === "vertical" ? "" : " ";
-    out += `${fg(entry.foreground)}${bg(entry.background)} ${entry.text}${trailing}`;
+    out += `${fg(entry.foreground)}${bg(entry.background)}${leading}${entry.text}${trailing}`;
   });
   out += `${reset()}${fg(safe[safe.length - 1].background)}${POWERLINE.right}${reset()}`;
   return out;
@@ -217,10 +218,10 @@ function chipFor(field, values, theme) {
     case "model": return renderParts([part(values.provider || "model", p.nord3), part(values.model || "n/a", p.white, p.nord3)]);
     case "effort": return renderParts([part(values.effort || "off", p.effort)]);
     case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
-    case "branch": return renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch || "no-branch", p.nord3)])], { divider: "rounded" });
-    case "diff": return renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" });
+    case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
+    case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
     case "mcp": return renderParts([part(`${values.mcpCount || 0}`, p.magenta), part("MCP", p.nord3)], { divider: "vertical" });
-    case "cost": return renderParts([part(`$${Number(values.cost || 0).toFixed(2)}`, p.green, darken(p.green, 0.42))]);
+    case "cost": return renderParts([part(`$${Number(values.cost || 0).toFixed(2)}`, darken(p.green), p.green)]);
     case "context": {
       const pct = Number(values.contextPct || 0);
       if (pct > 80) return renderParts([
@@ -228,8 +229,8 @@ function chipFor(field, values, theme) {
         part(formatChipTokens(values.contextMax), p.red, [0, 0, 0]),
       ], { divider: "vertical" });
       return renderParts([
-        part(`${pct.toFixed(1)}%`, p.context),
-        part(formatChipTokens(values.contextMax), p.grey),
+        part(`${pct.toFixed(1)}%`, pct < 40 ? p.green : p.context, pct < 40 ? darken(p.green, 0.42) : undefined),
+        part(formatChipTokens(values.contextMax), p.grey, p.nord3),
       ], { divider: "vertical" });
     }
     default: return "";
