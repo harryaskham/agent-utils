@@ -38,6 +38,12 @@ Payloads may include `source`, `raw`, and the active `sessionId`. A mismatched
 `agent-utils:choice-session` with `status: started|ended` so adapters attach only
 while needed and release resources immediately afterward.
 
+## RPC and Pi Daemon input
+
+In `ctx.mode === "rpc"`, Agent Utils uses Pi's typed SDK UI protocol rather than terminal hooks or widgets. `ctx.ui.select(question, options, { signal })` emits an `extension_ui_request`; the authorized RPC controller returns the selected option. Appended freeform controls continue through `ctx.ui.input`. Cancellation, timeout, abort, Cacophony resolution, duplicate responses, and late responses settle the exact pending tool at most once.
+
+If an RPC host does not implement typed `ctx.ui.select`, `interactive_choice` fails immediately with a clear tool error. It never installs a terminal-input widget in RPC mode, because RPC terminal input is intentionally unavailable and would leave the tool waiting forever.
+
 ## Keyboard input
 
 While a choice is visible:

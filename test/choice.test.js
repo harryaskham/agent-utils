@@ -490,6 +490,75 @@ test("Escape dismisses the choice, preserves editor text, and waits for the next
   assert.equal(result.details.reason, "freeform");
 });
 
+test("RPC choice uses typed select and resolves the exact response once", async () => {
+  const h = harness();
+  h.ctx.mode = "rpc";
+  const calls = [];
+  h.ctx.ui.select = async (title, options, config) => {
+    calls.push({ title, options, config });
+    return options[1];
+  };
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, persistedSettings: { choice: {}, tts: {} } })(h.pi);
+  const result = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
+  assert.equal(result.details.status, "selected");
+  assert.equal(result.details.choice.label, "beta");
+  assert.equal(result.details.source, "rpc");
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].options[1], /^2\. Beta/);
+  assert.ok(calls[0].config.signal instanceof AbortSignal);
+  assert.equal(h.widgets.size, 0, "RPC never installs a terminal-only widget");
+});
+
+test("RPC typed cancellation, timeout, external resolution, and missing surface settle promptly", async () => {
+  const cancel = harness();
+  cancel.ctx.mode = "rpc";
+  cancel.ctx.ui.select = async () => undefined;
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} } })(cancel.pi);
+  const cancelled = await cancel.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, cancel.ctx);
+  assert.equal(cancelled.details.reason, "rpc-cancelled");
+
+  const missing = harness();
+  missing.ctx.mode = "rpc";
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} } })(missing.pi);
+  const failed = await missing.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, missing.ctx);
+  assert.equal(failed.details.status, "error");
+  assert.match(failed.details.error, /typed ctx\.ui\.select/);
+
+  const jobs = [];
+  const timeout = harness();
+  timeout.ctx.mode = "rpc";
+  timeout.ctx.ui.select = (_title, _options, { signal }) => new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true }));
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { timeoutMs: 20 }, tts: {} },
+    setTimer(fn, ms) { const job = { fn, ms }; jobs.push(job); return job; },
+    clearTimer() {},
+  })(timeout.pi);
+  const pending = timeout.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 20 }, null, null, timeout.ctx);
+  await Promise.resolve();
+  jobs.find((job) => job.ms === 20).fn();
+  const timed = await pending;
+  assert.equal(timed.details.status, "timeout");
+
+  let externalResolve;
+  let lateSelect;
+  const external = harness();
+  external.ctx.mode = "rpc";
+  external.ctx.ui.select = () => new Promise((resolve) => { lateSelect = resolve; });
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    cacophonyBridge: { config: { enabled: true }, start({ onResolution }) { externalResolve = onResolution; return { settleLocal() {} }; } },
+  })(external.pi);
+  const externalPending = external.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, external.ctx);
+  await Promise.resolve();
+  externalResolve({ status: "selected", index: 2, source: "cacophony" });
+  const externalResult = await externalPending;
+  assert.equal(externalResult.details.choice.label, "gamma");
+  lateSelect("1. Alpha");
+  await Promise.resolve();
+  assert.equal(externalResult.details.choice.label, "gamma", "late RPC response cannot settle twice");
+});
+
 test("choice timeout resolves without inventing a selection", async () => {
   const h = harness();
   createChoiceExtension({ speaker: { speak: async () => {}, dispose() {} }, persistedSettings: { choice: { timeoutMs: 30000 }, tts: {} } })(h.pi);

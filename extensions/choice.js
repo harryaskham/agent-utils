@@ -168,6 +168,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       record.repeatTimer = null;
       try { record.terminalUnsub?.(); } catch {}
       record.terminalUnsub = null;
+      try { record.rpcAbort?.abort?.(); } catch {}
+      record.rpcAbort = null;
       if (record.customDone) {
         const done = record.customDone;
         record.customDone = null;
@@ -390,6 +392,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           freeformText: "",
           scheduleRepeat: null,
           terminalUnsub: null,
+          rpcAbort: null,
           onAbort: null,
           warnedSpeech: false,
           awaitingFreeform: false,
@@ -471,12 +474,62 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           }).catch((error) => {
             if (!record.finished) finish(record, { status: "error", error: error?.message || String(error), index: state.index, choice: state.current() });
           });
+        } else if (ctx?.mode === "rpc") {
+          if (typeof ctx?.ui?.select !== "function") {
+            finish(record, { status: "error", error: "RPC interactive_choice requires the typed ctx.ui.select surface", index: state.index, choice: state.current() });
+          } else {
+            record.rpcAbort = new AbortController();
+            const labels = choices.map((choice, index) => `${index + 1}. ${choice.headline}${choice.summary ? ` — ${choice.summary}` : ""}`);
+            void (async () => {
+              while (!record.finished) {
+                let selected;
+                try { selected = await ctx.ui.select(question, labels, { signal: record.rpcAbort.signal }); }
+                catch (error) {
+                  if (!record.finished) finish(record, { status: "error", error: error?.message || String(error), index: state.index, choice: state.current() });
+                  return;
+                }
+                if (record.finished) return;
+                if (selected === undefined) {
+                  finish(record, { status: "cancelled", reason: "rpc-cancelled", index: state.index, choice: state.current(), source: "rpc" });
+                  return;
+                }
+                const index = labels.indexOf(selected);
+                if (index < 0) {
+                  finish(record, { status: "error", error: "RPC choice returned an unknown option", index: state.index, choice: state.current() });
+                  return;
+                }
+                handleInput({ action: INPUT_ACTIONS.CHOOSE_INDEX, index, source: "rpc", sessionId });
+                if (record.finished) return;
+                if (record.freeformMode === "text") {
+                  if (typeof ctx.ui.input !== "function") {
+                    finish(record, { status: "error", error: "RPC freeform choice requires the typed ctx.ui.input surface", index: state.index, choice: state.current() });
+                    return;
+                  }
+                  let text;
+                  try { text = await ctx.ui.input(`${question} — reply`, "", { signal: record.rpcAbort.signal }); }
+                  catch (error) {
+                    if (!record.finished) finish(record, { status: "error", error: error?.message || String(error), index: state.index, choice: state.current() });
+                    return;
+                  }
+                  if (record.finished) return;
+                  if (text === undefined) {
+                    handleInput({ action: INPUT_ACTIONS.FREEFORM_CANCEL, source: "rpc", reason: "rpc-input-cancelled", sessionId });
+                    continue;
+                  }
+                  handleInput({ action: INPUT_ACTIONS.FREEFORM_SUBMIT, text, source: "rpc", sessionId });
+                  if (record.finished) return;
+                }
+              }
+            })();
+          }
         } else {
-          // RPC/older-runtime fallback: consume recognized controls through the
-          // terminal-input hook and render a normal widget.
+          // Older interactive runtimes may lack custom(); retain their terminal
+          // hook, but never use it for RPC where terminal input is intentionally
+          // unavailable and would deadlock the tool.
           record.terminalUnsub = ctx?.ui?.onTerminalInput?.((data) => dispatchKeyboard(data) ? { consume: true } : undefined) || null;
           try { ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(question, choices, state.index), { placement: "belowEditor" }); } catch {}
         }
+        if (record.finished) return;
         // Keep the process alive while an interactive tool is awaiting input;
         // unlike background refresh timers, this timeout resolves a live call.
         if (timeoutMs > 0) record.timer = setTimer(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
