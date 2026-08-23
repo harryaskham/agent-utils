@@ -164,13 +164,15 @@ test("editor extension wraps an existing gfx editor and draws chips after its ra
   let editorFactory;
   let footer;
   let delegated = "";
-  const previous = () => ({
+  const baseComponent = {
     focused: false,
+    wantsKeyRelease: true,
     render: () => ["gfx-top-placeholder", "editor", "gfx-bottom-placeholder"],
     handleInput: (data) => { delegated = data; },
     getText: () => "preserved editor text",
     invalidate() {},
-  });
+  };
+  const previous = () => baseComponent;
   const ctx = {
     mode: "tui",
     cwd: "/tmp/project",
@@ -201,6 +203,14 @@ test("editor extension wraps an existing gfx editor and draws chips after its ra
   })(pi);
   await handlers.get("session_start")[0]({}, ctx);
   const editor = editorFactory(tui, theme, {});
+  assert.equal(editor, baseComponent, "chrome decorates the exact host editor instead of replacing it with a proxy");
+  assert.equal(editor.wantsKeyRelease, true);
+  editor.handleInput("\u001b");
+  assert.equal(delegated, "\u001b");
+  editor.handleInput("\u0003");
+  assert.equal(delegated, "\u0003");
+  editor.handleInput("\u001b[99;5u");
+  assert.equal(delegated, "\u001b[99;5u", "Kitty CSI-u Ctrl-C reaches the host editor unchanged");
   editor.handleInput("x");
   assert.equal(delegated, "x");
   assert.equal(editor.getText(), "preserved editor text");

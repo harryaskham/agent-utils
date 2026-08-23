@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { readAgentSettings, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
-import { getOrCreateEditorChromeRegistry, wrapEditorComponent } from "./pi-graphics/fullscreen-contract.js";
+import { getOrCreateEditorChromeRegistry } from "./pi-graphics/fullscreen-contract.js";
 import {
   buildEditorChipRails,
   parseMcpCount,
@@ -172,12 +172,20 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         priority: 20,
         decorate(base, { tui, theme }) {
           state.tui = tui;
-          return wrapEditorComponent(base, {
-            renderRows(baseLines, width) {
+          if (!base || typeof base.render !== "function") return base;
+          // Preserve the exact host editor object. Pi routes global abort,
+          // key-release, focus and hardware-cursor behavior through that full
+          // component; a proxy-shaped partial wrapper can break Escape/Ctrl-C.
+          if (!base.__agentUtilsEditorChipsRender) {
+            const originalRender = base.render.bind(base);
+            base.__agentUtilsEditorChipsRender = originalRender;
+            base.render = (width) => {
+              const baseLines = originalRender(width);
               const rails = buildEditorChipRails({ width, config, values: valuesFor(ctx), theme });
               return clampRenderedRowsToWidth(replaceEditorRails(baseLines, baseLines, rails), width);
-            },
-          });
+            };
+          }
+          return base;
         },
       });
       installFooter(ctx);
