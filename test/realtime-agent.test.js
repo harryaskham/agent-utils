@@ -175,6 +175,7 @@ test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
 
 function makeHarness({ models = new Map(), initialModel } = {}) {
   const commands = new Map();
+  const shortcuts = new Map();
   const tools = new Map();
   const handlers = new Map();
   const providers = new Map();
@@ -219,6 +220,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
 
   const pi = {
     registerCommand(name, definition) { commands.set(name, definition); },
+    registerShortcut(name, definition) { shortcuts.set(name, definition); },
     getCommand(name) { return commands.get(name); },
     registerMessageRenderer() {},
     sendMessage(message, options) { sentMessages.push({ message, options }); },
@@ -252,7 +254,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     return { cancelled: false };
   };
 
-  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, editorText, editorTextSets, sendTerminalInput, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
+  return { pi, commands, shortcuts, tools, handlers, providers, widgets, statuses, notifications, editorText, editorTextSets, sendTerminalInput, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -1930,29 +1932,60 @@ test("empty-editor Space starts local PTT; Ctrl-Space toggles local VAD; ordinar
     realtimeAgentExtension(h.pi);
     h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
 
-    const pttResults = h.sendTerminalInput(" ");
+    await h.shortcuts.get("space").handler(h.ctx);
     await waitFor(() => captures.length === 1);
-    assert.ok(pttResults.some((r) => r?.consume), "empty-editor PTT shortcut consumes Space");
     assert.match(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
     h.sendTerminalInput("\u0003");
     await waitFor(() => captures[0].killed);
 
     h.ctx.ui.setEditorText("already typing");
-    const passResults = h.sendTerminalInput(" ");
+    await h.shortcuts.get("space").handler(h.ctx);
     await new Promise((r) => setTimeout(r, 5));
     assert.equal(captures.length, 1, "Space with non-empty editor does not start capture");
-    assert.ok(passResults.every((r) => !r?.consume), "ordinary Space passes through");
 
     h.ctx.ui.setEditorText("");
-    const vadResults = h.sendTerminalInput("\u0000");
+    await h.shortcuts.get("ctrl+space").handler(h.ctx);
     await waitFor(() => captures.length === 2);
-    assert.ok(vadResults.some((r) => r?.consume), "Ctrl-Space consumes and starts local VAD");
     assert.doesNotMatch(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
-    h.sendTerminalInput("\u0000");
+    await h.shortcuts.get("ctrl+space").handler(h.ctx);
     await waitFor(() => captures[1].killed);
   } finally {
     if (previous === undefined) delete process.env.PI_RT_STT_SHORTCUTS_ENABLED;
     else process.env.PI_RT_STT_SHORTCUTS_ENABLED = previous;
+    __setLocalVadHooksForTest({});
+  }
+});
+
+test("choice modal exclusively owns Space/Enter while global speech shortcuts stay inert", async () => {
+  const captures = [];
+  const captureFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => {};
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "choice reply" });
+  try {
+    const h = makeHarness();
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+    h.pi.events.emit("agent-utils:choice-session", { status: "started", sessionId: "choice-exclusive" });
+
+    const terminal = h.sendTerminalInput(" ");
+    assert.ok(terminal.every((result) => !result?.consume), "raw global listener never steals modal Space");
+    assert.equal(captures.length, 0);
+
+    await h.shortcuts.get("space").handler(h.ctx);
+    assert.ok(h.emittedEvents.some(({ name, payload }) => name === INPUT_ACTION_EVENT && payload.action === INPUT_ACTIONS.FREEFORM_ENTER && payload.sessionId === "choice-exclusive"));
+    await waitFor(() => captures.length === 1, 1000);
+
+    const enter = h.sendTerminalInput("\r");
+    assert.ok(enter.some((result) => result?.consume), "choice-owned PTT release consumes modal Enter");
+    assert.equal(h.sentUserMessages.length, 0, "choice PTT never queues a normal user message behind the choice");
+    h.pi.events.emit("agent-utils:choice-session", { status: "ended", sessionId: "choice-exclusive" });
+  } finally {
     __setLocalVadHooksForTest({});
   }
 });

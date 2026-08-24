@@ -155,7 +155,10 @@ A choice is not limited to its numbered rows:
   main Pi editor.
 - Press **Space** from the choice list to start a local-VAD push-to-talk reply.
   Speak, then press Enter or Space to finish. Escape or Ctrl-C cancels the
-  capture and returns to the choice.
+  capture and returns to the choice. While a choice is active, it is the sole
+  owner of Space/Enter/Escape/Ctrl-C: the ordinary editor PTT shortcut is
+  suppressed, and the final transcript resolves the choice instead of queuing a
+  normal user message behind the waiting tool.
 
 Text and successful PTT transcription resolve `interactive_choice` with
 `status: "freeform"`, the exact non-empty `text`, and its source. PTT partials
@@ -163,6 +166,11 @@ render inside the choice flow; they do not populate or submit the main editor.
 Empty, cancelled, or failed captures return to the choice list without inventing
 an answer. The choice timeout and spoken-repeat timers pause while text or PTT
 entry owns the modal and resume if entry is cancelled.
+
+Outside choices, empty-editor Space and Ctrl-Space are Pi editor shortcuts rather
+than raw terminal listeners. This keeps them inactive while MCP selectors,
+settings dialogs, overlays, and other focused custom components use Space for
+their own controls.
 
 These transitions use the generic `agent-utils:input-action` bus:
 `freeform-enter`, `freeform-update`, `freeform-submit`, `freeform-cancel`, and
