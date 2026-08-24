@@ -130,6 +130,8 @@ function renderChoiceDialog(question, choices, index, timeoutMs, width, theme, f
   return lines;
 }
 
+const CHOICE_UI_UNAVAILABLE_RE = /(?:extension_ui_unavailable|no controller client is attached|requires an attached controller client|interactive extension UI (?:is )?unavailable)/i;
+
 function resultText(result) {
   if (result?.status === "selected") return `selected ${result.index + 1}: ${result.choice?.label}`;
   if (result?.status === "freeform") return `freeform reply: ${result.text}`;
@@ -137,6 +139,46 @@ function resultText(result) {
   if (result?.status === "timeout") return `choice timed out after ${result.timeoutMs}ms`;
   if (result?.status === "cancelled") return `choice cancelled (${result.reason || "cancelled"})`;
   return `choice failed: ${result?.error || "unknown error"}`;
+}
+
+function entryIsForcedChoiceRequest(entry) {
+  return entry?.customType === FORCE_CHOICE_CUSTOM_TYPE
+    || (entry?.type === "message" && entry?.message?.role === "custom" && entry.message.customType === FORCE_CHOICE_CUSTOM_TYPE);
+}
+
+function interactiveChoiceToolResult(entry) {
+  const message = entry?.type === "message" ? entry.message : null;
+  if (message?.role !== "toolResult" || message.toolName !== "interactive_choice") return null;
+  const content = typeof message.content === "string"
+    ? message.content
+    : Array.isArray(message.content)
+      ? message.content.filter((item) => item?.type === "text").map((item) => item.text || "").join("\n")
+      : "";
+  return [message.details?.code, message.details?.error, content].filter(Boolean).join("\n");
+}
+
+// A Pi-Daemon process may reload the fixed extension while retaining a session
+// transcript produced by the old livelocking implementation. Recover from that
+// tail before agent_end can buy one more impossible model turn: the newest force
+// request followed by an unavailable interactive_choice result is authoritative
+// evidence that force mode must stand down for this session. No transcript edit
+// is required; unrelated historical failures do not count because only the
+// newest force request and its first choice result are considered.
+export function hasUnavailableForcedChoiceTail(entries) {
+  if (!Array.isArray(entries)) return false;
+  let forceIndex = -1;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entryIsForcedChoiceRequest(entries[index])) {
+      forceIndex = index;
+      break;
+    }
+  }
+  if (forceIndex < 0) return false;
+  for (let index = forceIndex + 1; index < entries.length; index += 1) {
+    const result = interactiveChoiceToolResult(entries[index]);
+    if (result !== null) return CHOICE_UI_UNAVAILABLE_RE.test(result);
+  }
+  return false;
 }
 
 export function createChoiceExtension({ speaker, cacophonyBridge, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
@@ -190,7 +232,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       lastResult = result;
       const unavailableForcedUi = record.forcedPresentation === true
         && result?.status === "error"
-        && /(?:no controller client is attached|requires an attached controller client|interactive extension UI (?:is )?unavailable)/i.test(String(result?.error || ""));
+        && CHOICE_UI_UNAVAILABLE_RE.test(`${String(result?.code || "")}\n${String(result?.error || "")}`);
       const discardedDurableForce = record.forcedPresentation === true
         && result?.source === "cacophony"
         && /discard/i.test(String(result?.reason || result?.action || ""));
@@ -703,6 +745,23 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         const result = await elicit({ question, choices: labels.map((label) => ({ label })) }, ctx);
         ctx.ui.notify(resultText(result), result.status === "selected" ? "info" : "warning");
       },
+    });
+
+    pi.on("session_start", (_event, ctx) => {
+      if (!choiceConfig.forceAtAgentEnd) return;
+      let entries = [];
+      try { entries = ctx?.sessionManager?.getBranch?.() || ctx?.sessionManager?.getEntries?.() || []; }
+      catch { entries = []; }
+      if (!hasUnavailableForcedChoiceTail(entries)) return;
+      choiceConfig.forceAtAgentEnd = false;
+      forcedRequestOutstanding = false;
+      warnedUnsatisfiedForce = true;
+      try {
+        ctx?.ui?.notify?.(
+          "force-choice disabled for this session: recovered a prior no-controller UI failure without starting another agent turn.",
+          "warning",
+        );
+      } catch {}
     });
 
     pi.registerCommand("force-choice", {

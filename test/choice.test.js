@@ -14,7 +14,13 @@ import {
   keyboardChoiceAction,
   normalizeChoices,
 } from "../extensions/lib/choice.js";
-import { createChoiceExtension, normalizeChoiceAppendEntries, resolveChoiceSettings } from "../extensions/choice.js";
+import {
+  FORCE_CHOICE_CUSTOM_TYPE,
+  createChoiceExtension,
+  hasUnavailableForcedChoiceTail,
+  normalizeChoiceAppendEntries,
+  resolveChoiceSettings,
+} from "../extensions/choice.js";
 
 // Managed test processes inherit CACO_AGENT_ID/CACO_PROJECT. Never mirror unit
 // test choices into the operator's durable Cacophony choice queue.
@@ -671,6 +677,70 @@ test("force-choice stands down when no controller UI is attached", async () => {
   await h.commands.get("force-choice").handler("on", h.ctx);
   h.handlers.get("agent_end")({}, h.ctx);
   assert.equal(h.sentMessages.length, 2, "explicit runtime re-arm remains available");
+});
+
+test("unavailable forced-choice history detection uses only the newest forced result", () => {
+  const forced = (id) => ({ type: "custom_message", id, customType: FORCE_CHOICE_CUSTOM_TYPE, content: "force" });
+  const result = (id, error) => ({
+    type: "message",
+    id,
+    message: {
+      role: "toolResult",
+      toolName: "interactive_choice",
+      content: [{ type: "text", text: error ? `choice failed: ${error}` : "selected 1: continue" }],
+      details: error ? { status: "error", code: "extension_ui_unavailable", error } : { status: "selected" },
+    },
+  });
+
+  assert.equal(hasUnavailableForcedChoiceTail([]), false);
+  assert.equal(hasUnavailableForcedChoiceTail([forced("a")]), false, "request without a result is not classified");
+  assert.equal(
+    hasUnavailableForcedChoiceTail([forced("a"), result("b", "interactive extension UI requires an attached controller client")]),
+    true,
+  );
+  assert.equal(
+    hasUnavailableForcedChoiceTail([
+      forced("old"),
+      result("old-result", "no controller client is attached"),
+      forced("new"),
+      result("new-result", null),
+    ]),
+    false,
+    "a newer successful forced choice supersedes an old unavailable result",
+  );
+});
+
+test("session reload recovers a stale headless force-choice tail without another paid turn", async () => {
+  const h = harness();
+  h.ctx.sessionManager = {
+    getBranch: () => [
+      { type: "custom_message", id: "forced", customType: FORCE_CHOICE_CUSTOM_TYPE, content: "force" },
+      {
+        type: "message",
+        id: "failed",
+        message: {
+          role: "toolResult",
+          toolName: "interactive_choice",
+          content: [{ type: "text", text: "choice failed: interactive extension UI requires an attached controller client" }],
+          details: { status: "error", code: "extension_ui_unavailable" },
+        },
+      },
+    ],
+  };
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
+  })(h.pi);
+
+  h.handlers.get("session_start")({}, h.ctx);
+  h.handlers.get("agent_end")({}, h.ctx);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 0, "reload recovery injects no second force turn");
+  assert.equal(h.notifications.filter(({ message }) => /recovered a prior no-controller/.test(message)).length, 1);
+
+  await h.commands.get("force-choice").handler("on", h.ctx);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 1, "explicit runtime re-arm remains possible after recovery");
 });
 
 test("discarded durable forced choice stands down instead of reinjecting", async () => {

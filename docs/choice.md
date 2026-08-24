@@ -227,8 +227,13 @@ extension warns and does not inject repeatedly. Presenting a real choice satisfi
 and rearms it for the next agent end. If presentation fails because no controller
 client/UI is attached, force mode disables itself for the current session and
 emits one bounded warning; it never turns an impossible modal into an agent-end
-retry loop. A durable Cacophony discard has the same stand-down semantics.
-`/force-choice on` can re-arm intentionally after a controller attaches.
+retry loop. On extension/session reload, the newest forced-choice request and
+its first tool result are inspected: a retained unavailable-UI tail disables
+force mode before `agent_end`, so sessions created by an older livelocking
+extension recover without transcript editing or one more paid model turn. A
+newer successful forced choice supersedes historical failures. A durable
+Cacophony discard has the same stand-down semantics. `/force-choice on` can
+re-arm intentionally after a controller attaches.
 
 A selected option labelled exactly `Stop continuous choices` (also simple
 `stop`, `idle`, `pause`, or `finish`) disables the mode for the current session,
