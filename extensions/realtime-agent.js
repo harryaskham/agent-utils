@@ -3273,7 +3273,7 @@ export default function realtimeAgentExtension(pi) {
             try { ctx.ui.notify(localVad.lastError, "warning"); } catch {}
             return;
           }
-          const identity = getCacophonyRuntimeIdentity(process.env, pi);
+          const identity = getCacophonyRuntimeIdentity();
           fileQuickfileUtterance(finalText, { project: identity.project || undefined, agentId: identity.agentId || undefined })
             .then((res) => {
               if (res.ok) {

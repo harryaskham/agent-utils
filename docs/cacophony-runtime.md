@@ -19,17 +19,9 @@ The runtime recognizes:
 - agent: `CACO_AGENT_ID`, `CACOPHONY_AGENT_ID`, then legacy `CACOPHONY_AGENT`
 - project: `CACO_PROJECT`, then `CACOPHONY_PROJECT`
 
-An explicit complete agent/project pair normally wins and no visiting registration is attempted.
+An explicit complete agent/project pair always wins and no visiting registration is attempted.
 
-For shared-process Pi-Daemon sessions, Cacophony supplies the same values through
-Pi's session-scoped extension flags: `caco-agent-id`, `caco-project`, and
-`disable-pi-caco`. Flags take precedence over ambient `process.env`, because the
-host process environment belongs to Pi-Daemon rather than any logical session.
-Each Pi `ExtensionAPI` instance owns an independent runtime identity context;
-module-global identity is never used for managed logical sessions. This prevents
-two concurrent agents from inheriting or overwriting each other's identity.
-
-Other Agent Utils extensions resolve identity from `extensions/lib/cacophony-runtime.js`, so a visiting or logical-session identity becomes usable immediately without mutating `process.env`. Child Cacophony processes receive the resolved identity only in their own scoped environment.
+Other Agent Utils extensions resolve identity from `extensions/lib/cacophony-runtime.js`, so a visiting identity becomes usable immediately without mutating `process.env`. Child Cacophony processes receive the resolved identity only in their own scoped environment.
 
 ## Visiting-agent auto-registration
 
@@ -114,9 +106,6 @@ ambient multi-server adapter.
 ## Security and lifecycle
 
 - Settings and parent-process startup environment are never rewritten.
-- Pi-Daemon must inject the three session extension flags alongside its existing
-  `runtimeOptions.environmentOverlay`; Agent Utils fails back to ordinary
-  process environment only for single-session Pi compatibility.
 - Registration uses the existing `caco` CLI and its configured local daemon/auth policy.
 - No identity is inferred from a timeout, malformed response, or failed command.
 - A project-less session never registers.

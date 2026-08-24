@@ -186,18 +186,18 @@ test("identity changes replace one owned registration and duplicate events are d
     },
   })(h.pi);
   await h.fire("session_start");
-  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true }, h.pi);
-  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true }, h.pi);
+  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true });
+  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true });
   await settle();
   await settle();
   assert.equal(registrations.length, 1);
-  setCacophonyRuntimeIdentity({ agentId: "visitor-b", project: "p", visiting: true }, h.pi);
+  setCacophonyRuntimeIdentity({ agentId: "visitor-b", project: "p", visiting: true });
   await settle();
   assert.equal(registrations.length, 2);
   assert.equal(disposals.length, 1);
   await h.fire("session_shutdown");
   assert.equal(disposals.length, 2);
-  clearCacophonyRuntimeIdentity(h.pi);
+  clearCacophonyRuntimeIdentity();
 });
 
 test("adapter registration failure warns once and leaves Pi commands functional", async () => {
