@@ -643,6 +643,67 @@ test("/force-choice injects once at agent_end, requires interactive_choice, then
   assert.equal(h.sentMessages.length, 2, "a real choice satisfies and rearms the next end-of-agent request");
 });
 
+test("force-choice stands down when no controller UI is attached", async () => {
+  const h = harness();
+  h.ctx.mode = "tui";
+  h.ctx.ui.custom = () => Promise.reject(new Error("interactive extension UI requires an attached controller client"));
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
+  })(h.pi);
+
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 1);
+  const result = await h.tools.get("interactive_choice").execute(
+    "forced",
+    { question: "Next?", choices: choices.slice(0, 2), timeoutMs: 0 },
+    null,
+    null,
+    h.ctx,
+  );
+  assert.equal(result.details.status, "error");
+  assert.match(result.details.error, /attached controller client/);
+  h.handlers.get("agent_end")({}, h.ctx);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 1, "unavailable forced UI disables the session loop");
+  assert.equal(h.notifications.filter(({ message }) => /force-choice disabled/.test(message)).length, 1);
+
+  await h.commands.get("force-choice").handler("on", h.ctx);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 2, "explicit runtime re-arm remains available");
+});
+
+test("discarded durable forced choice stands down instead of reinjecting", async () => {
+  const h = harness();
+  let resolveExternal;
+  createChoiceExtension({
+    speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
+    cacophonyBridge: {
+      start({ onResolution }) {
+        resolveExternal = onResolution;
+        return { settleLocal: async () => {} };
+      },
+    },
+    persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
+  })(h.pi);
+
+  h.handlers.get("agent_end")({}, h.ctx);
+  const pending = h.tools.get("interactive_choice").execute(
+    "forced",
+    { question: "Next?", choices: choices.slice(0, 2), timeoutMs: 0 },
+    null,
+    null,
+    h.ctx,
+  );
+  await Promise.resolve();
+  resolveExternal({ status: "cancelled", reason: "discarded" });
+  const result = await pending;
+  assert.equal(result.details.status, "cancelled");
+  assert.equal(result.details.reason, "discarded");
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 1, "durable discard disables force mode for this session");
+});
+
 test("q in the true TUI modal hard-stops force-choice and terminates the follow-up", async () => {
   const h = harness();
   let component;

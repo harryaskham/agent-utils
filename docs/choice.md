@@ -224,13 +224,18 @@ injects one tagged custom control message with `deliverAs: followUp` and
 
 The request is deduplicated: if the next run fails to present a choice, the
 extension warns and does not inject repeatedly. Presenting a real choice satisfies
-and rearms it for the next agent end. A selected option labelled exactly `Stop
-continuous choices` (also simple `stop`, `idle`, `pause`, or `finish`) disables
-the mode for the current session, so continuous operation can itself be ended
-from the ring. Durable configuration is `agentUtils.choice.forceAtAgentEnd` or
-`PI_FORCE_CHOICE` (env wins), and defines startup behavior only. Runtime
-`/force-choice on|off`, `/choice settings force=...`, Stop selections, and Escape
-never rewrite that startup policy.
+and rearms it for the next agent end. If presentation fails because no controller
+client/UI is attached, force mode disables itself for the current session and
+emits one bounded warning; it never turns an impossible modal into an agent-end
+retry loop. A durable Cacophony discard has the same stand-down semantics.
+`/force-choice on` can re-arm intentionally after a controller attaches.
+
+A selected option labelled exactly `Stop continuous choices` (also simple
+`stop`, `idle`, `pause`, or `finish`) disables the mode for the current session,
+so continuous operation can itself be ended from the ring. Durable configuration
+is `agentUtils.choice.forceAtAgentEnd` or `PI_FORCE_CHOICE` (env wins), and
+defines startup behavior only. Runtime `/force-choice on|off`, `/choice settings
+force=...`, Stop selections, and Escape never rewrite that startup policy.
 
 The TUI implementation is a true `ctx.ui.custom` modal, not a below-editor
 widget: it owns focus, captures arrow sequences before the editor, and swallows

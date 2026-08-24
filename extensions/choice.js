@@ -188,14 +188,25 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       record.signal?.removeEventListener?.("abort", record.onAbort);
       if (active === record) active = null;
       lastResult = result;
+      const unavailableForcedUi = record.forcedPresentation === true
+        && result?.status === "error"
+        && /(?:no controller client is attached|requires an attached controller client|interactive extension UI (?:is )?unavailable)/i.test(String(result?.error || ""));
+      const discardedDurableForce = record.forcedPresentation === true
+        && result?.source === "cacophony"
+        && /discard/i.test(String(result?.reason || result?.action || ""));
       if (
         choiceConfig.forceAtAgentEnd && (
           (result?.status === "selected" && /^(?:stop|idle|pause|finish|stop continuous choices)$/i.test(String(result.choice?.label || "").trim()))
           || (result?.terminal === true && result?.action === "discard")
+          || unavailableForcedUi
+          || discardedDurableForce
         )
       ) {
         choiceConfig.forceAtAgentEnd = false;
         forcedRequestOutstanding = false;
+        if (unavailableForcedUi) {
+          try { record.ctx?.ui?.notify?.("force-choice disabled for this session: no interactive controller UI is attached.", "warning"); } catch {}
+        }
       }
       endInputSession(record, result);
       void record.cacophony?.settleLocal?.(result);
@@ -353,7 +364,11 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
     const elicit = async (params, ctx, signal, onUpdate) => {
       const question = String(params?.question ?? params?.prompt ?? "").trim();
       if (!question) throw new Error("choice: question is required");
-      // Any real choice presentation satisfies a pending /force-choice request.
+      // Remember whether this presentation was requested by agent_end before
+      // clearing the one-shot guard. If the controller UI cannot open, finish()
+      // disables force mode for this session instead of letting the next
+      // agent_end inject the same impossible request forever (bd-849b38).
+      const forcedPresentation = forcedRequestOutstanding;
       forcedRequestOutstanding = false;
       warnedUnsatisfiedForce = false;
       const providedChoices = normalizeChoices(params?.choices);
@@ -395,6 +410,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           rpcAbort: null,
           onAbort: null,
           warnedSpeech: false,
+          forcedPresentation,
           awaitingFreeform: false,
           sessionEnded: false,
           finished: false,
