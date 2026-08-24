@@ -140,7 +140,7 @@ export default function forceAgentSpeechExtension(pi) {
       // /rt stt local-vad drops the mic for the spoken window + a release tail,
       // instead of transcribing the reply's echo back as a phantom turn.
       markAssistantSpeaking(estimateSpeechMs(spoken));
-      const identity = getCacophonyRuntimeIdentity();
+      const identity = getCacophonyRuntimeIdentity(process.env, pi);
       await speakRunner(spoken, { project: identity.project, agentId: identity.agentId });
     } catch {
       // best-effort: never break a turn because speech failed.

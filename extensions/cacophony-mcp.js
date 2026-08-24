@@ -147,12 +147,12 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
       return operation;
     };
 
-    const unsubscribeIdentity = onCacophonyRuntimeIdentity((identity) => { void enqueueIdentity(identity); });
+    const unsubscribeIdentity = onCacophonyRuntimeIdentity((identity) => { void enqueueIdentity(identity); }, pi);
 
     pi.registerCommand?.("caco-mcp", {
       description: "Show transient Cacophony MCP registration state for this Pi session.",
       handler: async (_args, ctx) => {
-        const identity = getCacophonyRuntimeIdentity(env);
+        const identity = getCacophonyRuntimeIdentity(env, pi);
         const status = isPiCacoDisabled(env)
           ? "disabled by DISABLE_PI_CACO"
           : registration
@@ -168,7 +168,7 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
       sessionCtx = ctx;
       stopped = false;
       if (isPiCacoDisabled(env)) return;
-      void enqueueIdentity(getCacophonyRuntimeIdentity(env));
+      void enqueueIdentity(getCacophonyRuntimeIdentity(env, pi));
     });
 
     pi.on("session_shutdown", async () => {

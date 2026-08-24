@@ -186,7 +186,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
     const speakerController = speaker || createChoiceSpeaker({ env, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
-    const cacoBridge = cacophonyBridge === false ? null : cacophonyBridge || createCacophonyChoiceBridge({ env, persisted: persistedChoice.cacophony || {}, setTimer, clearTimer });
+    const cacoBridge = cacophonyBridge === false ? null : cacophonyBridge || createCacophonyChoiceBridge({ env, persisted: persistedChoice.cacophony || {}, setTimer, clearTimer, pi });
     let active = null;
     let lastResult = null;
     let nextSessionId = 1;
