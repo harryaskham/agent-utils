@@ -1912,7 +1912,7 @@ test("/stt and /rt-stt default to local VAD + mai-transcribe-1.5 without opening
   }
 });
 
-test("empty-editor Space starts local PTT; Ctrl-Space toggles local VAD; ordinary Space passes through", async () => {
+test("raw Space/Ctrl-Space never start capture; explicit /ptt and /stt own editor speech", async () => {
   const captures = [];
   const captureFn = () => {
     const proc = new EventEmitter();
@@ -1930,31 +1930,40 @@ test("empty-editor Space starts local PTT; Ctrl-Space toggles local VAD; ordinar
     realtimeAgentExtension(h.pi);
     h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
 
-    const pttResults = h.sendTerminalInput(" ");
+    const spaceResults = h.sendTerminalInput(" ");
+    const ctrlSpaceResults = h.sendTerminalInput("\u0000");
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(captures.length, 0, "focus-blind terminal hooks never start capture");
+    assert.ok(spaceResults.every((r) => !r?.consume), "ordinary Space passes through");
+    assert.ok(ctrlSpaceResults.every((r) => !r?.consume), "dialog Ctrl-Space passes through");
+
+    await h.commands.get("ptt").handler("", h.ctx);
     await waitFor(() => captures.length === 1);
-    assert.ok(pttResults.some((r) => r?.consume), "empty-editor PTT shortcut consumes Space");
     assert.match(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
     h.sendTerminalInput("\u0003");
     await waitFor(() => captures[0].killed);
 
-    h.ctx.ui.setEditorText("already typing");
-    const passResults = h.sendTerminalInput(" ");
-    await new Promise((r) => setTimeout(r, 5));
-    assert.equal(captures.length, 1, "Space with non-empty editor does not start capture");
-    assert.ok(passResults.every((r) => !r?.consume), "ordinary Space passes through");
-
-    h.ctx.ui.setEditorText("");
-    const vadResults = h.sendTerminalInput("\u0000");
+    await h.commands.get("stt").handler("vad", h.ctx);
     await waitFor(() => captures.length === 2);
-    assert.ok(vadResults.some((r) => r?.consume), "Ctrl-Space consumes and starts local VAD");
     assert.doesNotMatch(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
-    h.sendTerminalInput("\u0000");
+    await h.commands.get("stt").handler("stop", h.ctx);
     await waitFor(() => captures[1].killed);
   } finally {
     if (previous === undefined) delete process.env.PI_RT_STT_SHORTCUTS_ENABLED;
     else process.env.PI_RT_STT_SHORTCUTS_ENABLED = previous;
     __setLocalVadHooksForTest({});
   }
+});
+
+test("active choice prevents realtime terminal handler from consuming modal keys", async () => {
+  const h = makeHarness();
+  realtimeAgentExtension(h.pi);
+  h.handlers.get("session_start")?.({ reason: "startup" }, h.ctx);
+  h.pi.events.emit("agent-utils:choice-session", { status: "started", sessionId: "choice-keys" });
+  for (const key of [" ", "\r", "\u001b", "\u0003"]) {
+    assert.ok(h.sendTerminalInput(key).every((result) => !result?.consume), `modal key ${JSON.stringify(key)} passes through`);
+  }
+  h.pi.events.emit("agent-utils:choice-session", { status: "ended", sessionId: "choice-keys" });
 });
 
 test("/ptt alias uses local VAD hold mode and never sends on the commit timeout", async () => {
