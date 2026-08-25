@@ -2828,6 +2828,12 @@ export default function realtimeAgentExtension(pi) {
   };
 
   let terminalInputUnsub = null;
+  let activeChoiceSessionId = null;
+  const choiceSessionHandler = (event = {}) => {
+    if (event.status === "started") activeChoiceSessionId = event.sessionId || null;
+    else if (event.status === "ended" && (!event.sessionId || event.sessionId === activeChoiceSessionId)) activeChoiceSessionId = null;
+  };
+  pi.events?.on?.("agent-utils:choice-session", choiceSessionHandler);
   const speechInputState = new SpeechInputStateMachine();
   const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
   const resolvedFastTts = () => {
@@ -2896,6 +2902,9 @@ export default function realtimeAgentExtension(pi) {
 
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = ctx.ui.onTerminalInput?.((data) => {
+      // Custom choice UI is the sole owner of its keys. Raw terminal listeners
+      // are focus-blind and must not steal Space/Enter/Escape/Ctrl-C.
+      if (activeChoiceSessionId) return undefined;
       if (!session.mic) {
         // bd-586f58: editor speech shortcuts are local-only. Empty-editor Space
         // starts PTT; Ctrl-Space (NUL in terminals) toggles always-listening VAD.
@@ -2915,24 +2924,10 @@ export default function realtimeAgentExtension(pi) {
           // startLocalVad, after this always-present shortcut handler.
           return undefined;
         }
-        if (session.current || session.connected || isRealtimeModel(ctx.model)) return undefined;
-        speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
-        const action = speechInputState.terminalAction(data, {
-          editorEmpty: String(ctx.ui.getEditorText?.() ?? "") === "",
-          shortcutsEnabled: localSttShortcutsEnabled(),
-        });
-        if (action.action === "start-ptt") {
-          void startLocalVad(ctx, { hold: true }).catch((e) => {
-            try { ctx.ui.notify(`PTT start failed: ${e?.message || String(e)}`, "error"); } catch {}
-          });
-          return { consume: true };
-        }
-        if (action.action === "start-vad") {
-          void startLocalVad(ctx).catch((e) => {
-            try { ctx.ui.notify(`STT start failed: ${e?.message || String(e)}`, "error"); } catch {}
-          });
-          return { consume: true };
-        }
+        // Pi currently exposes no safe focus predicate for raw terminal hooks.
+        // Starting PTT/VAD from Space here steals keys from MCP selectors and
+        // overlays. Use explicit /ptt or /stt in the normal editor; choice-owned
+        // PTT is granted separately through the semantic input bus.
         return undefined;
       }
       speechInputState.transition(SPEECH_INPUT_MODES.REALTIME);
@@ -2997,6 +2992,8 @@ export default function realtimeAgentExtension(pi) {
   pi.on("session_shutdown", async () => {
     config.autoReconnect = false;
     try { pi.events?.off?.(INPUT_ACTION_EVENT, choiceFreeformInputHandler); } catch {}
+    try { pi.events?.off?.("agent-utils:choice-session", choiceSessionHandler); } catch {}
+    activeChoiceSessionId = null;
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = null;
     stopLocalVad({ flush: false });
