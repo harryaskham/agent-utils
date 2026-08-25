@@ -2828,12 +2828,6 @@ export default function realtimeAgentExtension(pi) {
   };
 
   let terminalInputUnsub = null;
-  let activeChoiceSessionId = null;
-  const choiceSessionHandler = (event = {}) => {
-    if (event.status === "started") activeChoiceSessionId = event.sessionId || null;
-    else if (event.status === "ended" && (!event.sessionId || event.sessionId === activeChoiceSessionId)) activeChoiceSessionId = null;
-  };
-  pi.events?.on?.("agent-utils:choice-session", choiceSessionHandler);
   const speechInputState = new SpeechInputStateMachine();
   const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
   const resolvedFastTts = () => {
@@ -2902,9 +2896,6 @@ export default function realtimeAgentExtension(pi) {
 
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = ctx.ui.onTerminalInput?.((data) => {
-      // A focused custom choice/modal owns all keys. Global terminal listeners
-      // run outside component focus and must never steal Space/Enter/Escape.
-      if (activeChoiceSessionId) return undefined;
       if (!session.mic) {
         // bd-586f58: editor speech shortcuts are local-only. Empty-editor Space
         // starts PTT; Ctrl-Space (NUL in terminals) toggles always-listening VAD.
@@ -2925,9 +2916,23 @@ export default function realtimeAgentExtension(pi) {
           return undefined;
         }
         if (session.current || session.connected || isRealtimeModel(ctx.model)) return undefined;
-        // Editor-only speech starts are registered as Pi shortcuts below. Unlike
-        // this raw terminal listener, editor shortcuts are not dispatched while
-        // selectors/MCP dialogs/custom components own focus.
+        speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
+        const action = speechInputState.terminalAction(data, {
+          editorEmpty: String(ctx.ui.getEditorText?.() ?? "") === "",
+          shortcutsEnabled: localSttShortcutsEnabled(),
+        });
+        if (action.action === "start-ptt") {
+          void startLocalVad(ctx, { hold: true }).catch((e) => {
+            try { ctx.ui.notify(`PTT start failed: ${e?.message || String(e)}`, "error"); } catch {}
+          });
+          return { consume: true };
+        }
+        if (action.action === "start-vad") {
+          void startLocalVad(ctx).catch((e) => {
+            try { ctx.ui.notify(`STT start failed: ${e?.message || String(e)}`, "error"); } catch {}
+          });
+          return { consume: true };
+        }
         return undefined;
       }
       speechInputState.transition(SPEECH_INPUT_MODES.REALTIME);
@@ -2943,36 +2948,6 @@ export default function realtimeAgentExtension(pi) {
       }
       return undefined;
     });
-  });
-
-  pi.registerShortcut?.("space", {
-    description: "Start local push-to-talk from the normal empty editor",
-    handler: async (ctx) => {
-      if (activeChoiceSessionId) {
-        try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "ptt", source: "keyboard", sessionId: activeChoiceSessionId }); } catch {}
-        return;
-      }
-      if (!localSttShortcutsEnabled() || String(ctx.ui.getEditorText?.() ?? "") !== "") return;
-      if (localVad.active || session.current || session.connected || isRealtimeModel(ctx.model)) return;
-      await startLocalVad(ctx, { hold: true }).catch((error) => {
-        try { ctx.ui.notify(`PTT start failed: ${error?.message || String(error)}`, "error"); } catch {}
-      });
-    },
-  });
-
-  pi.registerShortcut?.("ctrl+space", {
-    description: "Toggle local VAD from the normal editor",
-    handler: async (ctx) => {
-      if (activeChoiceSessionId || !localSttShortcutsEnabled()) return;
-      if (localVad.active) {
-        if (!localVad.hold) stopLocalVad();
-        return;
-      }
-      if (session.current || session.connected || isRealtimeModel(ctx.model)) return;
-      await startLocalVad(ctx).catch((error) => {
-        try { ctx.ui.notify(`STT start failed: ${error?.message || String(error)}`, "error"); } catch {}
-      });
-    },
   });
 
   // bd-095b3d: auto-speak the REAL Pi agent's replies aloud when speak-replies
@@ -3024,8 +2999,6 @@ export default function realtimeAgentExtension(pi) {
     try { pi.events?.off?.(INPUT_ACTION_EVENT, choiceFreeformInputHandler); } catch {}
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = null;
-    activeChoiceSessionId = null;
-    try { pi.events?.off?.("agent-utils:choice-session", choiceSessionHandler); } catch {}
     stopLocalVad({ flush: false });
     speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
     try { fastDirectTtsPlayer.dispose(); } catch {}
