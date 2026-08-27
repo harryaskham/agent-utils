@@ -29,6 +29,7 @@ function pngHeader(width, height) {
 test("413 classification is exact and unrelated provider errors stay untouched", () => {
   assert.equal(isImagePayload413(413), true);
   assert.equal(isImagePayload413(400, "413 Request Entity Too Large"), true);
+  assert.equal(isImagePayload413(undefined, 'OpenAI API error (413): {"message":"failed to parse request"}'), true);
   assert.equal(isImagePayload413(401, "unauthorized"), false);
   assert.equal(isImagePayload413(429, "too many requests"), false);
 });
@@ -191,6 +192,29 @@ test("restored Tendril and user images are discovered without current-process to
 test("image message keys are stable for the same attachment", () => {
   const message = { role: "user", content: [{ type: "image", data: "abc" }] };
   assert.equal(imageMessageKey(message), imageMessageKey(structuredClone(message)));
+});
+
+test("agent_end recovers provider 413 when no raw response hook fired", async () => {
+  const imageEntry = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolCallId: "read-agent-end",
+      toolName: "read",
+      content: [{ type: "text", text: "Saved image: /tmp/agent-end.png" }, { type: "image", data: "large" }],
+    },
+  };
+  const h = harness({
+    entries: [imageEntry],
+    resize: async () => ({ ok: true, previewPath: "/tmp/agent-end-half.png", width: 10, height: 10 }),
+  });
+  await h.emit("session_start");
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: 'OpenAI API error (413): {"message":"failed to parse request"}' }] });
+  assert.equal(h.sent.length, 1, "one repaired retry is queued");
+  assert.equal(h.appended[0].data.toolCallId, "read-agent-end");
+  const context = await h.emit("context", { messages: [imageEntry.message] });
+  assert.equal(context.messages[0].content[0].type, "text");
+  assert.match(context.messages[0].content[0].text, /resized version is available/);
 });
 
 test("recovery message never embeds multiline provider or resize output", () => {

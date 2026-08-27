@@ -9,7 +9,9 @@ export const IMAGE_413_PREVIEW_DIR = ".pi/image-guard/previews";
 export const IMAGE_413_ORIGINAL_DIR = ".pi/image-guard/originals";
 
 export function isImagePayload413(status, errorMessage = "") {
-  return Number(status) === 413 || /\b413\b.*(?:request entity too large|payload too large)|(?:request entity too large|payload too large).*\b413\b/i.test(String(errorMessage || ""));
+  const text = String(errorMessage || "");
+  return Number(status) === 413
+    || /(?:OpenAI API error|HTTP(?: error)?)[^(\n]*\(413\)|\b413\b.*(?:request entity too large|payload too large)|(?:request entity too large|payload too large).*\b413\b/i.test(text);
 }
 
 export function hasImageContent(content) {

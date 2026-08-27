@@ -154,6 +154,28 @@ export function createImage413RecoveryExtension({ resize = createHalfImagePrevie
       await recoveryInFlight;
     });
 
+    // Some providers surface HTTP failures only as the terminal assistant error;
+    // their transport abstraction never exposes the raw Response to
+    // after_provider_response. Recover at agent_end as the authoritative
+    // fallback so 413 loops cannot bypass the guard.
+    pi.on("agent_end", async (event, ctx) => {
+      const messages = Array.isArray(event?.messages) ? event.messages : [];
+      const error = [...messages].reverse().find((message) => message?.role === "assistant" && message?.stopReason === "error");
+      const errorMessage = String(error?.errorMessage || error?.content || "");
+      if (!isImagePayload413(undefined, errorMessage) || recoveryInFlight) return;
+      let candidate = latestImageRead;
+      if (!candidate) {
+        let entries = [];
+        try { entries = (ctx || sessionCtx)?.sessionManager?.getBranch?.() || (ctx || sessionCtx)?.sessionManager?.getEntries?.() || []; } catch {}
+        candidate = latestImageToolCandidate(entries);
+      }
+      if (!candidate || recoveries.has(candidate.messageKey)) return;
+      latestImageRead = null;
+      recoveryInFlight = prepareRecovery(candidate, errorMessage || "413 Request Entity Too Large", ctx || sessionCtx)
+        .finally(() => { recoveryInFlight = null; });
+      await recoveryInFlight;
+    });
+
     pi.on("context", (event) => {
       const messages = [];
       for (const message of event.messages || []) {
