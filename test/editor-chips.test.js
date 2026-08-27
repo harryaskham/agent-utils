@@ -137,6 +137,15 @@ test("narrow rails collapse directory before reducing branch to its git icon", (
   assert.doesNotMatch(stripAnsi(rails.bottom), /agent\/ms-mac\/agent-utils/);
 });
 
+test("compacted groups reflow to full terminal width without overlap", () => {
+  const rails = buildEditorChipRails({ width: 80, config: { ...config, topCenter: ["directory"], bottomLeft: [], editorPaddingX: 1 }, values: values({ cost: 1333.23 }), theme });
+  assert.equal(rails.overlapping, false);
+  assert.equal(visibleCells(rails.top), 80);
+  assert.equal(visibleCells(rails.bottom), 80);
+  assert.match(stripAnsi(rails.top), /checkout|~\/\.\/a\/a\/m\/c/);
+  assert.match(stripAnsi(rails.top), /─+.*github-copilot/);
+});
+
 test("unavoidable narrow layouts report overlap and wrapper replacement remains width-clampable", () => {
   const rails = buildEditorChipRails({ width: 32, config, values: values({ contextPct: 88 }), theme });
   assert.equal(rails.overlapping, true);
@@ -220,6 +229,41 @@ test("editor extension wraps an existing gfx editor and draws chips after its ra
   assert.match(stripAnsi(rendered.at(-1)), /\+3/);
   assert.equal(footer.render(180).length, 0, "moved MCP/footer data is not duplicated below the editor");
   assert.equal(commands.has("editor-chips"), true);
+});
+
+test("footer setter is restored across repeated extension reload lifecycles", async () => {
+  let editorFactory;
+  let footerFactory;
+  const originalSetFooter = (factory) => { footerFactory = factory; };
+  const ui = {
+    getEditorComponent: () => null,
+    setEditorComponent(factory) { editorFactory = factory; },
+    setFooter: originalSetFooter,
+    setStatus() {},
+  };
+  class FakeCustomEditor { render() { return ["────", "", "────"]; } invalidate() {} }
+  const ctx = { cwd: "/tmp", model: {}, getContextUsage: () => ({}), sessionManager: { getEntries: () => [] }, ui };
+  const activate = async () => {
+    const handlers = new Map();
+    const pi = {
+      registerCommand() {},
+      on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+      getThinkingLevel: () => "low",
+      exec: async () => ({ code: 1, stdout: "" }),
+    };
+    await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true } } }, host: { CustomEditor: FakeCustomEditor } })(pi);
+    await handlers.get("session_start")[0]({}, ctx);
+    return handlers;
+  };
+  const first = await activate();
+  assert.notEqual(ui.setFooter, originalSetFooter);
+  await first.get("session_shutdown")[0]({}, ctx);
+  assert.equal(ui.setFooter, originalSetFooter, "shutdown restores exact host setter");
+  const second = await activate();
+  assert.equal(typeof editorFactory, "function");
+  assert.equal(typeof footerFactory, "function");
+  await second.get("session_shutdown")[0]({}, ctx);
+  assert.equal(ui.setFooter, originalSetFooter);
 });
 
 test("editor chips mount without relying on ctx.mode and reassert after a later editor owner", async () => {
