@@ -26,7 +26,6 @@ import {
   readPersistedReadSettings,
   readPersistedRingInputSettings,
   readPersistedTtsSettings,
-  resolveSpeakToolEnabled,
 } from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
 
@@ -107,13 +106,6 @@ test("narration model resolves exact provider/id and refuses unavailable models"
   assert.throws(() => resolveNarrationModel(registry, "gpt"), /provider\/id/);
   assert.throws(() => resolveNarrationModel(registry, "github-copilot/missing"), /not available/);
   assert.equal(DEFAULT_NARRATION_MODEL, "github-copilot/gpt-5.6-luna");
-});
-
-test("speak tool enablement resolves env > agentUtils.tts > default", () => {
-  assert.equal(resolveSpeakToolEnabled({}, {}), true);
-  assert.equal(resolveSpeakToolEnabled({}, { speakToolEnabled: false }), false);
-  assert.equal(resolveSpeakToolEnabled({ PI_SPEAK_TOOL_ENABLED: "1" }, { speakToolEnabled: false }), true);
-  assert.equal(resolveSpeakToolEnabled({ PI_SPEAK_TOOL_ENABLED: "0" }, { speakToolEnabled: true }), false);
 });
 
 test("durable TTS/narrate settings use env > persisted > defaults", () => {
