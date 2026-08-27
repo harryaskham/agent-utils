@@ -303,12 +303,10 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
   assert.equal(emittedEvents.at(-1)?.payload, pi.realtime);
 });
 
-test("speak tool is disabled while automatic /tts mode is on", async () => {
+test("realtime extension does not register an explicit speak tool", () => {
   const h = makeHarness();
   realtimeAgentExtension(h.pi);
-  h.pi.ttsNarration = { isEnabled: () => true };
-  const result = await h.tools.get("speak").execute("id", { text: "do not synthesize" }, null, null, h.ctx);
-  assert.match(result.content[0].text, /disabled while automatic \/tts mode is on/);
+  assert.equal(h.tools.has("speak"), false);
 });
 
 test("unified realtime controls mutate audio, voice, and widget state", () => {

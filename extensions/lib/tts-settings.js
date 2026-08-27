@@ -14,12 +14,6 @@ export function readPersistedTtsSettings(path = agentSettingsPath()) {
   return readSlice("tts", path);
 }
 
-export function resolveSpeakToolEnabled(env = process.env, persisted = {}) {
-  const raw = env.PI_SPEAK_TOOL_ENABLED ?? persisted.speakToolEnabled;
-  if (raw == null || String(raw).trim() === "") return true;
-  return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
-}
-
 export function readPersistedNarrateSettings(path = agentSettingsPath()) {
   return readSlice("narrate", path);
 }

@@ -73,7 +73,6 @@ explicitly.
       "styleDegree": null,
       "backend": "pulse",
       "device": "@DEFAULT_SINK@",
-      "speakToolEnabled": false,
       "prefix": "",
       "suffix": ""
     },
@@ -97,14 +96,13 @@ or `/tts`. If TTS backend is `auto`, configured Pulse routing selects `pacat`,
 otherwise it resolves to a local platform backend instead of erroring. Persisted `enabled: true`
 activates the corresponding hook immediately when the extension loads.
 
-The same `agentUtils.tts` slice is resolved by `/read`, automatic `/tts`, the
-agent-callable `speak` tool, realtime speak-replies, and spoken choices.
-`agentUtils.tts.speakToolEnabled=false` disables explicit speak-tool playback;
-the tool is also automatically refused whenever `/tts` mode is on, preventing
-duplicate speech. Per-call
-`speak` overrides win, then `PI_CASCADE_*` / `PI_TTS_*` env, then this slice, then
-the shared built-in defaults. These direct surfaces share interruptible `/tts`
-playback where applicable; credentials are still never read from settings.
+The same `agentUtils.tts` slice is resolved by `/read`, automatic `/tts`,
+realtime spoken replies, and spoken choices. Agent Utils does not expose an
+agent-callable `speak` tool; speech is controlled by those explicit runtime
+surfaces instead. `PI_CASCADE_*` / `PI_TTS_*` environment values override this
+slice, followed by shared built-in defaults. These direct surfaces share
+interruptible `/tts` playback where applicable; credentials are still never
+read from settings.
 
 ## `/narrate`: tool batches
 

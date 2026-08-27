@@ -201,7 +201,7 @@ import {
   resolveSpeakToolParams,
   cascadeSpeechEnabled,
 } from "./lib/tts.js";
-import { readPersistedTtsSettings, resolveSpeakToolEnabled } from "./lib/tts-settings.js";
+import { readPersistedTtsSettings } from "./lib/tts-settings.js";
 import {
   assistantReplyText,
   pickLastAssistantReply,
@@ -2956,7 +2956,7 @@ export default function realtimeAgentExtension(pi) {
     const body = String(text || "").trim();
     if (!body || !cascadeSpeechEnabled({ env: process.env })) return;
     const output = resolvedFastTts();
-    if (pi.ttsNarration?.isEnabled?.() || !resolveSpeakToolEnabled(process.env, output.persisted)) return;
+    if (pi.ttsNarration?.isEnabled?.()) return;
     const { voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams({ text: body }, { env: process.env, persisted: output.persisted });
     if (!voice) return; // no concrete Azure voice configured; stay silent rather than throw
     const credentialOptions = { env: process.env };
@@ -3976,50 +3976,6 @@ export default function realtimeAgentExtension(pi) {
       },
     });
 
-    // Fast direct-Azure speak tool (bd-15beec): gives the loaded Pi agent a
-    // "mouth" — synthesize a reply via the direct Azure REST path (no caco msg
-    // speak / daemon hop) in the configured cascade/MAI voice and play it
-    // locally. This is the low-latency replacement for force-agent-speech's
-    // daemon precis; pair with /rt stt local-vad so the loaded Pi agent IS the
-    // cascade brain.
-    pi.registerTool({
-      name: "speak",
-      label: "Speak (fast direct-Azure)",
-      description: "Speak text aloud immediately via the shared agentUtils.tts voice/playback defaults and fast direct-Azure REST path (no daemon round-trip). Per-call overrides win.",
-      promptSnippet: "Use the speak tool to talk to the user out loud: call speak with your reply text and it is synthesized in the cascade voice with low latency.",
-      promptGuidelines: ["When voice/cascade output is active AND automatic /tts is off, use speak for concise natural replies. Never call speak while /tts is on; assistant text is already spoken automatically. Do not read out tool mechanics, code, or URLs."],
-      parameters: ToolSchema.object({
-        text: ToolSchema.string({ description: "The text to speak aloud." }),
-        voice: ToolSchema.optional(ToolSchema.string({ description: "Azure voice override. Defaults through env then agentUtils.tts.voice." })),
-        speaker: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts ttsembedding profile override. Defaults through env then agentUtils.tts.embedding." })),
-        lang: ToolSchema.optional(ToolSchema.string({ description: "xml:lang locale, e.g. en-GB." })),
-        speed: ToolSchema.optional(ToolSchema.number({ description: "Speech rate multiplier, e.g. 1.6." })),
-        style: ToolSchema.optional(ToolSchema.string({ description: "Azure mstts express-as style, e.g. hopeful." })),
-        styledegree: ToolSchema.optional(ToolSchema.number({ description: "Azure express-as style degree from 0.01 to 2; only used with style." })),
-      }),
-      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-        const output = resolvedFastTts();
-        if (pi.ttsNarration?.isEnabled?.()) return { content: [{ type: "text", text: "speak: disabled while automatic /tts mode is on" }] };
-        if (!resolveSpeakToolEnabled(process.env, output.persisted)) return { content: [{ type: "text", text: "speak: disabled by agentUtils.tts.speakToolEnabled=false" }] };
-        const { text, voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams(params, { env: process.env, persisted: output.persisted });
-        if (!text) return { content: [{ type: "text", text: "speak: empty text" }] };
-        if (!cascadeSpeechEnabled({ env: process.env })) return { content: [{ type: "text", text: "speak: disabled by Cacophony node policy (speech.enabled=false)" }] };
-        if (!voice) return { content: [{ type: "text", text: "speak: no voice — pass voice= or configure agentUtils.tts.voice" }] };
-        const credentialOptions = { env: process.env };
-        if (!process.env.AZURE_SPEECH_ENDPOINT && output.persisted.endpoint !== undefined) credentialOptions.endpoint = output.persisted.endpoint;
-        const { endpoint, apiKey } = resolveAzureSpeechCreds(credentialOptions);
-        try {
-          const pcm = await synthesizeAzureSpeechDirect({ text, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey });
-          if (pcm && pcm.length) {
-            markAssistantSpeaking(audioDurationMs(pcm));
-            await fastDirectTtsPlayer.play(pcm, { backend: output.backend, server: output.server, device: output.device, streamName: "/tts", env: process.env });
-          }
-          return { content: [{ type: "text", text: `spoke (${text.length} chars, ${voice})` }] };
-        } catch (e) {
-          return { content: [{ type: "text", text: `speak failed: ${e?.message || String(e)}` }] };
-        }
-      },
-    });
   }
 
   pi.registerCommand("rt-dev", {
