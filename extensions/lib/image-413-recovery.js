@@ -19,8 +19,10 @@ export function hasImageContent(content) {
 }
 
 export function imageMessageKey(message) {
+  const content = Array.isArray(message?.content) ? message.content : [];
+  if (!content.some((block) => block?.type === "image")) return "";
   if (message?.toolCallId) return `tool:${message.toolCallId}`;
-  const image = (message?.content || []).find((block) => block?.type === "image");
+  const image = content.find((block) => block?.type === "image");
   if (!image) return "";
   const payload = String(image.data || image.source?.data || image.source?.path || image.path || "");
   return `image:${createHash("sha256").update(`${message.role || "unknown"}\0${payload.length}\0${payload.slice(0, 4096)}`).digest("hex").slice(0, 20)}`;

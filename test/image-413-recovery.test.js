@@ -189,9 +189,11 @@ test("restored Tendril and user images are discovered without current-process to
   } finally { rmSync(userDir, { recursive: true, force: true }); }
 });
 
-test("image message keys are stable for the same attachment", () => {
+test("image message keys are stable and tolerate non-array message content", () => {
   const message = { role: "user", content: [{ type: "image", data: "abc" }] };
   assert.equal(imageMessageKey(message), imageMessageKey(structuredClone(message)));
+  assert.equal(imageMessageKey({ role: "assistant", content: "plain text" }), "");
+  assert.equal(imageMessageKey({ role: "custom", content: null }), "");
 });
 
 test("agent_end recovers provider 413 when no raw response hook fired", async () => {
