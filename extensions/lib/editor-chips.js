@@ -274,9 +274,16 @@ function composeRailRow({ width, padding, left, center, right, theme, effort }) 
   const edge = Math.min(Math.max(0, padding), Math.floor(width / 2));
   const innerWidth = Math.max(0, width - edge * 2);
   const lw = visibleCells(left), cw = visibleCells(center), rw = visibleCells(right);
-  const centerStart = Math.max(lw, Math.floor((innerWidth - cw) / 2));
-  const rightStart = Math.max(centerStart + cw, innerWidth - rw);
-  const overlapping = rightStart + rw > innerWidth;
+  const totalFits = lw + cw + rw <= innerWidth;
+  const rightStart = Math.max(lw + cw, innerWidth - rw);
+  // Keep center visually centered when possible, but slide it left before ever
+  // overlapping the right group. This is the actual reflow step narrow panes
+  // need after directory/branch compaction.
+  const idealCenter = Math.floor((innerWidth - cw) / 2);
+  const centerStart = totalFits
+    ? Math.max(lw, Math.min(idealCenter, rightStart - cw))
+    : lw;
+  const overlapping = !totalFits;
   const inner = overlapping
     ? `${left}${center}${right}`
     : `${left}${rail(theme, effort, centerStart - lw)}${center}${rail(theme, effort, rightStart - centerStart - cw)}${right}${rail(theme, effort, innerWidth - rightStart - rw)}`;

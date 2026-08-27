@@ -67,7 +67,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       editorLease: null,
       footerFactory: null,
       originalSetFooter: null,
+      originalSetFooterRaw: null,
       patchedSetFooter: null,
+      footerUi: null,
+      timers: new Set(),
+      stopped: false,
     };
 
     const refreshGit = async (ctx) => {
@@ -146,8 +150,12 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       };
       factory.__agentUtilsEditorChipsFooter = true;
       state.footerFactory = factory;
+      state.footerUi = ctx.ui;
       if (!state.originalSetFooter) {
-        state.originalSetFooter = ctx.ui.setFooter.bind(ctx.ui);
+        const staleOriginal = ctx.ui.setFooter.__agentUtilsEditorChipsOriginal;
+        if (typeof staleOriginal === "function") ctx.ui.setFooter = staleOriginal;
+        state.originalSetFooterRaw = ctx.ui.setFooter;
+        state.originalSetFooter = state.originalSetFooterRaw.bind(ctx.ui);
         state.patchedSetFooter = function (next, ...rest) {
           if (next?.__agentUtilsEditorChipsFooter) return state.originalSetFooter(next, ...rest);
           // Keep later core/status extensions from restoring the redundant
@@ -156,6 +164,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
           return state.originalSetFooter(state.footerFactory, ...rest);
         };
         state.patchedSetFooter.__agentUtilsEditorChipsFooterGuard = true;
+        state.patchedSetFooter.__agentUtilsEditorChipsOriginal = state.originalSetFooterRaw;
         ctx.ui.setFooter = state.patchedSetFooter;
       }
       state.originalSetFooter(factory);
@@ -207,6 +216,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     });
 
     pi.on("session_start", async (_event, ctx) => {
+      state.stopped = false;
       await loadCustomEditor();
       if (!installSurfaces(ctx)) {
         try { ctx.ui?.notify?.(`Editor chips could not mount: ${hostImportError?.message || "CustomEditor host API unavailable"}`, "warning"); } catch {}
@@ -216,29 +226,48 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       // later session_start handlers. Reassert the lease after the startup event
       // drains; acquire() is owner-deduplicated, so this cannot stack wrappers.
       for (const delay of [0, 100]) {
-        const timer = setTimeout(() => { try { installSurfaces(ctx); } catch {} }, delay);
+        let timer;
+        timer = setTimeout(() => {
+          state.timers.delete(timer);
+          if (state.stopped) return;
+          try { installSurfaces(ctx); } catch {}
+        }, delay);
+        state.timers.add(timer);
         timer.unref?.();
       }
       await refreshGit(ctx);
     });
 
     pi.on("session_shutdown", () => {
+      state.stopped = true;
+      for (const timer of state.timers) clearTimeout(timer);
+      state.timers.clear();
       if (state.editorRegistry && state.editorLease) {
         try { state.editorRegistry.release(state.editorLease); } catch {}
       }
       state.editorLease = null;
-      if (state.originalSetFooter && state.patchedSetFooter && state.footerFactory) {
+      if (state.originalSetFooter && state.patchedSetFooter) {
         try { state.originalSetFooter(undefined); } catch {}
+        if (state.footerUi?.setFooter === state.patchedSetFooter) state.footerUi.setFooter = state.originalSetFooterRaw;
       }
       state.originalSetFooter = null;
+      state.originalSetFooterRaw = null;
       state.patchedSetFooter = null;
       state.footerFactory = null;
+      state.footerUi = null;
       state.tui = null;
     });
 
     const reassertAfterCoreUpdate = (ctx) => {
+      if (state.stopped) return;
       installSurfaces(ctx);
-      const timer = setTimeout(() => { try { installSurfaces(ctx); state.tui?.requestRender?.(); } catch {} }, 0);
+      let timer;
+      timer = setTimeout(() => {
+        state.timers.delete(timer);
+        if (state.stopped) return;
+        try { installSurfaces(ctx); state.tui?.requestRender?.(); } catch {}
+      }, 0);
+      state.timers.add(timer);
       timer.unref?.();
     };
     pi.on("model_select", async (_event, ctx) => { reassertAfterCoreUpdate(ctx); });
