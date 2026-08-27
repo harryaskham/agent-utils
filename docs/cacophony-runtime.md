@@ -23,6 +23,12 @@ An explicit complete agent/project pair always wins and no visiting registration
 
 Other Agent Utils extensions resolve identity from `extensions/lib/cacophony-runtime.js`, so a visiting identity becomes usable immediately without mutating `process.env`. Child Cacophony processes receive the resolved identity only in their own scoped environment.
 
+### Pi-Daemon logical sessions
+
+Agent Utils deliberately reads ordinary `process.env`; it does not implement a private environment overlay. Pi-Daemon `0.3.9` and later provide the generic host contract: extension loading, callbacks, commands, tools, RPC, runtime replacement, and asynchronous continuations run with a logical per-session `process.env` view. That view combines a neutral supervisor-owned service baseline with exactly one session overlay, and writes/deletes remain local to that session.
+
+Consequently, the same Agent Utils package can run concurrently for sessions A and B while resolving different Cacophony identities, child MCP environments, choice mirrors, and graphics namespaces. A complete managed environment identity always overrides the module's visiting-agent fallback. `DISABLE_PI_CACO` is likewise session-local under Pi-Daemon. Agent Utils must never emulate this by temporarily mutating a shared host environment; older Pi-Daemon versions without the generic contract are unsupported for concurrent managed logical sessions.
+
 ## Visiting-agent auto-registration
 
 Enable immutable startup policy in `settings.json`:
