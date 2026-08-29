@@ -220,6 +220,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
 
     const emitChoiceUpdate = (record) => {
       record.revision += 1;
+      record.lastInputCommandId = null;
       emitSession(choiceSessionPayload(record, "updated"));
     };
 
