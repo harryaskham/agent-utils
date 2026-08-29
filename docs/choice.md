@@ -243,9 +243,12 @@ newer successful forced choice supersedes historical failures. A durable
 Cacophony discard has the same stand-down semantics. `/force-choice on` can
 re-arm intentionally after a controller attaches.
 
-A selected option labelled exactly `Stop continuous choices` (also simple
-`stop`, `idle`, `pause`, or `finish`) disables the mode for the current session,
-so continuous operation can itself be ended from the ring. Durable configuration
+Selecting an option labelled exactly `Stop continuous choices` (also simple
+`stop`, `idle`, `pause`, or `finish`) first opens a `Yes — stop` / `No — keep
+choosing` confirmation, defaulting to No. The confirmation uses the same semantic
+input bus as the original choice, so keyboard, Omni, and direct-ring navigation
+and selection all work. Confirming Yes disables the mode for the current session;
+No returns to the original choices with the Stop row highlighted. Durable configuration
 is `agentUtils.choice.forceAtAgentEnd` or `PI_FORCE_CHOICE` (env wins), and
 defines startup behavior only. Runtime `/force-choice on|off`, `/choice settings
 force=...`, Stop selections, and Escape never rewrite that startup policy.

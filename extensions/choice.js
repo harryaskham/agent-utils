@@ -223,6 +223,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       try { record.ctx?.ui?.setWidget?.("agent-utils-choice", undefined); } catch {}
     };
 
+    const isStopChoice = (choice) => /^(?:stop|idle|pause|finish|stop continuous choices)$/i.test(String(choice?.label || "").trim());
+
     const finish = (record, result) => {
       if (!record || record.finished) return;
       record.finished = true;
@@ -238,7 +240,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         && /discard/i.test(String(result?.reason || result?.action || ""));
       if (
         choiceConfig.forceAtAgentEnd && (
-          (result?.status === "selected" && /^(?:stop|idle|pause|finish|stop continuous choices)$/i.test(String(result.choice?.label || "").trim()))
+          (result?.status === "selected" && isStopChoice(result.choice))
           || (result?.terminal === true && result?.action === "discard")
           || unavailableForcedUi
           || discardedDurableForce
@@ -353,7 +355,32 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         }
       } else if (outcome.type === "selected") {
         const source = outcome.source || input?.source || "event";
-        if (outcome.choice?.appended && outcome.choice?.terminal) {
+        if (record.confirmingStop) {
+          if (outcome.choice?.value === true) {
+            const original = record.stopSelection;
+            finish(record, { status: "selected", index: original.index, choice: original.choice, source });
+          } else {
+            record.question = record.originalQuestion;
+            record.state = new ChoiceStateMachine({ choices: record.originalChoices, initialIndex: record.stopSelection.index, wrap: record.wrap });
+            record.confirmingStop = false;
+            record.stopSelection = null;
+            if (record.requestRender) { try { record.requestRender(); } catch {} }
+            else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index), { placement: "belowEditor" }); } catch {} }
+            if (choiceConfig.speechEnabled) void speakerController.speak("Stop cancelled. Back to choices.");
+          }
+        } else if (isStopChoice(outcome.choice)) {
+          record.stopSelection = { index: outcome.index, choice: outcome.choice };
+          record.confirmingStop = true;
+          record.question = "Stop continuous choices?";
+          record.state = new ChoiceStateMachine({ choices: [
+            { label: "Yes", headline: "Yes — stop", value: true },
+            { label: "No", headline: "No — keep choosing", value: false },
+          ], initialIndex: 1, wrap: record.wrap });
+          if (record.requestRender) { try { record.requestRender(); } catch {} }
+          else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index, "confirm stop"), { placement: "belowEditor" }); } catch {} }
+          try { record.onUpdate?.({ content: [{ type: "text", text: "Confirm stop: Yes or No (selected: No)" }] }); } catch {}
+          if (choiceConfig.speechEnabled) void speakerController.speak("Stop continuous choices? Option 1: Yes, stop. Option 2: No, keep choosing. Selected: No.");
+        } else if (outcome.choice?.appended && outcome.choice?.terminal) {
           finish(record, {
             status: "cancelled",
             reason: "appended-terminal",
@@ -453,6 +480,11 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           onAbort: null,
           warnedSpeech: false,
           forcedPresentation,
+          originalQuestion: question,
+          originalChoices: choices,
+          wrap: params?.wrap ?? choiceConfig.wrap,
+          confirmingStop: false,
+          stopSelection: null,
           awaitingFreeform: false,
           sessionEnded: false,
           finished: false,
@@ -511,7 +543,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
             emitInput({ action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "ptt", source: "keyboard" });
             return true;
           }
-          const input = keyboardChoiceAction(key, choices.length);
+          const input = keyboardChoiceAction(key, record.state.choices.length);
           if (!input) return false;
           // Keyboard is another event producer, not a privileged state-machine path.
           emitInput(input);
@@ -525,7 +557,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
             record.customDone = done;
             record.requestRender = () => tui.requestRender();
             return {
-              render: (width) => renderChoiceDialog(question, choices, state.index, timeoutMs, width, theme, { mode: record.freeformMode, text: record.freeformText }),
+              render: (width) => renderChoiceDialog(record.question, record.state.choices, record.state.index, timeoutMs, width, theme, { mode: record.freeformMode, text: record.freeformText }),
               invalidate() { tui.requestRender(); },
               handleInput(data) { dispatchKeyboard(data); },
             };
@@ -537,11 +569,11 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
             finish(record, { status: "error", error: "RPC interactive_choice requires the typed ctx.ui.select surface", index: state.index, choice: state.current() });
           } else {
             record.rpcAbort = new AbortController();
-            const labels = choices.map((choice, index) => `${index + 1}. ${choice.headline}${choice.summary ? ` — ${choice.summary}` : ""}`);
             void (async () => {
               while (!record.finished) {
+                const labels = record.state.choices.map((choice, index) => `${index + 1}. ${choice.headline}${choice.summary ? ` — ${choice.summary}` : ""}`);
                 let selected;
-                try { selected = await ctx.ui.select(question, labels, { signal: record.rpcAbort.signal }); }
+                try { selected = await ctx.ui.select(record.question, labels, { signal: record.rpcAbort.signal }); }
                 catch (error) {
                   if (!record.finished) finish(record, { status: "error", error: error?.message || String(error), index: state.index, choice: state.current() });
                   return;

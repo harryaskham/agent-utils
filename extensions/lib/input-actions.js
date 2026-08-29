@@ -11,6 +11,7 @@ export const INPUT_ACTIONS = Object.freeze({
   SELECT_NEXT: "select-next",
   CHOOSE_CURRENT: "choose-current",
   CHOOSE_INDEX: "choose-index",
+  CHOOSE_ID: "choose-id",
   CANCEL: "cancel",
   FREEFORM_ENTER: "freeform-enter",
   FREEFORM_UPDATE: "freeform-update",

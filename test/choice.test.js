@@ -816,7 +816,14 @@ test("force-choice runtime controls and Escape preserve startup policy while let
     const stopPending = h.tools.get("interactive_choice").execute("stop", { question: "Next?", choices: [{ label: "Stop continuous choices" }, { label: "Continue" }], timeoutMs: 0 }, null, null, h.ctx);
     await Promise.resolve();
     h.input("1");
-    await stopPending;
+    assert.match(h.widgets.get("agent-utils-choice").join("\n"), /Stop continuous choices\?/);
+    h.events.emit(CHOICE_INPUT_EVENT, { action: CHOICE_INPUT_ACTIONS.CHOOSE_INDEX, index: 1, source: "omni" });
+    assert.match(h.widgets.get("agent-utils-choice").join("\n"), /Next\?/);
+    h.input("1");
+    h.events.emit(CHOICE_INPUT_EVENT, { action: CHOICE_INPUT_ACTIONS.CHOOSE_INDEX, index: 0, source: "omni" });
+    const stopResult = await stopPending;
+    assert.equal(stopResult.details.choice.label, "Stop continuous choices", "confirmation returns the original stop choice");
+    assert.equal(stopResult.details.source, "omni", "confirmation accepts semantic Omni input");
     assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).agentUtils.choice.forceAtAgentEnd, true, "Stop selection does not rewrite startup policy");
     h.handlers.get("agent_end")({}, h.ctx);
     assert.equal(h.sentMessages.length, 0, "Stop selection disables force mode for this session");

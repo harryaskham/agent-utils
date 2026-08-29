@@ -16,6 +16,7 @@ import {
 } from "./tts.js";
 
 export const CHOICE_SESSION_EVENT = "agent-utils:choice-session";
+export const CHOICE_CAPABILITY_EVENT = "agent-utils:choice-capability";
 // Compatibility aliases for choice consumers; the actual bus contract is
 // generic and lives in input-actions.js so device adapters remain independent.
 export const CHOICE_INPUT_EVENT = INPUT_ACTION_EVENT;
@@ -24,6 +25,7 @@ export const CHOICE_INPUT_ACTIONS = Object.freeze({
   NEXT: INPUT_ACTIONS.SELECT_NEXT,
   CHOOSE_CURRENT: INPUT_ACTIONS.CHOOSE_CURRENT,
   CHOOSE_INDEX: INPUT_ACTIONS.CHOOSE_INDEX,
+  CHOOSE_ID: INPUT_ACTIONS.CHOOSE_ID,
   CANCEL: INPUT_ACTIONS.CANCEL,
   FREEFORM_ENTER: INPUT_ACTIONS.FREEFORM_ENTER,
   FREEFORM_UPDATE: INPUT_ACTIONS.FREEFORM_UPDATE,
@@ -40,10 +42,11 @@ export function normalizeChoices(choices = []) {
   const out = choices.map((choice) => {
     if (typeof choice === "string") {
       const label = choice.trim();
-      return { label, headline: label, summary: "", value: label };
+      return { id: "", label, headline: label, summary: "", value: label };
     }
     const label = String(choice?.label ?? choice?.headline ?? choice?.value ?? "").trim();
     return {
+      id: String(choice?.id ?? "").trim(),
       label,
       headline: String(choice?.headline ?? label).trim(),
       summary: String(choice?.summary ?? "").trim(),
@@ -55,7 +58,14 @@ export function normalizeChoices(choices = []) {
     };
   }).filter((choice) => choice.label);
   if (out.length < 2) throw new Error("choice: at least two non-empty choices are required");
-  return out.map((choice, index) => ({ ...choice, index }));
+  const usedIds = new Set();
+  return out.map((choice, index) => {
+    const base = choice.id || `option-${index + 1}`;
+    let id = base;
+    for (let suffix = 2; usedIds.has(id); suffix += 1) id = `${base}-${suffix}`;
+    usedIds.add(id);
+    return { ...choice, id, index };
+  });
 }
 
 export class ChoiceStateMachine {
@@ -80,6 +90,15 @@ export class ChoiceStateMachine {
       if (this.wrap) this.index = (this.index + direction + this.choices.length) % this.choices.length;
       else this.index = Math.min(this.choices.length - 1, Math.max(0, this.index + direction));
       return { type: "navigate", action, changed: this.index !== oldIndex, index: this.index, choice: this.current(), source: input?.source };
+    }
+    if (action === CHOICE_INPUT_ACTIONS.CHOOSE_ID) {
+      const index = this.choices.findIndex((choice) => choice.id === input?.choiceId);
+      if (index < 0) {
+        return { type: "ignored", reason: "id-not-found", index: this.index, choice: this.current(), source: input?.source };
+      }
+      this.index = index;
+      this.done = true;
+      return { type: "selected", action, index, choice: this.current(), source: input?.source };
     }
     if (action === CHOICE_INPUT_ACTIONS.CHOOSE_INDEX) {
       const index = Math.trunc(Number(input?.index));
