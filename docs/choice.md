@@ -25,7 +25,8 @@ controls can consume the same input modules:
 | `select-prev` | Highlight the previous option. |
 | `select-next` | Highlight the next option. |
 | `choose-current` | Confirm the highlighted option. |
-| `choose-index` | Confirm zero-based `index` directly. |
+| `choose-index` | Confirm zero-based `index` directly inside local adapters. |
+| `choose-id` | Confirm the stable `choiceId`; intended for distributed/remote adapters. |
 | `cancel` | Cancel without selecting. |
 | `freeform-enter` | Enter choice-owned text or PTT reply mode (`mode: text|ptt`). |
 | `freeform-update` | Update the choice-owned PTT transcript preview without touching the main editor. |
@@ -34,9 +35,26 @@ controls can consume the same input modules:
 | `freeform-ptt-commit` | Finish choice-owned PTT and request its final transcription. |
 
 Payloads may include `source`, `raw`, and the active `sessionId`. A mismatched
-`sessionId` is ignored. The choice extension emits
-`agent-utils:choice-session` with `status: started|ended` so adapters attach only
-while needed and release resources immediately afterward.
+`sessionId` is ignored. A distributed response may also carry an opaque
+`commandId`, which is preserved in the terminal choice-session event for
+exactly-once reconciliation.
+
+The choice extension emits `agent-utils:choice-capability` on `session_start`.
+Its versioned payload advertises supported question kinds, freeform and draft
+support, and bounded question/option counts. It emits
+`agent-utils:choice-session` with `status: started|updated|ended`:
+
+- `started` and `updated` contain stable request/question/option IDs, complete
+  labels and descriptions, the recommended option, freeform support, revision,
+  and optional deadline;
+- `updated` is a complete replacement, used for transitions such as Stop
+  confirmation rather than an ambiguous partial patch; and
+- `ended` carries the runtime-authoritative result, source, and optional remote
+  command correlation.
+
+This is a generic adapter contract, not a Paratenic dependency. An AHP bridge
+may map it to standard elicitation actions while keyboard, Omni, ring,
+Cacophony, timeout, and abort remain equal producers in the same local arbiter.
 
 ## RPC and Pi Daemon input
 

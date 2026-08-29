@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   CHOICE_INPUT_ACTIONS,
   CHOICE_INPUT_EVENT,
+  CHOICE_CAPABILITY_EVENT,
   CHOICE_SESSION_EVENT,
   ChoiceStateMachine,
   createChoiceSpeaker,
@@ -97,7 +98,7 @@ test("choice state machine supports wrap, clamp, direct index, select, cancel, a
   const state = new ChoiceStateMachine({ choices, wrap: true });
   assert.equal(state.apply({ action: CHOICE_INPUT_ACTIONS.PREVIOUS }).index, 2, "previous wraps to last");
   assert.equal(state.apply({ action: CHOICE_INPUT_ACTIONS.NEXT }).index, 0, "next wraps to first");
-  assert.equal(state.apply({ action: CHOICE_INPUT_ACTIONS.CHOOSE_INDEX, index: 1 }).choice.label, "beta");
+  assert.equal(state.apply({ action: CHOICE_INPUT_ACTIONS.CHOOSE_ID, choiceId: "option-2" }).choice.label, "beta");
   assert.equal(state.done, true);
   assert.equal(state.apply({ action: "garbage" }).reason, "finished");
 
@@ -163,7 +164,18 @@ test("choice extension resolves keyboard and external event inputs through one b
   const h = harness();
   createChoiceExtension({ speaker })(h.pi);
   const sessions = [];
+  const capabilities = [];
   h.events.on(CHOICE_SESSION_EVENT, (event) => sessions.push(event));
+  h.events.on(CHOICE_CAPABILITY_EVENT, (event) => capabilities.push(event));
+  h.handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] }, ui: h.ctx.ui });
+  assert.deepEqual(capabilities[0], {
+    version: 1,
+    questionKinds: ["single_select"],
+    allowFreeform: true,
+    drafts: false,
+    maxQuestions: 1,
+    maxOptions: 9,
+  });
 
   const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000, prefix: "Agent: ", suffix: " please" }, null, null, h.ctx);
   await Promise.resolve();
@@ -175,14 +187,19 @@ test("choice extension resolves keyboard and external event inputs through one b
   assert.ok(spoken.some((text) => text === "Beta"), "navigation speaks the new headline");
 
   // A device adapter emits the same semantic event as the keyboard.
-  const sessionId = sessions.find((event) => event.status === "started").sessionId;
-  h.events.emit(CHOICE_INPUT_EVENT, { action: CHOICE_INPUT_ACTIONS.CHOOSE_INDEX, index: 2, source: "test-adapter", sessionId });
+  const started = sessions.find((event) => event.status === "started");
+  const sessionId = started.sessionId;
+  assert.equal(started.requestId, sessionId);
+  assert.deepEqual(started.choices.map((choice) => choice.id), ["option-1", "option-2", "option-3"]);
+  h.events.emit(CHOICE_INPUT_EVENT, { action: CHOICE_INPUT_ACTIONS.CHOOSE_ID, choiceId: "option-3", source: "test-adapter", commandId: "remote-command-1", sessionId });
   const result = await pending;
   assert.equal(result.details.status, "selected");
   assert.equal(result.details.choice.label, "gamma");
   assert.equal(result.details.source, "test-adapter");
+  assert.equal(result.details.commandId, "remote-command-1");
   assert.equal(h.widgets.has("agent-utils-choice"), false);
   assert.equal(sessions.at(-1).status, "ended");
+  assert.equal(sessions.at(-1).result.commandId, "remote-command-1");
 });
 
 test("appended controls keep ordinary indices stable, remain visible, and honor tts:false", async () => {

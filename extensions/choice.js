@@ -10,6 +10,7 @@ import { createCacophonyChoiceBridge } from "./lib/cacophony-choice.js";
 import {
   INPUT_ACTION_EVENT,
   INPUT_ACTIONS,
+  CHOICE_CAPABILITY_EVENT,
   CHOICE_SESSION_EVENT,
   DEFAULT_CHOICE_TIMEOUT_MS,
   ChoiceStateMachine,
@@ -197,10 +198,42 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       try { pi.events?.emit?.(CHOICE_SESSION_EVENT, payload); } catch {}
     };
 
+    const choiceSessionPayload = (record, status) => ({
+      status,
+      version: 2,
+      sessionId: record.sessionId,
+      requestId: record.sessionId,
+      revision: record.revision,
+      question: record.question,
+      questionId: "choice",
+      choices: record.state.choices.map((choice, index) => ({
+        id: choice.id,
+        label: choice.headline || choice.label,
+        description: choice.summary || "",
+        recommended: index === record.state.index,
+      })),
+      allowFreeform: true,
+      timeoutMs: record.timeoutMs,
+      deadline: record.deadline == null ? null : new Date(record.deadline).toISOString(),
+      confirmingStop: record.confirmingStop === true,
+    });
+
+    const emitChoiceUpdate = (record) => {
+      record.revision += 1;
+      emitSession(choiceSessionPayload(record, "updated"));
+    };
+
     const endInputSession = (record, result) => {
       if (record.sessionEnded) return;
       record.sessionEnded = true;
-      emitSession({ status: "ended", sessionId: record.sessionId, result });
+      emitSession({
+        status: "ended",
+        version: 2,
+        sessionId: record.sessionId,
+        requestId: record.sessionId,
+        revision: record.revision,
+        result,
+      });
     };
 
     const releaseChoiceUi = (record, result = null) => {
@@ -227,6 +260,9 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
 
     const finish = (record, result) => {
       if (!record || record.finished) return;
+      if (record.lastInputCommandId && result?.commandId === undefined) {
+        result = { ...result, commandId: record.lastInputCommandId };
+      }
       record.finished = true;
       releaseChoiceUi(record, result);
       record.signal?.removeEventListener?.("abort", record.onAbort);
@@ -312,6 +348,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       const record = active;
       if (!record || record.finished) return null;
       if (input?.sessionId && input.sessionId !== record.sessionId) return null;
+      if (input?.commandId) record.lastInputCommandId = String(input.commandId);
       const action = String(input?.action ?? "").trim().toLowerCase();
       if (action === INPUT_ACTIONS.FREEFORM_ENTER) {
         enterFreeform(record, input?.mode);
@@ -358,12 +395,13 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         if (record.confirmingStop) {
           if (outcome.choice?.value === true) {
             const original = record.stopSelection;
-            finish(record, { status: "selected", index: original.index, choice: original.choice, source });
+            finish(record, { status: "selected", index: original.index, choice: original.choice, inputChoiceId: "yes-stop", source });
           } else {
             record.question = record.originalQuestion;
             record.state = new ChoiceStateMachine({ choices: record.originalChoices, initialIndex: record.stopSelection.index, wrap: record.wrap });
             record.confirmingStop = false;
             record.stopSelection = null;
+            emitChoiceUpdate(record);
             if (record.requestRender) { try { record.requestRender(); } catch {} }
             else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index), { placement: "belowEditor" }); } catch {} }
             if (choiceConfig.speechEnabled) void speakerController.speak("Stop cancelled. Back to choices.");
@@ -373,9 +411,10 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           record.confirmingStop = true;
           record.question = "Stop continuous choices?";
           record.state = new ChoiceStateMachine({ choices: [
-            { label: "Yes", headline: "Yes — stop", value: true },
-            { label: "No", headline: "No — keep choosing", value: false },
+            { id: "yes-stop", label: "Yes", headline: "Yes — stop", value: true },
+            { id: "no-continue", label: "No", headline: "No — keep choosing", value: false },
           ], initialIndex: 1, wrap: record.wrap });
+          emitChoiceUpdate(record);
           if (record.requestRender) { try { record.requestRender(); } catch {} }
           else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index, "confirm stop"), { placement: "belowEditor" }); } catch {} }
           try { record.onUpdate?.({ content: [{ type: "text", text: "Confirm stop: Yes or No (selected: No)" }] }); } catch {}
@@ -459,6 +498,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       const result = await new Promise((resolve) => {
         const record = {
           sessionId,
+          revision: 1,
           question,
           state,
           ctx,
@@ -479,6 +519,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
           rpcAbort: null,
           onAbort: null,
           warnedSpeech: false,
+          lastInputCommandId: null,
           forcedPresentation,
           originalQuestion: question,
           originalChoices: choices,
@@ -624,11 +665,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         // unlike background refresh timers, this timeout resolves a live call.
         if (timeoutMs > 0) record.timer = setTimer(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
         emitSession({
-          status: "started",
-          sessionId,
-          question,
-          choiceCount: choices.length,
-          timeoutMs,
+          ...choiceSessionPayload(record, "started"),
           ring: params?.ring ?? null,
           prefix: promptPrefix,
           suffix: promptSuffix,
@@ -672,6 +709,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         parameters: ToolSchema.Object({
           question: ToolSchema.String({ description: "Question to speak and display." }),
           choices: ToolSchema.Array(ToolSchema.Object({
+            id: ToolSchema.Optional(ToolSchema.String({ description: "Stable option ID for external input surfaces; generated when omitted." })),
             label: ToolSchema.String({ description: "Stable choice label returned on selection." }),
             headline: ToolSchema.Optional(ToolSchema.String({ description: "Short spoken/display headline; defaults to label." })),
             summary: ToolSchema.Optional(ToolSchema.String({ description: "Optional short explanation spoken in the initial list." })),
@@ -780,6 +818,16 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
     });
 
     pi.on("session_start", (_event, ctx) => {
+      try {
+        pi.events?.emit?.(CHOICE_CAPABILITY_EVENT, {
+          version: 1,
+          questionKinds: ["single_select"],
+          allowFreeform: true,
+          drafts: false,
+          maxQuestions: 1,
+          maxOptions: choiceConfig.maxChoices,
+        });
+      } catch {}
       if (!choiceConfig.forceAtAgentEnd) return;
       let entries = [];
       try { entries = ctx?.sessionManager?.getBranch?.() || ctx?.sessionManager?.getEntries?.() || []; }
