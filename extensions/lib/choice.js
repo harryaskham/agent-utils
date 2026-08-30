@@ -17,6 +17,7 @@ import {
 
 export const CHOICE_SESSION_EVENT = "agent-utils:choice-session";
 export const CHOICE_CAPABILITY_EVENT = "agent-utils:choice-capability";
+export const CHOICE_SYNC_REQUEST_EVENT = "agent-utils:choice-sync-request";
 // Compatibility aliases for choice consumers; the actual bus contract is
 // generic and lives in input-actions.js so device adapters remain independent.
 export const CHOICE_INPUT_EVENT = INPUT_ACTION_EVENT;

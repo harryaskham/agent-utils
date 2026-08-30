@@ -12,6 +12,7 @@ import {
   INPUT_ACTIONS,
   CHOICE_CAPABILITY_EVENT,
   CHOICE_SESSION_EVENT,
+  CHOICE_SYNC_REQUEST_EVENT,
   DEFAULT_CHOICE_TIMEOUT_MS,
   ChoiceStateMachine,
   createChoiceSpeaker,
@@ -196,6 +197,20 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
 
     const emitSession = (payload) => {
       try { pi.events?.emit?.(CHOICE_SESSION_EVENT, payload); } catch {}
+    };
+
+    const capabilityPayload = (requestId) => ({
+      version: 1,
+      questionKinds: ["single_select"],
+      allowFreeform: true,
+      drafts: false,
+      maxQuestions: 1,
+      maxOptions: choiceConfig.maxChoices,
+      ...(requestId ? { requestId } : {}),
+    });
+
+    const announceCapability = (requestId) => {
+      try { pi.events?.emit?.(CHOICE_CAPABILITY_EVENT, capabilityPayload(requestId)); } catch {}
     };
 
     const choiceSessionPayload = (record, status) => ({
@@ -464,7 +479,13 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
     };
 
     const eventInputHandler = (input) => { handleInput(input); };
+    const choiceSyncRequestHandler = (request = {}) => {
+      announceCapability(String(request?.requestId || "").trim() || undefined);
+      if (active && !active.finished) emitSession(choiceSessionPayload(active, "updated"));
+    };
     pi.events?.on?.(INPUT_ACTION_EVENT, eventInputHandler);
+    pi.events?.on?.(CHOICE_SYNC_REQUEST_EVENT, choiceSyncRequestHandler);
+    queueMicrotask(() => announceCapability());
     pi.registerMessageRenderer?.(FORCE_CHOICE_CUSTOM_TYPE, (message, _options, theme) => ({
       render: (width) => [theme.fg("dim", String(message.content || "").slice(0, width))],
       invalidate() {},
@@ -819,16 +840,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
     });
 
     pi.on("session_start", (_event, ctx) => {
-      try {
-        pi.events?.emit?.(CHOICE_CAPABILITY_EVENT, {
-          version: 1,
-          questionKinds: ["single_select"],
-          allowFreeform: true,
-          drafts: false,
-          maxQuestions: 1,
-          maxOptions: choiceConfig.maxChoices,
-        });
-      } catch {}
+      announceCapability();
       if (!choiceConfig.forceAtAgentEnd) return;
       let entries = [];
       try { entries = ctx?.sessionManager?.getBranch?.() || ctx?.sessionManager?.getEntries?.() || []; }
@@ -895,6 +907,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
     pi.on("session_shutdown", () => {
       cancelActive("shutdown");
       try { pi.events?.off?.(INPUT_ACTION_EVENT, eventInputHandler); } catch {}
+      try { pi.events?.off?.(CHOICE_SYNC_REQUEST_EVENT, choiceSyncRequestHandler); } catch {}
       try { speakerController.dispose?.(); } catch {}
     });
   };

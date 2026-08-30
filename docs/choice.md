@@ -40,6 +40,8 @@ Payloads may include `source`, `raw`, and the active `sessionId`. A mismatched
 exactly-once reconciliation.
 
 The choice extension emits `agent-utils:choice-capability` on `session_start`.
+A bridge that loads later can emit `agent-utils:choice-sync-request`; Agent Utils replies with the current capability and, when one exists, a complete `updated` snapshot of the active choice.
+This request/replay handshake makes integration independent of extension registration and `session_start` handler order.
 Its versioned payload advertises supported question kinds, freeform and draft
 support, and bounded question/option counts. It emits
 `agent-utils:choice-session` with `status: started|updated|ended`:

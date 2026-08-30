@@ -9,6 +9,7 @@ import {
   CHOICE_INPUT_EVENT,
   CHOICE_CAPABILITY_EVENT,
   CHOICE_SESSION_EVENT,
+  CHOICE_SYNC_REQUEST_EVENT,
   ChoiceStateMachine,
   createChoiceSpeaker,
   formatChoiceIntroduction,
@@ -181,6 +182,10 @@ test("choice extension resolves keyboard and external event inputs through one b
   await Promise.resolve();
   assert.ok(h.widgets.has("agent-utils-choice"));
   assert.match(spoken[0], /^Agent: Pick please Option 1: Alpha/, "interactive choice affixes wrap only the initial question");
+  h.events.emit(CHOICE_SYNC_REQUEST_EVENT, { requestId: "late-bridge" });
+  assert.equal(capabilities.at(-1).requestId, "late-bridge");
+  assert.equal(sessions.at(-1).status, "updated");
+  assert.equal(sessions.at(-1).requestId, sessions.find((event) => event.status === "started").requestId);
   h.input("j");
   await Promise.resolve();
   assert.match(String(h.widgets.get("agent-utils-choice")?.[2]), /▶ 2\. Beta/);
