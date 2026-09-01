@@ -53,7 +53,13 @@ function normalizedAnswer(command) {
   const answer = command?.answers?.choice;
   if (!answer || typeof answer !== "object") return null;
   const kind = String(answer.kind || "").trim().toLowerCase();
-  if (kind === "selected" && typeof answer.value === "string" && answer.value) return { kind, value: answer.value };
+  if (kind === "selected") {
+    const freeform = Array.isArray(answer.freeformValues)
+      ? answer.freeformValues.map((value) => String(value).trim()).find(Boolean)
+      : undefined;
+    if (freeform) return { kind: "text", value: freeform };
+    if (typeof answer.value === "string" && answer.value) return { kind, value: answer.value };
+  }
   if (kind === "text" && typeof answer.value === "string" && answer.value.trim()) return { kind, value: answer.value.trim() };
   return null;
 }

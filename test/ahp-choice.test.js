@@ -96,6 +96,22 @@ test("provider feature-detects late bridge, snapshots completely, and admits bef
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.deepEqual(completions, [{ response: "accept", answer: { kind: "selected", value: "west-id" }, commandId: "cmd", operationId: "op" }]);
 
+  const freeformAdmission = await bridge.provider.complete({
+    operationId: "op-freeform",
+    commandId: "cmd-freeform",
+    requestId: active.sessionId,
+    response: "accept",
+    answers: { choice: { kind: "selected", value: "freeform", freeformValues: ["custom region"] } },
+  });
+  assert.deepEqual(freeformAdmission, { accepted: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(completions.at(-1), {
+    response: "accept",
+    answer: { kind: "text", value: "custom region" },
+    commandId: "cmd-freeform",
+    operationId: "op-freeform",
+  });
+
   active = null;
   assert.deepEqual(await bridge.provider.snapshot(), [], "snapshot is a complete authoritative cut");
   adapter.dispose();
