@@ -6,6 +6,7 @@ import {
   modelCandidates,
   isModelUnavailableError,
 } from "../extensions/web-search-models.js";
+import { resolveWebSearchAuthConfig } from "../extensions/web-search-auth.js";
 import {
   combineTimeoutSignal,
   resolveRequestTimeoutMs,
@@ -13,6 +14,30 @@ import {
 } from "../extensions/web-search-http.js";
 
 const DEFAULT_FALLBACKS = ["gpt-5.3-codex", "gpt-5.5", "gpt-5.4"];
+
+test("web search prefers an authenticated managed LiteLLM proxy unless direct API is explicit", () => {
+  const names = ["WEB_SEARCH_COPILOT_API_BASE", "WEB_SEARCH_LITELLM_BASE_URL", "WEB_SEARCH_LITELLM_API_KEY", "LITELLM_BASE_URL", "LITELLM_PROXY_URL", "LITELLM_MASTER_KEY"];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    process.env.LITELLM_BASE_URL = "http://helsinki:4002";
+    process.env.LITELLM_MASTER_KEY = "proxy-secret";
+    const proxy = resolveWebSearchAuthConfig(process.env);
+    assert.equal(proxy.authMode, "litellm");
+    assert.equal(proxy.apiBase, "http://helsinki:4002/v1");
+    assert.equal(proxy.proxyKey, "proxy-secret");
+
+    process.env.WEB_SEARCH_COPILOT_API_BASE = "https://api.githubcopilot.com/v1";
+    const direct = resolveWebSearchAuthConfig(process.env);
+    assert.equal(direct.authMode, "copilot");
+    assert.equal(direct.apiBase, "https://api.githubcopilot.com/v1");
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
 
 test("parseFallbackModels falls back to defaults for empty/blank input", () => {
   assert.deepEqual(parseFallbackModels(undefined), DEFAULT_FALLBACKS);

@@ -1,7 +1,3 @@
-import { readFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
 import { Type } from "@sinclair/typebox";
 
 import {
@@ -11,34 +7,19 @@ import {
   isModelUnavailableError,
 } from "./web-search-models.js";
 import { combineTimeoutSignal, resolveRequestTimeoutMs } from "./web-search-http.js";
+import { resolveWebSearchAuthConfig, resolveWebSearchToken } from "./web-search-auth.js";
 
-const DEFAULT_TOKEN_FILE = "~/.config/gh-auth-tokens/copilot.token";
-const DEFAULT_AUTH_JSON_FILE = "~/.pi/agent/auth.json";
-const DEFAULT_AUTH_JSON_KEY = "github-copilot";
 const DEFAULT_MAX_OUTPUT_TOKENS = 16000;
-const DEFAULT_API_BASE = "https://api.githubcopilot.com/v1";
 const DEFAULT_EDITOR_VERSION = "vscode/1.103.1";
 
-function expandHome(inputPath) {
-  if (!inputPath.startsWith("~/")) return inputPath;
-  return path.join(os.homedir(), inputPath.slice(2));
-}
-
 function getConfig() {
-  // An explicitly-set token file always wins (back-compat / operator override);
-  // otherwise we prefer Pi's own auth.json, which Pi keeps auto-refreshed.
-  const explicitTokenFile = Boolean(process.env.WEB_SEARCH_COPILOT_TOKEN_FILE);
   return {
-    explicitTokenFile,
-    tokenFile: expandHome(process.env.WEB_SEARCH_COPILOT_TOKEN_FILE || DEFAULT_TOKEN_FILE),
-    authJsonFile: expandHome(process.env.WEB_SEARCH_COPILOT_AUTH_JSON || DEFAULT_AUTH_JSON_FILE),
-    authJsonKey: process.env.WEB_SEARCH_COPILOT_AUTH_JSON_KEY || DEFAULT_AUTH_JSON_KEY,
+    ...resolveWebSearchAuthConfig(process.env),
     model: process.env.WEB_SEARCH_MODEL || DEFAULT_MODEL,
     maxOutputTokens: Number.parseInt(
       process.env.WEB_SEARCH_MAX_OUTPUT_TOKENS || String(DEFAULT_MAX_OUTPUT_TOKENS),
       10,
     ),
-    apiBase: (process.env.WEB_SEARCH_COPILOT_API_BASE || DEFAULT_API_BASE).replace(/\/$/, ""),
     editorVersion: process.env.WEB_SEARCH_EDITOR_VERSION || DEFAULT_EDITOR_VERSION,
     fallbackModels: parseFallbackModels(process.env.WEB_SEARCH_FALLBACK_MODELS),
     // bd-6cf0d6: bound the /responses fetch so a stalled upstream can't hang the tool.
@@ -50,50 +31,6 @@ function getConfig() {
 // isModelUnavailableError) live in ./web-search-models.js so they can be
 // unit-tested without importing this entrypoint's @sinclair/typebox dependency.
 
-
-async function readTokenFile(tokenFile) {
-  const token = (await readFile(tokenFile, "utf8")).trim();
-  if (!token) {
-    throw new Error(`GitHub Copilot token file is empty: ${tokenFile}`);
-  }
-  return token;
-}
-
-// Pull the auto-refreshed Copilot bearer out of Pi's auth.json
-// (e.g. ~/.pi/agent/auth.json -> { "github-copilot": { "access": "tid=..." } }).
-// Returns null on any failure (missing file, parse error, missing field) so the
-// caller can fall back to the legacy static token file.
-async function readTokenFromAuthJson(authJsonFile, authJsonKey) {
-  let raw;
-  try {
-    raw = await readFile(authJsonFile, "utf8");
-  } catch {
-    return null;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  const access = parsed?.[authJsonKey]?.access;
-  if (typeof access !== "string") return null;
-  const token = access.trim();
-  return token ? token : null;
-}
-
-// Resolution order:
-//   1. An explicitly-configured token file (WEB_SEARCH_COPILOT_TOKEN_FILE).
-//   2. Pi's auth.json github-copilot.access (auto-refreshed by the Pi runtime).
-//   3. The legacy default static token file.
-async function resolveToken(config) {
-  if (config.explicitTokenFile) {
-    return readTokenFile(config.tokenFile);
-  }
-  const fromAuthJson = await readTokenFromAuthJson(config.authJsonFile, config.authJsonKey);
-  if (fromAuthJson) return fromAuthJson;
-  return readTokenFile(config.tokenFile);
-}
 
 function extractTextAndCitations(responseBody) {
   const texts = [];
@@ -179,7 +116,7 @@ export default function webSearchExtension(pi) {
     }),
     async execute(_toolCallId, params, signal) {
       const config = getConfig();
-      const token = await resolveToken(config);
+      const token = await resolveWebSearchToken(config);
       const candidates = modelCandidates(config, params.model);
       let response;
       let model;
@@ -249,6 +186,7 @@ export default function webSearchExtension(pi) {
           responseId: responseBody.id || null,
           status: responseBody.status || null,
           model: responseBody.model || model,
+          authMode: config.authMode,
           incompleteDetails: responseBody.incomplete_details || null,
           webSearchCalls,
           usage: responseBody.usage || null,

@@ -285,7 +285,8 @@ The web-search extension is loaded from [`extensions/web-search.js`](extensions/
 
 Configuration (environment):
 
-- `WEB_SEARCH_COPILOT_TOKEN_FILE` — explicit path to a Copilot bearer token file. When set (or pointed at a non-default path), it takes precedence. Otherwise the bearer is read from Pi's auto-refreshed `auth.json` (see below), falling back to `~/.config/gh-auth-tokens/copilot.token`.
+- `WEB_SEARCH_LITELLM_BASE_URL` / `WEB_SEARCH_LITELLM_API_KEY` — optional managed OpenAI-compatible proxy endpoint and key. When omitted, `LITELLM_BASE_URL`/`LITELLM_PROXY_URL` plus `LITELLM_MASTER_KEY` are used. An authenticated proxy is preferred by default because it owns per-account Copilot token refresh/routing; set `WEB_SEARCH_COPILOT_API_BASE` explicitly to force direct Copilot mode.
+- `WEB_SEARCH_COPILOT_TOKEN_FILE` — explicit path to a Copilot bearer token file in direct mode. When set, it takes precedence. Otherwise the bearer is read from Pi's auto-refreshed `auth.json` (see below), falling back to `~/.config/gh-auth-tokens/copilot.token`.
 - `WEB_SEARCH_COPILOT_AUTH_JSON` — path to Pi's `auth.json` holding the auto-refreshed Copilot bearer (default `~/.pi/agent/auth.json`). The bearer is taken from `<key>.access`; Pi keeps this fresh, avoiding the stale static-token-file problem.
 - `WEB_SEARCH_COPILOT_AUTH_JSON_KEY` — top-level key in `auth.json` whose `.access` field holds the bearer (default `github-copilot`).
 - `WEB_SEARCH_MODEL` — upstream Copilot model (default `gpt-5.3-codex`).
