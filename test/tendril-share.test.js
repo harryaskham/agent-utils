@@ -263,6 +263,21 @@ test("tendril_pi_stream tool starts, reports, and stops queued frame streaming",
   }
 });
 
+test("recurring Tendril frames skip busy and overlapping ticks instead of queueing follow-ups", async () => {
+  const busy = makeHarness({ idle: false });
+  const stream = { frame: 1, skippedBusy: 0, skippedOverlap: 0, frameInFlight: false };
+  assert.equal(await __tendrilShareTest.sendStreamFrame(busy.pi, busy.ctx, stream, { recurring: true }), null);
+  assert.equal(stream.frame, 1);
+  assert.equal(stream.skippedBusy, 1);
+  assert.equal(busy.userMessages.length, 0);
+
+  const idle = makeHarness({ idle: true });
+  const overlapping = { frame: 1, skippedBusy: 0, skippedOverlap: 0, frameInFlight: true };
+  assert.equal(await __tendrilShareTest.sendStreamFrame(idle.pi, idle.ctx, overlapping, { recurring: true }), null);
+  assert.equal(overlapping.skippedOverlap, 1);
+  assert.equal(idle.userMessages.length, 0);
+});
+
 test("tendril bridge doctor reports bridge settings and probes targets", async () => {
   const { pi, execCalls } = makeHarness();
   const tools = new Map();

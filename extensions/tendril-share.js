@@ -481,8 +481,21 @@ async function describeTarget(pi, ctx, { kind, target, id, prompt, includeList =
   return { ...captured, description, queued: !!options, includeList };
 }
 
-async function sendStreamFrame(pi, ctx, stream) {
+async function sendStreamFrame(pi, ctx, stream, { recurring = false } = {}) {
+  // A periodic visual feed must never build an unbounded follow-up queue behind
+  // a modal tool such as interactive_choice. Keep the newest opportunity by
+  // skipping busy ticks; the next idle tick captures fresh state.
+  if (recurring && ctx.isIdle?.() === false) {
+    stream.skippedBusy = (stream.skippedBusy || 0) + 1;
+    return null;
+  }
+  if (stream.frameInFlight) {
+    stream.skippedOverlap = (stream.skippedOverlap || 0) + 1;
+    return null;
+  }
+  stream.frameInFlight = true;
   stream.frame += 1;
+  try {
   const captured = await capturePngTarget(pi, ctx, {
     kind: stream.kind,
     target: stream.target.id,
@@ -513,13 +526,16 @@ async function sendStreamFrame(pi, ctx, stream) {
   stream.lastOutputPath = captured.outputPath;
   stream.lastPreview = preview;
   return captured;
+  } finally {
+    stream.frameInFlight = false;
+  }
 }
 
 function streamStatusText(stream) {
   if (!stream) return "No active Tendril stream.";
   const last = stream.lastFrameAt ? new Date(stream.lastFrameAt).toLocaleTimeString() : "never";
   const preview = stream.lastPreview ? `, kitty preview image=${stream.lastPreview.imageId}` : `, kitty preview=${previewConfig().enabled ? "pending" : "off"}`;
-  return `Tendril stream active: ${stream.kind} ${stream.target.id} (${stream.target.label || stream.target.id}), every ${Math.round(stream.intervalMs / 1000)}s, frames sent ${stream.frame}, last frame ${last}${preview}.`;
+  return `Tendril stream active: ${stream.kind} ${stream.target.id} (${stream.target.label || stream.target.id}), every ${Math.round(stream.intervalMs / 1000)}s, frames sent ${stream.frame}, skipped busy ${stream.skippedBusy || 0}, skipped overlap ${stream.skippedOverlap || 0}, last frame ${last}${preview}.`;
 }
 
 function textResult(text, data = undefined) {
@@ -596,12 +612,15 @@ async function startStream(pi, ctx, state, { kind, target, id, intervalSeconds, 
     frame: 0,
     lastFrameAt: null,
     lastOutputPath: null,
+    skippedBusy: 0,
+    skippedOverlap: 0,
+    frameInFlight: false,
     timer: null,
   };
   state.stream = stream;
   await sendStreamFrame(pi, ctx, stream);
   stream.timer = setInterval(() => {
-    sendStreamFrame(pi, ctx, stream).catch((error) => {
+    sendStreamFrame(pi, ctx, stream, { recurring: true }).catch((error) => {
       ctx.ui?.notify?.(`Tendril stream frame failed: ${error.message || String(error)}`, "error");
     });
   }, intervalMs);
@@ -979,6 +998,7 @@ export const __tendrilShareTest = {
   resolveTendrilTarget,
   streamStatusText,
   stopStream,
+  sendStreamFrame,
   buildTendrilCommand,
   tendrilCommandSummary,
   tendrilBridgeConfig,
