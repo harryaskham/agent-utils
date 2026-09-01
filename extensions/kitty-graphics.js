@@ -125,10 +125,25 @@ export function controlDataToString(control = {}) {
   return parts.join(",");
 }
 
+export function tmuxPassthroughDepth(env = process.env) {
+  const configured = Number(env.KITTY_IMAGE_PREVIEW_TMUX_DEPTH ?? env.AGENT_UTILS_TMUX_PASSTHROUGH_DEPTH ?? 1);
+  if (!Number.isFinite(configured)) return 1;
+  return Math.max(1, Math.min(8, Math.trunc(configured)));
+}
+
 export function wrapForPassthrough(sequence, passthrough = "auto", env = process.env) {
   const mode = passthrough === "auto" ? detectKittyPassthroughMode(env) : passthrough;
   if (mode === "tmux") {
-    return `${TMUX_DCS_START}${sequence.replaceAll(ESC, `${ESC}${ESC}`)}${TMUX_DCS_END}`;
+    // Each tmux layer consumes exactly one DCS passthrough envelope. Nested
+    // clients therefore require recursive wrapping; the inner server unwraps
+    // one layer and forwards a still-wrapped sequence to its outer server.
+    // There is no portable way to infer hidden outer servers (launchers often
+    // deliberately unset TMUX), so operators may provide the bounded depth.
+    let wrapped = sequence;
+    for (let depth = 0; depth < tmuxPassthroughDepth(env); depth += 1) {
+      wrapped = `${TMUX_DCS_START}${wrapped.replaceAll(ESC, `${ESC}${ESC}`)}${TMUX_DCS_END}`;
+    }
+    return wrapped;
   }
   if (mode === "none" || mode === "off" || mode === false) return sequence;
   throw new Error(`Unsupported kitty graphics passthrough mode: ${mode}`);

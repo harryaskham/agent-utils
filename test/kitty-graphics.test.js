@@ -36,6 +36,7 @@ import {
   estimateRowsForImage,
   isSupportedKittyPngPath,
   wrapForPassthrough,
+  tmuxPassthroughDepth,
   unwrapTmuxGraphicsPassthrough,
   serializeKittyGraphicsChunks,
   detectKittyPassthroughMode,
@@ -541,6 +542,13 @@ test("wrapForPassthrough tmux-wraps (doubling ESC) or passes through, and reject
   const wrapped = wrapForPassthrough(seq, "tmux");
   assert.notEqual(wrapped, seq);
   assert.ok(wrapped.includes(`${ESC}${ESC}`)); // ESC doubled for tmux DCS
+  const nested = wrapForPassthrough(seq, "tmux", { KITTY_IMAGE_PREVIEW_TMUX_DEPTH: "2" });
+  assert.notEqual(nested, wrapped);
+  assert.equal((nested.match(/Ptmux;/g) || []).length, 2);
+  assert.ok(nested.includes(`${ESC}${ESC}${ESC}${ESC}_G`) || nested.includes(`${ESC}${ESC}${ESC}${ESC}Y`), "nested body escapes are doubled once per tmux layer");
+  assert.equal(tmuxPassthroughDepth({}), 1);
+  assert.equal(tmuxPassthroughDepth({ KITTY_IMAGE_PREVIEW_TMUX_DEPTH: "2" }), 2);
+  assert.equal(tmuxPassthroughDepth({ KITTY_IMAGE_PREVIEW_TMUX_DEPTH: "99" }), 8);
   assert.throws(() => wrapForPassthrough(seq, "bogus"), /Unsupported kitty graphics passthrough mode/);
 });
 
