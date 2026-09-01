@@ -7,6 +7,7 @@
 import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import { createCacophonyChoiceBridge } from "./lib/cacophony-choice.js";
+import { createAhpChoiceProvider } from "./lib/ahp-choice.js";
 import {
   INPUT_ACTION_EVENT,
   INPUT_ACTIONS,
@@ -183,7 +184,7 @@ export function hasUnavailableForcedChoiceTail(entries) {
   return false;
 }
 
-export function createChoiceExtension({ speaker, cacophonyBridge, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   return function choiceExtension(pi) {
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
@@ -194,6 +195,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
     let nextSessionId = 1;
     let forcedRequestOutstanding = false;
     let warnedUnsatisfiedForce = false;
+    let ahpProvider = null;
 
     const emitSession = (payload) => {
       try { pi.events?.emit?.(CHOICE_SESSION_EVENT, payload); } catch {}
@@ -237,6 +239,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       record.revision += 1;
       record.lastInputCommandId = null;
       emitSession(choiceSessionPayload(record, "updated"));
+      ahpProvider?.updated(record);
     };
 
     const endInputSession = (record, result) => {
@@ -305,6 +308,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         }
       }
       endInputSession(record, result);
+      ahpProvider?.resolved(record, result);
       void record.cacophony?.settleLocal?.(result);
       record.resolve(result);
     };
@@ -477,6 +481,28 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       }
       return outcome;
     };
+
+    ahpProvider = createAhpChoiceProvider({
+      pi,
+      env,
+      bridge: ahpBridge,
+      disabled: ahpBridge === false,
+      getActive: () => active,
+      complete(command) {
+        const record = active;
+        if (!record || record.finished) return;
+        const common = { source: "ahp", commandId: command.commandId, sessionId: record.sessionId };
+        if (command.response === "accept" && command.answer?.kind === "selected") {
+          handleInput({ ...common, action: INPUT_ACTIONS.CHOOSE_ID, choiceId: command.answer.value });
+        } else if (command.response === "accept" && command.answer?.kind === "text") {
+          handleInput({ ...common, action: INPUT_ACTIONS.FREEFORM_SUBMIT, text: command.answer.value });
+        } else if (command.response === "timeout") {
+          finish(record, { status: "timeout", timeoutMs: record.timeoutMs, index: record.state.index, choice: record.state.current(), ...common });
+        } else {
+          finish(record, { status: "cancelled", reason: command.response, index: record.state.index, choice: record.state.current(), ...common });
+        }
+      },
+    });
 
     const eventInputHandler = (input) => { handleInput(input); };
     const choiceSyncRequestHandler = (request = {}) => {
@@ -686,6 +712,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
         // Keep the process alive while an interactive tool is awaiting input;
         // unlike background refresh timers, this timeout resolves a live call.
         if (timeoutMs > 0) record.timer = setTimer(() => finish(record, { status: "timeout", timeoutMs, index: state.index, choice: state.current() }), timeoutMs);
+        ahpProvider?.requested(record);
         emitSession({
           ...choiceSessionPayload(record, "started"),
           ring: params?.ring ?? null,
@@ -908,6 +935,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, env = process.
       cancelActive("shutdown");
       try { pi.events?.off?.(INPUT_ACTION_EVENT, eventInputHandler); } catch {}
       try { pi.events?.off?.(CHOICE_SYNC_REQUEST_EVENT, choiceSyncRequestHandler); } catch {}
+      try { ahpProvider?.dispose?.(); } catch {}
       try { speakerController.dispose?.(); } catch {}
     });
   };

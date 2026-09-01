@@ -54,9 +54,21 @@ support, and bounded question/option counts. It emits
 - `ended` carries the runtime-authoritative result, source, and optional remote
   command correlation.
 
-This is a generic adapter contract, not a Paratenic dependency. An AHP bridge
-may map it to standard elicitation actions while keyboard, Omni, ring,
-Cacophony, timeout, and abort remain equal producers in the same local arbiter.
+This is a generic adapter contract, not a Paratenic dependency. When Paratenic
+exposes its optional package-neutral `Symbol.for("paratenic.pi.ahp-bridge.v1")`
+bridge, Agent Utils feature-detects it and registers a version-1 input provider.
+The provider publishes complete authoritative snapshots for the active request,
+preserves opaque request/question/option/command IDs, admits only exact pending
+completions, and publishes the eventual runtime-authoritative `resolved`
+settlement separately. Backend selections and freeform replies enter the same
+local arbitration path as keyboard, Omni, ring, Cacophony, timeout, and abort.
+
+Load order is irrelevant: Agent Utils reads the symbol, listens for
+`paratenic:ahp-bridge-available`, and emits
+`paratenic:ahp-bridge-discovery` when loaded first. It disposes only its own
+provider on session shutdown and never owns Paratenic transport or registration.
+If the bridge is absent, choice behavior is unchanged. `PI_DISABLE_AHP=1`
+disables provider registration; `PI_DISABLE_ACP=1` remains a migration alias.
 
 ## RPC and Pi Daemon input
 
@@ -156,8 +168,7 @@ By default, moving the highlight speaks both the option headline and its
 initial spoken option list still includes descriptions in either mode.
 
 Choice speech resolves the same `agentUtils.tts` voice, embedding, language,
-speed, style, endpoint, backend, server, and device used by `/read`, `/tts`, and
-the `speak` tool. `agentUtils.choice.prefix` and `suffix` wrap only the initial
+speed, style, endpoint, backend, server, and device used by `/read` and `/tts`. `agentUtils.choice.prefix` and `suffix` wrap only the initial
 question; option headlines and navigation speech remain unmodified. Set them with
 `/choice settings prefix="$AGENT_ID: " suffix=" please"`, override them per
 `interactive_choice` call with `prefix`/`suffix`, or use `PI_CHOICE_PREFIX` and
