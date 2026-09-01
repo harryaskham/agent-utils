@@ -15,6 +15,7 @@ import {
   extractGitBehindSettings,
   formatWarning,
   isGitCommand,
+  isGitCommandForContext,
   makeGitRunner,
   parseBehindCount,
   parseBool,
@@ -88,6 +89,16 @@ test("isGitCommand matches git at command positions, not substrings", () => {
   assert.equal(isGitCommand("echo nogit"), false);
   assert.equal(isGitCommand(""), false);
   assert.equal(isGitCommand(undefined), false);
+});
+
+test("context git detection rejects commands aimed at another worktree", () => {
+  assert.equal(isGitCommandForContext("git status"), true);
+  assert.equal(isGitCommandForContext("git fetch origin"), true);
+  assert.equal(isGitCommandForContext("git -C ../other status"), false);
+  assert.equal(isGitCommandForContext("git --no-pager -C=/tmp/other log"), false);
+  assert.equal(isGitCommandForContext("cd ../other && git status"), false);
+  assert.equal(isGitCommandForContext("echo hi; cd /tmp && git fetch"), false);
+  assert.equal(isGitCommandForContext("echo no git here"), false);
 });
 
 test("stripRemotePrefix handles fully-qualified and abbreviated refs", () => {
@@ -407,20 +418,41 @@ test("tool_call ignores non-git bash and non-bash tools", async () => {
   assert.equal(runGit.calls.length, 0, "no checks for non-git bash or non-bash tool");
 });
 
-test("turn_end fires only every N turns", async () => {
-  const runGit = makeFakeGit({ ...REPO_OK, "rev-list --count HEAD..origin/main": { code: 0, stdout: "1\n" } });
-  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_EVERY_TURNS: "3" } });
+test("turn cadence rate-limits warnings but never polls without a relevant git command", async () => {
+  const runGit = makeFakeGit({ ...REPO_OK, "rev-list --count HEAD..origin/main": { code: 0, stdout: "40\n" } });
+  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_EVERY_TURNS: "3", AGENT_UTILS_GIT_BEHIND_COOLDOWN_MS: "0", AGENT_UTILS_GIT_BEHIND_FETCH_CACHE_MS: "0" } });
   const h = makeHarness({ runGit, config });
   const turnEnd = h.handlers.get("turn_end");
+  const toolCall = h.handlers.get("tool_call");
+
+  await toolCall({ toolName: "bash", input: { command: "git status" } }, h.ctx);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.sent.length, 1, "first relevant git command may warn");
 
   await turnEnd({}, h.ctx);
   await turnEnd({}, h.ctx);
   await new Promise((r) => setTimeout(r, 10));
-  assert.equal(runGit.calls.length, 0, "no check before reaching cadence");
+  const callsBefore = runGit.calls.length;
+  assert.equal(callsBefore > 0, true);
+  assert.equal(h.sent.length, 1, "turns alone never run checks or warn");
 
-  await turnEnd({}, h.ctx); // 3rd turn -> fires
+  await toolCall({ toolName: "bash", input: { command: "git status" } }, h.ctx);
   await new Promise((r) => setTimeout(r, 10));
-  assert.ok(runGit.calls.length > 0, "check fires on the Nth turn");
+  assert.equal(runGit.calls.length, callsBefore, "warning remains gated before N turns");
+
+  await turnEnd({}, h.ctx);
+  await toolCall({ toolName: "bash", input: { command: "git status" } }, h.ctx);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.sent.length, 2, "a relevant git command may warn after N more turns");
+});
+
+test("git commands targeting another worktree do not inspect the original cwd", async () => {
+  const runGit = makeFakeGit({ ...REPO_OK, "rev-list --count HEAD..origin/main": { code: 0, stdout: "40\n" } });
+  const h = makeHarness({ runGit, config: resolveConfig({}) });
+  await h.handlers.get("tool_call")({ toolName: "bash", input: { command: "cd ../other && git status" } }, h.ctx);
+  await h.handlers.get("tool_call")({ toolName: "bash", input: { command: "git -C ../other fetch" } }, h.ctx);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(runGit.calls.length, 0);
 });
 
 test("disabled config makes tool_call and turn_end no-ops", async () => {

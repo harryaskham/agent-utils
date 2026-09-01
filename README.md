@@ -305,10 +305,7 @@ The guard is enabled by default; disable it by setting `PI_COMPACTION_CONTINUE_G
 
 The checkout-behind warning extension is loaded from [`extensions/git-behind-warning.js`](extensions/git-behind-warning.js) (policy/throttle/parse logic in [`extensions/lib/git-behind.js`](extensions/lib/git-behind.js)). It is a generic, reusable replacement for Cacophony's git-check mixin — a PostToolUse nudge when a managed checkout fell behind `main` — which was effectively lost when managed Pi moved to the pi-home-override path. This extension warns **any** Pi agent, managed or not, when its checkout is significantly behind the origin default branch, so it can rebase before drift causes painful conflicts. It is decoupled from daemon-checkout specifics and works in any git repository.
 
-It is **async, throttled, and never per-message**. Two triggers schedule a fire-and-forget check that never blocks a tool call:
-
-- **pre-git hook**: a `tool_call` on a bash `git ...` command.
-- **turn cadence**: a `turn_end` trigger that fires at most every N turns.
+It is **async, throttled, and never per-message**. A check runs only from a `tool_call` containing a bash `git ...` command that still targets Pi's current checkout; commands that first `cd` elsewhere or use `git -C` are ignored. Completed turns provide only a rate limit: after a warning, at least N further turns and the configured time cooldown must pass before another relevant git command can warn. Turns alone never poll Git or inject a nudge.
 
 The check is a graceful no-op outside the happy path — non-git directory, detached HEAD, an undetectable default branch, or a missing upstream tracking ref all return quietly. On the happy path it resolves the default branch (auto-detected from `origin/HEAD` via `symbolic-ref`, then `rev-parse --abbrev-ref`, then probing `main`/`master`, or an explicit override), fetches the remote default branch, and counts `git rev-list --count HEAD..<remote>/<default>`. When the behind-count reaches the threshold it surfaces an **advisory** warning (a status-line indicator, a UI notification, and — unless disabled — a single non-interrupting follow-up nudge to rebase). Fetches are **cached** so back-to-back git calls don't each hit the network, and active warnings are **cooldown-throttled**.
 
@@ -327,7 +324,7 @@ Configuration (env wins over `settings.json` `agentUtils.gitBehindWarning`, whic
 | `AGENT_UTILS_GIT_BEHIND_THRESHOLD` | `threshold` | `25` | Warn when the checkout is at least N commits behind. |
 | `AGENT_UTILS_GIT_BEHIND_BRANCH` | `defaultBranch` | auto-detect | Explicit default-branch override instead of `origin/HEAD` detection. |
 | `AGENT_UTILS_GIT_BEHIND_REMOTE` | `remote` | `origin` | Remote whose default branch is tracked. |
-| `AGENT_UTILS_GIT_BEHIND_EVERY_TURNS` | `everyTurns` | `10` | Turn-cadence: run the turn-driven check at most every N turns. |
+| `AGENT_UTILS_GIT_BEHIND_EVERY_TURNS` | `everyTurns` | `10` | Minimum completed turns between warnings; turns do not trigger checks. |
 | `AGENT_UTILS_GIT_BEHIND_COOLDOWN_MS` | `cooldownMs` | `600000` | Minimum interval between active warnings. |
 | `AGENT_UTILS_GIT_BEHIND_FETCH_CACHE_MS` | `fetchCacheMs` | `180000` | Minimum interval between fetches (fetch cache window). |
 | `AGENT_UTILS_GIT_BEHIND_NUDGE` | `nudge` | `true` | Inject a follow-up rebase nudge message (in addition to the UI notification). |

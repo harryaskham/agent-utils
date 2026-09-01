@@ -22,10 +22,9 @@ import { homedir } from "node:os";
 import {
   CUSTOM_TYPE,
   createRuntimeState,
-  decideTurnTrigger,
   extractGitBehindSettings,
   formatWarning,
-  isGitCommand,
+  isGitCommandForContext,
   makeGitRunner,
   resolveConfig,
   runGitBehindCheck,
@@ -107,6 +106,7 @@ export default function gitBehindWarningExtension(pi, options = {}) {
   function surface(ctx, result) {
     updateStatusLine(ctx, result);
     if (result?.status !== "ok" || !result.warn) return;
+    state.runtime.turnsSinceWarn = 0;
     const message = formatWarning(result);
     try {
       ctx?.ui?.notify?.(message, "warning");
@@ -153,17 +153,17 @@ export default function gitBehindWarningExtension(pi, options = {}) {
   pi.on?.("tool_call", (event, ctx) => {
     if (!state.config.enabled) return;
     if (event?.toolName !== "bash") return;
-    if (!isGitCommand(event?.input?.command)) return;
+    if (!isGitCommandForContext(event?.input?.command)) return;
+    if (state.runtime.turnsSinceWarn < state.config.everyTurns) return;
     scheduleCheck(ctx);
     // Never block: no return value.
   });
 
-  pi.on?.("turn_end", (_event, ctx) => {
-    state.runtime.turnsSinceCheck += 1;
-    if (!state.config.enabled) return;
-    if (!decideTurnTrigger(state.runtime.turnsSinceCheck, state.config.everyTurns)) return;
-    state.runtime.turnsSinceCheck = 0;
-    scheduleCheck(ctx);
+  pi.on?.("turn_end", () => {
+    // Count turns only as a warning-rate guard. Checks are deliberately tied to
+    // relevant git commands so an idle original cwd is not polled while the
+    // agent spends most of its time operating in another worktree.
+    state.runtime.turnsSinceWarn += 1;
   });
 
   pi.on?.("session_start", (_event, ctx) => {

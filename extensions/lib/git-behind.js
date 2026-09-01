@@ -133,6 +133,7 @@ export function createRuntimeState() {
     lastBehind: null,
     lastBranch: null,
     turnsSinceCheck: 0,
+    turnsSinceWarn: Number.POSITIVE_INFINITY,
     inFlight: false,
   };
 }
@@ -148,7 +149,23 @@ export function createRuntimeState() {
 export function isGitCommand(command) {
   const text = String(command ?? "");
   if (!text) return false;
-  return /(?:^|[\s;&|(){}`]|&&|\|\|)(?:sudo\s+)?git(?:\s|$)/.test(text);
+  return /(?:^|&&|\|\||[;&|(){}\n`])\s*(?:sudo\s+)?git(?:\s|$)/.test(text);
+}
+
+/**
+ * Conservatively identify git commands that operate on the tool context's
+ * checkout. A command that changes directory before invoking git, or uses
+ * git's own -C override, may target a different worktree and must not trigger
+ * a check of Pi's original cwd.
+ */
+export function isGitCommandForContext(command) {
+  const text = String(command ?? "");
+  if (!isGitCommand(text)) return false;
+  const gitAt = text.search(/(?:^|&&|\|\||[;&|(){}\n`])\s*(?:sudo\s+)?git(?:\s|$)/);
+  const prefix = gitAt < 0 ? "" : text.slice(0, gitAt);
+  if (/(?:^|[;&|()\s])cd(?:\s|$)/.test(prefix)) return false;
+  if (/(?:^|[;&|()\s])(?:sudo\s+)?git\s+(?:--[^\s]+\s+)*-C(?:\s|=)/.test(text)) return false;
+  return true;
 }
 
 /**
