@@ -307,7 +307,7 @@ The checkout-behind warning extension is loaded from [`extensions/git-behind-war
 
 It is **async, throttled, and never per-message**. A check runs only from a `tool_call` containing a bash `git ...` command that still targets Pi's current checkout; commands that first `cd` elsewhere or use `git -C` are ignored. Completed turns provide only a rate limit: after a warning, at least N further turns and the configured time cooldown must pass before another relevant git command can warn. Turns alone never poll Git or inject a nudge.
 
-The check is a graceful no-op outside the happy path — non-git directory, detached HEAD, an undetectable default branch, or a missing upstream tracking ref all return quietly. On the happy path it resolves the default branch (auto-detected from `origin/HEAD` via `symbolic-ref`, then `rev-parse --abbrev-ref`, then probing `main`/`master`, or an explicit override), fetches the remote default branch, and counts `git rev-list --count HEAD..<remote>/<default>`. When the behind-count reaches the threshold it surfaces an **advisory** warning (a status-line indicator, a UI notification, and — unless disabled — a single non-interrupting follow-up nudge to rebase). Fetches are **cached** so back-to-back git calls don't each hit the network, and active warnings are **cooldown-throttled**.
+The check is a graceful no-op outside the happy path — non-git directory, detached HEAD, an undetectable default branch, or a missing upstream tracking ref all return quietly. On the happy path it resolves the default branch (auto-detected from `origin/HEAD` via `symbolic-ref`, then `rev-parse --abbrev-ref`, then probing `main`/`master`, or an explicit override), fetches the remote default branch, and counts `git rev-list --count HEAD..<remote>/<default>`. When the behind-count reaches the threshold it surfaces an **advisory** status-line indicator and UI notification. Synthetic follow-up nudges are opt-in so an advisory can never queue a model turn behind a blocking interaction such as `interactive_choice`. Fetches are **cached** so back-to-back git calls don't each hit the network, and active warnings are **cooldown-throttled**.
 
 Commands:
 
@@ -327,7 +327,7 @@ Configuration (env wins over `settings.json` `agentUtils.gitBehindWarning`, whic
 | `AGENT_UTILS_GIT_BEHIND_EVERY_TURNS` | `everyTurns` | `10` | Minimum completed turns between warnings; turns do not trigger checks. |
 | `AGENT_UTILS_GIT_BEHIND_COOLDOWN_MS` | `cooldownMs` | `600000` | Minimum interval between active warnings. |
 | `AGENT_UTILS_GIT_BEHIND_FETCH_CACHE_MS` | `fetchCacheMs` | `180000` | Minimum interval between fetches (fetch cache window). |
-| `AGENT_UTILS_GIT_BEHIND_NUDGE` | `nudge` | `true` | Inject a follow-up rebase nudge message (in addition to the UI notification). |
+| `AGENT_UTILS_GIT_BEHIND_NUDGE` | `nudge` | `false` | Opt in to injecting a follow-up rebase nudge; leave off to avoid queued turns behind blocking UI. |
 
 Example `settings.json`: `{ "agentUtils": { "gitBehindWarning": { "threshold": 40, "everyTurns": 15 } } }`.
 

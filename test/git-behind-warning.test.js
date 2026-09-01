@@ -146,7 +146,7 @@ test("resolveConfig uses defaults when nothing configured", () => {
   assert.equal(cfg.everyTurns, DEFAULT_EVERY_TURNS);
   assert.equal(cfg.cooldownMs, DEFAULT_COOLDOWN_MS);
   assert.equal(cfg.fetchCacheMs, DEFAULT_FETCH_CACHE_MS);
-  assert.equal(cfg.nudge, true);
+  assert.equal(cfg.nudge, false);
 });
 
 test("resolveConfig: env overrides settings overrides defaults", () => {
@@ -394,7 +394,7 @@ test("extension registers tool_call, turn_end, session, and command surfaces", (
 
 test("tool_call on a git command triggers a throttled check and surfaces a warning", async () => {
   const runGit = makeFakeGit({ ...REPO_OK, "rev-list --count HEAD..origin/main": { code: 0, stdout: "40\n" } });
-  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_THRESHOLD: "10" } });
+  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_THRESHOLD: "10", AGENT_UTILS_GIT_BEHIND_NUDGE: "1" } });
   const h = makeHarness({ runGit, config });
 
   await h.handlers.get("tool_call")({ toolName: "bash", input: { command: "git status" } }, h.ctx);
@@ -420,7 +420,7 @@ test("tool_call ignores non-git bash and non-bash tools", async () => {
 
 test("turn cadence rate-limits warnings but never polls without a relevant git command", async () => {
   const runGit = makeFakeGit({ ...REPO_OK, "rev-list --count HEAD..origin/main": { code: 0, stdout: "40\n" } });
-  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_EVERY_TURNS: "3", AGENT_UTILS_GIT_BEHIND_COOLDOWN_MS: "0", AGENT_UTILS_GIT_BEHIND_FETCH_CACHE_MS: "0" } });
+  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_EVERY_TURNS: "3", AGENT_UTILS_GIT_BEHIND_COOLDOWN_MS: "0", AGENT_UTILS_GIT_BEHIND_FETCH_CACHE_MS: "0", AGENT_UTILS_GIT_BEHIND_NUDGE: "1" } });
   const h = makeHarness({ runGit, config });
   const turnEnd = h.handlers.get("turn_end");
   const toolCall = h.handlers.get("tool_call");
@@ -465,9 +465,9 @@ test("disabled config makes tool_call and turn_end no-ops", async () => {
   assert.equal(runGit.calls.length, 0);
 });
 
-test("nudge=false surfaces a notify but injects no message", async () => {
+test("default nudge=false surfaces a notify but queues no model turn", async () => {
   const runGit = makeFakeGit({ ...REPO_OK, "rev-list --count HEAD..origin/main": { code: 0, stdout: "40\n" } });
-  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_THRESHOLD: "10", AGENT_UTILS_GIT_BEHIND_NUDGE: "0" } });
+  const config = resolveConfig({ env: { AGENT_UTILS_GIT_BEHIND_THRESHOLD: "10" } });
   const h = makeHarness({ runGit, config });
   await h.handlers.get("tool_call")({ toolName: "bash", input: { command: "git status" } }, h.ctx);
   await new Promise((r) => setTimeout(r, 10));

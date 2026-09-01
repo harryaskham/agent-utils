@@ -117,7 +117,10 @@ export function resolveConfig({ env = {}, settings = {} } = {}) {
   const everyTurns = parsePositiveInt(pick(ENV.everyTurns, "everyTurns"), DEFAULT_EVERY_TURNS, 1);
   const cooldownMs = parsePositiveInt(pick(ENV.cooldownMs, "cooldownMs"), DEFAULT_COOLDOWN_MS, 0);
   const fetchCacheMs = parsePositiveInt(pick(ENV.fetchCacheMs, "fetchCacheMs"), DEFAULT_FETCH_CACHE_MS, 0);
-  const nudge = parseBool(pick(ENV.nudge, "nudge"), true);
+  // Advisory checks must not enqueue synthetic model turns behind a blocking
+  // modal (for example interactive_choice). Operators can opt in explicitly;
+  // the status line and UI notification remain the safe defaults.
+  const nudge = parseBool(pick(ENV.nudge, "nudge"), false);
 
   return { enabled, threshold, defaultBranch, remote, everyTurns, cooldownMs, fetchCacheMs, nudge };
 }
