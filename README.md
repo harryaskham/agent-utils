@@ -23,6 +23,7 @@ It currently provides:
 - `/web-search` prompt template
 - `search_web` native Pi tool for live web lookups via GitHub Copilot Responses API
 - `kitty_image_preview_*` native Pi tools for persistent terminal image previews via the kitty graphics protocol
+- macOS-only `open_macos_app` opens an `.app` in the background and moves its first window to the display not containing the focused window; `capture_macos_screenshot` and `/screenshot` use the native crosshair selector and immediately share the selected PNG as image context. Window movement requires macOS Accessibility permission; screenshot capture requires Screen Recording permission.
 - Reactive oversized-image recovery via [`extensions/image-413-recovery.js`](extensions/image-413-recovery.js): if a provider rejects the latest image-read context with HTTP 413, Agent Utils creates an exact half-width/half-height PNG, replaces only that tool attachment in future provider context with a path-bearing error message, and queues at most one repaired retry. See the [image 413 recovery guide](docs/image-413-recovery.md).
 - `firecracker_vm_*` native Pi tools for preparing, spawning, inspecting, and stopping Firecracker VM workloads for Tendril-visible services
 - `xvfb_*` native Pi tools (`xvfb_ensure` / `xvfb_stop` / `xvfb_status`) for opt-in, guarded Xvfb virtual-display orchestration on headless Linux nodes so display-dependent tools can run

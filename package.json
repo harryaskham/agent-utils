@@ -87,7 +87,8 @@
       "./extensions/app-automation.js",
       "./extensions/slack-mcp.js",
       "./extensions/android.js",
-      "./extensions/xvfb.js"
+      "./extensions/xvfb.js",
+      "./extensions/macos-native.js"
     ],
     "prompts": [
       "./prompts"
