@@ -902,10 +902,33 @@ async function describeImageFile(filePath, item, ctx, params = {}, signal) {
   });
 }
 
+export function boundedDescriptionError(error) {
+  const raw = String(error?.message || error || "Image description failed")
+    .replace(/(api[_-]?key|token|authorization|cookie|password)\s*[=:]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
+    .replace(/[\r\n]+/g, " ")
+    .trim()
+    .slice(0, 1000);
+  const code = /cannot find (?:package|module)|ERR_MODULE_NOT_FOUND/i.test(raw)
+    ? "dependency_unavailable"
+    : /auth|credential|api[_-]?key|401|403/i.test(raw)
+      ? "provider_auth_unavailable"
+      : /model|provider/i.test(raw)
+        ? "provider_unavailable"
+        : "inference_failed";
+  return { code, message: raw || "Image description failed" };
+}
+
 async function maybeDescribeImage(item, ctx, params = {}, signal, onUpdate) {
   if (!params.describe) return undefined;
   onUpdate?.({ content: [{ type: "text", text: `Describing ${item.label} with a vision model...` }] });
-  return describeImageFile(item.path, item, ctx, params, signal);
+  try {
+    return await describeImageFile(item.path, item, ctx, params, signal);
+  } catch (error) {
+    const descriptionError = boundedDescriptionError(error);
+    try { ctx?.ui?.notify?.(`Image preview is visible; optional description failed (${descriptionError.code}).`, "warning"); } catch {}
+    return { error: descriptionError };
+  }
 }
 
 

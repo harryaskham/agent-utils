@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createStrictMockPi } from "./helpers/strict-mock-pi.js";
-import kittyImagePreviewExtension from "../extensions/kitty-image-preview.js";
+import kittyImagePreviewExtension, { boundedDescriptionError } from "../extensions/kitty-image-preview.js";
 import { showInKittyImagePreview } from "../extensions/kitty-image-preview/runtime.js";
 
 // pi.on hook-wiring coverage for kitty-image-preview.js (bd-aacc0c, follow-up to
@@ -26,6 +26,17 @@ function makeCtx(hasUI) {
     ui: { setStatus() {}, setWidget() {}, notify() {} },
   };
 }
+
+test("optional description failures are typed, bounded, and secret-free", () => {
+  assert.deepEqual(boundedDescriptionError(new Error("Cannot find package @earendil-works/pi-ai token=secret")), {
+    code: "dependency_unavailable",
+    message: "Cannot find package @earendil-works/pi-ai token=[REDACTED]",
+  });
+  const auth = boundedDescriptionError(new Error(`provider 401 api_key=top-secret\n${"x".repeat(2000)}`));
+  assert.equal(auth.code, "provider_auth_unavailable");
+  assert.equal(auth.message.includes("top-secret"), false);
+  assert.ok(auth.message.length <= 1000);
+});
 
 test("kitty-image-preview registers session_start and session_shutdown hooks", () => {
   const { pi, handlers } = createStrictMockPi();
@@ -51,6 +62,29 @@ test("kitty-image-preview session_shutdown hook fires without throwing, UI + hea
   await assert.doesNotReject(async () => { await shutdown({}, makeCtx(false)); }, "session_shutdown (headless) must not throw");
   // Defensive: the hook guards on ctx?.hasUI, so a missing ctx must also be safe.
   await assert.doesNotReject(async () => { await shutdown({}, undefined); }, "session_shutdown (no ctx) must not throw");
+});
+
+test("folder preview remains successful when optional description inference fails", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "kitty-preview-describe-failure-"));
+  const file = path.join(tmp, "frame.png");
+  await writeFile(file, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lDL+WQAAAABJRU5ErkJggg==", "base64"));
+  const { pi, tools } = createStrictMockPi();
+  kittyImagePreviewExtension(pi);
+  const ctx = makeCtx(true);
+  ctx.cwd = tmp;
+  ctx.modelRegistry = {
+    find: () => ({ provider: "test", id: "vision" }),
+    complete: async () => { throw new Error("provider unavailable token=secret"); },
+  };
+  try {
+    const result = await tools.get("kitty_image_preview_add_folder").execute("tool", { path: tmp, describe: true }, null, () => {}, ctx);
+    assert.match(result.content[0].text, /Added 1 image/);
+    assert.equal(result.details.addedCount, 1);
+    assert.equal(result.details.description.error.code, "provider_unavailable");
+    assert.equal(result.details.description.error.message.includes("secret"), false);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 });
 
 test("runtime handoff mounts a captured PNG through the fullscreen widget owner", async () => {
