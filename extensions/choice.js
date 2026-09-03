@@ -567,6 +567,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
           rpcAbort: null,
           onAbort: null,
           warnedSpeech: false,
+          bracketedPaste: false,
+          suppressPasteSubmit: false,
           lastInputCommandId: null,
           forcedPresentation,
           originalQuestion: question,
@@ -606,6 +608,25 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
         };
         const dispatchKeyboard = (data) => {
           const key = String(data ?? "");
+          // Bracketed paste is message/composer input, never modal shortcuts.
+          // Consume it and the legacy injector's following Enter so pasted
+          // words containing i/j/k or digits cannot mutate the choice.
+          if (record.bracketedPaste) {
+            if (key.includes("\u001b[201~")) {
+              record.bracketedPaste = false;
+              record.suppressPasteSubmit = true;
+            }
+            return true;
+          }
+          if (key.includes("\u001b[200~")) {
+            record.bracketedPaste = !key.includes("\u001b[201~");
+            record.suppressPasteSubmit = true;
+            return true;
+          }
+          if (record.suppressPasteSubmit && isChoiceEnterKey(key)) {
+            record.suppressPasteSubmit = false;
+            return true;
+          }
           if (record.freeformMode === "text") {
             if (isChoiceEscapeKey(key)) emitInput({ action: INPUT_ACTIONS.FREEFORM_CANCEL, source: "keyboard", reason: "escape" });
             else if (isChoiceEnterKey(key)) emitInput({ action: INPUT_ACTIONS.FREEFORM_SUBMIT, text: record.freeformText, source: "keyboard" });

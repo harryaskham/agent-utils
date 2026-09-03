@@ -445,6 +445,20 @@ test("pending choices repeat at the configured interval with finite and unlimite
   assert.equal(unlimited.jobs[0].cancelled, true, "selection clears the pending repeat timer");
 });
 
+test("bracketed pasted messages cannot trigger modal choice shortcuts or submit", async () => {
+  const h = harness();
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, cacophonyBridge: false })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
+  await Promise.resolve();
+  h.input("\u001b[200~msg from agent with an i and 2 in it\u001b[201~");
+  h.input("\r");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(h.widgets.has("agent-utils-choice"), true, "paste and its submit Enter leave the choice pending");
+  h.input("2");
+  const result = await pending;
+  assert.equal(result.details.choice.label, "beta");
+});
+
 test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and renders colored selection", async () => {
   const h = harness();
   let component;

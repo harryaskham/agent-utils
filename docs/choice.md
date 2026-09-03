@@ -286,7 +286,9 @@ force=...`, Stop selections, and Escape never rewrite that startup policy.
 
 The TUI implementation is a true `ctx.ui.custom` modal, not a below-editor
 widget: it owns focus, captures arrow sequences before the editor, and swallows
-unmapped typing. Numbers and the selected item use accent styling, while summaries,
+unmapped typing. Bracketed paste is always consumed as non-choice input, including
+the legacy injector's following Enter, so pasted messages cannot activate `i`,
+`j`/`k`, numeric shortcuts, or the selected row. Numbers and the selected item use accent styling, while summaries,
 controls, timeout state, and the border use distinct theme colors.
 
 Under `/force-choice`, **q**, **Q**, and Escape are hard stops: they disable force
