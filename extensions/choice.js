@@ -888,6 +888,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
     });
 
     pi.on("session_start", (_event, ctx) => {
+      try { speakerController.assignSession?.(ctx); } catch {}
       announceCapability();
       if (!choiceConfig.forceAtAgentEnd) return;
       let entries = [];

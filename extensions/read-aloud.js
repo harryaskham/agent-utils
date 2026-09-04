@@ -20,6 +20,7 @@ import {
 } from "./lib/tts.js";
 import { audioDurationMs } from "./lib/realtime-audio.js";
 import { markAssistantSpeaking } from "./lib/half-duplex-state.js";
+import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./lib/tts-identity.js";
 import {
   readPersistedReadSettings,
   readPersistedTtsSettings,
@@ -261,6 +262,7 @@ export function createReadModeController({
         server: config.server,
         device: config.device,
         streamName: config.streamName,
+        pan: config.pan,
         env,
       });
       if (mine === generation) setStatus(ctx, "/read · on");
@@ -352,8 +354,9 @@ export function createReadModeController({
 
 export function createReadAloudExtension({ settingsPath, persistedTts, persistedRead } = {}) {
   return function readAloudExtension(pi) {
+  const ttsSettings = persistedTts ?? readPersistedTtsSettings(settingsPath);
   const controller = createReadModeController({
-    persistedTts: persistedTts ?? readPersistedTtsSettings(settingsPath),
+    persistedTts: ttsSettings,
     persistedRead: persistedRead ?? readPersistedReadSettings(settingsPath),
   });
   let terminalInputUnsubscribe = null;
@@ -361,6 +364,8 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
 
   pi.on("session_start", (_event, ctx) => {
     sessionCtx = ctx;
+    const assignment = resolveSessionSpeechAssignment(sessionSpeechIdentity(ctx), resolveSessionSpeechPolicy(ttsSettings));
+    controller.setConfig({ ...controller.getConfig(), ...(assignment.voice ? { voice: assignment.voice, embedding: null } : {}), pan: assignment.pan });
     try { terminalInputUnsubscribe?.(); } catch {}
     terminalInputUnsubscribe = ctx?.ui?.onTerminalInput?.((data) => controller.handleTerminalInput(data, ctx)) || null;
   });

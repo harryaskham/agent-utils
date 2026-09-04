@@ -7,6 +7,7 @@
 
 import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "./input-actions.js";
 import { resolveAgentTtsSettings } from "./tts-narration.js";
+import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./tts-identity.js";
 import {
   DEFAULT_TTS_BACKEND,
   DEFAULT_TTS_DEVICE,
@@ -186,6 +187,8 @@ export function createChoiceSpeaker({
   streamName = DEFAULT_CHOICE_STREAM_NAME,
 } = {}) {
   const shared = resolveAgentTtsSettings({ env, persisted }).config;
+  const speechPolicy = resolveSessionSpeechPolicy(persisted, env);
+  let assignment = null;
   let synthesis = null;
 
   const interrupt = () => {
@@ -203,10 +206,10 @@ export function createChoiceSpeaker({
     const resolved = resolveSpeakToolParams({ text: body }, { env, persisted });
     try {
       const options = {
-        voice: resolved.voice,
+        voice: assignment?.voice || resolved.voice,
         lang: resolved.lang,
         speed: resolved.speed,
-        speakerProfileId: resolved.speakerProfileId,
+        speakerProfileId: assignment ? undefined : resolved.speakerProfileId,
         style: resolved.style,
         styleDegree: resolved.styleDegree,
         signal: controller.signal,
@@ -220,6 +223,7 @@ export function createChoiceSpeaker({
         server: env.PULSE_SERVER || shared.server,
         device: env.PULSE_SINK || shared.device || DEFAULT_TTS_DEVICE,
         streamName,
+        pan: assignment?.pan,
         env,
       });
     } catch (error) {
@@ -230,5 +234,10 @@ export function createChoiceSpeaker({
     }
   };
 
-  return { speak, interrupt, dispose: interrupt };
+  return {
+    speak,
+    interrupt,
+    dispose: interrupt,
+    assignSession(ctx) { assignment = resolveSessionSpeechAssignment(sessionSpeechIdentity(ctx, env), speechPolicy); return { ...assignment }; },
+  };
 }

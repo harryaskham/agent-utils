@@ -886,7 +886,7 @@ test("choice speaker inherits persisted agentUtils.tts and interrupts stale spee
   };
   const speaker = createChoiceSpeaker({
     env: { AZURE_SPEECH_API_KEY: "secret" },
-    persisted: { voice: "PersistedVoice", embedding: "profile", lang: "cy-GB", speed: 1.4, endpoint: "https://speech", backend: "pulse", device: "persisted_sink" },
+    persisted: { voice: "PersistedVoice", voices: ["voice-a:MAI-Voice-2-Flash", "voice-b:MAI-Voice-2-Flash"], panRange: { min: -0.5, max: 0.5 }, embedding: "profile", lang: "cy-GB", speed: 1.4, endpoint: "https://speech", backend: "pulse", device: "persisted_sink" },
     synthesize: async (text, options) => { synthOptions.push(options); return Buffer.from(text); },
     player,
   });
@@ -898,4 +898,11 @@ test("choice speaker inherits persisted agentUtils.tts and interrupts stale spee
   assert.equal(synthOptions[0].endpoint, "https://speech");
   assert.equal(calls[1].options.device, "persisted_sink");
   assert.equal(calls[1].options.streamName, "/choice");
+
+  const assignment = speaker.assignSession({ sessionManager: { getSessionId: () => "choice-session" } });
+  await speaker.speak("assigned");
+  assert.ok(["voice-a:MAI-Voice-2-Flash", "voice-b:MAI-Voice-2-Flash"].includes(synthOptions[1].voice));
+  assert.equal(synthOptions[1].speakerProfileId, undefined);
+  assert.equal(calls.at(-1).options.pan, assignment.pan);
+  assert.ok(assignment.pan >= -0.5 && assignment.pan <= 0.5);
 });
