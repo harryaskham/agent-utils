@@ -235,6 +235,7 @@ export function createAgentSpeechController({
       if (mine !== generation || controller.signal.aborted) return { interrupted: true };
       return await player.play(pcm, {
         backend: effective.backend,
+        pan: effective.pan,
         server: effective.server,
         device: effective.device,
         streamName: "/tts",

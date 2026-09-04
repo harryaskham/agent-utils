@@ -18,6 +18,7 @@ import {
   synthesizeAzureSpeechDirect,
   synthesizeSpeechDirect,
   buildPcmPlaybackSpec,
+  panMonoPcm16le,
   createInterruptiblePcmPlayer,
 } from "../extensions/lib/tts.js";
 
@@ -25,6 +26,20 @@ const okFetch = (bytes = [1, 2, 3, 4]) => async () => ({
   ok: true,
   status: 200,
   async arrayBuffer() { return Uint8Array.from(bytes).buffer; },
+});
+
+test("mono PCM panning produces constant-power stereo", () => {
+  const mono = Buffer.alloc(4);
+  mono.writeInt16LE(10000, 0);
+  mono.writeInt16LE(-10000, 2);
+  const left = panMonoPcm16le(mono, -1);
+  assert.equal(left.length, 8);
+  assert.equal(left.readInt16LE(0), 10000);
+  assert.equal(left.readInt16LE(2), 0);
+  const right = panMonoPcm16le(mono, 1);
+  assert.equal(right.readInt16LE(0), 0);
+  assert.equal(right.readInt16LE(2), 10000);
+  assert.ok(Math.abs(panMonoPcm16le(mono, 0).readInt16LE(0) - 7071) <= 1);
 });
 
 test("shared TTS defaults match /read voice specification", () => {

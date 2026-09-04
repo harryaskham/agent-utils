@@ -15,6 +15,7 @@ Neither mode requires the agent to call the `speak` tool.
 /tts off
 /tts status
 /tts voice=MAI-Voice-2 speed=2 style=hopeful styledegree=1.5
+/tts --harry            # Harry embedding, retaining this session's stereo pan
 /tts prefix='Agent: ' suffix=' End.'
 ```
 
@@ -49,6 +50,18 @@ message always wins. Failures produce a warning but never block an agent turn.
 `/tts` is off by default. Avoid enabling legacy `speak-replies` simultaneously,
 since it is a separate historical auto-speech surface.
 
+At `session_start`, `/tts` and `/narrate` hash Pi's stable session ID to choose
+one voice from `agentUtils.tts.voices` and one constant-power stereo position
+within `agentUtils.tts.panRange` (default `-0.9..0.9`). The assignment remains
+stable for the session and differs independently across sessions. The built-in
+pool is the reviewed MAI-Voice-2-Flash list from Cacophony, excluding quarantined
+aliases. `PI_TTS_VOICES`, `PI_TTS_PAN_MIN`, and `PI_TTS_PAN_MAX` override policy.
+This identity assignment deliberately does **not** apply to `/read`.
+
+Start Pi with `--harry`, or run `/tts --harry` or `/narrate --harry`, to retain
+the session's stereo position while selecting `MAI-Voice-2` with Harry's
+`0daec43c-911f-4529-820a-16dab73630d3` embedding.
+
 ### Durable settings
 
 Both modes support the standard `env > settings.json > default` precedence.
@@ -66,6 +79,12 @@ explicitly.
       "enabled": true,
       "provider": "azure",
       "voice": "MAI-Voice-2",
+      "voices": [
+        "en-US-Harper:MAI-Voice-2-Flash",
+        "en-US-Iris:MAI-Voice-2-Flash",
+        "en-US-Jasper:MAI-Voice-2-Flash"
+      ],
+      "panRange": { "min": -0.9, "max": 0.9 },
       "lang": "en-GB",
       "speed": 2,
       "embedding": "0daec43c-911f-4529-820a-16dab73630d3",

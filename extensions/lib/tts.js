@@ -266,11 +266,26 @@ export async function synthesizeSpeechDirect(text, options = {}) {
   return synthesizeAzureSpeechDirect({ ...options, text });
 }
 
+export function panMonoPcm16le(buffer, pan = 0) {
+  const input = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  const position = Math.max(-1, Math.min(1, Number(pan) || 0));
+  const left = Math.cos((position + 1) * Math.PI / 4);
+  const right = Math.sin((position + 1) * Math.PI / 4);
+  const output = Buffer.allocUnsafe(Math.floor(input.length / 2) * 4);
+  for (let src = 0, dst = 0; src + 1 < input.length; src += 2, dst += 4) {
+    const sample = input.readInt16LE(src);
+    output.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample * left))), dst);
+    output.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample * right))), dst + 2);
+  }
+  return output;
+}
+
 export function buildPcmPlaybackSpec({
   backend = DEFAULT_TTS_BACKEND,
   server = process.env.PULSE_SERVER,
   device = DEFAULT_TTS_DEVICE,
   streamName = DEFAULT_TTS_STREAM_NAME,
+  channels = 1,
   env = process.env,
 } = {}) {
   let selected = String(backend || DEFAULT_TTS_BACKEND).trim().toLowerCase();
@@ -287,7 +302,7 @@ export function buildPcmPlaybackSpec({
   else childEnv.PULSE_SERVER = String(server);
 
   if (["pulse", "pulseaudio", "pacat", "paplay"].includes(selected)) {
-    const args = ["--playback", "--raw", "--format=s16le", "--rate=24000", "--channels=1"];
+    const args = ["--playback", "--raw", "--format=s16le", "--rate=24000", `--channels=${channels}`];
     if (server) args.push(`--server=${String(server)}`);
     if (device) args.push(`--device=${String(device)}`);
     if (streamName) {
@@ -296,10 +311,10 @@ export function buildPcmPlaybackSpec({
     return { command: "pacat", args, env: childEnv };
   }
   if (["sox", "play"].includes(selected)) {
-    return { command: "play", args: ["-q", "-t", "raw", "-b", "16", "-e", "signed-integer", "-r", "24000", "-c", "1", "-"], env: childEnv };
+    return { command: "play", args: ["-q", "-t", "raw", "-b", "16", "-e", "signed-integer", "-r", "24000", "-c", String(channels), "-"], env: childEnv };
   }
   if (["coreaudio", "ffplay", "ffmpeg"].includes(selected)) {
-    return { command: "ffplay", args: ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ch_layout", "mono", "-i", "-"], env: childEnv };
+    return { command: "ffplay", args: ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ch_layout", channels === 2 ? "stereo" : "mono", "-i", "-"], env: childEnv };
   }
   throw new Error(`tts playback: unsupported backend '${backend}'`);
 }
@@ -336,7 +351,12 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
   };
 
   const play = (buffer, options = {}) => {
-    const pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+    let pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+    const pan = Number(options.pan);
+    if (Number.isFinite(pan)) {
+      pcm = panMonoPcm16le(pcm, pan);
+      options = { ...options, channels: 2 };
+    }
     if (pcm.length === 0) return Promise.resolve({ interrupted: false, empty: true });
     interrupt();
     const spec = buildPcmPlaybackSpec(options);

@@ -29,7 +29,7 @@ import {
 } from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
 
-function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSettings = { tts: {}, narrate: {} } } = {}) {
+function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSettings = { tts: {}, narrate: {} }, flags = {} } = {}) {
   const commands = new Map();
   const handlers = new Map();
   const sent = [];
@@ -44,6 +44,8 @@ function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSetting
   };
   const pi = {
     registerCommand(name, def) { commands.set(name, def); },
+    registerFlag() {},
+    getFlag(name) { return flags[name]; },
     registerMessageRenderer(name, fn) { renderers.set(name, fn); },
     on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
     sendMessage(message, options) { sent.push({ message, options }); },
@@ -207,6 +209,29 @@ test("explicit /tts and /narrate setters are runtime-only and never rewrite star
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("session identity assigns one deterministic voice and pan while --harry keeps pan with Harry embedding", () => {
+  const makeSpeech = () => {
+    let config = { provider: "azure", voice: "base", embedding: "old", backend: "pulse", device: "sink" };
+    return { getConfig: () => ({ ...config }), setConfig(next) { config = { ...next }; }, apply(values) { config = { ...config, ...values }; }, interrupt() {}, dispose() {}, async speak() {} };
+  };
+  const normal = makeSpeech();
+  const h1 = harness({ speech: normal, persistedSettings: { tts: { voices: ["voice-a", "voice-b"], panRange: { min: -0.4, max: 0.4 } }, narrate: {} } });
+  h1.ctx.sessionManager = { getSessionId: () => "stable-session" };
+  h1.emit("session_start", {});
+  const assigned = normal.getConfig();
+  assert.ok(["voice-a", "voice-b"].includes(assigned.voice));
+  assert.ok(assigned.pan >= -0.4 && assigned.pan <= 0.4);
+  assert.equal(assigned.embedding, null);
+
+  const harry = makeSpeech();
+  const h2 = harness({ speech: harry, flags: { harry: true }, persistedSettings: { tts: { voices: ["voice-a"], panRange: { min: -0.4, max: 0.4 } }, narrate: {} } });
+  h2.ctx.sessionManager = { getSessionId: () => "stable-session" };
+  h2.emit("session_start", {});
+  assert.equal(harry.getConfig().voice, "MAI-Voice-2");
+  assert.equal(harry.getConfig().embedding, "0daec43c-911f-4529-820a-16dab73630d3");
+  assert.equal(harry.getConfig().pan, assigned.pan);
 });
 
 test("shared /tts speech controller inherits /read defaults and interrupts stale synthesis/playback", async () => {

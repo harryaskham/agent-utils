@@ -26,6 +26,8 @@ import {
   readPersistedTtsSettings,
 } from "./lib/tts-settings.js";
 import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js";
+import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./lib/tts-identity.js";
+import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE } from "./lib/tts.js";
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -47,6 +49,7 @@ function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "
     `enabled-source:${enabledSource}`,
     `provider:${config.provider}`,
     `voice:${optional(config.voice)}`,
+    `pan:${optional(config.pan == null ? null : Number(config.pan).toFixed(2))}`,
     `lang:${optional(config.lang)}`,
     `speed:${optional(config.speed)}`,
     `style:${optional(config.style)}`,
@@ -70,11 +73,15 @@ export function createTtsNarrationExtension({
   runtimeSettings,
 } = {}) {
   return function ttsNarrationExtension(pi) {
+    pi.registerFlag?.("harry", { description: "Use Harry's TTS embedding while retaining deterministic session pan", type: "boolean", default: false });
+    const harryFlag = pi.getFlag?.("harry") === true;
     const persistedTts = persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath);
     const persistedNarrate = persistedSettings?.narrate ?? readPersistedNarrateSettings(settingsPath);
     const resolvedTts = resolveAgentTtsSettings({ env, persisted: persistedTts });
     const resolvedNarrate = resolveNarrateSettings({ env, persisted: persistedNarrate });
     const speechController = speech || createAgentSpeechController({ env, initialConfig: resolvedTts.config });
+    const sessionSpeechPolicy = resolveSessionSpeechPolicy(persistedTts, env);
+    let sessionSpeechAssignment = null;
     let ttsEnabled = resolvedTts.enabled;
     let ttsEnabledSource = resolvedTts.enabledSource;
     let ttsPrefix = expandEnvReferences(resolvedTts.prefix, env, "/tts prefix");
@@ -110,9 +117,8 @@ export function createTtsNarrationExtension({
     };
 
     pi.on?.("session_start", (_event, ctx) => {
-      let saved;
-      try { saved = durable.restore(ctx); } catch { return; }
-      if (!saved) return;
+      let saved = {};
+      try { saved = durable.restore(ctx) || {}; } catch {}
 
       const tts = saved.tts || {};
       if (tts.speech && typeof tts.speech === "object") {
@@ -134,6 +140,18 @@ export function createTtsNarrationExtension({
       if (typeof narrate.prefix === "string") narrationPrefix = narrate.prefix;
       if (typeof narrate.suffix === "string") narrationSuffix = narrate.suffix;
       if (typeof narrate.enabled === "boolean") { narrateEnabled = narrate.enabled; narrateEnabledSource = "session"; }
+
+      sessionSpeechAssignment = resolveSessionSpeechAssignment(sessionSpeechIdentity(ctx, env), sessionSpeechPolicy);
+      const current = speechController.getConfig();
+      const assigned = {
+        ...current,
+        ...(harryFlag
+          ? { voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING }
+          : sessionSpeechAssignment.voice ? { voice: sessionSpeechAssignment.voice, embedding: null } : {}),
+        pan: sessionSpeechAssignment.pan,
+      };
+      if (typeof speechController.setConfig === "function") speechController.setConfig(assigned);
+      else if (typeof speechController.apply === "function") speechController.apply({ voice: assigned.voice, embedding: assigned.embedding });
     });
 
     try {
@@ -287,6 +305,16 @@ export function createTtsNarrationExtension({
           ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
           return;
         }
+        if (simple === "--harry" || simple === "harry") {
+          const current = speechController.getConfig();
+          speechController.setConfig({ ...current, voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
+          rememberTtsSpeechValues({ voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
+          ttsEnabled = true;
+          ttsEnabledSource = "runtime";
+          rememberTts({ enabled: true });
+          ctx.ui.notify(ttsStatus(ttsEnabled, speechController, env, ttsEnabledSource, { prefix: ttsPrefix, suffix: ttsSuffix }), "info");
+          return;
+        }
         if (simple === "off") {
           ttsEnabled = false;
           ttsEnabledSource = "runtime";
@@ -328,7 +356,14 @@ export function createTtsNarrationExtension({
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
-        if (!raw || simple === "on") {
+        if (simple === "--harry" || simple === "harry") {
+          const current = speechController.getConfig();
+          speechController.setConfig({ ...current, voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
+          rememberTtsSpeechValues({ voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
+          narrateEnabled = true;
+          narrateEnabledSource = "runtime";
+          rememberNarrate({ enabled: true });
+        } else if (!raw || simple === "on") {
           narrateEnabled = true;
           narrateEnabledSource = "runtime";
           rememberNarrate({ enabled: true });
