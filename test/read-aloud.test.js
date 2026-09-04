@@ -254,9 +254,8 @@ test("extension registers /read, attaches editor input, and exposes redacted sta
   assert.match(commands.get("read").description, /Direct Azure editor-to-speech mode/);
   assert.equal(harness.terminal.length, 1);
   assert.equal(typeof handlers.get("input"), "function");
-  assert.match(pi.readAloud.getConfig().voice, /:MAI-Voice-2-Flash$/);
-  assert.equal(pi.readAloud.getConfig().embedding, null);
-  assert.ok(pi.readAloud.getConfig().pan >= -0.9 && pi.readAloud.getConfig().pan <= 0.9);
+  assert.equal(pi.readAloud.getConfig().voice, "MAI-Voice-2");
+  assert.equal(pi.readAloud.getConfig().embedding, "0daec43c-911f-4529-820a-16dab73630d3");
 
   const oldEndpoint = process.env.AZURE_SPEECH_ENDPOINT;
   const oldKey = process.env.AZURE_SPEECH_API_KEY;
