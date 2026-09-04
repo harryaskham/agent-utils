@@ -178,7 +178,7 @@ import { fileQuickfileUtterance } from "./lib/realtime-quickfile.js";
 import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./lib/cacophony-runtime.js";
 import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
 import { makePttIndicator } from "./lib/realtime-ptt-indicator.js";
-import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs, transcribeAudioDirect } from "./lib/realtime-stt-batch.js";
+import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs, transcribeAudioDirect, transcribeMaiAudioDirect } from "./lib/realtime-stt-batch.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
 import { AudioLevelMeter, formatLevelBar, rmsToLevel, shouldRefreshMeter, DEFAULT_METER_REFRESH_MS } from "./lib/realtime-audio-meter.js";
@@ -309,7 +309,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|local-vad-ptt|quickfile|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt commentary [thinking|text|hidden], /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false commentary=thinking speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). `/stt` defaults to local-vad with mai-transcribe-1.5; `/ptt` is its hold-mode alias. Full Realtime transcription requires explicit `/rt stt ...`. Defaults: backend=pulse, server=sgu24:4713, listen=vad on Realtime start.";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|local-vad-ptt|quickfile|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt commentary [thinking|text|hidden], /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false commentary=thinking speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). `/stt` defaults to local-vad with mai-transcribe-2; `/ptt` is its hold-mode alias. Full Realtime transcription requires explicit `/rt stt ...`. Defaults: backend=pulse, server=sgu24:4713, listen=vad on Realtime start.";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -337,6 +337,9 @@ let localVadRunShellStream = runShellStream;
 function defaultLocalVadTranscribe(buffer, opts = {}) {
   const e = process.env;
   if (e.PI_RT_LOCAL_VAD_USE_STT_CLI === "1") return transcribePcmBuffer(buffer, opts);
+  if (String(opts.model || "").startsWith("mai-transcribe-") && e.AZURE_EASTUS_API_KEY && e.AZURE_EASTUS_ENDPOINT) {
+    return transcribeMaiAudioDirect({ pcm: buffer, model: opts.model, deployment: e.PI_RT_LOCAL_VAD_DEPLOYMENT, language: opts.language, timeoutMs: opts.timeoutMs, endpoint: e.AZURE_EASTUS_ENDPOINT, apiKey: e.AZURE_EASTUS_API_KEY });
+  }
   const baseUrl = e.PI_RT_BASE_URL || e.OPENAI_BASE_URL || "https://api.openai.com";
   const apiKey = e.PI_RT_API_KEY || e.OPENAI_API_KEY || "";
   return transcribeAudioDirect({ pcm: buffer, model: opts.model, language: opts.language, timeoutMs: opts.timeoutMs, baseUrl, apiKey });
@@ -4136,7 +4139,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   pi.registerCommand("stt", {
-    description: "Local-VAD speech transcription into the current Pi editor. Defaults to mai-transcribe-1.5; /stt ptt holds until release.",
+    description: "Local-VAD speech transcription into the current Pi editor. Defaults to mai-transcribe-2; /stt ptt holds until release.",
     handler: async (args, ctx) => handleLocalSpeechCommand(args, ctx, { defaultHold: false, commandName: "/stt" }),
   });
 

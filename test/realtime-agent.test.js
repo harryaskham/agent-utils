@@ -1840,7 +1840,7 @@ test("/rt stt local-vad captures, segments, batch-transcribes, and sends a commi
     );
     assert.equal(sentUserMessages[0].options?.deliverAs, "followUp");
     assert.ok(transcribeCalls.length >= 1, "batch transcribe ran over the segment audio");
-    assert.equal(transcribeCalls.at(-1).model, "mai-transcribe-1.5", "uses the decoupled batch model, not the realtime model");
+    assert.equal(transcribeCalls.at(-1).model, "mai-transcribe-2", "uses the decoupled batch model, not the realtime model");
 
     // /rt stt stop ends the capture.
     await commands.get("rt").handler("stt stop", ctx);
@@ -1877,7 +1877,7 @@ test("/rt stt=local-vad (k=v form) routes to local-vad, not regular stt-vad (bd-
   }
 });
 
-test("/stt and /rt-stt default to local VAD + mai-transcribe-1.5 without opening Realtime", async () => {
+test("/stt and /rt-stt default to local VAD + mai-transcribe-2 without opening Realtime", async () => {
   const captures = [];
   const captureFn = () => {
     const proc = new EventEmitter();
@@ -1897,7 +1897,7 @@ test("/stt and /rt-stt default to local VAD + mai-transcribe-1.5 without opening
     await h.commands.get("stt").handler("", h.ctx);
     assert.equal(captures.length, 1, "/stt starts local PCM capture");
     assert.equal(FakeWebSocket.instances.length, 0, "/stt does not open the Realtime WebSocket");
-    assert.match(String(h.widgets.get("realtime-status")?.[0]), /model=mai-transcribe-1\.5/);
+    assert.match(String(h.widgets.get("realtime-status")?.[0]), /model=mai-transcribe-2/);
     await h.commands.get("stt").handler("stop", h.ctx);
     assert.ok(captures[0].killed, "/stt stop kills local capture");
 
@@ -2300,7 +2300,7 @@ test("/rt stt local-vad surfaces the first transcribe failure to the operator (b
 
 test("/rt and local-STT value commands are runtime-only and preserve settings.json", async () => {
   const settingsPath = join(isolatedAgentSettingsDir, "settings.json");
-  const startup = JSON.stringify({ agentUtils: { realtime: { voice: "marin", speed: 1 }, stt: { energyThreshold: 0.01, model: "mai-transcribe-1.5" } }, unrelated: 11 }, null, 2) + "\n";
+  const startup = JSON.stringify({ agentUtils: { realtime: { voice: "marin", speed: 1 }, stt: { energyThreshold: 0.01, model: "mai-transcribe-2" } }, unrelated: 11 }, null, 2) + "\n";
   writeFileSync(settingsPath, startup);
   const previousEnergy = process.env.PI_RT_LOCAL_VAD_ENERGY_THRESHOLD;
   try {

@@ -9,7 +9,7 @@
 // backend so it can be unit-tested without a microphone/Pulse or a live `stt`
 // process. The eventual live wiring (a new `/rt stt local-vad` mode) feeds raw
 // PCM frames in via `push()` and, on each emitted event, runs a batch model
-// such as `stt --stdin --transcription-model mai-transcribe-1.5` over the
+// such as `stt --stdin --transcription-model mai-transcribe-2` over the
 // event's audio — inserting partials on `insert` and sending the turn on
 // `commit`. Those UX details (exact thresholds, insert-vs-commit semantics) are
 // operator-tunable and are NOT decided here.

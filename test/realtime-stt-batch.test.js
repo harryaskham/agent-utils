@@ -12,6 +12,7 @@ import {
   pcmToWav,
   resolveTranscriptionUrl,
   transcribeAudioDirect,
+  transcribeMaiAudioDirect,
 } from "../extensions/lib/realtime-stt-batch.js";
 
 test("resolveBatchSttModel reads PI_RT_LOCAL_VAD_MODEL or the batch default, decoupled from the realtime model (bd-84bbf7)", () => {
@@ -143,12 +144,24 @@ function fakeRes({ ok = true, status = 200, json, text, contentType = "applicati
   };
 }
 
+test("transcribeMaiAudioDirect uses East US JSON audio_url and derives the deployment", async () => {
+  let request;
+  const fetchImpl = async (url, init) => { request = { url, init, body: JSON.parse(init.body) }; return fakeRes({ json: { text: "new model" } }); };
+  const text = await transcribeMaiAudioDirect({ pcm: Buffer.from([0, 0]), model: "mai-transcribe-2", endpoint: "https://resource.cognitiveservices.azure.com", apiKey: "secret", language: "en", fetchImpl });
+  assert.equal(text, "new model");
+  assert.equal(request.url, "https://resource.services.ai.azure.com/mai/v1/audio/transcriptions");
+  assert.equal(request.body.model, "harryaskham-sandbox-ais-mai-transcribe-2");
+  assert.match(request.body.audio_url, /^data:audio\/wav;base64,/);
+  assert.equal(request.body.language, "en");
+  assert.equal(request.init.headers["api-key"], "secret");
+});
+
 test("transcribeAudioDirect POSTs one WAV to /v1/audio/transcriptions and returns {text} (bd-adde03)", async () => {
   let captured;
   const fetchImpl = async (url, opts) => { captured = { url, opts }; return fakeRes({ json: { text: "  hello world " } }); };
   const out = await transcribeAudioDirect({
     pcm: Buffer.from([1, 2, 3, 4]),
-    model: "mai-transcribe-1.5",
+    model: "mai-transcribe-2",
     baseUrl: "http://proxy:4000",
     apiKey: "sk-xyz",
     fetchImpl,

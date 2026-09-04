@@ -228,7 +228,7 @@ commit silence sends the finished editor contents as a Pi user message. Explicit
 `/rt stt local-vad` remains supported, but `/stt` is the normal entry point.
 
 The transcription model is independent of the realtime `trans` model: it
-defaults to `mai-transcribe-1.5` and is overridden with `PI_RT_LOCAL_VAD_MODEL`
+defaults to `mai-transcribe-2` and is overridden with `PI_RT_LOCAL_VAD_MODEL`
 (a realtime-only model such as `gpt-realtime-whisper` is not valid for the batch
 transcription endpoint). The request is bounded by `PI_RT_LOCAL_VAD_TIMEOUT_MS`
 (default 30000; `0` disables) so a stalled endpoint surfaces a clear error and
@@ -253,7 +253,7 @@ the status widget reacts in real time: `🎤 listening…` the instant speech is
 `✍️ transcribing…` while a batch runs, then your transcript firming up as you speak.
 
 Durable defaults live under `agentUtils.stt`; explicit setters such as
-`/stt model=mai-transcribe-1.5 insert=1000 commit=3000 energy=0.012`
+`/stt model=mai-transcribe-2 insert=1000 commit=3000 energy=0.012`
 read-merge-write that slice and start local VAD. `/ptt` accepts the same setters
 but starts hold mode. PTT intentionally shares these settings rather than
 copying them into an `agentUtils.ptt` tree.
@@ -262,7 +262,7 @@ Tuning knobs (all optional; env overrides the matching `agentUtils.stt` value):
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `PI_RT_LOCAL_VAD_MODEL` | `mai-transcribe-1.5` | batch transcription model (POSTed to `/v1/audio/transcriptions`) |
+| `PI_RT_LOCAL_VAD_MODEL` | `mai-transcribe-2` | batch transcription model (POSTed to `/v1/audio/transcriptions`) |
 | `PI_RT_LOCAL_VAD_TIMEOUT_MS` | `30000` | per-turn transcription timeout in ms (`0` disables) |
 | `PI_RT_LOCAL_VAD_USE_STT_CLI` | _(unset)_ | set `1` to fall back to the legacy `stt --stdin` subprocess instead of the direct HTTP call |
 | `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` | `0.012` | normalized RMS (0..1) at/above which a frame is speech |
@@ -275,7 +275,7 @@ Tuning knobs (all optional; env overrides the matching `agentUtils.stt` value):
 {
   "agentUtils": {
     "stt": {
-      "model": "mai-transcribe-1.5",
+      "model": "mai-transcribe-2",
       "timeoutMs": 30000,
       "energyThreshold": 0.012,
       "insertSilenceMs": 1000,
@@ -655,7 +655,7 @@ Unified `/rt` controls:
                               start microphone capture using listen API modes
 /rt audio [on|off|toggle]      control audio output
 /rt stt [vad|ptt|local-vad|stop]  explicit Realtime STT, or local-vad compatibility mode
-/stt [vad|ptt|stop|status]     local-VAD batch STT (default mai-transcribe-1.5)
+/stt [vad|ptt|stop|status]     local-VAD batch STT (default mai-transcribe-2)
 /ptt [start|stop|cancel|status] local-VAD hold mode with incremental editor drafts
 /rt widget [show|hide]         show or hide the realtime widget
 /rt status [compact|full]      compact or full status

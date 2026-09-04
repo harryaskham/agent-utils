@@ -185,7 +185,7 @@ test("cascade and STT startup readers are independent and never mutate settings"
   const path = join(dir, "settings.json");
   const startup = JSON.stringify({ agentUtils: {
     cascade: { voice: "embedding:default", speakerProfileId: "0daec43c" },
-    stt: { transcriptionModel: "whisper-1", vadThreshold: 0, model: "mai-transcribe-1.5", insertSilenceMs: 1000, shortcutsEnabled: true },
+    stt: { transcriptionModel: "whisper-1", vadThreshold: 0, model: "mai-transcribe-2", insertSilenceMs: 1000, shortcutsEnabled: true },
   }, theme: "nord" }, null, 2) + "\n";
   try {
     assert.deepEqual(readPersistedCascadeSettings(path), {}, "missing -> {}");

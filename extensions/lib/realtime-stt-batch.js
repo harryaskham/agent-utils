@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { runBoundedSubprocess } from "./bounded-exec.js";
 
-export const DEFAULT_STT_BATCH_MODEL = "mai-transcribe-1.5";
+export const DEFAULT_STT_BATCH_MODEL = "mai-transcribe-2";
 
 /// Default bound on how long the one-shot `stt` subprocess may run before it is
 /// killed and the transcription rejected (bd-adde03).
@@ -110,6 +110,45 @@ export function resolveTranscriptionUrl(baseUrl) {
 /// and cannot hang "transcribing" forever. The api key travels only in the
 /// Authorization header and is never logged. fetch/FormData/Blob injectable for
 /// tests.
+export async function transcribeMaiAudioDirect({
+  pcm,
+  wav,
+  model = DEFAULT_STT_BATCH_MODEL,
+  deployment,
+  endpoint,
+  apiKey,
+  language,
+  timeoutMs,
+  fetchImpl = fetch,
+} = {}) {
+  const root = String(endpoint || "").trim().replace(/\/+$/, "").replace(".cognitiveservices.azure.com", ".services.ai.azure.com");
+  if (!root) throw new Error("transcribe: no Azure East US endpoint");
+  const resource = new URL(root).hostname.split(".")[0];
+  const knownDeployment = model === "mai-transcribe-2"
+    ? "harryaskham-sandbox-ais-mai-transcribe-2"
+    : model === "mai-transcribe-1.5" ? "harryaskham-sandbox-ais-mai-transcribe-1-5" : undefined;
+  const selectedDeployment = String(deployment || knownDeployment || `${resource}-${String(model).replaceAll(".", "-")}`);
+  const audio = wav ?? pcmToWav(pcm);
+  const controller = new AbortController();
+  const timeout = timeoutMs == null ? resolveBatchSttTimeoutMs() : Number(timeoutMs);
+  const timer = Number.isFinite(timeout) && timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
+  let res;
+  try {
+    res = await fetchImpl(`${root}/mai/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { "api-key": String(apiKey || ""), "Content-Type": "application/json" },
+      body: JSON.stringify({ model: selectedDeployment, audio_url: `data:audio/wav;base64,${audio.toString("base64")}`, ...(language ? { language } : {}) }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`transcribe timed out after ${timeout}ms`);
+    throw error;
+  } finally { if (timer) clearTimeout(timer); }
+  if (!res?.ok) throw new Error(`transcribe HTTP ${res?.status ?? "?"}: ${String(await res?.text?.().catch?.(() => "") ?? "").slice(0, 200) || "no body"}`);
+  const value = await res.json();
+  return String(value?.text ?? "").trim();
+}
+
 export async function transcribeAudioDirect({
   pcm,
   wav,
