@@ -169,10 +169,15 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = 
 export function resolveNarrateSettings({ env = process.env, persisted = {} } = {}) {
   const speedRaw = env.PI_NARRATE_SPEED ?? persisted.speed;
   const speedNumber = Number(speedRaw);
+  const style = String(env.PI_NARRATE_STYLE ?? persisted.style ?? "").trim() || undefined;
+  const styleDegreeRaw = env.PI_NARRATE_STYLEDEGREE ?? persisted.styleDegree;
+  const styleDegreeNumber = Number(styleDegreeRaw);
   return {
     enabled: enabledValue(env.PI_NARRATE_ENABLED, enabledValue(persisted.enabled, false)),
     model: String(env.PI_NARRATE_MODEL || persisted.model || DEFAULT_NARRATION_MODEL).trim(),
     speed: Number.isFinite(speedNumber) && speedNumber > 0 ? speedNumber : undefined,
+    style,
+    styleDegree: Number.isFinite(styleDegreeNumber) && styleDegreeNumber >= 0.01 && styleDegreeNumber <= 2 ? styleDegreeNumber : undefined,
     textEnabled: enabledValue(env.PI_NARRATE_TEXT_ENABLED, enabledValue(persisted.textEnabled, true)),
     reasoningSummaries: enabledValue(env.PI_NARRATE_REASONING_SUMMARIES, enabledValue(persisted.reasoningSummaries, true)),
     prefix: String(env.PI_NARRATE_PREFIX ?? persisted.prefix ?? ""),
@@ -180,6 +185,8 @@ export function resolveNarrateSettings({ env = process.env, persisted = {} } = {
     enabledSource: env.PI_NARRATE_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
     modelSource: env.PI_NARRATE_MODEL ? "env" : persisted.model ? "settings" : "default",
     speedSource: env.PI_NARRATE_SPEED != null ? "env" : persisted.speed != null ? "settings" : "tts",
+    styleSource: env.PI_NARRATE_STYLE != null ? "env" : persisted.style != null ? "settings" : "tts",
+    styleDegreeSource: env.PI_NARRATE_STYLEDEGREE != null ? "env" : persisted.styleDegree != null ? "settings" : "tts",
     textEnabledSource: env.PI_NARRATE_TEXT_ENABLED != null ? "env" : Object.hasOwn(persisted, "textEnabled") ? "settings" : "default",
     reasoningSummariesSource: env.PI_NARRATE_REASONING_SUMMARIES != null ? "env" : Object.hasOwn(persisted, "reasoningSummaries") ? "settings" : "default",
   };

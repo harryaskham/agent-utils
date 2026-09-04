@@ -99,6 +99,8 @@ explicitly.
       "enabled": true,
       "model": "github-copilot/gpt-5.6-luna",
       "speed": 2,
+      "style": "excited",
+      "styleDegree": 1.6,
       "textEnabled": false,
       "reasoningSummaries": true,
       "prefix": "",
@@ -128,6 +130,7 @@ read from settings.
 ```text
 /narrate
 /narrate model=github-copilot/gpt-5.6-luna
+/narrate style=excited styledegree=1.6
 /narrate prefix="$AGENT_ID: " suffix=" done"
 /narrate reasoning_summaries=true
 /narrate text=false       # keep speech; omit retained text/context summaries

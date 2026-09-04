@@ -125,8 +125,8 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(tts.suffix, " done");
 
   const narrate = resolveNarrateSettings({
-    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2, textEnabled: false, reasoningSummaries: true, prefix: "N: ", suffix: " end" },
-    env: { PI_NARRATE_MODEL: "github-copilot/env" },
+    persisted: { enabled: true, model: "github-copilot/persisted", speed: 2, style: "hopeful", styleDegree: 1.2, textEnabled: false, reasoningSummaries: true, prefix: "N: ", suffix: " end" },
+    env: { PI_NARRATE_MODEL: "github-copilot/env", PI_NARRATE_STYLE: "excited", PI_NARRATE_STYLEDEGREE: "1.6" },
   });
   assert.equal(narrate.enabled, true);
   assert.equal(narrate.enabledSource, "settings");
@@ -134,6 +134,10 @@ test("durable TTS/narrate settings use env > persisted > defaults", () => {
   assert.equal(narrate.modelSource, "env");
   assert.equal(narrate.speed, 2);
   assert.equal(narrate.speedSource, "settings");
+  assert.equal(narrate.style, "excited");
+  assert.equal(narrate.styleDegree, 1.6);
+  assert.equal(narrate.styleSource, "env");
+  assert.equal(narrate.styleDegreeSource, "env");
   assert.equal(narrate.textEnabled, false);
   assert.equal(narrate.textEnabledSource, "settings");
   assert.equal(narrate.reasoningSummaries, true);
@@ -369,7 +373,7 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
     return { text: before ? "I am checking both sources." : "I found two matching records.", model: DEFAULT_NARRATION_MODEL };
   };
   const h = harness({ speech, runTextTurn, env: { AGENT_ID: "worker-7" }, persistedSettings: { tts: { speed: 1.4 }, narrate: { enabled: true, speed: 2 } } });
-  await h.commands.get("narrate").handler("prefix='$AGENT_ID: ' suffix=' done'", h.ctx);
+  await h.commands.get("narrate").handler("prefix='$AGENT_ID: ' suffix=' done' style=excited styledegree=1.6", h.ctx);
   h.emit("message_end", { message: { role: "assistant", content: [
     { type: "toolCall", id: "a", name: "read", arguments: { path: "a" } },
     { type: "toolCall", id: "b", name: "search", arguments: { query: "b" } },
@@ -390,7 +394,17 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
     assert.deepEqual(entry.options, { deliverAs: "nextTurn", triggerTurn: false });
   }
   assert.deepEqual(spoken, ["worker-7: I am checking both sources. done", "worker-7: I found two matching records. done"]);
-  assert.deepEqual(spokenOverrides, [{ speed: 2 }, { speed: 2 }], "narration overrides shared tts speed per call");
+  assert.deepEqual(spokenOverrides, [
+    { speed: 2, style: "excited", styleDegree: 1.6 },
+    { speed: 2, style: "excited", styleDegree: 1.6 },
+  ], "narration applies speech rate and Azure express-as style per call");
+});
+
+test("/narrate rejects Azure style degrees outside the SSML range", async () => {
+  const speech = { getConfig: () => ({}), apply() {}, interrupt() {}, dispose() {}, async speak() {} };
+  const h = harness({ speech, runTextTurn: async () => ({ text: "" }) });
+  await h.commands.get("narrate").handler("style=excited styledegree=2.1", h.ctx);
+  assert.match(h.notifications.at(-1).message, /between 0\.01 and 2/);
 });
 
 test("textEnabled=false speaks tool narration without retaining custom summary messages", async () => {

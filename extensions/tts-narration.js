@@ -92,6 +92,10 @@ export function createTtsNarrationExtension({
     let narrationModelSource = resolvedNarrate.modelSource;
     let narrationSpeed = resolvedNarrate.speed;
     let narrationSpeedSource = resolvedNarrate.speedSource;
+    let narrationStyle = resolvedNarrate.style;
+    let narrationStyleSource = resolvedNarrate.styleSource;
+    let narrationStyleDegree = resolvedNarrate.styleDegree;
+    let narrationStyleDegreeSource = resolvedNarrate.styleDegreeSource;
     let narrationTextEnabled = resolvedNarrate.textEnabled;
     let narrationTextEnabledSource = resolvedNarrate.textEnabledSource;
     let narrationReasoningSummaries = resolvedNarrate.reasoningSummaries;
@@ -135,6 +139,8 @@ export function createTtsNarrationExtension({
       const narrate = saved.narrate || {};
       if (typeof narrate.model === "string") { narrationModel = narrate.model; narrationModelSource = "session"; }
       if (typeof narrate.speed === "number") { narrationSpeed = narrate.speed; narrationSpeedSource = "session"; }
+      if (typeof narrate.style === "string") { narrationStyle = narrate.style || undefined; narrationStyleSource = "session"; }
+      if (typeof narrate.styleDegree === "number") { narrationStyleDegree = narrate.styleDegree; narrationStyleDegreeSource = "session"; }
       if (typeof narrate.textEnabled === "boolean") { narrationTextEnabled = narrate.textEnabled; narrationTextEnabledSource = "session"; }
       if (typeof narrate.reasoningSummaries === "boolean") { narrationReasoningSummaries = narrate.reasoningSummaries; narrationReasoningSummariesSource = "session"; }
       if (typeof narrate.prefix === "string") narrationPrefix = narrate.prefix;
@@ -196,7 +202,11 @@ export function createTtsNarrationExtension({
           details: { phase, source, batchId: batch.id, model, toolNames: batch.calls.map((call) => call.name) },
         }, { deliverAs: "nextTurn", triggerTurn: false });
       }
-      speakBestEffort(`${narrationPrefix}${text}${narrationSuffix}`, ctx, "narrate speech", narrationSpeed ? { speed: narrationSpeed } : {});
+      speakBestEffort(`${narrationPrefix}${text}${narrationSuffix}`, ctx, "narrate speech", {
+        ...(narrationSpeed ? { speed: narrationSpeed } : {}),
+        ...(narrationStyle ? { style: narrationStyle } : {}),
+        ...(narrationStyleDegree ? { styleDegree: narrationStyleDegree } : {}),
+      });
       return text;
     };
 
@@ -352,7 +362,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("narrate", {
-      description: "Asynchronously narrate complete tool batches before/after. Usage: /narrate [on|off|status|reasoning_summaries=true model=provider/id speed=2 text=false prefix='...' suffix='...'].",
+      description: "Asynchronously narrate complete tool batches before/after. Usage: /narrate [on|off|status|reasoning_summaries=true model=provider/id speed=2 style=excited styledegree=1.6 text=false prefix='...' suffix='...'].",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
@@ -377,7 +387,7 @@ export function createTtsNarrationExtension({
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             for (const key of Object.keys(parsed.values)) {
-              if (!new Set(["model", "enabled", "on", "speed", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
             if (parsed.values.prefix !== undefined) {
               narrationPrefix = expandEnvReferences(parsed.values.prefix, env, "/narrate prefix");
@@ -398,6 +408,19 @@ export function createTtsNarrationExtension({
               narrationSpeed = speed;
               narrationSpeedSource = "runtime";
               rememberNarrate({ speed });
+            }
+            if (parsed.values.style !== undefined) {
+              narrationStyle = String(parsed.values.style).trim() || undefined;
+              narrationStyleSource = "runtime";
+              rememberNarrate({ style: narrationStyle || "" });
+            }
+            const styleDegreeRaw = parsed.values.styledegree ?? parsed.values.style_degree;
+            if (styleDegreeRaw !== undefined) {
+              const degree = Number(styleDegreeRaw);
+              if (!Number.isFinite(degree) || degree < 0.01 || degree > 2) throw new Error("/narrate: styledegree must be between 0.01 and 2");
+              narrationStyleDegree = degree;
+              narrationStyleDegreeSource = "runtime";
+              rememberNarrate({ styleDegree: degree });
             }
             const reasoningRaw = parsed.values.reasoning_summaries ?? parsed.values.reasoningsummaries ?? parsed.values.reasoning;
             if (reasoningRaw !== undefined) {
@@ -423,7 +446,7 @@ export function createTtsNarrationExtension({
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
-        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · reasoning-summaries:${narrationReasoningSummaries ? "prefer" : "off"} · reasoning-source:${narrationReasoningSummariesSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
+        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · style:${narrationStyle ?? "tts"} · style-source:${narrationStyleSource} · styledegree:${narrationStyleDegree ?? "tts"} · styledegree-source:${narrationStyleDegreeSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · reasoning-summaries:${narrationReasoningSummaries ? "prefer" : "off"} · reasoning-source:${narrationReasoningSummariesSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
       },
     });
 
