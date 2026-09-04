@@ -59,7 +59,7 @@ aliases. `PI_TTS_VOICES`, `PI_TTS_PAN_MIN`, and `PI_TTS_PAN_MAX` override policy
 This identity assignment deliberately does **not** apply to `/read`.
 
 Start Pi with `--harry`, or run `/tts --harry` or `/narrate --harry`, to retain
-the session's stereo position while selecting `MAI-Voice-2` with Harry's
+the session's stereo position while selecting `MAI-Voice-2-Flash` with Harry's
 `0daec43c-911f-4529-820a-16dab73630d3` embedding.
 
 ### Durable settings

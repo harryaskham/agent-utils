@@ -27,7 +27,7 @@ import {
 } from "./lib/tts-settings.js";
 import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./lib/tts-identity.js";
-import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE } from "./lib/tts.js";
+import { DEFAULT_TTS_EMBEDDING } from "./lib/tts.js";
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -146,7 +146,7 @@ export function createTtsNarrationExtension({
       const assigned = {
         ...current,
         ...(harryFlag
-          ? { voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING }
+          ? { voice: "MAI-Voice-2-Flash", embedding: DEFAULT_TTS_EMBEDDING }
           : sessionSpeechAssignment.voice ? { voice: sessionSpeechAssignment.voice, embedding: null } : {}),
         pan: sessionSpeechAssignment.pan,
       };
@@ -307,8 +307,8 @@ export function createTtsNarrationExtension({
         }
         if (simple === "--harry" || simple === "harry") {
           const current = speechController.getConfig();
-          speechController.setConfig({ ...current, voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
-          rememberTtsSpeechValues({ voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
+          speechController.setConfig({ ...current, voice: "MAI-Voice-2-Flash", embedding: DEFAULT_TTS_EMBEDDING });
+          rememberTtsSpeechValues({ voice: "MAI-Voice-2-Flash", embedding: DEFAULT_TTS_EMBEDDING });
           ttsEnabled = true;
           ttsEnabledSource = "runtime";
           rememberTts({ enabled: true });
@@ -358,8 +358,8 @@ export function createTtsNarrationExtension({
         const simple = raw.toLowerCase();
         if (simple === "--harry" || simple === "harry") {
           const current = speechController.getConfig();
-          speechController.setConfig({ ...current, voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
-          rememberTtsSpeechValues({ voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
+          speechController.setConfig({ ...current, voice: "MAI-Voice-2-Flash", embedding: DEFAULT_TTS_EMBEDDING });
+          rememberTtsSpeechValues({ voice: "MAI-Voice-2-Flash", embedding: DEFAULT_TTS_EMBEDDING });
           narrateEnabled = true;
           narrateEnabledSource = "runtime";
           rememberNarrate({ enabled: true });

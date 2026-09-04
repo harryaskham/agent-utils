@@ -229,7 +229,7 @@ test("session identity assigns one deterministic voice and pan while --harry kee
   const h2 = harness({ speech: harry, flags: { harry: true }, persistedSettings: { tts: { voices: ["voice-a"], panRange: { min: -0.4, max: 0.4 } }, narrate: {} } });
   h2.ctx.sessionManager = { getSessionId: () => "stable-session" };
   h2.emit("session_start", {});
-  assert.equal(harry.getConfig().voice, "MAI-Voice-2");
+  assert.equal(harry.getConfig().voice, "MAI-Voice-2-Flash");
   assert.equal(harry.getConfig().embedding, "0daec43c-911f-4529-820a-16dab73630d3");
   assert.equal(harry.getConfig().pan, assigned.pan);
 });
