@@ -75,6 +75,7 @@ export function resolveChoiceSettings(env, persisted = {}) {
     ? null
     : Number.isFinite(repeatLimitNumber) && repeatLimitNumber >= 0 ? Math.trunc(repeatLimitNumber) : null;
   return {
+    enabled: boolSetting(env.PI_CHOICE_ENABLED, boolSetting(persisted.enabled, true)),
     timeoutMs: number("PI_CHOICE_TIMEOUT_MS", "timeoutMs", DEFAULT_CHOICE_TIMEOUT_MS, 0, 300000),
     maxChoices: number("PI_CHOICE_MAX_CHOICES", "maxChoices", 9, 2, 9),
     wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
@@ -188,6 +189,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
   return function choiceExtension(pi) {
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
+    if (!choiceConfig.enabled) return;
     const speakerController = speaker || createChoiceSpeaker({ env, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
     const cacoBridge = cacophonyBridge === false ? null : cacophonyBridge || createCacophonyChoiceBridge({ env, persisted: persistedChoice.cacophony || {}, setTimer, clearTimer });
     let active = null;

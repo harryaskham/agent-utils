@@ -14,6 +14,13 @@ adapters:
 The split uses Pi's built-in inter-extension event bus (`pi.events`). Future input
 modules can participate without importing either implementation.
 
+Set `agentUtils.choice.enabled=false` or `PI_CHOICE_ENABLED=0` to disable the
+entire choice extension: it registers no `interactive_choice` tool, commands,
+AHP provider, speech, or force-at-end hook. Dynamic settings forms such as
+`{ "$boolCommand": "[[ -z \"${PANOPTICON:-}\" ]]" }` are resolved before this
+policy is read, so Panopticon sessions can suppress choices without changing
+shared settings.
+
 ## Generic input event contract
 
 Input adapters emit `agent-utils:input-action` with one semantic action. The

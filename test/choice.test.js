@@ -75,9 +75,20 @@ const choices = [
 ];
 
 test("choice repeat settings resolve defaults and env overrides", () => {
+  assert.equal(resolveChoiceSettings({}, {}).enabled, true);
+  assert.equal(resolveChoiceSettings({ PI_CHOICE_ENABLED: "0" }, { enabled: true }).enabled, false);
+  assert.equal(resolveChoiceSettings({}, { enabled: false }).enabled, false);
   assert.deepEqual(resolveChoiceSettings({}, {}).repeat, { interval: 300, limit: null });
   assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_INTERVAL: "12.5", PI_CHOICE_REPEAT_LIMIT: "3" }, { repeat: { interval: 90, limit: null } }).repeat, { interval: 12.5, limit: 3 });
   assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_LIMIT: "null" }, { repeat: { interval: 45, limit: 2 } }).repeat, { interval: 45, limit: null });
+});
+
+test("disabled choice policy registers no tool, command, events, or speech", () => {
+  const h = harness();
+  createChoiceExtension({ speaker: null, persistedSettings: { choice: { enabled: false }, tts: {} }, cacophonyBridge: false })(h.pi);
+  assert.equal(h.tools.has("interactive_choice"), false);
+  assert.equal(h.commands.has("choice"), false);
+  assert.equal(h.handlers.size, 0);
 });
 
 test("configured appended actions normalize without mutating startup settings", () => {
