@@ -1,7 +1,11 @@
 // On-demand Nix dev shells without direnv startup or persistent project GC roots.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ToolSchema as Type } from "./tool-schema.js";
 import {
+  DEVSHELL_FAILURE_HINT,
+  flakeDeclaresDevShell,
   normalizeDevShellName,
   parseNullEnvironment,
   runNixDevelop,
@@ -11,11 +15,17 @@ import {
 
 const text = (value) => [{ type: "text", text: String(value) }];
 const label = (name) => name ? `.#${name}` : "default devshell";
+const warnedSessions = globalThis[Symbol.for("agent-utils.nix-devshell.warned-sessions.v1")] ??= new Set();
+
+function appendTextContent(content, message) {
+  if (typeof content === "string") return `${content}\n${message}`;
+  return [...(Array.isArray(content) ? content : []), { type: "text", text: message }];
+}
 
 export function createNixDevshellExtension({ run = runNixDevelop, localBashOperations, createBashToolFactory } = {}) {
   if (typeof createBashToolFactory !== "function") throw new Error("createNixDevshellExtension requires createBashToolFactory");
   return function nixDevshellExtension(pi) {
-    const state = { enabled: false, name: null, cwd: null, environment: null };
+    const state = { enabled: false, name: null, cwd: null, environment: null, sessionKey: null };
 
     async function enable(name, ctx) {
       const normalized = normalizeDevShellName(name);
@@ -41,12 +51,23 @@ export function createNixDevshellExtension({ run = runNixDevelop, localBashOpera
     }
 
     pi.on("session_start", async (_event, ctx) => {
+      state.sessionKey = ctx.sessionManager?.getSessionId?.() || ctx.sessionManager?.getSessionFile?.() || `runtime:${Date.now()}:${Math.random()}`;
       const bash = createBashToolFactory(ctx.cwd, {
         spawnHook({ command, cwd, env }) {
           return { command, cwd, env: state.enabled ? { ...env, ...state.environment } : env };
         },
       });
       pi.registerTool(bash);
+    });
+
+    pi.on("tool_result", (event, ctx) => {
+      if (event.toolName !== "bash" || !event.isError || state.enabled || process.env.IN_NIX_SHELL || warnedSessions.has(state.sessionKey)) return;
+      let declares = false;
+      try { declares = flakeDeclaresDevShell(readFileSync(join(ctx.cwd, "flake.nix"), "utf8")); } catch {}
+      if (!declares) return;
+      warnedSessions.add(state.sessionKey);
+      if (warnedSessions.size > 256) warnedSessions.delete(warnedSessions.values().next().value);
+      return { content: appendTextContent(event.content, DEVSHELL_FAILURE_HINT) };
     });
 
     pi.on("user_bash", async () => {
@@ -94,7 +115,8 @@ export function createNixDevshellExtension({ run = runNixDevelop, localBashOpera
     pi.registerTool({
       name: "nix_devshell_enable",
       label: "Enable Nix Devshell",
-      description: "Synchronously initialize and enable a Nix flake devshell for all subsequent agent Bash commands in this Pi session.",
+      description: "Synchronously initialize and enable a Nix flake devshell for all subsequent agent Bash commands in this Pi session. Use when repository commands need tools or environment supplied by flake.nix.",
+      promptSnippet: "Enable the current flake's devshell when repository Bash commands need dependencies that are unavailable in the regular environment.",
       parameters: Type.object({
         devshell: Type.optional(Type.string({ description: "Named flake devshell, such as ci for .#ci. Omit for the default devshell." })),
       }),
@@ -112,7 +134,8 @@ export function createNixDevshellExtension({ run = runNixDevelop, localBashOpera
     pi.registerTool({
       name: "nix_devshell_disable",
       label: "Disable Nix Devshell",
-      description: "Disable session-wide Nix devshell routing so subsequent Bash commands use the regular environment.",
+      description: "Disable session-wide Nix devshell routing so subsequent Bash commands use the regular environment inherited when Pi started.",
+      promptSnippet: "Disable the active on-demand Nix devshell when repository work no longer needs it.",
       parameters: Type.object({}),
       async execute(_id, _params, _signal, _update, ctx) {
         const previous = disable();
@@ -124,7 +147,8 @@ export function createNixDevshellExtension({ run = runNixDevelop, localBashOpera
     pi.registerTool({
       name: "bash_devshell",
       label: "Bash in Nix Devshell",
-      description: "Run one Bash command in a Nix flake devshell without changing session-wide Bash routing. Cached Nix evaluations/store paths make later calls fast.",
+      description: "Run one Bash command in a Nix flake devshell without changing session-wide Bash routing. Use for isolated hermetic repository commands; cached Nix evaluations/store paths make later calls faster.",
+      promptSnippet: "Use for one hermetic command in the current flake without enabling the devshell for later Bash calls.",
       parameters: Type.object({
         command: Type.string({ description: "Bash command to execute inside the devshell." }),
         devshell: Type.optional(Type.string({ description: "Named flake devshell, such as ci for .#ci. Omit for the default devshell." })),

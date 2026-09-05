@@ -23,10 +23,19 @@ Activation is session-local and fail-closed: a failed evaluation leaves ordinary
 Bash untouched. `/nix devshell off` restores ordinary Bash immediately. The
 footer shows `nix:default` or the selected shell while active.
 
+If the first failed agent Bash call in a session occurs outside an existing Nix
+shell and the current `flake.nix` declares `devShell` or `devShells`, its tool
+result gets one short hint naming `nix_devshell_enable` and `bash_devshell`.
+Successful commands, non-flake projects, later failures, and Pi processes already
+started inside a Nix shell receive no hint.
+
 The extension merges the captured devshell environment over Pi's command
 environment. This preserves Pi's per-call session variables while applying the
 Nix `PATH` and package variables. Captured values are held only in memory and are
-never returned in tool results or persisted into the transcript.
+never returned in tool results or persisted into the transcript. If Pi was
+already started inside a devshell, enabling another shell layers the selected
+environment over that inherited environment; disabling it restores the original
+inherited devshell environment.
 
 ## Agent tools
 

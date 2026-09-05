@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { devShellInstallable, nixDevelopArgs, normalizeDevShellName, parseNullEnvironment, sanitizeDevShellEnvironment, shellQuote, wrapCommandForDevShell } from "../extensions/lib/nix-devshell.js";
+import { DEVSHELL_FAILURE_HINT, devShellInstallable, flakeDeclaresDevShell, nixDevelopArgs, normalizeDevShellName, parseNullEnvironment, sanitizeDevShellEnvironment, shellQuote, wrapCommandForDevShell } from "../extensions/lib/nix-devshell.js";
 import { createNixDevshellExtension } from "../extensions/lib/nix-devshell-extension.js";
 
 test("devshell names and argv are strict and deterministic", () => {
@@ -12,6 +12,12 @@ test("devshell names and argv are strict and deterministic", () => {
   assert.equal(devShellInstallable("ci"), ".#ci");
   assert.deepEqual(nixDevelopArgs(null, ["true"]), ["develop", "--command", "true"]);
   assert.deepEqual(nixDevelopArgs("ci", ["bash", "-c", "echo ok"]), ["develop", ".#ci", "--command", "bash", "-c", "echo ok"]);
+});
+
+test("devshell declaration detection ignores comments and recognizes flake outputs", () => {
+  assert.equal(flakeDeclaresDevShell("# devShells.default = fake"), false);
+  assert.equal(flakeDeclaresDevShell("outputs = { self }: { devShells.x86_64-linux.default = value; };"), true);
+  assert.equal(flakeDeclaresDevShell("devShell = pkgs.mkShell {};"), true);
 });
 
 test("captured Nix environments and one-off shell quoting are lossless", () => {
@@ -41,7 +47,7 @@ function harness(run) {
       return { name: "bash", label: "Bash", parameters: {}, execute: async () => ({ content: [], details: {} }) };
     },
   })(pi);
-  const ctx = { cwd: "/repo", ui: { notify: (message, level) => notices.push({ message, level }), setStatus: (...args) => statuses.push(args) } };
+  const ctx = { cwd: "/repo", sessionManager: { getSessionId: () => `test-${Math.random()}` }, ui: { notify: (message, level) => notices.push({ message, level }), setStatus: (...args) => statuses.push(args) } };
   return { tools, commands, handlers, notices, statuses, ctx, getSpawnHook: () => spawnHook };
 }
 
@@ -76,6 +82,16 @@ test("bash_devshell is one-shot and does not enable global routing", async () =>
   assert.equal(calls[0].name, "lint");
   const original = { PATH: "/usr/bin" };
   assert.equal(h.getSpawnHook()({ command: "pwd", cwd: "/repo", env: original }).env, original);
+});
+
+test("the first failed Bash result gets one devshell hint when a flake declares one", async () => {
+  const h = harness(async () => ({ exitCode: 0, stdout: "", stderr: "", truncated: false }));
+  h.ctx.cwd = process.cwd();
+  await h.handlers.get("session_start")({}, h.ctx);
+  const first = h.handlers.get("tool_result")({ toolName: "bash", isError: true, content: [{ type: "text", text: "missing command" }] }, h.ctx);
+  assert.equal(first.content.at(-1).text, DEVSHELL_FAILURE_HINT);
+  const second = h.handlers.get("tool_result")({ toolName: "bash", isError: true, content: [] }, h.ctx);
+  assert.equal(second, undefined);
 });
 
 test("/nix devshell reports initialization failure without enabling", async () => {

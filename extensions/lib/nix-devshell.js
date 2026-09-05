@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 
 export const DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024;
+export const DEVSHELL_FAILURE_HINT = "This project has a Nix devshell; call nix_devshell_enable before retrying repository commands, or use bash_devshell for a one-off command.";
+
+export function flakeDeclaresDevShell(source) {
+  const text = String(source ?? "").replace(/#[^\n]*/g, "");
+  return /\bdevShells?\b\s*(?:\.|=)/.test(text);
+}
 
 export function normalizeDevShellName(value) {
   const name = String(value ?? "").trim();
