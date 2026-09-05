@@ -26,16 +26,17 @@ footer shows `nix:default` or the selected shell while active.
 If the first failed agent Bash call in a session occurs outside an existing Nix
 shell and the current `flake.nix` declares `devShell` or `devShells`, its tool
 result gets one short hint naming `nix_devshell_enable` and `bash_devshell`.
-Successful commands, non-flake projects, later failures, and Pi processes already
-started inside a Nix shell receive no hint.
+Successful commands, non-flake projects, and later failures receive no hint.
 
 The extension merges the captured devshell environment over Pi's command
 environment. This preserves Pi's per-call session variables while applying the
 Nix `PATH` and package variables. Captured values are held only in memory and are
-never returned in tool results or persisted into the transcript. If Pi was
-already started inside a devshell, enabling another shell layers the selected
-environment over that inherited environment; disabling it restores the original
-inherited devshell environment.
+never returned in tool results or persisted into the transcript.
+
+If Pi starts with `IN_NIX_SHELL` already set, the extension registers nothing:
+no Bash override, tools, command, hooks, or hint. The inherited shell remains
+fully authoritative. This avoids redundant layering and guarantees the plugin
+cannot affect Pi's cwd or session discovery in direnv-launched sessions.
 
 ## Agent tools
 

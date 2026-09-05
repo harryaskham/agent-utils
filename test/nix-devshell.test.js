@@ -1,8 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEVSHELL_FAILURE_HINT, devShellInstallable, flakeDeclaresDevShell, nixDevelopArgs, normalizeDevShellName, parseNullEnvironment, sanitizeDevShellEnvironment, shellQuote, wrapCommandForDevShell } from "../extensions/lib/nix-devshell.js";
+import { DEVSHELL_FAILURE_HINT, devShellInstallable, flakeDeclaresDevShell, nixDevelopArgs, normalizeDevShellName, parseNullEnvironment, sanitizeDevShellEnvironment, shellQuote, shouldRegisterNixDevshell, wrapCommandForDevShell } from "../extensions/lib/nix-devshell.js";
 import { createNixDevshellExtension } from "../extensions/lib/nix-devshell-extension.js";
+
+test("the plugin is unavailable when Pi already inherited a Nix shell", () => {
+  assert.equal(shouldRegisterNixDevshell({}), true);
+  assert.equal(shouldRegisterNixDevshell({ IN_NIX_SHELL: "impure" }), false);
+  assert.equal(shouldRegisterNixDevshell({ IN_NIX_SHELL: "pure" }), false);
+});
 
 test("devshell names and argv are strict and deterministic", () => {
   assert.equal(normalizeDevShellName(), null);
