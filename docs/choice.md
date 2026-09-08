@@ -159,11 +159,12 @@ overrides them for the current session; `repeat.limit=null` restores unlimited
 runtime repeats. Environment overrides are `PI_CHOICE_REPEAT_INTERVAL` and
 `PI_CHOICE_REPEAT_LIMIT`.
 
-Set startup `timeoutMs` to `0` (or run `/choice settings timeout=0` for this
-session) to disable automatic choice timeout entirely. A startup zero is an
-operator policy: it also
-ignores a model-generated per-call `timeoutMs: 30000` argument. Escape, explicit cancellation, session
-shutdown, or a selection still terminates the choice normally. The ring adapter
+The configured `timeoutMs` is authoritative and supports values through seven
+days. For example, 24 hours is `86400000`. Model-generated per-call values such
+as `timeoutMs: 30000` cannot silently replace it. Set startup `timeoutMs` to `0`
+(or run `/choice settings timeout=0` for this session) to disable automatic
+choice timeout entirely. Escape, explicit cancellation, session shutdown, or a
+selection still terminates the choice normally. The ring adapter
 keeps listening indefinitely by renewing its bounded `ring get` smart client
 every five minutes while that no-timeout choice remains active; navigation can
 continue for any number of gestures before selection.

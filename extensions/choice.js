@@ -31,6 +31,7 @@ import {
 
 export const FORCE_CHOICE_CUSTOM_TYPE = "agent-utils-force-choice";
 export const CHOICE_CACOPHONY_ACTIONS = Object.freeze(["freeformReply", "discard"]);
+export const MAX_CHOICE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000;
 
 function boolSetting(value, fallback) {
   if (value == null || String(value).trim() === "") return fallback;
@@ -76,7 +77,7 @@ export function resolveChoiceSettings(env, persisted = {}) {
     : Number.isFinite(repeatLimitNumber) && repeatLimitNumber >= 0 ? Math.trunc(repeatLimitNumber) : null;
   return {
     enabled: boolSetting(env.PI_CHOICE_ENABLED, boolSetting(persisted.enabled, true)),
-    timeoutMs: number("PI_CHOICE_TIMEOUT_MS", "timeoutMs", DEFAULT_CHOICE_TIMEOUT_MS, 0, 300000),
+    timeoutMs: number("PI_CHOICE_TIMEOUT_MS", "timeoutMs", DEFAULT_CHOICE_TIMEOUT_MS, 0, MAX_CHOICE_TIMEOUT_MS),
     maxChoices: number("PI_CHOICE_MAX_CHOICES", "maxChoices", 9, 2, 9),
     wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
     speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
@@ -534,13 +535,10 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
       const promptPrefix = params?.prefix !== undefined ? expandEnvReferences(params.prefix, env, "interactive_choice prefix") : choiceConfig.prefix;
       const promptSuffix = params?.suffix !== undefined ? expandEnvReferences(params.suffix, env, "interactive_choice suffix") : choiceConfig.suffix;
       if (choices.length > choiceConfig.maxChoices) throw new Error(`choice: at most ${choiceConfig.maxChoices} choices are configured (maximum 9 for numeric selection)`);
-      // A durable timeoutMs=0 is an operator policy, not merely a default: it
-      // must defeat model-generated timeoutMs=30000 arguments.
-      const timeoutMs = choiceConfig.timeoutMs === 0
-        ? 0
-        : Number.isFinite(Number(params?.timeoutMs))
-          ? Math.max(0, Math.min(300_000, Math.trunc(Number(params.timeoutMs))))
-          : choiceConfig.timeoutMs;
+      // The resolved operator setting is policy, not an advisory default. Models
+      // commonly emit the schema's 30-second default, which must not silently
+      // replace a long-lived or disabled operator timeout.
+      const timeoutMs = choiceConfig.timeoutMs;
       cancelActive();
       const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
       const sessionId = `choice-${nextSessionId++}`;
@@ -787,7 +785,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
             summary: ToolSchema.Optional(ToolSchema.String({ description: "Optional short explanation spoken in the initial list." })),
             value: ToolSchema.Optional(ToolSchema.Any({ description: "Optional caller value returned in details." })),
           }), { minItems: 2, maxItems: 9 }),
-          timeoutMs: ToolSchema.Optional(ToolSchema.Integer({ minimum: 0, maximum: 300000, description: "Selection timeout in milliseconds (default 30000); 0 disables timeout." })),
+          timeoutMs: ToolSchema.Optional(ToolSchema.Integer({ minimum: 0, maximum: MAX_CHOICE_TIMEOUT_MS, description: "Advisory selection timeout in milliseconds. The operator's configured choice timeout is authoritative; 0 disables timeout." })),
           initialIndex: ToolSchema.Optional(ToolSchema.Integer({ minimum: 0, maximum: 8, description: "Initially highlighted zero-based index." })),
           wrap: ToolSchema.Optional(ToolSchema.Boolean({ description: "Wrap navigation at list ends (default true); false clamps." })),
           ring: ToolSchema.Optional(ToolSchema.String({ description: "Optional ring name accepted by the ring input adapter." })),
@@ -866,7 +864,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
                 choiceConfig.repeat.limit = value;
               }
             }
-            number(["timeout", "timeout_ms"], "timeoutMs", 0, 300000);
+            number(["timeout", "timeout_ms"], "timeoutMs", 0, MAX_CHOICE_TIMEOUT_MS);
             number(["max", "max_choices"], "maxChoices", 2, 9);
             boolean(["wrap"], "wrap");
             boolean(["speech", "speech_enabled"], "speechEnabled");

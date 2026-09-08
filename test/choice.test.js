@@ -78,6 +78,7 @@ test("choice repeat settings resolve defaults and env overrides", () => {
   assert.equal(resolveChoiceSettings({}, {}).enabled, true);
   assert.equal(resolveChoiceSettings({ PI_CHOICE_ENABLED: "0" }, { enabled: true }).enabled, false);
   assert.equal(resolveChoiceSettings({}, { enabled: false }).enabled, false);
+  assert.equal(resolveChoiceSettings({}, { timeoutMs: 24 * 60 * 60 * 1000 }).timeoutMs, 86_400_000);
   assert.deepEqual(resolveChoiceSettings({}, {}).repeat, { interval: 300, limit: null });
   assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_INTERVAL: "12.5", PI_CHOICE_REPEAT_LIMIT: "3" }, { repeat: { interval: 90, limit: null } }).repeat, { interval: 12.5, limit: 3 });
   assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_LIMIT: "null" }, { repeat: { interval: 45, limit: 2 } }).repeat, { interval: 45, limit: null });
@@ -614,8 +615,8 @@ test("RPC typed cancellation, timeout, external resolution, and missing surface 
 
 test("choice timeout resolves without inventing a selection", async () => {
   const h = harness();
-  createChoiceExtension({ speaker: { speak: async () => {}, dispose() {} }, persistedSettings: { choice: { timeoutMs: 30000 }, tts: {} } })(h.pi);
-  const result = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 5 }, null, null, h.ctx);
+  createChoiceExtension({ speaker: { speak: async () => {}, dispose() {} }, persistedSettings: { choice: { timeoutMs: 5 }, tts: {} } })(h.pi);
+  const result = await h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 30000 }, null, null, h.ctx);
   assert.equal(result.details.status, "timeout");
   assert.equal(h.widgets.has("agent-utils-choice"), false);
 });
