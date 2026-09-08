@@ -319,7 +319,7 @@ export function buildPcmPlaybackSpec({
   throw new Error(`tts playback: unsupported backend '${backend}'`);
 }
 
-export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 250, queue = true } = {}) {
+export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 250, queue = false } = {}) {
   let current = null;
   let queued = null;
 

@@ -204,7 +204,7 @@ export function applyAgentTtsConfig(current, values = {}, env = process.env) {
 export function createAgentSpeechController({
   env = process.env,
   synthesize = synthesizeSpeechDirect,
-  player = createInterruptiblePcmPlayer(),
+  player = createInterruptiblePcmPlayer({ queue: true }),
   initialConfig,
 } = {}) {
   let config = initialConfig ? { ...initialConfig, streamName: "/tts" } : defaultAgentTtsConfig(env);

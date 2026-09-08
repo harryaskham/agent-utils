@@ -5,15 +5,16 @@ daemon. Synthesized audio and small metadata records are spooled under
 `$PI_TTS_QUEUE_DIR` or `~/.cache/agent-utils/tts-queue`; atomic directory locks
 coordinate independent Pi processes.
 
-The default policy is one active playback and no overlap. Speech synthesis and
-agent work remain asynchronous while playback waits. Any live Pi session can
-claim queued jobs, so a job survives its originating session exiting as long as
-another Agent Utils session is running.
+The default policy is one active playback with a two-second early overlap.
+Speech synthesis and agent work remain asynchronous while playback waits. Any
+live Pi session can claim queued jobs, so a job survives its originating session
+exiting as long as another Agent Utils session is running.
 
-All playback through the shared interruptible PCM primitive participates,
-including `/tts`, `/narrate`, `/read`, spoken choices, and direct realtime reply
-playback. Environment objects and credentials are never serialized; metadata
-contains only playback routing such as backend, sink, pan, and stream name.
+Only automatic `/tts` and `/narrate` playback opts into the queue by default.
+`/read`, spoken choices, and direct realtime reply playback remain immediate and
+interruptible without entering the machine queue. Environment objects and
+credentials are never serialized; metadata contains only playback routing such
+as backend, sink, pan, and stream name.
 
 ## User control
 
@@ -36,6 +37,9 @@ Configuration is machine-global and persists in `config.json` beneath the queue
 root. It therefore applies consistently to later Pi sessions.
 
 ## Agent tools
+
+Agent-facing controls are disabled by default to keep the normal tool surface
+small. Set `PI_TTS_QUEUE_AGENT_TOOLS=1` before starting Pi to register:
 
 - `tts_queue_status`
 - `tts_queue_configure({ maxParallel?, overlapMs? })`

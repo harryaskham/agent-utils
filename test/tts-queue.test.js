@@ -4,7 +4,13 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MachineTtsQueue, normalizeQueueConfig, pcmDurationMs } from "../extensions/lib/tts-queue.js";
+import { DEFAULT_TTS_QUEUE_CONFIG, MachineTtsQueue, normalizeQueueConfig, pcmDurationMs, ttsQueueAgentToolsEnabled } from "../extensions/lib/tts-queue.js";
+
+test("queue defaults to serial playback with a two-second overlap and agent tools opt in", () => {
+  assert.deepEqual(DEFAULT_TTS_QUEUE_CONFIG, { maxParallel: 1, overlapMs: 2000 });
+  assert.equal(ttsQueueAgentToolsEnabled({}), false);
+  assert.equal(ttsQueueAgentToolsEnabled({ PI_TTS_QUEUE_AGENT_TOOLS: "true" }), true);
+});
 
 test("queue config and PCM duration are bounded", () => {
   assert.deepEqual(normalizeQueueConfig({ maxParallel: 99, overlapMs: 99999 }), { maxParallel: 8, overlapMs: 30000 });

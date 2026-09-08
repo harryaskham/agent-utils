@@ -1,6 +1,6 @@
 import { ToolSchema as Type } from "./lib/tool-schema.js";
 import { createInterruptiblePcmPlayer } from "./lib/tts.js";
-import { MachineTtsQueue, TTS_QUEUE_SYMBOL, ttsQueueRoot } from "./lib/tts-queue.js";
+import { MachineTtsQueue, TTS_QUEUE_SYMBOL, ttsQueueAgentToolsEnabled, ttsQueueRoot } from "./lib/tts-queue.js";
 
 const content = (text) => [{ type: "text", text }];
 const summary = (s) => `tts queue: ${s.active} active, ${s.queued} queued · parallel=${s.config.maxParallel} overlap=${s.config.overlapMs}ms`;
@@ -30,19 +30,19 @@ export default function ttsQueueExtension(pi) {
     },
   });
 
-  pi.registerTool({
+  if (ttsQueueAgentToolsEnabled()) pi.registerTool({
     name: "tts_queue_status", label: "TTS Queue Status",
     description: "Inspect the machine-global file-backed TTS playback queue and its parallelism/overlap policy.",
     parameters: Type.object({}),
     async execute() { const status = queue.status(); return { content: content(summary(status)), details: { ...status, root: ttsQueueRoot() } }; },
   });
-  pi.registerTool({
+  if (ttsQueueAgentToolsEnabled()) pi.registerTool({
     name: "tts_queue_configure", label: "Configure TTS Queue",
     description: "Set machine-global TTS playback parallelism (1-8) and optional early overlap (0-30000ms).",
     parameters: Type.object({ maxParallel: Type.optional(Type.number()), overlapMs: Type.optional(Type.number()) }),
     async execute(_id, params) { const config = queue.configure(params); return { content: content(`Configured TTS queue: parallel=${config.maxParallel}, overlap=${config.overlapMs}ms.`), details: config }; },
   });
-  pi.registerTool({
+  if (ttsQueueAgentToolsEnabled()) pi.registerTool({
     name: "tts_queue_control", label: "Control TTS Queue",
     description: "Skip the oldest current TTS playback, prompt queue advancement, or clear waiting speech. Clearing requires confirmed=true.",
     parameters: Type.object({ action: Type.StringEnum(["skip", "next", "clear"]), confirmed: Type.optional(Type.boolean()) }),

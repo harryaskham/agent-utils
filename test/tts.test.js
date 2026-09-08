@@ -211,6 +211,25 @@ function fakePlayerSpawn() {
   return { spawnImpl, processes };
 }
 
+test("PCM playback bypasses the machine queue unless explicitly opted in", async () => {
+  const symbol = Symbol.for("agent-utils.tts-queue.v1");
+  const queued = [];
+  globalThis[symbol] = { enqueue(buffer, options) { queued.push({ buffer, options }); const pending = Promise.resolve({ queued: true }); pending.jobId = "job"; return pending; }, cancel() {} };
+  try {
+    const directSpawn = fakePlayerSpawn();
+    const direct = createInterruptiblePcmPlayer({ spawnImpl: directSpawn.spawnImpl, killDelayMs: 0 });
+    const directResult = direct.play(Buffer.from([1, 2]), { backend: "pulse" });
+    assert.equal(directSpawn.processes.length, 1);
+    assert.equal(queued.length, 0);
+    directSpawn.processes[0].emit("close", 0, null);
+    await directResult;
+
+    const optedIn = createInterruptiblePcmPlayer({ queue: true });
+    assert.deepEqual(await optedIn.play(Buffer.from([3, 4]), { backend: "pulse" }), { queued: true });
+    assert.equal(queued.length, 1);
+  } finally { delete globalThis[symbol]; }
+});
+
 test("interruptible PCM player kills the previous pacat before starting the next", async () => {
   const { spawnImpl, processes } = fakePlayerSpawn();
   const player = createInterruptiblePcmPlayer({ spawnImpl, killDelayMs: 0 });

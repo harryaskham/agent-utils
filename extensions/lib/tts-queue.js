@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 export const TTS_QUEUE_SYMBOL = Symbol.for("agent-utils.tts-queue.v1");
-export const DEFAULT_TTS_QUEUE_CONFIG = Object.freeze({ maxParallel: 1, overlapMs: 0 });
+export const DEFAULT_TTS_QUEUE_CONFIG = Object.freeze({ maxParallel: 1, overlapMs: 2000 });
+
+export function ttsQueueAgentToolsEnabled(env = process.env) {
+  return ["1", "true", "yes", "on"].includes(String(env.PI_TTS_QUEUE_AGENT_TOOLS || "").trim().toLowerCase());
+}
 
 export function ttsQueueRoot(env = process.env) {
   return env.PI_TTS_QUEUE_DIR || join(env.XDG_CACHE_HOME || join(homedir(), ".cache"), "agent-utils", "tts-queue");
