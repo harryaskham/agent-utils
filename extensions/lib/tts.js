@@ -319,8 +319,9 @@ export function buildPcmPlaybackSpec({
   throw new Error(`tts playback: unsupported backend '${backend}'`);
 }
 
-export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 250 } = {}) {
+export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 250, queue = true } = {}) {
   let current = null;
+  let queued = null;
 
   const settle = (record, error, result) => {
     if (!record || record.settled) return;
@@ -332,6 +333,11 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
   };
 
   const interrupt = () => {
+    if (queued) {
+      try { globalThis[Symbol.for("agent-utils.tts-queue.v1")]?.cancel?.(queued.jobId); } catch {}
+      queued = null;
+      return true;
+    }
     const record = current;
     if (!record) return false;
     current = null;
@@ -351,6 +357,13 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
   };
 
   const play = (buffer, options = {}) => {
+    const provider = queue ? globalThis[Symbol.for("agent-utils.tts-queue.v1")] : null;
+    if (provider?.enqueue) {
+      interrupt();
+      const pending = provider.enqueue(buffer, options);
+      queued = pending;
+      return Promise.resolve(pending).finally(() => { if (queued === pending) queued = null; });
+    }
     let pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
     const pan = Number(options.pan);
     if (Number.isFinite(pan)) {
@@ -403,7 +416,7 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
     play,
     interrupt,
     dispose: interrupt,
-    isPlaying: () => !!current,
+    isPlaying: () => !!current || !!queued,
     currentProcess: () => current?.proc ?? null,
   };
 }

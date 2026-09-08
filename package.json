@@ -65,6 +65,7 @@
       "./extensions/firecracker-vm.js",
       "./extensions/realtime-agent.js",
       "./extensions/pipe.js",
+      "./extensions/tts-queue.js",
       "./extensions/read-aloud.js",
       "./extensions/tts-narration.js",
       "./extensions/choice.js",
