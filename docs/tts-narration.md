@@ -125,6 +125,18 @@ slice, followed by shared built-in defaults. These direct surfaces share
 interruptible `/tts` playback where applicable; credentials are still never
 read from settings.
 
+### Session-aware prefixes
+
+Set `prefixWithSessionName: true` and use punctuation such as `prefix: ": "` in
+both `agentUtils.tts` and `agentUtils.narrate`. At speech time the extension
+prepends, in priority order, the live Pi session name, the GitHub repository
+root name, or the current directory name. An exact home-directory cwd is called
+`home`. The configured prefix remains concatenative, so session `release` plus
+`: ` becomes `release: `. Session renames take effect without restarting Pi.
+Environment overrides are `PI_TTS_PREFIX_WITH_SESSION_NAME` and
+`PI_NARRATE_PREFIX_WITH_SESSION_NAME`; runtime commands accept
+`prefix_with_session_name=true`.
+
 ## `/narrate`: tool batches
 
 ```text

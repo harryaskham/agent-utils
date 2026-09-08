@@ -161,6 +161,7 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = 
     config,
     enabled: enabledValue(env.PI_TTS_ENABLED, enabledValue(persisted.enabled, false)),
     prefix: String(env.PI_TTS_PREFIX ?? persisted.prefix ?? ""),
+    prefixWithSessionName: enabledValue(env.PI_TTS_PREFIX_WITH_SESSION_NAME, enabledValue(persisted.prefixWithSessionName, false)),
     suffix: String(env.PI_TTS_SUFFIX ?? persisted.suffix ?? ""),
     enabledSource: env.PI_TTS_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
   };
@@ -181,6 +182,7 @@ export function resolveNarrateSettings({ env = process.env, persisted = {} } = {
     textEnabled: enabledValue(env.PI_NARRATE_TEXT_ENABLED, enabledValue(persisted.textEnabled, true)),
     reasoningSummaries: enabledValue(env.PI_NARRATE_REASONING_SUMMARIES, enabledValue(persisted.reasoningSummaries, true)),
     prefix: String(env.PI_NARRATE_PREFIX ?? persisted.prefix ?? ""),
+    prefixWithSessionName: enabledValue(env.PI_NARRATE_PREFIX_WITH_SESSION_NAME, enabledValue(persisted.prefixWithSessionName, false)),
     suffix: String(env.PI_NARRATE_SUFFIX ?? persisted.suffix ?? ""),
     enabledSource: env.PI_NARRATE_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
     modelSource: env.PI_NARRATE_MODEL ? "env" : persisted.model ? "settings" : "default",

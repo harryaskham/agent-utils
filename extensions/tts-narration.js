@@ -27,6 +27,7 @@ import {
 } from "./lib/tts-settings.js";
 import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./lib/tts-identity.js";
+import { speechPrefix } from "./lib/tts-prefix.js";
 import { DEFAULT_TTS_EMBEDDING } from "./lib/tts.js";
 
 function boolValue(value, name) {
@@ -85,6 +86,7 @@ export function createTtsNarrationExtension({
     let ttsEnabled = resolvedTts.enabled;
     let ttsEnabledSource = resolvedTts.enabledSource;
     let ttsPrefix = expandEnvReferences(resolvedTts.prefix, env, "/tts prefix");
+    let ttsPrefixWithSessionName = resolvedTts.prefixWithSessionName;
     let ttsSuffix = expandEnvReferences(resolvedTts.suffix, env, "/tts suffix");
     let narrateEnabled = resolvedNarrate.enabled;
     let narrateEnabledSource = resolvedNarrate.enabledSource;
@@ -101,7 +103,15 @@ export function createTtsNarrationExtension({
     let narrationReasoningSummaries = resolvedNarrate.reasoningSummaries;
     let narrationReasoningSummariesSource = resolvedNarrate.reasoningSummariesSource;
     let narrationPrefix = expandEnvReferences(resolvedNarrate.prefix, env, "/narrate prefix");
+    let narrationPrefixWithSessionName = resolvedNarrate.prefixWithSessionName;
     let narrationSuffix = expandEnvReferences(resolvedNarrate.suffix, env, "/narrate suffix");
+
+    const effectivePrefix = (configuredPrefix, enabled, ctx) => speechPrefix({
+      enabled,
+      configuredPrefix,
+      sessionName: pi.getSessionName?.(),
+      cwd: ctx?.cwd,
+    });
 
     // Session-durable runtime overrides (bd-4dd60f). `/tts on` is scoped to this
     // session, not written to settings.json — but a `/restart` does not end the
@@ -130,6 +140,7 @@ export function createTtsNarrationExtension({
         try { speechController.apply(ttsSpeechValues); } catch {}
       }
       if (typeof tts.prefix === "string") ttsPrefix = tts.prefix;
+      if (typeof tts.prefixWithSessionName === "boolean") ttsPrefixWithSessionName = tts.prefixWithSessionName;
       if (typeof tts.suffix === "string") ttsSuffix = tts.suffix;
       if (typeof tts.enabled === "boolean") {
         ttsEnabled = tts.enabled;
@@ -144,6 +155,7 @@ export function createTtsNarrationExtension({
       if (typeof narrate.textEnabled === "boolean") { narrationTextEnabled = narrate.textEnabled; narrationTextEnabledSource = "session"; }
       if (typeof narrate.reasoningSummaries === "boolean") { narrationReasoningSummaries = narrate.reasoningSummaries; narrationReasoningSummariesSource = "session"; }
       if (typeof narrate.prefix === "string") narrationPrefix = narrate.prefix;
+      if (typeof narrate.prefixWithSessionName === "boolean") narrationPrefixWithSessionName = narrate.prefixWithSessionName;
       if (typeof narrate.suffix === "string") narrationSuffix = narrate.suffix;
       if (typeof narrate.enabled === "boolean") { narrateEnabled = narrate.enabled; narrateEnabledSource = "session"; }
 
@@ -202,7 +214,7 @@ export function createTtsNarrationExtension({
           details: { phase, source, batchId: batch.id, model, toolNames: batch.calls.map((call) => call.name) },
         }, { deliverAs: "nextTurn", triggerTurn: false });
       }
-      speakBestEffort(`${narrationPrefix}${text}${narrationSuffix}`, ctx, "narrate speech", {
+      speakBestEffort(`${effectivePrefix(narrationPrefix, narrationPrefixWithSessionName, ctx)}${text}${narrationSuffix}`, ctx, "narrate speech", {
         ...(narrationSpeed ? { speed: narrationSpeed } : {}),
         ...(narrationStyle ? { style: narrationStyle } : {}),
         ...(narrationStyleDegree ? { styleDegree: narrationStyleDegree } : {}),
@@ -270,7 +282,7 @@ export function createTtsNarrationExtension({
           const key = `${message?.timestamp ?? ""}:${text}`;
           if (key !== lastPlainKey) {
             lastPlainKey = key;
-            speakBestEffort(`${ttsPrefix}${text}${ttsSuffix}`, ctx, "tts");
+            speakBestEffort(`${effectivePrefix(ttsPrefix, ttsPrefixWithSessionName, ctx)}${text}${ttsSuffix}`, ctx, "tts");
           }
         }
       }
@@ -340,10 +352,15 @@ export function createTtsNarrationExtension({
         try {
           const parsed = parseEnvStyleArgs(raw);
           if (parsed.positionals.length) throw new Error(`/tts: unexpected argument '${parsed.positionals[0]}'`);
-          const { prefix, suffix, ...speechValues } = parsed.values;
+          const { prefix, suffix, prefix_with_session_name, prefixwithsessionname, ...speechValues } = parsed.values;
           if (prefix !== undefined) {
             ttsPrefix = expandEnvReferences(prefix, env, "/tts prefix");
             rememberTts({ prefix: ttsPrefix });
+          }
+          const prefixNameValue = prefix_with_session_name ?? prefixwithsessionname;
+          if (prefixNameValue !== undefined) {
+            ttsPrefixWithSessionName = boolValue(prefixNameValue, "prefix_with_session_name");
+            rememberTts({ prefixWithSessionName: ttsPrefixWithSessionName });
           }
           if (suffix !== undefined) {
             ttsSuffix = expandEnvReferences(suffix, env, "/tts suffix");
@@ -387,11 +404,16 @@ export function createTtsNarrationExtension({
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             for (const key of Object.keys(parsed.values)) {
-              if (!new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "prefix_with_session_name", "prefixwithsessionname", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
             if (parsed.values.prefix !== undefined) {
               narrationPrefix = expandEnvReferences(parsed.values.prefix, env, "/narrate prefix");
               rememberNarrate({ prefix: narrationPrefix });
+            }
+            const prefixNameValue = parsed.values.prefix_with_session_name ?? parsed.values.prefixwithsessionname;
+            if (prefixNameValue !== undefined) {
+              narrationPrefixWithSessionName = boolValue(prefixNameValue, "prefix_with_session_name");
+              rememberNarrate({ prefixWithSessionName: narrationPrefixWithSessionName });
             }
             if (parsed.values.suffix !== undefined) {
               narrationSuffix = expandEnvReferences(parsed.values.suffix, env, "/narrate suffix");
