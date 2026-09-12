@@ -106,6 +106,7 @@ import {
   KittyImagePreviewWidget,
 } from "./kitty-image-preview/widget.js";
 import { registerKittyImagePreviewRuntime } from "./kitty-image-preview/runtime.js";
+import { KittyImageGalleryOverlay } from "./kitty-image-preview/overlay.js";
 
 import {
   fullResolutionDescribeParams,
@@ -468,16 +469,26 @@ function ensureSidePanel(ctx, state) {
   panel.component = {
     render() { return []; },
     invalidate() {},
-    dispose() { uninstallSidePanelLayout(panel); },
+    // Discovery overlay is short-lived; the side layout has its own owner and
+    // is removed by clearSidePanel, not by discovery UI disposal.
+    dispose() {},
   };
   state.sidePanel = panel;
 
   let promise;
   try {
-    promise = ctx.ui.custom((tui) => {
+    promise = ctx.ui.custom((tui, _theme, _keys, done) => {
       panel.pending = false;
       panel.tui = tui;
-      installSidePanelLayout(tui, state, panel);
+      // Fullscreen renders a layout root, bypassing tui.render(). A patch of
+      // the document renderer is therefore invisible there. Use a real widget
+      // in the fullscreen layout instead of reporting a phantom side panel.
+      state.fullscreenTui = typeof tui.setLayoutRoot === "function";
+      if (!state.fullscreenTui) installSidePanelLayout(tui, state, panel);
+      queueMicrotask(() => {
+        done();
+        if (!panel.cancelled && state.fullscreenTui) syncWidget(ctx, state);
+      });
       return panel.component;
     }, {
       overlay: true,
@@ -485,10 +496,8 @@ function ensureSidePanel(ctx, state) {
       onHandle: (handle) => {
         panel.handle = handle;
         handle.unfocus?.();
-        // The hidden overlay is only a supported way to get the TUI instance
-        // from Pi. Remove it immediately so normal overlay compositing does not
-        // pad the buffer or affect side-panel viewport math.
-        handle.hide?.();
+        // done() above closes discovery, including its ui_prompt waiting span.
+        // hide() alone removes the placement but leaves custom() unresolved.
       },
     });
   } catch (error) {
@@ -556,6 +565,12 @@ function ensureSideOverlay(ctx, state) {
 
 export function syncWidget(ctx, state) {
   if (!ctx?.hasUI) return;
+  if (state.galleryOverlay) {
+    ctx.ui.setWidget(WIDGET_ID, undefined);
+    clearSidePresentation(state);
+    state.galleryOverlay.requestRender?.();
+    return;
+  }
   if (state.items.length === 0) {
     ctx.ui.setWidget(WIDGET_ID, undefined);
     clearSidePresentation(state);
@@ -573,9 +588,9 @@ export function syncWidget(ctx, state) {
   if (isSideOverlayPlacement(placement)) {
     clearSideOverlay(state);
     ctx.ui.setWidget(WIDGET_ID, undefined);
-    if (shouldUseInlineRightPlacement(state)) {
+    if (state.fullscreenTui || shouldUseInlineRightPlacement(state)) {
       clearSidePanel(state);
-      fallbackSideWidget(ctx, state, "rightOverlay is inline inside tmux passthrough", { warn: false });
+      fallbackSideWidget(ctx, state, "rightOverlay uses the fullscreen widget layout", { warn: false });
     } else {
       ensureSidePanel(ctx, state);
     }
@@ -598,17 +613,17 @@ function flashDeleteWidget(ctx, state, deleteCommand) {
       invalidate() {},
     };
     if (typeof ctx.ui.custom === "function") {
-      let handle;
+      let close;
       try {
-        const promise = ctx.ui.custom(() => flashComponent, {
+        const promise = ctx.ui.custom((_tui, _theme, _keys, done) => {
+          close = done;
+          return flashComponent;
+        }, {
           overlay: true,
           overlayOptions: () => buildSideOverlayOptions(state),
-          onHandle: (overlayHandle) => {
-            handle = overlayHandle;
-          },
         });
         promise?.catch?.(() => {});
-        setTimeout(() => handle?.hide?.(), 100);
+        setTimeout(() => close?.(), 100);
       } catch {
         ctx.ui.setWidget(WIDGET_ID, () => flashComponent, { placement: "aboveEditor" });
         setTimeout(() => ctx.ui.setWidget(WIDGET_ID, undefined), 100);
@@ -744,6 +759,7 @@ async function preparePagePayloads(state) {
   const placement = resolvePlacement(state);
   const multiImageSidePanel = state.items.length >= 2
     && isSideOverlayPlacement(placement)
+    && !state.fullscreenTui && !state.galleryOverlay
     && !shouldUseInlineRightPlacement(state);
   if (!multiImageSidePanel) {
     state.pagePrepared = undefined;
@@ -1286,6 +1302,11 @@ export default function kittyImagePreviewExtension(pi) {
     stopCycle(state);
     void stopStream(state, { cleanup: true });
     state.visible = false;
+    clearSidePresentation(state);
+    if (state.galleryOverlay) {
+      state.galleryOverlay.cancelled = true;
+      state.galleryOverlay.close?.();
+    }
     if (ctx?.hasUI) {
       const ownedDelete = releaseOwnedImageData(state, { keepIds: [] });
       clearOwnedImageIds(state);
@@ -1975,9 +1996,69 @@ export default function kittyImagePreviewExtension(pi) {
       return;
     }
     state.visible = true;
+    // Explicit recovery after terminal reattach, eviction, or a disposed UI.
+    // Re-upload every visible page image, not only the selected image.
+    resetTransmissionGuard(state);
+    clearSidePresentation(state);
     await prepareCurrentImage(state, ctx, { forceReload: true });
     syncWidget(ctx, state);
+    state.sidePanel?.tui?.requestRender?.(true);
     ctx.ui?.notify?.(`${summarizeCurrent(state)} ${imageControlHint(state, { includeCount: true })}`, "info");
+  }
+
+  async function overlayCommand(ctx) {
+    if (!state.items.length) return noImages(ctx);
+    if (!ctx.hasUI || typeof ctx.ui.custom !== "function" || (ctx.mode && ctx.mode !== "tui")) {
+      ctx.ui?.notify?.("Image overlay requires a terminal UI.", "warning");
+      return;
+    }
+    if (state.galleryOverlay) return;
+    const wasVisible = state.visible;
+    const owner = {};
+    let component;
+    let tui;
+    stopAnimation(state);
+    stopCycle(state);
+    state.galleryOverlay = owner;
+    state.visible = true;
+    clearSidePresentation(state);
+    ctx.ui.setWidget(WIDGET_ID, undefined);
+    resetTransmissionGuard(state);
+    try {
+      // Freeze a live source before browsing so it cannot replace the gallery
+      // or race an asynchronous navigation while the modal owns input.
+      await stopStream(state, { cleanup: false });
+      if (owner.cancelled) return;
+      await prepareCurrentImage(state, ctx, { forceReload: true });
+      if (owner.cancelled) return;
+      state.lastDeleteCommand = buildScopedDeleteCommand(state);
+      await ctx.ui.custom((terminalUi, theme, _keys, done) => {
+        tui = terminalUi;
+        owner.close = () => done();
+        owner.requestRender = () => tui.requestRender();
+        component = new KittyImageGalleryOverlay(state, {
+          tui, theme, close: owner.close,
+          navigate: async (direction) => {
+            advanceIndex(state, direction);
+            await prepareCurrentImage(state, ctx, { forceReload: true });
+          },
+        });
+        return component;
+      }, { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "90%" } });
+    } finally {
+      // Esc remains immediate during a file read, but the read must settle
+      // before remounting the preview so it cannot resurrect the closed modal.
+      await component?.pending;
+      if (state.galleryOverlay === owner) state.galleryOverlay = undefined;
+      try { tui?.terminal?.write?.(buildScopedDeleteCommand(state)); } catch {}
+      resetTransmissionGuard(state);
+      if (!owner.cancelled) {
+        state.visible = wasVisible;
+        if (wasVisible) await prepareCurrentImage(state, ctx, { forceReload: true });
+        syncWidget(ctx, state);
+        tui?.requestRender?.(true);
+      }
+    }
   }
 
   function hideCommand(ctx) {
@@ -2124,9 +2205,13 @@ export default function kittyImagePreviewExtension(pi) {
     ctx.ui?.notify?.(`kitty passthrough probe: passthrough mode=${mode}; emitted a magenta test cell through ${emitted.length} path(s): ${emitted.join(", ") || "none"}. Whichever label shows a magenta cell is the working kitty output path; a blank cell or raw escape text means that path does not reach the kitty client.`, "info");
   }
 
-  registerImageCommand(["kitty-image-preview", "image-status", "image-preview"],
+  registerImageCommand(["kitty-image-preview", "image-status"],
     "Show kitty image preview extension status and quick usage.",
     async (_args, ctx) => statusCommand(ctx));
+
+  registerImageCommand(["image-overlay"],
+    "Browse preview images in an overlay. Left/Right navigate; Escape closes.",
+    async (_args, ctx) => overlayCommand(ctx));
 
   registerImageCommand(["image-config"],
     "Show or update image preview render params at runtime (placement, placementMode, transferMode, passthrough, zIndex, columns, rows, maxRows, minRows, background, showCaption, clearPrevious, widthRatio). Call with no args to print current config.",
@@ -2160,7 +2245,7 @@ export default function kittyImagePreviewExtension(pi) {
       return showCommand(ctx);
     });
 
-  registerImageCommand(["image-show"],
+  registerImageCommand(["image-show", "image-preview"],
     "Show or restore the current kitty image preview.",
     async (_args, ctx) => showCommand(ctx));
 

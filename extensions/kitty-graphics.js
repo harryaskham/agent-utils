@@ -328,6 +328,15 @@ export function buildPngDisplayCommand({
   return serializeKittyGraphicsChunks(control, payload, { passthrough, chunkSize, env });
 }
 
+// Recreate a virtual placement after a fullscreen compositor clears placements,
+// without retransmitting PNG bytes that the terminal already holds.
+export function buildVirtualPlacementCommand({ imageId, placementId, columns, rows, passthrough = "auto" } = {}) {
+  return serializeKittyGraphicsCommand({
+    a: "p", i: imageId, p: placeholderPlacementId(placementId), U: 1,
+    c: columns, r: rows, q: 2,
+  }, "", { passthrough });
+}
+
 export function buildPngVirtualPlacementCommand({
   imageId,
   placementId,

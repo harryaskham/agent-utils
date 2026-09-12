@@ -359,7 +359,8 @@ test("kitty multiviewer registers discoverable image commands, controls, and a c
 
   assert.match(source, /registerImageCommand\(\["image-next"\]/);
   assert.match(source, /"image-prev", "image-previous"/);
-  assert.match(source, /registerImageCommand\(\["image-show"\]/);
+  assert.match(source, /registerImageCommand\(\["image-show", "image-preview"\]/);
+  assert.match(source, /registerImageCommand\(\["image-overlay"\]/);
   assert.match(source, /registerImageCommand\(\["image-hide"\]/);
   assert.match(source, /registerImageCommand\(\["image-clear"\]/);
   assert.match(source, /"image-start-cycle", "image-cycle"/);

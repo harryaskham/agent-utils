@@ -84,12 +84,34 @@ test("resetTransmissionGuard forces a re-upload on the next unicode render", () 
 
   // Simulate a terminal reattach / session_start restore.
   resetTransmissionGuard(state);
-  // The render memo is also cleared by reset semantics; emulate a fresh frame.
-  state.currentCommand.rendered = undefined;
 
   const afterReattach = buildCurrentDisplayCommand(state, item, 12, 6, true);
   assert.match(afterReattach, /a=T/, "reattach re-transmits so the new terminal holds the image");
   assert.equal(buildCurrentDisplayCommand(state, item, 12, 6, true), "", "steady state returns to placement-only");
+});
+
+test("fullscreen redraw recreates virtual placements without retransmitting bytes", () => {
+  const state = makeState();
+  state.fullscreenTui = true;
+  const item = makeItem();
+  assert.match(buildCurrentDisplayCommand(state, item, 12, 6, true), /a=T/);
+  for (let i = 0; i < 3; i++) {
+    const redraw = buildCurrentDisplayCommand(state, item, 12, 6, true);
+    assert.match(redraw, /a=p/);
+    assert.match(redraw, /U=1/);
+    assert.ok(!redraw.includes(PNG_BASE64));
+  }
+});
+
+test("reset clears every paged payload's empty render memo", () => {
+  const state = makeState();
+  const item = makeItem();
+  const page = { ...state.currentCommand };
+  state.pagePrepared = new Map([[item.id, page]]);
+  buildCurrentDisplayCommand(state, item, 12, 6, true, page);
+  assert.equal(buildCurrentDisplayCommand(state, item, 12, 6, true, page), "");
+  resetTransmissionGuard(state);
+  assert.match(buildCurrentDisplayCommand(state, item, 12, 6, true, page), /a=T/);
 });
 
 test("a new image id transmits independently of a prior image's guard", () => {

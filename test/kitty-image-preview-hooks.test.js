@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -85,6 +85,46 @@ test("folder preview remains successful when optional description inference fail
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("image-preview restores hidden images; overlay navigates and restores visibility", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "kitty-gallery-"));
+  const file = path.join(tmp, "frame.png");
+  await writeFile(file, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lDL+WQAAAABJRU5ErkJggg==", "base64"));
+  const { pi, tools, commands } = createStrictMockPi();
+  kittyImagePreviewExtension(pi);
+  const ctx = makeCtx(true);
+  ctx.cwd = tmp;
+  let widget;
+  ctx.ui.setWidget = (_id, factory) => { widget = factory; };
+  try {
+    for (const label of ["first", "second"]) {
+      const distinctFile = path.join(tmp, `${label}.png`);
+      await copyFile(file, distinctFile);
+      await tools.get("kitty_image_preview_add").execute("add", { path: distinctFile, label, show: false, config: { placement: "aboveEditor", transferMode: "memory", placementMode: "unicode" } }, null, null, ctx);
+    }
+    await commands.get("image-preview").handler("", ctx);
+    assert.equal(typeof widget, "function");
+    widget().render(80);
+    widget().render(80); // populate empty-command memo
+    await commands.get("image-preview").handler("", ctx);
+    assert.match(widget().render(80).join("\n"), /a=T/);
+    let modal;
+    ctx.ui.custom = factory => new Promise(resolve => {
+      modal = factory({ terminal: { rows: 30, write() {} }, requestRender() {} }, {}, {}, resolve);
+    });
+    const opened = commands.get("image-overlay").handler("", ctx);
+    while (!modal) await new Promise(resolve => setTimeout(resolve, 1));
+    const before = modal.state.index;
+    modal.handleInput("\x1b[D");
+    await modal.pending;
+    assert.notEqual(modal.state.index, before);
+    modal.handleInput("\x1b");
+    await opened;
+    assert.equal(modal.state.galleryOverlay, undefined);
+    assert.equal(modal.state.visible, true);
+    assert.equal(typeof widget, "function");
+  } finally { await rm(tmp, { recursive: true, force: true }); }
 });
 
 test("runtime handoff mounts a captured PNG through the fullscreen widget owner", async () => {

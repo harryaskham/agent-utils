@@ -28,6 +28,7 @@ export function renderCurrentImageLines(state, current, {
   leadingSpaces = 0,
   frame = false,
   prepared = undefined,
+  showCaption = state.config.showCaption,
 } = {}) {
   const command = buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders, prepared);
   const leftPadding = " ".repeat(Math.max(0, leadingSpaces));
@@ -49,12 +50,12 @@ export function renderCurrentImageLines(state, current, {
       width: lineWidth,
     });
     const framed = [imageSeparatorLine(lineWidth)];
-    if (state.config.showCaption) framed.push(imageHeaderLine(state, lineWidth));
+    if (showCaption) framed.push(imageHeaderLine(state, lineWidth));
     framed.push(...imageLines, imageSeparatorLine(lineWidth));
     return framed.map((line, index) => `${leftPadding}${index === 0 ? commandPrefix : ""}${line}`);
   }
 
-  const label = state.config.showCaption
+  const label = showCaption
     ? `kitty image ${state.index + 1}/${state.items.length}: ${current.label}`
     : "";
   const imageLines = useUnicodePlaceholders

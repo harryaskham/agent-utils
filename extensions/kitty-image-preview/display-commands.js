@@ -10,6 +10,7 @@
 import {
   buildPngDisplayCommand,
   buildPngVirtualPlacementCommand,
+  buildVirtualPlacementCommand,
   buildScopedDeleteCommand as buildScopedDeleteCommandRaw,
 } from "../kitty-graphics.js";
 import { clearOwnedImageIds } from "./state.js";
@@ -134,6 +135,10 @@ function transmissionGuard(state) {
 export function resetTransmissionGuard(state) {
   if (!state) return;
   state.transmittedSignatures = new Map();
+  // Empty-command render memos also mean "already uploaded". Clearing only
+  // the id guard leaves those memos returning before the guard is consulted.
+  if (state.currentCommand) state.currentCommand.rendered = undefined;
+  for (const payload of state.pagePrepared?.values?.() || []) payload.rendered = undefined;
 }
 
 // `prepared` is the prepared payload for `current`; it defaults to the single
@@ -145,7 +150,8 @@ export function resetTransmissionGuard(state) {
 export function buildCurrentDisplayCommand(state, current, columns, rows, useUnicodePlaceholders = false, prepared = state.currentCommand) {
   if (!prepared || prepared.itemId !== current.id) return "";
   const placementMode = useUnicodePlaceholders ? "unicode" : "cursor";
-  const signature = `${columns}:${rows}:${prepared.zIndex}:${prepared.transport}:${prepared.passthrough}:${prepared.chunkSize}:${placementMode}:${state.config.placementId}`;
+  const recreatePlacement = Boolean(state.fullscreenTui || state.galleryOverlay);
+  const signature = `${columns}:${rows}:${prepared.zIndex}:${prepared.transport}:${prepared.passthrough}:${prepared.chunkSize}:${placementMode}:${state.config.placementId}:${recreatePlacement}`;
   if (prepared.rendered?.signature === signature) return prepared.rendered.command;
 
   // Unicode mode decouples transmission from placement: once the payload for a
@@ -155,8 +161,14 @@ export function buildCurrentDisplayCommand(state, current, columns, rows, useUni
     const guard = transmissionGuard(state);
     const guardKey = `${current.id}:${signature}`;
     if (guard.get(current.id) === guardKey) {
-      prepared.rendered = { signature, command: "" };
-      return "";
+      // Fullscreen and overlay compositors can clear virtual placements during
+      // redraw. Placeholder cells alone cannot recreate a deleted placement.
+      const command = recreatePlacement ? buildVirtualPlacementCommand({
+        imageId: current.id, placementId: state.config.placementId,
+        columns, rows, passthrough: prepared.passthrough,
+      }) : "";
+      prepared.rendered = { signature, command };
+      return command;
     }
     const command = buildPngVirtualPlacementCommand({
       imageId: current.id,

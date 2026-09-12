@@ -178,6 +178,10 @@ Set `AGENT_UTILS_TENDRIL_REMOTE=<host>` to wrap Tendril invocations with `tendri
 
 The kitty image preview extension is loaded from [`extensions/kitty-image-preview.js`](extensions/kitty-image-preview.js) and uses shared protocol helpers in [`extensions/kitty-graphics.js`](extensions/kitty-graphics.js). It is a first-class Pi package extension like `search_web`: install this repo as a Pi package, then the tools become available to the agent without shelling out to `kitty icat`.
 
+Use `/image-preview` (or `/image-show`) to restore the selected image and force a fresh upload after hiding, terminal reattachment, or image eviction. `/image-status` remains status-only. `/image-overlay` opens a large single-image gallery: **Left/Right** browse, **Escape** closes. Closing preserves the selected image and restores the preview's prior visibility; opening stops cycling/streaming so the gallery stays still while browsing.
+
+Fullscreen Pi mounts the preview in its supported above-editor widget layout rather than patching the regular document renderer. Fullscreen/overlay Unicode redraws recreate virtual placements without resending PNG bytes; explicit preview restoration resets both upload guards and rendered-command caches.
+
 Available tools:
 
 - `kitty_image_preview_add` — add a PNG/APNG image and optionally show it immediately.
