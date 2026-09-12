@@ -100,6 +100,8 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
   const minIntervalMs = resolveMinIntervalMs(process.env);
   const minPercent = resolveMinPercent(process.env);
   let lastQueuedAt = 0;
+  let sessionGeneration = 0;
+  pi.on?.("session_shutdown", () => { sessionGeneration++; });
 
   // After a real compaction fires, treat that moment as the new reference point
   // so the rate-limit window measures from the most recent actual compaction.
@@ -111,9 +113,9 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
     name: "self_compact",
     label: "Self Compact",
     description:
-      "Trigger compaction of this agent's own conversation context (equivalent to a user-issued /compact) so a long-running agent can free up context autonomously, without operator intervention. Optionally focus the retained summary with instructions.",
+      "Compact this agent's own conversation context via /compact and automatically continue the interrupted task after successful compaction. Optionally focus the retained summary with instructions.",
     promptSnippet:
-      "Compact your own conversation context (equivalent to /compact) to free context during a long session; optionally focus the summary with instructions.",
+      "Compact your own conversation context and automatically resume after success; optionally focus the summary with instructions.",
     promptGuidelines: [
       "Use self_compact when your context is heavy in a long-running session and you want to compact-and-continue rather than request recreation or a handoff.",
       "Prefer self_compact over a context-driven handoff: compaction preserves the session and avoids spin-up overhead.",
@@ -205,9 +207,26 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
       // Real, fire-and-forget compaction trigger (bd-d71947). ctx.compact()
       // actually runs compaction; the old pi.sendUserMessage("/compact") only
       // replayed the text and never dispatched the command.
+      const generation = sessionGeneration;
+      let settled = false;
       ctx.compact({
         customInstructions,
+        onComplete: () => {
+          if (settled || generation !== sessionGeneration) return;
+          settled = true;
+          // ctx.compact is fire-and-forget and interrupts the running agent.
+          // Only its successful completion may request another turn. Follow-up
+          // delivery also handles completion while Pi is still unwinding tools.
+          pi.sendMessage({
+            customType: "agent-utils.self-compact-continue",
+            content: "Self-compaction completed. Continue the interrupted task using the compacted summary and retained recent messages. Do not stop merely because compaction finished.",
+            display: false,
+            details: { toolCallId: _toolCallId, source: "self_compact" },
+          }, { triggerTurn: true, deliverAs: "followUp" });
+        },
         onError: (err) => {
+          if (settled || generation !== sessionGeneration) return;
+          settled = true;
           if (ctx.hasUI && typeof ctx.ui?.notify === "function") {
             ctx.ui.notify(`self-compact failed: ${err?.message || err}`, "error");
           }
@@ -219,7 +238,7 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
             type: "text",
             text: `Triggering compaction (\`${command}\`) — this agent will compact its own context, equivalent to a user-issued /compact. Context: ${formatContextUsage(
               usage,
-            )}.`,
+            )}. The agent will resume automatically after successful compaction.`,
           },
         ],
         details: { command, queued: true, minIntervalMs, minPercent, forced: params.force === true, usage },

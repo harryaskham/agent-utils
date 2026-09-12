@@ -15,8 +15,10 @@ import selfCompactExtension, {
 function makeHarness({ now } = {}) {
   const tools = new Map();
   const compactCalls = [];
+  const messages = [];
   const handlers = new Map();
   const pi = {
+    sendMessage(message, options) { messages.push({ message, options }); },
     registerTool(definition) { tools.set(definition.name, definition); },
     on(event, handler) {
       const arr = handlers.get(event) || [];
@@ -33,7 +35,7 @@ function makeHarness({ now } = {}) {
   const emit = (event, payload) => {
     for (const h of handlers.get(event) || []) h(payload);
   };
-  return { pi, ctx, tools, compactCalls, handlers, emit };
+  return { pi, ctx, tools, compactCalls, messages, handlers, emit };
 }
 
 function load(pi, opts) {
@@ -66,6 +68,41 @@ test("execute triggers ctx.compact (real compaction, no user-message replay)", a
   assert.equal(typeof h.compactCalls[0].onError, "function", "should pass an onError handler");
   assert.equal(result.details.queued, true);
   assert.equal(result.details.command, "/compact");
+});
+
+test("successful self-compaction resumes exactly once, after completion only", async () => {
+  const h = makeHarness();
+  load(h.pi);
+  await run(h, "resume-call", {});
+  assert.equal(h.messages.length, 0);
+  h.emit("session_compact", {});
+  assert.equal(h.messages.length, 0, "the general event does not trigger self continuation");
+  h.compactCalls[0].onComplete();
+  h.compactCalls[0].onComplete();
+  assert.equal(h.messages.length, 1);
+  assert.deepEqual(h.messages[0].options, { triggerTurn: true, deliverAs: "followUp" });
+  assert.equal(h.messages[0].message.display, false);
+  assert.equal(h.messages[0].message.details.toolCallId, "resume-call");
+  assert.match(h.messages[0].message.content, /Continue the interrupted task/);
+});
+
+test("failed or stale self-compaction never resumes the agent", async () => {
+  for (const scenario of ["failure", "shutdown"]) {
+    const h = makeHarness();
+    load(h.pi);
+    await run(h, "resume-call", {});
+    if (scenario === "failure") h.compactCalls[0].onError(new Error("cancelled"));
+    else h.emit("session_shutdown", {});
+    h.compactCalls[0].onComplete();
+    assert.equal(h.messages.length, 0, scenario);
+  }
+});
+
+test("manual compaction does not start an unsolicited continuation", () => {
+  const h = makeHarness();
+  load(h.pi);
+  h.emit("session_compact", {});
+  assert.equal(h.messages.length, 0);
 });
 
 test("execute with instructions passes sanitized customInstructions to ctx.compact", async () => {
