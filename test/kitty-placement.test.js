@@ -8,7 +8,37 @@ import {
   resolvePlacement,
   sideOverlayWidth,
   sideOverlayMaxHeight,
+  shouldRenderUnicodePlaceholders,
 } from "../extensions/kitty-image-preview/placement.js";
+
+import { shouldUseInMemoryTransfer } from "../extensions/kitty-graphics.js";
+import { buildCurrentDisplayCommand } from "../extensions/kitty-image-preview/display-commands.js";
+
+test("Herdr/SSH without tmux uses direct cursor graphics, not tmux or virtual placement", () => {
+  for (const env of [
+    { TERM: "xterm-256color", HERDR_ENV: "1" },
+    { TERM: "xterm-256color", HERDR_ENV: "1", SSH_CONNECTION: "client server" },
+    { TERM: "xterm-256color", SSH_TTY: "/dev/pts/0" },
+  ]) {
+    const state = makeState({ passthrough: "auto", placementMode: "auto", placement: "rightOverlay" });
+    assert.equal(configuredPassthroughMode(state, env), "none");
+    assert.equal(shouldUseInMemoryTransfer(env), true);
+    assert.equal(shouldRenderUnicodePlaceholders(state, { env }), false);
+    state.currentCommand = { itemId: 123, pngBase64: "eA==", transport: "memory", passthrough: "none", zIndex: 0 };
+    const command = buildCurrentDisplayCommand(state, { id: 123 }, 30, 10, false);
+    assert.match(command, /a=T/);
+    assert.match(command, /t=d/);
+    assert.ok(!command.includes("U=1"));
+    assert.ok(!command.includes("\x1bPtmux;"));
+  }
+});
+
+test("real tmux and explicit Unicode placement retain anchored rendering", () => {
+  const state = makeState({ passthrough: "auto", placementMode: "auto" });
+  assert.equal(shouldRenderUnicodePlaceholders(state, { env: { TMUX: "/tmp/tmux" } }), true);
+  state.config.placementMode = "unicode";
+  assert.equal(shouldRenderUnicodePlaceholders(state, { env: { HERDR_ENV: "1" } }), true);
+});
 
 function makeState(config = {}) {
   return {

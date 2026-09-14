@@ -180,6 +180,8 @@ The kitty image preview extension is loaded from [`extensions/kitty-image-previe
 
 Use `/image-preview` (or `/image-show`) to restore the selected image and force a fresh upload after hiding, terminal reattachment, or image eviction. `/image-status` remains status-only. `/image-overlay` opens a large single-image gallery: **Left/Right** browse, **Escape** closes. Closing preserves the selected image and restores the preview's prior visibility; opening stops cycling/streaming so the gallery stays still while browsing.
 
+Auto placement uses ordinary cursor graphics when no tmux passthrough hop is detected, including SSH and Herdr with `TERM=xterm-256color`. SSH/Herdr transport uses in-band PNG bytes rather than a server-local file path. Unicode virtual placement remains available explicitly (`/image-config placementMode=unicode`) and is used automatically for tmux.
+
 Fullscreen Pi mounts the preview in its supported above-editor widget layout rather than patching the regular document renderer. Fullscreen/overlay Unicode redraws recreate virtual placements without resending PNG bytes; explicit preview restoration resets both upload guards and rendered-command caches.
 
 Available tools:

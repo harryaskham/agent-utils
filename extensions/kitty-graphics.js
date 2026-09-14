@@ -62,7 +62,10 @@ export function shouldUseInMemoryTransfer(env = process.env) {
   // Use inline transmission for tmux/SSH and for native kitty/Ghostty/WezTerm;
   // fall back to file transmission only for a generic local terminal that shares
   // our filesystem and is not known to need in-band kitty bytes.
-  return Boolean(env.TMUX) || isRemoteSshSession(env) || isNativeKittyGraphicsTerminal(env);
+  // A Herdr PTY can terminate at a different host even without SSH_* in the
+  // child environment. Never ask its graphics client to open a server path.
+  return Boolean(env.TMUX || env.HERDR_ENV || env.HERDR_SOCKET_PATH)
+    || isRemoteSshSession(env) || isNativeKittyGraphicsTerminal(env);
 }
 
 // Detect a remote SSH session where the controlling terminal lives on another

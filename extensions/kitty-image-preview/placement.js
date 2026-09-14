@@ -5,8 +5,6 @@
 import {
   MAX_KITTY_PLACEHOLDER_DIACRITIC_VALUE,
   detectKittyPassthroughMode,
-  isNativeKittyGraphicsTerminal,
-  isRemoteSshSession,
   shouldUseUnicodePlaceholders,
 } from "../kitty-graphics.js";
 
@@ -78,17 +76,15 @@ export function shouldRenderUnicodePlaceholders(state, options = {}) {
   const env = options.env ?? process.env;
   const passthrough = state.config.passthrough;
   const passthroughMode = passthrough === "auto" ? detectKittyPassthroughMode(env) : passthrough;
-  const nativeNoPassthrough = passthroughMode === "none" && !isRemoteSshSession(env) && isNativeKittyGraphicsTerminal(env);
+  const directNoPassthrough = passthroughMode === "none";
   const preferAnchored = state.config.placementMode === "auto"
     && options.preferAnchored !== false
-    // On native kitty-compatible terminals with no passthrough hop (not tmux,
-    // not SSH), default to cursor placement. Unicode placeholders are useful as
-    // an anchored tmux/side-panel workaround, but in no-passthrough Ghostty they
-    // can leak PUA placeholder cells as tofu when the TUI text stream and kitty
-    // protocol writes interleave (bd-903d89).
-    && !nativeNoPassthrough;
+    // SSH and Herdr forward graphics bytes; they do not imply tmux or support
+    // for Unicode virtual placements. Without a passthrough hop, use ordinary
+    // cursor placement like icat, even when TERM is only xterm-256color.
+    && !directNoPassthrough;
   const forceAnchored = options.forceUnicodePlaceholders || preferAnchored || (
-    options.forceSideOverlay !== false && isSideOverlayPlacement(placement) && !nativeNoPassthrough
+    options.forceSideOverlay !== false && isSideOverlayPlacement(placement) && !directNoPassthrough
   );
   return shouldUseUnicodePlaceholders({
     placementMode: state.config.placementMode,

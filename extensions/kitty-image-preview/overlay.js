@@ -1,4 +1,5 @@
 import { containImageBox } from "./layout.js";
+import { shouldRenderUnicodePlaceholders } from "./placement.js";
 import { renderCurrentImageLines } from "./widget.js";
 import { truncatePlainText } from "./text-utils.js";
 
@@ -54,9 +55,9 @@ export class KittyImageGalleryOverlay {
       rows: box.imageRows,
       lineWidth: cols,
       showCaption: false,
-      // Virtual placements follow the overlay's cells through compositing,
-      // scrolling and resize, including SSH/tmux. No screen coordinates leak.
-      useUnicodePlaceholders: true,
+      // Use the same transport/placement decision as the normal preview.
+      // In particular SSH/Herdr without tmux must not force virtual placements.
+      useUnicodePlaceholders: shouldRenderUnicodePlaceholders(state),
     });
     return [header, ...images, color(this.error ? "warning" : "dim", line(this.error || "← →  Browse    Esc  Close"))];
   }
