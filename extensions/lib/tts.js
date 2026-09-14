@@ -4,7 +4,9 @@
 //   text -> Azure Speech REST (SSML) -> raw PCM16/24kHz/mono -> playback child.
 // It never shells out to the `tts` CLI and never routes through the Cacophony
 // narration daemon. Callers such as /read, realtime speak-replies, and cascade
-// share the same defaults, policy gate, timeout behavior, and SSML builder.
+// share the same defaults, timeout behavior, and SSML builder. Each caller
+// owns its enable/default policy; synthesis must not veto explicit /tts or
+// /narrate activation based on the unrelated cascade auto-speech environment.
 
 import { spawn } from "node:child_process";
 import { combineTimeoutSignal } from "./bounded-exec.js";
@@ -188,9 +190,6 @@ export async function synthesizeAzureSpeechDirect({
   signal,
   env = process.env,
 } = {}) {
-  if (!cascadeSpeechEnabled({ env })) {
-    throw new Error("azure-speech: disabled by Cacophony node policy (speech.enabled=false)");
-  }
   const body = String(text ?? "");
   if (!body.trim()) throw new Error("azure-speech: refusing to synthesize empty text");
 

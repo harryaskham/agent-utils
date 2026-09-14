@@ -147,20 +147,19 @@ test("native Azure synthesis posts SSML directly and returns raw PCM", async () 
   assert.match(request.options.body, /style='hopeful'/);
 });
 
-test("native synthesis honors the speech policy and rejects unsupported providers", async () => {
-  assert.equal(cascadeSpeechEnabled({ env: { PI_CASCADE_SPEECH_ENABLED: "0" } }), false);
+test("explicit native synthesis is independent of cascade auto-speech policy", async () => {
+  const env = { CACO_AGENT_ID: "managed-agent", PI_CASCADE_SPEECH_ENABLED: "0" };
+  assert.equal(cascadeSpeechEnabled({ env }), false, "cascade callers retain their own default gate");
   let fetched = false;
-  await assert.rejects(
-    synthesizeAzureSpeechDirect({
-      text: "silent",
-      endpoint: "https://speech.example",
-      apiKey: "secret",
-      env: { PI_CASCADE_SPEECH_ENABLED: "0" },
-      fetchImpl: async () => { fetched = true; return okFetch()(); },
-    }),
-    /disabled by Cacophony node policy/,
-  );
-  assert.equal(fetched, false);
+  await synthesizeAzureSpeechDirect({
+    text: "explicit speech",
+    endpoint: "https://speech.example",
+    apiKey: "secret",
+    env,
+    fetchImpl: async () => { fetched = true; return okFetch()(); },
+  });
+  assert.equal(fetched, true);
+  assert.equal(env.PI_CASCADE_SPEECH_ENABLED, "0", "explicit speech does not mutate defaults");
   await assert.rejects(synthesizeSpeechDirect("hello", { provider: "openai" }), /unsupported direct provider/);
 });
 

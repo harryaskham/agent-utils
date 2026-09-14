@@ -28,6 +28,7 @@ import {
   readPersistedTtsSettings,
 } from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
+import { synthesizeSpeechDirect } from "../extensions/lib/tts.js";
 
 function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSettings = { tts: {}, narrate: {} }, flags = {} } = {}) {
   const commands = new Map();
@@ -60,6 +61,41 @@ async function waitFor(predicate, timeoutMs = 1000) {
   while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
   return predicate();
 }
+
+test("Caco off-by-default settings allow explicit /tts and /narrate through native synthesis", async () => {
+  const env = { CACO_AGENT_ID: "test-agent", PI_CASCADE_SPEECH_ENABLED: "0" };
+  const played = [];
+  const speech = createAgentSpeechController({
+    env,
+    synthesize: (text, options) => synthesizeSpeechDirect(text, {
+      ...options, endpoint: "https://speech.example", apiKey: "test-key",
+      fetchImpl: async () => ({ ok: true, arrayBuffer: async () => new Uint8Array([1, 2]).buffer }),
+    }),
+    player: { interrupt() {}, play: async pcm => { played.push(pcm); } },
+  });
+  // These booleans are the evaluated result of the operator's boolCommand.
+  const h = harness({ env, speech, persistedSettings: { tts: { enabled: false }, narrate: { enabled: false } } });
+  const message = timestamp => ({ message: { role: "assistant", timestamp, content: [{ type: "text", text: "Hello" }] } });
+  h.emit("message_end", message(1));
+  assert.equal(played.length, 0);
+  await h.commands.get("tts").handler("on", h.ctx);
+  h.emit("message_end", message(2));
+  assert.equal(await waitFor(() => played.length === 1), true);
+  assert.equal(h.pi.ttsNarration.isNarrateEnabled(), false);
+  await h.commands.get("tts").handler("off", h.ctx);
+  h.emit("message_end", message(3));
+  assert.equal(played.length, 1);
+  await h.commands.get("narrate").handler("on", h.ctx);
+  h.emit("message_end", { message: { role: "assistant", content: [
+    { type: "text", text: "I will inspect the configuration." },
+    { type: "toolCall", id: "inspect", name: "read", arguments: {} },
+  ] } });
+  assert.equal(await waitFor(() => played.length === 2), true);
+  assert.equal(h.pi.ttsNarration.isEnabled(), false, "narrate does not enable plain TTS");
+  await h.commands.get("narrate").handler("off", h.ctx);
+  assert.equal(env.PI_CASCADE_SPEECH_ENABLED, "0");
+  assert.ok(!h.notifications.some(({ level }) => level === "warning"));
+});
 
 test("assistant TTS extracts only plain text while tool batches retain parallel calls", () => {
   const message = {
