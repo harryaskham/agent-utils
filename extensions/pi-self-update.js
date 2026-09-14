@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path";
 import { homedir } from "node:os";
 
 import { ToolSchema } from "./lib/tool-schema.js";
+import { resolveProcessExecve } from "./lib/process-reexec.js";
 
 const UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const OUTPUT_LIMIT = 12_000;
@@ -16,6 +17,9 @@ const PI_RESTART_PREFER_PATH = "pi";
 
 const VALUE_FLAGS = new Set([
   "--mode",
+  "--name",
+  "-n",
+  "--tui-mode",
   "--provider",
   "--model",
   "--api-key",
@@ -23,6 +27,9 @@ const VALUE_FLAGS = new Set([
   "--append-system-prompt",
   "--models",
   "--tools",
+  "-t",
+  "--exclude-tools",
+  "-xt",
   "--thinking",
   "--export",
   "--extension",
@@ -30,7 +37,6 @@ const VALUE_FLAGS = new Set([
   "--skill",
   "--prompt-template",
   "--theme",
-  "--list-models",
 ]);
 
 const BOOLEAN_FLAGS = new Set([
@@ -39,6 +45,15 @@ const BOOLEAN_FLAGS = new Set([
   "--version",
   "-v",
   "--no-tools",
+  "-nt",
+  "--no-builtin-tools",
+  "-nbt",
+  "--no-context-files",
+  "-nc",
+  "--approve",
+  "-a",
+  "--no-approve",
+  "-na",
   "--print",
   "-p",
   "--no-extensions",
@@ -52,7 +67,7 @@ const BOOLEAN_FLAGS = new Set([
   "--offline",
 ]);
 
-const SESSION_VALUE_FLAGS = new Set(["--session", "--fork", "--session-dir"]);
+const SESSION_VALUE_FLAGS = new Set(["--session", "--session-id", "--fork", "--session-dir"]);
 const SESSION_BOOLEAN_FLAGS = new Set(["--continue", "-c", "--resume", "-r", "--no-session"]);
 
 function truncateOutput(text, limit = OUTPUT_LIMIT) {
@@ -271,7 +286,7 @@ function redactSensitiveArgs(args) {
   return redacted;
 }
 
-function stripPromptArgs(rawArgs) {
+function stripPromptArgs(rawArgs, getFlag = () => undefined) {
   const preserved = [];
   const dropped = [];
   for (let i = 0; i < rawArgs.length; i += 1) {
@@ -280,30 +295,50 @@ function stripPromptArgs(rawArgs) {
       dropped.push(...rawArgs.slice(i));
       break;
     }
-    if (SESSION_VALUE_FLAGS.has(arg)) {
+    const equals = arg.startsWith("--") ? arg.indexOf("=") : -1;
+    const flag = equals >= 0 ? arg.slice(0, equals) : arg;
+    const value = equals >= 0 ? arg.slice(equals + 1) : undefined;
+    const consumeValue = () => {
+      if (equals >= 0) return value;
+      const next = rawArgs[i + 1];
+      if (next === undefined || next === "--" || /^--?[a-z]/i.test(next)) {
+        throw new Error(`/restart: missing value for ${flag}; refusing an ambiguous argument list`);
+      }
+      i++;
+      return next;
+    };
+    if (SESSION_VALUE_FLAGS.has(flag)) {
+      dropped.push(flag, consumeValue());
+      continue;
+    }
+    if (SESSION_BOOLEAN_FLAGS.has(flag)) {
       dropped.push(arg);
-      if (i + 1 < rawArgs.length) dropped.push(rawArgs[++i]);
       continue;
     }
-    if (SESSION_BOOLEAN_FLAGS.has(arg)) {
+    if (VALUE_FLAGS.has(flag)) {
+      preserved.push(flag, consumeValue());
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(flag)) {
+      if (equals >= 0) throw new Error(`/restart: unexpected value for ${flag}`);
+      preserved.push(flag);
+      continue;
+    }
+    if (flag === "--list-models") {
+      // Optional-value, one-shot CLI action: do not repeat on restart.
       dropped.push(arg);
+      if (equals < 0 && rawArgs[i + 1] && !/^[-@]/.test(rawArgs[i + 1])) dropped.push(rawArgs[++i]);
       continue;
     }
-    if (VALUE_FLAGS.has(arg)) {
-      preserved.push(arg);
-      if (i + 1 < rawArgs.length) preserved.push(rawArgs[++i]);
-      continue;
-    }
-    if (BOOLEAN_FLAGS.has(arg)) {
-      preserved.push(arg);
-      continue;
-    }
-    if (arg.startsWith("--") && arg.includes("=")) {
-      preserved.push(arg);
-      continue;
-    }
-    if (arg.startsWith("--") || arg.startsWith("-")) {
-      preserved.push(arg);
+    if (arg.startsWith("-")) {
+      const registered = getFlag(flag.replace(/^--/, ""));
+      if (typeof registered === "string") {
+        preserved.push(flag, consumeValue());
+      } else if (typeof registered === "boolean" && equals < 0) {
+        preserved.push(flag);
+      } else {
+        throw new Error(`/restart: unknown or unsupported flag ${flag}; refusing to guess its argument arity`);
+      }
       continue;
     }
     dropped.push(arg);
@@ -318,12 +353,13 @@ export function buildPiRestartPlan({
   sessionDir,
   cwd = process.cwd(),
   command = PI_RESTART_PREFER_PATH,
+  getFlag,
 } = {}) {
   if (!sessionFile) {
     throw new Error("/restart requires a persistent session file; current Pi session is ephemeral or not yet persisted");
   }
   const rawArgs = argv.slice(2);
-  const { preserved, dropped } = stripPromptArgs(rawArgs);
+  const { preserved, dropped } = stripPromptArgs(rawArgs, getFlag);
   const restartArgs = [...preserved];
   if (sessionDir) restartArgs.push("--session-dir", sessionDir);
   restartArgs.push("--session", sessionFile);
@@ -345,22 +381,25 @@ export function buildPiRestartPlan({
   };
 }
 
-export function executePiRestartPlan(plan, { execve = process.execve, spawnImpl = spawn, exit = process.exit } = {}) {
-  if (typeof execve === "function") {
-    execve(plan.executable, plan.args, plan.env);
-    return { method: "execve" };
+export function executePiRestartPlan(plan, { execve = process.execve } = {}) {
+  if (typeof execve !== "function") {
+    throw new Error("/restart: safe process replacement is unavailable; refusing to spawn a competing terminal reader");
   }
-  const child = spawnImpl(plan.executable, plan.args.slice(1), {
-    cwd: plan.cwd,
-    env: plan.env,
-    stdio: "inherit",
-  });
-  child.on?.("exit", (code, signal) => {
-    if (signal) exit(128);
-    exit(typeof code === "number" ? code : 0);
-  });
-  child.on?.("error", () => exit(1));
-  return { method: "spawn" };
+  execve(plan.executable, plan.args, plan.env);
+  return { method: "execve" };
+}
+
+export async function captureRestartTerminal(ctx) {
+  if (!ctx.hasUI || (ctx.mode && ctx.mode !== "tui")) return undefined;
+  if (typeof ctx.ui?.custom !== "function") throw new Error("/restart: cannot safely release the terminal in this runtime");
+  let terminalUi;
+  await ctx.ui.custom((tui, _theme, _keys, done) => {
+    terminalUi = tui;
+    queueMicrotask(() => done());
+    return { render: () => [], invalidate() {} };
+  }, { overlay: true, overlayOptions: { width: 1, maxHeight: 1, visible: () => false, nonCapturing: true } });
+  if (typeof terminalUi?.stop !== "function") throw new Error("/restart: terminal stop API unavailable");
+  return terminalUi;
 }
 
 function formatRestartPlan(plan) {
@@ -558,7 +597,7 @@ export default async function piSelfUpdateExtension(pi) {
       const sessionDir = ctx.sessionManager?.getSessionDir?.();
       let plan;
       try {
-        plan = buildPiRestartPlan({ sessionFile, sessionDir, cwd: ctx.cwd });
+        plan = buildPiRestartPlan({ sessionFile, sessionDir, cwd: ctx.cwd, getFlag: (name) => pi.getFlag?.(name) });
       } catch (error) {
         ctx.ui.notify(error.message || String(error), "error");
         return;
@@ -577,7 +616,18 @@ export default async function piSelfUpdateExtension(pi) {
         droppedArgCount: plan.droppedArgs.length,
       });
       ctx.ui.notify("Restarting Pi process with the current session; startup prompt/file args are suppressed.", "info");
-      executePiRestartPlan(plan);
+      let terminalUi;
+      try {
+        const execve = await resolveProcessExecve();
+        terminalUi = await captureRestartTerminal(ctx);
+        // Disable raw input/keyboard protocols and leave the old alternate
+        // screen before replacement. Never let two Pi processes read stdin.
+        terminalUi?.stop();
+        executePiRestartPlan(plan, { execve });
+      } catch (error) {
+        terminalUi?.start?.();
+        ctx.ui.notify(error.message || String(error), "error");
+      }
     },
   });
 

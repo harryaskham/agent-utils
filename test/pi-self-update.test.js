@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 
 process.env.PI_AUTO_UPDATE_ON_STARTUP = process.env.PI_AUTO_UPDATE_ON_STARTUP ?? "0";
 
-import piSelfUpdateExtension, { buildPiRestartPlan, executePiRestartPlan } from "../extensions/pi-self-update.js";
+import piSelfUpdateExtension, { buildPiRestartPlan, executePiRestartPlan, captureRestartTerminal } from "../extensions/pi-self-update.js";
 
 async function loadExtension(pi) {
   await piSelfUpdateExtension(pi);
@@ -217,6 +217,7 @@ test("buildPiRestartPlan preserves runtime flags, switches to current session, a
     sessionFile: "/tmp/pi-session/session.jsonl",
     sessionDir: "/tmp/pi-session",
     cwd: "/work/project",
+    getFlag: name => name === "unknown-bool" ? true : undefined,
   });
 
   assert.equal(plan.executable, "/old/pi/dist/cli.js");
@@ -224,6 +225,36 @@ test("buildPiRestartPlan preserves runtime flags, switches to current session, a
   assert.deepEqual(plan.droppedArgs, ["--continue", "@startup.md", "non-idempotent prompt"]);
   assert.equal(plan.env.PI_RESTARTED_WITHOUT_INITIAL_PROMPT, "1");
   assert.equal(plan.env.PI_RESTART_SESSION_FILE, "/tmp/pi-session/session.jsonl");
+});
+
+test("restart keeps names, fullscreen mode and quoted values attached to their flags", () => {
+  const name = 'Agent "two words" $(not-a-command)';
+  const sessionFile = '/tmp/session dir/a "quoted" session.jsonl';
+  const plan = buildPiRestartPlan({
+    argv: ['bun', '/$bunfs/root/pi', '--name', name, '--tui-mode', 'fullscreen', '-t', 'read,bash', '-xt', 'write', '--append-system-prompt', 'hello\nworld', 'initial prompt', '@initial.png'],
+    sessionFile, sessionDir: '/tmp/session dir', env: {},
+  });
+  assert.deepEqual(plan.restartArgs, ['--name', name, '--tui-mode', 'fullscreen', '-t', 'read,bash', '-xt', 'write', '--append-system-prompt', 'hello\nworld', '--session-dir', '/tmp/session dir', '--session', sessionFile]);
+  assert.deepEqual(plan.droppedArgs, ['initial prompt', '@initial.png']);
+});
+
+test("restart normalizes equals values and replaces all old session selectors", () => {
+  const plan = buildPiRestartPlan({
+    argv: ['node', '/bin/pi', '-n', 'my agent', '--session-id=old-id', '--session=old file', '--session-dir=/old dir', '--fork', '/old fork', '--no-session', '--tui-mode=fullscreen', '--model=provider/model'],
+    sessionFile: '/new session', env: {},
+  });
+  assert.deepEqual(plan.restartArgs, ['-n', 'my agent', '--tui-mode', 'fullscreen', '--model', 'provider/model', '--session', '/new session']);
+});
+
+test("restart fails closed on missing values and unknown flags", () => {
+  for (const args of [['--name'], ['--name', '--session-dir', '/old'], ['--new-value-flag', 'lost value']]) {
+    assert.throws(() => buildPiRestartPlan({ argv: ['node', '/bin/pi', ...args], sessionFile: '/current', env: {} }), /refusing/);
+  }
+  const plan = buildPiRestartPlan({
+    argv: ['node', '/bin/pi', '--custom', 'two words', '--harry'], sessionFile: '/current', env: {},
+    getFlag: name => name === 'custom' ? 'two words' : name === 'harry' ? true : undefined,
+  });
+  assert.deepEqual(plan.restartArgs, ['--custom', 'two words', '--harry', '--session', '/current']);
 });
 
 test("/restart --dry-run reports reexec plan without executing", async () => {
@@ -281,39 +312,21 @@ test("executePiRestartPlan prefers execve with full argv", () => {
   assert.deepEqual(calls, [{ file: "/bin/pi", args: ["pi", "--session", "/tmp/session.jsonl"], env: { PI_RESTARTED_WITHOUT_INITIAL_PROMPT: "1" } }]);
 });
 
-test("executePiRestartPlan falls back to spawn when execve is unavailable (bd-31ca09)", () => {
-  const plan = {
-    executable: "/bin/pi",
-    args: ["pi", "--session", "/tmp/s.jsonl"],
-    env: { X: "1" },
-    cwd: "/work",
-  };
-  const spawnCalls = [];
-  const exitCalls = [];
-  let exitHandler;
-  let errorHandler;
-  const fakeChild = {
-    on(event, cb) {
-      if (event === "exit") exitHandler = cb;
-      if (event === "error") errorHandler = cb;
-    },
-  };
-  const result = executePiRestartPlan(plan, {
-    execve: null, // null (not undefined, which would hit the process.execve default) -> spawn fallback
-    spawnImpl(file, args, opts) { spawnCalls.push({ file, args, opts }); return fakeChild; },
-    exit(code) { exitCalls.push(code); },
-  });
-  assert.equal(result.method, "spawn");
-  assert.equal(spawnCalls.length, 1);
-  assert.equal(spawnCalls[0].file, "/bin/pi");
-  assert.deepEqual(spawnCalls[0].args, ["--session", "/tmp/s.jsonl"]); // args.slice(1)
-  assert.equal(spawnCalls[0].opts.cwd, "/work");
-  assert.equal(spawnCalls[0].opts.stdio, "inherit");
-  // exit wiring: a clean exit forwards the code; an error exits 1.
-  exitHandler(3, null);
-  assert.deepEqual(exitCalls, [3]);
-  errorHandler(new Error("boom"));
-  assert.deepEqual(exitCalls, [3, 1]);
+test("executePiRestartPlan refuses unsafe spawn fallback", () => {
+  assert.throws(() => executePiRestartPlan({ executable: "/bin/pi", args: [] }, { execve: null }), /competing terminal reader/);
+});
+
+test("restart terminal capture settles its UI span before terminal shutdown", async () => {
+  let doneCalled = false;
+  const tui = { stop() {} };
+  const ctx = { hasUI: true, mode: "tui", ui: {
+    custom: (factory, options) => new Promise(resolve => {
+      assert.equal(options.overlayOptions.nonCapturing, true);
+      factory(tui, {}, {}, () => { doneCalled = true; resolve(); });
+    }),
+  } };
+  assert.equal(await captureRestartTerminal(ctx), tui);
+  assert.equal(doneCalled, true);
 });
 
 test("buildPiRestartPlan includes --session-dir when a session dir is provided (bd-31ca09)", () => {
