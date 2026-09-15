@@ -6,6 +6,14 @@ import { join } from "node:path";
 
 import { DEFAULT_TTS_QUEUE_CONFIG, MachineTtsQueue, normalizeQueueConfig, pcmDurationMs, ttsQueueAgentToolsEnabled } from "../extensions/lib/tts-queue.js";
 
+async function waitFor(predicate) {
+  const deadline = Date.now() + 4000;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, "queue did not settle");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("queue defaults to serial playback with a two-second overlap and agent tools opt in", () => {
   assert.deepEqual(DEFAULT_TTS_QUEUE_CONFIG, { maxParallel: 1, overlapMs: 2000 });
   assert.equal(ttsQueueAgentToolsEnabled({}), false);
@@ -23,12 +31,15 @@ test("queue config and PCM duration are bounded", () => {
 test("machine queue persists, claims, plays, and removes a job without serializing env", async () => {
   const root = mkdtempSync(join(tmpdir(), "tts-queue-"));
   const played = [];
-  const player = { interrupt() {}, async play(pcm, options) { played.push({ pcm: pcm.toString(), options }); return { interrupted: false }; } };
+  const player = { interrupt() {}, async play(pcm, options) {
+    const metadata = readdirSync(join(root, "active")).filter((name) => name.endsWith(".json"))
+      .map((name) => readFileSync(join(root, "active", name), "utf8")).join("\n");
+    assert.notEqual(metadata, ""); assert.doesNotMatch(metadata, /never-write|SECRET/);
+    played.push({ pcm: pcm.toString(), options }); return { interrupted: false };
+  } };
   const queue = new MachineTtsQueue({ root, player, pollMs: 10_000 });
   try {
     const pending = queue.enqueue(Buffer.from("pcm"), { backend: "pulse", env: { SECRET: "never-write" } });
-    const metadata = ["jobs", "active"].flatMap((dir) => readdirSync(join(root, dir)).filter((name) => name.endsWith(".json")).map((name) => readFileSync(join(root, dir, name), "utf8"))).join("\n");
-    if (metadata) assert.doesNotMatch(metadata, /never-write|SECRET/);
     assert.deepEqual(await pending, { interrupted: false });
     assert.equal(played[0].pcm, "pcm");
     assert.equal(played[0].options.backend, "pulse");
@@ -47,7 +58,7 @@ test("two independent workers honor machine-global parallel capacity", async () 
     first.configure({ maxParallel: 2 });
     const a = first.enqueue(Buffer.alloc(48_000), { streamName: "a" });
     const b = second.enqueue(Buffer.alloc(48_000), { streamName: "b" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => first.status().active === 2 && finishes.length === 2);
     assert.equal(first.status().active, 2);
     finishes.splice(0).forEach((finish) => finish({ interrupted: false }));
     await Promise.all([a, b]);
@@ -62,7 +73,7 @@ test("skip current writes a cross-process cancellation marker", async () => {
   const queue = new MachineTtsQueue({ root, player, pollMs: 10 });
   try {
     const pending = queue.enqueue(Buffer.alloc(48_000), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => queue.current !== null);
     assert.equal(queue.skipCurrent(), true);
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(interrupted, true);
