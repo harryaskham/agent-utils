@@ -65,6 +65,14 @@ Only a receipt containing a non-empty durable agent ID and project is accepted. 
 
 On reload or restart, the latest matching session receipt restores the runtime identity without rerunning the CLI or duplicating the registration message. `/caco-runtime` shows the current managed, visiting, disabled, in-progress, or unregistered state.
 
+## Manual visiting-agent registration
+
+Use `/caco-agent-register` to register the current session explicitly, including when `autoRegister` is false (the default) or `PI_CACO_AUTO_REGISTER=0`. It uses the configured project environment variable and requires tmux, just like startup registration. No settings or parent environment variables are changed.
+
+Manual and startup registration share the same in-flight request, durable receipt, identity publication, and downstream MCP notification. Repeated commands reuse the existing identity. Receipts restore on reload/restart even with auto-registration off.
+
+`/caco-runtime` distinguishes **unregistered; auto-registration off** from **disabled by DISABLE_PI_CACO** and points to the manual command. The latter is a global kill switch and still blocks manual registration; use `PI_CACO_AUTO_REGISTER=0`, not `DISABLE_PI_CACO=1`, when only boot registration should be disabled.
+
 ## Transient Cacophony MCP
 
 Agent Utils declares `pi-mcp-adapter` as its own runtime dependency, so package

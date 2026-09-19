@@ -38,6 +38,57 @@ function harness({ entries = [] } = {}) {
 
 const settle = async () => { await Promise.resolve(); await new Promise((resolve) => setImmediate(resolve)); };
 
+test("manual registration works with auto-registration off and deduplicates concurrent requests and reload", async () => {
+  clearCacophonyRuntimeIdentity();
+  const env = { CACO_PROJECT: "p", TMUX: "yes", PI_CACO_AUTO_REGISTER: "0" };
+  const h = harness();
+  let calls = 0;
+  let complete;
+  const options = {
+    env, settings: {},
+    execFileImpl(_command, _args, _options, callback) { calls++; complete = callback; },
+  };
+  createCacophonyRuntimeExtension(options)(h.pi);
+  await h.emit("session_start");
+  assert.equal(calls, 0);
+  await h.commands.get("caco-runtime").handler("", h.ctx);
+  assert.match(h.notifications.at(-1).message, /auto-registration off; use \/caco-agent-register/);
+  const register = () => h.commands.get("caco-agent-register").handler("", h.ctx);
+  const first = register();
+  const second = register();
+  assert.equal(calls, 1);
+  complete(null, JSON.stringify({ id: "visitor", project: "p" }), "");
+  await Promise.all([first, second]);
+  await register();
+  assert.equal(calls, 1);
+  assert.equal(h.appended.length, 1);
+  assert.equal(h.events.length, 1);
+  await h.emit("session_shutdown");
+  const restored = harness({ entries: h.appended });
+  createCacophonyRuntimeExtension(options)(restored.pi);
+  await restored.emit("session_start");
+  assert.equal(getCacophonyRuntimeIdentity(env).agentId, "visitor");
+  assert.equal(calls, 1);
+  assert.equal(restored.messages.length, 0);
+  await restored.emit("session_shutdown");
+});
+
+test("manual command preserves global disable, project and tmux requirements", async () => {
+  for (const [env, warning] of [
+    [{ DISABLE_PI_CACO: "1", CACO_PROJECT: "p", TMUX: "yes" }, /disabled by DISABLE_PI_CACO/],
+    [{ TMUX: "yes" }, /requires CACO_PROJECT/],
+    [{ CACO_PROJECT: "p" }, /require a tmux pane/],
+  ]) {
+    clearCacophonyRuntimeIdentity();
+    const h = harness();
+    let calls = 0;
+    createCacophonyRuntimeExtension({ env, settings: {}, execFileImpl() { calls++; } })(h.pi);
+    await h.commands.get("caco-agent-register").handler("", h.ctx);
+    assert.equal(calls, 0);
+    assert.match(h.notifications.at(-1).message, warning);
+  }
+});
+
 test("global Cacophony disable and explicit identity resolution are fail closed", () => {
   assert.equal(isPiCacoDisabled({ DISABLE_PI_CACO: "1" }), true);
   const disabled = resolveCacophonyRuntimeConfig({ DISABLE_PI_CACO: "1", CACO_PROJECT: "p", TMUX: "x" }, { agentUtils: { cacophony: { autoRegister: true } } });
