@@ -1,5 +1,6 @@
 // Automatic assistant TTS + tool-batch narration helpers (bd-93503c).
 
+import { playTtsCommand } from "./tts-command.js";
 import { defaultReadConfig, applyReadConfigValues } from "../read-aloud.js";
 import { createInterruptiblePcmPlayer, synthesizeSpeechDirect } from "./tts.js";
 
@@ -142,13 +143,13 @@ function enabledValue(value, fallback = false) {
 export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = {}) {
   let config = defaultAgentTtsConfig({});
   const persistedValues = {};
-  for (const key of ["provider", "voice", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device"]) {
+  for (const key of ["provider", "command", "voice", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device"]) {
     if (Object.hasOwn(persisted, key)) persistedValues[key === "styleDegree" ? "styledegree" : key] = persisted[key];
   }
   config = applyAgentTtsConfig(config, persistedValues, {});
   const envValues = {};
   const envMap = {
-    PI_TTS_PROVIDER: "provider", PI_TTS_VOICE: "voice", PI_TTS_LANG: "lang",
+    PI_TTS_PROVIDER: "provider", PI_TTS_COMMAND: "command", PI_TTS_VOICE: "voice", PI_TTS_LANG: "lang",
     PI_TTS_SPEED: "speed", PI_TTS_EMBEDDING: "embedding", PI_TTS_STYLE: "style",
     PI_TTS_STYLEDEGREE: "styledegree", AZURE_SPEECH_ENDPOINT: "endpoint",
     PI_TTS_BACKEND: "backend", PULSE_SERVER: "server", PULSE_SINK: "device",
@@ -227,6 +228,9 @@ export function createAgentSpeechController({
     const controller = new AbortController();
     synthesisAbort = controller;
     try {
+      if (["command", "local"].includes(effective.provider)) {
+        return await playTtsCommand(body, { ...effective, signal: controller.signal, env });
+      }
       const options = {
         provider: effective.provider,
         voice: effective.voice,

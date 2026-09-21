@@ -49,6 +49,7 @@ function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "
     `tts:${enabled ? "on" : "off"}`,
     `enabled-source:${enabledSource}`,
     `provider:${config.provider}`,
+    `command:${config.command ? "set" : "none"}`,
     `voice:${optional(config.voice)}`,
     `pan:${optional(config.pan == null ? null : Number(config.pan).toFixed(2))}`,
     `lang:${optional(config.lang)}`,
@@ -165,7 +166,7 @@ export function createTtsNarrationExtension({
         ...current,
         ...(harryFlag
           ? { voice: "MAI-Voice-2-Flash", embedding: DEFAULT_TTS_EMBEDDING }
-          : sessionSpeechAssignment.voice ? { voice: sessionSpeechAssignment.voice, embedding: null } : {}),
+          : !["command", "local"].includes(current.provider) && sessionSpeechAssignment.voice ? { voice: sessionSpeechAssignment.voice, embedding: null } : {}),
         pan: sessionSpeechAssignment.pan,
       };
       if (typeof speechController.setConfig === "function") speechController.setConfig(assigned);
@@ -316,7 +317,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("tts", {
-      description: "Automatically speak every plain assistant text message verbatim. Usage: /tts [on|off|status|prefix='...' suffix='...' key=value ...]. Uses /read's native Azure settings/defaults.",
+      description: "Automatically speak every plain assistant text message verbatim. Usage: /tts [on|off|status|prefix='...' suffix='...' key=value ...]. Uses /read's Azure or local command settings; command='program \"$@\"' selects local playback.",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();

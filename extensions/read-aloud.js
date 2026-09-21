@@ -5,6 +5,7 @@
 // Synthesis uses the shared native Azure REST library; playback is a named,
 // interruptible PCM child (Pulse by default). No daemon or `tts` CLI hop.
 
+import { playTtsCommand } from "./lib/tts-command.js";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import {
   DEFAULT_TTS_PROVIDER,
@@ -49,7 +50,8 @@ export function defaultReadConfig(env = process.env, persisted = {}, persistedRe
     return Number.isFinite(number) && number > 0 ? number : fallback;
   };
   return {
-    provider: env.PI_TTS_PROVIDER || configured("provider", DEFAULT_TTS_PROVIDER),
+    provider: env.PI_TTS_PROVIDER || (env.PI_TTS_COMMAND ? "command" : configured("provider", persisted.command ? "command" : DEFAULT_TTS_PROVIDER)),
+    command: env.PI_TTS_COMMAND ?? configured("command", null),
     voice: env.PI_TTS_VOICE || configured("voice", DEFAULT_TTS_VOICE),
     lang: env.PI_TTS_LANG || configured("lang", DEFAULT_TTS_LANG),
     speed: env.PI_READ_SPEED != null
@@ -107,7 +109,7 @@ function booleanValue(value, name) {
 export function applyReadConfigValues(current, values = {}, env = process.env) {
   const next = { ...current };
   const known = new Set([
-    "provider", "voice", "lang", "speed", "style", "styledegree", "style_degree",
+    "provider", "command", "voice", "lang", "speed", "style", "styledegree", "style_degree",
     "embedding", "speaker", "speakerprofileid", "speaker_profile_id",
     "base_url", "baseurl", "endpoint", "api_key", "apikey",
     "backend", "server", "device", "sink", "delay", "on_delay", "ondelay",
@@ -120,10 +122,15 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
   if (own(values, "provider")) {
     const provider = nullableString(values.provider, env);
     const normalized = provider == null ? DEFAULT_TTS_PROVIDER : provider.toLowerCase();
-    if (!["azure", "azure-speech", "direct-azure"].includes(normalized)) {
-      throw new Error(`/read: unsupported provider '${provider}'; use provider=azure`);
+    if (!["azure", "azure-speech", "direct-azure", "command", "local"].includes(normalized)) {
+      throw new Error(`/read: unsupported provider '${provider}'; use provider=azure or command`);
     }
-    next.provider = "azure";
+    next.provider = ["command", "local"].includes(normalized) ? "command" : "azure";
+  }
+  if (own(values, "command")) {
+    // Preserve shell variables for expansion at playback, not configuration.
+    next.command = String(values.command ?? "");
+    if (!own(values, "provider")) next.provider = "command";
   }
   if (own(values, "voice")) next.voice = nullableString(values.voice, env);
   if (own(values, "lang")) next.lang = nullableString(values.lang, env);
@@ -171,6 +178,7 @@ export function formatReadStatus(enabled, config, env = process.env) {
   return [
     `read:${enabled ? "on" : "off"}`,
     `provider:${config.provider}`,
+    `command:${config.command ? "set" : "none"}`,
     `voice:${optional(config.voice)}`,
     `lang:${optional(config.lang)}`,
     `speed:${optional(config.speed)}`,
@@ -238,6 +246,14 @@ export function createReadModeController({
     synthesisAbort = abort;
     setStatus(ctx, `/read · synthesizing (${reason})`);
     try {
+      if (["command", "local"].includes(config.provider)) {
+        setStatus(ctx, `/read · speaking (${reason})`);
+        const result = await playTtsCommand(body, { ...config, signal: abort.signal, env });
+        if (mine !== generation || abort.signal.aborted) return false;
+        synthesisAbort = null;
+        setStatus(ctx, "/read · on");
+        return !result.interrupted;
+      }
       const synthesisOptions = {
         provider: config.provider,
         voice: config.voice,
@@ -378,7 +394,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
   });
 
   pi.registerCommand("read", {
-    description: "Direct Azure editor-to-speech mode. Usage: /read [on|off|status|text] [provider=azure voice=... lang=... speed=... style=... styledegree=... embedding=... delay=2000 on_delay=true on_send=true backend=pulse server=... device=...].",
+    description: "Azure or local-command editor-to-speech mode (command= selects local playback). Usage: /read [on|off|status|text] [provider=azure voice=... lang=... speed=... style=... styledegree=... embedding=... delay=2000 on_delay=true on_send=true backend=pulse server=... device=...].",
     handler: async (args, ctx) => {
       try {
         const parsed = parseEnvStyleArgs(String(args || ""));

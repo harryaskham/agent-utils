@@ -251,7 +251,7 @@ test("extension registers /read, attaches editor input, and exposes redacted sta
   createReadAloudExtension({ persistedTts: {}, persistedRead: {}, settingsPath: null })(pi);
   handlers.get("session_start")({ reason: "startup" }, harness.ctx);
   assert.ok(commands.has("read"));
-  assert.match(commands.get("read").description, /Direct Azure editor-to-speech mode/);
+  assert.match(commands.get("read").description, /Azure or local-command editor-to-speech mode/);
   assert.equal(harness.terminal.length, 1);
   assert.equal(typeof handlers.get("input"), "function");
   assert.equal(pi.readAloud.getConfig().voice, "MAI-Voice-2");

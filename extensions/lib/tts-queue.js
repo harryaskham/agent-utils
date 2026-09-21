@@ -60,6 +60,7 @@ export class MachineTtsQueue {
     this.root = root; this.player = player; this.pollMs = pollMs; this.now = now;
     this.maxBytes = maxBytes; this.admissionWaitMs = admissionWaitMs;
     this.current = null; this.timer = null; this.waiters = new Map();
+    this.tasks = new Map(); this.taskAbort = null;
     this.admitting = new Set(); this.admissionBytes = 0; this.stopped = false;
     this.acknowledgedCancellations = new Set();
     this.maintenance = null; this.needsMaintenance = true; this.lastMaintenance = null;
@@ -75,7 +76,17 @@ export class MachineTtsQueue {
     this.stopped = false; this.needsMaintenance = true;
     this.timer = setInterval(() => this.kick(), this.pollMs); this.timer.unref?.(); this.kick();
   }
-  stop() { if (this.timer) clearInterval(this.timer); this.timer = null; this.stopped = true; }
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null; this.stopped = true;
+    for (const id of this.tasks.keys()) this.cancel(id);
+    this.taskAbort?.abort();
+  }
+  interruptCurrent() { if (this.taskAbort) this.taskAbort.abort(); else this.player.interrupt(); }
+  enqueueTask(run, options = {}) {
+    if (typeof run !== "function") throw new Error("TTS queue task requires a function");
+    return this.enqueue(Buffer.from([0]), options, run);
+  }
   withLock(fn) {
     const lock = join(this.root, "lock"), token = `${process.pid}:${randomUUID()}`;
     const create = () => {
@@ -136,12 +147,12 @@ export class MachineTtsQueue {
     this.maintenance = pending;
     return pending;
   }
-  enqueue(buffer, options = {}) {
+  enqueue(buffer, options = {}, task = null) {
     const pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
     if (!pcm.length) return Promise.resolve({ empty: true, interrupted: false });
     const id = `${String(this.now()).padStart(13, "0")}-${process.pid}-${randomUUID()}`;
     const { env: _discardedEnv, ...safeOptions } = options || {};
-    const job = { id, createdAt: this.now(), ownerPid: process.pid, bytes: pcm.length, durationMs: pcmDurationMs(pcm.length, safeOptions), options: safeOptions };
+    const job = { id, createdAt: this.now(), ownerPid: process.pid, bytes: pcm.length, durationMs: task ? null : pcmDurationMs(pcm.length, safeOptions), options: safeOptions, ...(task ? { kind: "task" } : {}) };
     const metadataBytes = Buffer.byteLength(`${JSON.stringify(job)}\n`);
     const reservedBytes = pcm.length + metadataBytes;
     if (reservedBytes > this.maxBytes || this.admissionBytes + reservedBytes > this.maxBytes) {
@@ -149,6 +160,7 @@ export class MachineTtsQueue {
     }
     const pending = new Promise((resolve) => this.waiters.set(id, resolve));
     pending.jobId = id;
+    if (task) { this.tasks.set(id, task); void pending.then(() => this.tasks.delete(id)); }
     this.admitting.add(id); this.admissionBytes += reservedBytes;
     this.start();
     void this.admit(job, pcm, metadataBytes).catch((error) => {
@@ -195,7 +207,7 @@ export class MachineTtsQueue {
     if (!isTtsQueueJobId(id)) return false;
     try { if (regularFile(join(this.root, "active", `${id}.json`))) atomicJson(join(this.root, "active", `${id}.cancel`), 1); } catch {}
     try { if (regularFile(join(this.root, "jobs", `${id}.json`))) atomicJson(join(this.root, "jobs", `${id}.cancel`), 1); } catch {}
-    if (this.current?.id === id) this.player.interrupt();
+    if (this.current?.id === id) this.interruptCurrent();
     if (this.waiters.has(id)) this.acknowledgedCancellations.add(id);
     this.waiters.get(id)?.({ interrupted: true }); this.waiters.delete(id);
     // Cancellation cleanup must not wait for an idle playback slot.
@@ -236,7 +248,7 @@ export class MachineTtsQueue {
       const activeDir = join(this.root, "active");
       const active = readdirSync(activeDir).filter((n) => n.endsWith(".json")).map((n) => readJson(join(activeDir, n))).filter(Boolean);
       const cfg = this.config(); const now = this.now();
-      const overlap = cfg.overlapMs > 0 && active.length >= cfg.maxParallel && active.some((a) => Number(a.expectedEndAt) - now <= cfg.overlapMs);
+      const overlap = cfg.overlapMs > 0 && active.length >= cfg.maxParallel && active.some((a) => a.expectedEndAt != null && Number(a.expectedEndAt) - now <= cfg.overlapMs);
       if (active.length >= cfg.maxParallel + (overlap ? 1 : 0)) return null;
       const jobsDir = join(this.root, "jobs");
       const names = readdirSync(jobsDir).filter((n) => n.endsWith(".json")).sort();
@@ -247,10 +259,15 @@ export class MachineTtsQueue {
         const job = readJson(path); if (!job || job.id !== id) { rmSync(path, { force: true }); continue; }
         const base = join(jobsDir, id);
         if (existsSync(`${base}.cancel`)) { this.removeJob(id, true); continue; }
+        // Opaque playback runs only where its closure and environment live.
+        if (job.kind === "task" && !this.tasks.has(id)) {
+          if (!alive(job.ownerPid)) this.removeJob(id);
+          continue;
+        }
         const pcmPath = `${base}.pcm`; if (!regularFile(pcmPath)) continue;
         const claimedPcm = join(activeDir, `${job.id}.pcm`);
         try { renameSync(pcmPath, claimedPcm); } catch { continue; }
-        const record = { ...job, workerPid: process.pid, startedAt: now, expectedEndAt: now + job.durationMs };
+        const record = { ...job, workerPid: process.pid, startedAt: now, expectedEndAt: job.durationMs == null ? null : now + job.durationMs };
         atomicJson(join(activeDir, `${job.id}.json`), record);
         rmSync(path, { force: true });
         return { ...record, pcmPath: claimedPcm };
@@ -282,27 +299,31 @@ export class MachineTtsQueue {
   async tick() {
     if (this.stopped) return;
     this.settleRemoteWaiters();
-    if (this.current && existsSync(join(this.root, "active", `${this.current.id}.cancel`))) this.player.interrupt();
+    if (this.current && existsSync(join(this.root, "active", `${this.current.id}.cancel`))) this.interruptCurrent();
     if (this.needsMaintenance || this.lastMaintenance === null || this.now() - this.lastMaintenance >= STORAGE_MAINTENANCE_MS) {
       await this.maintainStorage(); this.settleRemoteWaiters();
     }
     if (this.stopped) return;
     if (this.current) {
-      if (existsSync(join(this.root, "active", `${this.current.id}.cancel`))) this.player.interrupt();
+      if (existsSync(join(this.root, "active", `${this.current.id}.cancel`))) this.interruptCurrent();
       return;
     }
     const job = this.claim(); if (!job) return;
     this.current = job;
     try {
       const pcm = await readFile(job.pcmPath);
+      if (job.kind === "task") this.taskAbort = new AbortController();
       const result = existsSync(join(this.root, "active", `${job.id}.cancel`))
         ? { interrupted: true }
-        : await this.player.play(pcm, job.options || {});
+        : job.kind === "task"
+          ? await this.tasks.get(job.id)(this.taskAbort.signal)
+          : await this.player.play(pcm, job.options || {});
       this.waiters.get(job.id)?.(result); this.waiters.delete(job.id);
     } catch (error) {
       this.waiters.get(job.id)?.({ interrupted: false, error: error.message }); this.waiters.delete(job.id);
     } finally {
       for (const suffix of [".json", ".pcm", ".cancel"]) rmSync(join(this.root, "active", `${job.id}${suffix}`), { force: true });
+      this.taskAbort = null;
       this.current = null; queueMicrotask(() => this.kick());
     }
   }

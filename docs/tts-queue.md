@@ -10,11 +10,21 @@ Speech synthesis and agent work remain asynchronous while playback waits. Any
 live Pi session can claim queued jobs, so a job survives its originating session
 exiting as long as another Agent Utils session is running.
 
-Only automatic `/tts` and `/narrate` playback opts into the queue by default.
-`/read`, spoken choices, and direct realtime reply playback remain immediate and
+For PCM, only automatic `/tts` and `/narrate` playback opts into the queue by default.
+Azure `/read`, spoken choices, and direct realtime reply playback remain immediate and
 interruptible without entering the machine queue. Environment objects and
 credentials are never serialized; metadata contains only playback routing such
 as backend, sink, pan, and stream name.
+
+Local command playback from `/tts`, `/narrate`, and `/read` also uses queue
+slots when this extension is loaded. It needs no audio buffer: a scheduling
+record reserves capacity until the command exits. Duration is unknown, so these
+jobs cannot trigger timed end-of-speech overlap. Commands, utterances, and their
+environment stay in memory; only the originating session can execute them, and
+they do not survive its exit. Skip/cancel terminates the command process group.
+Reload all queue workers after updating from a PCM-only version. For direct
+playback with no spool, load only the speech extensions, not `tts-queue.js`.
+See [local command configuration](tts-narration.md#local-command-playback).
 
 ## User control
 

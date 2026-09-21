@@ -62,6 +62,71 @@ Start Pi with `--harry`, or run `/tts --harry` or `/narrate --harry`, to retain
 the session's stereo position while selecting `MAI-Voice-2-Flash` with Harry's
 `0daec43c-911f-4529-820a-16dab73630d3` embedding.
 
+### Local command playback
+
+`/tts command=...` selects the command provider. `/narrate` uses that same
+provider and command, including its own effective speed/style overrides.
+`/read command=...` independently configures editor readback.
+
+```text
+/tts command='termux-tts-speak -r "$PI_TTS_SPEED" "$@"' speed=1
+/narrate on
+/read command='termux-tts-speak -r "$PI_TTS_SPEED" "$@"' speed=1
+/tts provider=azure
+```
+
+Commands run with `sh -c`; the entire utterance is one positional argument
+(`$1`, or quoted `"$@"`). Speech is never interpolated into shell source.
+Commands are trusted operator code: pipes, redirects, and shell expansion work.
+Shell variables in `command=` are preserved until playback. Exported variables:
+`PI_TTS_SPEED`, `PI_TTS_VOICE`, `PI_TTS_LANG`, `PI_TTS_STYLE`,
+`PI_TTS_STYLEDEGREE`, `PI_TTS_EMBEDDING`, and `PI_TTS_PAN`. Unset optional
+values are empty strings. Local providers interpret these values themselves;
+Azure voice names, embeddings, pan, and PCM backend settings are not automatically
+applied to a local engine. Configured Pulse server/sink are passed through.
+
+The command owns playback: **no audio output file or PCM stdout is required**.
+Stdout is discarded; nonzero exit reports a bounded stderr tail. Commands should
+block until playback finishes. If an engine launches asynchronous playback, use
+a blocking wrapper; terminating a process cannot necessarily stop audio already
+handed to an external service. Cancellation terminates the shell's process group
+on POSIX, escalating to SIGKILL after a short grace period.
+
+With the queue extension loaded, command playback (including `/read`) holds a
+machine-global queue slot until exit. Skip, clear, and concurrency controls still
+work. Duration is unknown, so a command cannot trigger end-of-utterance timed
+overlap. Only its originating session executes the command; speech, shell source,
+and environment are kept in memory rather than serialized into the spool. Pending
+command jobs do not survive the originating process exiting. Reload **all** queue
+workers after updating; older workers only understand PCM jobs.
+
+Startup configuration accepts `PI_TTS_COMMAND` or `agentUtils.tts.command` in
+settings.json; a command selects the command provider unless a provider is also
+specified. `provider=command` (alias `local`) can explicitly select it. Runtime
+`/tts` settings survive session restart through the existing session override path.
+This provider currently covers `/tts`, `/narrate`, and `/read`, not Realtime audio
+or spoken interactive choices.
+
+#### Speech-only, without queue or session persistence
+
+Load the two extension files directly from a checkout rather than loading the
+whole package manifest (which includes the queue and other extensions):
+
+```sh
+PI_TTS_COMMAND='termux-tts-speak -r "$PI_TTS_SPEED" "$@"' \
+PI_TTS_SPEED=1 \
+pi --no-extensions --no-session \
+  -e /path/to/agent-utils/extensions/read-aloud.js \
+  -e /path/to/agent-utils/extensions/tts-narration.js
+```
+
+Then enable `/tts on`, `/narrate on`, or `/read on`. Without the queue extension,
+commands execute directly and create no queue artifacts. Environment-supplied
+commands are not copied into runtime overrides; `--no-session` disables Pi's
+session-file persistence. This does not control shell history, terminal logs,
+or logs created by the invoked program. Runtime `/tts command=...` **is** stored
+in session overrides when session persistence is enabled.
+
 ### Durable settings
 
 Both modes support the standard `env > settings.json > default` precedence.
