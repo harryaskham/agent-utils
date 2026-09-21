@@ -183,6 +183,32 @@ question; option headlines and navigation speech remain unmodified. Set them wit
 `PI_CHOICE_SUFFIX`. Safe `$VAR`/`${VAR}` expansion is supported without command
 substitution. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
 
+### Local/private spoken choices
+
+Choice speech also inherits `PI_TTS_PROVIDER=command` and `PI_TTS_COMMAND`
+(or `agentUtils.tts.provider`/`command`). It passes the question/options as a
+literal positional argument and exports effective TTS variables just like `/tts`.
+The local engine keeps its configured voice instead of receiving an assigned
+Azure voice. No Azure synthesis or PCM player is invoked. These are startup
+settings; later `/tts` runtime changes do not reconfigure choice speech.
+
+For local commands and no outbound choice publishing:
+
+```sh
+export PI_TTS_PROVIDER=command
+export PI_TTS_COMMAND='termux-tts-speak -r "$PI_TTS_SPEED" "$@"'
+export PI_CHOICE_SPEECH_ENABLED=true
+export DISABLE_PI_CACO=1
+export PI_CHOICE_CACO_ENABLED=false
+export PI_DISABLE_AHP=1
+```
+
+Load `choice.js` directly with `--no-extensions`; optionally load `omni-input.js`
+and `ring-input.js` for input events. No queue artifacts are created unless the
+queue extension is also loaded. The configured command owns playback and should
+block until done; choice cancellation interrupts its process group. These flags
+do not sandbox the command, its TTS engine, or other loaded extensions.
+
 ## Freeform text and push-to-talk replies
 
 A choice is not limited to its numbered rows:

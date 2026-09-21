@@ -7,6 +7,7 @@
 
 import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "./input-actions.js";
 import { resolveAgentTtsSettings } from "./tts-narration.js";
+import { playTtsCommand } from "./tts-command.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./tts-identity.js";
 import {
   DEFAULT_TTS_BACKEND,
@@ -205,6 +206,16 @@ export function createChoiceSpeaker({
     synthesis = controller;
     const resolved = resolveSpeakToolParams({ text: body }, { env, persisted });
     try {
+      if (["command", "local"].includes(shared.provider)) {
+        return await playTtsCommand(body, {
+          ...shared,
+          // Local engines keep their configured voice, not an Azure identity.
+          pan: assignment?.pan ?? shared.pan,
+          streamName,
+          signal: controller.signal,
+          env,
+        });
+      }
       const options = {
         voice: assignment?.voice || resolved.voice,
         lang: resolved.lang,

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createChoiceSpeaker } from "../extensions/lib/choice.js";
 import { runTtsCommand, playTtsCommand } from "../extensions/lib/tts-command.js";
 import { MachineTtsQueue, TTS_QUEUE_SYMBOL } from "../extensions/lib/tts-queue.js";
 import { resolveAgentTtsSettings, createAgentSpeechController } from "../extensions/lib/tts-narration.js";
@@ -46,6 +47,29 @@ test("command speech bypasses Azure and PCM, and supports narration overrides", 
   });
   assert.deepEqual(await speech.speak("hello", { speed: 2 }), { interrupted: false });
   speech.dispose();
+});
+
+test("choice speech inherits command settings without Azure synthesis or voice reassignment", async () => {
+  const root = mkdtempSync(join(tmpdir(), "choice-command-"));
+  const speaker = createChoiceSpeaker({
+    env: { ...process.env, PI_TTS_PROVIDER: "command", PI_TTS_COMMAND: 'printf "%s\\n%s\\n%s" "$PI_TTS_SPEED" "$PI_TTS_VOICE" "$@" > "$OUT"', PI_TTS_SPEED: "1.3", PI_TTS_VOICE: "offline-voice", OUT: join(root, "out") },
+    persisted: { provider: "azure", speed: 2, voice: "cloud-voice" },
+    synthesize() { throw new Error("must not contact Azure"); },
+    player: { interrupt() {}, play() { throw new Error("must not play PCM"); } },
+  });
+  try {
+    speaker.assignSession({});
+    assert.deepEqual(await speaker.speak('Pick "$HOME" or $(exit 7)'), { interrupted: false });
+    assert.equal(readFileSync(join(root, "out"), "utf8"), '1.3\noffline-voice\nPick "$HOME" or $(exit 7)');
+  } finally { speaker.dispose(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("choice command interruption stops direct playback without a queue", async () => {
+  const speaker = createChoiceSpeaker({ env: { ...process.env, PI_TTS_PROVIDER: "command", PI_TTS_COMMAND: "exec sleep 30" } });
+  const result = speaker.speak("waiting");
+  speaker.interrupt();
+  assert.equal((await result).interrupted, true);
+  speaker.dispose();
 });
 
 test("opaque jobs share queue capacity, have unknown duration, and cancel without PCM", async () => {

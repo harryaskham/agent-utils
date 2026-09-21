@@ -104,8 +104,9 @@ Startup configuration accepts `PI_TTS_COMMAND` or `agentUtils.tts.command` in
 settings.json; a command selects the command provider unless a provider is also
 specified. `provider=command` (alias `local`) can explicitly select it. Runtime
 `/tts` settings survive session restart through the existing session override path.
-This provider currently covers `/tts`, `/narrate`, and `/read`, not Realtime audio
-or spoken interactive choices.
+This provider covers `/tts`, `/narrate`, `/read`, and spoken interactive choices,
+but not Realtime audio. Choices inherit startup TTS settings (environment/settings),
+not subsequent `/tts` runtime overrides.
 
 #### Speech-only, without queue or session persistence
 
