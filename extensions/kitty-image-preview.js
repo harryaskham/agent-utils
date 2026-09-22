@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
+import { shareCurrentImage } from "./kitty-image-preview/share.js";
 import {
   shellQuote,
   normalizeMaybeAtPath,
@@ -1318,6 +1319,20 @@ export default function kittyImagePreviewExtension(pi) {
       // forgetting the ids (bd-ded98d element (e)).
       runHeadlessOwnedFree(ctx, state);
     }
+  });
+
+  pi.registerTool({
+    name: "kitty_image_preview_share_current",
+    label: "Share Current Kitty Image",
+    description: "Explicitly share the selected PNG/APNG still or gallery image as durable Pi image content (maximum 8 MiB). Returns the actual image bytes in the final tool result and model context, not a path or UI-only preview. Snapshots just the selected frame; never starts continuous sharing.",
+    promptSnippet: "Explicitly share the selected preview image into model context and durable session history.",
+    promptGuidelines: [
+      "Use kitty_image_preview_share_current only when sharing the selected image is intended. Preview, gallery navigation, and streams stay local by default.",
+    ],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, signal) {
+      return shareCurrentImage(state, signal);
+    },
   });
 
   pi.registerTool({
