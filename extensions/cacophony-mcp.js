@@ -109,7 +109,8 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
     };
 
     const enqueueIdentity = (identity) => {
-      const plan = buildCacophonyMcpRegistration(identity, env);
+      if (!sessionCtx) return operation;
+      const plan = buildCacophonyMcpRegistration(identity, env, sessionCtx.cwd);
       if (!plan || stopped) return operation;
       const requestedGeneration = ++generation;
       operation = operation.then(async () => {

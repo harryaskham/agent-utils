@@ -50,10 +50,9 @@ Registration runs only when:
 1. Cacophony integration is not globally disabled.
 2. a project environment variable is present;
 3. no explicit agent identity is present;
-4. auto-registration is enabled; and
-5. `TMUX` is set.
+4. auto-registration is enabled.
 
-Without tmux, the extension performs no registration and shows one warning because visiting agents require a stable tmux pane.
+Registration supports Herdr and other hosts supported by the Caco CLI; the plugin does not require tmux. The CLI runs with Pi's session `ctx.cwd` as its working directory, not the MCP daemon's directory.
 
 After session startup, registration runs asynchronously:
 
@@ -67,7 +66,7 @@ On reload or restart, the latest matching session receipt restores the runtime i
 
 ## Manual visiting-agent registration
 
-Use `/caco-agent-register` to register the current session explicitly, including when `autoRegister` is false (the default) or `PI_CACO_AUTO_REGISTER=0`. It uses the configured project environment variable and requires tmux, just like startup registration. No settings or parent environment variables are changed.
+Use `/caco-agent-register` to register the current session explicitly, including when `autoRegister` is false (the default) or `PI_CACO_AUTO_REGISTER=0`. It uses the configured project environment variable and the actual Pi session working directory, just like startup registration. No settings or parent environment variables are changed.
 
 Manual and startup registration share the same in-flight request, durable receipt, identity publication, and downstream MCP notification. Repeated commands reuse the existing identity. Receipts restore on reload/restart even with auto-registration off.
 
@@ -102,9 +101,11 @@ CACO_AGENT_ID=<resolved managed-or-visiting id>
 CACO_PROJECT=<resolved project>
 ```
 
+The child server also receives the Pi session working directory through its `cwd` launch option. This applies to the session-owned server, not separately configured ambient/remote MCP servers; use `/caco-agent-register` for registering the current Pi session rather than a remote server's working directory.
+
 The extension never writes those values into `process.env` or `settings.json`.
 It does nothing when `DISABLE_PI_CACO=1`, identity/project is incomplete, or
-visiting registration was skipped (including the no-tmux case). Registration is serialized and deduplicated per identity. The native runtime
+visiting registration was skipped. Registration is serialized and deduplicated per identity. The native runtime
 API disposes an old identity before replacement. The 2.25 compatibility adapter
 is session-owned and tears down through its own `session_shutdown` handler; an
 unexpected mid-session identity change asks for a reload instead of leaking a

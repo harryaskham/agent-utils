@@ -2,7 +2,7 @@ import { isPiCacoDisabled } from "./cacophony-runtime.js";
 
 export const CACO_MCP_SERVER_NAME = "cacophony-runtime";
 
-export function buildCacophonyMcpRegistration(identity = {}, env = process.env) {
+export function buildCacophonyMcpRegistration(identity = {}, env = process.env, cwd) {
   if (isPiCacoDisabled(env) || identity?.disabled) return null;
   const agentId = String(identity?.agentId || "").trim();
   const project = String(identity?.project || "").trim();
@@ -13,6 +13,7 @@ export function buildCacophonyMcpRegistration(identity = {}, env = process.env) 
     definition: {
       command: String(env.CACO_BIN || "caco"),
       args: ["mcp", "stdio"],
+      ...(cwd ? { cwd } : {}),
       env: { CACO_AGENT_ID: agentId, CACO_PROJECT: project },
       literalEnv: true,
       lifecycle: "keep-alive",

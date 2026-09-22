@@ -26,13 +26,12 @@ export function resolveCacophonyRuntimeConfig(env = process.env, settings = {}) 
     command: String(env.CACO_BIN || persisted.command || "caco"),
     project: explicit.project,
     explicitAgentId: explicit.agentId,
-    hasTmux: Boolean(String(env.TMUX || "").trim()),
   };
 }
 
-function execJson(execFileImpl, command, args) {
+function execJson(execFileImpl, command, args, cwd) {
   return new Promise((resolve, reject) => {
-    execFileImpl(command, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    execFileImpl(command, args, { cwd, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) { reject(new Error(String(stderr || stdout || error.message).trim())); return; }
       try { resolve(JSON.parse(String(stdout || "{}"))); }
       catch (error_) { reject(new Error(`invalid caco registration JSON: ${error_.message}`)); }
@@ -56,7 +55,6 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
 
   return function cacophonyRuntimeExtension(pi) {
     let registration = null;
-    let warnedNoTmux = false;
 
     const announce = (ctx, identity, restored = false) => {
       const content = `Registered as Cacophony visiting agent ${identity.agentId} in project ${identity.project}${restored ? " (restored)" : ""}.`;
@@ -117,16 +115,9 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
       }
       if (!manual && !config.autoRegister) return;
 
-      if (!config.hasTmux) {
-        if (manual || !warnedNoTmux) {
-          warnedNoTmux = true;
-          try { ctx.ui?.notify?.("Cacophony visiting-agent registration skipped: visiting agents require a tmux pane.", "warning"); } catch {}
-        }
-        return;
-      }
       if (registration) return registration;
 
-      registration = execJson(execFileImpl, config.command, ["agent", "register", "--project", config.project, "--json"])
+      registration = execJson(execFileImpl, config.command, ["agent", "register", "--project", config.project, "--json"], ctx.cwd)
         .then((response) => {
           const data = response?.data || response;
           const agentId = String(data?.id || data?.agent_id || data?.agentId || "").trim();

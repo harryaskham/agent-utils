@@ -105,6 +105,7 @@ test("registration plan scopes managed identity to one keep-alive stdio child", 
 test("managed identity registers once, exposes diagnostics, and disposes on shutdown", async () => {
   clearCacophonyRuntimeIdentity();
   const h = harness();
+  h.ctx.cwd = "/projects/herdr-session";
   const registrations = [];
   let disposals = 0;
   createCacophonyMcpExtension({
@@ -115,6 +116,7 @@ test("managed identity registers once, exposes diagnostics, and disposes on shut
   await settle();
   assert.equal(registrations.length, 1);
   assert.equal(registrations[0].definition.command, "caco-test");
+  assert.equal(registrations[0].definition.cwd, h.ctx.cwd);
   assert.deepEqual(registrations[0].definition.args, ["mcp", "stdio"]);
   assert.deepEqual(registrations[0].definition.env, { CACO_AGENT_ID: "managed-1", CACO_PROJECT: "agent-utils" });
   assert.equal(registrations[0].definition.lifecycle, "keep-alive", "adapter auto-connects and publishes proxy metadata without restart");

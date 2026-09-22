@@ -29,6 +29,7 @@ function harness({ entries = [] } = {}) {
     events: { emit(name, payload) { events.push({ name, payload }); } },
   };
   const ctx = {
+    cwd: "/projects/actual-project",
     sessionManager: { getBranch: () => [...entries, ...appended] },
     ui: { notify(message, level) { notifications.push({ message, level }); } },
   };
@@ -73,11 +74,10 @@ test("manual registration works with auto-registration off and deduplicates conc
   await restored.emit("session_shutdown");
 });
 
-test("manual command preserves global disable, project and tmux requirements", async () => {
+test("manual command preserves global disable and project requirements", async () => {
   for (const [env, warning] of [
     [{ DISABLE_PI_CACO: "1", CACO_PROJECT: "p", TMUX: "yes" }, /disabled by DISABLE_PI_CACO/],
     [{ TMUX: "yes" }, /requires CACO_PROJECT/],
-    [{ CACO_PROJECT: "p" }, /require a tmux pane/],
   ]) {
     clearCacophonyRuntimeIdentity();
     const h = harness();
@@ -98,20 +98,25 @@ test("global Cacophony disable and explicit identity resolution are fail closed"
   assert.equal(explicit.project, "p");
 });
 
-test("visiting registration requires project and tmux and warns once when tmux is absent", async () => {
+test("visiting registration supports non-tmux hosts and uses the session cwd", async () => {
   clearCacophonyRuntimeIdentity();
   let calls = 0;
   const h = harness();
   createCacophonyRuntimeExtension({
     env: { CACO_PROJECT: "agent-utils" },
     settings: { agentUtils: { cacophony: { autoRegister: true } } },
-    execFileImpl() { calls += 1; },
+    execFileImpl(_command, _args, options, callback) {
+      calls += 1;
+      assert.equal(options.cwd, h.ctx.cwd);
+      callback(null, JSON.stringify({ id: "herdr-visitor", project: "agent-utils" }), "");
+    },
   })(h.pi);
   await h.emit("session_start");
+  await settle();
   await h.emit("session_start");
-  assert.equal(calls, 0);
-  assert.equal(h.notifications.length, 1);
-  assert.match(h.notifications[0].message, /require a tmux pane/);
+  assert.equal(calls, 1);
+  assert.equal(getCacophonyRuntimeIdentity({}).agentId, "herdr-visitor");
+  await h.emit("session_shutdown");
 });
 
 test("successful registration publishes one durable runtime identity and context message", async () => {
