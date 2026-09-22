@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "ag": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./ag",
+        "type": "path"
+      },
+      "original": {
+        "path": "./ag",
+        "type": "path"
+      },
+      "parent": []
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -129,6 +145,7 @@
     },
     "root": {
       "inputs": {
+        "ag": "ag",
         "flake-utils": "flake-utils",
         "linear-extra": "linear-extra",
         "nixpkgs": "nixpkgs",

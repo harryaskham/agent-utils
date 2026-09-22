@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "delivery": "Nix-managed Rust CLI; no daemon, TUI, or self-update lane",
+  "requirements": [
+    {"id":"STATE-1","contract":"Speech requests persist under XDG_STATE_HOME/agent-utils/tts/speech.jsonl, independent of PCM cache; old feed is copied once without deleting it.","tests":["test/tts-feed.test.js"]},
+    {"id":"IMAGE-1","contract":"Agent tool-result images, explicit kitty gallery additions/samples and local assistant image Markdown are copied with immutable provenance sidecars; user uploads and background preview frames are not implicitly archived.","tests":["test/shared-images.test.js"]},
+    {"id":"IMAGE-2","contract":"Private atomic publication, bounded image size, checksum, safe agent paths, repeat-event idempotency and survival after source/session deletion.","tests":["test/shared-images.test.js"]},
+    {"id":"CLI-1","contract":"Typed CLI/JSON/MCP reads share one domain core; config uses configurable-cli with managed symlink support.","tests":["ag/tests/cli.rs"]},
+    {"id":"FLEET-1","contract":"Configured SSH hosts/usernames/ports/paths; fan-out isolates failures; tails reconnect from cursors without replaying delivered entries; Ctrl-C reaps child processes.","tests":["ag/tests/cli.rs"]},
+    {"id":"READ-1","contract":"Bounded JSONL, history, image-list and transport reads; human output escapes terminal controls; read-only operations never alter source archives.","tests":["ag/tests/cli.rs"]},
+    {"id":"NIX-1","contract":"Independent ag subflake, root named package and aggregate, locked build; Collective config symlink and agent-utils pin updated without switch.","evidence":["ag/flake.nix","flake.nix","docs/ag.md"]}
+  ],
+  "budgets": {"image_bytes":67108864,"jsonl_record_bytes":8388608,"hosts":128,"history_records_per_host":1000,"image_records_per_host":1000,"ssh_connect_seconds":10,"tail_poll_ms":500},
+  "integration_notes": {
+    "mcp_cli":"Required; read-only list/history/config tools, finite results only. CLI follow is intentionally not an unending MCP call.",
+    "configurable_cli":"Required; AG_CONFIG, XDG config, canonical YAML/schema/validation and symlink-preserving management.",
+    "updatable_cli":"Not applicable to this Nix-only package; update the flake pin rather than overwriting a store binary.",
+    "feedback_cli":"No automatic telemetry or remote error submission for this private transcript/image reader; bounded structured CLI/MCP errors and per-node tail status are local only.",
+    "ahp":"Current structural bridge v1 only supports input providers. No unsupported attachment/resource capabilities advertised; image archiving remains independently functional."
+  }
+}

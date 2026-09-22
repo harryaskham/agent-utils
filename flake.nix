@@ -41,6 +41,11 @@
       inputs.pyproject-build-systems.follows = "pyproject-build-systems";
     };
 
+    ag = {
+      url = "path:./ag";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # pi-wasm: in-browser Pi agent loop subproject (epic bd-f76cee). Node/Vite
     # subflake; only needs nixpkgs + flake-utils (no python/uv2nix toolchain).
     pi-wasm = {
@@ -50,7 +55,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, pi-wasm, ... }:
+  outputs = { self, nixpkgs, flake-utils, web-search, linear-extra, pi-wasm, ag, ... }:
     let
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -70,6 +75,7 @@
             web-search.packages.${system}.web-search-mcp
             linear-extra.packages.${system}.linear-extra-mcp
             skillServer
+            ag.packages.${system}.ag
           ];
           withoutChecks = package: package.overrideAttrs (_: {
             doCheck = false;
@@ -77,10 +83,12 @@
           webSearchUnchecked = withoutChecks web-search.packages.${system}.web-search-mcp;
           linearExtraUnchecked = withoutChecks linear-extra.packages.${system}.linear-extra-mcp;
           skillServerUnchecked = withoutChecks skillServer;
+          agUnchecked = withoutChecks ag.packages.${system}.ag;
           uncheckedPackages = [
             webSearchUnchecked
             linearExtraUnchecked
             skillServerUnchecked
+            agUnchecked
           ];
           uncheckedJoin = pkgs.symlinkJoin {
             name = "agent-utils-unchecked";
@@ -95,6 +103,8 @@
             paths = allPackages;
             pathsToLink = [ "/bin" ];
           };
+          ag = ag.packages.${system}.ag;
+          ag-unchecked = agUnchecked;
           all = self.packages.${system}.default;
           unchecked = uncheckedJoin;
           all-unchecked = uncheckedJoin;
@@ -119,6 +129,7 @@
         packages = self.packages.${prev.system};
       in {
         agent-utils = packages.unchecked;
+        ag = packages.ag-unchecked;
         web-search-mcp = packages.web-search-mcp-unchecked;
         linear-extra-mcp = packages.linear-extra-mcp-unchecked;
         skill-server = packages.skill-server-unchecked;
@@ -130,6 +141,10 @@
         default = {
           type = "app";
           program = "${self.packages.${system}.web-search-mcp}/bin/web-search-mcp";
+        };
+        ag = {
+          type = "app";
+          program = "${self.packages.${system}.ag}/bin/ag";
         };
         web-search-mcp = self.apps.${system}.default;
         linear-extra-mcp = {
@@ -148,6 +163,10 @@
           type = "app";
           program = "${self.packages.${system}.pi-wasm-serve}/bin/pi-wasm-serve";
         };
+      });
+
+      checks = forAllSystems (system: {
+        ag = ag.packages.${system}.ag;
       });
 
       devShells = forAllSystems (system:

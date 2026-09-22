@@ -30,6 +30,7 @@ import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpee
 import { speechPrefix } from "./lib/tts-prefix.js";
 import { DEFAULT_TTS_EMBEDDING } from "./lib/tts.js";
 import { appendTtsFeed } from "./lib/tts-feed.js";
+import { artifactIdentity } from "./lib/artifact-state.js";
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -194,10 +195,13 @@ export function createTtsNarrationExtension({
       try { ctx?.ui?.notify?.(`${kind}: ${error?.message || String(error)}`, "warning"); } catch {}
     };
 
+    const feedWrites = new Set();
     const speakBestEffort = (text, ctx, kind = "tts", overrides = {}) => {
-      try {
-        appendFeed({ text, kind: kind === "tts" ? "tts" : "narrate", session: sessionSpeechIdentity(ctx, env), cwd: ctx?.cwd }, { env });
-      } catch (error) { warnOnce("tts feed", error, ctx); }
+      const identity = artifactIdentity(pi, ctx, env);
+      const pending = Promise.resolve().then(() => appendFeed({ ...identity, text, kind: kind === "tts" ? "tts" : "narrate" }, { env }))
+        .catch((error) => warnOnce("tts feed", error, ctx))
+        .finally(() => feedWrites.delete(pending));
+      feedWrites.add(pending);
       void speechController.speak(text, overrides).catch((error) => warnOnce(kind, error, ctx));
     };
 
@@ -478,7 +482,7 @@ export function createTtsNarrationExtension({
       },
     });
 
-    pi.on("session_shutdown", () => {
+    pi.on("session_shutdown", async () => {
       // In-memory teardown only. This is process lifecycle, not operator intent,
       // so it must NOT be recorded as a runtime override — otherwise every exit
       // would durably "turn off" tts for the session it is leaving. Flush any
@@ -488,6 +492,7 @@ export function createTtsNarrationExtension({
       narrateEnabled = false;
       stopNarrationWork();
       speechController.dispose();
+      await Promise.allSettled([...feedWrites]);
     });
   };
 }

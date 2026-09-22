@@ -10,13 +10,17 @@ Neither mode requires the agent to call the `speak` tool.
 
 ## Machine-wide speech feed
 
-Every `/tts` and `/narrate` speech request appends its full text (including spoken prefixes/suffixes) to `speech.jsonl` in the machine TTS queue directory. Default: `~/.cache/agent-utils/tts-queue/speech.jsonl`; `XDG_CACHE_HOME` and `PI_TTS_QUEUE_DIR` are respected. Each JSON line contains a timestamp, kind, session identity, PID, cwd, and text. Embedded newlines are escaped so each request occupies one physical line.
+Every `/tts` and `/narrate` speech request appends its full text (including spoken prefixes/suffixes) to `~/.local/state/agent-utils/tts/speech.jsonl`, separate from the disposable PCM queue. `XDG_STATE_HOME`, `PI_AGENT_UTILS_STATE_DIR`, and `PI_TTS_FEED_PATH` can override the producer destination. Each JSON line contains a timestamp, kind, agent/session identity, host, PID, cwd, and text. Embedded newlines are escaped so each request occupies one physical line.
 
 ```sh
-tail -F ~/.cache/agent-utils/tts-queue/speech.jsonl
-# Readable text view (requires jq):
-tail -F ~/.cache/agent-utils/tts-queue/speech.jsonl | jq --unbuffered -r '"\(.timestamp) [\(.kind)] \(.session): \(.text)"'
+tail -F ~/.local/state/agent-utils/tts/speech.jsonl
+# Global multi-node view using the packaged Rust CLI:
+ag tts tail
+# Readable local text view (requires jq):
+tail -F ~/.local/state/agent-utils/tts/speech.jsonl | jq --unbuffered -r '"\(.timestamp) [\(.kind)] \(.session): \(.text)"'
 ```
+
+On first write to a missing durable feed, an existing queue-adjacent `speech.jsonl` is copied once atomically. The legacy file is retained because old Pi processes may still write there; reload them to use the new path. Existing durable feeds are never overwritten or repeatedly merged. See the [`ag` guide](../ag/README.md) for fleet configuration and durable image storage.
 
 This is a **request feed**, not proof of completed playback: failed, interrupted, or superseded speech remains in the log. Appends do not acquire the queue lock or add polling. Logging errors warn once per session without preventing speech. New files are owner-only (`0600`). Text may contain sensitive project content; the feed stays local, is append-only, and is not pruned by PCM queue cleanup. Operators can archive or remove it when desired; subsequent requests recreate it.
 

@@ -1,0 +1,30 @@
+[package]
+name = "ag"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+license = "MIT"
+description = "Durable agent speech and shared images across your machines"
+repository = "https://github.com/harryaskham/agent-utils"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+configurable-cli = { git = "https://github.com/harryaskham/configurable-cli", rev = "7d2234a2bb81beb7718582a9f927603c07f205f1" }
+mcp-cli = { package = "mcp-cli-core", git = "https://github.com/harryaskham/mcp-cli", rev = "81e55235df7d7335d4dc7bd1095131246d157a2a" }
+schemars = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+nix = { version = "0.30", features = ["poll", "signal", "process"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "sync", "signal", "io-util", "fs", "macros"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[workspace]
