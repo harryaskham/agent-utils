@@ -14,10 +14,14 @@ import selfCompactExtension, {
 // the slash command, so no compaction ran).
 function makeHarness({ now } = {}) {
   const tools = new Map();
+  let active = ["read", "self_compact"];
+  const activeChanges = [];
   const compactCalls = [];
   const messages = [];
   const handlers = new Map();
   const pi = {
+    getActiveTools() { return active; },
+    setActiveTools(names) { active = names; activeChanges.push(names); },
     sendMessage(message, options) { messages.push({ message, options }); },
     registerTool(definition) { tools.set(definition.name, definition); },
     on(event, handler) {
@@ -30,12 +34,13 @@ function makeHarness({ now } = {}) {
   // documented fire-and-forget compaction trigger.
   const ctx = {
     hasUI: false,
+    getContextUsage: () => ({ tokens: 160_000, contextWindow: 200_000, percent: 80 }),
     compact(options) { compactCalls.push(options); },
   };
   const emit = (event, payload) => {
-    for (const h of handlers.get(event) || []) h(payload);
+    for (const h of handlers.get(event) || []) h(payload, ctx);
   };
-  return { pi, ctx, tools, compactCalls, messages, handlers, emit };
+  return { pi, ctx, tools, compactCalls, messages, handlers, emit, activeChanges };
 }
 
 function load(pi, opts) {
@@ -175,7 +180,7 @@ test("missing ctx.compact is reported, not thrown", async () => {
   const h = makeHarness();
   load(h.pi);
   // Simulate a runtime whose ExtensionContext has no compact().
-  const result = await h.tools.get("self_compact").execute("t1", {}, null, null, { hasUI: false });
+  const result = await h.tools.get("self_compact").execute("t1", {}, null, null, { hasUI: false, getContextUsage: h.ctx.getContextUsage });
   assert.equal(result.details.queued, false);
   assert.equal(result.details.reason, "unsupported");
   assert.equal(h.compactCalls.length, 0);
@@ -207,13 +212,38 @@ test("buildCompactCommand + sanitizeInstructions: bound, single-line, strip lead
 });
 
 // bd-78ac4f: compaction is not free, so it is refused below a usage threshold
-// unless explicitly forced. A session compacting at 50.1% "because this feels
+// with no agent-controlled bypass. A session compacting at 50.1% "because this feels
 // long" throws away half a usable window.
 function makeUsageHarness(usage) {
   const h = makeHarness();
   h.ctx.getContextUsage = () => usage;
   return h;
 }
+
+test("visibility tracks threshold crossings without repeated active-set changes", async () => {
+  const h = makeUsageHarness({ percent: 28 });
+  load(h.pi);
+  h.emit("session_start");
+  assert.deepEqual(h.pi.getActiveTools(), ["read"]);
+  h.emit("turn_start");
+  assert.equal(h.activeChanges.length, 1);
+  h.ctx.getContextUsage = () => ({ percent: 75 });
+  h.emit("turn_end");
+  assert.deepEqual(h.pi.getActiveTools(), ["read", "self_compact"]);
+  h.emit("before_agent_start");
+  assert.equal(h.activeChanges.length, 2);
+  h.ctx.getContextUsage = () => ({ percent: 20 });
+  h.emit("session_compact");
+  assert.deepEqual(h.pi.getActiveTools(), ["read"]);
+  const stale = await run(h, "stale", { force: true });
+  assert.equal(stale.details.reason, "below_threshold");
+  h.ctx.getContextUsage = () => ({ percent: 80 });
+  h.emit("model_select");
+  assert.ok(h.pi.getActiveTools().includes("self_compact"));
+  h.ctx.getContextUsage = () => ({ tokens: null, percent: null });
+  h.emit("turn_start");
+  assert.deepEqual(h.pi.getActiveTools(), ["read"]);
+});
 
 test("self_compact refuses below the 75% threshold and reports the real figure", async () => {
   const h = makeUsageHarness({ tokens: 100_100, contextWindow: 200_000, percent: 50.1 });
@@ -228,33 +258,32 @@ test("self_compact refuses below the 75% threshold and reports the real figure",
   assert.equal(h.compactCalls.length, 0, "no compaction may run when refused");
 });
 
-test("self_compact proceeds below the threshold when force is set", async () => {
+test("self_compact ignores legacy force arguments and does not advertise force", async () => {
   const h = makeUsageHarness({ tokens: 100_100, contextWindow: 200_000, percent: 50.1 });
   load(h.pi);
   const result = await run(h, "call-1", { force: true });
-  assert.equal(result.details.queued, true);
-  assert.equal(result.details.forced, true);
-  assert.equal(h.compactCalls.length, 1);
+  assert.equal(result.details.queued, false);
+  assert.equal(result.details.reason, "below_threshold");
+  assert.equal(h.compactCalls.length, 0);
+  assert.equal(h.tools.get("self_compact").parameters.properties.force, undefined);
 });
 
-test("self_compact proceeds at or above the threshold without force", async () => {
+test("self_compact proceeds at or above the threshold", async () => {
   const h = makeUsageHarness({ tokens: 160_000, contextWindow: 200_000, percent: 80 });
   load(h.pi);
   const result = await run(h, "call-1", {});
   assert.equal(result.details.queued, true);
-  assert.equal(result.details.forced, false);
   assert.equal(h.compactCalls.length, 1);
 });
 
-test("self_compact still works when the runtime cannot report usage", async () => {
-  // Blocking on an unmeasurable figure would disable the tool outright on
-  // runtimes without the usage API, which is worse than an early compaction.
-  const h = makeHarness();
+test("self_compact refuses when the runtime cannot report usage", async () => {
+  const h = makeUsageHarness(null);
   load(h.pi);
   const result = await run(h, "call-1", {});
-  assert.equal(result.details.queued, true);
+  assert.equal(result.details.queued, false);
+  assert.equal(result.details.reason, "usage_unknown");
   assert.equal(result.details.usage.available, false);
-  assert.equal(h.compactCalls.length, 1);
+  assert.equal(h.compactCalls.length, 0);
 });
 
 test("self_compact dry run reports usage without compacting", async () => {
@@ -278,13 +307,13 @@ test("resolveMinPercent: default, override, disable, and invalid fallback", () =
   assert.equal(resolveMinPercent({ PI_SELF_COMPACT_MIN_PERCENT: "150" }), 75);
 });
 
-test("shouldRefuseCompaction: only refuses on a known sub-threshold figure", () => {
+test("shouldRefuseCompaction: refuses below threshold and unknown usage", () => {
   const below = { available: true, percent: 50, tokens: 1, contextWindow: 2, remaining: 1 };
   const above = { available: true, percent: 80, tokens: 8, contextWindow: 10, remaining: 2 };
   const unknown = { available: false, percent: null, tokens: null, contextWindow: null, remaining: null };
-  assert.ok(shouldRefuseCompaction(below, 75, false));
-  assert.equal(shouldRefuseCompaction(below, 75, true), null, "force overrides");
-  assert.equal(shouldRefuseCompaction(above, 75, false), null);
-  assert.equal(shouldRefuseCompaction(unknown, 75, false), null, "unknown usage must not block");
-  assert.equal(shouldRefuseCompaction(below, 0, false), null, "0 disables the guard");
+  assert.ok(shouldRefuseCompaction(below, 75));
+  assert.ok(shouldRefuseCompaction(below, 75, true), "legacy force cannot override");
+  assert.equal(shouldRefuseCompaction(above, 75), null);
+  assert.ok(shouldRefuseCompaction(unknown, 75), "unknown usage must block");
+  assert.equal(shouldRefuseCompaction(below, 0), null, "0 disables the guard");
 });
