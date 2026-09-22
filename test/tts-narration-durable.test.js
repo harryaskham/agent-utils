@@ -61,7 +61,7 @@ function harness({ sessionEntries, env = {}, persistedSettings = { tts: {}, narr
 
   // flushMs 0 keeps assertions synchronous; coalescing is covered separately.
   const runtimeSettings = createSessionRuntimeSettings(pi, { flushMs: 0 });
-  createTtsNarrationExtension({ env, speech, persistedSettings, runtimeSettings })(pi);
+  createTtsNarrationExtension({ env, speech, persistedSettings, runtimeSettings, appendFeed() {} })(pi);
 
   const emit = (name, event) => { for (const fn of handlers.get(name) || []) fn(event, ctx); };
   const run = (name, args) => commands.get(name).handler(args ?? "", ctx);

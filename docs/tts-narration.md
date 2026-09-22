@@ -8,6 +8,18 @@ Agent Utils separates two voice-output modes:
 
 Neither mode requires the agent to call the `speak` tool.
 
+## Machine-wide speech feed
+
+Every `/tts` and `/narrate` speech request appends its full text (including spoken prefixes/suffixes) to `speech.jsonl` in the machine TTS queue directory. Default: `~/.cache/agent-utils/tts-queue/speech.jsonl`; `XDG_CACHE_HOME` and `PI_TTS_QUEUE_DIR` are respected. Each JSON line contains a timestamp, kind, session identity, PID, cwd, and text. Embedded newlines are escaped so each request occupies one physical line.
+
+```sh
+tail -F ~/.cache/agent-utils/tts-queue/speech.jsonl
+# Readable text view (requires jq):
+tail -F ~/.cache/agent-utils/tts-queue/speech.jsonl | jq --unbuffered -r '"\(.timestamp) [\(.kind)] \(.session): \(.text)"'
+```
+
+This is a **request feed**, not proof of completed playback: failed, interrupted, or superseded speech remains in the log. Appends do not acquire the queue lock or add polling. Logging errors warn once per session without preventing speech. New files are owner-only (`0600`). Text may contain sensitive project content; the feed stays local, is append-only, and is not pruned by PCM queue cleanup. Operators can archive or remove it when desired; subsequent requests recreate it.
+
 ## `/tts`: verbatim assistant messages
 
 ```text

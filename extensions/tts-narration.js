@@ -29,6 +29,7 @@ import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js"
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./lib/tts-identity.js";
 import { speechPrefix } from "./lib/tts-prefix.js";
 import { DEFAULT_TTS_EMBEDDING } from "./lib/tts.js";
+import { appendTtsFeed } from "./lib/tts-feed.js";
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -73,6 +74,7 @@ export function createTtsNarrationExtension({
   settingsPath,
   persistedSettings,
   runtimeSettings,
+  appendFeed = appendTtsFeed,
 } = {}) {
   return function ttsNarrationExtension(pi) {
     pi.registerFlag?.("harry", { description: "Use Harry's TTS embedding while retaining deterministic session pan", type: "boolean", default: false });
@@ -193,6 +195,9 @@ export function createTtsNarrationExtension({
     };
 
     const speakBestEffort = (text, ctx, kind = "tts", overrides = {}) => {
+      try {
+        appendFeed({ text, kind: kind === "tts" ? "tts" : "narrate", session: sessionSpeechIdentity(ctx, env), cwd: ctx?.cwd }, { env });
+      } catch (error) { warnOnce("tts feed", error, ctx); }
       void speechController.speak(text, overrides).catch((error) => warnOnce(kind, error, ctx));
     };
 

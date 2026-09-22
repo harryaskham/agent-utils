@@ -34,6 +34,7 @@ function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSetting
   const commands = new Map();
   const handlers = new Map();
   const sent = [];
+  const feed = [];
   const notifications = [];
   const renderers = new Map();
   const model = { provider: "github-copilot", id: "gpt-5.6-luna" };
@@ -51,9 +52,9 @@ function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSetting
     on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
     sendMessage(message, options) { sent.push({ message, options }); },
   };
-  createTtsNarrationExtension({ runTextTurn, speech, env, settingsPath, persistedSettings })(pi);
+  createTtsNarrationExtension({ runTextTurn, speech, env, settingsPath, persistedSettings, appendFeed: record => feed.push(record) })(pi);
   const emit = (name, event) => { for (const fn of handlers.get(name) || []) fn(event, ctx); };
-  return { pi, ctx, commands, handlers, sent, notifications, renderers, emit };
+  return { pi, ctx, commands, handlers, sent, notifications, renderers, emit, feed };
 }
 
 async function waitFor(predicate, timeoutMs = 1000) {
@@ -343,6 +344,9 @@ test("/tts speaks every plain assistant message verbatim without a speak tool ca
   h.emit("message_end", { message: { role: "assistant", timestamp: 1, content: [{ type: "text", text: "Exact plain response." }, { type: "thinking", thinking: "not spoken" }] } });
   await waitFor(() => spoken.length === 1);
   assert.deepEqual(spoken, ["Agent says: Exact plain response. End."]);
+  assert.equal(h.feed.length, 1);
+  assert.equal(h.feed[0].kind, "tts");
+  assert.equal(h.feed[0].text, spoken[0]);
   // Same finalized message re-emission is deduplicated.
   h.emit("message_end", { message: { role: "assistant", timestamp: 1, content: [{ type: "text", text: "Exact plain response." }] } });
   await Promise.resolve();
