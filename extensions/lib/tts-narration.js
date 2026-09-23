@@ -4,7 +4,7 @@ import { playTtsCommand } from "./tts-command.js";
 import { defaultReadConfig, applyReadConfigValues } from "../read-aloud.js";
 import { createInterruptiblePcmPlayer, synthesizeSpeechDirect } from "./tts.js";
 
-export const DEFAULT_NARRATION_MODEL = "github-copilot/gpt-5.6-luna";
+export const DEFAULT_NARRATION_MODEL = "github-copilot/gpt-6-luna";
 export const TOOL_SUMMARY_CUSTOM_TYPE = "agent-utils-tool-summary";
 
 const SENSITIVE_KEY = /(api[-_]?key|token|secret|password|passwd|authorization|cookie|credential|private[-_]?key)/i;

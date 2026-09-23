@@ -37,7 +37,7 @@ function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSetting
   const feed = [];
   const notifications = [];
   const renderers = new Map();
-  const model = { provider: "github-copilot", id: "gpt-5.6-luna" };
+  const model = { provider: "github-copilot", id: "gpt-6-luna" };
   const ctx = {
     modelRegistry: {
       find(provider, id) { return provider === model.provider && id === model.id ? model : undefined; },
@@ -140,11 +140,11 @@ test("narration helpers redact secrets, bound output, and produce one natural se
 });
 
 test("narration model resolves exact provider/id and refuses unavailable models", () => {
-  const registry = { find: (provider, id) => provider === "github-copilot" && id === "gpt-5.6-luna" ? { provider, id } : undefined };
-  assert.deepEqual(resolveNarrationModel(registry), { provider: "github-copilot", id: "gpt-5.6-luna" });
+  const registry = { find: (provider, id) => provider === "github-copilot" && id === "gpt-6-luna" ? { provider, id } : undefined };
+  assert.deepEqual(resolveNarrationModel(registry), { provider: "github-copilot", id: "gpt-6-luna" });
   assert.throws(() => resolveNarrationModel(registry, "gpt"), /provider\/id/);
   assert.throws(() => resolveNarrationModel(registry, "github-copilot/missing"), /not available/);
-  assert.equal(DEFAULT_NARRATION_MODEL, "github-copilot/gpt-5.6-luna");
+  assert.equal(DEFAULT_NARRATION_MODEL, "github-copilot/gpt-6-luna");
 });
 
 test("durable TTS/narrate settings use env > persisted > defaults", () => {
@@ -246,7 +246,7 @@ test("explicit /tts and /narrate setters are runtime-only and never rewrite star
     assert.equal(readFileSync(path, "utf8"), startup, "all startup values remain byte-for-byte immutable");
     assert.equal(config.voice, "SavedVoice");
     assert.equal(config.speed, 1.6);
-    assert.ok(h.notifications.some(({ message }) => /model:github-copilot\/gpt-5\.6-luna/.test(message) && /speed:2/.test(message) && /text:off/.test(message) && /reasoning-summaries:off/.test(message)));
+    assert.ok(h.notifications.some(({ message }) => /model:github-copilot\/gpt-6-luna/.test(message) && /speed:2/.test(message) && /text:off/.test(message) && /reasoning-summaries:off/.test(message)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

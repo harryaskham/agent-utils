@@ -215,7 +215,7 @@ test("/narrate settings survive a restart", async () => {
   const first = harness({ sessionEntries: session.entries });
   first.emit("session_start", {});
   // `/narrate on` is its own bare form; combined settings use enabled=.
-  await first.run("narrate", "enabled=true model=github-copilot/gpt-5.6-luna speed=2 text=false");
+  await first.run("narrate", "enabled=true model=github-copilot/gpt-6-luna speed=2 text=false");
 
   assert.equal(first.pi.ttsNarration.isNarrateEnabled(), true);
 
@@ -225,7 +225,7 @@ test("/narrate settings survive a restart", async () => {
 
   await revived.run("narrate", "status");
   const status = revived.notifications.at(-1).message;
-  assert.match(status, /model:github-copilot\/gpt-5\.6-luna/);
+  assert.match(status, /model:github-copilot\/gpt-6-luna/);
   assert.match(status, /speed:2/);
   assert.match(status, /text:off/);
 });

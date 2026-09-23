@@ -179,7 +179,7 @@ explicitly.
     },
     "narrate": {
       "enabled": true,
-      "model": "github-copilot/gpt-5.6-luna",
+      "model": "github-copilot/gpt-6-luna",
       "speed": 2,
       "style": "excited",
       "styleDegree": 1.6,
@@ -223,7 +223,7 @@ Environment overrides are `PI_TTS_PREFIX_WITH_SESSION_NAME` and
 
 ```text
 /narrate
-/narrate model=github-copilot/gpt-5.6-luna
+/narrate model=github-copilot/gpt-6-luna
 /narrate style=excited styledegree=1.6
 /narrate prefix="$AGENT_ID: " suffix=" done"
 /narrate reasoning_summaries=true
@@ -232,7 +232,7 @@ Environment overrides are `PI_TTS_PREFIX_WITH_SESSION_NAME` and
 /narrate status
 ```
 
-The default narration model is `github-copilot/gpt-5.6-luna`, overridable with
+The default narration model is `github-copilot/gpt-6-luna`, overridable with
 `PI_NARRATE_MODEL` or the runtime command. Narration normally inherits
 `agentUtils.tts.speed`, but `agentUtils.narrate.speed`, `PI_NARRATE_SPEED`, or
 `/narrate speed=2` applies a per-call speech-rate override without changing
@@ -241,6 +241,13 @@ without changing retained summary text; `PI_NARRATE_PREFIX` and
 `PI_NARRATE_SUFFIX` override settings. Inference goes through Pi's first-party
 `ctx.modelRegistry.complete` surface, which owns provider authentication; the
 extension does not import the removed legacy `pi-ai` top-level `complete` export.
+
+The GPT-6 Luna default was verified against GitHub Copilot on 2026-09-23:
+`/models` reported it enabled, and a `/responses` inference returned HTTP 200
+with status `completed`. The catalog advertises Responses endpoints, a
+1,000,000-token context window, 872,000 prompt tokens and 128,000 output tokens.
+Explicit per-session model overrides remain operator-owned; changing the default
+does not rewrite historical sessions.
 
 When an assistant message contains one or more tool calls, all sibling calls in
 that assistant message form one batch—even when Pi executes them in parallel.

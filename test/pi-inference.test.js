@@ -64,7 +64,7 @@ test("runPiTextTurn resolves auth, calls complete with the expected shape, and r
 test("runPiTextTurn prefers modelRegistry.complete without importing legacy pi-ai", async () => {
   const calls = [];
   const ctx = { modelRegistry: { complete: async (...args) => { calls.push(args); return { content: [{ type: "text", text: "registry" }], stopReason: "stop" }; } } };
-  const model = { provider: "github-copilot", id: "gpt-5.6-luna" };
+  const model = { provider: "github-copilot", id: "gpt-6-luna" };
   const result = await runPiTextTurn(ctx, { model, systemPrompt: "system", messages: [], maxTokens: 100 });
   assert.equal(result.text, "registry");
   assert.equal(calls.length, 1);
