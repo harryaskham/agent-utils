@@ -14,7 +14,7 @@
     packages = each (system: let pkgs = import nixpkgs { inherit system; }; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
-        version = "0.1.0";
+        version = "0.1.1";
         src = source;
         cargoDeps = (pkgs.rustPlatform.importCargoLock.override {
           fetchurl = attrs: pkgs.fetchurl (attrs // {

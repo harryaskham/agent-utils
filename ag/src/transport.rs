@@ -15,6 +15,29 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+pub fn remote_command(host: &Host, arguments: &[String]) -> String {
+    let executable = shell_quote(&host.command);
+    let invocation = std::iter::once(executable.clone())
+        .chain(arguments.iter().map(|value| shell_quote(value)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let missing = shell_quote(&format!(
+        "ag: remote executable {:?} is unavailable after login initialization. Install ag on this node (apply its Collective configuration), or set hosts[].command to an installed executable. cltv-run/nix run on the collector does not install remote nodes.",
+        host.command
+    ));
+    // SSH runs a non-login shell. Ask the REMOTE account's shell to initialize
+    // its login environment; never copy the collector's PATH to another node.
+    // fd 3 saves the protocol stdout while profile chatter goes to stderr.
+    // A POSIX sh payload keeps the check/redirections independent of whether
+    // the account's login shell is bash, zsh, or another compatible -lc shell.
+    // Every stage execs its successor, preserving stdin/EOF and process cleanup.
+    let payload = format!(
+        "if ! command -v {executable} >/dev/null 2>&1; then printf '%s\\n' {missing} >&2; exit 127; fi; exec {invocation} 1>&3 3>&-"
+    );
+    let login = format!("exec sh -c {}", shell_quote(&payload));
+    format!("exec \"$SHELL\" -lc {} 3>&1 1>&2", shell_quote(&login))
+}
+
 pub fn ssh_command(config: &Config, host: &Host, arguments: &[String]) -> Command {
     let mut command = Command::new(&config.ssh_command);
     command.args([
@@ -38,15 +61,7 @@ pub fn ssh_command(config: &Config, host: &Host, arguments: &[String]) -> Comman
         command.arg("-l").arg(user);
     }
     command.arg("--").arg(&host.address);
-    command.arg(format!(
-        "exec {} {}",
-        shell_quote(&host.command),
-        arguments
-            .iter()
-            .map(|s| shell_quote(s))
-            .collect::<Vec<_>>()
-            .join(" ")
-    ));
+    command.arg(remote_command(host, arguments));
     command.kill_on_drop(true);
     command
 }

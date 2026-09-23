@@ -7,6 +7,7 @@
     {"id":"IMAGE-2","contract":"Private atomic publication, bounded image size, checksum, safe agent paths, repeat-event idempotency and survival after source/session deletion.","tests":["test/shared-images.test.js"]},
     {"id":"CLI-1","contract":"Typed CLI/JSON/MCP reads share one domain core; config uses configurable-cli with managed symlink support.","tests":["ag/tests/cli.rs"]},
     {"id":"FLEET-1","contract":"Configured SSH hosts/usernames/ports/paths; fan-out isolates failures; tails reconnect from cursors without replaying delivered entries; Ctrl-C reaps child processes.","tests":["ag/tests/cli.rs"]},
+    {"id":"FLEET-2","contract":"SSH resolves executables after remote login-shell initialization, preserves quoted arguments and stdin/EOF, keeps profile chatter out of JSON/binary stdout, and diagnoses undeployed remote binaries.","tests":["ag/tests/cli.rs"]},
     {"id":"READ-1","contract":"Bounded JSONL, history, image-list and transport reads; human output escapes terminal controls; read-only operations never alter source archives.","tests":["ag/tests/cli.rs"]},
     {"id":"NIX-1","contract":"Independent ag subflake, root named package and aggregate, locked build; Collective config symlink and agent-utils pin updated without switch.","evidence":["ag/flake.nix","flake.nix","docs/ag.md"]}
   ],

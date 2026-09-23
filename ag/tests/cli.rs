@@ -63,6 +63,8 @@ impl Fixture {
             .env("HOME", self.temp.path())
             .env("AG_CONFIG", &self.config)
             .env_remove("XDG_CONFIG_HOME")
+            .env_remove("BASH_ENV")
+            .env_remove("ENV")
             .env_remove("PI_TTS_FEED_PATH")
             .env_remove("PI_SHARED_IMAGES_DIR")
             .env_remove("PI_AGENT_UTILS_STATE_DIR");
@@ -95,8 +97,13 @@ impl Fixture {
         id.into()
     }
     fn ssh(&self, script: &str) -> PathBuf {
+        // A hermetic account shell: emulate -lc profile loading without running
+        // the operator's real /etc or home startup files during the test suite.
+        let shell = self.temp.path().join("login-shell");
+        fs::write(&shell, "#!/bin/sh\nset -eu\n[ \"$#\" = 2 ] && [ \"$1\" = -lc ] || exit 64\nif [ -f \"$HOME/.ag-test-profile\" ]; then . \"$HOME/.ag-test-profile\"; fi\nexec /bin/sh -c \"$2\"\n").unwrap();
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o700)).unwrap();
         let path = self.temp.path().join("fake-ssh");
-        fs::write(&path, format!("#!/bin/sh\nset -eu\nprevious=''\nlast=''\nfor argument do previous=\"$last\"; last=\"$argument\"; done\n{script}\nexec /bin/sh -c \"$last\"\n")).unwrap();
+        fs::write(&path, format!("#!/bin/sh\nset -eu\nexport SHELL={}\nprevious=''\nlast=''\nfor argument do previous=\"$last\"; last=\"$argument\"; done\n{script}\nexec /bin/sh -c \"$last\"\n", ag::transport::shell_quote(shell.to_str().unwrap()))).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
@@ -341,6 +348,113 @@ fn fleet_reads_real_peer_processes_with_quoted_paths_and_partial_failure() {
         .0,
         0
     );
+}
+
+#[test]
+fn remote_login_path_and_profile_chatter_preserve_json_binary_and_live_streams() {
+    let f = Fixture::new();
+    f.append("from remote login PATH");
+    let id = f.image();
+    let bin_dir = f.temp.path().join("remote profile's bin");
+    fs::create_dir(&bin_dir).unwrap();
+    symlink(BIN, bin_dir.join("ag")).unwrap();
+    fs::write(
+        f.temp.path().join(".ag-test-profile"),
+        format!(
+            "export PATH={}:$PATH\nprintf 'login profile banner\\n'\n",
+            ag::transport::shell_quote(bin_dir.to_str().unwrap())
+        ),
+    )
+    .unwrap();
+    let special = f
+        .temp
+        .path()
+        .join("feed with '$literal' ; not-a-command.jsonl");
+    fs::copy(&f.feed, &special).unwrap();
+    let ssh = f.ssh("export PATH=/bin:/usr/bin");
+    let mut config = f.remote_config(&ssh, &["remote"]);
+    config.hosts[0].command = "ag".into();
+    config.hosts[0].paths.tts_feed = Some(special.display().to_string());
+    f.save(&config);
+
+    let (code, result, _) = f.run(&["--json", "tts", "list"]);
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(
+        result["data"]["hosts"][0]["data"]["records"][0]["text"],
+        "from remote login PATH"
+    );
+    let output = f.temp.path().join("download.png");
+    assert_eq!(
+        f.run(&[
+            "--json",
+            "image",
+            "get",
+            &id,
+            "-o",
+            output.to_str().unwrap()
+        ])
+        .0,
+        0
+    );
+    assert_eq!(
+        fs::read(output).unwrap(),
+        fs::read(f.images.join(id)).unwrap()
+    );
+
+    let mut child = OwnedChild(
+        f.command()
+            .args(["--json", "tts", "tail"])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let (tx, rx) = mpsc::channel();
+    let stdout = child.0.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    loop {
+        let row: Value = serde_json::from_str(
+            &rx.recv_timeout(Duration::from_secs(10))
+                .expect("login-initialized stream"),
+        )
+        .unwrap();
+        if row["data"]["type"] == "speech" {
+            assert_eq!(row["data"]["record"]["text"], "from remote login PATH");
+            break;
+        }
+        assert_ne!(row["data"]["state"], "offline", "{row}");
+    }
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.0.id() as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .unwrap();
+    wait_exit(&mut child.0, 5);
+    reader.join().unwrap();
+}
+
+#[test]
+fn missing_remote_binary_reports_deployment_not_just_path_failure() {
+    let f = Fixture::new();
+    let ssh = f.ssh("");
+    let mut config = f.remote_config(&ssh, &["remote"]);
+    config.hosts[0].command = f.temp.path().join("not-installed").display().to_string();
+    f.save(&config);
+    let (code, result, _) = f.run(&["--json", "tts", "list"]);
+    assert_eq!(code, 3);
+    let message = result["data"]["hosts"][0]["error"]["message"]
+        .as_str()
+        .unwrap();
+    assert!(message.contains("after login initialization"), "{message}");
+    assert!(message.contains("Install ag on this node"), "{message}");
+    assert!(message.contains("hosts[].command"), "{message}");
 }
 
 #[test]
