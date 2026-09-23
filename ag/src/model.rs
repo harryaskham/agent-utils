@@ -1,3 +1,4 @@
+use crate::speech::{MuteReceipt, SpeechKind};
 use mcp_cli::JsonError;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -142,6 +143,39 @@ impl Default for ListInput {
         }
     }
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SpeechControlInput {
+    #[serde(flatten)]
+    pub selection: Selection,
+    /// Empty means all four types. Other types retain their state.
+    pub kinds: Vec<SpeechKind>,
+    /// Required for MCP mutations; the explicit CLI command supplies this.
+    pub confirmed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechDisposition {
+    Observed,
+    Applied,
+    Error,
+    Unconfirmed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct NodeSpeechControl {
+    pub host: String,
+    pub disposition: SpeechDisposition,
+    pub data: Option<MuteReceipt>,
+    pub error: Option<JsonError>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct FleetSpeechControl {
+    pub hosts: Vec<NodeSpeechControl>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageInput {

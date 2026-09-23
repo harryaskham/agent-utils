@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod model;
 pub mod service;
+pub mod speech;
 pub mod store;
 pub mod transport;
 pub use error::{Error, Result};

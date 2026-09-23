@@ -49,6 +49,7 @@ impl Fixture {
             paths: Paths {
                 tts_feed: Some(fixture.feed.display().to_string()),
                 image_dir: Some(fixture.images.display().to_string()),
+                tts_mute: Some(fixture.temp.path().join("mute.json").display().to_string()),
             },
             ..Config::default()
         });
@@ -66,6 +67,7 @@ impl Fixture {
             .env_remove("BASH_ENV")
             .env_remove("ENV")
             .env_remove("PI_TTS_FEED_PATH")
+            .env_remove("PI_TTS_MUTE_PATH")
             .env_remove("PI_SHARED_IMAGES_DIR")
             .env_remove("PI_AGENT_UTILS_STATE_DIR");
         command
@@ -125,6 +127,13 @@ impl Fixture {
                     paths: Paths {
                         tts_feed: Some(self.feed.display().to_string()),
                         image_dir: Some(self.images.display().to_string()),
+                        tts_mute: Some(
+                            self.temp
+                                .path()
+                                .join(format!("{name}-mute.json"))
+                                .display()
+                                .to_string(),
+                        ),
                     },
                     ..Host::default()
                 })
@@ -509,6 +518,114 @@ fn peer_stops_on_stdin_eof_even_when_feed_does_not_exist() {
     );
     drop(child.0.stdin.take());
     wait_exit(&mut child.0, 5);
+}
+
+#[test]
+fn mute_cli_defaults_to_all_nodes_and_types_and_reports_partial_failure() {
+    let f = Fixture::new();
+    let ssh = f.ssh("if [ \"$previous\" = down ]; then echo offline >&2; exit 42; fi");
+    f.save(&f.remote_config(&ssh, &["one", "two", "down"]));
+    let (code, value, _) = f.run(&["--json", "tts", "mute", "--narrate", "--choices"]);
+    assert_eq!(code, 3, "{value}");
+    for name in ["one", "two"] {
+        let state = ag::speech::read_state(&f.temp.path().join(format!("{name}-mute.json")))
+            .unwrap()
+            .state;
+        assert!(state.muted[&ag::speech::SpeechKind::Narrate]);
+        assert!(state.muted[&ag::speech::SpeechKind::Choices]);
+        assert!(!state.muted[&ag::speech::SpeechKind::Read]);
+        assert!(!state.muted[&ag::speech::SpeechKind::Tts]);
+    }
+    assert_eq!(value["data"]["hosts"][0]["disposition"], "unconfirmed");
+    assert_eq!(f.run(&["--host", "one", "--json", "tts", "mute"]).0, 0);
+    assert!(
+        ag::speech::read_state(&f.temp.path().join("one-mute.json"))
+            .unwrap()
+            .state
+            .muted
+            .values()
+            .all(|v| *v)
+    );
+    assert_eq!(
+        f.run(&["--host", "one", "--json", "tts", "unmute", "--read"])
+            .0,
+        0
+    );
+    assert!(
+        ag::speech::read_state(&f.temp.path().join("one-mute.json"))
+            .unwrap()
+            .state
+            .muted[&ag::speech::SpeechKind::Tts]
+    );
+    assert_eq!(f.run(&["--json", "tts", "unmute"]).0, 3);
+    for name in ["one", "two"] {
+        assert!(
+            ag::speech::read_state(&f.temp.path().join(format!("{name}-mute.json")))
+                .unwrap()
+                .state
+                .muted
+                .values()
+                .all(|v| !v)
+        );
+    }
+    let status = f.run(&["--host", "two", "--json", "tts", "status"]);
+    assert_eq!(status.0, 0);
+    assert_eq!(status.1["data"]["hosts"][0]["disposition"], "observed");
+    let local = f.temp.path().join("local-mute.json");
+    assert_eq!(
+        f.run(&[
+            "--local",
+            "--mute-state",
+            local.to_str().unwrap(),
+            "tts",
+            "mute",
+            "--tts"
+        ])
+        .0,
+        0
+    );
+    let state = ag::speech::read_state(&local).unwrap().state;
+    assert!(state.muted[&ag::speech::SpeechKind::Tts]);
+    assert!(!state.muted[&ag::speech::SpeechKind::Choices]);
+}
+
+#[test]
+fn speech_mcp_confirmation_and_cli_share_one_policy() {
+    let f = Fixture::new();
+    let path = f.temp.path().join("mute.json");
+    assert_ne!(
+        f.run(&["call", "ag_tts_mute", "{\"kinds\":[\"read\"]}"]).0,
+        0
+    );
+    assert!(!path.exists());
+    assert_eq!(
+        f.run(&[
+            "call",
+            "ag_tts_mute",
+            "{\"kinds\":[\"read\"],\"confirmed\":true}"
+        ])
+        .0,
+        0
+    );
+    let cli = f.run(&["--json", "tts", "status"]).1;
+    let mcp = f.run(&["call", "ag_tts_status", "{}"]).1;
+    assert_eq!(cli["data"], mcp["data"]);
+    assert_eq!(
+        cli["data"]["hosts"][0]["data"]["state"]["muted"]["read"],
+        true
+    );
+    assert_eq!(
+        f.run(&["call", "ag_tts_unmute", "{\"confirmed\":true}"]).0,
+        0
+    );
+    assert!(
+        ag::speech::read_state(&path)
+            .unwrap()
+            .state
+            .muted
+            .values()
+            .all(|v| !v)
+    );
 }
 
 struct OwnedChild(Child);

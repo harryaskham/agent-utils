@@ -11,6 +11,7 @@ live Pi session can claim queued jobs, so a job survives its originating session
 exiting as long as another Agent Utils session is running.
 
 For PCM, only automatic `/tts` and `/narrate` playback opts into the queue by default.
+Their source names stay distinct in Pulse. New speech jobs carry a per-kind runtime-policy epoch (not an AbortSignal or inherited environment), checked again by the playback worker. `ag tts mute` cancels matching in-flight jobs; epoch checks discard recovered/stale jobs even after an unmute, rather than replaying a muted backlog. The policy file is outside the queue cache; see [runtime speech control](speech-runtime-control.md).
 Azure `/read`, spoken choices, and direct realtime reply playback remain immediate and
 interruptible without entering the machine queue. Environment objects and
 credentials are never serialized; metadata contains only playback routing such

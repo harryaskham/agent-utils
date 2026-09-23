@@ -3,6 +3,7 @@ use ag::{
     config::{self, Paths},
     model::*,
     service::{self, Service},
+    speech::{self, SpeechKind},
     store, terminal_text,
 };
 use clap::{Args, CommandFactory, Parser, Subcommand};
@@ -35,7 +36,7 @@ struct Cli {
     /// Select configured nodes (repeatable); default is all enabled nodes.
     #[arg(long = "host", global = true)]
     hosts: Vec<String>,
-    /// Read this machine without SSH or fleet recursion.
+    /// Target this machine without SSH or fleet recursion.
     #[arg(long, global = true, conflicts_with = "hosts")]
     local: bool,
     /// Override the feed path on selected nodes (~/ expands on each node).
@@ -44,6 +45,9 @@ struct Cli {
     /// Override the image archive on selected nodes.
     #[arg(long, global = true)]
     image_dir: Option<String>,
+    /// Override the runtime speech mute file on selected nodes.
+    #[arg(long, global = true)]
+    mute_state: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -66,7 +70,7 @@ enum Commands {
         #[command(subcommand)]
         command: Option<ConfigCommand>,
     },
-    /// Serve finite read/config tools over MCP stdio.
+    /// Serve finite read/config and confirmed speech-control tools over MCP stdio.
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
@@ -81,7 +85,7 @@ enum Commands {
     },
     /// Generate shell completions without loading configuration.
     Completions { shell: clap_complete::Shell },
-    /// Private read-only peer protocol. Does not load fleet configuration.
+    /// Private peer protocol. Does not load fleet configuration.
     #[command(hide = true)]
     Node {
         #[command(subcommand)]
@@ -97,8 +101,42 @@ struct ListArgs {
     #[arg(short = 'n', long, default_value_t = 20)]
     limit: usize,
 }
+#[derive(Args, Default)]
+struct SpeechTypes {
+    /// Select editor read-aloud.
+    #[arg(long)]
+    read: bool,
+    /// Select assistant TTS.
+    #[arg(long)]
+    tts: bool,
+    /// Select tool-batch narration.
+    #[arg(long)]
+    narrate: bool,
+    /// Select spoken choices (without closing prompts).
+    #[arg(long)]
+    choices: bool,
+}
+impl SpeechTypes {
+    fn kinds(&self) -> Vec<SpeechKind> {
+        [
+            (self.read, SpeechKind::Read),
+            (self.tts, SpeechKind::Tts),
+            (self.narrate, SpeechKind::Narrate),
+            (self.choices, SpeechKind::Choices),
+        ]
+        .into_iter()
+        .filter_map(|(selected, kind)| selected.then_some(kind))
+        .collect()
+    }
+}
 #[derive(Subcommand)]
 enum TtsCommand {
+    /// Mute selected types (default all) on selected nodes (default all enabled).
+    Mute(SpeechTypes),
+    /// Unmute selected types (default all); muted backlog is not replayed.
+    Unmute(SpeechTypes),
+    /// Show node-wide runtime mute policy, independent of session on/off settings.
+    Status,
     /// Follow all selected feeds until Ctrl-C; reconnect using byte cursors.
     Tail {
         #[arg(short = 'n', long, default_value_t = 20)]
@@ -130,6 +168,22 @@ enum ImageCommand {
 }
 #[derive(Subcommand)]
 enum NodeCommand {
+    TtsMute {
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long, value_enum)]
+        kind: Vec<SpeechKind>,
+    },
+    TtsUnmute {
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long, value_enum)]
+        kind: Vec<SpeechKind>,
+    },
+    TtsStatus {
+        #[arg(long)]
+        path: Option<String>,
+    },
     TtsList {
         #[arg(long)]
         path: Option<String>,
@@ -235,6 +289,47 @@ fn finite_tts(service: &Service, selection: Selection, limit: usize, as_json: bo
     }
     Ok(if partial { 3 } else { 0 })
 }
+fn show_speech_control(result: FleetSpeechControl, as_json: bool) -> Result<u8> {
+    let failed = result.hosts.iter().any(|host| host.error.is_some());
+    if as_json {
+        json(&result)?;
+    } else {
+        for host in result.hosts {
+            if let Some(error) = host.error {
+                eprintln!(
+                    "[{}] {}{}",
+                    terminal_text(&host.host),
+                    terminal_text(&error.message),
+                    if matches!(host.disposition, SpeechDisposition::Unconfirmed) {
+                        "; policy write unconfirmed — it may have applied; run tts status to reconcile"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            if let Some(data) = host.data {
+                let kinds = SpeechKind::ALL
+                    .into_iter()
+                    .map(|kind| {
+                        format!(
+                            "/{}={}",
+                            kind.name(),
+                            if data.state.muted[&kind] {
+                                "muted"
+                            } else {
+                                "unmuted"
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                text(&format!("[{}] {kinds}", terminal_text(&host.host)))?;
+            }
+        }
+    }
+    Ok(if failed { 3 } else { 0 })
+}
+
 fn follow(service: &Service, selection: Selection, lines: usize, as_json: bool) -> Result<u8> {
     service.hosts(&selection)?;
     store::check_limit(lines)?;
@@ -271,6 +366,31 @@ fn follow(service: &Service, selection: Selection, lines: usize, as_json: bool) 
 
 fn node(command: NodeCommand) -> Result<u8> {
     match command {
+        NodeCommand::TtsMute { path, kind } => json(speech::set_muted(
+            &Paths {
+                tts_mute: path,
+                ..Paths::default()
+            }
+            .mute()?,
+            &kind,
+            true,
+        )?)?,
+        NodeCommand::TtsUnmute { path, kind } => json(speech::set_muted(
+            &Paths {
+                tts_mute: path,
+                ..Paths::default()
+            }
+            .mute()?,
+            &kind,
+            false,
+        )?)?,
+        NodeCommand::TtsStatus { path } => json(speech::read_state(
+            &Paths {
+                tts_mute: path,
+                ..Paths::default()
+            }
+            .mute()?,
+        )?)?,
         NodeCommand::TtsList { path, limit } => json(store::speech_list(
             &Paths {
                 tts_feed: path,
@@ -406,6 +526,12 @@ fn execute(cli: Cli) -> Result<u8> {
             host.paths.image_dir = Some(path.clone());
         }
     }
+    if let Some(path) = cli.mute_state {
+        config.paths.tts_mute = Some(path.clone());
+        for host in &mut config.hosts {
+            host.paths.tts_mute = Some(path.clone());
+        }
+    }
     let service = Service::new(config, cli.config)?;
     let selection = Selection {
         hosts: cli.hosts,
@@ -438,6 +564,25 @@ fn execute(cli: Cli) -> Result<u8> {
         }
         Commands::Tts { command } => {
             return match command {
+                TtsCommand::Mute(types) => show_speech_control(
+                    service.speech_mute(SpeechControlInput {
+                        selection,
+                        kinds: types.kinds(),
+                        confirmed: true,
+                    })?,
+                    cli.json,
+                ),
+                TtsCommand::Unmute(types) => show_speech_control(
+                    service.speech_unmute(SpeechControlInput {
+                        selection,
+                        kinds: types.kinds(),
+                        confirmed: true,
+                    })?,
+                    cli.json,
+                ),
+                TtsCommand::Status => {
+                    show_speech_control(service.speech_status(selection)?, cli.json)
+                }
                 TtsCommand::List(args) => finite_tts(&service, selection, args.limit, cli.json),
                 TtsCommand::Tail {
                     lines,
@@ -535,6 +680,9 @@ fn main() {
             cli.command,
             Commands::Node {
                 command: NodeCommand::TtsList { .. }
+                    | NodeCommand::TtsMute { .. }
+                    | NodeCommand::TtsUnmute { .. }
+                    | NodeCommand::TtsStatus { .. }
                     | NodeCommand::ImageList { .. }
                     | NodeCommand::ImageInfo { .. }
             } | Commands::Call { .. }

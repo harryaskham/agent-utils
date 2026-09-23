@@ -1,6 +1,7 @@
 // Automatic assistant TTS + tool-batch narration helpers (bd-93503c).
 
 import { playTtsCommand } from "./tts-command.js";
+import { speechKind, withSpeechControl } from "./speech-control.js";
 import { defaultReadConfig, applyReadConfigValues } from "../read-aloud.js";
 import { createInterruptiblePcmPlayer, synthesizeSpeechDirect } from "./tts.js";
 
@@ -224,35 +225,38 @@ export function createAgentSpeechController({
     if (!body.trim()) return { skipped: true };
     interrupt();
     const mine = generation;
-    const effective = { ...config, ...overrides, streamName: "/tts" };
+    const effective = { ...config, ...overrides };
     const controller = new AbortController();
     synthesisAbort = controller;
     try {
-      if (["command", "local"].includes(effective.provider)) {
-        return await playTtsCommand(body, { ...effective, signal: controller.signal, env });
-      }
-      const options = {
-        provider: effective.provider,
-        voice: effective.voice,
-        lang: effective.lang,
-        speed: effective.speed,
-        speakerProfileId: effective.embedding,
-        style: effective.style,
-        styleDegree: effective.styleDegree,
-        signal: controller.signal,
-        env,
-      };
-      if (effective.endpoint !== undefined) options.endpoint = effective.endpoint;
-      if (effective.apiKey !== undefined) options.apiKey = effective.apiKey;
-      const pcm = await synthesize(body, options);
-      if (mine !== generation || controller.signal.aborted) return { interrupted: true };
-      return await player.play(pcm, {
-        backend: effective.backend,
-        pan: effective.pan,
-        server: effective.server,
-        device: effective.device,
-        streamName: "/tts",
-        env,
+      return await withSpeechControl({ ...effective, speechKind: speechKind(effective) || "tts", signal: controller.signal, env }, async (controlled) => {
+        if (["command", "local"].includes(effective.provider)) return playTtsCommand(body, controlled);
+        const options = {
+          provider: effective.provider,
+          voice: effective.voice,
+          lang: effective.lang,
+          speed: effective.speed,
+          speakerProfileId: effective.embedding,
+          style: effective.style,
+          styleDegree: effective.styleDegree,
+          signal: controlled.signal,
+          env,
+        };
+        if (effective.endpoint !== undefined) options.endpoint = effective.endpoint;
+        if (effective.apiKey !== undefined) options.apiKey = effective.apiKey;
+        const pcm = await synthesize(body, options);
+        if (mine !== generation || controlled.signal.aborted) return { interrupted: true };
+        return player.play(pcm, {
+          backend: effective.backend,
+          pan: effective.pan,
+          server: effective.server,
+          device: effective.device,
+          streamName: effective.streamName,
+          speechKind: controlled.speechKind,
+          speechControl: controlled.speechControl,
+          signal: controlled.signal,
+          env,
+        });
       });
     } catch (error) {
       if (controller.signal.aborted || error?.name === "AbortError") return { interrupted: true };

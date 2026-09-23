@@ -83,6 +83,7 @@ import { spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { isAssistantSpeaking, markAssistantSpeaking } from "./lib/half-duplex-state.js";
+import { withSpeechControl } from "./lib/speech-control.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import {
   env,
@@ -2839,6 +2840,7 @@ export default function realtimeAgentExtension(pi) {
   pi.events?.on?.("agent-utils:choice-session", choiceSessionHandler);
   const speechInputState = new SpeechInputStateMachine();
   const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
+  let fastDirectTtsAbort = null;
   const resolvedFastTts = () => {
     const persisted = readPersistedTtsSettings();
     return {
@@ -2965,15 +2967,21 @@ export default function realtimeAgentExtension(pi) {
     const credentialOptions = { env: process.env };
     if (!process.env.AZURE_SPEECH_ENDPOINT && output.persisted.endpoint !== undefined) credentialOptions.endpoint = output.persisted.endpoint;
     const { endpoint, apiKey } = resolveAzureSpeechCreds(credentialOptions);
+    fastDirectTtsAbort?.abort();
+    fastDirectTtsPlayer.interrupt();
+    const abort = new AbortController();
+    fastDirectTtsAbort = abort;
     try {
-      const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey });
-      if (pcm && pcm.length) {
-        markAssistantSpeaking(audioDurationMs(pcm));
-        await fastDirectTtsPlayer.play(pcm, { backend: output.backend, server: output.server, device: output.device, streamName: "/tts", env: process.env });
-      }
+      await withSpeechControl({ speechKind: "tts", streamName: "/tts", signal: abort.signal, env: process.env }, async (controlled) => {
+        const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey, signal: controlled.signal });
+        if (pcm?.length && !controlled.signal.aborted) {
+          markAssistantSpeaking(audioDurationMs(pcm));
+          await fastDirectTtsPlayer.play(pcm, { ...controlled, backend: output.backend, server: output.server, device: output.device });
+        }
+      });
     } catch (e) {
-      try { ctx?.ui?.notify?.(`speak-replies failed: ${e?.message || String(e)}`, "warning"); } catch {}
-    }
+      if (!abort.signal.aborted) { try { ctx?.ui?.notify?.(`speak-replies failed: ${e?.message || String(e)}`, "warning"); } catch {} }
+    } finally { if (fastDirectTtsAbort === abort) fastDirectTtsAbort = null; }
   }
 
   pi.on("agent_end", async (event, ctx) => {
@@ -3001,6 +3009,8 @@ export default function realtimeAgentExtension(pi) {
     terminalInputUnsub = null;
     stopLocalVad({ flush: false });
     speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
+    fastDirectTtsAbort?.abort();
+    fastDirectTtsAbort = null;
     try { fastDirectTtsPlayer.dispose(); } catch {}
     await session.close(false).catch(() => {});
   });

@@ -130,7 +130,7 @@ jobs:
         with:
           node-version: 22
       - name: Test extension-written artifacts through ag
-        run: AG_TEST_BIN="$PWD/ag/target/debug/ag" node --test test/ag-artifacts.test.js test/shared-images.test.js test/tts-feed.test.js
+        run: AG_TEST_BIN="$PWD/ag/target/debug/ag" node --test test/ag-artifacts.test.js test/shared-images.test.js test/tts-feed.test.js test/speech-control.test.js test/speech-runtime-integration.test.js
 
   audit:
     name: Dependency audit (cargo audit)

@@ -6,6 +6,7 @@
 // interruptible PCM child (Pulse by default). No daemon or `tts` CLI hop.
 
 import { playTtsCommand } from "./lib/tts-command.js";
+import { withSpeechControl } from "./lib/speech-control.js";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import {
   DEFAULT_TTS_PROVIDER,
@@ -246,41 +247,43 @@ export function createReadModeController({
     synthesisAbort = abort;
     setStatus(ctx, `/read · synthesizing (${reason})`);
     try {
-      if (["command", "local"].includes(config.provider)) {
+      const result = await withSpeechControl({ ...config, speechKind: "read", signal: abort.signal, env }, async (controlled) => {
+        if (["command", "local"].includes(config.provider)) {
+          setStatus(ctx, `/read · speaking (${reason})`);
+          return playTtsCommand(body, controlled);
+        }
+        const synthesisOptions = {
+          provider: config.provider,
+          voice: config.voice,
+          lang: config.lang,
+          speed: config.speed,
+          speakerProfileId: config.embedding,
+          style: config.style,
+          styleDegree: config.styleDegree,
+          signal: controlled.signal,
+          env,
+        };
+        if (config.endpoint !== undefined) synthesisOptions.endpoint = config.endpoint;
+        if (config.apiKey !== undefined) synthesisOptions.apiKey = config.apiKey;
+        const pcm = await synthesize(body, synthesisOptions);
+        if (mine !== generation || controlled.signal.aborted) return { interrupted: true };
+        markAssistantSpeaking(audioDurationMs(pcm));
         setStatus(ctx, `/read · speaking (${reason})`);
-        const result = await playTtsCommand(body, { ...config, signal: abort.signal, env });
-        if (mine !== generation || abort.signal.aborted) return false;
-        synthesisAbort = null;
-        setStatus(ctx, "/read · on");
-        return !result.interrupted;
-      }
-      const synthesisOptions = {
-        provider: config.provider,
-        voice: config.voice,
-        lang: config.lang,
-        speed: config.speed,
-        speakerProfileId: config.embedding,
-        style: config.style,
-        styleDegree: config.styleDegree,
-        signal: abort.signal,
-        env,
-      };
-      if (config.endpoint !== undefined) synthesisOptions.endpoint = config.endpoint;
-      if (config.apiKey !== undefined) synthesisOptions.apiKey = config.apiKey;
-      const pcm = await synthesize(body, synthesisOptions);
+        return player.play(pcm, {
+          backend: config.backend,
+          server: config.server,
+          device: config.device,
+          streamName: config.streamName,
+          speechKind: controlled.speechKind,
+          speechControl: controlled.speechControl,
+          signal: controlled.signal,
+          env,
+        });
+      });
       if (mine !== generation || abort.signal.aborted) return false;
       synthesisAbort = null;
-      markAssistantSpeaking(audioDurationMs(pcm));
-      setStatus(ctx, `/read · speaking (${reason})`);
-      await player.play(pcm, {
-        backend: config.backend,
-        server: config.server,
-        device: config.device,
-        streamName: config.streamName,
-        env,
-      });
-      if (mine === generation) setStatus(ctx, "/read · on");
-      return true;
+      setStatus(ctx, result?.muted ? "/read · muted" : "/read · on");
+      return !result?.interrupted;
     } catch (error) {
       if (mine !== generation || abort.signal.aborted) return false;
       synthesisAbort = null;

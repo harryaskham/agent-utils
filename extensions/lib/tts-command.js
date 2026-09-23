@@ -1,7 +1,17 @@
 // Operator-configured shell playback. Speech is data ($1 / "$@"), never code.
 import { spawn } from "node:child_process";
+import { speechKind, withSpeechControl } from "./speech-control.js";
+
+function speechOptions(options) {
+  const kind = speechKind(options) || "tts";
+  return { ...options, speechKind: kind, streamName: options.streamName || `/${kind}` };
+}
 
 export function runTtsCommand(text, options = {}) {
+  return withSpeechControl(speechOptions(options), (controlled) => runTtsCommandRaw(text, controlled));
+}
+
+function runTtsCommandRaw(text, options) {
   const { command, signal, env = process.env, spawnImpl = spawn, killDelayMs = 250 } = options;
   if (!String(command || "").trim()) return Promise.reject(new Error("tts: provider=command requires command=..."));
   if (signal?.aborted) return Promise.resolve({ interrupted: true });
@@ -10,7 +20,12 @@ export function runTtsCommand(text, options = {}) {
     SPEED: options.speed, VOICE: options.voice, LANG: options.lang,
     STYLE: options.style, STYLEDEGREE: options.styleDegree,
     EMBEDDING: options.embedding, PAN: options.pan,
+    KIND: options.speechKind, STREAM_NAME: options.streamName,
   })) childEnv[`PI_TTS_${key}`] = String(value ?? "");
+  // Pulse-aware command clients can inherit the identity without shell-string
+  // rewriting. Commands with explicit naming flags should use PI_TTS_STREAM_NAME.
+  const pulseName = String(options.streamName).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  childEnv.PULSE_PROP = `${childEnv.PULSE_PROP || ""} application.name="${pulseName}" media.name="${pulseName}"`.trim();
   if (options.server != null) childEnv.PULSE_SERVER = String(options.server);
   if (options.device != null) childEnv.PULSE_SINK = String(options.device);
   return new Promise((resolve, reject) => {
@@ -47,14 +62,20 @@ export function runTtsCommand(text, options = {}) {
   });
 }
 
-export async function playTtsCommand(text, options = {}) {
+export function playTtsCommand(text, options = {}) {
+  return withSpeechControl(speechOptions(options), (controlled) => playTtsCommandControlled(text, controlled));
+}
+
+async function playTtsCommandControlled(text, options) {
   const queue = globalThis[Symbol.for("agent-utils.tts-queue.v1")];
   if (!queue?.enqueueTask) return runTtsCommand(text, options);
   if (options.signal?.aborted) return { interrupted: true };
   // Closures stay in the originating process; only a scheduling lease is
   // persisted. No shell commands, speech, or inherited environment on disk.
   const pending = queue.enqueueTask((signal) => runTtsCommand(text, { ...options, signal }), {
-    streamName: options.streamName || "/tts",
+    streamName: options.streamName,
+    speechKind: options.speechKind,
+    speechControl: options.speechControl,
   });
   const abort = () => queue.cancel(pending.jobId);
   options.signal?.addEventListener("abort", abort, { once: true });

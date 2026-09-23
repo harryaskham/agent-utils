@@ -8,6 +8,7 @@
 import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "./input-actions.js";
 import { resolveAgentTtsSettings } from "./tts-narration.js";
 import { playTtsCommand } from "./tts-command.js";
+import { withSpeechControl } from "./speech-control.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./tts-identity.js";
 import {
   DEFAULT_TTS_BACKEND,
@@ -38,7 +39,7 @@ export const CHOICE_INPUT_ACTIONS = Object.freeze({
 });
 export { INPUT_ACTION_EVENT, INPUT_ACTIONS };
 export const DEFAULT_CHOICE_TIMEOUT_MS = 30_000;
-export const DEFAULT_CHOICE_STREAM_NAME = "/choice";
+export const DEFAULT_CHOICE_STREAM_NAME = "/choices";
 
 export function normalizeChoices(choices = []) {
   if (!Array.isArray(choices)) throw new Error("choice: choices must be an array");
@@ -206,36 +207,35 @@ export function createChoiceSpeaker({
     synthesis = controller;
     const resolved = resolveSpeakToolParams({ text: body }, { env, persisted });
     try {
-      if (["command", "local"].includes(shared.provider)) {
-        return await playTtsCommand(body, {
-          ...shared,
+      return await withSpeechControl({ ...shared, speechKind: "choices", streamName, signal: controller.signal, env }, async (controlled) => {
+        if (["command", "local"].includes(shared.provider)) {
           // Local engines keep their configured voice, not an Azure identity.
-          pan: assignment?.pan ?? shared.pan,
+          return playTtsCommand(body, { ...controlled, pan: assignment?.pan ?? shared.pan });
+        }
+        const options = {
+          voice: assignment?.voice || resolved.voice,
+          lang: resolved.lang,
+          speed: resolved.speed,
+          speakerProfileId: assignment ? undefined : resolved.speakerProfileId,
+          style: resolved.style,
+          styleDegree: resolved.styleDegree,
+          signal: controlled.signal,
+          env,
+        };
+        if (!env.AZURE_SPEECH_ENDPOINT && shared.endpoint !== undefined) options.endpoint = shared.endpoint;
+        const pcm = await synthesize(body, options);
+        if (synthesis !== controller || controlled.signal.aborted) return { interrupted: true };
+        return player.play(pcm, {
+          backend: env.PI_TTS_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,
+          server: env.PULSE_SERVER || shared.server,
+          device: env.PULSE_SINK || shared.device || DEFAULT_TTS_DEVICE,
           streamName,
-          signal: controller.signal,
+          speechKind: controlled.speechKind,
+          speechControl: controlled.speechControl,
+          signal: controlled.signal,
+          pan: assignment?.pan,
           env,
         });
-      }
-      const options = {
-        voice: assignment?.voice || resolved.voice,
-        lang: resolved.lang,
-        speed: resolved.speed,
-        speakerProfileId: assignment ? undefined : resolved.speakerProfileId,
-        style: resolved.style,
-        styleDegree: resolved.styleDegree,
-        signal: controller.signal,
-        env,
-      };
-      if (!env.AZURE_SPEECH_ENDPOINT && shared.endpoint !== undefined) options.endpoint = shared.endpoint;
-      const pcm = await synthesize(body, options);
-      if (synthesis !== controller || controller.signal.aborted) return { interrupted: true };
-      return await player.play(pcm, {
-        backend: env.PI_TTS_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,
-        server: env.PULSE_SERVER || shared.server,
-        device: env.PULSE_SINK || shared.device || DEFAULT_TTS_DEVICE,
-        streamName,
-        pan: assignment?.pan,
-        env,
       });
     } catch (error) {
       if (controller.signal.aborted || error?.name === "AbortError") return { interrupted: true };

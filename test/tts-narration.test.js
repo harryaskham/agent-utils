@@ -11,7 +11,7 @@ import {
   assistantReasoningSummary,
   assistantToolCalls,
   buildNarrationRequest,
-  createAgentSpeechController,
+  createAgentSpeechController as createAgentSpeechControllerImpl,
   normalizeNarrationText,
   redactNarrationText,
   resolveAgentTtsSettings,
@@ -29,6 +29,8 @@ import {
 } from "../extensions/lib/tts-settings.js";
 import { createTtsNarrationExtension } from "../extensions/tts-narration.js";
 import { synthesizeSpeechDirect } from "../extensions/lib/tts.js";
+import { speechTestEnv, waitForSpeech } from "./helpers/speech-environment.js";
+const createAgentSpeechController = (options = {}) => createAgentSpeechControllerImpl({ ...options, env: speechTestEnv(options.env) });
 
 function harness({ runTextTurn, speech, env = {}, settingsPath, persistedSettings = { tts: {}, narrate: {} }, flags = {} } = {}) {
   const commands = new Map();
@@ -294,6 +296,7 @@ test("shared /tts speech controller inherits /read defaults and interrupts stale
   assert.equal(speech.getConfig().voice, "MAI-Voice-2");
   assert.equal(speech.getConfig().speed, 2);
   const first = speech.speak("first");
+  await waitForSpeech(() => synthCalls.length === 1);
   const second = speech.speak("second");
   assert.deepEqual(await first, { interrupted: true });
   await second;
@@ -435,8 +438,8 @@ test("/narrate batches parallel tools into one pre/post summary, speaks both, an
   }
   assert.deepEqual(spoken, ["worker-7: I am checking both sources. done", "worker-7: I found two matching records. done"]);
   assert.deepEqual(spokenOverrides, [
-    { speed: 2, style: "excited", styleDegree: 1.6 },
-    { speed: 2, style: "excited", styleDegree: 1.6 },
+    { speed: 2, style: "excited", styleDegree: 1.6, speechKind: "narrate", streamName: "/narrate" },
+    { speed: 2, style: "excited", styleDegree: 1.6, speechKind: "narrate", streamName: "/narrate" },
   ], "narration applies speech rate and Azure express-as style per call");
 });
 

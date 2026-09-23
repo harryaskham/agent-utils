@@ -185,6 +185,8 @@ substitution. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
 
 ### Local/private spoken choices
 
+Choice audio uses the Pulse client/stream name `/choices` (the user command is still `/choice`). `ag tts mute --choices` suppresses/stops choice speech across the selected nodes without closing prompts or disabling keyboard/ring input. Unmuting permits future speech and does not replay muted introductions. See [runtime speech control](speech-runtime-control.md).
+
 Choice speech also inherits `PI_TTS_PROVIDER=command` and `PI_TTS_COMMAND`
 (or `agentUtils.tts.provider`/`command`). It passes the question/options as a
 literal positional argument and exports effective TTS variables just like `/tts`.

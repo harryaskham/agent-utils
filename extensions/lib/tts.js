@@ -10,6 +10,7 @@
 
 import { spawn } from "node:child_process";
 import { combineTimeoutSignal } from "./bounded-exec.js";
+import { speechKind, withSpeechControl } from "./speech-control.js";
 
 export const DEFAULT_TTS_PROVIDER = "azure";
 export const AZURE_SPEECH_PROVIDER = "azure-speech"; // accepted legacy alias
@@ -321,24 +322,29 @@ export function buildPcmPlaybackSpec({
 export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 250, queue = false } = {}) {
   let current = null;
   let queued = null;
+  let pendingControl = null;
 
   const settle = (record, error, result) => {
     if (!record || record.settled) return;
     record.settled = true;
     if (current === record) current = null;
     if (record.killTimer) clearTimeout(record.killTimer);
+    record.cleanup?.();
     if (error) record.reject(error);
     else record.resolve(result);
   };
 
   const interrupt = () => {
+    const pending = pendingControl;
+    pendingControl = null;
+    pending?.abort();
     if (queued) {
       try { globalThis[Symbol.for("agent-utils.tts-queue.v1")]?.cancel?.(queued.jobId); } catch {}
       queued = null;
       return true;
     }
     const record = current;
-    if (!record) return false;
+    if (!record) return !!pending;
     current = null;
     record.interrupted = true;
     try { record.proc.stdin?.destroy?.(); } catch {}
@@ -355,13 +361,19 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
     return true;
   };
 
-  const play = (buffer, options = {}) => {
+  const playRaw = (buffer, options = {}) => {
+    if (options.signal?.aborted) return Promise.resolve({ interrupted: true });
     const provider = queue ? globalThis[Symbol.for("agent-utils.tts-queue.v1")] : null;
     if (provider?.enqueue) {
-      interrupt();
       const pending = provider.enqueue(buffer, options);
       queued = pending;
-      return Promise.resolve(pending).finally(() => { if (queued === pending) queued = null; });
+      const cancel = () => { if (queued === pending) { provider.cancel?.(pending.jobId); queued = null; } };
+      options.signal?.addEventListener("abort", cancel, { once: true });
+      if (options.signal?.aborted) cancel();
+      return Promise.resolve(pending).finally(() => {
+        options.signal?.removeEventListener("abort", cancel);
+        if (queued === pending) queued = null;
+      });
     }
     let pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
     const pan = Number(options.pan);
@@ -370,7 +382,6 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
       options = { ...options, channels: 2 };
     }
     if (pcm.length === 0) return Promise.resolve({ interrupted: false, empty: true });
-    interrupt();
     const spec = buildPcmPlaybackSpec(options);
     return new Promise((resolve, reject) => {
       let proc;
@@ -382,6 +393,9 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
       }
       const record = { proc, resolve, reject, settled: false, exited: false, interrupted: false, killTimer: null, stderr: "", stdinError: null };
       current = record;
+      const abort = () => { if (current === record) interrupt(); };
+      record.cleanup = () => options.signal?.removeEventListener("abort", abort);
+      options.signal?.addEventListener("abort", abort, { once: true });
       proc.on?.("error", (error) => settle(record, error));
       proc.stderr?.on?.("data", (chunk) => { record.stderr = `${record.stderr}${String(chunk)}`.slice(-500); });
       const done = (code = 0, signal = null) => {
@@ -402,6 +416,7 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
         // child exit so the caller gets that stderr rather than a bare EPIPE.
         if (!record.interrupted) record.stdinError = error;
       });
+      if (options.signal?.aborted) { abort(); return; }
       try {
         proc.stdin.write(pcm);
         proc.stdin.end();
@@ -411,11 +426,28 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
     });
   };
 
+  const play = (buffer, options = {}) => {
+    interrupt();
+    if (!speechKind(options) && !options.speechControl) return playRaw(buffer, options);
+    const control = new AbortController();
+    pendingControl = control;
+    const abort = () => control.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    return withSpeechControl({ ...options, signal: control.signal }, (controlled) => {
+      if (pendingControl !== control || control.signal.aborted) return { interrupted: true };
+      return playRaw(buffer, controlled);
+    }).finally(() => {
+      options.signal?.removeEventListener("abort", abort);
+      if (pendingControl === control) pendingControl = null;
+    });
+  };
+
   return {
     play,
     interrupt,
     dispose: interrupt,
-    isPlaying: () => !!current || !!queued,
+    isPlaying: () => !!current || !!queued || !!pendingControl,
     currentProcess: () => current?.proc ?? null,
   };
 }

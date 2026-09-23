@@ -11,7 +11,7 @@ import readAloudExtension, {
   applyReadConfigValues,
   formatReadStatus,
   isReadControlText,
-  createReadModeController,
+  createReadModeController as createReadModeControllerImpl,
   createReadAloudExtension,
 } from "../extensions/read-aloud.js";
 import {
@@ -19,6 +19,9 @@ import {
   DEFAULT_TTS_SPEED,
   DEFAULT_TTS_EMBEDDING,
 } from "../extensions/lib/tts.js";
+
+import { speechTestEnv, waitForSpeech } from "./helpers/speech-environment.js";
+const createReadModeController = (options = {}) => createReadModeControllerImpl({ ...options, env: speechTestEnv(options.env) });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -162,16 +165,16 @@ test("read mode speaks the full editor after debounce, each changed version, and
 
   controller.handleTerminalInput("x", harness.ctx);
   harness.setText("The quick brown");
-  await sleep(30);
+  await waitForSpeech(() => played.length === 1);
   assert.deepEqual(spoken.map((entry) => entry.text), ["The quick brown"]);
 
   controller.handleTerminalInput("x", harness.ctx);
   harness.setText("The quick brown fox jumped");
-  await sleep(30);
+  await waitForSpeech(() => played.length === 2);
   assert.deepEqual(spoken.map((entry) => entry.text), ["The quick brown", "The quick brown fox jumped"]);
 
   controller.handleSubmittedText("The quick brown fox jumped", harness.ctx);
-  await sleep(5);
+  await waitForSpeech(() => played.length === 3);
   assert.deepEqual(spoken.map((entry) => entry.text), [
     "The quick brown",
     "The quick brown fox jumped",
@@ -213,7 +216,7 @@ test("a newer synthesis aborts the stale request and interrupts playback", async
   const harness = makeCtx("");
   const controller = createReadModeController({ env: {}, synthesize, player });
   const first = controller.speak("first", "manual", harness.ctx);
-  await sleep(1);
+  await waitForSpeech(() => signals.length === 1);
   const second = controller.speak("second", "manual", harness.ctx);
   assert.equal(signals[0].aborted, true);
   resolveFirst(Buffer.from([0, 0]));

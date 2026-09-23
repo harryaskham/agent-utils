@@ -3,12 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createChoiceSpeaker } from "../extensions/lib/choice.js";
-import { runTtsCommand, playTtsCommand } from "../extensions/lib/tts-command.js";
+import { createChoiceSpeaker as createChoiceSpeakerImpl } from "../extensions/lib/choice.js";
+import { runTtsCommand as runTtsCommandImpl, playTtsCommand as playTtsCommandImpl } from "../extensions/lib/tts-command.js";
 import { MachineTtsQueue, TTS_QUEUE_SYMBOL } from "../extensions/lib/tts-queue.js";
-import { resolveAgentTtsSettings, createAgentSpeechController } from "../extensions/lib/tts-narration.js";
+import { resolveAgentTtsSettings, createAgentSpeechController as createAgentSpeechControllerImpl } from "../extensions/lib/tts-narration.js";
 import { applyReadConfigValues, defaultReadConfig } from "../extensions/read-aloud.js";
 import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
+import { speechTestEnv } from "./helpers/speech-environment.js";
+const controlled = (options = {}) => ({ ...options, env: speechTestEnv(options.env) });
+const createChoiceSpeaker = (options) => createChoiceSpeakerImpl(controlled(options));
+const createAgentSpeechController = (options) => createAgentSpeechControllerImpl(controlled(options));
+const runTtsCommand = (text, options) => runTtsCommandImpl(text, controlled(options));
+const playTtsCommand = (text, options) => playTtsCommandImpl(text, controlled(options));
 
 const waitFor = async (fn) => {
   const end = Date.now() + 4000;
@@ -90,6 +96,8 @@ test("opaque jobs share queue capacity, have unknown duration, and cancel withou
     assert.equal(started, 0, "unknown duration must not enable timed overlap");
     first.skipCurrent();
     assert.equal((await playing).interrupted, true);
+    // Workers use unref'ed timers; keep this isolated test alive until admission.
+    await waitFor(() => started === 1);
     await next;
     assert.equal(started, 1);
   } finally {

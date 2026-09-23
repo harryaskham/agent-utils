@@ -202,7 +202,8 @@ export function createTtsNarrationExtension({
         .catch((error) => warnOnce("tts feed", error, ctx))
         .finally(() => feedWrites.delete(pending));
       feedWrites.add(pending);
-      void speechController.speak(text, overrides).catch((error) => warnOnce(kind, error, ctx));
+      const speechKind = kind === "tts" ? "tts" : "narrate";
+      void speechController.speak(text, { ...overrides, speechKind, streamName: `/${speechKind}` }).catch((error) => warnOnce(kind, error, ctx));
     };
 
     const supersedeNarrationWork = ({ clearBatches = false } = {}) => {

@@ -2,6 +2,7 @@ use crate::{
     Error, Result,
     config::{self, Config, Host},
     model::*,
+    speech::{self, SpeechKind},
     store, transport,
 };
 use mcp_cli::{JsonError, McpServer, StdioServerConfig, ToolRouter};
@@ -72,6 +73,100 @@ impl Service {
             ));
         }
         Ok(hosts.remove(0))
+    }
+    pub fn speech_status(&self, selection: Selection) -> Result<FleetSpeechControl> {
+        self.speech_control(selection, vec![], None)
+    }
+    pub fn speech_mute(&self, input: SpeechControlInput) -> Result<FleetSpeechControl> {
+        if !input.confirmed {
+            return Err(Error::Invalid("ag_tts_mute requires confirmed=true".into()));
+        }
+        self.speech_control(input.selection, input.kinds, Some(true))
+    }
+    pub fn speech_unmute(&self, input: SpeechControlInput) -> Result<FleetSpeechControl> {
+        if !input.confirmed {
+            return Err(Error::Invalid(
+                "ag_tts_unmute requires confirmed=true".into(),
+            ));
+        }
+        self.speech_control(input.selection, input.kinds, Some(false))
+    }
+    fn speech_control(
+        &self,
+        selection: Selection,
+        kinds: Vec<SpeechKind>,
+        muted: Option<bool>,
+    ) -> Result<FleetSpeechControl> {
+        let kinds = speech::selected_kinds(&kinds)?;
+        let hosts = self.hosts(&selection)?;
+        self.runtime.block_on(async {
+            let mut jobs = JoinSet::new();
+            for host in hosts {
+                let config = self.config.clone();
+                let kinds = kinds.clone();
+                jobs.spawn(async move {
+                    let result = if host.local {
+                        match host.paths.mute() {
+                            Ok(path) => {
+                                blocking(move || match muted {
+                                    Some(value) => speech::set_muted(&path, &kinds, value),
+                                    None => speech::read_state(&path),
+                                })
+                                .await
+                            }
+                            Err(error) => Err(error),
+                        }
+                    } else {
+                        let action = match muted {
+                            Some(true) => "tts-mute",
+                            Some(false) => "tts-unmute",
+                            None => "tts-status",
+                        };
+                        let mut args = vec!["node".into(), action.into()];
+                        if let Some(path) = &host.paths.tts_mute {
+                            args.extend(["--path".into(), path.clone()]);
+                        }
+                        if muted.is_some() {
+                            for kind in kinds {
+                                args.extend(["--kind".into(), kind.name().into()]);
+                            }
+                        }
+                        transport::query(&config, &host, &args).await
+                    };
+                    match result {
+                        Ok(data) => NodeSpeechControl {
+                            host: host.name,
+                            disposition: if muted.is_some() {
+                                SpeechDisposition::Applied
+                            } else {
+                                SpeechDisposition::Observed
+                            },
+                            data: Some(data),
+                            error: None,
+                        },
+                        Err(error) => NodeSpeechControl {
+                            host: host.name,
+                            disposition: if muted.is_some() {
+                                SpeechDisposition::Unconfirmed
+                            } else {
+                                SpeechDisposition::Error
+                            },
+                            data: None,
+                            error: Some(JsonError::from_error(&error)),
+                        },
+                    }
+                });
+            }
+            let mut hosts = vec![];
+            while let Some(result) = jobs.join_next().await {
+                hosts
+                    .push(result.map_err(|e| {
+                        Error::Transport(format!("speech policy task failed: {e}"))
+                    })?);
+            }
+            hosts.sort_by(|a, b| a.host.cmp(&b.host));
+            Ok(FleetSpeechControl { hosts })
+        })
     }
     pub fn tts_list(&self, input: ListInput) -> Result<FleetListing<SpeechRecord>> {
         store::check_limit(input.limit)?;
@@ -301,6 +396,9 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
 
 pub fn router() -> ToolRouter<Service> {
     let mut router = ToolRouter::new();
+    router.add_typed_tool_with_output_schema("ag_tts_status", "Read node-wide runtime speech mute policy on selected/all enabled nodes. Does not change session settings or audio.", Service::speech_status);
+    router.add_typed_tool_with_output_schema("ag_tts_mute", "Mute selected speech kinds on selected/all enabled nodes. Empty kinds means read, tts, narrate and choices. Requires confirmed=true after operator approval. Acknowledges the policy file, not synchronous audio quiescence; errors may be unconfirmed, so reconcile with ag_tts_status.", Service::speech_mute);
+    router.add_typed_tool_with_output_schema("ag_tts_unmute", "Unmute selected speech kinds on selected/all enabled nodes. Empty kinds unmutes all four. Requires confirmed=true after operator approval. Allows future speech without replaying muted backlog; does not enable disabled session settings.", Service::speech_unmute);
     router.add_typed_tool_with_output_schema("ag_tts_list", "Read recent speech requests from configured nodes concurrently. Finite snapshot, ≤1000 records per node; failures are reported per node.", Service::tts_list);
     router.add_typed_tool_with_output_schema("ag_image_list", "List recent durable shared-image metadata across configured nodes. ≤1000 records per node; filter by exact agent name or archive directory.", Service::image_list);
     router.add_typed_tool_with_output_schema("ag_image_info", "Get one image's metadata from an explicitly selected node. Use id from ag_image_list; never resolves paths outside its archive.", Service::image_info);

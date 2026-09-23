@@ -151,7 +151,7 @@ export class MachineTtsQueue {
     const pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
     if (!pcm.length) return Promise.resolve({ empty: true, interrupted: false });
     const id = `${String(this.now()).padStart(13, "0")}-${process.pid}-${randomUUID()}`;
-    const { env: _discardedEnv, ...safeOptions } = options || {};
+    const { env: _discardedEnv, signal: _discardedSignal, ...safeOptions } = options || {};
     const job = { id, createdAt: this.now(), ownerPid: process.pid, bytes: pcm.length, durationMs: task ? null : pcmDurationMs(pcm.length, safeOptions), options: safeOptions, ...(task ? { kind: "task" } : {}) };
     const metadataBytes = Buffer.byteLength(`${JSON.stringify(job)}\n`);
     const reservedBytes = pcm.length + metadataBytes;

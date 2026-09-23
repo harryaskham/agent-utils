@@ -24,6 +24,12 @@ On first write to a missing durable feed, an existing queue-adjacent `speech.jso
 
 This is a **request feed**, not proof of completed playback: failed, interrupted, or superseded speech remains in the log. Appends do not acquire the queue lock or add polling. Logging errors warn once per session without preventing speech. New files are owner-only (`0600`). Text may contain sensitive project content; the feed stays local, is append-only, and is not pruned by PCM queue cleanup. Operators can archive or remove it when desired; subsequent requests recreate it.
 
+## Pulse identities and node-wide mute
+
+Pulse client and stream names identify the speech source: `/tts`, `/narrate`, `/read`, and `/choices`. Narration shares voice/backend settings with TTS, but does not inherit its client name.
+
+`ag tts mute` / `ag tts unmute` set a machine-wide runtime policy for all four types on all enabled configured nodes. Use `ag --host NAME tts mute --narrate --choices` or `ag --local tts unmute --read --tts` for narrower control. `ag tts status` shows policy without changing it. Muted audio is stopped/discarded, not replayed after unmute; per-session settings, narration text and this request feed remain unchanged. Updated extensions observe `~/.local/state/agent-utils/tts/mute.json` without idle polling. See [runtime speech control](speech-runtime-control.md).
+
 ## `/tts`: verbatim assistant messages
 
 ```text
@@ -96,7 +102,7 @@ Commands run with `sh -c`; the entire utterance is one positional argument
 Commands are trusted operator code: pipes, redirects, and shell expansion work.
 Shell variables in `command=` are preserved until playback. Exported variables:
 `PI_TTS_SPEED`, `PI_TTS_VOICE`, `PI_TTS_LANG`, `PI_TTS_STYLE`,
-`PI_TTS_STYLEDEGREE`, `PI_TTS_EMBEDDING`, and `PI_TTS_PAN`. Unset optional
+`PI_TTS_STYLEDEGREE`, `PI_TTS_EMBEDDING`, `PI_TTS_PAN`, `PI_TTS_KIND`, and `PI_TTS_STREAM_NAME`. Pulse-aware commands also receive source names through `PULSE_PROP`; commands with explicit `pacat --client-name` / `--stream-name` flags should use `"$PI_TTS_STREAM_NAME"` for those values. Unset optional
 values are empty strings. Local providers interpret these values themselves;
 Azure voice names, embeddings, pan, and PCM backend settings are not automatically
 applied to a local engine. Configured Pulse server/sink are passed through.

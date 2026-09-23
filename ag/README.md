@@ -7,6 +7,11 @@ ag tts tail                           # all configured nodes, live until Ctrl-C
 ag tts tail --no-follow -n 10         # finite recent history per node
 ag --host ms-mac --host sgu24 tts tail
 ag --local tts list -n 100 --json
+ag tts mute                          # all four types, all enabled nodes
+ag tts unmute                        # clear all four on all enabled nodes
+ag --host ms-mac tts mute --narrate --choices
+ag --local tts unmute --read --tts
+ag tts status
 ag image list --limit 50
 ag image list --agent my-agent --json
 ag --host ms-mac image info 'my-agent/img-<id>.png'
@@ -16,6 +21,18 @@ ag hosts
 
 Human speech output is ordered by arrival when following (not a globally synchronized clock). Finite speech snapshots/images are sorted by producer timestamps. Every line identifies its source node. Host errors go to stderr in human mode and remain structured in JSON. Healthy nodes continue independently while offline tails retry with bounded backoff. `--json` follow emits JSONL envelopes; it does not mix progress prose into stdout.
 
+## Runtime speech mute
+
+`ag tts mute` / `unmute` control node-wide audio policy, independently of individual sessions' on/off settings. With no type switches they affect **all** of `read`, `tts`, `narrate`, and `choices`; switches select only their union and leave the other types unchanged. With no `--host` they attempt every enabled configured node. Use `--host NAME` (repeatable) or `--local` to narrow the target.
+
+Policy lives at `~/.local/state/agent-utils/tts/mute.json` (XDG state rules apply), independently of the PCM cache. `paths.tts_mute`, `--mute-state PATH`, and producer `PI_TTS_MUTE_PATH` support overrides; producers and `ag` must point to the same node-local file. Missing state means unmuted. The mute persists until explicitly changed, including across agent restarts.
+
+Updated Agent Utils sessions suppress synthesis, stop active playback, and discard queued/in-flight speech of muted types. Per-type epochs prevent muted backlog from replaying after unmute. New speech is allowed immediately when unmuted; disabled session features stay disabled. Text feeds and narration text continue. Unrelated apps, realtime audio, and other clients of a remote Pulse server are not muted.
+
+No daemon or polling writer is added. `ag` uses a private atomic write under a short-lived OS advisory lock; speech holds event-driven directory watches only while in flight. Since macOS can drop a cold-start/atomic-rename notification, a shared 200 ms **active-only metadata stat** reconciles changes; unchanged files are not reopened, and all watchers/timers close when the last utterance settles or aborts. There is no idle polling or queue-lock churn. Invalid/unreadable existing policy fails closed and should be inspected/repaired. New files are owner-only. Managed symlinks are preserved.
+
+A successful receipt acknowledges the **policy write**, not synchronous audio-quiescence proof from every agent. A failed remote write can be unconfirmed (the reply may have been lost after application); `ag tts status` reconciles it. Mutations are not automatically retried. Targets need `ag` 0.2+ and updated Agent Utils; older running extensions cannot enforce the file. See [the control contract](https://github.com/harryaskham/agent-utils/blob/main/docs/speech-runtime-control.md).
+
 ## Durable producer data
 
 Agent Utils writes to:
@@ -23,7 +40,7 @@ Agent Utils writes to:
 - `$XDG_STATE_HOME/agent-utils/tts/speech.jsonl` (default `~/.local/state/agent-utils/tts/speech.jsonl`).
 - `$XDG_STATE_HOME/agent-utils/images/<agent-name>/img-<share-id>.<ext>`, with `<image>.json` provenance sidecars.
 
-`PI_AGENT_UTILS_STATE_DIR` overrides the common producer root. `PI_TTS_FEED_PATH` and `PI_SHARED_IMAGES_DIR` override individual producer destinations. Configure matching `paths` in `ag` if the sources are customized; `ag` is a reader and never rewrites another node's producer configuration.
+`PI_AGENT_UTILS_STATE_DIR` overrides the common producer root. `PI_TTS_FEED_PATH` and `PI_SHARED_IMAGES_DIR` override individual producer destinations. Configure matching `paths` in `ag` if the sources are customized; artifact reads never rewrite another node's producer configuration, and mute commands change only the runtime policy file.
 
 The speech feed records requests, not playback success. New-format entries include identity, timestamp, host, cwd, kind and full text; legacy entries remain readable. On first write to a missing durable feed, the old queue-adjacent `speech.jsonl` is atomically copied once, without deleting the original. Reload old Pi sessions so they stop appending to the old cache location. Late writes by still-old processes are not silently merged. Archives and feeds are intentionally retained indefinitely; queue cleanup, session teardown and preview clearing do not delete them. Protect/back up this private project data accordingly.
 
@@ -41,6 +58,7 @@ paths:
   # Omit to use XDG_STATE_HOME and producer environment defaults on each node.
   tts_feed: ~/.local/state/agent-utils/tts/speech.jsonl
   image_dir: ~/.local/state/agent-utils/images
+  tts_mute: ~/.local/state/agent-utils/tts/mute.json
 hosts:
   - name: local
     local: true
@@ -82,7 +100,7 @@ ag completions zsh
 
 ## MCP and JSON
 
-`ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_image_list`, `ag_image_info`, plus house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private `ag node ...` protocol that ignores fleet config, preventing recursion.
+`ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_tts_status`, `ag_image_list`, `ag_image_info`, plus `ag_tts_mute` / `ag_tts_unmute` (require `confirmed=true` after operator approval) and house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private typed `ag node ...` protocol that ignores fleet config, preventing recursion. Speech-control writes use the same policy implementation as the local CLI and MCP.
 
 Exit codes: `0` success/normal Ctrl-C or closed pipe; `1` command/config/I/O failure; `2` clap usage error; `3` finite fleet result with one or more failed nodes (healthy data is still returned). Configured paths/errors are local private diagnostic data. Human output escapes terminal control characters. Limits: 128 nodes, 1000 records per node/request, 8 MiB per speech line, 64 MiB image/response, 64 KiB image sidecar and a 200000-file image scan. Incomplete appended lines are held until newline; malformed/oversized records are reported, not interpreted as commands. Images are checksum-verified before download; downloads refuse traversal, symlink escapes and overwrite of existing destinations.
 

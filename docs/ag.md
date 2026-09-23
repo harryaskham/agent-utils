@@ -29,4 +29,10 @@ Explicit `kitty_image_preview_show` calls also preserve the shown image, includi
 
 A read-only probe of `ms-mac` found that its SSH/login PATH already included the Nix profile locations, but `ag` was not installed there. Login initialization cannot deploy a missing executable: each target needs the updated Collective package installed, or an explicit `hosts[].command` pointing to an installed binary. Running `cltv-run ag` on the collector alone does not install its peers. The transport now reports that distinction explicitly and never builds or switches a remote system automatically.
 
+## Runtime speech control (ag 0.2)
+
+`ag tts mute`, `unmute`, and `status` now share a private atomic per-node policy with Agent Utils. All enabled nodes/all four speech types are the default; host/local and type flags narrow the operation. See [the control contract](speech-runtime-control.md) for names, epoch fencing, path overrides, partial-failure receipts and enforcement semantics.
+
+Validation: 16 Rust integration tests, 133 focused JS tests, both Nix package entrypoints, and the Nix-built CLI → JS controller boundary passed. Twenty consecutive control/playback runs cover live mute, symlink updates, queue recovery and observer cleanup. Stress testing exposed dropped macOS filesystem events, so event watchers have an active-only 200 ms metadata reconciliation fallback; there is no idle polling or periodic state/lock writer. No production audio or node mute policy was changed during validation.
+
 The archives are intentionally **not caches**. Session shutdown, preview cleanup and PCM queue maintenance never delete them. Archive retention/backups are operator-owned. No daemon or automatic remote upload is introduced; the explicit `ag` invocation reads selected configured nodes using existing SSH authentication.

@@ -13,12 +13,15 @@ pub struct Paths {
     /// Local path, or a path on the remote node (~/ expands on that node).
     pub tts_feed: Option<String>,
     pub image_dir: Option<String>,
+    /// Runtime mute policy consumed by Agent Utils on the target node.
+    pub tts_mute: Option<String>,
 }
 impl Paths {
     pub fn over(&self, base: &Self) -> Self {
         Self {
             tts_feed: self.tts_feed.clone().or_else(|| base.tts_feed.clone()),
             image_dir: self.image_dir.clone().or_else(|| base.image_dir.clone()),
+            tts_mute: self.tts_mute.clone().or_else(|| base.tts_mute.clone()),
         }
     }
     pub fn tts(&self) -> Result<PathBuf> {
@@ -34,6 +37,21 @@ impl Paths {
                         .into()
                 }),
         )
+    }
+    pub fn mute(&self) -> Result<PathBuf> {
+        let path = self
+            .tts_mute
+            .clone()
+            .or_else(|| {
+                std::env::var("PI_TTS_MUTE_PATH")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or_else(|| state_root().join("tts/mute.json").to_string_lossy().into());
+        if !safe(&path, 4096) {
+            return Err(Error::Invalid("invalid speech mute state path".into()));
+        }
+        expand_home(&path)
     }
     pub fn images(&self) -> Result<PathBuf> {
         expand_home(
@@ -170,8 +188,10 @@ impl AppConfig for Config {
             for path in [
                 &host.paths.tts_feed,
                 &host.paths.image_dir,
+                &host.paths.tts_mute,
                 &self.paths.tts_feed,
                 &self.paths.image_dir,
+                &self.paths.tts_mute,
             ]
             .into_iter()
             .flatten()

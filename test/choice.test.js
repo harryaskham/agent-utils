@@ -11,7 +11,7 @@ import {
   CHOICE_SESSION_EVENT,
   CHOICE_SYNC_REQUEST_EVENT,
   ChoiceStateMachine,
-  createChoiceSpeaker,
+  createChoiceSpeaker as createChoiceSpeakerImpl,
   formatChoiceIntroduction,
   keyboardChoiceAction,
   normalizeChoices,
@@ -23,6 +23,9 @@ import {
   normalizeChoiceAppendEntries,
   resolveChoiceSettings,
 } from "../extensions/choice.js";
+
+import { speechTestEnv } from "./helpers/speech-environment.js";
+const createChoiceSpeaker = (options = {}) => createChoiceSpeakerImpl({ ...options, env: speechTestEnv(options.env) });
 
 // Managed test processes inherit CACO_AGENT_ID/CACO_PROJECT. Never mirror unit
 // test choices into the operator's durable Cacophony choice queue.
@@ -909,7 +912,7 @@ test("choice speaker inherits persisted agentUtils.tts and interrupts stale spee
   assert.equal(synthOptions[0].speakerProfileId, "profile");
   assert.equal(synthOptions[0].endpoint, "https://speech");
   assert.equal(calls[1].options.device, "persisted_sink");
-  assert.equal(calls[1].options.streamName, "/choice");
+  assert.equal(calls[1].options.streamName, "/choices");
 
   const assignment = speaker.assignSession({ sessionManager: { getSessionId: () => "choice-session" } });
   await speaker.speak("assigned");
