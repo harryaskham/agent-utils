@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { agentUtilsStateRoot, expandStatePath } from "./artifact-state.js";
 import { ttsQueueRoot } from "./tts-queue.js";
+import { ttsFeedEnabled } from "./privacy.js";
 
 export function ttsFeedPath(env = process.env) {
   return expandStatePath(env.PI_TTS_FEED_PATH || join(agentUtilsStateRoot(env), "tts", "speech.jsonl"), env);
@@ -14,6 +15,7 @@ export function ttsFeedPath(env = process.env) {
 // Atomic link publication prevents partial imports and duplicate concurrent
 // imports. No lock files, polling, or rereading history on the append hot path.
 export async function prepareTtsFeed(env = process.env) {
+  if (!ttsFeedEnabled(env)) return null;
   const destination = ttsFeedPath(env);
   await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
   if (await stat(destination).then(() => true, (error) => { if (error.code === "ENOENT") return false; throw error; })) return destination;
@@ -35,7 +37,7 @@ export async function prepareTtsFeed(env = process.env) {
 // One append per request, independent of the ephemeral PCM queue. JSONL keeps
 // exact text, escaping embedded newlines/control characters. Not a playback ack.
 export async function appendTtsFeed({ text, kind, session, agent, host, cwd }, { env = process.env, now = Date.now } = {}) {
-  if (!String(text || "").trim()) return;
+  if (!ttsFeedEnabled(env) || !String(text || "").trim()) return;
   const destination = await prepareTtsFeed(env);
   const record = Buffer.from(JSON.stringify({
     version: 1, id: randomUUID(), timestamp: new Date(now()).toISOString(),

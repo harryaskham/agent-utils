@@ -1,6 +1,7 @@
 // Operator-configured shell playback. Speech is data ($1 / "$@"), never code.
 import { spawn } from "node:child_process";
 import { speechKind, withSpeechControl } from "./speech-control.js";
+import { sharedTtsQueueEnabled } from "./privacy.js";
 
 function speechOptions(options) {
   const kind = speechKind(options) || "tts";
@@ -67,7 +68,7 @@ export function playTtsCommand(text, options = {}) {
 }
 
 async function playTtsCommandControlled(text, options) {
-  const queue = globalThis[Symbol.for("agent-utils.tts-queue.v1")];
+  const queue = sharedTtsQueueEnabled(options.env) ? globalThis[Symbol.for("agent-utils.tts-queue.v1")] : null;
   if (!queue?.enqueueTask) return runTtsCommand(text, options);
   if (options.signal?.aborted) return { interrupted: true };
   // Closures stay in the originating process; only a scheduling lease is

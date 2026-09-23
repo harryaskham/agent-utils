@@ -22,6 +22,8 @@ tail -F ~/.local/state/agent-utils/tts/speech.jsonl | jq --unbuffered -r '"\(.ti
 
 On first write to a missing durable feed, an existing queue-adjacent `speech.jsonl` is copied once atomically. The legacy file is retained because old Pi processes may still write there; reload them to use the new path. Existing durable feeds are never overwritten or repeatedly merged. See the [`ag` guide](../ag/README.md) for fleet configuration and durable image storage.
 
+Set `PI_TTS_FEED_ENABLED=0` to opt out of this durable feed. `PI_INCOGNITO=1` always suppresses it, including legacy-feed migration, even if the individual feed flag is enabled. This does not delete existing history. Incognito also bypasses the shared speech queue and image archive; see [private choices](choice.md#localprivate-spoken-choices).
+
 This is a **request feed**, not proof of completed playback: failed, interrupted, or superseded speech remains in the log. Appends do not acquire the queue lock or add polling. Logging errors warn once per session without preventing speech. New files are owner-only (`0600`). Text may contain sensitive project content; the feed stays local, is append-only, and is not pruned by PCM queue cleanup. Operators can archive or remove it when desired; subsequent requests recreate it.
 
 ## Pulse identities and node-wide mute

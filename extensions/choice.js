@@ -5,6 +5,8 @@
 // the same semantic actions on CHOICE_INPUT_EVENT.
 
 import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
+import { ChoiceView, choiceViewKey } from "./lib/choice-layout.js";
+import { createChoicePreferenceStore } from "./lib/choice-preferences.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import { createCacophonyChoiceBridge } from "./lib/cacophony-choice.js";
 import { createAhpChoiceProvider } from "./lib/ahp-choice.js";
@@ -82,6 +84,7 @@ export function resolveChoiceSettings(env, persisted = {}) {
     wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
     speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
     descriptionOnNavigate: boolSetting(env.PI_CHOICE_DESCRIPTION_ON_NAVIGATE, boolSetting(persisted.descriptionOnNavigate, true)),
+    expanded: boolSetting(env.PI_CHOICE_EXPANDED, boolSetting(persisted.expanded, true)),
     forceAtAgentEnd: boolSetting(env.PI_FORCE_CHOICE, boolSetting(persisted.forceAtAgentEnd, false)),
     prefix: expandEnvReferences(env.PI_CHOICE_PREFIX ?? persisted.prefix ?? "", env, "/choice prefix"),
     suffix: expandEnvReferences(env.PI_CHOICE_SUFFIX ?? persisted.suffix ?? "", env, "/choice suffix"),
@@ -100,39 +103,6 @@ function renderChoiceWidget(question, choices, index, status = "listening") {
     ...normalized.map((choice, i) => `${i === index ? "▶" : " "} ${i + 1}. ${choice.headline}${choice.summary ? ` — ${choice.summary}` : ""}`),
     "↑/k previous · ↓/j next · Enter choose · 1-9 direct · Esc/q cancel (hard stop in force mode)",
   ];
-}
-
-function renderChoiceDialog(question, choices, index, timeoutMs, width, theme, freeform = {}) {
-  const color = (name, text) => { try { return theme?.fg?.(name, text) ?? text; } catch { return text; } };
-  const bold = (text) => { try { return theme?.bold?.(text) ?? text; } catch { return text; } };
-  const maxWidth = Math.max(20, width || 80);
-  const fit = (text, limit = maxWidth) => {
-    const raw = String(text ?? "");
-    return raw.length <= limit ? raw : `${raw.slice(0, Math.max(1, limit - 1))}…`;
-  };
-  const lines = [color("accent", "━".repeat(maxWidth)), color("text", bold(fit(`◇ ${question}`, maxWidth))) , ""];
-  for (let i = 0; i < choices.length; i++) {
-    const selected = i === index;
-    const marker = selected ? color("accent", "◆") : color("dim", "·");
-    const number = selected ? color("accent", bold(`${i + 1}.`)) : color("muted", `${i + 1}.`);
-    const room = Math.max(4, maxWidth - 7);
-    const label = fit(choices[i].headline, room);
-    lines.push(`${marker} ${number} ${selected ? color("accent", bold(label)) : color("text", label)}`);
-    if (choices[i].summary) lines.push(`    ${color(selected ? "muted" : "dim", fit(choices[i].summary, Math.max(4, maxWidth - 4)))}`);
-  }
-  lines.push("");
-  if (freeform.mode === "text") {
-    lines.push(`${color("accent", "Reply:")} ${color("text", fit(freeform.text || "", Math.max(4, maxWidth - 9)))}${color("accent", "▏")}`);
-    lines.push(`${color("success", "Enter")} ${color("dim", "submit reply")}  ${color("warning", "Esc")} ${color("dim", "back to choices")}  ${color("muted", "Backspace")} ${color("dim", "delete")}`);
-  } else if (freeform.mode === "ptt") {
-    lines.push(color("accent", "🎤 Push-to-talk reply is recording/transcribing…"));
-    lines.push(`${color("success", "Enter / Space")} ${color("dim", "finish")}  ${color("warning", "Esc / Ctrl-C")} ${color("dim", "cancel and return")}`);
-  } else {
-    lines.push(`${color("accent", "↑/k")} ${color("dim", "previous")}  ${color("accent", "↓/j")} ${color("dim", "next")}  ${color("success", "Enter / 1–9")} ${color("dim", "choose")}  ${color("accent", "i")} ${color("dim", "type reply")}  ${color("accent", "Space")} ${color("dim", "PTT reply")}  ${color("warning", "Esc/q")} ${color("dim", "cancel")}`);
-  }
-  lines.push(color("dim", timeoutMs === 0 ? "No timeout · editor input is suspended while this choice is open" : `Timeout: ${timeoutMs}ms · editor input is suspended while this choice is open`));
-  lines.push(color("accent", "━".repeat(maxWidth)));
-  return lines;
 }
 
 const CHOICE_UI_UNAVAILABLE_RE = /(?:extension_ui_unavailable|no controller client is attached|requires an attached controller client|interactive extension UI (?:is )?unavailable)/i;
@@ -186,7 +156,7 @@ export function hasUnavailableForcedChoiceTail(entries) {
   return false;
 }
 
-export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, preferenceStore, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   return function choiceExtension(pi) {
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
@@ -199,6 +169,28 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
     let forcedRequestOutstanding = false;
     let warnedUnsatisfiedForce = false;
     let ahpProvider = null;
+    const viewPreferences = preferenceStore || createChoicePreferenceStore({ env });
+    const initialExpanded = choiceConfig.expanded;
+    let preferenceLoad = null;
+    let viewSaveStatus = viewPreferences.persistent === false ? "session only" : "local preference";
+    const loadViewPreference = (ctx) => preferenceLoad ||= viewPreferences.load().then(value => {
+      if (env.PI_CHOICE_EXPANDED == null && typeof value.expanded === "boolean") choiceConfig.expanded = value.expanded;
+    }).catch(error => { ctx?.ui?.notify?.(`Choice view preference unavailable: ${error.message}`, "warning"); });
+    const setViewPreference = async (action, ctx) => {
+      await loadViewPreference(ctx);
+      const expanded = action === "reset" ? initialExpanded : action === "toggle" ? !choiceConfig.expanded : action === "expanded";
+      choiceConfig.expanded = expanded;
+      active?.view?.setExpanded(expanded);
+      active?.requestRender?.();
+      try {
+        await viewPreferences.save(action === "reset" ? null : expanded);
+        viewSaveStatus = viewPreferences.persistent === false ? "session only" : "saved locally";
+      } catch (error) {
+        viewSaveStatus = "not saved";
+        ctx?.ui?.notify?.(`Choice view changed but was not saved: ${error.message}`, "warning");
+      }
+      return expanded;
+    };
 
     const emitSession = (payload) => {
       try { pi.events?.emit?.(CHOICE_SESSION_EVENT, payload); } catch {}
@@ -267,6 +259,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
       record.terminalUnsub = null;
       try { record.rpcAbort?.abort?.(); } catch {}
       record.rpcAbort = null;
+      try { record.disposeView?.(); } catch {}
+      record.disposeView = null;
       if (record.customDone) {
         const done = record.customDone;
         record.customDone = null;
@@ -275,6 +269,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
       // Cancellation/selection must stop an in-flight spoken prompt immediately;
       // Escape should not leave the old question talking over freeform input.
       try { speakerController.interrupt?.(); } catch {}
+      try { speakerController.endChoice?.(record.sessionId); } catch {}
       try { record.ctx?.ui?.setWidget?.("agent-utils-choice", undefined); } catch {}
     };
 
@@ -539,6 +534,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
       // commonly emit the schema's 30-second default, which must not silently
       // replace a long-lived or disabled operator timeout.
       const timeoutMs = choiceConfig.timeoutMs;
+      if (ctx?.mode === "tui") await loadViewPreference(ctx);
+      if (signal?.aborted) return { status: "cancelled", reason: "aborted" };
       cancelActive();
       const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
       const sessionId = `choice-${nextSessionId++}`;
@@ -546,6 +543,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
       const result = await new Promise((resolve) => {
         const record = {
           sessionId,
+          view: new ChoiceView({ expanded: choiceConfig.expanded }),
+          disposeView: null,
           revision: 1,
           question,
           state,
@@ -581,6 +580,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
           finished: false,
         };
         active = record;
+        speakerController.beginChoice?.(sessionId);
         record.cacophony = cacoBridge?.start?.({
           question,
           choices,
@@ -645,6 +645,15 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
             else if (isChoiceEnterKey(key) || key === " ") emitInput({ action: INPUT_ACTIONS.FREEFORM_PTT_COMMIT, source: "keyboard" });
             return true;
           }
+          if (record.requestRender) {
+            const action = choiceViewKey(key);
+            if (action === "toggle") { void setViewPreference("toggle", ctx); return true; }
+            if (action && record.view.input(action)) { record.requestRender(); return true; }
+            if (record.view.focus === "question" && ["\u001b[A", "\u001b[B", "j", "k"].includes(key)) {
+              record.view.input(key === "j" || key === "\u001b[B" ? "down" : "up");
+              record.requestRender(); return true;
+            }
+          }
           if (key === "i" || key === "I") {
             emitInput({ action: INPUT_ACTIONS.FREEFORM_ENTER, mode: "text", source: "keyboard" });
             return true;
@@ -664,14 +673,41 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
           // deliberately swallowed instead of leaking into the editor; Escape
           // closes the modal and restores normal editor focus.
           void ctx.ui.custom((tui, theme, _kb, done) => {
+            if (record.finished || record.awaitingFreeform) {
+              done(null);
+              return { render: () => [], invalidate() {}, handleInput() {} };
+            }
             record.customDone = done;
             record.requestRender = () => tui.requestRender();
-            return {
-              render: (width) => renderChoiceDialog(record.question, record.state.choices, record.state.index, timeoutMs, width, theme, { mode: record.freeformMode, text: record.freeformText }),
-              invalidate() { tui.requestRender(); },
-              handleInput(data) { dispatchKeyboard(data); },
+            const dimensions = () => ({ columns: tui.terminal?.columns || 80, rows: tui.terminal?.rows || 24 });
+            // Save/restore terminal mouse modes, rather than disabling a mode
+            // owned by fullscreen Pi or the surrounding terminal on dismissal.
+            const mouse = tui.mode !== "fullscreen" && typeof tui.terminal?.write === "function";
+            if (mouse) tui.terminal.write("\u001b[?1000s\u001b[?1006s\u001b[?1000h\u001b[?1006h");
+            let disposed = false;
+            record.disposeView = () => {
+              if (disposed) return; disposed = true;
+              if (mouse) tui.terminal.write("\u001b[?1006r\u001b[?1000r");
+              record.view.invalidate();
             };
-          }).catch((error) => {
+            return {
+              render: (width) => record.view.render({ question: record.question, choices: record.state.choices, index: record.state.index, timeoutMs, freeformMode: record.freeformMode, freeformText: record.freeformText }, width, dimensions().rows, theme),
+              snapshot: () => ({ expanded: record.view.expanded, focus: record.view.focus, layout: record.view.layout }),
+              invalidate() { record.view.invalidate(); },
+              handleInput(data) {
+                const size = dimensions();
+                const action = record.view.mouse(data, size.columns, size.rows);
+                if (action) {
+                  if (record.freeformMode) return;
+                  if (action.type === "choose") emitInput({ action: INPUT_ACTIONS.CHOOSE_INDEX, index: action.index, source: "mouse" });
+                  else if (action.type === "toggle") void setViewPreference("toggle", ctx);
+                  else if (action.type === "render") record.requestRender();
+                  return;
+                }
+                dispatchKeyboard(data);
+              },
+            };
+          }, { overlay: true, overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%", margin: 0 } }).catch((error) => {
             if (!record.finished) finish(record, { status: "error", error: error?.message || String(error), index: state.index, choice: state.current() });
           });
         } else if (ctx?.mode === "rpc") {
@@ -812,11 +848,19 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
     }
 
     pi.registerCommand("choice", {
-      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice cancel|status|settings prefix='...' suffix='...' key=value",
+      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice view expanded|compact|toggle|reset; /choice cancel|status|settings key=value",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         if (raw.toLowerCase() === "cancel") {
           ctx.ui.notify(cancelActive("command") ? "choice cancelled" : "no active choice", "info");
+          return;
+        }
+        if (/^view(?:\s|$)/i.test(raw)) {
+          const action = raw.split(/\s+/)[1]?.toLowerCase() || "status";
+          if (!["expanded", "compact", "toggle", "reset", "status"].includes(action)) { ctx.ui.notify("Usage: /choice view expanded|compact|toggle|reset|status", "warning"); return; }
+          if (action === "status") await loadViewPreference(ctx);
+          else await setViewPreference(action, ctx);
+          ctx.ui.notify(`choice view: ${choiceConfig.expanded ? "expanded" : "compact"} · ${viewSaveStatus}`, "info");
           return;
         }
         if (raw.toLowerCase() === "status") {
@@ -953,12 +997,13 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, env
       return { action: "continue" };
     });
 
-    pi.on("session_shutdown", () => {
+    pi.on("session_shutdown", async () => {
       cancelActive("shutdown");
       try { pi.events?.off?.(INPUT_ACTION_EVENT, eventInputHandler); } catch {}
       try { pi.events?.off?.(CHOICE_SYNC_REQUEST_EVENT, choiceSyncRequestHandler); } catch {}
       try { ahpProvider?.dispose?.(); } catch {}
       try { speakerController.dispose?.(); } catch {}
+      await viewPreferences.flush?.();
     });
   };
 }

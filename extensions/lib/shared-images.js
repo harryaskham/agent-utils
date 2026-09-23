@@ -1,3 +1,4 @@
+import { sharedImagesEnabled } from "./privacy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, extname, join, resolve } from "node:path";
 import { link, lstat, mkdir, open, stat, unlink } from "node:fs/promises";
@@ -60,6 +61,7 @@ async function publish(path, bytes) {
 }
 
 export async function archiveSharedImage(image, provenance, { env = process.env, now = Date.now } = {}) {
+  if (!sharedImagesEnabled(env)) return null;
   const sourcePath = image.path
     ? resolve(provenance.cwd || process.cwd(), image.path.startsWith("~") ? expandStatePath(image.path, env) : image.path.replace(/^@/, ""))
     : undefined;

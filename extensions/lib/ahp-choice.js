@@ -2,6 +2,8 @@
 // Paratenic owns transport/projection; Agent Utils remains the sole choice-state
 // owner and interprets completion only through its existing arbitration path.
 
+import { isIncognito } from "./privacy.js";
+
 export const AHP_BRIDGE_SYMBOL = Symbol.for("paratenic.pi.ahp-bridge.v1");
 export const AHP_AVAILABLE_EVENT = "paratenic:ahp-bridge-available";
 export const AHP_DISCOVERY_EVENT = "paratenic:ahp-bridge-discovery";
@@ -10,7 +12,7 @@ const TRUE_RE = /^(1|true|yes|on)$/i;
 let providerSequence = 0;
 
 export function isAhpDisabled(env = process.env) {
-  return TRUE_RE.test(String(env.PI_DISABLE_AHP || env.PI_DISABLE_ACP || "").trim());
+  return isIncognito(env) || TRUE_RE.test(String(env.PI_DISABLE_AHP || env.PI_DISABLE_ACP || "").trim());
 }
 
 export function choiceAhpRequest(record) {

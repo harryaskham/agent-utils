@@ -83,6 +83,32 @@ In `ctx.mode === "rpc"`, Agent Utils uses Pi's typed SDK UI protocol rather than
 
 If an RPC host does not implement typed `ctx.ui.select`, `interactive_choice` fails immediately with a clear tool error. It never installs a terminal-input widget in RPC mode, because RPC terminal input is intentionally unavailable and would leave the tool waiting forever.
 
+## Wrapped choice view
+
+The TUI opens in **expanded** view. Questions, option headlines, full labels (when distinct), and descriptions wrap at terminal-cell boundaries instead of being cut off. Each question/option text area grows to five lines; longer text has its own scroll position and a visible line range. The options viewport stays bounded at short heights and follows deliberate selection changes.
+
+- **v** — toggle expanded/compact view. The choice remains pending.
+- **PgUp / PgDn** or **[ / ]** — scroll the selected option's text, without selecting a different option.
+- **Shift+PgUp / Shift+PgDn** or **{ / }** — scroll the question independently.
+- **Ctrl+PgUp / Ctrl+PgDn** or **< / >** — scroll the options viewport without changing selection.
+- **Tab** — switch text focus between question and choices. With question focus, arrows/j/k and PgUp/PgDn scroll the question; **Home/End** reaches either text area's beginning/end.
+- **Mouse wheel** — scroll the text under the pointer. Over a long option, it scrolls that option's text; over the list gutter/short rows it scrolls the list. **Click an option** to choose it; click the header to toggle view.
+- **?** — show/hide the compact key guide. Native terminal text selection can use the terminal's mouse-bypass modifier (usually Shift).
+
+These view actions do not speak, reset deadlines, or submit model input. Freeform text/PTT keeps exclusive ownership of its keys. The viewport-sized modal covers the suspended editor and restores terminal mouse modes on dismissal. RPC/AHP clients still receive complete text and own their own rendering.
+
+```text
+/choice view expanded
+/choice view compact
+/choice view toggle
+/choice view reset
+/choice view status
+```
+
+The view toggle persists only the boolean preference in `~/.local/state/agent-utils/choice/ui.json` (XDG/`PI_AGENT_UTILS_STATE_DIR` rules apply; `PI_CHOICE_UI_STATE_PATH` can override). Writes are asynchronous, private and atomic, and preserve managed symlinks. It contains no question, choice, or speech text. Shared `settings.json` is untouched. `agentUtils.choice.expanded` supplies the default (true); `PI_CHOICE_EXPANDED` overrides the saved preference at startup. `reset` returns to that startup default. In incognito, view preferences remain session-memory-only.
+
+See [the acceptance inventory](choice-layout-acceptance.json) and [visual evidence](choice-layout-review.md).
+
 ## Keyboard input
 
 While a choice is visible:
@@ -134,8 +160,10 @@ live under `agentUtils.choice`:
 ```
 
 `settings.json` is startup policy and is never rewritten by `/choice`,
-`/force-choice`, or `/ring-input`. Their setters and toggles affect only the
-current session; edit the JSON explicitly to change the next startup.
+`/force-choice`, or `/ring-input`. Their speech/behavior setters affect only the
+current session; edit the JSON explicitly to change the next startup. The display-only
+`/choice view` preference is the exception: it is saved to the separate local UI
+state file described above, not to the shared settings.
 
 `agentUtils.choice.append` adds the same configured control rows after every
 agent-provided choice list without mutating that list or shifting its indices.
@@ -183,6 +211,12 @@ question; option headlines and navigation speech remain unmodified. Set them wit
 `PI_CHOICE_SUFFIX`. Safe `$VAR`/`${VAR}` expansion is supported without command
 substitution. `PI_CHOICE_*` / `PI_TTS_*` / Pulse env overrides still win.
 
+### Per-choice audio cache
+
+Completed native PCM speech is cached **in memory for the open choice only**. Returning to an option, repeating its description, or repeating the introduction replays the cached clip. Rapidly revisiting an option reuses its in-flight synthesis; navigation interrupts stale playback/waiters without restarting that same synthesis. Voice/style/speed and the runtime mute epoch qualify cache entries.
+
+Selection, cancellation, timeout, supersession, UI dismissal and session shutdown release the cache and abort its outstanding synthesis. The cache never spills to disk and is bounded to 16 MiB/32 clips with eviction; oversized clips are played but not retained. Master mute still cancels cache fills/playback. Opaque `provider=command` playback (for example `termux-tts-speak`) returns no audio bytes, so it remains uncached; no recording or shared spool is introduced to fake a cache.
+
 ### Local/private spoken choices
 
 Choice audio uses the Pulse client/stream name `/choices` (the user command is still `/choice`). `ag tts mute --choices` suppresses/stops choice speech across the selected nodes without closing prompts or disabling keyboard/ring input. Unmuting permits future speech and does not replay muted introductions. See [runtime speech control](speech-runtime-control.md).
@@ -197,6 +231,7 @@ settings; later `/tts` runtime changes do not reconfigure choice speech.
 For local commands and no outbound choice publishing:
 
 ```sh
+export PI_INCOGNITO=1
 export PI_TTS_PROVIDER=command
 export PI_TTS_COMMAND='termux-tts-speak -r "$PI_TTS_SPEED" "$@"'
 export PI_CHOICE_SPEECH_ENABLED=true
@@ -204,6 +239,10 @@ export DISABLE_PI_CACO=1
 export PI_CHOICE_CACO_ENABLED=false
 export PI_DISABLE_AHP=1
 ```
+
+`PI_INCOGNITO=1` also suppresses Agent Utils' shared TTS queue, speech-feed logging, image archiving and automatic Cacophony/AHP mirroring—even if their individual enabled flags are set. Playback bypasses another logical session's already-present global queue. Ordinary sessions can opt out individually with `PI_TTS_QUEUE_ENABLED=0`, `PI_TTS_FEED_ENABLED=0`, and `PI_SHARED_IMAGES_ENABLED=0`.
+
+This is not a network sandbox or a promise that the selected model/TTS provider is local. Explicit model endpoints, audio routes, profile mounts/sync, user-requested tools and other extensions retain their configured behavior. Existing archives are not deleted. Collective's `pincognito` launcher sets the guard but still intentionally uses its pocket4 profile and configured audio endpoint.
 
 Load `choice.js` directly with `--no-extensions`; optionally load `omni-input.js`
 and `ring-input.js` for input events. No queue artifacts are created unless the

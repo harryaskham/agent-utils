@@ -1,3 +1,5 @@
+import { isIncognito } from "./privacy.js";
+
 const TRUE_RE = /^(1|true|yes|on|enabled)$/i;
 
 const state = {
@@ -9,7 +11,7 @@ const state = {
 const listeners = new Set();
 
 export function isPiCacoDisabled(env = process.env) {
-  return TRUE_RE.test(String(env.DISABLE_PI_CACO || "").trim());
+  return isIncognito(env) || TRUE_RE.test(String(env.DISABLE_PI_CACO || "").trim());
 }
 
 export function explicitCacophonyIdentity(env = process.env) {

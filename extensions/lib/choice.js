@@ -9,6 +9,7 @@ import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "./input-actions.js";
 import { resolveAgentTtsSettings } from "./tts-narration.js";
 import { playTtsCommand } from "./tts-command.js";
 import { withSpeechControl } from "./speech-control.js";
+import { ChoiceAudioCache } from "./choice-audio-cache.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./tts-identity.js";
 import {
   DEFAULT_TTS_BACKEND,
@@ -192,6 +193,7 @@ export function createChoiceSpeaker({
   const speechPolicy = resolveSessionSpeechPolicy(persisted, env);
   let assignment = null;
   let synthesis = null;
+  const audioCache = new ChoiceAudioCache();
 
   const interrupt = () => {
     try { synthesis?.abort(); } catch {}
@@ -223,8 +225,9 @@ export function createChoiceSpeaker({
           env,
         };
         if (!env.AZURE_SPEECH_ENDPOINT && shared.endpoint !== undefined) options.endpoint = shared.endpoint;
-        const pcm = await synthesize(body, options);
-        if (synthesis !== controller || controlled.signal.aborted) return { interrupted: true };
+        const key = JSON.stringify([body, options.voice, options.lang, options.speed, options.speakerProfileId, options.style, options.styleDegree, controlled.speechControl.epoch]);
+        const pcm = await audioCache.get(key, (signal) => withSpeechControl({ ...controlled, signal }, (cached) => synthesize(body, { ...options, signal: cached.signal })), controlled.signal);
+        if (synthesis !== controller || controlled.signal.aborted || !Buffer.isBuffer(pcm)) return { interrupted: true, ...(pcm?.muted ? { muted: true } : {}) };
         return player.play(pcm, {
           backend: env.PI_TTS_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,
           server: env.PULSE_SERVER || shared.server,
@@ -248,7 +251,10 @@ export function createChoiceSpeaker({
   return {
     speak,
     interrupt,
-    dispose: interrupt,
-    assignSession(ctx) { assignment = resolveSessionSpeechAssignment(sessionSpeechIdentity(ctx, env), speechPolicy); return { ...assignment }; },
+    beginChoice(id) { audioCache.begin(id); },
+    endChoice(id) { audioCache.end(id); },
+    cacheSnapshot: () => audioCache.snapshot(),
+    dispose() { interrupt(); audioCache.end(); },
+    assignSession(ctx) { audioCache.end(); assignment = resolveSessionSpeechAssignment(sessionSpeechIdentity(ctx, env), speechPolicy); return { ...assignment }; },
   };
 }

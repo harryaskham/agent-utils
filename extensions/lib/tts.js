@@ -11,6 +11,7 @@
 import { spawn } from "node:child_process";
 import { combineTimeoutSignal } from "./bounded-exec.js";
 import { speechKind, withSpeechControl } from "./speech-control.js";
+import { sharedTtsQueueEnabled } from "./privacy.js";
 
 export const DEFAULT_TTS_PROVIDER = "azure";
 export const AZURE_SPEECH_PROVIDER = "azure-speech"; // accepted legacy alias
@@ -363,7 +364,7 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
 
   const playRaw = (buffer, options = {}) => {
     if (options.signal?.aborted) return Promise.resolve({ interrupted: true });
-    const provider = queue ? globalThis[Symbol.for("agent-utils.tts-queue.v1")] : null;
+    const provider = queue && sharedTtsQueueEnabled(options.env) ? globalThis[Symbol.for("agent-utils.tts-queue.v1")] : null;
     if (provider?.enqueue) {
       const pending = provider.enqueue(buffer, options);
       queued = pending;

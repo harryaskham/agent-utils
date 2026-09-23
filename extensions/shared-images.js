@@ -1,6 +1,7 @@
 // Durable machine-local image receipts. Observes explicit sharing, not private
 // user uploads or the UI-only live-preview frame stream.
 import { randomUUID } from "node:crypto";
+import { sharedImagesEnabled } from "./lib/privacy.js";
 import { artifactIdentity, sharedImagesRoot } from "./lib/artifact-state.js";
 import { archiveSharedImage, inlineSharedImages, localMarkdownImages } from "./lib/shared-images.js";
 
@@ -8,6 +9,7 @@ const PREVIEW_ADDITIONS = new Set(["kitty_image_preview_add", "kitty_image_previ
 
 export function createSharedImagesExtension({ env = process.env, archive = archiveSharedImage } = {}) {
   return function sharedImagesExtension(pi) {
+    if (!sharedImagesEnabled(env)) return;
     let warned = false;
     const capture = async (images, provenance, ctx) => {
       const stored = [], errors = [];
@@ -26,6 +28,7 @@ export function createSharedImagesExtension({ env = process.env, archive = archi
     };
 
     pi.on("tool_result", async (event, ctx) => {
+      if (!sharedImagesEnabled(env)) return;
       const images = inlineSharedImages(event.content);
       if (PREVIEW_ADDITIONS.has(event.toolName)) {
         const added = event.details?.added;
@@ -50,6 +53,7 @@ export function createSharedImagesExtension({ env = process.env, archive = archi
     });
 
     pi.on("message_end", async (event, ctx) => {
+      if (!sharedImagesEnabled(env)) return;
       const message = event.message;
       if (!message || !["assistant", "custom"].includes(message.role)) return;
       const images = [...inlineSharedImages(message.content), ...localMarkdownImages(message.content)];

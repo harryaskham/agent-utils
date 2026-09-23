@@ -30,6 +30,7 @@ import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpee
 import { speechPrefix } from "./lib/tts-prefix.js";
 import { DEFAULT_TTS_EMBEDDING } from "./lib/tts.js";
 import { appendTtsFeed } from "./lib/tts-feed.js";
+import { ttsFeedEnabled } from "./lib/privacy.js";
 import { artifactIdentity } from "./lib/artifact-state.js";
 
 function boolValue(value, name) {
@@ -197,11 +198,13 @@ export function createTtsNarrationExtension({
 
     const feedWrites = new Set();
     const speakBestEffort = (text, ctx, kind = "tts", overrides = {}) => {
-      const identity = artifactIdentity(pi, ctx, env);
-      const pending = Promise.resolve().then(() => appendFeed({ ...identity, text, kind: kind === "tts" ? "tts" : "narrate" }, { env }))
-        .catch((error) => warnOnce("tts feed", error, ctx))
-        .finally(() => feedWrites.delete(pending));
-      feedWrites.add(pending);
+      if (ttsFeedEnabled(env)) {
+        const identity = artifactIdentity(pi, ctx, env);
+        const pending = Promise.resolve().then(() => appendFeed({ ...identity, text, kind: kind === "tts" ? "tts" : "narrate" }, { env }))
+          .catch((error) => warnOnce("tts feed", error, ctx))
+          .finally(() => feedWrites.delete(pending));
+        feedWrites.add(pending);
+      }
       const speechKind = kind === "tts" ? "tts" : "narrate";
       void speechController.speak(text, { ...overrides, speechKind, streamName: `/${speechKind}` }).catch((error) => warnOnce(kind, error, ctx));
     };

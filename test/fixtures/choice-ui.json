@@ -1,0 +1,17 @@
+{
+  "question": "Which validation path should run before the release? Review the complete deployment plan, including rollback and recovery, before making a selection.\nKeep the production session running while checks execute in isolation.\nVerify the local changes first, then the package and the remote reader.\nIf a step fails, collect its receipt and leave the current deployment intact.\nOnly publish after every required check passes.\nThe final checkpoint is the operator-owned rollout.",
+  "choices": [
+    {
+      "label": "Run isolated source validation and review every failing check before proceeding",
+      "summary": "Execute the focused test suite against disposable configuration and state. Preserve the complete failure output and verify cleanup before returning to the existing session."
+    },
+    {
+      "label": "Validate the packaged application across all supported environments",
+      "summary": "Build the pinned package and run its real command interface.\nCompare the installed runtime version against the declared release.\nCheck a narrow window and a short window.\nVerify Unicode titles and full descriptions.\nExercise scrolling without changing the selection.\nConfirm that the final line is reachable.\nDo not replace the operator configuration."
+    },
+    {
+      "label": "Keep the current deployment",
+      "summary": "Leave production untouched and return to the pending work."
+    }
+  ]
+}

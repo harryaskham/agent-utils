@@ -18,14 +18,15 @@ import {
 } from "../extensions/lib/choice.js";
 import {
   FORCE_CHOICE_CUSTOM_TYPE,
-  createChoiceExtension,
+  createChoiceExtension as createChoiceExtensionImpl,
   hasUnavailableForcedChoiceTail,
   normalizeChoiceAppendEntries,
   resolveChoiceSettings,
 } from "../extensions/choice.js";
 
-import { speechTestEnv } from "./helpers/speech-environment.js";
+import { speechTestEnv, waitForSpeech } from "./helpers/speech-environment.js";
 const createChoiceSpeaker = (options = {}) => createChoiceSpeakerImpl({ ...options, env: speechTestEnv(options.env) });
+const createChoiceExtension = (options = {}) => createChoiceExtensionImpl({ preferenceStore: { load: async () => ({ expanded: null }), save: async () => {} }, ...options });
 
 // Managed test processes inherit CACO_AGENT_ID/CACO_PROJECT. Never mirror unit
 // test choices into the operator's durable Cacophony choice queue.
@@ -487,7 +488,7 @@ test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and
   createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, persistedSettings: { choice: {}, tts: {} } })(h.pi);
   h.editor.value = "editor must stay untouched";
   const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
-  await Promise.resolve();
+  await waitForSpeech(() => component);
   const first = component.render(80).join("\n");
   assert.match(first, /<accent>.*1\./, "selected number is colored");
   assert.match(first, /<accent>.*Alpha/, "selected headline is colored");
@@ -501,6 +502,40 @@ test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and
   assert.equal(result.details.choice.label, "beta", "raw Kitty Enter selects the highlighted modal row");
 });
 
+test("TUI view toggles persist across choices and view navigation never speaks or selects", async () => {
+  const h = harness(); let component, saved = null, speechCount = 0;
+  const lifetimes = [];
+  h.ctx.mode = "tui";
+  h.ctx.ui.custom = factory => new Promise(resolve => {
+    component = factory({ requestRender() {}, terminal: { columns: 50, rows: 20 } }, { fg: (_, value) => value, bold: value => value }, null, resolve);
+  });
+  createChoiceExtension({
+    speaker: { speak: async () => { speechCount++; }, interrupt() {}, dispose() {}, beginChoice: id => lifetimes.push(["begin", id]), endChoice: id => lifetimes.push(["end", id]) },
+    preferenceStore: { load: async () => ({ expanded: saved }), save: async value => { saved = value; } },
+    persistedSettings: { choice: { timeoutMs: 0 }, tts: {} },
+  })(h.pi);
+  const params = { question: Array.from({ length: 12 }, (_, i) => `Question ${i}`).join("\n"), choices: choices.map(choice => ({ ...choice, summary: "Description ".repeat(50) })) };
+  let settled = false;
+  const pending = h.tools.get("interactive_choice").execute("view", params, null, null, h.ctx).then(value => { settled = true; return value; });
+  await waitForSpeech(() => component); component.render(50);
+  const before = speechCount;
+  component.handleInput("\u001b[6~"); component.render(50);
+  component.handleInput("\u001b[6;2~"); component.render(50);
+  component.handleInput("v"); await waitForSpeech(() => saved === false);
+  component.render(50);
+  assert.equal(component.snapshot().expanded, false);
+  assert.equal(component.snapshot().layout.index, 0);
+  assert.equal(speechCount, before); assert.equal(settled, false);
+  component.handleInput("1"); await pending;
+  assert.deepEqual(lifetimes.map(value => value[0]), ["begin", "end"]);
+  component = null;
+  const next = h.tools.get("interactive_choice").execute("next", params, null, null, h.ctx);
+  await waitForSpeech(() => component); component.render(50);
+  assert.equal(component.snapshot().expanded, false);
+  component.handleInput("q"); await next;
+  assert.deepEqual(lifetimes.map(value => value[0]), ["begin", "end", "begin", "end"]);
+});
+
 test("TUI freeform field owns focus, renders typed text, and submits without touching the editor", async () => {
   const h = harness();
   let component;
@@ -511,7 +546,7 @@ test("TUI freeform field owns focus, renders typed text, and submits without tou
   createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} } })(h.pi);
   h.editor.value = "main editor draft";
   const pending = h.tools.get("interactive_choice").execute("id", { question: "Pick", choices: choices.slice(0, 2), timeoutMs: 1000 }, null, null, h.ctx);
-  await Promise.resolve();
+  await waitForSpeech(() => component);
   component.handleInput("i");
   component.handleInput("typed reply");
   assert.match(component.render(80).join("\n"), /Reply: typed reply/);
@@ -837,7 +872,7 @@ test("q in the true TUI modal hard-stops force-choice and terminates the follow-
     persistedSettings: { choice: { forceAtAgentEnd: true }, tts: {} },
   })(h.pi);
   const pending = h.tools.get("interactive_choice").execute("id", { question: "Next?", choices: choices.slice(0, 2), timeoutMs: 0 }, null, null, h.ctx);
-  await Promise.resolve();
+  await waitForSpeech(() => component);
   component.handleInput("q");
   const result = await pending;
   assert.equal(result.details.reason, "quit-stop");

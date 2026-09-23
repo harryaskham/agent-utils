@@ -1,3 +1,4 @@
+import { sharedTtsQueueEnabled } from "./lib/privacy.js";
 import { ToolSchema as Type } from "./lib/tool-schema.js";
 import { createInterruptiblePcmPlayer } from "./lib/tts.js";
 import { MachineTtsQueue, TTS_QUEUE_SYMBOL, ttsQueueAgentToolsEnabled, ttsQueueRoot } from "./lib/tts-queue.js";
@@ -6,6 +7,7 @@ const content = (text) => [{ type: "text", text }];
 const summary = (s) => `tts queue: ${s.active} active, ${s.queued} queued · parallel=${s.config.maxParallel} overlap=${s.config.overlapMs}ms`;
 
 export default function ttsQueueExtension(pi) {
+  if (!sharedTtsQueueEnabled()) return;
   const queue = new MachineTtsQueue({ player: createInterruptiblePcmPlayer({ queue: false }) });
   globalThis[TTS_QUEUE_SYMBOL] = queue;
 
