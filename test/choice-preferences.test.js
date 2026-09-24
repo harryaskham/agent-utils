@@ -28,6 +28,12 @@ test("CHOICE-PREF-1 atomic local preference survives a new store and preserves m
     assert.ok((await lstat(link)).isSymbolicLink()); assert.ok((await lstat(second)).isSymbolicLink());
     assert.equal((await readChoicePreferences(path)).expanded, true);
     assert.deepEqual(Object.keys(JSON.parse(await readFile(path, "utf8"))).sort(), ["expanded", "version"], "no prompt/choice/speech content persisted");
+    await store.save(false, true);
+    assert.deepEqual(await createChoicePreferenceStore({ env }).load(), { expanded: false, fullscreen: true });
+    await store.save(true, false);
+    assert.deepEqual(await store.load(), { expanded: true, fullscreen: false });
+    await store.save(null, null);
+    assert.deepEqual(await store.load(), { expanded: null, fullscreen: null });
     await writeFile(path, "bad sensitive input");
     await assert.rejects(readChoicePreferences(path), error => !error.message.includes("sensitive"));
     await writeFile(path, "x".repeat(4097));

@@ -52,6 +52,8 @@ export default function choiceUiFixture(pi) {
     });
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
     await chmod(socket, 0o600);
+    pi.sendMessage({ customType: "choice-qa-transcript", display: true,
+      content: "Recent transcript\nThe isolated validation finished successfully.\nSource checks passed; the working deployment is unchanged.\nChoose the next step below without losing this conversation context." }, { triggerTurn: false });
   });
   pi.on("session_shutdown", async () => {
     for (const client of clients) client.destroy();

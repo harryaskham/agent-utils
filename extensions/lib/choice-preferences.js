@@ -37,17 +37,19 @@ export async function readChoicePreferences(path) {
     try { value = JSON.parse(data.subarray(0, bytesRead).toString("utf8")); }
     catch { throw new Error("invalid choice view preference JSON"); }
     if (!value || value.version !== 1 || !(value.expanded === null || typeof value.expanded === "boolean")) throw new Error("unsupported choice view preference");
-    return { expanded: value.expanded };
+    if (value.fullscreen !== undefined && value.fullscreen !== null && typeof value.fullscreen !== "boolean") throw new Error("unsupported choice layout preference");
+    return { expanded: value.expanded, ...(value.fullscreen === undefined ? {} : { fullscreen: value.fullscreen }) };
   } finally { await file.close(); }
 }
-export async function writeChoicePreferences(path, expanded) {
+export async function writeChoicePreferences(path, expanded, fullscreen) {
   if (!(expanded === null || typeof expanded === "boolean")) throw new Error("choice view must be expanded, compact, or reset");
+  if (fullscreen !== undefined && fullscreen !== null && typeof fullscreen !== "boolean") throw new Error("choice layout must be bottom, fullscreen, or reset");
   const target = await writableTarget(path);
   const temp = `${target}.${randomUUID()}.tmp`;
   let file;
   try {
     file = await open(temp, "wx", 0o600);
-    await file.writeFile(`${JSON.stringify({ version: 1, expanded })}\n`);
+    await file.writeFile(`${JSON.stringify({ version: 1, expanded, ...(fullscreen === undefined ? {} : { fullscreen }) })}\n`);
     await file.sync(); await file.close(); file = null;
     await rename(temp, target);
   } finally {
@@ -57,18 +59,18 @@ export async function writeChoicePreferences(path, expanded) {
 }
 export function createChoicePreferenceStore({ env = process.env, path = choicePreferencesPath(env) } = {}) {
   if (isIncognito(env)) {
-    let expanded = null;
-    return { path: null, persistent: false, load: async () => ({ expanded }), save: async (value) => { expanded = value; }, flush: async () => {} };
+    let value = { expanded: null };
+    return { path: null, persistent: false, load: async () => ({ ...value }), save: async (expanded, fullscreen) => { value = { expanded, ...(fullscreen === undefined ? {} : { fullscreen }) }; }, flush: async () => {} };
   }
   let pending = Promise.resolve();
   return {
     path,
     persistent: true,
     load: () => readChoicePreferences(path),
-    save(expanded) {
+    save(expanded, fullscreen) {
       // Serialize toggles from this session; no background writer or idle timer.
       // Across independent sessions, the last completed explicit toggle wins.
-      const next = pending.then(() => writeChoicePreferences(path, expanded));
+      const next = pending.then(() => writeChoicePreferences(path, expanded, fullscreen));
       pending = next.catch(() => {});
       return next;
     },

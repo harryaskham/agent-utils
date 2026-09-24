@@ -85,9 +85,12 @@ If an RPC host does not implement typed `ctx.ui.select`, `interactive_choice` fa
 
 ## Wrapped choice view
 
-The TUI opens in **expanded** view. Questions, option headlines, full labels (when distinct), and descriptions wrap at terminal-cell boundaries instead of being cut off. Each question/option text area grows to five lines; longer text has its own scroll position and a visible line range. The options viewport stays bounded at short heights and follows deliberate selection changes.
+The TUI opens as a **bottom dock**, leaving the transcript visible above it. It uses at most half the terminal height (capped at 18 rows), and short choices use less. **Expanded text is on by default**: questions, option headlines, full labels (when distinct), and descriptions wrap at terminal-cell boundaries. Each text area grows to five lines where space permits, then scrolls independently. The options viewport follows deliberate selection changes.
 
-- **v** — toggle expanded/compact view. The choice remains pending.
+Fullscreen is optional, not the default; text expansion and screen placement are separate preferences.
+
+- **v** — toggle expanded/compact text. The choice remains pending.
+- **f** — toggle bottom/fullscreen placement. The choice and speech state remain unchanged.
 - **PgUp / PgDn** or **[ / ]** — scroll the selected option's text, without selecting a different option.
 - **Shift+PgUp / Shift+PgDn** or **{ / }** — scroll the question independently.
 - **Ctrl+PgUp / Ctrl+PgDn** or **< / >** — scroll the options viewport without changing selection.
@@ -95,17 +98,19 @@ The TUI opens in **expanded** view. Questions, option headlines, full labels (wh
 - **Mouse wheel** — scroll the text under the pointer. Over a long option, it scrolls that option's text; over the list gutter/short rows it scrolls the list. **Click an option** to choose it; click the header to toggle view.
 - **?** — show/hide the compact key guide. Native terminal text selection can use the terminal's mouse-bypass modifier (usually Shift).
 
-These view actions do not speak, reset deadlines, or submit model input. Freeform text/PTT keeps exclusive ownership of its keys. The viewport-sized modal covers the suspended editor and restores terminal mouse modes on dismissal. RPC/AHP clients still receive complete text and own their own rendering.
+These view actions do not speak, reset deadlines, or submit model input. Freeform text/PTT keeps exclusive ownership of its keys. The bottom dock covers the suspended editor, not the transcript; the opt-in fullscreen layout uses the whole viewport. Both restore terminal mouse modes on dismissal. RPC/AHP clients still receive complete text and own their own rendering.
 
 ```text
 /choice view expanded
 /choice view compact
+/choice view bottom
+/choice view fullscreen
 /choice view toggle
 /choice view reset
 /choice view status
 ```
 
-The view toggle persists only the boolean preference in `~/.local/state/agent-utils/choice/ui.json` (XDG/`PI_AGENT_UTILS_STATE_DIR` rules apply; `PI_CHOICE_UI_STATE_PATH` can override). Writes are asynchronous, private and atomic, and preserve managed symlinks. It contains no question, choice, or speech text. Shared `settings.json` is untouched. `agentUtils.choice.expanded` supplies the default (true); `PI_CHOICE_EXPANDED` overrides the saved preference at startup. `reset` returns to that startup default. In incognito, view preferences remain session-memory-only.
+The view toggles persist only boolean presentation preferences in `~/.local/state/agent-utils/choice/ui.json` (XDG/`PI_AGENT_UTILS_STATE_DIR` rules apply; `PI_CHOICE_UI_STATE_PATH` can override). Writes are asynchronous, private and atomic, and preserve managed symlinks. It contains no question, choice, or speech text. Shared `settings.json` is untouched. `agentUtils.choice.expanded` supplies the default (true); `PI_CHOICE_EXPANDED` overrides the saved text preference at startup. `agentUtils.choice.fullscreen` defaults to false; `PI_CHOICE_FULLSCREEN` overrides the saved placement at startup. Existing expanded-only preference files migrate naturally to bottom placement. `reset` returns both to their startup defaults. In incognito, view preferences remain session-memory-only.
 
 See [the acceptance inventory](choice-layout-acceptance.json) and [visual evidence](choice-layout-review.md).
 

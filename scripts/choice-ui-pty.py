@@ -76,7 +76,15 @@ with tempfile.TemporaryDirectory(prefix='choice-pty-', dir='/tmp') as folder:
     try:
         wait(lambda s: True); call('open')
         state = wait(lambda s: s.get('frame') and s['frame'].get('view',{}).get('layout') is not None)
-        assert state['frame']['view']['expanded']; capture('expanded-80x30', state)
+        assert state['frame']['view']['expanded']
+        assert not state['frame']['view']['fullscreen']
+        assert state['frame']['view']['layout']['rowOffset'] == 15
+        assert len(state['frame']['lines']) == 15
+        capture('bottom-80x30', state)
+        key('f'); state = wait(lambda s: s['frame']['view']['fullscreen'])
+        assert state['frame']['view']['layout']['rowOffset'] == 0
+        capture('fullscreen-80x30', state)
+        key('f'); state = wait(lambda s: not s['frame']['view']['fullscreen'])
         # Dedicated question scrolling must not move the selected option.
         key('\x1b[6;2~'); state = wait(lambda s: s['frame']['view']['layout']['question']['offset'] > 0)
         assert state['frame']['view']['layout']['index'] == 0
@@ -93,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='choice-pty-', dir='/tmp') as folder:
         state = wait(lambda s: s.get('frame') and s['frame']['columns']==40 and s['frame']['rows']==20)
         capture('expanded-40x20', state)
         # Mouse wheel over prompt: selection and list position stay put.
-        layout = state['frame']['view']['layout']; row = layout['question']['top'] + 1
+        layout = state['frame']['view']['layout']; row = layout.get('rowOffset', 0) + layout['question']['top'] + 1
         key(f'\x1b[<65;10;{row}M')
         state = wait(lambda s: s['frame']['view']['layout']['question']['offset'] > 0)
         assert state['frame']['view']['layout']['index'] == 0
@@ -114,7 +122,7 @@ with tempfile.TemporaryDirectory(prefix='choice-pty-', dir='/tmp') as folder:
             # Darwin can detach the slave when its controlling session exits.
             if error.args[0] != 25: raise
             assert (args.tui_mode == 'regular' and b'\x1b[?1006r' in transcript) or (b'\x1b[?1049l' in transcript and b'\x1b[?1006l' in transcript), 'terminal modes not restored before hangup'
-        assert json.loads((root / 'state/choice/ui.json').read_text()) == {'version':1, 'expanded':True}
+        assert json.loads((root / 'state/choice/ui.json').read_text()) == {'version':1, 'expanded':True, 'fullscreen':False}
         (out / 'manifest.json').write_text(json.dumps({'version':1, 'theme':args.theme, 'captures':captures, 'cleanup':True}, indent=2))
         print(json.dumps({'ok':True,'captures':len(captures),'out':str(out),'cleanup':True}))
     finally:

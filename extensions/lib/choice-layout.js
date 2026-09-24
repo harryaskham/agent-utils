@@ -9,6 +9,13 @@ const marks = /^(?:\p{Mark}|\p{Default_Ignorable_Code_Point})+$/u;
 const spacingMark = /^(?:[\p{Spacing_Mark}--[\u1734\u302E\u302F]]|[\u065F\u0F7F\u102B\u102C\u1031\u1033-\u1035\u1038\u103A-\u103E])$/v;
 export const CHOICE_TEXT_ROWS = 5;
 
+// Leave at least half the terminal to the transcript; tall windows need no more
+// than eighteen rows for the choice dock. Fullscreen is an explicit preference.
+export function choicePanelRows(rows, fullscreen = false) {
+  const height = Math.max(0, Math.trunc(Number(rows) || 0));
+  return fullscreen ? height : Math.min(18, Math.max(height ? 1 : 0, Math.floor(height / 2)));
+}
+
 export function choicePlainText(value) {
   return stripVTControlCharacters(String(value ?? "")).replace(/\r\n?/g, "\n").replace(/\t/g, "    ").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
 }
@@ -70,6 +77,7 @@ const bold = (theme, text) => { try { return theme?.bold?.(text) ?? text; } catc
 // One registry for modal view keys and help. Does not include selection/freeform keys.
 export const CHOICE_VIEW_KEYS = Object.freeze([
   { action: "toggle", label: "v expand", keys: ["v", "V", "\x1b[118u", "\x1b[118;1u"] },
+  { action: "toggle-fullscreen", label: "f fullscreen/bottom", keys: ["f", "F", "\x1b[102u", "\x1b[102;1u"] },
   { action: "focus", label: "Tab focus", keys: ["\t", "\x1b[9u", "\x1b[9;1u", "\x1b[Z"] },
   { action: "page-up", label: "PgUp/PgDn text", keys: ["\x1b[5~", "["] },
   { action: "page-down", keys: ["\x1b[6~", "]"] },
@@ -85,6 +93,7 @@ export function choiceViewKey(data) {
   const kitty = /^\x1b\[(\d+)(?::[\d:]+)?(?:;(\d+)(?::(\d+))?)?(?:;[\d:]+)?u$/.exec(data);
   if (kitty && kitty[3] !== "3" && (!kitty[2] || ["1", "2"].includes(kitty[2]))) {
     if ([86, 118].includes(Number(kitty[1]))) return "toggle";
+    if ([70, 102].includes(Number(kitty[1]))) return "toggle-fullscreen";
     if (Number(kitty[1]) === 9) return "focus";
   }
   const normalized = String(data).replace(/;([125]):[12](?=[~ABHF])/g, ";$1").replace(/^\x1b\[([56]);1~$/, "\x1b[$1~");
@@ -92,8 +101,9 @@ export function choiceViewKey(data) {
 }
 
 export class ChoiceView {
-  constructor({ expanded = true } = {}) {
+  constructor({ expanded = true, fullscreen = false } = {}) {
     this.expanded = expanded;
+    this.fullscreen = fullscreen;
     this.focus = "choices";
     this.questionOffset = 0;
     this.choiceOffsets = new Map();
@@ -138,14 +148,14 @@ export class ChoiceView {
     if (this.focus === "question" && ["up", "down"].includes(action)) return this.scroll("question", action === "down" ? 1 : -1);
     return false;
   }
-  // Overlay is pinned to terminal row/column zero. Wheel reads the hovered pane,
+  // The host sets rowOffset for the bottom-anchored dock. Wheel reads its pane,
   // never changes selection. Clicks return intents for the extension input bus.
   mouse(data, columns, rows) {
     const event = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
     if (!event) return null;
     const layout = this.layout;
     if (!layout || layout.width !== columns || layout.terminalRows !== rows) return { type: "ignored" };
-    const button = Number(event[1]), x = Number(event[2]) - 1, y = Number(event[3]) - 1;
+    const button = Number(event[1]), x = Number(event[2]) - 1, y = Number(event[3]) - 1 - (layout.rowOffset || 0);
     if (x < 0 || x >= layout.width || y < 0 || y >= layout.height) return { type: "ignored" };
     if (event[4] === "m" || button & 32) return { type: "ignored" };
     if (button & 64) {
@@ -186,9 +196,9 @@ export class ChoiceView {
       ? [fit(`Reply: ${freeformText || ""}▏`), fit("Enter submit · Esc back · Backspace delete")]
       : freeformMode === "ptt"
         ? [fit("PTT reply · recording/transcribing…"), fit("Enter/Space finish · Esc/Ctrl-C cancel")]
-        : [fit(w >= 75 ? "↑↓/jk choices · Enter/1–9 choose · i reply · Space PTT · Esc/q cancel" : w >= 36 ? "↑↓ pick · Enter · v view · ? help" : "↑↓ · Enter · v · ?")];
+        : [fit(w >= 75 ? "↑↓/jk choices · Enter/1–9 choose · i reply · Space PTT · Esc/q cancel" : w >= 36 ? "↑↓ pick · Enter · v/f view · ? help" : "↑↓ · Enter · v/f · ?")];
     const mode = this.expanded ? "Expanded" : "Compact";
-    const title = fit(`◇ Choice · ${index + 1}/${choices.length} · v ${mode}${timeoutMs > 0 ? ` · ${Math.ceil(timeoutMs / 1000)}s` : ""}`);
+    const title = fit(`◇ Choice · ${index + 1}/${choices.length} · v ${mode}${w >= 60 ? ` · f ${this.fullscreen ? "Bottom" : "Fullscreen"}` : " · f"}${timeoutMs > 0 ? ` · ${Math.ceil(timeoutMs / 1000)}s` : ""}`);
     if (this.help && !freeformMode) footer = [
       ...wrapChoiceText("↑↓/jk choices · Enter/1–9 choose · i text reply · Space PTT · Esc/q cancel", w),
       ...wrapChoiceText(CHOICE_VIEW_KEYS.filter(k => k.label).map(k => k.label).join(" · "), w),
@@ -196,7 +206,7 @@ export class ChoiceView {
     ];
     // Collapse chrome before the primary option. The last option/text line remains
     // reachable even when the host shrinks to a very short terminal.
-    footer = footer.slice(0, Math.min(footer.length, Math.max(0, h - 5)));
+    footer = footer.slice(0, Math.min(footer.length, Math.max(0, h - (freeformMode ? 1 : 5))));
     const chrome = 1 + footer.length;
     const questionHeight = Math.min(compact ? 1 : CHOICE_TEXT_ROWS, questionLines.length, Math.max(0, h - chrome - (h >= 10 ? 6 : 3)));
     this.questionOffset = clamp(this.questionOffset, questionLines.length - questionHeight);
@@ -256,9 +266,9 @@ export class ChoiceView {
     const listTop = lines.length, hitRows = {};
     const visibleList = listLines.slice(this.listOffset, this.listOffset + listHeight);
     visibleList.forEach((line, row) => { lines.push(line); hitRows[listTop + row] = listHits[this.listOffset + row]; });
-    // This is a viewport-sized modal. Cover the suspended editor underneath and
-    // keep controls anchored, instead of exposing a second input cursor/footer.
-    while (lines.length < h - footer.length) lines.push("");
+    // Fill only the allocated dock/fullscreen region, covering the suspended
+    // editor and anchoring controls without obscuring the transcript above.
+    while (this.fullscreen && lines.length < h - footer.length) lines.push("");
     lines.push(...footer.map(line => paint("muted", line)));
     this.layout = { width: w, terminalRows: h, height: Math.min(lines.length, h), index, textIndent: indent,
       question: { top: questionTop, height: questionHeight, total: questionLines.length, offset: this.questionOffset },

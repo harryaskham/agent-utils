@@ -1,13 +1,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
-import { ChoiceView, choiceTextWidth, wrapChoiceText, fitChoiceText, choiceViewKey } from "../extensions/lib/choice-layout.js";
+import { ChoiceView, choiceTextWidth, wrapChoiceText, fitChoiceText, choiceViewKey, choicePanelRows } from "../extensions/lib/choice-layout.js";
 
 const choices = Array.from({ length: 9 }, (_, i) => ({ id: `option-${i}`, label: `Choice ${i + 1}`, headline: `Choice ${i + 1}`, summary: Array.from({ length: 11 }, (_, j) => `Description ${i + 1} line ${j + 1} has meaningful readable detail.`).join("\n") }));
 const question = Array.from({ length: 12 }, (_, i) => `Question line ${i + 1} is important.`).join("\n");
 const model = { question, choices, index: 0 };
 const theme = { fg: (_, value) => value, bold: value => value };
 const render = (view, width = 80, height = 30, value = model) => view.render(value, width, height, theme);
+
+test("bottom dock leaves transcript space and offsets mouse hit testing", () => {
+  for (const rows of [0, 1, 2, 10, 24, 30, 60, 100]) {
+    const height = choicePanelRows(rows);
+    assert.ok(height <= 18 && height <= rows);
+    if (rows > 1) assert.ok(height <= rows / 2);
+    assert.equal(choicePanelRows(rows, true), rows);
+  }
+  const view = new ChoiceView();
+  view.render(model, 80, choicePanelRows(30), theme);
+  view.layout.rowOffset = 15; view.layout.terminalRows = 30;
+  assert.equal(view.mouse("\x1b[<0;20;5M", 80, 30).type, "ignored", "transcript click cannot choose");
+  const y = view.layout.rowOffset + view.layout.list.top + 1;
+  assert.deepEqual(view.mouse(`\x1b[<0;20;${y}M`, 80, 30), { type: "choose", index: 0 });
+  assert.equal(choiceViewKey("f"), "toggle-fullscreen");
+  assert.equal(choiceViewKey("\x1b[102;1:1u"), "toggle-fullscreen");
+});
 
 test("CHOICE-WRAP-1 wraps prose, explicit lines, wide text and whole graphemes safely", () => {
   assert.deepEqual(wrapChoiceText("one two three four", 9), ["one two", "three", "four"]);

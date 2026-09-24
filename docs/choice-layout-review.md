@@ -2,7 +2,22 @@
 
 Direction: compact, legible, keyboard-first. Reuse Pi's theme, numbered rows and selected marker; align wrapped text under its first line. Use line ranges for scroll position, not explanatory subtitles.
 
-## Rendered evidence
+## Bottom-dock correction (current default)
+
+The default is now a bottom-anchored dock, not fullscreen. It reserves at most half the terminal (18 rows maximum), leaves the transcript visible, and does not add blank padding for short choices. **f** toggles fullscreen independently of **v** text expansion; both preferences persist locally. Older expanded-only preference files default to bottom placement.
+
+| Current state | Evidence | Finding |
+| --- | --- | --- |
+| Bottom, dark 80×30 | [Image](assets/choices/dock/bottom.png) | Transcript remains above the dock; only the lower 15 rows are used. |
+| Optional fullscreen | [Image](assets/choices/dock/fullscreen.png) | The same pending choice expands to the viewport; `f Bottom` provides the return action. |
+| Narrow 40×20 | [Image](assets/choices/dock/narrow.png) | Dock stays in the lower half; question/details retain independent scroll offsets. |
+| Short 40×10 | [Image](assets/choices/dock/short.png) | Five-row dock preserves transcript space. Long text remains reachable by scrolling; `f` is available for more reading space. |
+| Light | [Image](assets/choices/dock/light.png) | Theme-owned roles and the same bottom geometry. |
+| Regular host TUI | [Image](assets/choices/dock/regular.png) | Correct bottom placement and intact transcript/line alignment, also outside Pi's fullscreen host mode. |
+
+Real Pi tests passed 21 captured states across three host/theme combinations, including toggling, persistence, resize, mouse coordinates offset from the dock, and freeform/selection cleanup. Unit tests also ensure transcript clicks cannot accidentally select an option. The screenshot replayer preserves raw carriage-return bytes: an initial regular-mode replay normalized CR to LF and created visual corruption in the **review artifact**, not in the component; this was corrected and recaptured.
+
+## Earlier wrapping review (fullscreen captures, now opt-in)
 
 The final captures replay **real Pi 0.84.4 PTY output** in xterm.js 6.0.0 inside an isolated Playwright browser. They are not HTML approximations of the layout. The before image renders the prior choice component through the same terminal renderer. All content is a deterministic public fixture; no operator session, model call, speech service or production configuration was used.
 
@@ -26,8 +41,8 @@ node --test test/choice-layout.test.js test/choice-preferences.test.js \
   test/choice-audio-cache.test.js test/incognito-artifacts.test.js test/choice.test.js
 ```
 
-`PI_BIN` or `--pi` selects the installed Pi executable. The PTY harness uses a temporary HOME/config/state directory and an owner-private Unix inspection socket. It exercises real keyboard navigation, independent question/detail scrolling, view persistence, mouse wheel, resize, freeform return and final selection. It verifies process/socket/terminal-mode cleanup and writes bounded ANSI streams plus semantic frame receipts. This ran in dark/light fullscreen and dark regular mode (six captured states each).
+`PI_BIN` or `--pi` selects the installed Pi executable. The PTY harness uses a temporary HOME/config/state directory and an owner-private Unix inspection socket. It exercises real keyboard navigation, independent question/detail scrolling, view persistence, mouse wheel, resize, freeform return and final selection. It verifies process/socket/terminal-mode cleanup and writes bounded ANSI streams plus semantic frame receipts. This ran in dark/light fullscreen and dark regular host mode (now seven captured states each, including both choice placements).
 
 The inspection fixture calls the real extension tool and its modal; it does not maintain another choice reducer. The ordinary runtime exposes no QA socket. Pure tests cover tiny/zero geometry, Unicode/graphemes, stale mouse hitboxes, end-of-content reachability, managed preference symlinks and a cached-redraw p95 budget of 10 ms for a nine-option long-text fixture.
 
-Intentional tradeoffs: long text uses bounded independent regions rather than expanding off screen; compact mode abbreviates content by explicit operator choice. Command-provider speech remains uncached because those commands do not return PCM to Pi. Native choice audio is RAM-only and expires with the choice.
+Intentional tradeoffs: bottom placement prioritizes transcript visibility, with fullscreen available explicitly; long text uses bounded independent regions rather than expanding off screen; compact mode abbreviates content by explicit operator choice. Command-provider speech remains uncached because those commands do not return PCM to Pi. Native choice audio is RAM-only and expires with the choice.

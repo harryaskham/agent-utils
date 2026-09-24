@@ -80,6 +80,8 @@ const choices = [
 
 test("choice repeat settings resolve defaults and env overrides", () => {
   assert.equal(resolveChoiceSettings({}, {}).enabled, true);
+  assert.equal(resolveChoiceSettings({}, {}).fullscreen, false);
+  assert.equal(resolveChoiceSettings({ PI_CHOICE_FULLSCREEN: "1" }, {}).fullscreen, true);
   assert.equal(resolveChoiceSettings({ PI_CHOICE_ENABLED: "0" }, { enabled: true }).enabled, false);
   assert.equal(resolveChoiceSettings({}, { enabled: false }).enabled, false);
   assert.equal(resolveChoiceSettings({}, { timeoutMs: 24 * 60 * 60 * 1000 }).timeoutMs, 86_400_000);
@@ -503,15 +505,17 @@ test("TUI custom choice owns focus, swallows ordinary keys, captures arrows, and
 });
 
 test("TUI view toggles persist across choices and view navigation never speaks or selects", async () => {
-  const h = harness(); let component, saved = null, speechCount = 0;
+  const h = harness(); let component, saved = null, savedFullscreen = null, speechCount = 0;
   const lifetimes = [];
   h.ctx.mode = "tui";
-  h.ctx.ui.custom = factory => new Promise(resolve => {
+  h.ctx.ui.custom = (factory, options) => new Promise(resolve => {
+    assert.equal(options.overlayOptions.anchor, "bottom-left");
+    assert.equal(options.overlayOptions.row, undefined);
     component = factory({ requestRender() {}, terminal: { columns: 50, rows: 20 } }, { fg: (_, value) => value, bold: value => value }, null, resolve);
   });
   createChoiceExtension({
     speaker: { speak: async () => { speechCount++; }, interrupt() {}, dispose() {}, beginChoice: id => lifetimes.push(["begin", id]), endChoice: id => lifetimes.push(["end", id]) },
-    preferenceStore: { load: async () => ({ expanded: saved }), save: async value => { saved = value; } },
+    preferenceStore: { load: async () => ({ expanded: saved, fullscreen: savedFullscreen }), save: async (value, fullscreen) => { saved = value; savedFullscreen = fullscreen; } },
     persistedSettings: { choice: { timeoutMs: 0 }, tts: {} },
   })(h.pi);
   const params = { question: Array.from({ length: 12 }, (_, i) => `Question ${i}`).join("\n"), choices: choices.map(choice => ({ ...choice, summary: "Description ".repeat(50) })) };
@@ -524,6 +528,13 @@ test("TUI view toggles persist across choices and view navigation never speaks o
   component.handleInput("v"); await waitForSpeech(() => saved === false);
   component.render(50);
   assert.equal(component.snapshot().expanded, false);
+  assert.equal(component.snapshot().fullscreen, false);
+  assert.ok(component.render(50).length <= 10, "default dock preserves half the transcript viewport");
+  component.handleInput("f"); await waitForSpeech(() => savedFullscreen === true);
+  assert.equal(component.render(50).length, 20);
+  assert.equal(component.snapshot().expanded, false, "placement and text expansion are independent");
+  component.handleInput("f"); await waitForSpeech(() => savedFullscreen === false);
+  component.render(50);
   assert.equal(component.snapshot().layout.index, 0);
   assert.equal(speechCount, before); assert.equal(settled, false);
   component.handleInput("1"); await pending;

@@ -5,7 +5,7 @@
 // the same semantic actions on CHOICE_INPUT_EVENT.
 
 import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
-import { ChoiceView, choiceViewKey } from "./lib/choice-layout.js";
+import { ChoiceView, choiceViewKey, choicePanelRows } from "./lib/choice-layout.js";
 import { createChoicePreferenceStore } from "./lib/choice-preferences.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import { createCacophonyChoiceBridge } from "./lib/cacophony-choice.js";
@@ -85,6 +85,7 @@ export function resolveChoiceSettings(env, persisted = {}) {
     speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
     descriptionOnNavigate: boolSetting(env.PI_CHOICE_DESCRIPTION_ON_NAVIGATE, boolSetting(persisted.descriptionOnNavigate, true)),
     expanded: boolSetting(env.PI_CHOICE_EXPANDED, boolSetting(persisted.expanded, true)),
+    fullscreen: boolSetting(env.PI_CHOICE_FULLSCREEN, boolSetting(persisted.fullscreen, false)),
     forceAtAgentEnd: boolSetting(env.PI_FORCE_CHOICE, boolSetting(persisted.forceAtAgentEnd, false)),
     prefix: expandEnvReferences(env.PI_CHOICE_PREFIX ?? persisted.prefix ?? "", env, "/choice prefix"),
     suffix: expandEnvReferences(env.PI_CHOICE_SUFFIX ?? persisted.suffix ?? "", env, "/choice suffix"),
@@ -171,19 +172,25 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     let ahpProvider = null;
     const viewPreferences = preferenceStore || createChoicePreferenceStore({ env });
     const initialExpanded = choiceConfig.expanded;
+    const initialFullscreen = choiceConfig.fullscreen;
     let preferenceLoad = null;
     let viewSaveStatus = viewPreferences.persistent === false ? "session only" : "local preference";
     const loadViewPreference = (ctx) => preferenceLoad ||= viewPreferences.load().then(value => {
       if (env.PI_CHOICE_EXPANDED == null && typeof value.expanded === "boolean") choiceConfig.expanded = value.expanded;
+      if (env.PI_CHOICE_FULLSCREEN == null && typeof value.fullscreen === "boolean") choiceConfig.fullscreen = value.fullscreen;
     }).catch(error => { ctx?.ui?.notify?.(`Choice view preference unavailable: ${error.message}`, "warning"); });
     const setViewPreference = async (action, ctx) => {
       await loadViewPreference(ctx);
-      const expanded = action === "reset" ? initialExpanded : action === "toggle" ? !choiceConfig.expanded : action === "expanded";
+      const layoutOnly = ["bottom", "fullscreen", "toggle-fullscreen"].includes(action);
+      const expanded = layoutOnly ? choiceConfig.expanded : action === "reset" ? initialExpanded : action === "toggle" ? !choiceConfig.expanded : action === "expanded";
+      const fullscreen = action === "reset" ? initialFullscreen : layoutOnly ? action === "toggle-fullscreen" ? !choiceConfig.fullscreen : action === "fullscreen" : choiceConfig.fullscreen;
       choiceConfig.expanded = expanded;
+      choiceConfig.fullscreen = fullscreen;
       active?.view?.setExpanded(expanded);
+      if (active?.view) { active.view.fullscreen = fullscreen; active.view.invalidate(); }
       active?.requestRender?.();
       try {
-        await viewPreferences.save(action === "reset" ? null : expanded);
+        await viewPreferences.save(action === "reset" ? null : expanded, action === "reset" ? null : fullscreen);
         viewSaveStatus = viewPreferences.persistent === false ? "session only" : "saved locally";
       } catch (error) {
         viewSaveStatus = "not saved";
@@ -543,7 +550,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       const result = await new Promise((resolve) => {
         const record = {
           sessionId,
-          view: new ChoiceView({ expanded: choiceConfig.expanded }),
+          view: new ChoiceView({ expanded: choiceConfig.expanded, fullscreen: choiceConfig.fullscreen }),
           disposeView: null,
           revision: 1,
           question,
@@ -647,7 +654,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
           }
           if (record.requestRender) {
             const action = choiceViewKey(key);
-            if (action === "toggle") { void setViewPreference("toggle", ctx); return true; }
+            if (action === "toggle" || action === "toggle-fullscreen") { void setViewPreference(action, ctx); return true; }
             if (action && record.view.input(action)) { record.requestRender(); return true; }
             if (record.view.focus === "question" && ["\u001b[A", "\u001b[B", "j", "k"].includes(key)) {
               record.view.input(key === "j" || key === "\u001b[B" ? "down" : "up");
@@ -691,8 +698,17 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
               record.view.invalidate();
             };
             return {
-              render: (width) => record.view.render({ question: record.question, choices: record.state.choices, index: record.state.index, timeoutMs, freeformMode: record.freeformMode, freeformText: record.freeformText }, width, dimensions().rows, theme),
-              snapshot: () => ({ expanded: record.view.expanded, focus: record.view.focus, layout: record.view.layout }),
+              render(width) {
+                const rows = dimensions().rows;
+                const height = choicePanelRows(rows, record.view.fullscreen);
+                const lines = record.view.render({ question: record.question, choices: record.state.choices, index: record.state.index, timeoutMs, freeformMode: record.freeformMode, freeformText: record.freeformText }, width, height, theme);
+                if (record.view.layout) {
+                  record.view.layout.terminalRows = rows;
+                  record.view.layout.rowOffset = rows - lines.length;
+                }
+                return lines;
+              },
+              snapshot: () => ({ expanded: record.view.expanded, fullscreen: record.view.fullscreen, focus: record.view.focus, layout: record.view.layout }),
               invalidate() { record.view.invalidate(); },
               handleInput(data) {
                 const size = dimensions();
@@ -707,7 +723,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
                 dispatchKeyboard(data);
               },
             };
-          }, { overlay: true, overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%", margin: 0 } }).catch((error) => {
+          }, { overlay: true, overlayOptions: { anchor: "bottom-left", col: 0, width: "100%", maxHeight: "100%", margin: 0 } }).catch((error) => {
             if (!record.finished) finish(record, { status: "error", error: error?.message || String(error), index: state.index, choice: state.current() });
           });
         } else if (ctx?.mode === "rpc") {
@@ -848,7 +864,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     }
 
     pi.registerCommand("choice", {
-      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice view expanded|compact|toggle|reset; /choice cancel|status|settings key=value",
+      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice view expanded|compact|bottom|fullscreen|toggle|reset; /choice cancel|status|settings key=value",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         if (raw.toLowerCase() === "cancel") {
@@ -857,10 +873,10 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
         }
         if (/^view(?:\s|$)/i.test(raw)) {
           const action = raw.split(/\s+/)[1]?.toLowerCase() || "status";
-          if (!["expanded", "compact", "toggle", "reset", "status"].includes(action)) { ctx.ui.notify("Usage: /choice view expanded|compact|toggle|reset|status", "warning"); return; }
+          if (!["expanded", "compact", "toggle", "bottom", "fullscreen", "reset", "status"].includes(action)) { ctx.ui.notify("Usage: /choice view expanded|compact|bottom|fullscreen|toggle|reset|status", "warning"); return; }
           if (action === "status") await loadViewPreference(ctx);
           else await setViewPreference(action, ctx);
-          ctx.ui.notify(`choice view: ${choiceConfig.expanded ? "expanded" : "compact"} · ${viewSaveStatus}`, "info");
+          ctx.ui.notify(`choice view: ${choiceConfig.expanded ? "expanded" : "compact"} · ${choiceConfig.fullscreen ? "fullscreen" : "bottom"} · ${viewSaveStatus}`, "info");
           return;
         }
         if (raw.toLowerCase() === "status") {
