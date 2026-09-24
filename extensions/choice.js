@@ -161,8 +161,13 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
   return function choiceExtension(pi) {
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
-    if (!choiceConfig.enabled) return;
-    const speakerController = speaker || createChoiceSpeaker({ env, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
+    let speakerController = speaker || null;
+    const ensureSpeaker = (ctx) => {
+      if (!speakerController) speakerController = createChoiceSpeaker({ env, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
+      if (ctx) speakerController.assignSession?.(ctx);
+    };
+    if (choiceConfig.enabled) ensureSpeaker();
+    let enablementGeneration = 0;
     const cacoBridge = cacophonyBridge === false ? null : cacophonyBridge || createCacophonyChoiceBridge({ env, persisted: persistedChoice.cacophony || {}, setTimer, clearTimer });
     let active = null;
     let lastResult = null;
@@ -214,6 +219,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     });
 
     const announceCapability = (requestId) => {
+      if (!choiceConfig.enabled) return;
       try { pi.events?.emit?.(CHOICE_CAPABILITY_EVENT, capabilityPayload(requestId)); } catch {}
     };
 
@@ -371,7 +377,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
 
     const handleInput = (input) => {
       const record = active;
-      if (!record || record.finished) return null;
+      if (!choiceConfig.enabled || !record || record.finished) return null;
       if (input?.sessionId && input.sessionId !== record.sessionId) return null;
       if (input?.commandId) record.lastInputCommandId = String(input.commandId);
       const action = String(input?.action ?? "").trim().toLowerCase();
@@ -487,7 +493,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       return outcome;
     };
 
-    ahpProvider = createAhpChoiceProvider({
+    const startAhpProvider = () => createAhpChoiceProvider({
       pi,
       env,
       bridge: ahpBridge,
@@ -495,7 +501,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       getActive: () => active,
       complete(command) {
         const record = active;
-        if (!record || record.finished) return;
+        if (!choiceConfig.enabled || !record || record.finished || command.requestId !== record.sessionId) return;
         const common = { source: "ahp", commandId: command.commandId, sessionId: record.sessionId };
         if (command.response === "accept" && command.answer?.kind === "selected") {
           handleInput({ ...common, action: INPUT_ACTIONS.CHOOSE_ID, choiceId: command.answer.value });
@@ -508,6 +514,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
         }
       },
     });
+
+    if (choiceConfig.enabled) ahpProvider = startAhpProvider();
 
     const eventInputHandler = (input) => { handleInput(input); };
     const choiceSyncRequestHandler = (request = {}) => {
@@ -523,6 +531,8 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     }));
 
     const elicit = async (params, ctx, signal, onUpdate) => {
+      if (!choiceConfig.enabled) return { status: "cancelled", reason: "disabled" };
+      const generation = enablementGeneration;
       const question = String(params?.question ?? params?.prompt ?? "").trim();
       if (!question) throw new Error("choice: question is required");
       // Remember whether this presentation was requested by agent_end before
@@ -542,6 +552,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       // replace a long-lived or disabled operator timeout.
       const timeoutMs = choiceConfig.timeoutMs;
       if (ctx?.mode === "tui") await loadViewPreference(ctx);
+      if (!choiceConfig.enabled || generation !== enablementGeneration) return { status: "cancelled", reason: "disabled" };
       if (signal?.aborted) return { status: "cancelled", reason: "aborted" };
       cancelActive();
       const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
@@ -818,8 +829,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       return result;
     };
 
-    if (typeof pi.registerTool === "function") {
-      pi.registerTool({
+    const choiceTool = {
         name: "interactive_choice",
         label: "Interactive Choice",
         description: "Present a spoken choice with keyboard, freeform text (i), push-to-talk (Space), numeric selection, cancellation, and external input adapters such as Finger One ring events.",
@@ -860,13 +870,48 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
             return { content: [{ type: "text", text: resultText(result) }], details: result };
           }
         },
-      });
-    }
+    };
+    let toolRegistered = false;
+    let runtimeReady = false;
+    const syncToolVisibility = () => {
+      if (choiceConfig.enabled && !toolRegistered && typeof pi.registerTool === "function") {
+        pi.registerTool(choiceTool);
+        toolRegistered = true;
+      }
+      if (!runtimeReady || !toolRegistered || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+      const current = pi.getActiveTools();
+      const present = current.includes("interactive_choice");
+      if (present !== choiceConfig.enabled) pi.setActiveTools(choiceConfig.enabled ? [...current, "interactive_choice"] : current.filter(name => name !== "interactive_choice"));
+    };
+    syncToolVisibility();
+    const setChoiceEnabled = (enabled, ctx) => {
+      runtimeReady = true; // command handlers run after the runtime is bound
+      if (enabled === choiceConfig.enabled) { syncToolVisibility(); return; }
+      if (enabled) ensureSpeaker(ctx);
+      choiceConfig.enabled = enabled;
+      enablementGeneration++;
+      forcedRequestOutstanding = false;
+      warnedUnsatisfiedForce = false;
+      if (enabled) ahpProvider ||= startAhpProvider();
+      else {
+        // Keep the optional bridge registration stable. With no active request
+        // its snapshot is empty; only the model's callable tool set changes.
+        cancelActive("disabled");
+        speakerController?.dispose?.(); speakerController = speaker || null;
+      }
+      syncToolVisibility();
+      announceCapability();
+    };
 
     pi.registerCommand("choice", {
-      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice view expanded|compact|bottom|fullscreen|toggle|reset; /choice cancel|status|settings key=value",
+      description: "Ask a spoken multi-input choice. Usage: /choice Question | Choice A | Choice B [| ...]; /choice view expanded|compact|bottom|fullscreen|toggle|reset; /choice on|off|cancel|status|settings key=value",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
+        if (["on", "off"].includes(raw.toLowerCase())) {
+          setChoiceEnabled(raw.toLowerCase() === "on", ctx);
+          ctx.ui.notify(`choice:${choiceConfig.enabled ? "on" : "off"} · force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"}${!choiceConfig.enabled && choiceConfig.forceAtAgentEnd ? " (suspended)" : ""} · runtime only`, "info");
+          return;
+        }
         if (raw.toLowerCase() === "cancel") {
           ctx.ui.notify(cancelActive("command") ? "choice cancelled" : "no active choice", "info");
           return;
@@ -881,7 +926,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · append=${choiceConfig.append.length} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+          ctx.ui.notify(`choice:${choiceConfig.enabled ? "on" : "off"} · ${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · append=${choiceConfig.append.length} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
@@ -948,9 +993,11 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     });
 
     pi.on("session_start", (_event, ctx) => {
-      try { speakerController.assignSession?.(ctx); } catch {}
+      runtimeReady = true;
+      try { if (choiceConfig.enabled) ensureSpeaker(ctx); } catch {}
+      syncToolVisibility();
       announceCapability();
-      if (!choiceConfig.forceAtAgentEnd) return;
+      if (!choiceConfig.enabled || !choiceConfig.forceAtAgentEnd) return;
       let entries = [];
       try { entries = ctx?.sessionManager?.getBranch?.() || ctx?.sessionManager?.getEntries?.() || []; }
       catch { entries = []; }
@@ -971,7 +1018,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       handler: async (args, ctx) => {
         const action = String(args || "on").trim().toLowerCase() || "on";
         if (action === "status") {
-          ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"}${forcedRequestOutstanding ? " · awaiting choice" : ""}`, "info");
+          ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"}${forcedRequestOutstanding ? " · awaiting choice" : ""}${!choiceConfig.enabled ? " · choices off (suspended)" : ""}`, "info");
           return;
         }
         if (!["on", "off"].includes(action)) { ctx.ui.notify("Usage: /force-choice [on|off|status]", "warning"); return; }
@@ -980,12 +1027,12 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
           forcedRequestOutstanding = false;
           warnedUnsatisfiedForce = false;
         }
-        ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"} (runtime; startup setting unchanged)`, "info");
+        ctx.ui.notify(`force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"}${!choiceConfig.enabled ? " · choices off (suspended)" : ""} (runtime; startup setting unchanged)`, "info");
       },
     });
 
     pi.on("agent_end", (_event, ctx) => {
-      if (!choiceConfig.forceAtAgentEnd || active) return;
+      if (!choiceConfig.enabled || !choiceConfig.forceAtAgentEnd || active) return;
       if (forcedRequestOutstanding) {
         if (!warnedUnsatisfiedForce) {
           warnedUnsatisfiedForce = true;
@@ -1014,11 +1061,13 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     });
 
     pi.on("session_shutdown", async () => {
+      choiceConfig.enabled = false;
+      enablementGeneration++;
       cancelActive("shutdown");
       try { pi.events?.off?.(INPUT_ACTION_EVENT, eventInputHandler); } catch {}
       try { pi.events?.off?.(CHOICE_SYNC_REQUEST_EVENT, choiceSyncRequestHandler); } catch {}
       try { ahpProvider?.dispose?.(); } catch {}
-      try { speakerController.dispose?.(); } catch {}
+      try { speakerController?.dispose?.(); } catch {}
       await viewPreferences.flush?.();
     });
   };

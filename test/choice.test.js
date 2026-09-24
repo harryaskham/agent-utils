@@ -44,6 +44,7 @@ function eventBus() {
 function harness() {
   const commands = new Map();
   const tools = new Map();
+  let activeTools = ["read", "bash"];
   const handlers = new Map();
   const events = eventBus();
   const widgets = new Map();
@@ -63,7 +64,9 @@ function harness() {
   const pi = {
     events,
     registerCommand(name, def) { commands.set(name, def); },
-    registerTool(def) { tools.set(def.name, def); },
+    registerTool(def) { tools.set(def.name, def); activeTools.push(def.name); },
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names) { activeTools = [...names]; },
     registerMessageRenderer() {},
     sendMessage(message, options) { sentMessages.push({ message, options }); },
     on(name, fn) { handlers.set(name, fn); },
@@ -90,12 +93,66 @@ test("choice repeat settings resolve defaults and env overrides", () => {
   assert.deepEqual(resolveChoiceSettings({ PI_CHOICE_REPEAT_LIMIT: "null" }, { repeat: { interval: 45, limit: 2 } }).repeat, { interval: 45, limit: null });
 });
 
-test("disabled choice policy registers no tool, command, events, or speech", () => {
+test("disabled startup policy leaves runtime controls available without a callable choice tool", () => {
   const h = harness();
   createChoiceExtension({ speaker: null, persistedSettings: { choice: { enabled: false }, tts: {} }, cacophonyBridge: false })(h.pi);
   assert.equal(h.tools.has("interactive_choice"), false);
-  assert.equal(h.commands.has("choice"), false);
-  assert.equal(h.handlers.size, 0);
+  assert.equal(h.commands.has("choice"), true);
+  assert.equal(h.commands.has("force-choice"), true);
+  assert.deepEqual(h.pi.getActiveTools(), ["read", "bash"]);
+  h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.sentMessages.length, 0);
+});
+
+test("/choice off hides only its tool, cancels pending work and preserves force-choice", async () => {
+  const h = harness(); let ends = 0;
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {}, endChoice() { ends++; } }, persistedSettings: { choice: { forceAtAgentEnd: true, timeoutMs: 0 }, tts: {} } })(h.pi);
+  const tool = h.tools.get("interactive_choice");
+  const pending = tool.execute("active", { question: "Pick", choices }, null, null, h.ctx);
+  await h.commands.get("choice").handler("off", h.ctx);
+  assert.equal((await pending).details.reason, "disabled");
+  assert.equal(ends, 1); assert.equal(h.widgets.size, 0);
+  assert.deepEqual(h.pi.getActiveTools(), ["read", "bash"]);
+  assert.equal((await tool.execute("stale", {}, null, null, h.ctx)).details.reason, "disabled");
+  h.handlers.get("agent_end")({}, h.ctx); assert.equal(h.sentMessages.length, 0);
+  await h.commands.get("force-choice").handler("status", h.ctx);
+  assert.match(h.notifications.at(-1).message, /force-choice:on/);
+  await h.commands.get("choice").handler("on", h.ctx);
+  await h.commands.get("choice").handler("on", h.ctx);
+  assert.equal(h.pi.getActiveTools().filter(n => n === "interactive_choice").length, 1);
+  h.handlers.get("agent_end")({}, h.ctx); assert.equal(h.sentMessages.length, 1);
+  await h.handlers.get("session_shutdown")();
+});
+
+test("runtime enablement is per extension and can override disabled startup without persisting it", async () => {
+  const a = harness(), b = harness();
+  const startup = { choice: { enabled: false, speechEnabled: false, timeoutMs: 0 }, tts: {} };
+  const speaker = () => ({ speak: async () => {}, interrupt() {}, dispose() {} });
+  createChoiceExtension({ speaker: speaker(), persistedSettings: startup })(a.pi);
+  createChoiceExtension({ speaker: speaker(), persistedSettings: { choice: { timeoutMs: 0 }, tts: {} } })(b.pi);
+  assert.equal(a.tools.has("interactive_choice"), false);
+  await a.commands.get("choice").handler("on", a.ctx);
+  assert.equal(startup.choice.enabled, false);
+  const pending = a.tools.get("interactive_choice").execute("enabled", { question: "Pick", choices }, null, null, a.ctx);
+  a.input("2"); assert.equal((await pending).details.choice.label, "beta");
+  await a.commands.get("choice").handler("off", a.ctx);
+  assert.equal(b.pi.getActiveTools().includes("interactive_choice"), true);
+  await b.commands.get("force-choice").handler("on", b.ctx);
+  assert.equal(a.pi.getActiveTools().includes("interactive_choice"), false);
+  await a.handlers.get("session_shutdown")(); await b.handlers.get("session_shutdown")();
+});
+
+test("off/on during asynchronous view preparation never resurrects an old blocking request", async () => {
+  const h = harness(); let resolveLoad, presentations = 0;
+  h.ctx.mode = "tui";
+  h.ctx.ui.custom = () => { presentations++; throw new Error("must not present"); };
+  createChoiceExtension({ speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, preferenceStore: { load: () => new Promise(resolve => { resolveLoad = resolve; }), save: async () => {} }, persistedSettings: { choice: { timeoutMs: 0 }, tts: {} } })(h.pi);
+  const pending = h.tools.get("interactive_choice").execute("waiting", { question: "Pick", choices }, null, null, h.ctx);
+  await h.commands.get("choice").handler("off", h.ctx);
+  await h.commands.get("choice").handler("on", h.ctx);
+  resolveLoad({ expanded: true });
+  assert.equal((await pending).details.reason, "disabled"); assert.equal(presentations, 0);
+  await h.handlers.get("session_shutdown")();
 });
 
 test("configured appended actions normalize without mutating startup settings", () => {

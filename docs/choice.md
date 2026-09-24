@@ -14,12 +14,21 @@ adapters:
 The split uses Pi's built-in inter-extension event bus (`pi.events`). Future input
 modules can participate without importing either implementation.
 
-Set `agentUtils.choice.enabled=false` or `PI_CHOICE_ENABLED=0` to disable the
-entire choice extension: it registers no `interactive_choice` tool, commands,
-AHP provider, speech, or force-at-end hook. Dynamic settings forms such as
-`{ "$boolCommand": "[[ -z \"${PANOPTICON:-}\" ]]" }` are resolved before this
-policy is read, so Panopticon sessions can suppress choices without changing
-shared settings.
+Set `agentUtils.choice.enabled=false` or `PI_CHOICE_ENABLED=0` to start with choices disabled. The `/choice` and `/force-choice` controls remain available, but no `interactive_choice` tool, speech controller, or AHP provider is activated until choices are enabled. Dynamic settings forms such as `{ "$boolCommand": "[[ -z \"${PANOPTICON:-}\" ]]" }` are resolved before this startup default is read.
+
+## Runtime enablement
+
+```text
+/choice off
+/choice on
+/choice status
+```
+
+`/choice off` removes `interactive_choice` from **this agent session's active tool set**, so the model cannot normally issue a blocking choice call. Already-admitted/stale calls return a cancelled/disabled result immediately. A currently open choice is cancelled, its UI/timers/speech/cache are released, and its Cacophony/AHP request is settled normally. No answer is invented. Other agents and unrelated tools are untouched.
+
+Enablement is independent of `/force-choice`: turning choices off **suspends** force-at-end prompting but preserves its on/off preference. `/choice on` restores the tool and permits the saved force behavior at the next ordinary `agent_end`; it does not itself start a model turn. `/force-choice on` cannot re-enable choices. Startup settings and local presentation preferences are not rewritten, and reload/restart restores startup enablement.
+
+After initial registration the optional AHP provider stays registered across off/on toggles, with an empty pending-request snapshot while disabled. This avoids bridge registration churn. Deferred old completions remain tied to their original request IDs and cannot resolve a newer choice. A runtime without active-tool APIs still has the execution guard and cannot block on disabled choices.
 
 ## Generic input event contract
 

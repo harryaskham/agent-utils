@@ -99,11 +99,11 @@ export function createAhpChoiceProvider({ pi, env = process.env, getActive, comp
             if (answer.kind === "selected" && !active.state.choices.some((choice) => choice.id === answer.value)) {
               return { accepted: false, error: "Choice completion references an unknown option ID" };
             }
-            setTimeout(() => complete?.({ response, answer, commandId: command.commandId, operationId: command.operationId }), 0);
+            setTimeout(() => complete?.({ response, answer, requestId: command.requestId, commandId: command.commandId, operationId: command.operationId }), 0);
             return { accepted: true };
           }
           if (["decline", "cancel", "timeout", "superseded"].includes(response)) {
-            setTimeout(() => complete?.({ response, commandId: command.commandId, operationId: command.operationId }), 0);
+            setTimeout(() => complete?.({ response, requestId: command.requestId, commandId: command.commandId, operationId: command.operationId }), 0);
             return { accepted: true };
           }
           return { accepted: false, error: "Unsupported choice completion response" };

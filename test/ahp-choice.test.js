@@ -94,7 +94,7 @@ test("provider feature-detects late bridge, snapshots completely, and admits bef
   assert.deepEqual(admission, { accepted: true });
   assert.equal(completions.length, 0, "admission returns before local arbitration settles");
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(completions, [{ response: "accept", answer: { kind: "selected", value: "west-id" }, commandId: "cmd", operationId: "op" }]);
+  assert.deepEqual(completions, [{ response: "accept", answer: { kind: "selected", value: "west-id" }, requestId: active.sessionId, commandId: "cmd", operationId: "op" }]);
 
   const freeformAdmission = await bridge.provider.complete({
     operationId: "op-freeform",
@@ -108,6 +108,7 @@ test("provider feature-detects late bridge, snapshots completely, and admits bef
   assert.deepEqual(completions.at(-1), {
     response: "accept",
     answer: { kind: "text", value: "custom region" },
+    requestId: active.sessionId,
     commandId: "cmd-freeform",
     operationId: "op-freeform",
   });
@@ -139,6 +140,7 @@ test("disable flags and absent bridge preserve standalone behavior", () => {
 });
 
 function choiceHarness(bridge) {
+  const commands = new Map();
   const tools = new Map();
   const handlers = new Map();
   const bus = events();
@@ -146,11 +148,11 @@ function choiceHarness(bridge) {
   const pi = {
     events: bus,
     registerTool(def) { tools.set(def.name, def); },
-    registerCommand() {}, registerMessageRenderer() {}, sendMessage() {},
+    registerCommand(name, def) { commands.set(name, def); }, registerMessageRenderer() {}, sendMessage() {},
     on(name, fn) { handlers.set(name, fn); },
   };
   createChoiceExtension({ ahpBridge: bridge, cacophonyBridge: false, speaker: { speak: async () => {}, interrupt() {}, dispose() {} }, env: { PI_CHOICE_SPEECH_ENABLED: "0" }, persistedSettings: { choice: {}, tts: {} } })(pi);
-  return { pi, tools, handlers, ctx };
+  return { pi, tools, handlers, commands, ctx };
 }
 
 test("AHP completion uses the existing choice arbitration and publishes final resolution", async () => {
@@ -171,6 +173,25 @@ test("AHP completion uses the existing choice arbitration and publishes final re
   });
   h.handlers.get("session_shutdown")?.();
   assert.equal(bridge.calls.disposed, 1);
+});
+
+test("runtime off/on keeps AHP registration stable and rejects a previously admitted stale completion", async () => {
+  const bridge = fakeBridge(); const h = choiceHarness(bridge);
+  const params = { question: "Pick", choices: [{ id: "a", label: "Alpha" }, { id: "b", label: "Beta" }] };
+  const first = h.tools.get("interactive_choice").execute("old", params, null, null, h.ctx);
+  const requestId = bridge.calls.requested.at(-1).requestId;
+  assert.equal((await bridge.provider.complete({ requestId, response: "accept", answers: { choice: { kind: "selected", value: "b" } }, operationId: "op", commandId: "late" })).accepted, true);
+  await h.commands.get("choice").handler("off", h.ctx);
+  assert.equal((await first).details.reason, "disabled");
+  assert.deepEqual(await bridge.provider.snapshot(), []);
+  await h.commands.get("choice").handler("on", h.ctx);
+  let settled = false;
+  const next = h.tools.get("interactive_choice").execute("new", params, null, null, h.ctx).then(value => { settled = true; return value; });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(settled, false, "old AHP admission cannot select the new choice");
+  assert.equal(bridge.calls.registrations.length, 1); assert.equal(bridge.calls.disposed, 0);
+  await h.commands.get("choice").handler("off", h.ctx); await next;
+  await h.handlers.get("session_shutdown")(); assert.equal(bridge.calls.disposed, 1);
 });
 
 test("global bridge symbol is optional and is never owned by Agent Utils", () => {

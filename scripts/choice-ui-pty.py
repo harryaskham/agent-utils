@@ -74,7 +74,12 @@ with tempfile.TemporaryDirectory(prefix='choice-pty-', dir='/tmp') as folder:
         (out / (name+'.json')).write_text(json.dumps(state, indent=2))
         captures.append({'name':name, 'columns':state['frame']['columns'], 'rows':state['frame']['rows']})
     try:
-        wait(lambda s: True); call('open')
+        wait(lambda s: s['enabled'])
+        assert call('disable')['enabled'] is False
+        call('open'); state = wait(lambda s: not s['pending'])
+        assert state['result']['reason'] == 'disabled', 'stale tool call must not block'
+        assert call('enable')['enabled'] is True
+        call('open')
         state = wait(lambda s: s.get('frame') and s['frame'].get('view',{}).get('layout') is not None)
         assert state['frame']['view']['expanded']
         assert not state['frame']['view']['fullscreen']
@@ -112,6 +117,10 @@ with tempfile.TemporaryDirectory(prefix='choice-pty-', dir='/tmp') as folder:
         key('\x1b'); wait(lambda s: not any('Reply:' in line for line in s['frame']['lines']))
         key('2'); state = wait(lambda s: not s['pending'])
         assert state['result']['status']=='selected' and state['result']['index']==1
+        call('open'); wait(lambda s: s['pending'] and s.get('frame'))
+        assert call('disable')['enabled'] is False
+        state = wait(lambda s: not s['pending'])
+        assert state['result']['reason'] == 'disabled', 'off must settle the active choice'
         key('\x04')
         deadline=time.monotonic()+8
         while child.poll() is None and time.monotonic()<deadline: drain()

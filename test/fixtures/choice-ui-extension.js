@@ -9,11 +9,12 @@ export default function choiceUiFixture(pi) {
   if (!socket || !fixturePath) throw new Error("choice UI fixture requires isolated socket and fixture paths");
   let tool, context, frame = null, pending = false, result = null, revision = 0, server;
   const clients = new Set();
+  const commands = new Map();
   createChoiceExtension({
     cacophonyBridge: false, ahpBridge: false,
     speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
     persistedSettings: { choice: { speechEnabled: false, timeoutMs: 0, expanded: true }, tts: {} },
-  })({ ...pi, registerTool(definition) { tool = definition; pi.registerTool(definition); } });
+  })({ ...pi, registerTool(definition) { tool = definition; pi.registerTool(definition); }, registerCommand(name, definition) { commands.set(name, definition); pi.registerCommand(name, definition); } });
 
   pi.on("session_start", async (_event, ctx) => {
     context = { ...ctx, ui: { ...ctx.ui, custom(factory, options) {
@@ -38,14 +39,17 @@ export default function choiceUiFixture(pi) {
         const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
         try {
           const request = JSON.parse(line);
-          if (request.action === "open") {
+          if (["enable", "disable"].includes(request.action)) {
+            await commands.get("choice").handler(request.action === "enable" ? "on" : "off", context);
+            client.end(JSON.stringify({ id: request.id, enabled: pi.getActiveTools().includes("interactive_choice") }) + "\n");
+          } else if (request.action === "open") {
             if (pending) throw new Error("choice already open");
             const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
             pending = true; result = null; frame = null;
             void tool.execute(`fixture-${revision}`, fixture, undefined, undefined, context).then(value => { result = value.details; pending = false; });
             client.end(JSON.stringify({ id: request.id, accepted: true }) + "\n");
           } else if (request.action === "snapshot") {
-            client.end(JSON.stringify({ id: request.id, pending, result, revision, frame }) + "\n");
+            client.end(JSON.stringify({ id: request.id, pending, result, revision, frame, enabled: pi.getActiveTools().includes("interactive_choice") }) + "\n");
           } else throw new Error("unknown fixture action");
         } catch (error) { client.end(JSON.stringify({ error: error.message }) + "\n"); }
       });
