@@ -1,6 +1,6 @@
 # ag — agent feeds
 
-A small Rust CLI for reading agent speech and durable shared images on one machine or across a configured SSH fleet. No daemon, listening port, TUI, or automatic telemetry.
+A Rust CLI for agent speech and durable shared images across a configured SSH fleet. `ag image` opens a local browser gallery. No daemon, listening port, or automatic telemetry.
 
 ```sh
 ag tts tail                           # all configured nodes, live until Ctrl-C
@@ -12,6 +12,12 @@ ag tts unmute                        # clear all four on all enabled nodes
 ag --host ms-mac tts mute --narrate --choices
 ag --local tts unmute --read --tts
 ag tts status
+ag image                             # sync all enabled nodes, open the gallery
+ag image pull                        # incremental bulk cache, no browser
+ag image --offline                   # view cached images, no network
+ag --host ms-mac --host sgu24 image
+ag image --no-open --json             # write gallery and return its receipt
+ag image pull --checksum              # repair corrupt same-size/mtime cached files
 ag image list --limit 50
 ag image list --agent my-agent --json
 ag --host ms-mac image info 'my-agent/img-<id>.png'
@@ -20,6 +26,20 @@ ag hosts
 ```
 
 Human speech output is ordered by arrival when following (not a globally synchronized clock). Finite speech snapshots/images are sorted by producer timestamps. Every line identifies its source node. Host errors go to stderr in human mode and remain structured in JSON. Healthy nodes continue independently while offline tails retry with bounded backoff. `--json` follow emits JSONL envelopes; it does not mix progress prose into stdout.
+
+## Fleet-wide image gallery
+
+**`ag image` without a subcommand opens the viewer.** It uses incremental rsync-over-SSH to pull every selected archive into `~/.cache/ag/images` (`XDG_CACHE_HOME` honored), validates registered image/sidecar pairs and SHA-256 checksums, then opens a private local `index.html`. It scans all registrations, not the recent `image list` limit of 100/1000. The viewer pages thumbnails so every item remains reachable without putting the whole fleet in the DOM.
+
+Filter by node or agent, search labels/IDs, and click a thumbnail for a full-size preview. Arrow keys browse; +/− and Fit control zoom; dragging pans zoomed images; Escape closes the preview. Dark/light colors and narrow layouts are included. Browser-unsupported formats or decode failures have visible placeholders and original metadata, rather than disappearing from the catalog. Standard PNG/JPEG/GIF/WebP/SVG previews work; HEIC/TIFF support depends on the browser.
+
+`ag image pull` performs the same sync/index operation without launching a browser. `--offline` uses only the cache; `--json` never launches a browser. `--cache-dir PATH` overrides local storage. `--host NAME` is repeatable, `--local` selects this machine, and no host flag selects all enabled configured nodes. A changed selection regenerates the gallery for that selection; other cached files remain intact.
+
+Remote machines need **rsync**, not a newer `ag`, for the gallery/pull path. SSH uses the same configured executable, username, port, strict host-key verification and remote login environment as other `ag` operations. Configured image paths and per-node producer environment defaults resolve on the remote node. No remote install, service, archive mutation or deletion is performed. Raw get/info/list commands still require a remote `ag`.
+
+The first pull transfers archive contents, so allow enough local disk space. Later pulls transfer only changed data; `--checksum` asks rsync to repair content mismatches even when size/mtime match. Transfers skip symlinks, devices/special files, deep descendants and files over 64 MiB. Only verified registered image/sidecar pairs enter the gallery. Invalid records and node errors are reported per host (CLI exit 3), while healthy/cached images remain usable. The cache is **additive**, retaining earlier registrations even if the source later removes them. Node sync times/states distinguish a collected snapshot from live fleet state. No background refresh or automatic eviction runs.
+
+The generated page embeds only local metadata and image paths; it loads no CDN assets, analytics, network scripts or remote image URLs, and makes no network requests itself. Its content-security policy and text-only DOM construction prevent archive metadata from becoming active HTML. It is a private local artifact, not a published website. Root cache symlinks are supported; owned child directories may not be symlinks. UI index size is bounded to 64 MiB with an explicit error, never silent truncation. A per-cache advisory lock prevents overlapping writers. `gallery-acceptance.json` records the contract and tests.
 
 ## Runtime speech mute
 
@@ -76,6 +96,11 @@ hosts:
     # command: /absolute/path/to/ag
     # paths:
     #   tts_feed: ~/different/speech.jsonl
+gallery:
+  # cache_dir: ~/.cache/ag/images
+  rsync_command: rsync
+  parallelism: 4
+  sync_timeout_seconds: 300
 connect_timeout_seconds: 10
 command_timeout_seconds: 20
 reconnect_seconds: 3
@@ -101,6 +126,8 @@ ag completions zsh
 ```
 
 ## MCP and JSON
+
+`ag_image_pull` provides the same gallery/cache operation over MCP/`ag call`, requires `confirmed=true`, and never opens a browser. Its `offline` option reindexes the local cache without network. It returns gallery path, counts and per-node status/warnings rather than dumping all images into model context.
 
 `ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_tts_status`, `ag_image_list`, `ag_image_info`, plus `ag_tts_mute` / `ag_tts_unmute` (require `confirmed=true` after operator approval) and house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private typed `ag node ...` protocol that ignores fleet config, preventing recursion. Speech-control writes use the same policy implementation as the local CLI and MCP.
 

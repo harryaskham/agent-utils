@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "direction": "A compact photographic contact sheet: large image area, thin host/agent provenance, restrained neutral theme, no redundant explanatory cards. Search/filter and full-size keyboard preview.",
+  "contracts": [
+    {"id":"FLEET-ALL","contract":"ag image opens a local gallery of all valid registered images across selected/all configured enabled nodes, not the existing recent-list cap. Incomplete sync, invalid records and unavailable nodes are explicit; cached images remain readable offline."},
+    {"id":"PULL","contract":"ag image pull incrementally rsyncs archives via existing strict SSH authentication, with per-node concurrency/time bounds, configured ports and remote login PATH. No remote ag install, process deployment, archive mutation or deletion. --offline does no network work; --json never opens a browser."},
+    {"id":"PRIVATE","contract":"Cache and generated HTML are local and owner-private. Validated image metadata, path containment and SHA-256 qualify gallery entries. Symlink children, special files, active remote content, HTML/script injection and external network resources cannot enter the viewer."},
+    {"id":"VIEW","contract":"Responsive thumbnail gallery with host/agent filters, search, pagination and full-size prev/next/zoom preview. All registered items are reachable; unsupported browser formats and decode errors are visible rather than silently omitted."},
+    {"id":"VALIDATE","contract":"Hermetic Rust CLI/MCP/SSH/rsync fixtures including >1000 images, offline retention, failed nodes and cache reuse; actual browser interaction and screenshots at desktop/mobile sizes. Real configured fleet rollout is separate from isolated evidence."}
+  ]
+}

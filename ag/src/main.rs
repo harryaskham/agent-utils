@@ -60,10 +60,12 @@ enum Commands {
         #[command(subcommand)]
         command: TtsCommand,
     },
-    /// Inspect or retrieve durable shared images.
+    /// Open a fleet-wide image gallery (or list/pull/get registered images).
     Image {
+        #[command(flatten)]
+        options: GalleryArgs,
         #[command(subcommand)]
-        command: ImageCommand,
+        command: Option<ImageCommand>,
     },
     /// Manage canonical YAML configuration (symlinks preserved).
     Config {
@@ -148,8 +150,27 @@ enum TtsCommand {
     /// Print a finite snapshot of recent requests.
     List(ListArgs),
 }
+#[derive(Args, Default)]
+struct GalleryArgs {
+    /// Local gallery cache; defaults to ~/.cache/ag/images (XDG_CACHE_HOME honored).
+    #[arg(long)]
+    cache_dir: Option<String>,
+    /// Read cached images only; no SSH or rsync.
+    #[arg(long)]
+    offline: bool,
+    /// Generate the gallery without launching a browser (also implied by --json).
+    #[arg(long)]
+    no_open: bool,
+    /// Ask rsync to checksum files too, repairing same-size/mtime cache corruption.
+    #[arg(long)]
+    checksum: bool,
+}
 #[derive(Subcommand)]
 enum ImageCommand {
+    /// Open the fleet gallery; same as ag image without a subcommand.
+    View(GalleryArgs),
+    /// Incrementally cache all selected archives and write the gallery, without opening it.
+    Pull(GalleryArgs),
     /// List newest image metadata across all selected nodes.
     List {
         #[arg(short = 'n', long, default_value_t = 100)]
@@ -594,8 +615,64 @@ fn execute(cli: Cli) -> Result<u8> {
                 } => follow(&service, selection, lines, cli.json),
             };
         }
-        Commands::Image { command } => match command {
-            ImageCommand::List { limit, agent } => {
+        Commands::Image { command, options } => match command {
+            None | Some(ImageCommand::View(_)) | Some(ImageCommand::Pull(_)) => {
+                let pull_only = matches!(command, Some(ImageCommand::Pull(_)));
+                let options = match command {
+                    Some(ImageCommand::View(inner) | ImageCommand::Pull(inner)) => GalleryArgs {
+                        cache_dir: inner.cache_dir.or(options.cache_dir),
+                        offline: inner.offline || options.offline,
+                        no_open: inner.no_open || options.no_open,
+                        checksum: inner.checksum || options.checksum,
+                    },
+                    _ => options,
+                };
+                let result = service.image_gallery(ag::gallery::GalleryInput {
+                    selection,
+                    cache_dir: options.cache_dir,
+                    offline: options.offline,
+                    checksum: options.checksum,
+                    confirmed: true,
+                })?;
+                let partial = result.hosts.iter().any(|host| {
+                    host.state == "unavailable" || host.invalid > 0 || !host.warnings.is_empty()
+                });
+                if cli.json {
+                    json(&result)?;
+                } else {
+                    for host in &result.hosts {
+                        eprintln!(
+                            "{}",
+                            terminal_text(&format!(
+                                "[{}] {} · {} images{}",
+                                host.host,
+                                host.state,
+                                host.images,
+                                if host.warnings.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" · {}", host.warnings.join("; "))
+                                }
+                            ))
+                        );
+                    }
+                    text(&terminal_text(&format!(
+                        "{} images · {}\n{}",
+                        result.images,
+                        if options.offline {
+                            "cached / offline"
+                        } else {
+                            "local fleet snapshot"
+                        },
+                        result.index.display()
+                    )))?;
+                    if !pull_only && !options.no_open {
+                        ag::gallery::open_viewer(&result.index)?;
+                    }
+                }
+                return Ok(if partial { 3 } else { 0 });
+            }
+            Some(ImageCommand::List { limit, agent }) => {
                 let result = service.image_list(ListInput {
                     selection,
                     limit,
@@ -631,8 +708,10 @@ fn execute(cli: Cli) -> Result<u8> {
                 }
                 return Ok(if partial { 3 } else { 0 });
             }
-            ImageCommand::Info { id } => json(service.image_info(ImageInput { selection, id })?)?,
-            ImageCommand::Get { id, output } => {
+            Some(ImageCommand::Info { id }) => {
+                json(service.image_info(ImageInput { selection, id })?)?
+            }
+            Some(ImageCommand::Get { id, output }) => {
                 let bytes = service.image_bytes(ImageInput { selection, id })?;
                 let mut file = OpenOptions::new()
                     .write(true)

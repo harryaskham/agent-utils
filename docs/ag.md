@@ -29,6 +29,10 @@ Explicit `kitty_image_preview_show` calls also preserve the shown image, includi
 
 A read-only probe of `ms-mac` found that its SSH/login PATH already included the Nix profile locations, but `ag` was not installed there. Login initialization cannot deploy a missing executable: each target needs the updated Collective package installed, or an explicit `hosts[].command` pointing to an installed binary. Running `cltv-run ag` on the collector alone does not install its peers. The transport now reports that distinction explicitly and never builds or switches a remote system automatically.
 
+## Fleet image viewer (ag 0.3)
+
+`ag image` now bulk-syncs selected/all enabled nodes and opens a local browser gallery. `ag image pull` fills the same incremental rsync cache without opening a browser, and `ag image --offline` reads cached images without network. The gallery indexes all validated registrations rather than the recent-list cap, with node/agent filtering, search and full-size previews. Failed nodes retain visibly cached data. See [the gallery guide and validation](ag-gallery.md).
+
 ## Runtime speech control (ag 0.2)
 
 `ag tts mute`, `unmute`, and `status` now share a private atomic per-node policy with Agent Utils. All enabled nodes/all four speech types are the default; host/local and type flags narrow the operation. See [the control contract](speech-runtime-control.md) for names, epoch fencing, path overrides, partial-failure receipts and enforcement semantics.

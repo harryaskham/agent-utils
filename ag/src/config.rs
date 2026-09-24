@@ -102,9 +102,29 @@ impl Host {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+pub struct GalleryConfig {
+    pub cache_dir: Option<String>,
+    pub rsync_command: String,
+    pub sync_timeout_seconds: u64,
+    pub parallelism: usize,
+}
+impl Default for GalleryConfig {
+    fn default() -> Self {
+        Self {
+            cache_dir: None,
+            rsync_command: "rsync".into(),
+            sync_timeout_seconds: 300,
+            parallelism: 4,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
     pub paths: Paths,
+    pub gallery: GalleryConfig,
     pub hosts: Vec<Host>,
     /// SSH executable (primarily useful for an isolated transport fixture).
     pub ssh_command: String,
@@ -119,6 +139,7 @@ impl Default for Config {
             version: 1,
             paths: Paths::default(),
             hosts: vec![Host::local()],
+            gallery: GalleryConfig::default(),
             ssh_command: "ssh".into(),
             connect_timeout_seconds: 10,
             command_timeout_seconds: 20,
@@ -149,6 +170,19 @@ impl AppConfig for Config {
         {
             return Err(invalid(
                 "timeouts: connect 1–60s, command/reconnect 1–300s, poll 100–60000ms",
+            ));
+        }
+        if !safe(&self.gallery.rsync_command, 4096)
+            || self
+                .gallery
+                .cache_dir
+                .as_ref()
+                .is_some_and(|p| !safe(p, 4096))
+            || !(1..=3600).contains(&self.gallery.sync_timeout_seconds)
+            || !(1..=16).contains(&self.gallery.parallelism)
+        {
+            return Err(invalid(
+                "gallery: executable/path required; timeout 1–3600s, parallelism 1–16",
             ));
         }
         let mut names = HashSet::new();

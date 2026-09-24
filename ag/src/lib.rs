@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod error;
+pub mod gallery;
 pub mod model;
 pub mod service;
 pub mod speech;

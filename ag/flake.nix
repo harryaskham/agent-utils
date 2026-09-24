@@ -14,7 +14,7 @@
     packages = each (system: let pkgs = import nixpkgs { inherit system; }; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
-        version = "0.2.0";
+        version = "0.3.0";
         src = source;
         cargoDeps = (pkgs.rustPlatform.importCargoLock.override {
           fetchurl = attrs: pkgs.fetchurl (attrs // {
@@ -30,14 +30,15 @@
           };
         };
         nativeBuildInputs = [ pkgs.makeWrapper pkgs.installShellFiles ];
+        nativeCheckInputs = [ pkgs.rsync ];
         postInstall = ''
           installShellCompletion --cmd ag \
             --bash <($out/bin/ag completions bash) \
             --zsh <($out/bin/ag completions zsh) \
             --fish <($out/bin/ag completions fish)
-          wrapProgram $out/bin/ag --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
+          wrapProgram $out/bin/ag --prefix PATH : ${pkgs.lib.makeBinPath ([ pkgs.openssh pkgs.rsync ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.xdg-utils ])}
           mkdir -p $out/share/doc/ag
-          cp README.md acceptance.json $out/share/doc/ag/
+          cp README.md acceptance.json gallery-acceptance.json $out/share/doc/ag/
         '';
         meta = {
           description = "Durable agent speech and shared images across your machines";
@@ -54,7 +55,7 @@
     });
     checks = each (system: { inherit (self.packages.${system}) ag; });
     devShells = each (system: let pkgs = import nixpkgs { inherit system; }; in {
-      default = pkgs.mkShell { packages = with pkgs; [ cargo rustc rustfmt clippy openssh ]; };
+      default = pkgs.mkShell { packages = with pkgs; [ cargo rustc rustfmt clippy openssh rsync ]; };
     });
   };
 }
