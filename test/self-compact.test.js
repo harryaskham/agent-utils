@@ -33,6 +33,9 @@ function makeHarness({ now } = {}) {
   // The ExtensionContext handed to a tool's execute (5th arg). compact() is the
   // documented fire-and-forget compaction trigger.
   const ctx = {
+    mode: "tui",
+    isIdle: () => true,
+    hasPendingMessages: () => false,
     hasUI: false,
     getContextUsage: () => ({ tokens: 160_000, contextWindow: 200_000, percent: 80 }),
     compact(options) { compactCalls.push(options); },
@@ -49,9 +52,56 @@ function load(pi, opts) {
 
 // Invoke the tool with the ctx as the 5th execute arg, matching Pi's real
 // ToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx) signature.
-function run(h, toolCallId, params) {
-  return h.tools.get("self_compact").execute(toolCallId, params, null, null, h.ctx);
+async function run(h, toolCallId, params) {
+  const result = await h.tools.get("self_compact").execute(toolCallId, params, null, null, h.ctx);
+  h.emit("agent_settled", {});
+  await new Promise(resolve => setTimeout(resolve, 5));
+  return result;
 }
+
+test("compaction waits for persisted tool result, settled run, and event-dispatch unwind", async () => {
+  const h = makeHarness(); const deferred = [];
+  load(h.pi, { defer: fn => { deferred.push(fn); return deferred.length; }, cancelDeferred() {} });
+  h.ctx.isIdle = () => false;
+  const result = await h.tools.get("self_compact").execute("safe", {}, null, null, h.ctx);
+  assert.equal(result.terminate, true);
+  assert.equal(h.compactCalls.length, 0, "never abort from execute");
+  h.emit("agent_end", {}); assert.equal(deferred.length, 0, "agent_end is not settled");
+  h.ctx.isIdle = () => true;
+  h.emit("agent_settled", {}); h.emit("agent_settled", {});
+  assert.equal(h.compactCalls.length, 0); assert.equal(deferred.length, 1);
+  deferred[0](); assert.equal(h.compactCalls.length, 1);
+  h.compactCalls[0].onComplete(); h.compactCalls[0].onComplete();
+  assert.equal(h.messages.length, 1);
+});
+
+test("new input, shutdown, nonidle state and queued messages fence deferred compaction", async () => {
+  for (const scenario of ["input", "session_shutdown", "agent_start", "busy", "queued"]) {
+    const h = makeHarness(); let scheduled;
+    load(h.pi, { defer: fn => { scheduled = fn; return 1; }, cancelDeferred() {} });
+    await h.tools.get("self_compact").execute("old", {}, null, null, h.ctx);
+    h.emit("agent_settled", {});
+    if (scenario === "busy") h.ctx.isIdle = () => false;
+    else if (scenario === "queued") h.ctx.hasPendingMessages = () => true;
+    else h.emit(scenario, {});
+    scheduled(); assert.equal(h.compactCalls.length, 0, scenario);
+  }
+});
+
+test("RPC and AHP runtimes fail closed instead of creating uncorrelated abort/resume turns", async () => {
+  const key = Symbol.for("paratenic.pi.ahp-bridge.v1"), previous = globalThis[key];
+  try {
+    for (const scenario of ["rpc", "ahp"]) {
+      const h = makeHarness();
+      if (scenario === "rpc") { h.ctx.mode = "rpc"; delete globalThis[key]; }
+      else globalThis[key] = { version: 1, enabled: true };
+      load(h.pi); h.emit("session_start", {});
+      assert.equal(h.pi.getActiveTools().includes("self_compact"), false);
+      const result = await run(h, "stale", {});
+      assert.equal(result.details.reason, "unsupported"); assert.equal(h.compactCalls.length, 0); assert.equal(h.messages.length, 0);
+    }
+  } finally { if (previous === undefined) delete globalThis[key]; else globalThis[key] = previous; }
+});
 
 test("registers a self_compact agent-visible tool", () => {
   const h = makeHarness();
@@ -139,6 +189,7 @@ test("rate-limit skips a second self-compaction within the minimum interval", as
   assert.equal(first.details.queued, true);
   assert.equal(h.compactCalls.length, 1);
 
+  h.compactCalls[0].onComplete();
   clock += 5_000; // 5s later — within the 30s default window
   const second = await run(h, "t2", {});
   assert.equal(second.details.queued, false);

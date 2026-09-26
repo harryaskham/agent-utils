@@ -256,6 +256,15 @@ test("self_set_model enforces selfModelSelection.models and leaves model unchang
   assert.equal(h.currentModel, MODELS[4]);
 });
 
+test("empty agent allowlist disables self-selection while retaining manual /m", async () => {
+  const h = makeHarness({ settings: { selfModelSelection: { models: [] } } });
+  const denied = await h.tools.get("self_set_model").execute("disabled", { model: "openai/gpt-5.5" }, undefined, undefined, h.ctx);
+  assert.equal(denied.details.ok, false);
+  assert.equal(denied.details.code, "model_not_allowed");
+  await h.commands.get("m").handler("openai/gpt-5.5", h.ctx);
+  assert.equal(h.currentModel, MODELS[3]);
+});
+
 test("operator-facing /m remains unrestricted by selfModelSelection policy", async () => {
   const h = makeHarness({
     settings: { selfModelSelection: { models: ["gemini-3.5-flash"] } },

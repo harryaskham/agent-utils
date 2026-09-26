@@ -2,10 +2,11 @@
 //
 // Lets a long-running agent autonomously trigger compaction of its OWN
 // conversation/context — equivalent to a user-issued `/compact` — without
-// requiring operator intervention. It calls the documented extension
-// compaction API `ctx.compact({ customInstructions })` (the 5th argument to a
-// tool's `execute` is the `ExtensionContext`), which is the fire-and-forget
-// trigger Pi provides for exactly this (see examples/extensions/trigger-compact.ts).
+// requiring operator intervention in standalone Pi. The tool returns its receipt
+// first and requests normal turn termination. Only after agent_settled, outside
+// the event dispatcher, may the idle context call ctx.compact(). RPC/AHP is
+// deliberately unsupported until the host has correlated compact/resume control:
+// calling compact() inside execute aborts its own tool/client request.
 //
 // bd-d71947: the previous implementation used
 // `pi.sendUserMessage("/compact", { deliverAs: "followUp" })`, but that only
@@ -89,7 +90,13 @@ export function buildCompactCommand(instructions) {
   return clean ? `/compact ${clean}` : "/compact";
 }
 
-export default function selfCompactExtension(pi, { now = () => Date.now() } = {}) {
+// The generic AHP bridge has no correlated compact-and-resume operation. Never
+// manufacture a new autonomous turn after its owning client has observed abort.
+export function selfCompactRuntimeSupported(ctx) {
+  return ctx?.mode !== "rpc" && !globalThis[Symbol.for("paratenic.pi.ahp-bridge.v1")]?.enabled;
+}
+
+export default function selfCompactExtension(pi, { now = () => Date.now(), defer = (fn) => setTimeout(fn, 0), cancelDeferred = clearTimeout } = {}) {
   if (!envBool("PI_SELF_COMPACT_TOOL", true)) return;
   if (typeof pi.registerTool !== "function") return;
 
@@ -97,9 +104,51 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
   const minPercent = resolveMinPercent(process.env);
   let lastQueuedAt = 0;
   let sessionGeneration = 0;
+  let pending = null;
+  let timer = null;
+  const cancelPending = () => {
+    sessionGeneration++;
+    if (timer !== null) cancelDeferred(timer);
+    timer = null;
+    pending = null;
+  };
+  pi.on?.("input", cancelPending);
+  pi.on?.("agent_start", cancelPending);
+  pi.on?.("session_shutdown", cancelPending);
+  pi.on?.("agent_settled", (_event, ctx) => {
+    const request = pending;
+    if (!request || request.started || timer !== null) return;
+    // Leave the event dispatcher before compact() -> abort() waits for it.
+    timer = defer(() => {
+      timer = null;
+      if (pending !== request || request.generation !== sessionGeneration || request.signal?.aborted
+          || !selfCompactRuntimeSupported(ctx) || ctx?.isIdle?.() !== true || ctx?.hasPendingMessages?.()) {
+        pending = null;
+        return;
+      }
+      request.started = true;
+      const settle = (error) => {
+        if (pending !== request || request.generation !== sessionGeneration) return;
+        pending = null;
+        if (error) {
+          ctx?.ui?.notify?.(`self-compact failed: ${error?.message || error}. Continue manually when ready.`, "error");
+          return;
+        }
+        if (ctx?.isIdle?.() !== true || ctx?.hasPendingMessages?.()) return;
+        pi.sendMessage({
+          customType: "agent-utils.self-compact-continue",
+          content: "Self-compaction completed. Continue the interrupted task using the compacted summary and retained recent messages. Do not stop merely because compaction finished.",
+          display: false,
+          details: { toolCallId: request.toolCallId, source: "self_compact" },
+        }, { triggerTurn: true, deliverAs: "followUp" });
+      };
+      try { ctx.compact({ customInstructions: request.customInstructions, onComplete: () => settle(), onError: settle }); }
+      catch (error) { settle(error); }
+    });
+  });
   const syncVisibility = (_event, ctx) => {
     if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
-    const visible = !shouldRefuseCompaction(getContextUsage(ctx), minPercent);
+    const visible = selfCompactRuntimeSupported(ctx) && !shouldRefuseCompaction(getContextUsage(ctx), minPercent);
     const active = pi.getActiveTools();
     if (active.includes("self_compact") === visible) return;
     pi.setActiveTools(visible ? [...active, "self_compact"] : active.filter((name) => name !== "self_compact"));
@@ -109,7 +158,15 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
   for (const event of ["session_start", "before_agent_start", "turn_start", "turn_end", "model_select", "session_compact"]) {
     pi.on?.(event, syncVisibility);
   }
-  pi.on?.("session_shutdown", () => { sessionGeneration++; });
+  const onBridgeAvailable = () => {
+    cancelPending();
+    if (typeof pi.getActiveTools === "function" && typeof pi.setActiveTools === "function") {
+      const active = pi.getActiveTools();
+      if (active.includes("self_compact")) pi.setActiveTools(active.filter(name => name !== "self_compact"));
+    }
+  };
+  pi.events?.on?.("paratenic:ahp-bridge-available", onBridgeAvailable);
+  pi.on?.("session_shutdown", () => pi.events?.off?.("paratenic:ahp-bridge-available", onBridgeAvailable));
 
   // After a real compaction fires, treat that moment as the new reference point
   // so the rate-limit window measures from the most recent actual compaction.
@@ -121,7 +178,7 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
     name: "self_compact",
     label: "Self Compact",
     description:
-      "Compact this agent's own conversation context via /compact and automatically continue the interrupted task after successful compaction. Optionally focus the retained summary with instructions.",
+      "Queue standalone Pi context compaction via /compact after the current run settles, then continue after success. Unavailable in RPC/AHP sessions; those require controller-owned compaction. Optionally focus the retained summary with instructions.",
     promptSnippet:
       "Compact your own conversation context and automatically resume after success; optionally focus the summary with instructions.",
     promptGuidelines: [
@@ -187,6 +244,10 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
         };
       }
 
+      if (pending) return {
+        content: [{ type: "text", text: "Self-compaction is already pending; no second request was queued." }],
+        details: { command, queued: false, reason: "pending" },
+      };
       const t = now();
       if (lastQueuedAt && t - lastQueuedAt < minIntervalMs) {
         const sinceMs = t - lastQueuedAt;
@@ -204,52 +265,26 @@ export default function selfCompactExtension(pi, { now = () => Date.now() } = {}
         };
       }
 
-      if (!ctx || typeof ctx.compact !== "function") {
+      if (!ctx || typeof ctx.compact !== "function" || typeof ctx.isIdle !== "function" || !selfCompactRuntimeSupported(ctx)) {
         return {
-          content: [{ type: "text", text: "Cannot self-compact: the compaction API (ctx.compact) is unavailable in this runtime." }],
+          content: [{ type: "text", text: "Cannot self-compact safely in this runtime. RPC/AHP clients must use their controller-owned compaction path; the generic bridge does not provide correlated compact-and-resume. Manual /compact remains available." }],
           details: { command, queued: false, reason: "unsupported" },
         };
       }
 
       lastQueuedAt = t;
-      // Real, fire-and-forget compaction trigger (bd-d71947). ctx.compact()
-      // actually runs compaction; the old pi.sendUserMessage("/compact") only
-      // replayed the text and never dispatched the command.
-      const generation = sessionGeneration;
-      let settled = false;
-      ctx.compact({
-        customInstructions,
-        onComplete: () => {
-          if (settled || generation !== sessionGeneration) return;
-          settled = true;
-          // ctx.compact is fire-and-forget and interrupts the running agent.
-          // Only its successful completion may request another turn. Follow-up
-          // delivery also handles completion while Pi is still unwinding tools.
-          pi.sendMessage({
-            customType: "agent-utils.self-compact-continue",
-            content: "Self-compaction completed. Continue the interrupted task using the compacted summary and retained recent messages. Do not stop merely because compaction finished.",
-            display: false,
-            details: { toolCallId: _toolCallId, source: "self_compact" },
-          }, { triggerTurn: true, deliverAs: "followUp" });
-        },
-        onError: (err) => {
-          if (settled || generation !== sessionGeneration) return;
-          settled = true;
-          if (ctx.hasUI && typeof ctx.ui?.notify === "function") {
-            ctx.ui.notify(`self-compact failed: ${err?.message || err}`, "error");
-          }
-        },
-      });
+      pending = { toolCallId: _toolCallId, customInstructions, generation: sessionGeneration, signal: _signal, started: false };
       return {
         content: [
           {
             type: "text",
-            text: `Triggering compaction (\`${command}\`) — this agent will compact its own context, equivalent to a user-issued /compact. Context: ${formatContextUsage(
+            text: `Queued compaction (\`${command}\`) — compaction will start only after this tool result and the agent run settle. Context: ${formatContextUsage(
               usage,
             )}. The agent will resume automatically after successful compaction.`,
           },
         ],
         details: { command, queued: true, minIntervalMs, minPercent, usage },
+        terminate: true,
       };
     },
   });
