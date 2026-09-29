@@ -141,3 +141,56 @@ Covered by `test/pi-graphics-id-space.test.js` and
 Together they bound WindowServer image memory both within a process and across
 restarts. Two non-critical refinements remain tracked as a P3 draft by
 agnt-dev-0 (screenshot/preview stream-frame id reuse; preview headless-free).
+
+---
+
+# Follow-up — 2026-09-29: Ghostty + Pi fullscreen audit (lab-verified)
+
+Verified in a real Ghostty 1.3.1 and Kitty under Xvfb with screenshots and pty
+captures (`scripts/pi-graphics-ghostty-lab.mjs`).
+
+## Findings and fixes
+
+1. **Host classes never loaded (critical).** Under the compiled Pi binary,
+   `import("@earendil-works/pi-coding-agent")` fails for files inside this ESM
+   package (checkout and git install), and a package-local copy would be a
+   different class identity anyway. `CustomEditor` was `undefined`, so the
+   editor surface, box chrome and compact chat spacing were silently dead.
+   Classes are now learned from the live TUI tree and `Container.addChild`
+   (`pi-graphics/host-components.js`).
+2. **Virtual-parent relative placements are not portable.** Ghostty positions
+   `P/Q` children at the current terminal cursor, and Pi fullscreen deletes
+   visible placements (`a=d,d=a`) whenever an image line changes. Cursor
+   halos, footer underlays and relative rails drifted or vanished. Replaced by
+   the frame compositor (absolute placements injected inside Pi's synchronized
+   frame from zero-width markers and Pi's IME cursor).
+3. **Transmissions embedded in box rows.** Unicode box cells returned
+   `transmit + placeholder` as row text; Pi fullscreen saw every boxed row as
+   an image line and repainted the whole screen plus deleted every placement
+   on each frame (~50 KB/frame). Transmits now go through the side channel.
+4. **Host frames destroy image data.** Pi fullscreen's first/forced full
+   redraw sends `a=d,d=A` (delete *and free* all images), and ED `2J`/`3J`
+   makes Kitty and Ghostty prune images left without placements ("ENOENT:
+   image not found"). The compositor replays owned uploads inside the same
+   frame when it sees either.
+5. **topLeft modes painted one cell.** A lone placeholder cell only ever paints
+   one cell of a wide virtual placement; topLeft now uses full placeholder rows
+   (rails) or compositor strips (boxes).
+6. **Width math swallowed text.** The APC pattern only accepted ST, but Pi's
+   `CURSOR_MARKER` is BEL-terminated, so measurement/clamping consumed real
+   text up to the next ST (mis-measured cursors, truncated footers).
+7. **Unbounded image churn.** Border art keys included the typing-impulse
+   column (new PNG + image id per keystroke, freed only at exit); caches are
+   now bounded LRUs whose eviction frees data (`d=I`).
+8. **Teardown wrote nothing.** Extension UI contexts expose no terminal, so
+   shutdown / `/gfx mode off` / `pi_graphics_clear` deletes were no-ops; the
+   writer now resolves through the captured TUI terminal (prototype `write`,
+   never a temporary capture shadow).
+9. **Ghostty zlib crash.** Ghostty 1.3.1 crashes on some valid `f=32,o=z`
+   payloads (reproduced by replaying a single upload; re-deflating the same
+   pixels, raw RGBA, or PNG do not crash). The canvas therefore defaults to
+   PNG transport.
+
+Measured on the same scripted fullscreen session (typing + wheel scroll):
+before 481 KB written with 9 full repaints and PNG payloads in frames; after
+65 KB, no PNG payloads in frames, keystroke frames ~230 bytes.

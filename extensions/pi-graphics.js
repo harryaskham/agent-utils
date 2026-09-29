@@ -57,7 +57,8 @@ import {
 import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
 import { captureTuiFromUi, createHostComponentRegistry } from "./pi-graphics/host-components.js";
 import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./pi-graphics/frame-compositor.js";
-import { createPixelGeometryTracker } from "./pi-graphics/terminal-io.js";
+import { createPixelGeometryTracker, tapTerminalInput } from "./pi-graphics/terminal-io.js";
+import { createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
 import { readAgentSettings, readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import { mixHexColor } from "./pi-graphics/color-utils.js";
@@ -477,7 +478,7 @@ export default async function piGraphicsExtension(pi) {
   // placements land at the *outer* terminal cursor, which tmux does not keep in
   // sync with the pane, so overlays are opt-in there; placeholders still work.
   function compositorOverlaysEnabled() {
-    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return false;
+    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE) || fullCanvasActive()) return false;
     if (runningInsideTmux()) return envBool("PI_GRAPHICS_TMUX_OVERLAYS", false);
     return envBool("PI_GRAPHICS_OVERLAYS", true);
   }
@@ -523,7 +524,7 @@ export default async function piGraphicsExtension(pi) {
         });
       }
       let inject = overlayPlacements.update(frame, desired);
-      if (traceFile) trace(`frame ${frameCompositor.frames} mode=${frame.mode} markers=${frame.markers.size} desired=${desired.length} cursor=${JSON.stringify(frame.cursor)} cleared=${frame.cleared} freed=${frame.freed} injectBytes=${inject.length}`);
+      if (traceFile && inject) trace(`frame ${frameCompositor.frames} mode=${frame.mode} markers=${frame.markers.size} desired=${desired.length} cursor=${JSON.stringify(frame.cursor)} cleared=${frame.cleared} freed=${frame.freed} injectBytes=${inject.length}`);
       // Pi fullscreen deletes every visible placement when its own image lines
       // change and clears the screen on full redraws. Re-assert the virtual
       // placements our Unicode placeholders reference (cheap: no pixel data).
@@ -531,6 +532,54 @@ export default async function piGraphicsExtension(pi) {
       return { inject };
     },
   });
+
+  let lastEditorWrapper = null;
+  let lastFooterComponent = null;
+  let canvasImageCounter = 0;
+  function layoutRegions(renderer) {
+    const root = renderer?.currentLayout?.root;
+    if (!root) return {};
+    const regions = {};
+    const walk = (box, depth = 0) => {
+      if (!box || depth > 12) return;
+      const kids = box.component?.children;
+      if (Array.isArray(kids)) {
+        if (!regions.editor && lastEditorWrapper && kids.includes(lastEditorWrapper)) regions.editor = box.rect;
+        if (!regions.footer && lastFooterComponent && kids.includes(lastFooterComponent)) regions.footer = box.rect;
+      }
+      for (const child of box.children || []) walk(child, depth + 1);
+    };
+    walk(root);
+    for (const key of Object.keys(regions)) {
+      const rect = regions[key];
+      if (!rect || rect.height <= 0 || rect.width <= 0) delete regions[key];
+    }
+    return regions;
+  }
+  fullCanvas = createFullCanvas({
+    getTui: () => hostTui,
+    write: (data) => { const writer = terminalWriter(hostTui?.terminal); if (writer && data) writer(data); },
+    serialize: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: state.config.passthrough }),
+    allocateImageId: (name) => piGraphicsImageId(`canvas:${name}:${canvasImageCounter++}`),
+    z: { background: PI_GRAPHICS_Z.DEEP_BACKGROUND, rows: PI_GRAPHICS_Z.BACKGROUND, caret: PI_GRAPHICS_Z.SURFACE },
+    themeColor: (token) => getThemeColorHex(activeThemeRef, token, null),
+    pixelGeometry,
+    getRegions: layoutRegions,
+    trace,
+    onStateChange(active) {
+      // Pixel-canvas mode draws its own chrome: drop placeholder decorations
+      // and overlays so Pi's composed screen is plain styled text.
+      const clear = overlayPlacements.clear();
+      if (clear) emitGraphicsCommand(clear);
+      cellMetricsCache = null;
+      try { hostTui?.invalidate?.(); } catch {}
+      trace(`full canvas ${active ? "on" : "off"}`);
+    },
+  });
+
+  function fullCanvasActive() {
+    return Boolean(fullCanvas?.active);
+  }
 
   function reassertVirtualPlacements() {
     let command = "";
@@ -1368,6 +1417,10 @@ export default async function piGraphicsExtension(pi) {
   // so the width-budget/shrink-order behavior is covered by calling them.
 
   function buildFooterDividerCell(segmentKey, index, token = "borderAccent") {
+    if (fullCanvasActive()) {
+      const fg = typeof activeThemeRef?.fg === "function" ? activeThemeRef.fg.bind(activeThemeRef) : (_t, text) => text;
+      return fg(token, " │ ");
+    }
     if (!ensureUnicodePlacement(state)) return "│";
     const cell = cellMetrics();
     const color = getThemeColorHex(activeThemeRef, token, "#88c0d0");
@@ -1465,7 +1518,7 @@ export default async function piGraphicsExtension(pi) {
       writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
       activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
       const unsubscribe = (() => { try { return footerData?.onBranchChange?.(() => tui?.requestRender?.()); } catch { return null; } })();
-      return {
+      return (lastFooterComponent = {
         __piGraphicsNoWrap: true,
         piGraphics: false,
         dispose() { try { unsubscribe?.(); } catch {} },
@@ -1475,7 +1528,7 @@ export default async function piGraphicsExtension(pi) {
           activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
           return [clampRenderedLineToWidth(buildSegmentedFooterLine(ctx, footerData, width, pi, activeThemeRef), width)];
         },
-      };
+      });
     };
     factory.__piGraphicsNoWrap = true;
     factory.piGraphics = false;
@@ -1537,11 +1590,12 @@ export default async function piGraphicsExtension(pi) {
         activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
         writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
         applyHardwareCursorPolicy(tui);
-        return wrapEditorComponent(base, {
+        return (lastEditorWrapper = wrapEditorComponent(base, {
           renderRows(baseLines, width) {
             // Cheap per-frame check: a regular<->fullscreen switch creates a
             // new renderer that needs the frame hook again.
             if (hostTui) ensureFrameCompositor();
+            if (fullCanvasActive()) return baseLines;
             // The dash-rule detection + border/decoration/clamp composition is a pure
             // seam (composeEditorRenderRows, bd-f5f802); the stateful pieces stay
             // here and are injected as callbacks.
@@ -1554,7 +1608,7 @@ export default async function piGraphicsExtension(pi) {
               topLeftUnicode: false,
             });
           },
-        });
+        }));
       },
     });
     return true;
@@ -1938,6 +1992,8 @@ export default async function piGraphicsExtension(pi) {
         return { colorRgb };
       },
     }) : createBoxRailsRuntime();
+    const applyToRows = runtime.applyToRows.bind(runtime);
+    runtime.applyToRows = (args) => (fullCanvasActive() ? args.lines : applyToRows(args));
     boxChromeRuntime = runtime;
     const patch = installBoxChromeMonkeyPatch({
       components: boxChromeComponentMap(),
@@ -2769,6 +2825,10 @@ export default async function piGraphicsExtension(pi) {
       };
       if (tokens.length === 0) { await showGfxSettingsWindow(ctx, settings, gfx, editor); return; }
       const action = String(tokens[0] || "").toLowerCase();
+      if (action === "full" || action === "canvas") {
+        await handleFullCanvasCommand(ctx, tokens.slice(1), gfx);
+        return;
+      }
       if (action === "status" || action === "show" || action === "info") { describe(); return; }
       if (action === "save") {
         if (!hasUnsavedGfxChanges()) { ctx.ui.notify("Pi Graphics: no unsaved runtime changes to save.", "info"); return; }
@@ -2968,6 +3028,63 @@ export default async function piGraphicsExtension(pi) {
     },
   });
 
+
+  function fullCanvasOptions(gfx = {}, overrides = {}) {
+    const full = gfx.full || {};
+    const pick = (value, fallback) => (value === undefined || value === null || value === "" ? fallback : value);
+    return {
+      fontSizePx: Number(pick(overrides.fontSizePx, pick(process.env.PI_GRAPHICS_FULL_FONT_SIZE, full.fontSizePx ?? full.fontSize))) || undefined,
+      lineHeight: Number(pick(overrides.lineHeight, pick(process.env.PI_GRAPHICS_FULL_LINE_HEIGHT, full.lineHeight))) || undefined,
+      padding: Number(pick(overrides.padding, full.padding)) || undefined,
+      font: pick(overrides.font, pick(process.env.PI_GRAPHICS_FULL_FONT, full.font)),
+      family: pick(overrides.family, full.family),
+      caret: pick(overrides.caret, full.caret),
+      zoom: Number(pick(overrides.zoom, pick(process.env.PI_GRAPHICS_FULL_ZOOM, full.zoom))) || undefined,
+      transport: pick(overrides.transport, full.transport),
+      pixelMouse: pick(overrides.pixelMouse, full.pixelMouse),
+      tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null),
+    };
+  }
+
+  let fullCanvasOverrides = {};
+  async function handleFullCanvasCommand(ctx, args, gfx) {
+    const sub = String(args[0] || "toggle").toLowerCase();
+    const value = args[1];
+    const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
+    if (!hostTui) discoverHostComponents(ctx);
+    ensureFrameCompositor();
+    const describe = () => {
+      const st = fullCanvas.status();
+      return [
+        `Pi Graphics full canvas: ${st.active ? "ON" : "off"}`,
+        st.active ? `  virtual grid ${st.virt.cols}x${st.virt.rows} @ cell ${st.cell}px (font ${st.fontSizePx}px) on ${st.real.width}x${st.real.height}px canvas` : "  /gfx full on — render the whole Pi UI as a pixel canvas (fullscreen TUI mode)",
+        st.active ? `  font ${st.font}` : "  /gfx full zoom <x> | font-size <px> | line-height <n> | font <path.ttf> | caret glow|beam | pixel-mouse on|off|auto | transport png|zlib",
+        st.active ? `  frames ${st.stats.frames} uploads ${st.stats.uploads} (${Math.round(st.stats.uploadBytes / 1024)} KiB) raster ${st.stats.rasterMs}ms last frame ${st.stats.lastFrameMs}ms cached strips ${st.cachedStrips} pixelMouse=${st.pixelMouse}` : "  /gfx full off — back to the terminal text grid",
+      ].join("\n");
+    };
+    try {
+      if (sub === "status") { notify(describe()); return; }
+      if (sub === "off" || (sub === "toggle" && fullCanvas.active)) {
+        await fullCanvas.stop();
+        notify("Pi Graphics full canvas off.");
+        return;
+      }
+      const numeric = (name) => { const n = Number(value); if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} needs a positive number`); return n; };
+      if (sub === "font-size" || sub === "size") fullCanvasOverrides.fontSizePx = numeric("font-size");
+      else if (sub === "zoom" || sub === "scale") { fullCanvasOverrides.zoom = numeric("zoom"); delete fullCanvasOverrides.fontSizePx; }
+      else if (sub === "line-height") fullCanvasOverrides.lineHeight = numeric("line-height");
+      else if (sub === "font") fullCanvasOverrides.font = args.slice(1).join(" ");
+      else if (sub === "caret") fullCanvasOverrides.caret = String(value || "glow");
+      else if (sub === "pixel-mouse") fullCanvasOverrides.pixelMouse = String(value || "auto");
+      else if (sub === "transport") fullCanvasOverrides.transport = String(value || "png");
+      else if (!["on", "toggle", "start"].includes(sub)) { notify(`unknown /gfx full option: ${sub}\n${describe()}`, "warning"); return; }
+      if (fullCanvas.active) await fullCanvas.stop({ reason: "reconfigure" });
+      await fullCanvas.start(fullCanvasOptions(gfx, fullCanvasOverrides));
+      notify(describe());
+    } catch (error) {
+      notify(`Pi Graphics full canvas: ${error?.message || error}`, "warning");
+    }
+  }
 
   function releaseOwnedUiSurfaces(ctx) {
     const ui = ctx?.ui;

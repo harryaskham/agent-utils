@@ -14,6 +14,31 @@ For protocol details, see
 fullscreen ownership model and implementation sequence, see
 [`design/pi-graphics-fullscreen-composition.md`](design/pi-graphics-fullscreen-composition.md).
 
+## How graphics are placed (read this first)
+
+Two Kitty mechanisms are used, chosen for portability across Kitty, Ghostty
+and Pi's regular *and* fullscreen renderers:
+
+1. **Unicode placeholders** (virtual `U=1` placements). The image is part of
+   the text flow — Pi diffs and scrolls it like text. Used for editor rails,
+   footer dividers, box-rail rows and fill-mode box edge cells. Transmissions
+   always go through a side channel, never into rendered row text (Pi treats
+   any line containing `ESC _G` as an image line: full repaint plus
+   delete-all-placements every fullscreen frame).
+2. **Compositor overlays** (real placements, under text). A component embeds a
+   zero-width marker `ESC _ pi:gfx:<key> BEL`; the
+   [frame compositor](../extensions/pi-graphics/frame-compositor.js) wraps the
+   active renderer's `doRender`, locates markers and Pi's own IME cursor in the
+   final composed screen, and injects absolute `CUP + a=p` commands *inside the
+   same synchronized update*, cropped at screen edges. Used for the cursor
+   halo/beam, the footer underlay, `relative` editor rails and box strips under
+   text. After any host clear (`2J`/`3J`, `a=d,d=A`) the compositor replays
+   uploads in the same frame — Kitty and Ghostty prune images that lose their
+   last placement.
+
+Placements parented to virtual placements (`P/Q/H/V`) are no longer used:
+Ghostty places them at the terminal cursor, and Pi fullscreen deletes them.
+
 ## Current supported surface
 
 The normal extension deliberately stays smaller than the historical showcase:
@@ -121,6 +146,50 @@ Legacy names remain readable for compatibility but produce a one-time warning:
 Unknown values fall back to `static`. Runtime normalization does not write
 `settings.json`; only explicit `/gfx save` persists canonical values.
 
+## Full pixel canvas (`/gfx full`, experimental)
+
+`/gfx full` is a separate view over the *same* Pi session. Pi keeps composing
+its fullscreen screen (transcript, overlays, selection, search, flashes,
+editor, footer) but at a virtual cell grid derived from a canvas font size,
+independent of the terminal's cells. The frame hook hands each composed screen
+to [`canvas/full-canvas.js`](../extensions/pi-graphics/canvas/full-canvas.js),
+which rasterizes rows itself and places them as Kitty images:
+
+- dependency-free TrueType renderer (cmap 4/12, simple + composite glyf,
+  coverage rasterizer, synthetic bold/italic, fontconfig fallback per
+  codepoint) at any pixel size — DPI independent; the default size follows the
+  terminal's physical cell height;
+- vector box drawing, rounded corners, blocks, braille; rounded panels for
+  background runs; an editor card and footer bar from Pi's layout rects;
+  soft rounded selection; a gradient/vignette background layer; Pi inline
+  images decoded and composited; an eased glowing caret;
+- rows are position-independent, content-keyed strips: scrolling re-places
+  cached strips, only changed rows are rasterized and uploaded (a keystroke is
+  ~1 strip, ~4 ms, a few KiB), each frame is one synchronized update;
+- input keeps Pi's behaviour: keys/paste/IME untouched (the hidden hardware
+  cursor is parked under the caret), SGR mouse is remapped from real pixels
+  (SGR-Pixels 1016 on Kitty/Ghostty/WezTerm) or real cells to virtual cells
+  before Pi's handlers, so wheel scrolling, drag selection, copy, links and
+  the scrollbar work at canvas resolution.
+
+Requires Pi's fullscreen TUI mode (`/settings` → TUI mode or `--tui-mode
+fullscreen`) and a Kitty-graphics terminal; refused inside tmux unless
+`PI_GRAPHICS_FULL_TMUX=1`.
+
+```text
+/gfx full [on|off|toggle|status]
+/gfx full zoom 1.25            # scale the canvas font relative to the terminal cell
+/gfx full font-size 16         # absolute canvas font px
+/gfx full line-height 1.3
+/gfx full font /path/Face.ttf  # or piGraphics.full.font / PI_GRAPHICS_FULL_FONT
+/gfx full caret glow|beam
+/gfx full pixel-mouse auto|on|off
+/gfx full transport png|zlib   # zlib (f=32,o=z) is opt-in: Ghostty 1.3.1 crashes on some zlib streams
+```
+
+Settings live under `piGraphics.full` (`fontSizePx`, `zoom`, `lineHeight`,
+`padding`, `font`, `family`, `caret`, `pixelMouse`, `transport`).
+
 ## Commands
 
 `/gfx` with no arguments opens the settings UI. Useful direct forms include:
@@ -186,6 +255,11 @@ current path still avoids terminal cursor-position reports, absolute screen
 math, and forced fullscreen redraws. Kitty honours offsets from a virtual
 parent; Ghostty currently drops those offsets, so centred multi-cell glow is a
 Kitty-targeted feature and the one-cell cursor remains the portable fallback.
+
+**Superseded:** the halo is now a compositor overlay placed at Pi's own IME
+cursor cell each frame (clipped at edges, drawn under text) and works in
+Ghostty; the glyph under the cursor stays readable (bold) instead of being
+replaced by a placeholder.
 
 Bounded live smoke in a direct Kitty window:
 
@@ -273,6 +347,21 @@ node --test --test-reporter=spec \
   test/editor-chips.test.js \
   test/pi-graphics.test.js
 ```
+
+Real-terminal lab (Xvfb + Ghostty or Kitty, screenshots and pty capture;
+never part of `npm test`, isolated agent dir):
+
+```bash
+node scripts/pi-graphics-ghostty-lab.mjs --out=/tmp/gfx --tui=fullscreen --fixture=4 \
+  --settings='{"piGraphics":{"mode":"on","boxChrome":true}}' --record \
+  --steps='wait:6500,shot:start,type:hello,wait:800,shot:typed,scroll:500;300;up;6,shot:scrolled'
+node scripts/pi-graphics-ghostty-lab.mjs --terminal=kitty --out=/tmp/gfx-full --tui=fullscreen \
+  --fixture=4 --steps='wait:7000,cmd:/gfx full on,wait:3000,drag:60;560;300;620,shot:canvas'
+```
+
+`--record` tees the exact pty byte stream to `pty.log` for protocol audits;
+`PI_GRAPHICS_TRACE=/path` (via `--env`) logs host discovery, compositor
+frames and canvas frame timings.
 
 Optional visual artifacts and terminal smoke checks:
 

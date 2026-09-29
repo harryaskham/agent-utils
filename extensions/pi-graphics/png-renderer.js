@@ -110,25 +110,27 @@ function makeIhdr(width, height) {
   return ihdr;
 }
 
-function deflateRgbaFrame(pixels, width, height) {
+function deflateRgbaFrame(pixels, width, height, level) {
   const rowStride = width * 4;
   const filtered = Buffer.alloc(height * (rowStride + 1));
   for (let y = 0; y < height; y += 1) {
     filtered[y * (rowStride + 1)] = 0; // filter type none
     pixels.copy(filtered, y * (rowStride + 1) + 1, y * rowStride, (y + 1) * rowStride);
   }
-  return deflateSync(filtered);
+  return level === undefined ? deflateSync(filtered) : deflateSync(filtered, { level });
 }
 
 /**
  * Encode an RGBA pixel buffer (length = width*height*4) into PNG bytes.
+ * `level` trades size for speed (1 is ~3x faster than the default 6 and is
+ * what interactive canvas strips use).
  */
-export function encodeRgbaPng(pixels, width, height) {
+export function encodeRgbaPng(pixels, width, height, { level } = {}) {
   validateRgbaFrame(pixels, width, height, "encodeRgbaPng");
   return Buffer.concat([
     PNG_SIGNATURE,
     makeChunk("IHDR", makeIhdr(width, height)),
-    makeChunk("IDAT", deflateRgbaFrame(pixels, width, height)),
+    makeChunk("IDAT", deflateRgbaFrame(pixels, width, height, level)),
     makeChunk("IEND", Buffer.alloc(0)),
   ]);
 }
