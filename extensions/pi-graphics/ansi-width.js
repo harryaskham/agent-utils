@@ -6,7 +6,11 @@
 // extension consumes approximateVisibleCells, clampRenderedLineToWidth, and
 // clampRenderedRowsToWidth.
 
-const TERMINAL_CONTROL_RE = /(?:\x1b\[[0-?]*[ -/]*[@-~])|(?:\x1b\][\s\S]*?(?:\x07|\x1b\\))|(?:\x1b[_PG][\s\S]*?\x1b\\)/g;
+// APC (`ESC _`) is terminated by ST or BEL: Pi's CURSOR_MARKER and the
+// Pi-graphics overlay markers are BEL-terminated. Without BEL the lazy match
+// ran on to the next ST and swallowed real text (mis-measured cursor columns,
+// truncated footers). DCS (`ESC P`) keeps ST-only termination.
+const TERMINAL_CONTROL_RE = /(?:\x1b\[[0-?]*[ -/]*[@-~])|(?:\x1b\][\s\S]*?(?:\x07|\x1b\\))|(?:\x1b_[^\x07\x1b]*(?:\x07|\x1b\\))|(?:\x1b[PG][\s\S]*?\x1b\\)/g;
 
 export function readTerminalControlAt(text, index) {
   TERMINAL_CONTROL_RE.lastIndex = index;

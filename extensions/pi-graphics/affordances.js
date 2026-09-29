@@ -274,13 +274,18 @@ export function renderEditorCursorGlowFrames({
   hotColor = "#ff9f5a",
   coreColor = NORDIC_EDGE,
   radioactiveBlue = "#3ce6ff",
+  // beam=true puts the white-hot core on the LEFT edge of the centre cell so
+  // the glyph under the cursor stays readable (the halo is drawn under text).
+  beam = false,
 } = {}) {
   const metrics = resolveCellMetrics({ cellWidthPx, cellHeightPx, lineHeightScale });
   const cols = clampPositive(columns, 11, "columns");
   const rowCount = clampPositive(rows, 5, "rows");
   const widthPx = metrics.cellWidthPx * cols;
   const heightPx = metrics.cellHeightPx * rowCount;
-  const cx = Math.floor((Math.floor(cols / 2) + 0.5) * metrics.cellWidthPx);
+  const cx = beam
+    ? Math.floor(Math.floor(cols / 2) * metrics.cellWidthPx + Math.max(1, metrics.cellWidthPx * 0.12))
+    : Math.floor((Math.floor(cols / 2) + 0.5) * metrics.cellWidthPx);
   const cy = Math.floor(heightPx / 2);
   const N = Math.max(2, Math.trunc(Number(frameCount) || 24));
   const blue = parseColor(radioactiveBlue).slice(0, 3);

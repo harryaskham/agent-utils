@@ -1450,8 +1450,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   // prototype is derived under a `typeof AssistantMessageComponent === "function"`
   // guard and the module top level stays dependency-free (importable + activatable
   // under bare `node --test`). Assert both invariants.
-  assert.match(source, /const chatContainerPrototype =[\s\S]{0,160}?Object\.getPrototypeOf\(AssistantMessageComponent\.prototype\)/);
-  assert.match(source, /typeof AssistantMessageComponent === "function"/);
   assert.doesNotMatch(source, /from "@earendil-works\/pi-coding-agent"/);
   assert.match(source, /await import\("@earendil-works\/pi-coding-agent"\)/);
   assert.match(source, /function boxChromeComponentMap\(\)/);
@@ -1511,34 +1509,18 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function editorTypingImpulseEnabled\(\)/);
   assert.match(source, /if \(!editorDynamicHeatEnabled\(\)\) \{\n\s+editorCursorHeat = 0/);
   assert.match(source, /if \(editorTypingImpulseEnabled\(\)\) \{\n\s+editorCursorImpulseCol = safeCol/);
-  assert.match(source, /const impulseEnabled = dynamicHeat && editorTypingImpulseEnabled\(\)/);
-  assert.match(source, /const impulseStrength = impulseEnabled \? Math\.max\(0, Math\.min\(1, Math\.exp\(-impulseAge \/ 360\)/);
-  assert.match(source, /mixHexColor\(baseBorderColor, contextMode === "thinking" \? "#d8dee9" : "#ffffff", railHeat\)/);
   assert.match(source, /function editorBorderHeight\(edge\)/);
   assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
   assert.match(source, /function editorBorderStyle\(\)/);
   assert.match(source, /EDITOR_BORDER_STYLES = \["gradient", "glass", "chrome", "geometric"\]/);
-  assert.match(source, /editor-border-static-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{variant\}-\$\{borderStyle\}-rail-\$\{railHeatBucket\}-\$\{contextMode\}/);
-  assert.match(source, /impulse-\$\{impulseCol \?\? "none"\}-\$\{impulseBucket\}/);
-  assert.match(source, /context: contextMode/);
-  assert.match(source, /impulseX: impulseCol == null \? null : \(impulseCol \+ 0\.5\) \* cell\.cellWidthPx/);
   assert.match(source, /rows: height/);
-  assert.match(source, /function buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
   // Border now uses the cursor strategy: transparent anchor + a full-width
   // RELATIVE escalation strip uploaded once + rail-heat -> frame-select. The old
   // per-heat-bucket image key + manual loop are gone.
-  assert.match(source, /editor-border-escalation-\$\{edge\}-\$\{visualCols\}x\$\{height\}-\$\{paletteKey\}/);
-  assert.match(source, /editor-border-anchor-\$\{edge\}/);
-  assert.match(source, /const frame = 1 \+ Math\.max\(0, Math\.min\(BORDER_FRAMES - 1, Math\.round\(\(Number\(railHeat\) \|\| 0\) \* \(BORDER_FRAMES - 1\)\)\)\)/);
-  assert.match(source, /buildAnimationFrameCommand\(\{ imageId, frame, passthrough/);
-  assert.match(source, /edge === "top" && height > 1/);
   assert.match(source, /const row = buildEditorRelativeBorderRow\(width, edge\)/);
   assert.match(source, /function buildEditorBorderWidgetRows\(width, edge\)/);
   assert.doesNotMatch(source, /if \(edge === "top"\) return \[\]/);
   assert.match(source, /rows\.slice\(0, -1\).*rows\.slice\(1\)/s);
-  assert.match(source, /editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"/);
-  assert.match(source, /buildEditorBorderWidgetRows\(width, edge\)[\s\S]*buildJoinedUnicodeEditorBorderLine\(width, edge\)/);
-  assert.match(source, /editorBorderNeedsWidget\(edge\)[\s\S]*editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"\) return true/);
   // The dash-rule detection + border/decorate/clamp composition moved into the
   // pure composeEditorRenderRows seam (bd-f5f802); it is asserted behaviorally in
   // the "editor render composition" test below. The surface still contains the
@@ -1568,21 +1550,15 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /unknown unicode mode: \$\{value\} \(use fill\|topLeft\)/);
   assert.match(source, /function buildEditorRelativeBorderRow\(width, edge\)/);
   assert.match(source, /function editorBorderNeedsWidget\(edge\)/);
-  assert.match(source, /editorStyle\(\) === "unicode" && editorUnicodeMode\(\) === "topLeft"\) return true/);
-  assert.match(source, /A top-left Unicode placement can only grow down from its anchor/);
-  assert.match(source, /function buildBoxRailRows\(\{ width, edge, type = "assistant" \}\)/);
   assert.match(source, /function createBoxRailsRuntime\(\)/);
-  assert.match(source, /unicodeMode === "fill"/);
   assert.match(source, /function clearStaleStartupGraphics\(\)/);
   assert.match(source, /PI_GRAPHICS_CLEAR_STALE_ON_STARTUP/);
   assertSourceCallIncludes(source, "buildDeleteByZIndexBandCommand", ["PI_GRAPHICS_RESERVED_Z_INDICES", "freeData: true"], "stale-startup reserved-z-band cleanup frees image data");
   assert.match(source, /createBoxRailsRuntime\(\)/);
   assert.match(source, /box-rail-/);
-  assert.match(source, /const vOffset = edge === "top" \? -\(height - 1\) : 0/);
   assert.match(source, /const placementLineCache = new Map\(\)/);
   assert.match(source, /function cachedPlacementLine\(key, buildLine\)/);
   assert.match(source, /function clearEditorCursorPlacement\(\)/);
-  assert.match(source, /editorCursorRelativePlacement = null;\n\s+editorCursorGlowFrame = -1;\n\s+editorCursorGlowImageId = null;\n\s+return true/);
   assert.match(source, /function editorWorkspaceCellMetrics\(\)/);
   assert.match(source, /lineHeightScale: env\.PI_GRAPHICS_LINE_HEIGHT_SCALE \?\? 1\.2/);
   assert.match(source, /const cell = editorWorkspaceCellMetrics\(\)/);
@@ -1595,34 +1571,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const variant = safeHeat > 0\.35 \? "scanlines" : "glow"/);
   assert.match(source, /fadeStart: false,\n\s+fadeEnd: true/);
   assert.match(source, /function editorCursorStyle\(\)/);
-  assert.match(source, /const cursorStyle = editorCursorStyle\(\)/);
-  assert.match(source, /if \(cursorStyle === "cell"\)/);
-  assert.match(source, /Glow mode: a precomputed escalation animation/);
-  assert.match(source, /const key = `editor-cursor-cell-direct-\$\{heatBucket\}-\$\{trailBucket\}-\$\{directionBucket\}/);
   // Glow now: transparent stable anchor + escalation frames uploaded once + a
   // single persistent relative halo + heat->frame-select (no per-keystroke
   // re-upload, no cell+halo double-draw, no churn).
-  assert.match(source, /editor-cursor-glow-anchor-/);
-  assert.match(source, /ensureAnchorUploaded\(\{ anchorImageId, anchorPlacementId \}\)/);
   assert.match(source, /renderEditorCursorGlowFrames\(\{/);
-  assert.match(source, /editor-cursor-glow-frames-/);
-  assert.match(source, /buildPngCursorAnimationUpload\(\{/);
-  assert.match(source, /editor-cursor-glow-halo-/);
-  assert.match(source, /columns: 1,\n\s+rows: 1,/);
-  assert.match(source, /cursorColumns = 11/);
-  assert.match(source, /const cursorHOffset = -Math\.floor\(cursorColumns \/ 2\)/);
-  assert.match(source, /const cursorVOffset = -Math\.floor\(cursorRows \/ 2\)/);
-  assert.match(source, /hOffset: cursorHOffset/);
-  assert.match(source, /vOffset: cursorVOffset/);
-  assert.match(source, /zIndex: PI_GRAPHICS_Z\.BOX_CHROME/);
-  assert.match(source, /vanishes when the editor row repaints during typing/);
-  assert.match(source, /function deferGraphicsCommand\(command\)/);
-  assert.match(source, /deferGraphicsCommand\(buildRelativePlacementCommand\(\{/);
-  assert.match(source, /buildAnimationFrameCommand\(\{ imageId, frame, passthrough/);
-  assert.match(source, /return `\$\{String\(label \|\| "anchored"\)\.padEnd\(12\)\} \$\{anchorLine\}\$\{relativePlacement\}`/);
   assert.doesNotMatch(source, /return anchorLine \? `\$\{anchorLine\}\$\{relativePlacement\}` : null/);
-  assert.match(source, /trailCells: heat > 0\.04/);
-  assertSourceCallIncludes(source, "buildDeleteCommand", ["editorCursorRelativePlacement.imageId", "editorCursorRelativePlacement.placementId", "deleteMode: \"i\""], "editor cursor-glow clear stays placement-only (transient, lowercase d=i)");
   // bd-f4d277: the strip, footer, and cursor-glow halo evictions all route
   // through the shared evictOwnedImage helper, which frees image data (d=I) and
   // drops the upload-cache / ownership entries, guarded by a replacement image
@@ -1631,17 +1584,13 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /const freesImage = replacementImageId === undefined \|\| imageId !== replacementImageId;/);
   assertSourceCallIncludes(source, "buildDeleteCommand", ["freeData: freesImage"], "evictOwnedImage frees image data on genuine eviction (bd-f4d277)");
   assert.match(source, /if \(freesImage\) \{\n\s+uploadedImages\.delete\(imageId\);\n\s+state\.ownedImageIds\?\.delete\?\.\(imageId\);/);
-  assertSourceCallIncludes(source, "evictOwnedImage", ["imageId: entry.imageId", "replacementImageId: imageId"], "box-rail strip eviction routes through evictOwnedImage (bd-f4d277)");
-  assertSourceCallIncludes(source, "evictOwnedImage", ["imageId: editorCursorRelativePlacement.imageId", "replacementImageId: imageId"], "cursor-glow halo supersede routes through evictOwnedImage (bd-15ea4f / bd-f4d277)");
-  assertSourceCallIncludes(source, "evictOwnedImage", ["imageId: footerUnderlayRelative.imageId", "replacementImageId: imageId"], "footer underlay eviction routes through evictOwnedImage (bd-f4d277)");
+  // Cache evictions free image data and drop every ownership/replay record.
+  assert.match(source, /function freeOwnedImages\(imageIds\)/);
+  assert.match(source, /freeOwnedImages\(oldest\.imageIds\)/);
+  assert.match(source, /freeOwnedImages\(\[oldestId\]\)/);
+  assert.match(source, /transmitLog\.delete\(imageId\)/);
   assert.doesNotMatch(source, /deleteMode: "p"/);
-  assert.match(source, /function ensureEditorRowBackground/);
   assert.match(source, /editorRowBackgroundEnabled\(\)/);
-  assert.match(source, /const safeRowWidth = Math\.max\(1, Math\.min\(512, Math\.trunc\(Number\(rowWidth\) \|\| 1\) - 2\)\)/);
-  assert.match(source, /const safeCursorCol = Math\.max\(0, Math\.min\(safeRowWidth - 1/);
-  assert.match(source, /hOffset: -safeCursorCol/);
-  assert.match(source, /columns: safeRowWidth/);
-  assert.match(source, /zIndex: PI_GRAPHICS_Z\.BACKGROUND/);
   assert.match(source, /renderEditorCursorVline/);
   assert.match(source, /function ensureManualAnimationLoop\(\{ imageId, frames, delayMs \}\)/);
   assert.match(source, /function keepTimerFromHoldingProcess\(timer\)/);
@@ -1655,8 +1604,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /ensureManualAnimationLoop\(\{ imageId: placement\.imageId, frames: placement\.frames/);
   assert.doesNotMatch(source, /autoLoop: true/);
   assert.match(source, /if \(!editorDynamicHeatEnabled\(\) \|\| editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
-  assert.match(source, /terminal-driven APNG\/native frame loops have not repainted/);
-  assert.match(source, /buildAnimationStopCommand\(\{ imageId: animImageId/);
   assert.match(source, /function buildSegmentedFooterLine/);
   assert.match(surface, /function approximateVisibleCells\(text\)/);
   assert.match(surface, /function truncateAnsiToVisibleWidth\(text, maxWidth\)/);
@@ -1700,14 +1647,11 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function installSegmentedFooter/);
   assert.match(source, /ctx\.ui\.setFooter\(factory, \{ piGraphics: false \}\)/);
   assert.match(source, /ensureUnicodePlacement\(state\)/);
-  assert.match(source, /function buildFooterUnderlayCell\(width\)/);
   assert.match(source, /renderFooterUnderlay\(\{/);
   // Footer underlay now spills full-width from a 1x1 transparent virtual anchor
   // via a NON-virtual relative placement (H=0,V=0) at the background z-index,
   // rather than a single tiled virtual placeholder cell (which only ever drew
   // one cell). See the kitty relative-placement probe findings.
-  assert.match(source, /ensureAnchorUploaded\(\{ anchorImageId, anchorPlacementId \}\)/);
-  assert.match(source, /buildRelativePlacementCommand\(\{[\s\S]*?zIndex: PI_GRAPHICS_Z\.BACKGROUND,[\s\S]*?\}\)/);
   assert.doesNotMatch(source, /ensureFooterSegmentBackground/);
   assert.doesNotMatch(source, /hOffset: FOOTER_DIVIDER_WIDTH/);
   assert.match(source, /function themeProvenanceLines/);
@@ -1721,25 +1665,12 @@ test("pi-graphics settings source maps minimal env", async () => {
   // bd-dcca28: minimal-invariant pin — assert the editor-cursor-cell builder is
   // defined and takes a destructured options object, without pinning the exact
   // parameter list/defaults (which churns on every benign signature tweak).
-  assert.match(source, /function buildEditorCursorCell\(\{/);
-  assert.match(source, /editor-cursor-cell-direct-/);
-  assert.match(source, /editor-cursor-glow-/);
-  assert.match(source, /editor-cursor-glow-halo-/);
-  assert.match(source, /1 \+ Math\.max\(0, Math\.min\(GLOW_FRAMES - 1, Math\.round\(heat \* \(GLOW_FRAMES - 1\)\)\)\)/);
-  assert.match(source, /columns: 1,\n\s+rows: 1,/);
-  assert.match(source, /trailCells: 0/);
-  assert.match(source, /trailCells: heat > 0\.04/);
   assert.match(source, /editorCursorTrailDirection = safeCol > editorCursorLastCol \? 1 : -1/);
   // bd-dcca28: minimal-invariant pin — builder is defined and destructures an
   // options object; do not pin the full parameter list/defaults.
-  assert.match(source, /function buildAnchoredEditorCursorPreviewLine\(\{/);
-  assert.match(source, /editor-cursor-preview-anchor-/);
-  assert.match(source, /editor-cursor-preview-relative-placement-/);
   // bd-dcca28: keep the meaningful invariant (an "anchored"-labeled preview line
   // is pushed) but drop the brittle exact heat/wpm/trailDirection argument values.
-  assert.match(source, /lines\.push\(buildAnchoredEditorCursorPreviewLine\(\{ label: "anchored"/);
   assert.match(source, /function buildEditorCursorPreviewLines\(\)/);
-  assert.match(source, /editor-cursor-preview-/);
   assert.match(source, /action === "cursor-preview" \|\| action === "preview"/);
   assert.match(source, /function cursorDoctorLines\(\)/);
   assert.match(source, /Expected live cursor: configurable single-cell or speed-responsive anchored glow at the text cursor/);
@@ -1876,7 +1807,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(cursorAnchorSource, /\\x1b\\\[\(\?:0\|27\)m/);
   assert.match(cursorAnchorSource, /approximateVisibleCells\(text\.slice\(0, match\.index\)\)/);
   assert.match(source, /locateEditorCursorAnchor\(text, rowWidth\)/);
-  assert.match(source, /cursorCol: anchor\.cursorCol/);
   // decorateEditorContentLine is now invoked via the composeEditorRenderRows
   // decorateLine callback (bd-f5f802); the wiring is asserted here and the
   // composition behavior in the "editor render composition" tests above.
@@ -1884,7 +1814,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /if \(!tmuxLiveEditorGraphicsEnabled\(\)\) return line/);
   assert.match(source, /editorTrailingWorkspaceEnabled\(\)/);
   assert.match(source, /visualCols: cols/);
-  assert.match(source, /return `\$\{chrome\}\$\{" "\.repeat\(Math\.max\(0, cols - visualCols\)\)\}`/);
 });
 
 // Behavioral coverage for the pure footer helpers extracted in bd-0f9032. These
@@ -2110,6 +2039,31 @@ test("buildWorkingIndicatorFrames creates a themed neon pulse sequence", () => {
   assert.deepEqual(calls.map(([token]) => token), ["dim", "muted", "accent", "borderAccent", "thinkingXhigh", "borderAccent", "accent", "muted"]);
 });
 
+test("pi-graphics composes real placements through the frame compositor, never virtual-parent relatives", async () => {
+  const source = await readFile(new URL("../extensions/pi-graphics.js", import.meta.url), "utf8");
+  // Host classes come from the live TUI (the compiled Pi binary cannot resolve
+  // the pi-coding-agent import for this package, and a copy would differ).
+  assert.match(source, /createHostComponentRegistry\(/);
+  assert.match(source, /captureTuiFromUi\(ctx\?\.ui\)/);
+  assert.match(source, /host\.get\("CustomEditor"\)/);
+  // Real placements: compositor-injected, cropped at edges; never P/Q parents.
+  assert.match(source, /createFrameCompositor\(\{/);
+  assert.match(source, /overlayPlacements\.update\(frame, desired\)/);
+  assert.doesNotMatch(source, /buildRelativePlacementCommand\(/);
+  assert.doesNotMatch(source, /deferGraphicsCommand\(/);
+  // Pi fullscreen frees every image on full redraws; replay inside the frame.
+  assert.match(source, /inject = `\$\{restoreAfterHostClear\(frame\)\}\$\{inject\}`/);
+  // Bounded caches with data-freeing eviction.
+  assert.match(source, /PLACEMENT_LINE_CACHE_LIMIT/);
+  assert.match(source, /REAL_IMAGE_CACHE_LIMIT/);
+  assert.match(source, /freeData: true, passthrough: state\.config\.passthrough/);
+  // Border artwork keys are bounded: no typing-impulse column in the key.
+  assert.doesNotMatch(source, /impulse-\$\{impulseCol/);
+  assert.match(source, /heat\$\{railHeatBucket\}/);
+  // Settings reads do not spread process.env per call.
+  assert.match(source, /if \(gfxEnvCache && gfxEnvSource === settingsEnv\) return gfxEnvCache;/);
+});
+
 test("pi-graphics extension source is the slim graphics primitive layer", async () => {
   const sourcePath = fileURLToPath(new URL("../extensions/pi-graphics.js", import.meta.url));
   const source = await readFile(sourcePath, "utf8");
@@ -2158,10 +2112,8 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /function patchUiGraphicsSurfaces/);
   assert.match(source, /function restoreUiGraphicsSurfaces/);
   assert.match(source, /function teardownBoxChrome/);
-  assert.match(source, /restoreBuiltInBoxChrome/);
   assert.match(source, /function resetGraphicsUploadCaches\(\)/);
   assert.match(source, /uploadedImages\.clear\(\)/);
-  assert.match(source, /relativeUploaded\.clear\(\)/);
   assert.match(source, /resetPlacementTracking\(state\)/);
   assert.match(source, /boxChromeRuntime\?\.resetCaches\?\.\(\)/);
   assert.match(source, /async execute\(_toolCallId, params = \{\}, _signal, _onUpdate, ctx\)/);
@@ -2203,7 +2155,6 @@ test("pi-graphics extension source is the slim graphics primitive layer", async 
   assert.match(source, /ui\.setWorkingMessage\?\.__piGraphicsPatchedSurface/);
   assert.match(source, /ui\.setWorkingIndicator\?\.__piGraphicsPatchedSurface/);
   assert.match(source, /ui\.setHiddenThinkingLabel\?\.__piGraphicsPatchedSurface/);
-  assert.match(source, /restoreBuiltInBoxChrome\?\.\(\)/);
   assert.match(source, /boxChromeInstalled = false/);
   assert.match(source, /installBoxChromeOnce\(ctx, \{ force: true \}\)/);
   assert.match(source, /teardownBoxChrome\(ctx\)/);

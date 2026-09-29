@@ -25,6 +25,9 @@ export function makeState() {
     transmittedImageIds: new Set(),
     placementByImage: new Map(),
     uploadedContentByImage: new Map(),
+    // imageId -> { placementId, columns, rows } for Unicode-placeholder virtual
+    // placements, so they can be re-asserted after a compositor clears them.
+    virtualPlacements: new Map(),
     config: {
       passthrough: "auto",
       placementMode: "auto",
@@ -73,6 +76,7 @@ export function buildPlacement(state, { name, png, columns, rows, width, caption
     passthrough: state.config.passthrough,
   });
   if (!alreadyTransmitted) markImageUploaded(state, imageId, hash);
+  (state.virtualPlacements ||= new Map()).set(imageId, { placementId, columns, rows });
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
     placementId,
@@ -103,6 +107,7 @@ export function buildAnimatedPlacement(state, { name, pngs, delaysMs, columns, r
     autoLoop,
   });
   if (!alreadyTransmitted) markImageUploaded(state, imageId, hash);
+  (state.virtualPlacements ||= new Map()).set(imageId, { placementId, columns, rows });
   const lines = buildKittyUnicodePlaceholderLines({
     imageId,
     placementId,
@@ -119,6 +124,7 @@ export function resetPlacementTracking(state) {
   state?.transmittedImageIds?.clear?.();
   state?.placementByImage?.clear?.();
   state?.uploadedContentByImage?.clear?.();
+  state?.virtualPlacements?.clear?.();
 }
 
 export function ensureUnicodePlacement(state) {

@@ -54,7 +54,7 @@ const LIFECYCLE_HOOKS = [
   "message_end",
   "turn_end",
   "session_compact",
-  "session_end",
+  "session_shutdown",
 ];
 
 test("pi-graphics registers exactly one handler for each lifecycle hook", async () => {
@@ -89,12 +89,12 @@ test("pi-graphics footer hooks fire without throwing (model_select/message_end/t
   }
 });
 
-test("pi-graphics session_end hook fires without throwing (graphics-safe ctx)", async () => {
+test("pi-graphics session_shutdown hook fires without throwing (graphics-safe ctx)", async () => {
   const { handlers } = await activate();
-  const [end] = handlers.get("session_end");
+  const [end] = handlers.get("session_shutdown");
   // Teardown path: box-chrome restore, widget/footer clear, scoped graphics free.
   await assert.doesNotReject(
     async () => { await end({}, makeCtx()); },
-    "session_end must not throw with a graphics-safe ctx",
+    "session_shutdown must not throw with a graphics-safe ctx",
   );
 });

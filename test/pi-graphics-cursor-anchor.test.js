@@ -65,10 +65,12 @@ test("replacement moves the placeholder with the rendered cursor cell", () => {
   assert.equal(replaceLocatedEditorCursor(right, locateEditorCursorAnchor(right, 8), "ANCHOR"), "abcANCHOR");
 });
 
-test("fullscreen cursor path uses row-relative anchors, not absolute terminal probing", () => {
+test("cursor halo is placed at Pi's own IME cursor by the frame compositor, never by probing", () => {
   const source = readFileSync(new URL("../extensions/pi-graphics.js", import.meta.url), "utf8");
   assert.match(source, /locateEditorCursorAnchor\(text, rowWidth\)/);
-  assert.match(source, /hOffset: -Math\.floor\(GLOW_COLS \/ 2\)/);
-  assert.match(source, /vOffset: -Math\.floor\(GLOW_ROWS \/ 2\)/);
+  assert.match(source, /row: frame\.cursor\.row \+ halo\.dRow/);
+  assert.match(source, /dCol: -Math\.floor\(EDITOR_CURSOR_GLOW_COLUMNS \/ 2\)/);
   assert.doesNotMatch(source, /\x1b\[6n|cursor position report|absoluteCursor/i);
+  // No placements parented to virtual placements (broken in Ghostty and wiped by fullscreen).
+  assert.doesNotMatch(source, /buildRelativePlacementCommand\(/);
 });

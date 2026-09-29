@@ -160,7 +160,9 @@ test("unicode box mode leaves render-width slack for padded containers", () => {
   assert.doesNotMatch(out[0], /x{10}/, "unicode wrapper must not preserve full content plus side borders when renderWidth includes container padding");
 });
 
-test("unicode box topLeft mode emits one anchor and no redundant right placeholder", () => {
+test("unicode box topLeft mode without a compositor degrades to portable edge cells", () => {
+  // A lone anchor cell can only ever paint one cell of a wide virtual
+  // placement, so topLeft without the frame compositor uses fill edge cells.
   const runtime = createBoxChromeRuntime({
     emitGraphicsCommand: () => {},
     state: { ownedImageIds: new Set() },
@@ -171,11 +173,28 @@ test("unicode box topLeft mode emits one anchor and no redundant right placehold
     resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
   });
   const out = runtime.applyToRows({ type: "assistant", instanceId: 113, lines: ["hello"], renderWidth: 12 });
-  const visible = out[0]
-    .replace(/\x1b_G[\s\S]*?\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;]*m/g, "");
-  assert.equal((visible.match(/U/g) || []).length, 1, "topLeft mode should expose only one debug anchor cell");
-  assert.match(visible, /^Uhell/);
+  assert.doesNotMatch(out[0], /\x1b_G/, "rows must never embed kitty transmissions");
+  const visible = out[0].replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(visible, /^Uhello/);
+});
+
+test("unicode box topLeft mode with a compositor places one overlay strip per row under the text", () => {
+  const bindings = [];
+  const runtime = createBoxChromeRuntime({
+    emitGraphicsCommand: () => {},
+    state: { ownedImageIds: new Set() },
+    passthrough: "none",
+    boxMode: "unicode",
+    boxUnicodeMode: "topLeft",
+    resolveTheme: () => ({ colorRgb: [136, 192, 208] }),
+    overlayMarker: (bindingKey, instanceKey, spec) => { bindings.push({ bindingKey, instanceKey, spec }); return `<M:${instanceKey}>`; },
+  });
+  const out = runtime.applyToRows({ type: "assistant", instanceId: 7, lines: ["hello", "world"], renderWidth: 12 });
+  assert.equal(bindings.length, 2);
+  assert.deepEqual(bindings.map((b) => b.instanceKey), ["7.0", "7.1"]);
+  assert.equal(bindings[0].spec.cols, 12, "strip spans the full render width (no side-cell slack)");
+  assert.ok(out[0].startsWith("<M:7.0>hello"), "text keeps every cell; the strip sits under it");
+  assert.doesNotMatch(out.join(""), /\u{10eeee}|\x1b_G/u);
 });
 
 test("unicode box mode clamps overwide content to render width hint", () => {

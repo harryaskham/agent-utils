@@ -15,7 +15,7 @@
 // has been removed. The goal is to prove the graphics primitive layer before
 // adding decorative chrome.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 
 // tool-schema.js is a dependency-free local shim for the small `@sinclair/typebox`
 // `Type.*` subset used below (Object/Optional/String/Number/Boolean). Importing
@@ -55,6 +55,9 @@ import {
   renderBoxStripPng,
 } from "./pi-graphics/box-chrome.js";
 import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
+import { captureTuiFromUi, createHostComponentRegistry } from "./pi-graphics/host-components.js";
+import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./pi-graphics/frame-compositor.js";
+import { createPixelGeometryTracker } from "./pi-graphics/terminal-io.js";
 import { readAgentSettings, readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import { mixHexColor } from "./pi-graphics/color-utils.js";
@@ -113,59 +116,61 @@ const TOOL_PREFIX = "pi_graphics";
 const EDITOR_VARIANTS = ["rule", "gradient", "scanlines", "grid", "dots", "glow"];
 const MAX_DECORATED_NOTIFICATION_LINES = 64;
 const EINK_THEME_NAME = "eink";
+const BOX_CHROME_CLASS_BY_TYPE = Object.freeze([
+  ["assistant", "AssistantMessageComponent"], ["tool", "ToolExecutionComponent"],
+  ["bash", "BashExecutionComponent"], ["user", "UserMessageComponent"],
+  ["custom", "CustomMessageComponent"], ["skill", "SkillInvocationMessageComponent"],
+  ["branch", "BranchSummaryMessageComponent"], ["compaction", "CompactionSummaryMessageComponent"],
+  ["footer", "FooterComponent"], ["loader", "BorderedLoader"], ["border", "DynamicBorder"],
+  ["input", "ExtensionInputComponent"], ["editor", "ExtensionEditorComponent"],
+  ["selector", "ExtensionSelectorComponent"], ["login", "LoginDialogComponent"],
+  ["model", "ModelSelectorComponent"], ["oauth", "OAuthSelectorComponent"],
+  ["session", "SessionSelectorComponent"], ["settings", "SettingsSelectorComponent"],
+  ["image", "ShowImagesSelectorComponent"], ["theme", "ThemeSelectorComponent"],
+  ["thinkingSelector", "ThinkingSelectorComponent"], ["tree", "TreeSelectorComponent"],
+  ["userSelector", "UserMessageSelectorComponent"], ["agent", "ArminComponent"],
+  ["mascot", "DaxnutsComponent"],
+]);
+const BOX_CHROME_TYPE_BY_CLASS = new Map(BOX_CHROME_CLASS_BY_TYPE.map(([type, name]) => [name, type]));
+const BOX_CHROME_CLASS_NAMES = new Set(BOX_CHROME_TYPE_BY_CLASS.keys());
 
 export default async function piGraphicsExtension(pi) {
-  // Lazy-load the pi-coding-agent Component surface so the module top level is
-  // dependency-free and importable/activatable under bare `node --test`
-  // (@earendil-works/pi-coding-agent is a host-runtime peer, not installed in
-  // the unit-test env). Pi awaits this async factory before firing lifecycle
-  // hooks (see the async pi-self-update extension), so every `pi.on(...)`
-  // registration below still lands before session_start. When the package is
-  // absent the bindings stay undefined and the downstream guards degrade to
-  // no-ops: installCompactChatSpacingPatch bails on a null basePrototype,
-  // installEditorSurface returns early on `typeof CustomEditor !== "function"`,
-  // and installBoxChromeMonkeyPatch skips non-function component entries.
-  let ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader,
-    BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor,
-    CustomMessageComponent, DaxnutsComponent, DynamicBorder, ExtensionEditorComponent,
-    ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, LoginDialogComponent,
-    ModelSelectorComponent, OAuthSelectorComponent, SessionSelectorComponent,
-    SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent,
-    ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent,
-    TreeSelectorComponent, UserMessageComponent, UserMessageSelectorComponent;
-  try {
-    ({
-      ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader,
-      BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor,
-      CustomMessageComponent, DaxnutsComponent, DynamicBorder, ExtensionEditorComponent,
-      ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, LoginDialogComponent,
-      ModelSelectorComponent, OAuthSelectorComponent, SessionSelectorComponent,
-      SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent,
-      ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent,
-      TreeSelectorComponent, UserMessageComponent, UserMessageSelectorComponent,
-    } = await import("@earendil-works/pi-coding-agent"));
-  } catch {
-    // Host/optional dependency not installed (e.g. bare node --test); the
-    // component bindings stay undefined and the guards above keep activation
-    // and every fired hook safe.
-  }
-
-  const chatContainerPrototype = (typeof AssistantMessageComponent === "function")
-    ? Object.getPrototypeOf(AssistantMessageComponent.prototype)
-    : null;
-  installCompactChatSpacingPatch({
-    basePrototype: chatContainerPrototype,
-    chatBubbleConstructors: [
-      AssistantMessageComponent,
-      BashExecutionComponent,
-      BranchSummaryMessageComponent,
-      CompactionSummaryMessageComponent,
-      CustomMessageComponent,
-      SkillInvocationMessageComponent,
-      ToolExecutionComponent,
-      UserMessageComponent,
-    ],
+  // Host component classes. The compiled Pi binary does not reliably resolve
+  // `@earendil-works/pi-coding-agent` for files inside this ESM package (and a
+  // package-local node_modules copy would be a *different* class identity), so
+  // the authoritative constructors are learned from the live TUI tree and from
+  // Container.addChild. An import, when it works, only seeds the registry.
+  const CHAT_BUBBLE_NAMES = [
+    "AssistantMessageComponent", "BashExecutionComponent", "BranchSummaryMessageComponent",
+    "CompactionSummaryMessageComponent", "CustomMessageComponent", "SkillInvocationMessageComponent",
+    "ToolExecutionComponent", "UserMessageComponent",
+  ];
+  const chatBubbleConstructors = [];
+  let boxChromeInstalled = false;
+  let boxChromeRuntime = null;
+  const boxChromeRestores = [];
+  let hostImportError = null;
+  let compactChatSpacingInstalled = false;
+  const host = createHostComponentRegistry({
+    onDiscover(name, ctor) {
+      trace(`host discovered ${name}`);
+      if (CHAT_BUBBLE_NAMES.includes(name) && !chatBubbleConstructors.includes(ctor)) chatBubbleConstructors.push(ctor);
+      if (name === "Container" && !compactChatSpacingInstalled) {
+        compactChatSpacingInstalled = installCompactChatSpacingPatch({
+          basePrototype: ctor.prototype,
+          chatBubbleConstructors,
+        }).installed !== false;
+      }
+      if (boxChromeInstalled && BOX_CHROME_CLASS_NAMES.has(name)) patchDiscoveredBoxChromeClass(name, ctor);
+    },
   });
+  try {
+    host.addModule(await import("@earendil-works/pi-coding-agent"));
+  } catch (error) {
+    // Expected under the compiled Pi binary and bare `node --test`: live-tree
+    // discovery supplies the classes once session_start exposes the TUI.
+    hostImportError = error;
+  }
 
   const settings = readJsonIfExists(agentSettingsPath()) || {};
   // Keep the raw object for /gfx save so special forms are never rewritten;
@@ -177,7 +182,22 @@ export default async function piGraphicsExtension(pi) {
   // invocations within the session and can be flushed by `/gfx save` (or the
   // settings dialog Enter). null = no unsaved runtime changes pending.
   let runtimeSettingsOverride = null;
-  const gfxEnv = () => ({ ...settingsEnv, ...process.env });
+  // Settings reads happen many times per rendered frame; spreading all of
+  // process.env on each call dominated editor render cost. Cache the merged
+  // view and invalidate when settings change (`/gfx`, `/eink`, reload).
+  let gfxEnvCache = null;
+  let gfxEnvSource = null;
+  const gfxEnv = () => {
+    if (gfxEnvCache && gfxEnvSource === settingsEnv) return gfxEnvCache;
+    gfxEnvSource = settingsEnv;
+    gfxEnvCache = { ...settingsEnv, ...process.env };
+    return gfxEnvCache;
+  };
+  const traceFile = process.env.PI_GRAPHICS_TRACE || "";
+  const trace = (message) => {
+    if (!traceFile) return;
+    try { appendFileSync(traceFile, `${Date.now()} ${message}\n`); } catch {}
+  };
   const configuredThemeName = String(settings.piGraphics?.theme || settings.kittyGraphics?.theme || settings.theme || "");
   const state = makeState();
   const resourceOwner = createFullscreenResourceOwner();
@@ -201,26 +221,48 @@ export default async function piGraphicsExtension(pi) {
     return !FALSE_RE.test(String(value).trim());
   }
 
+  // Real cell pixel size, learned from the terminal's CSI 16 t reply. Artwork
+  // rendered at the true cell size is displayed 1:1 (crisp on HiDPI) instead
+  // of being rescaled by the terminal. Explicit env overrides still win.
+  const pixelGeometry = createPixelGeometryTracker({
+    onChange(geometry) {
+      trace(`pixel geometry ${JSON.stringify(geometry)}`);
+      const cellKey = `${geometry.cellWidthPx}x${geometry.cellHeightPx}`;
+      if (cellKey === appliedCellKey) return;
+      appliedCellKey = cellKey;
+      cellMetricsCache = null;
+      if (fullCanvas?.active) { fullCanvas.onGeometry?.(geometry); return; }
+      // Box chrome bakes cell metrics into its runtime; rebuild it so strips
+      // are rendered at the terminal's real cell size, then force one full
+      // repaint: Pi only rewrites changed rows, so rows showing the previous
+      // generation's placeholders would otherwise keep referencing freed images.
+      if (boxChromeInstalled && lastUiContext) {
+        try { installBoxChromeOnce(lastUiContext, { force: true }); } catch {}
+      }
+      try { hostTui?.invalidate?.(); } catch {}
+      try { hostTui?.requestRender?.(true); } catch {}
+    },
+  });
+  let cellMetricsCache = null;
+  let cellMetricsSource = null;
+  let appliedCellKey = "";
   function cellMetrics() {
+    if (cellMetricsCache && cellMetricsSource === settingsEnv) return cellMetricsCache;
     const env = gfxEnv();
-    return resolveCellMetrics({
-      cellWidthPx: env.PI_GRAPHICS_CELL_WIDTH_PX,
-      cellHeightPx: env.PI_GRAPHICS_CELL_HEIGHT_PX,
+    const measured = pixelGeometry.known() && envBool("PI_GRAPHICS_CELL_AUTO", true);
+    const explicitWidth = process.env.PI_GRAPHICS_CELL_WIDTH_PX;
+    const explicitHeight = process.env.PI_GRAPHICS_CELL_HEIGHT_PX;
+    cellMetricsSource = settingsEnv;
+    cellMetricsCache = resolveCellMetrics({
+      cellWidthPx: explicitWidth ?? (measured ? pixelGeometry.geometry.cellWidthPx : env.PI_GRAPHICS_CELL_WIDTH_PX),
+      cellHeightPx: explicitHeight ?? (measured ? pixelGeometry.geometry.cellHeightPx : env.PI_GRAPHICS_CELL_HEIGHT_PX),
       lineHeightScale: env.PI_GRAPHICS_LINE_HEIGHT_SCALE ?? 1.2,
     });
+    return cellMetricsCache;
   }
 
   function editorWorkspaceCellMetrics() {
-    const env = gfxEnv();
-    // The trailing workspace is rendered into the editor text row itself, not a
-    // separate widget. Keep its PNG height tied to the configured line-height
-    // scale (1.2 by default for Ghostty/Pi) so the placeholder image occupies
-    // the same visual row height as the editor top/bottom border graphics.
-    return resolveCellMetrics({
-      cellWidthPx: env.PI_GRAPHICS_CELL_WIDTH_PX,
-      cellHeightPx: env.PI_GRAPHICS_CELL_HEIGHT_PX,
-      lineHeightScale: env.PI_GRAPHICS_LINE_HEIGHT_SCALE ?? 1.2,
-    });
+    return cellMetrics();
   }
 
   const EDITOR_BORDER_STYLES = ["gradient", "glass", "chrome", "geometric"];
@@ -395,6 +437,8 @@ export default async function piGraphicsExtension(pi) {
   }
 
   let writeGraphicsCommand = null;
+  let hostTui = null;
+  let lastUiContext = null;
   let hardwareCursorTui = null;
   let editorChromeRegistry = null;
   let editorChromeLease = null;
@@ -404,20 +448,144 @@ export default async function piGraphicsExtension(pi) {
   let ownsWorkingMessage = false;
   let ownedWorkingIndicator = null;
   let ownsWorkingIndicator = false;
-  function resolveGraphicsWriter(ctx) {
-    if (typeof ctx?.ui?.write === "function") return ctx.ui.write.bind(ctx.ui);
-    if (typeof ctx?.ui?.terminal?.write === "function") return ctx.ui.terminal.write.bind(ctx.ui.terminal);
-    if (typeof ctx?.terminal?.write === "function") return ctx.terminal.write.bind(ctx.terminal);
-    return null;
+  function terminalWriter(terminal) {
+    if (!terminal) return null;
+    // Bind the class method, not an own-property override: the frame
+    // compositor temporarily shadows terminal.write while Pi renders, and a
+    // writer bound to that capture closure would silently drop graphics.
+    const method = Object.getPrototypeOf(terminal)?.write;
+    if (typeof method === "function") return method.bind(terminal);
+    return typeof terminal.write === "function" ? terminal.write.bind(terminal) : null;
   }
-  function emitGraphicsCommand(command) {
-    if (!command || typeof writeGraphicsCommand !== "function") return;
-    try { writeGraphicsCommand(command); } catch {}
+  function resolveGraphicsWriter(ctx) {
+    // Extension UI contexts expose neither `write` nor `terminal`; the live TUI
+    // captured at session_start is the dependable route to the terminal.
+    return terminalWriter(ctx?.ui?.terminal)
+      || terminalWriter(ctx?.terminal)
+      || terminalWriter(hostTui?.terminal)
+      || (typeof ctx?.ui?.write === "function" ? ctx.ui.write.bind(ctx.ui) : null);
+  }
+  const overlayPlacements = (() => {
+    const set = createOverlayPlacementSet({
+      serialize: (control) => serializeKittyGraphicsCommand(control, "", { passthrough: state.config.passthrough }),
+    });
+    set.reset = () => { set.clear(); };
+    return set;
+  })();
+
+  // Real placements need a known screen position. Under tmux, passthrough
+  // placements land at the *outer* terminal cursor, which tmux does not keep in
+  // sync with the pane, so overlays are opt-in there; placeholders still work.
+  function compositorOverlaysEnabled() {
+    if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return false;
+    if (runningInsideTmux()) return envBool("PI_GRAPHICS_TMUX_OVERLAYS", false);
+    return envBool("PI_GRAPHICS_OVERLAYS", true);
   }
 
-  function deferGraphicsCommand(command) {
+  function frameCompositorActive() {
+    return Boolean(frameCompositor && hostTui && frameCompositor.frames >= 0 && compositorInstalled);
+  }
+
+  let compositorInstalled = false;
+  let fullCanvas = null;
+  const frameCompositor = createFrameCompositor({
+    getTui: () => hostTui,
+    onError: (error) => trace(`compositor error: ${error?.stack || error}`),
+    onFrame(frame, context) {
+      if (fullCanvas?.active) return fullCanvas.onFrame(frame, context);
+      frame.buffer = context?.buffer || "";
+      const cursorSeen = editorCursorFrameSeen;
+      editorCursorFrameSeen = false;
+      if (!compositorOverlaysEnabled()) {
+        const restore = restoreAfterHostClear(frame);
+        return { inject: `${restore}${overlayPlacements.size() ? `\x1b7${overlayPlacements.clear()}\x1b8` : ""}` };
+      }
+      const desired = [];
+      editorCursorFrameSeen = cursorSeen;
+      const halo = cursorHaloPlacement(frame);
+      editorCursorFrameSeen = false;
+      if (halo) desired.push(halo);
+      for (const [markerKey, position] of frame.markers) {
+        const bindingKey = markerKey.split("#", 1)[0];
+        const spec = overlayBindings.get(bindingKey);
+        if (!spec || spec.imageId === undefined) continue;
+        desired.push({
+          key: markerKey,
+          imageId: spec.imageId,
+          placementId: piGraphicsPlacementId(`overlay:${markerKey}`),
+          row: position.row + (spec.dRow || 0),
+          col: position.col + (spec.dCol || 0),
+          cols: spec.cols,
+          rows: spec.rows,
+          z: spec.z,
+          cellWidthPx: spec.cell?.cellWidthPx,
+          cellHeightPx: spec.cell?.cellHeightPx,
+        });
+      }
+      let inject = overlayPlacements.update(frame, desired);
+      if (traceFile) trace(`frame ${frameCompositor.frames} mode=${frame.mode} markers=${frame.markers.size} desired=${desired.length} cursor=${JSON.stringify(frame.cursor)} cleared=${frame.cleared} freed=${frame.freed} injectBytes=${inject.length}`);
+      // Pi fullscreen deletes every visible placement when its own image lines
+      // change and clears the screen on full redraws. Re-assert the virtual
+      // placements our Unicode placeholders reference (cheap: no pixel data).
+      inject = `${restoreAfterHostClear(frame)}${inject}`;
+      return { inject };
+    },
+  });
+
+  function reassertVirtualPlacements() {
+    let command = "";
+    for (const [imageId, placement] of state.virtualPlacements || []) {
+      command += serializeKittyGraphicsCommand({
+        a: "p", i: imageId, p: placement.placementId, U: 1, c: placement.columns, r: placement.rows, q: 2,
+      }, "", { passthrough: state.config.passthrough });
+    }
+    return command;
+  }
+
+  function ensureFrameCompositor(tui = hostTui) {
+    if (!tui) return false;
+    compositorInstalled = frameCompositor.ensure(tui) || compositorInstalled;
+    return compositorInstalled;
+  }
+
+  // Every transmission we emit is remembered (bounded by the image caches'
+  // eviction) so it can be replayed if the host frees all terminal images:
+  // Pi fullscreen's first/forced full redraw sends `a=d,d=A`.
+  const transmitLog = new Map();
+  const TRANSMIT_RE = /\x1b_Ga=[tTf],[^;\x1b]*?\bi=(\d+)/;
+  function recordTransmit(command) {
+    if (!command.includes("\x1b_Ga=")) return;
+    const match = TRANSMIT_RE.exec(command);
+    if (!match) return;
+    const imageId = Number(match[1]);
+    const prior = transmitLog.get(imageId);
+    // a=f frames extend an earlier a=t/a=T upload of the same image.
+    transmitLog.set(imageId, /\x1b_Ga=f,/.test(command) && prior ? `${prior}${command}` : command);
+  }
+
+  // After a bare erase only images without a virtual placement are pruned, so
+  // replay just the compositor-placed (a=t) images; `d=A` frees everything.
+  function replayTransmits({ realOnly = false } = {}) {
+    let command = "";
+    for (const [imageId, transmit] of transmitLog) {
+      if (!state.ownedImageIds.has(imageId)) { transmitLog.delete(imageId); continue; }
+      if (realOnly && state.virtualPlacements?.has(imageId)) continue;
+      command += transmit;
+    }
+    return command;
+  }
+
+  function restoreAfterHostClear(frame) {
+    if (!frame.freed) return frame.cleared ? reassertVirtualPlacements() : "";
+    const onlyErased = frame.erased && !/\x1b_Ga=d,d=A/.test(frame.buffer || "");
+    return `${replayTransmits({ realOnly: onlyErased })}${reassertVirtualPlacements()}`;
+  }
+
+  function emitGraphicsCommand(command) {
     if (!command) return;
-    ownedTimeout(() => emitGraphicsCommand(command), 0);
+    recordTransmit(command);
+    if (typeof writeGraphicsCommand !== "function") return;
+    try { writeGraphicsCommand(command); } catch {}
   }
 
   function cursorStylingEnabled() {
@@ -479,12 +647,15 @@ export default async function piGraphicsExtension(pi) {
     try { ctx.ui?.setTheme?.(configuredThemeName); } catch {}
   }
 
-  // Track which images have already been uploaded so we never resend payload.
+  // Image caches. Every cache is bounded (LRU) and eviction frees terminal
+  // image data (d=I) so long sessions cannot grow WindowServer/GPU memory.
   const uploadedImages = new Set();
-  const relativeUploaded = new Set();
-  const placementLineCache = new Map();
+  const PLACEMENT_LINE_CACHE_LIMIT = 160;
+  const REAL_IMAGE_CACHE_LIMIT = 96;
+  const placementLineCache = new Map(); // key -> { value, imageIds }
+  const realImageCache = new Map(); // key -> imageId (a=t uploaded, placed by the compositor)
+  const overlayBindings = new Map(); // binding key -> overlay spec
   const animationTimers = new Map();
-  let editorBackgroundPlacementKey = null;
   let editorCursorLastText = "";
   let editorCursorLastAt = 0;
   let editorCursorWpm = 0;
@@ -500,19 +671,12 @@ export default async function piGraphicsExtension(pi) {
   let editorContextMode = "idle";
   let editorContextTick = 0;
   let editorContextTimer = null;
-  let editorCursorRelativePlacement = null;
-  let footerUnderlayRelative = null;
-  // Cursor-glow escalation: one precomputed frame set uploaded once, frame-
-  // selected by typing heat via a=a,c=<frame> (no per-keystroke re-upload).
-  let editorCursorGlowImageId = null;
-  let editorCursorGlowFrame = -1;
-  // Editor border escalation: one precomputed heat-escalation strip per edge,
-  // uploaded once and frame-selected by rail heat (cursor speed) -- mirrors the
-  // cursor glow. Replaces the per-heat-bucket image churn + manual setInterval
-  // loops that stacked frames.
-  const BORDER_FRAMES = 16;
-  const editorBorderRelative = { top: null, bottom: null, symmetric: null };
-  const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[_PG][\s\S]*?\x1b\\/g;
+  // Set by the editor decorator when it rendered a cursor this frame; the
+  // compositor only draws the halo for our editor's cursor.
+  let editorCursorRenderedAt = 0;
+  let editorCursorFrameSeen = false;
+  const HEAT_BUCKETS = 8;
+  const ZERO_WIDTH_CONTROL_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b_[^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PG][\s\S]*?\x1b\\/g;
 
   function stopManualAnimationLoops() {
     for (const timer of animationTimers.values()) clearOwnedTimer(timer);
@@ -531,9 +695,62 @@ export default async function piGraphicsExtension(pi) {
     editorHeatRenderTimer = null;
     editorContextTimer = null;
     uploadedImages.clear();
-    relativeUploaded.clear();
     placementLineCache.clear();
-    editorBackgroundPlacementKey = null;
+    realImageCache.clear();
+    transmitLog.clear();
+    overlayBindings.clear();
+    overlayPlacements.reset();
+  }
+
+  function freeOwnedImages(imageIds) {
+    if (traceFile) trace(`freeOwnedImages ${[...(imageIds || [])].length}`);
+    let command = "";
+    for (const imageId of imageIds || []) {
+      if (imageId === undefined || imageId === null) continue;
+      const timer = animationTimers.get(imageId);
+      if (timer) { clearOwnedTimer(timer); animationTimers.delete(imageId); }
+      command += buildDeleteCommand({ imageId, deleteMode: "i", freeData: true, passthrough: state.config.passthrough });
+      uploadedImages.delete(imageId);
+      state.ownedImageIds?.delete?.(imageId);
+      state.transmittedImageIds?.delete?.(imageId);
+      state.uploadedContentByImage?.delete?.(imageId);
+      state.placementByImage?.delete?.(imageId);
+      state.virtualPlacements?.delete?.(imageId);
+      transmitLog.delete(imageId);
+    }
+    emitGraphicsCommand(command);
+  }
+
+  // Bounded LRU cache for placeholder lines. The builder's newly owned image
+  // ids are recorded so eviction can free exactly those images.
+  // Upload an image once (a=t, no placement) for compositor-placed overlays.
+  function ensureRealImage(key, renderPng) {
+    const hit = realImageCache.get(key);
+    if (hit !== undefined) {
+      realImageCache.delete(key);
+      realImageCache.set(key, hit);
+      return hit;
+    }
+    const imageId = piGraphicsImageId(`real:${key}`);
+    const png = renderPng();
+    emitGraphicsCommand(serializeKittyGraphicsChunks({ a: "t", f: 100, t: "d", i: imageId, q: 2 }, bufferToBase64(png), { passthrough: state.config.passthrough }));
+    state.ownedImageIds.add(imageId);
+    uploadedImages.add(imageId);
+    realImageCache.set(key, imageId);
+    while (realImageCache.size > REAL_IMAGE_CACHE_LIMIT) {
+      const [oldestKey, oldestId] = realImageCache.entries().next().value;
+      realImageCache.delete(oldestKey);
+      freeOwnedImages([oldestId]);
+    }
+    return imageId;
+  }
+
+  // Marker-anchored overlay: returns the zero-width marker for this row and
+  // records how the compositor should place the image when it sees it.
+  function overlayMarker(bindingKey, instanceKey, spec) {
+    overlayBindings.set(bindingKey, spec);
+    if (overlayBindings.size > 512) overlayBindings.delete(overlayBindings.keys().next().value);
+    return gfxMarker(instanceKey ? `${bindingKey}#${instanceKey}` : bindingKey);
   }
 
   // Evict a superseded owned kitty image: free its image DATA (uppercase d=I)
@@ -644,30 +861,32 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function clearEditorCursorPlacement() {
-    if (!editorCursorRelativePlacement) return false;
-    // Intentional placement-only delete (bd-15ea4f): this clears the live cursor
-    // halo placement (cursor inactive / editor blur), but the frame image id is
-    // stable per (theme, font-geometry) and is re-used when the cursor returns,
-    // so freeing the data here would force an immediate re-upload on every
-    // clear/return. The id stays tracked in state.ownedImageIds and is reclaimed
-    // by the freeData:true session_shutdown teardown (bd-b94fa1). Bounded, not a leak.
-    emitGraphicsCommand(buildDeleteCommand({
-      imageId: editorCursorRelativePlacement.imageId,
-      placementId: editorCursorRelativePlacement.placementId,
-      deleteMode: "i",
-      passthrough: state.config.passthrough,
-    }));
-    editorCursorRelativePlacement = null;
-    editorCursorGlowFrame = -1;
-    editorCursorGlowImageId = null;
-    return true;
+    const had = overlayPlacements.keys().includes("cursor-halo");
+    editorCursorFrameSeen = false;
+    editorCursorRenderedAt = 0;
+    try { hostTui?.requestRender?.(); } catch {}
+    return had;
   }
 
+  // Bounded LRU cache for placeholder lines. The builder's newly owned image
+  // ids are recorded so eviction can free exactly those images.
   function cachedPlacementLine(key, buildLine) {
-    if (placementLineCache.has(key)) return placementLineCache.get(key);
-    const line = buildLine();
-    placementLineCache.set(key, line);
-    return line;
+    const hit = placementLineCache.get(key);
+    if (hit) {
+      placementLineCache.delete(key);
+      placementLineCache.set(key, hit);
+      return hit.value;
+    }
+    const before = new Set(state.ownedImageIds);
+    const value = buildLine();
+    const imageIds = [...state.ownedImageIds].filter((id) => !before.has(id));
+    placementLineCache.set(key, { value, imageIds });
+    while (placementLineCache.size > PLACEMENT_LINE_CACHE_LIMIT) {
+      const [oldestKey, oldest] = placementLineCache.entries().next().value;
+      placementLineCache.delete(oldestKey);
+      freeOwnedImages(oldest.imageIds);
+    }
+    return value;
   }
 
   function updateEditorTypingHeat(plainText, cursorCol = 0) {
@@ -775,32 +994,6 @@ export default async function piGraphicsExtension(pi) {
     try { footerState.compactMode = pi?.getCompactMode?.() || footerState.compactMode; } catch {}
   }
 
-  function ensureAnchorUploaded({ anchorImageId, anchorPlacementId }) {
-    if (uploadedImages.has(anchorImageId)) return;
-    // Upload a 1×1 transparent PNG for the anchor image.
-    const upload = serializeKittyGraphicsChunks({
-      a: "t",
-      f: 100,
-      t: "d",
-      i: anchorImageId,
-      q: 2,
-    }, transparentPixelPngBase64(), { passthrough: state.config.passthrough });
-    // Create the virtual placement that Unicode placeholders will anchor to.
-    const place = serializeKittyGraphicsCommand({
-      a: "p",
-      i: anchorImageId,
-      p: anchorPlacementId,
-      U: 1,
-      c: 1,
-      r: 1,
-      z: PI_GRAPHICS_Z.SURFACE,
-      q: 2,
-    }, "", { passthrough: state.config.passthrough });
-    emitGraphicsCommand(`${upload}${place}`);
-    state.ownedImageIds.add(anchorImageId);
-    uploadedImages.add(anchorImageId);
-  }
-
   function ensureManualAnimationLoop({ imageId, frames, delayMs }) {
     const frameCount = Math.max(1, Math.trunc(Number(frames) || 1));
     if (frameCount <= 1 || animationTimers.has(imageId)) return;
@@ -830,44 +1023,14 @@ export default async function piGraphicsExtension(pi) {
     return placement;
   }
 
-  function ensureRelativeAnimUploaded({ animImageId, anchorImageId, anchorPlacementId, animPlacementId, pngs, delayMs, columns, rows, frames, hOffset = 0, vOffset = 0 }) {
-    const key = `${animImageId}->${anchorImageId}/${anchorPlacementId}@${hOffset},${vOffset}`;
-    const alreadyPlaced = relativeUploaded.has(key);
-    // Upload animation frames to the non-virtual animated image id.
-    if (!uploadedImages.has(animImageId)) {
-      const upload = buildPngCursorAnimationUpload({
-        imageId: animImageId,
-        pngBases: pngs.map((png) => bufferToBase64(png)),
-        delaysMs: delayMs,
-        passthrough: state.config.passthrough,
-      });
-      emitGraphicsCommand(upload);
-      state.ownedImageIds.add(animImageId);
-      uploadedImages.add(animImageId);
-    }
-    if (!alreadyPlaced) {
-      // Create a relative non-virtual placement attached to the anchor.
-      const rel = buildRelativePlacementCommand({
-        imageId: animImageId,
-        placementId: animPlacementId,
-        parentImageId: anchorImageId,
-        parentPlacementId: anchorPlacementId,
-        hOffset,
-        vOffset,
-        columns,
-        rows,
-        zIndex: PI_GRAPHICS_Z.SURFACE,
-        passthrough: state.config.passthrough,
-      });
-      // In practice, terminal-driven APNG/native frame loops have not repainted
-      // reliably in Pi/tmux sessions. Use the protocol's client-driven current
-      // frame control instead; this is the path Harry confirmed actually moves.
-      emitGraphicsCommand(`${rel}${buildAnimationStopCommand({ imageId: animImageId, passthrough: state.config.passthrough })}`);
-      relativeUploaded.add(key);
-    }
-    ensureManualAnimationLoop({ imageId: animImageId, frames, delayMs });
+  function heatBucket(value, buckets = HEAT_BUCKETS) {
+    return Math.max(0, Math.min(buckets - 1, Math.round((Number(value) || 0) * (buckets - 1))));
   }
 
+  // Border artwork is keyed by a SMALL, bounded set of inputs: edge, width,
+  // height, style, palette, context and a quantized heat bucket. The old key
+  // included the typing-impulse column and fine phase, which minted a new PNG,
+  // image id and upload on nearly every keystroke (never freed until exit).
   function editorBorderRenderSpec(width, edge) {
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
     const cell = cellMetrics();
@@ -876,258 +1039,87 @@ export default async function piGraphicsExtension(pi) {
     const alpha = editorAlpha();
     const contextMode = editorContextMode === "thinking" ? "thinking" : "idle";
     const dynamicHeat = editorDynamicHeatEnabled();
-    const contextPhase = contextMode === "thinking" && dynamicHeat ? (editorContextTick % 48) / 48 : 0;
-    const impulseEnabled = dynamicHeat && editorTypingImpulseEnabled();
-    const impulseAge = impulseEnabled && editorCursorImpulseAt ? Math.max(0, Date.now() - editorCursorImpulseAt) : Infinity;
-    const impulseStrength = impulseEnabled ? Math.max(0, Math.min(1, Math.exp(-impulseAge / 360) * Math.max(editorCursorHeat, editorCursorHeatTarget, 0))) : 0;
-    const impulseBucket = Math.max(0, Math.min(12, Math.round(impulseStrength * 12)));
-    const impulseCol = dynamicHeat && editorCursorImpulseCol == null ? null : dynamicHeat ? Math.max(0, Math.min(cols - 1, Math.trunc(Number(editorCursorImpulseCol) || 0))) : null;
-    const railHeat = Math.max(dynamicHeat ? editorRailHeat() : 0, contextMode === "thinking" ? 0.42 : 0, impulseStrength * 0.55);
-    const railHeatBucket = Math.max(0, Math.min(12, Math.round(railHeat * 12)));
+    const railHeat = Math.max(dynamicHeat ? editorRailHeat() : 0, contextMode === "thinking" ? 0.42 : 0);
+    const railHeatBucket = heatBucket(railHeat, 6);
+    const quantHeat = railHeatBucket / 5;
     const baseBorderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const baseGlowColor = contextMode === "thinking"
       ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
       : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
-    const borderColor = mixHexColor(baseBorderColor, contextMode === "thinking" ? "#d8dee9" : "#ffffff", railHeat);
-    const glowColor = mixHexColor(baseGlowColor, railHeat > 0.65 ? "#ffffff" : "#ff9f5a", railHeat);
-    const borderAlpha = Math.max(0.32, Math.min(0.82, alpha + railHeat * 0.22 + (contextMode === "thinking" ? 0.04 : 0)));
-    const glowAlpha = Math.max(0.22, Math.min(0.76, alpha * 0.62 + railHeat * 0.34 + (contextMode === "thinking" ? 0.08 : 0)));
+    const borderColor = mixHexColor(baseBorderColor, contextMode === "thinking" ? "#d8dee9" : "#ffffff", quantHeat);
+    const glowColor = mixHexColor(baseGlowColor, quantHeat > 0.65 ? "#ffffff" : "#ff9f5a", quantHeat);
+    const borderAlpha = Math.max(0.32, Math.min(0.82, alpha + quantHeat * 0.22 + (contextMode === "thinking" ? 0.04 : 0)));
+    const glowAlpha = Math.max(0.22, Math.min(0.76, alpha * 0.62 + quantHeat * 0.34 + (contextMode === "thinking" ? 0.08 : 0)));
     const height = edge === "symmetric" ? 1 : editorBorderHeight(edge);
     const frames = editorAnimationEnabled() ? editorAnimationFrames() : 1;
-    const delayMs = editorAnimationDelayMs();
-    return { cols, visualCols: cols, cell, variant, borderStyle, alpha, railHeat, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs };
+    const delayMs = Math.max(50, editorAnimationDelayMs());
+    const key = `${edge}-${cols}x${height}-${variant}-${borderStyle}-heat${railHeatBucket}-${contextMode}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}-f${frames}`;
+    return { cols, visualCols: cols, cell, variant, borderStyle, alpha, railHeat: quantHeat, railHeatBucket, contextMode, contextPhase: 0, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs, key };
+  }
+
+  function renderEditorBorderSpec(spec, edge) {
+    return renderEditorBorderFramesPngs({
+      columns: spec.visualCols,
+      rows: spec.height,
+      edge,
+      ...spec.cell,
+      frames: spec.frames,
+      borderColor: spec.borderColor,
+      glowColor: spec.glowColor,
+      borderAlpha: spec.borderAlpha,
+      glowAlpha: spec.glowAlpha,
+      phase: 0,
+      style: spec.borderStyle,
+      context: spec.contextMode,
+      impulseX: null,
+      impulseStrength: 0,
+    });
   }
 
   function buildEditorBorderPlaceholderLines(width, edge) {
     if (!ensureUnicodePlacement(state)) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs } = spec;
-    const key = `editor-border-static-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-impulse-${impulseCol ?? "none"}-${impulseBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}-${frames}`;
-    return cachedPlacementLine(key, () => {
-      const rendered = renderEditorBorderFramesPngs({
-        columns: visualCols,
-        rows: height,
-        edge,
-        ...cell,
-        frames,
-        borderColor,
-        glowColor,
-        borderAlpha,
-        glowAlpha,
-        phase: contextPhase,
-        style: borderStyle,
-        context: contextMode,
-        impulseX: impulseCol == null ? null : (impulseCol + 0.5) * cell.cellWidthPx,
-        impulseStrength,
-      });
-      const placement = frames > 1 ? buildManualAnimatedPlacement({
-        name: key,
+    return cachedPlacementLine(`editor-border-${spec.key}`, () => {
+      const rendered = renderEditorBorderSpec(spec, edge);
+      const placement = spec.frames > 1 ? buildManualAnimatedPlacement({
+        name: `editor-border-${spec.key}`,
         pngs: rendered.pngs,
-        delaysMs: Array.from({ length: frames }, () => delayMs),
+        delaysMs: Array.from({ length: spec.frames }, () => spec.delayMs),
         columns: rendered.columns,
         rows: rendered.rows,
-        width: visualCols,
+        width: spec.visualCols,
         zIndex: PI_GRAPHICS_Z.SURFACE,
       }) : buildPlacement(state, {
-        name: key,
+        name: `editor-border-${spec.key}`,
         png: rendered.pngs[0],
         columns: rendered.columns,
         rows: rendered.rows,
-        width: visualCols,
+        width: spec.visualCols,
         zIndex: PI_GRAPHICS_Z.SURFACE,
       });
-      if (frames <= 1) emitGraphicsCommand(placement.transmit);
+      if (spec.frames <= 1) emitGraphicsCommand(placement.transmit);
       return placement.lines;
     });
   }
 
+  // "relative" editor style: the rail is a real placement positioned by the
+  // frame compositor from a zero-width marker, so taller rails can spill above
+  // the anchor row without consuming text cells. Works in Kitty and Ghostty and
+  // survives Pi fullscreen placement clears (the compositor re-places it).
   function buildEditorRelativeBorderRow(width, edge) {
-    if (!ensureUnicodePlacement(state)) return null;
+    if (!compositorOverlaysEnabled()) return null;
     const spec = editorBorderRenderSpec(width, edge);
-    const { cols, visualCols, cell, variant, borderStyle, alpha, railHeatBucket, contextMode, contextPhase, impulseCol, impulseBucket, impulseStrength, borderColor, glowColor, borderAlpha, glowAlpha, height, frames, delayMs } = spec;
-    const anchorKey = `editor-border-anchor-${edge}-${visualCols}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-    const imageKey = `editor-border-relative-${edge}-${visualCols}x${height}-${variant}-${borderStyle}-rail-${railHeatBucket}-${contextMode}-${Math.round(contextPhase * 48)}-impulse-${impulseCol ?? "none"}-${impulseBucket}-${alpha.toFixed(2)}-${borderColor}-${glowColor}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}-${frames}`;
-    const anchorImageId = piGraphicsImageId(anchorKey);
-    const imageId = piGraphicsImageId(imageKey);
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-placement-${edge}-${visualCols}`);
-    const placementId = piGraphicsPlacementId(`editor-border-relative-placement-${edge}-${visualCols}x${height}`);
-    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
-    const vOffset = edge === "top" ? -(height - 1) : 0;
-    const relativeKey = `${imageId}->${anchorImageId}/${anchorPlacementId}@0,${vOffset}`;
-    if (!uploadedImages.has(imageId) || !relativeUploaded.has(relativeKey)) {
-      const rendered = renderEditorBorderFramesPngs({
-        columns: visualCols,
-        rows: height,
-        edge,
-        ...cell,
-        frames,
-        borderColor,
-        glowColor,
-        borderAlpha,
-        glowAlpha,
-        phase: contextPhase,
-        style: borderStyle,
-        context: contextMode,
-        impulseX: impulseCol == null ? null : (impulseCol + 0.5) * cell.cellWidthPx,
-        impulseStrength,
-      });
-      if (frames > 1) {
-        ensureRelativeAnimUploaded({
-          animImageId: imageId,
-          anchorImageId,
-          anchorPlacementId,
-          animPlacementId: placementId,
-          pngs: rendered.pngs,
-          delayMs,
-          columns: rendered.columns,
-          rows: rendered.rows,
-          frames,
-          hOffset: 0,
-          vOffset,
-        });
-      } else {
-        if (!uploadedImages.has(imageId)) {
-          emitGraphicsCommand(serializeKittyGraphicsChunks({
-            a: "t",
-            f: 100,
-            t: "d",
-            i: imageId,
-            q: 2,
-          }, bufferToBase64(rendered.pngs[0]), { passthrough: state.config.passthrough }));
-          state.ownedImageIds.add(imageId);
-          uploadedImages.add(imageId);
-        }
-        emitGraphicsCommand(buildRelativePlacementCommand({
-          imageId,
-          placementId,
-          parentImageId: anchorImageId,
-          parentPlacementId: anchorPlacementId,
-          hOffset: 0,
-          vOffset,
-          columns: rendered.columns,
-          rows: rendered.rows,
-          zIndex: PI_GRAPHICS_Z.SURFACE,
-          passthrough: state.config.passthrough,
-        }));
-        relativeUploaded.add(relativeKey);
-      }
-    }
-    const anchorCell = buildKittyUnicodePlaceholderCell({
-      imageId: anchorImageId,
-      placementId: anchorPlacementId,
-      row: 0,
-      column: 0,
-      includeColumn: true,
+    const imageId = ensureRealImage(`editor-border-${spec.key}`, () => renderEditorBorderSpec({ ...spec, frames: 1 }, edge).pngs[0]);
+    const marker = overlayMarker(`editor-border:${edge}`, null, {
+      imageId,
+      cols: spec.visualCols,
+      rows: spec.height,
+      dRow: edge === "top" ? -(spec.height - 1) : 0,
+      dCol: 0,
+      z: PI_GRAPHICS_Z.SURFACE,
+      cell: spec.cell,
     });
-    const ESC = "\x1b";
-    const low24 = anchorImageId % 0x1000000;
-    const placementLow24 = anchorPlacementId % 0x1000000;
-    const fg = `${ESC}[38;2;${(low24 >> 16) & 0xff};${(low24 >> 8) & 0xff};${low24 & 0xff}m`;
-    const underline = `${ESC}[58;2;${(placementLow24 >> 16) & 0xff};${(placementLow24 >> 8) & 0xff};${placementLow24 & 0xff}m`;
-    const reset = `${ESC}[39;59m`;
-    const filler = " ".repeat(Math.max(0, visualCols - 1));
-    const chrome = `${fg}${underline}${anchorCell}${reset}${filler}`;
-    return `${chrome}${" ".repeat(Math.max(0, cols - visualCols))}`;
-  }
-
-  function buildJoinedUnicodeEditorBorderLine(width, edge) {
-    if (!ensureUnicodePlacement(state)) return null;
-    const spec = editorBorderRenderSpec(width, edge);
-    const { visualCols, cell, variant, borderStyle, contextMode, height, railHeat } = spec;
-    const fullWidth = Math.max(0, Math.trunc(Number(width) || 0));
-    // Calm/hot palette endpoints, independent of the live heat, so the image key
-    // is stable across keystrokes and only the SELECTED FRAME changes.
-    const baseBorderColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const baseGlowColor = contextMode === "thinking"
-      ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
-      : getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
-    const paletteKey = `${baseBorderColor}-${baseGlowColor}-${contextMode}-${borderStyle}-${variant}`;
-    // Transparent stable anchor on the border row. The full-width escalation
-    // strip is a relative (non-virtual) placement off it -- a lone virtual
-    // placement would only tile a single cell (the original footer/border bug).
-    const anchorImageId = piGraphicsImageId(`editor-border-anchor-${edge}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-border-anchor-${edge}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
-    const imageId = piGraphicsImageId(`editor-border-escalation-${edge}-${visualCols}x${height}-${paletteKey}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`);
-    const placementId = piGraphicsPlacementId(`editor-border-escalation-placement-${edge}-${visualCols}x${height}`);
-    const vOffset = edge === "top" ? -(height - 1) : 0;
-    const entry = editorBorderRelative[edge];
-    if (!uploadedImages.has(imageId)) {
-      // Precompute BORDER_FRAMES frames at increasing rail heat (calm -> hot),
-      // reusing the existing styled border renderer for each frame, and upload
-      // them ONCE. No per-keystroke re-render, no manual animation loop.
-      const pngs = [];
-      for (let i = 0; i < BORDER_FRAMES; i += 1) {
-        const r = i / (BORDER_FRAMES - 1);
-        const borderColor = mixHexColor(baseBorderColor, contextMode === "thinking" ? "#d8dee9" : "#ffffff", r);
-        const glowColor = mixHexColor(baseGlowColor, r > 0.65 ? "#ffffff" : "#ff9f5a", r);
-        const borderAlpha = Math.max(0.32, Math.min(0.82, spec.alpha + r * 0.22 + (contextMode === "thinking" ? 0.04 : 0)));
-        const glowAlpha = Math.max(0.22, Math.min(0.76, spec.alpha * 0.62 + r * 0.34 + (contextMode === "thinking" ? 0.08 : 0)));
-        const rendered = renderEditorBorderFramesPngs({
-          columns: visualCols,
-          rows: height,
-          edge,
-          ...cell,
-          frames: 1,
-          borderColor,
-          glowColor,
-          borderAlpha,
-          glowAlpha,
-          phase: 0,
-          style: borderStyle,
-          context: contextMode,
-          impulseX: null,
-          impulseStrength: 0,
-        });
-        pngs.push(rendered.pngs[0]);
-      }
-      emitGraphicsCommand(buildPngCursorAnimationUpload({
-        imageId,
-        pngBases: pngs.map((png) => bufferToBase64(png)),
-        delaysMs: 80,
-        passthrough: state.config.passthrough,
-      }));
-      state.ownedImageIds.add(imageId);
-      uploadedImages.add(imageId);
-      // Replace any prior strip for this edge (width/palette change) so stale
-      // strips do not linger.
-      if (entry && (entry.imageId !== imageId || entry.placementId !== placementId)) {
-        // Genuine eviction: this edge's prior strip (width/palette change) will
-        // not be reused. Free its image data (d=I) and drop the upload-cache /
-        // ownership entries so memory is reclaimed and a future strip re-uploads
-        // (bd-b94fa1). The replacement image id guards the placement-only case so
-        // a still-live shared strip image is never freed (bd-f4d277).
-        evictOwnedImage({ imageId: entry.imageId, placementId: entry.placementId, replacementImageId: imageId });
-      }
-      deferGraphicsCommand(buildRelativePlacementCommand({
-        imageId,
-        placementId,
-        parentImageId: anchorImageId,
-        parentPlacementId: anchorPlacementId,
-        hOffset: 0,
-        vOffset,
-        columns: visualCols,
-        rows: height,
-        zIndex: PI_GRAPHICS_Z.SURFACE,
-        passthrough: state.config.passthrough,
-      }));
-      editorBorderRelative[edge] = { imageId, placementId, frame: -1 };
-    }
-    // Select the escalation frame for the live rail heat; emit only on change.
-    const cur = editorBorderRelative[edge];
-    const frame = 1 + Math.max(0, Math.min(BORDER_FRAMES - 1, Math.round((Number(railHeat) || 0) * (BORDER_FRAMES - 1))));
-    if (cur && frame !== cur.frame) {
-      emitGraphicsCommand(buildAnimationFrameCommand({ imageId, frame, passthrough: state.config.passthrough }));
-      cur.frame = frame;
-    }
-    const anchorLine = buildKittyUnicodePlaceholderLines({
-      imageId: anchorImageId,
-      placementId: anchorPlacementId,
-      columns: 1,
-      rows: 1,
-      width: 1,
-    })[0] ?? "";
-    return `${anchorLine}${" ".repeat(Math.max(0, fullWidth - 1))}`;
+    return `${marker}${" ".repeat(spec.cols)}`;
   }
 
   function emptyEditorBorderRow(width) {
@@ -1135,24 +1127,12 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function buildEditorBorderRows(width, edge) {
-    if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
-      const height = editorBorderRenderSpec(width, edge).height;
-      if (edge === "top" && height > 1) {
-        // A top-left Unicode placement can only grow down from its anchor. Using
-        // an above-editor widget for the anchor makes a lone left-to-right rail
-        // appear detached from the editor until the next editor repaint. For
-        // taller top borders, keep the topLeft setting for single-row cases but
-        // use the relative path so the border is anchored on the editor row and
-        // placed upward by V=-(height-1).
-        const row = buildEditorRelativeBorderRow(width, edge);
-        return row ? [row] : null;
-      }
-      const line = buildJoinedUnicodeEditorBorderLine(width, edge);
-      return line ? [line] : null;
-    }
+    // topLeft used to be a lone 1-cell anchor plus a relative child strip; a
+    // lone virtual placement only ever paints one cell and the child breaks in
+    // Ghostty/fullscreen. A full placeholder row is the portable equivalent.
     if (editorBorderUsesRelativePlacement()) {
       const row = buildEditorRelativeBorderRow(width, edge);
-      return row ? [row] : null;
+      if (row) return [row];
     }
     return buildEditorBorderPlaceholderLines(width, edge);
   }
@@ -1275,276 +1255,53 @@ export default async function piGraphicsExtension(pi) {
     return `${String(line).slice(0, -match[0].length)}${tail}`;
   }
 
-  function ensureEditorRowBackground({ parentImageId, parentPlacementId, rowWidth, cursorCol }) {
-    if (!editorRowBackgroundEnabled() || !ensureUnicodePlacement(state) || rowWidth < 2) return;
-    const safeRowWidth = Math.max(1, Math.min(512, Math.trunc(Number(rowWidth) || 1) - 2));
-    const safeCursorCol = Math.max(0, Math.min(safeRowWidth - 1, Math.trunc(Number(cursorCol) || 0)));
+  function cursorHaloImage(style, heat) {
     const cell = cellMetrics();
-    const bgImageId = piGraphicsImageId(`editor-row-background-${safeRowWidth}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(bgImageId)) {
-      const rendered = renderPromptEnclosure({
-        columns: safeRowWidth,
-        variant: "glow",
-        alpha: Math.max(0.10, editorAlpha() * 0.24),
-        leftColor: getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead"),
-        rightColor: getThemeColorHex(activeThemeRef, "accent", "#88c0d0"),
-        fadeEdges: true,
-        ...cell,
-      });
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: bgImageId,
-        q: 2,
-      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(bgImageId);
-      uploadedImages.add(bgImageId);
-    }
-    const bgPlacementId = piGraphicsPlacementId("editor-row-background-relative");
-    const key = `${bgImageId}:${parentImageId}:${parentPlacementId}:${safeRowWidth}:${safeCursorCol}`;
-    if (editorBackgroundPlacementKey === key) return;
-    emitGraphicsCommand(buildRelativePlacementCommand({
-      imageId: bgImageId,
-      placementId: bgPlacementId,
-      parentImageId,
-      parentPlacementId,
-      hOffset: -safeCursorCol,
-      columns: safeRowWidth,
-      rows: 1,
-      zIndex: PI_GRAPHICS_Z.BACKGROUND,
-      passthrough: state.config.passthrough,
-    }));
-    editorBackgroundPlacementKey = key;
-  }
-
-  function buildEditorCursorCell({ rowWidth = 1, cursorCol = 0, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
-    if (!ensureUnicodePlacement(state) || editorCursorStyle() === "off") return null;
-    const cell = cellMetrics();
-    const heatBucket = Math.max(0, Math.min(12, Math.round((Number(heat) || 0) * 12)));
-    const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
-    const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
-    const glowColor = heatBucket >= 9
-      ? "#ff9f5a"
-      : heatBucket >= 4
-        ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
-        : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const cursorStyle = editorCursorStyle();
-    if (cursorStyle === "cell") {
-      clearEditorCursorPlacement();
-      const key = `editor-cursor-cell-direct-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
-      return cachedPlacementLine(key, () => {
-        const rendered = renderEditorCursorVline({
-          alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
-          backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
-          coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-          glowColor,
-          columns: 1,
-          rows: 1,
-          heat,
-          glowRadiusCells: 0.35,
-          trailCells: 0,
-          trailDirection,
-          ...cell,
-        });
-        const placement = buildPlacement(state, {
-          name: key,
-          png: rendered.png,
-          columns: rendered.columns,
-          rows: rendered.rows,
-          width: 1,
-          zIndex: PI_GRAPHICS_Z.SURFACE,
-        });
-        emitGraphicsCommand(placement.transmit);
-        editorCursorRelativePlacement = null;
-        return placement.lines[0] ?? null;
-      });
-    }
-
-    // Glow mode: a precomputed escalation animation (calm -> white-hot ->
-    // radioactive bloom) uploaded ONCE to a stable image id and attached as a
-    // single relative halo to a TRANSPARENT virtual anchor at the cursor cell.
-    // Typing heat selects a frame via a=a,c=<frame>; there is no per-keystroke
-    // re-render/re-upload, no visible cell+halo double-draw (the old flicker),
-    // and no placement churn/stacking. kitty honors the relative H/V offset, so
-    // the 11x5 halo centers on the cursor (this path targets kitty; Ghostty
-    // drops offsets off a virtual parent).
-    const GLOW_COLS = EDITOR_CURSOR_GLOW_COLUMNS;
-    const GLOW_ROWS = EDITOR_CURSOR_GLOW_ROWS;
-    const GLOW_FRAMES = 24;
+    const bucket = heatBucket(heat);
     const calmColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
     const warmColor = getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead");
-
-    // Transparent stable anchor -- it draws nothing itself, so only the halo is
-    // visible (kills the cell+halo conflict). Its placeholder cell (returned
-    // below) is repainted at the cursor each render and the halo follows it.
-    const anchorImageId = piGraphicsImageId(`editor-cursor-glow-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-glow-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
-
-    // Precomputed escalation frames, uploaded once to a stable image id. We do
-    // NOT start a native time loop (s=3,v=1) -- the frame is driven by heat.
-    const imageId = piGraphicsImageId(`editor-cursor-glow-frames-${GLOW_COLS}x${GLOW_ROWS}-${GLOW_FRAMES}-${calmColor}-${warmColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(imageId)) {
-      const rendered = renderEditorCursorGlowFrames({
-        columns: GLOW_COLS,
-        rows: GLOW_ROWS,
-        frameCount: GLOW_FRAMES,
-        calmColor,
-        warmColor,
-        coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-        ...cell,
-      });
-      emitGraphicsCommand(buildPngCursorAnimationUpload({
-        imageId,
-        pngBases: rendered.frames.map((png) => bufferToBase64(png)),
-        delaysMs: 80,
-        passthrough: state.config.passthrough,
-      }));
-      state.ownedImageIds.add(imageId);
-      uploadedImages.add(imageId);
-      editorCursorGlowFrame = -1; // force a frame-select after (re)upload
+    const coreColor = getThemeColorHex(activeThemeRef, "text", "#eceff4");
+    if (style === "cell") {
+      const key = `cursor-beam-${bucket}-${calmColor}-${warmColor}-${coreColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+      const imageId = ensureRealImage(key, () => renderEditorCursorGlowFrames({
+        columns: 1, rows: 1, frameCount: HEAT_BUCKETS, calmColor, warmColor, coreColor, beam: true, ...cell,
+      }).frames[bucket]);
+      return { imageId, cols: 1, rows: 1, dRow: 0, dCol: 0, cell };
     }
-
-    // One persistent relative halo centered on the cursor (H=-5,V=-2). Created
-    // once per (image, anchor) and left in place; kitty moves it as the anchor
-    // placeholder moves. Near the left edge it simply clips at the screen edge.
-    const placementId = piGraphicsPlacementId(`editor-cursor-glow-halo-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!editorCursorRelativePlacement
-      || editorCursorRelativePlacement.imageId !== imageId
-      || editorCursorRelativePlacement.placementId !== placementId) {
-      if (editorCursorRelativePlacement) {
-        // Genuine eviction when the frame image id itself changed (theme or
-        // font-geometry change): the prior halo frames will not be reused, so
-        // free their image data (d=I) and drop the upload-cache / ownership
-        // entries instead of waiting for session_shutdown reclaim (bd-15ea4f). The
-        // replacement-id guard keeps a placement-only change from freeing the
-        // still-live frame image (bd-f4d277).
-        evictOwnedImage({
-          imageId: editorCursorRelativePlacement.imageId,
-          placementId: editorCursorRelativePlacement.placementId,
-          replacementImageId: imageId,
-        });
-      }
-      // Defer so kitty resolves the parent's physical cell after the placeholder
-      // is painted. Raw APC must stay out of the editor's rendered text.
-      deferGraphicsCommand(buildRelativePlacementCommand({
-        imageId,
-        placementId,
-        parentImageId: anchorImageId,
-        parentPlacementId: anchorPlacementId,
-        hOffset: -Math.floor(GLOW_COLS / 2),
-        vOffset: -Math.floor(GLOW_ROWS / 2),
-        columns: GLOW_COLS,
-        rows: GLOW_ROWS,
-        // Under text but above non-default editor cell backgrounds, else it
-        // vanishes when the editor row repaints during typing.
-        zIndex: PI_GRAPHICS_Z.BOX_CHROME,
-        passthrough: state.config.passthrough,
-      }));
-      editorCursorRelativePlacement = { imageId, placementId };
-    }
-
-    // Map typing heat -> 1-based escalation frame and select it only on change,
-    // so steady typing/idle does not spam frame-select codes.
-    const frame = 1 + Math.max(0, Math.min(GLOW_FRAMES - 1, Math.round(heat * (GLOW_FRAMES - 1))));
-    if (frame !== editorCursorGlowFrame || imageId !== editorCursorGlowImageId) {
-      emitGraphicsCommand(buildAnimationFrameCommand({ imageId, frame, passthrough: state.config.passthrough }));
-      editorCursorGlowFrame = frame;
-      editorCursorGlowImageId = imageId;
-    }
-
-    return buildKittyUnicodePlaceholderLines({
-      imageId: anchorImageId,
-      placementId: anchorPlacementId,
-      columns: 1,
-      rows: 1,
-      width: 1,
-    })[0] ?? null;
+    const key = `cursor-halo-${bucket}-${calmColor}-${warmColor}-${coreColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    const imageId = ensureRealImage(key, () => renderEditorCursorGlowFrames({
+      columns: EDITOR_CURSOR_GLOW_COLUMNS, rows: EDITOR_CURSOR_GLOW_ROWS, frameCount: HEAT_BUCKETS,
+      calmColor, warmColor, coreColor, beam: true, ...cell,
+    }).frames[bucket]);
+    return {
+      imageId,
+      cols: EDITOR_CURSOR_GLOW_COLUMNS,
+      rows: EDITOR_CURSOR_GLOW_ROWS,
+      dRow: -Math.floor(EDITOR_CURSOR_GLOW_ROWS / 2),
+      dCol: -Math.floor(EDITOR_CURSOR_GLOW_COLUMNS / 2),
+      cell,
+    };
   }
 
-  function buildAnchoredEditorCursorPreviewLine({ label, heat = 0, wpm = 0, trailDirection = 1 } = {}) {
-    const cell = cellMetrics();
-    const trailBucket = Math.max(0, Math.min(4, Math.round((Number(wpm) || 0) / 60)));
-    const directionBucket = Number(trailDirection) < 0 ? "left" : "right";
-    const heatBucket = Math.max(0, Math.min(5, Math.round((Number(heat) || 0) * 5)));
-    const glowColor = heatBucket >= 4
-      ? "#ff9f5a"
-      : heatBucket >= 2
-        ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
-        : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-    const anchorImageId = piGraphicsImageId(`editor-cursor-preview-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(anchorImageId)) {
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: anchorImageId,
-        q: 2,
-      }, transparentPixelPngBase64(), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(anchorImageId);
-      uploadedImages.add(anchorImageId);
-    }
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId(`editor-cursor-preview-anchor-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    emitGraphicsCommand(serializeKittyGraphicsCommand({
-      a: "p",
-      i: anchorImageId,
-      p: anchorPlacementId,
-      U: 1,
-      c: 1,
-      r: 1,
-      z: PI_GRAPHICS_Z.SURFACE,
-      q: 2,
-    }, "", { passthrough: state.config.passthrough }));
-    const rendered = renderEditorCursorVline({
-      alpha: Math.max(0.38, editorAlpha() * (0.70 + heat * 0.40)),
-      backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
-      coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-      glowColor,
-      columns: 11,
-      rows: 5,
-      heat,
-      glowRadiusCells: 0.9 + heat * 0.9,
-      trailCells: heat > 0.04 ? 0.8 + trailBucket * 0.42 + heat * 1.2 : 0,
-      trailDirection,
-      ...cell,
-    });
-    const imageId = piGraphicsImageId(`editor-cursor-preview-relative-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    if (!uploadedImages.has(imageId)) {
-      emitGraphicsCommand(serializeKittyGraphicsChunks({
-        a: "t",
-        f: 100,
-        t: "d",
-        i: imageId,
-        q: 2,
-      }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
-      state.ownedImageIds.add(imageId);
-      uploadedImages.add(imageId);
-    }
-    const cursorColumns = 11;
-    const cursorRows = 5;
-    const cursorHOffset = -Math.floor(cursorColumns / 2);
-    const cursorVOffset = -Math.floor(cursorRows / 2);
-    const relativePlacement = buildRelativePlacementCommand({
-      imageId,
-      placementId: piGraphicsPlacementId(`editor-cursor-preview-relative-placement-${heatBucket}-${trailBucket}-${directionBucket}`),
-      parentImageId: anchorImageId,
-      parentPlacementId: anchorPlacementId,
-      hOffset: cursorHOffset,
-      vOffset: cursorVOffset,
-      columns: cursorColumns,
-      rows: cursorRows,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
-      passthrough: state.config.passthrough,
-    });
-    const anchorLine = buildKittyUnicodePlaceholderLines({
-      imageId: anchorImageId,
-      placementId: anchorPlacementId,
-      columns: 1,
-      rows: 1,
-      width: 1,
-    })[0] ?? "";
-    return `${String(label || "anchored").padEnd(12)} ${anchorLine}${relativePlacement}`;
+  // Compositor provider: the cursor halo is a real placement at Pi's own
+  // hardware-cursor cell (the IME position), clipped at screen edges. It is
+  // drawn under text but above cell backgrounds so the glyph stays readable.
+  function cursorHaloPlacement(frame) {
+    const style = editorCursorStyle();
+    if (style === "off" || !frame.cursor || !editorCursorFrameSeen) return null;
+    const halo = cursorHaloImage(style, editorCursorHeat);
+    return {
+      key: "cursor-halo",
+      imageId: halo.imageId,
+      placementId: piGraphicsPlacementId("cursor-halo"),
+      row: frame.cursor.row + halo.dRow,
+      col: frame.cursor.col + halo.dCol,
+      cols: halo.cols,
+      rows: halo.rows,
+      z: PI_GRAPHICS_Z.BOX_CHROME,
+      cellWidthPx: halo.cell.cellWidthPx,
+      cellHeightPx: halo.cell.cellHeightPx,
+    };
   }
 
   function replaceEditorCursorChrome(line, rowWidth = 1) {
@@ -1553,10 +1310,15 @@ export default async function piGraphicsExtension(pi) {
     const anchor = locateEditorCursorAnchor(text, rowWidth);
     if (!anchor) return line;
     const plainText = text.replace(anchor.matchText, "|").replace(ZERO_WIDTH_CONTROL_RE, "");
-    const { heat, wpm, trailDirection } = updateEditorTypingHeat(plainText, anchor.cursorCol);
-    const cursor = buildEditorCursorCell({ rowWidth, cursorCol: anchor.cursorCol, heat, wpm, trailDirection });
-    if (!cursor) return line;
-    return replaceLocatedEditorCursor(text, anchor, cursor);
+    updateEditorTypingHeat(plainText, anchor.cursorCol);
+    editorCursorFrameSeen = true;
+    editorCursorRenderedAt = Date.now();
+    // With a live compositor the halo/beam is the cursor: keep the glyph under
+    // it readable (bold) instead of a reverse-video block. Without one, keep
+    // Pi's reverse-video cursor untouched so the cursor can never disappear.
+    if (editorCursorStyle() === "off" || !compositorOverlaysEnabled() || !frameCompositorActive()) return line;
+    const glyph = anchor.matchText.replace(/^\x1b\[7m/, "").replace(/\x1b\[(?:0|27)m$/, "");
+    return replaceLocatedEditorCursor(text, anchor, `\x1b[1m${glyph}\x1b[22m`);
   }
 
   function decorateEditorContentLine(line, rowWidth) {
@@ -1609,23 +1371,25 @@ export default async function piGraphicsExtension(pi) {
     if (!ensureUnicodePlacement(state)) return "│";
     const cell = cellMetrics();
     const color = getThemeColorHex(activeThemeRef, token, "#88c0d0");
-    const rendered = renderFooterDividerPng({
-      columns: FOOTER_DIVIDER_WIDTH,
-      barColor: color,
-      glowColor: getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead"),
-      alpha: Math.max(0.36, editorAlpha() * 0.72),
-      ...cell,
+    const glow = getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead");
+    const alpha = Math.max(0.36, editorAlpha() * 0.72);
+    // Dividers are identical for every segment with the same colour, so key
+    // by appearance only: one PNG per colour instead of an encode + sha256 per
+    // divider per rendered frame.
+    const name = `footer-divider-${color}-${glow}-${alpha.toFixed(2)}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    return cachedPlacementLine(name, () => {
+      const rendered = renderFooterDividerPng({ columns: FOOTER_DIVIDER_WIDTH, barColor: color, glowColor: glow, alpha, ...cell });
+      const placement = buildPlacement(state, {
+        name,
+        png: rendered.png,
+        columns: FOOTER_DIVIDER_WIDTH,
+        rows: 1,
+        width: FOOTER_DIVIDER_WIDTH,
+        zIndex: PI_GRAPHICS_Z.SURFACE,
+      });
+      emitGraphicsCommand(placement.transmit);
+      return { cell: placement.lines[0] ?? "│", imageId: placement.imageId, placementId: placement.placementId };
     });
-    const placement = buildPlacement(state, {
-      name: `footer-divider-${segmentKey}-${index}-${color}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-      png: rendered.png,
-      columns: FOOTER_DIVIDER_WIDTH,
-      rows: 1,
-      width: FOOTER_DIVIDER_WIDTH,
-      zIndex: PI_GRAPHICS_Z.SURFACE,
-    });
-    emitGraphicsCommand(placement.transmit);
-    return { cell: placement.lines[0] ?? "│", imageId: placement.imageId, placementId: placement.placementId };
   }
 
   // The footer underlay sits beneath the entire footer line. It is anchored to a
@@ -1639,70 +1403,22 @@ export default async function piGraphicsExtension(pi) {
   // no displacement, so it works on every kitty-protocol terminal -- only
   // non-zero H/V offsets hit terminal-specific gaps.) The visual is a mild
   // upward glow with a solid hline along the bottom edge.
-  function buildFooterUnderlayCell(width) {
-    if (!footerUnderlayEnabled()) return null;
-    if (!ensureUnicodePlacement(state)) return null;
+  // The footer underlay sits beneath the whole footer line. It is a real
+  // placement positioned by the frame compositor from a zero-width marker at
+  // the footer's first column, so it no longer steals a text cell and it works
+  // in Ghostty and Pi fullscreen (the old virtual-parent relative child did not).
+  function buildFooterUnderlayMarker(width) {
+    if (!footerUnderlayEnabled() || !compositorOverlaysEnabled()) return "";
     const cols = Math.max(1, Math.min(512, Math.trunc(Number(width) || 1)));
-    if (cols < 2) return null;
+    if (cols < 2) return "";
     const cell = cellMetrics();
     const glowColor = getThemeColorHex(activeThemeRef, footerUnderlayGlowToken(), "#101729");
     const lineColor = getThemeColorHex(activeThemeRef, footerUnderlayLineToken(), "#5e81ac");
     const glowAlpha = footerUnderlayGlowAlpha();
     const lineAlpha = footerUnderlayLineAlpha();
-    // Stable transparent anchor in the footer's first cell; the placeholder cell
-    // (returned below) tracks wherever Pi paints the footer, and the relative
-    // strip follows it.
-    const anchorImageId = piGraphicsImageId(`footer-underlay-anchor-${cell.cellWidthPx}x${cell.cellHeightPx}`);
-    const anchorPlacementId = piGraphicsPlaceholderPlacementId("footer-underlay-anchor-placement");
-    ensureAnchorUploaded({ anchorImageId, anchorPlacementId });
-    const key = `footer-underlay-${cols}-${glowColor}-${lineColor}-${glowAlpha.toFixed(3)}-${lineAlpha.toFixed(3)}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
-    const imageId = piGraphicsImageId(key);
-    const placementId = piGraphicsPlacementId(`footer-underlay-relative-${cols}`);
-    const relativeKey = `${imageId}->${anchorImageId}/${anchorPlacementId}@0,0`;
-    if (!uploadedImages.has(imageId) || !relativeUploaded.has(relativeKey)) {
-      const rendered = renderFooterUnderlay({ columns: cols, glowColor, lineColor, glowAlpha, lineAlpha, ...cell });
-      if (!uploadedImages.has(imageId)) {
-        emitGraphicsCommand(serializeKittyGraphicsChunks({
-          a: "t", f: 100, t: "d", i: imageId, q: 2,
-        }, bufferToBase64(rendered.png), { passthrough: state.config.passthrough }));
-        state.ownedImageIds.add(imageId);
-        uploadedImages.add(imageId);
-      }
-      // Replace any prior footer strip (e.g. on a width/theme change) so stale
-      // wider strips do not linger beneath the footer.
-      if (footerUnderlayRelative && (footerUnderlayRelative.imageId !== imageId || footerUnderlayRelative.placementId !== placementId)) {
-        // Genuine eviction: the prior footer strip (width/theme change) will not
-        // be reused. Free its image data (d=I) and drop the upload-cache /
-        // ownership entries so memory is reclaimed (bd-b94fa1); the replacement
-        // image id guards the placement-only case (bd-f4d277).
-        evictOwnedImage({
-          imageId: footerUnderlayRelative.imageId,
-          placementId: footerUnderlayRelative.placementId,
-          replacementImageId: imageId,
-        });
-      }
-      emitGraphicsCommand(buildRelativePlacementCommand({
-        imageId,
-        placementId,
-        parentImageId: anchorImageId,
-        parentPlacementId: anchorPlacementId,
-        hOffset: 0,
-        vOffset: 0,
-        columns: rendered.columns,
-        rows: rendered.rows,
-        zIndex: PI_GRAPHICS_Z.BACKGROUND,
-        passthrough: state.config.passthrough,
-      }));
-      footerUnderlayRelative = { imageId, placementId };
-      relativeUploaded.add(relativeKey);
-    }
-    return buildKittyUnicodePlaceholderLines({
-      imageId: anchorImageId,
-      placementId: anchorPlacementId,
-      columns: 1,
-      rows: 1,
-      width: 1,
-    })[0] ?? null;
+    const key = `footer-underlay-${cols}-${glowColor}-${lineColor}-${glowAlpha.toFixed(3)}-${lineAlpha.toFixed(3)}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    const imageId = ensureRealImage(key, () => renderFooterUnderlay({ columns: cols, glowColor, lineColor, glowAlpha, lineAlpha, ...cell }).png);
+    return overlayMarker("footer-underlay", null, { imageId, cols, rows: 1, dRow: 0, dCol: 0, z: PI_GRAPHICS_Z.BACKGROUND, cell });
   }
 
   function buildSegmentedFooterLine(ctx, footerData, width, pi, theme = activeThemeRef) {
@@ -1711,10 +1427,10 @@ export default async function piGraphicsExtension(pi) {
     // The 1x1 underlay placeholder consumes one text cell on the LHS, so the
     // footer text is laid out into width-1 columns and we add a single trailing
     // space on the RHS so the line ends with `provider/model<space>`.
-    const underlay = buildFooterUnderlayCell(fullWidth);
-    const target = underlay ? Math.max(1, fullWidth - 1) - 1 : fullWidth;
-    const prefix = underlay || "";
-    const suffix = underlay ? " " : "";
+    // Leave one trailing cell so the line ends with `provider/model<space>`.
+    const prefix = buildFooterUnderlayMarker(fullWidth);
+    const target = Math.max(1, fullWidth - 1);
+    const suffix = " ";
     const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
     const renderSegments = (segments, indexOffset = 0) => {
       let line = "";
@@ -1771,21 +1487,14 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function buildEditorBorderWidgetRows(width, edge) {
-    if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") {
-      const height = editorBorderHeight(edge);
-      const line = buildJoinedUnicodeEditorBorderLine(width, edge);
-      if (!line) return [];
-      return [line, ...Array.from({ length: Math.max(0, height - 1) }, () => emptyEditorBorderRow(width))];
-    }
-    if (editorBorderUsesRelativePlacement()) return [];
+    if (editorBorderUsesRelativePlacement() && compositorOverlaysEnabled()) return [];
     const rows = buildEditorBorderRows(width, edge);
     if (!rows || rows.length <= 1) return [];
     return edge === "top" ? rows.slice(0, -1) : rows.slice(1);
   }
 
   function editorBorderNeedsWidget(edge) {
-    if (editorBorderUsesRelativePlacement()) return false;
-    if (editorStyle() === "unicode" && editorUnicodeMode() === "topLeft") return true;
+    if (editorBorderUsesRelativePlacement() && compositorOverlaysEnabled()) return false;
     return editorBorderHeight(edge) > 1;
   }
 
@@ -1810,7 +1519,11 @@ export default async function piGraphicsExtension(pi) {
       return false;
     }
     if (typeof ctx.ui?.setEditorComponent !== "function") return false;
-    if (typeof CustomEditor !== "function") return false;
+    const CustomEditor = host.get("CustomEditor");
+    if (typeof CustomEditor !== "function") {
+      trace("installEditorSurface: CustomEditor class not discovered yet");
+      return false;
+    }
     editorChromeRegistry = getOrCreateEditorChromeRegistry(ctx.ui, {
       defaultFactory: (tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
     });
@@ -1820,11 +1533,15 @@ export default async function piGraphicsExtension(pi) {
       priority: 10,
       decorate(base, { tui, theme }) {
         editorRenderTui = tui || editorRenderTui;
+        if (!hostTui && tui) hostTui = tui;
         activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
         writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
         applyHardwareCursorPolicy(tui);
         return wrapEditorComponent(base, {
           renderRows(baseLines, width) {
+            // Cheap per-frame check: a regular<->fullscreen switch creates a
+            // new renderer that needs the frame hook again.
+            if (hostTui) ensureFrameCompositor();
             // The dash-rule detection + border/decoration/clamp composition is a pure
             // seam (composeEditorRenderRows, bd-f5f802); the stateful pieces stay
             // here and are injected as callbacks.
@@ -1834,55 +1551,13 @@ export default async function piGraphicsExtension(pi) {
               decorateLine: (line, lineWidth) => decorateEditorContentLine(line, lineWidth),
               clampRows: (lines, lineWidth) => clampRenderedRowsToWidth(lines, lineWidth),
               buildBorderRow: (lineWidth, edge) => buildEditorBorderRow(lineWidth, edge),
-              topLeftUnicode: editorStyle() === "unicode" && editorUnicodeMode() === "topLeft",
+              topLeftUnicode: false,
             });
           },
         });
       },
     });
     return true;
-  }
-
-  function looksLikeDashRender(component) {
-    if (!component || typeof component.render !== "function") return false;
-    if (component.__piGraphicsDashPatched) return false;
-    try {
-      const sample = component.render(8);
-      if (!Array.isArray(sample) || sample.length !== 1) return false;
-      const text = String(sample[0] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
-      return /^[─━═]{2,}$/.test(text);
-    } catch {
-      return false;
-    }
-  }
-
-  function wrapDashRender(component) {
-    const original = component.render.bind(component);
-    component.__piGraphicsDashPatched = true;
-    component.render = (width) => {
-      const line = buildEditorBorderRow(width, "symmetric");
-      return clampRenderedRowsToWidth(line ? [line] : original(width), width);
-    };
-  }
-
-  function walkAndPatch(node, depth = 0) {
-    if (!node || depth > 32) return;
-    if (looksLikeDashRender(node)) wrapDashRender(node);
-    const kids = Array.isArray(node.children) ? node.children : null;
-    if (kids) for (const child of kids) walkAndPatch(child, depth + 1);
-  }
-
-  function patchDashRendersForTui(tui) {
-    if (!ensureUnicodePlacement(state)) return;
-    if (!tui) return;
-    walkAndPatch(tui, 0);
-    let attempts = 0;
-    const id = ownedInterval(() => {
-      attempts += 1;
-      try { walkAndPatch(tui, 0); } catch {}
-      if (attempts >= 40) clearOwnedTimer(id);
-    }, 500);
-
   }
 
 
@@ -1912,9 +1587,6 @@ export default async function piGraphicsExtension(pi) {
     try { ctx.ui.setWidget("pi-graphics-editor-bottom", bottomNeedsWidget ? factory("bottom") : undefined, { placement: "belowEditor" }); } catch {}
   }
 
-  let boxChromeInstalled = false;
-  let boxChromeRuntime = null;
-  let restoreBuiltInBoxChrome = null;
   let genericGraphicsInstanceCounter = 0;
   let activeThemeRef = null;
 
@@ -1924,34 +1596,19 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function boxChromeComponentMap() {
-    return {
-      assistant: AssistantMessageComponent,
-      tool: ToolExecutionComponent,
-      bash: BashExecutionComponent,
-      user: UserMessageComponent,
-      custom: CustomMessageComponent,
-      skill: SkillInvocationMessageComponent,
-      branch: BranchSummaryMessageComponent,
-      compaction: CompactionSummaryMessageComponent,
-      footer: FooterComponent,
-      loader: BorderedLoader,
-      border: DynamicBorder,
-      input: ExtensionInputComponent,
-      editor: ExtensionEditorComponent,
-      selector: ExtensionSelectorComponent,
-      login: LoginDialogComponent,
-      model: ModelSelectorComponent,
-      oauth: OAuthSelectorComponent,
-      session: SessionSelectorComponent,
-      settings: SettingsSelectorComponent,
-      image: ShowImagesSelectorComponent,
-      theme: ThemeSelectorComponent,
-      thinkingSelector: ThinkingSelectorComponent,
-      tree: TreeSelectorComponent,
-      userSelector: UserMessageSelectorComponent,
-      agent: ArminComponent,
-      mascot: DaxnutsComponent,
-    };
+    const map = {};
+    for (const [type, name] of BOX_CHROME_CLASS_BY_TYPE) map[type] = host.get(name);
+    return map;
+  }
+
+  // Classes discovered after box chrome was installed (e.g. the first
+  // assistant message) are patched incrementally with the active runtime.
+  function patchDiscoveredBoxChromeClass(name, ctor) {
+    if (!boxChromeRuntime) return;
+    const type = BOX_CHROME_TYPE_BY_CLASS.get(name);
+    if (!type) return;
+    const patch = installBoxChromeMonkeyPatch({ components: { [type]: ctor }, runtime: boxChromeRuntime });
+    if (typeof patch?.restore === "function") boxChromeRestores.push(patch.restore);
   }
 
   function shouldSkipGraphicsWrap(value) {
@@ -2150,22 +1807,25 @@ export default async function piGraphicsExtension(pi) {
     delete ui.__piGraphicsSurfacesPatched;
   }
 
-  function buildBoxRailRows({ width, edge, type = "assistant" }) {
+  function buildBoxRailRows({ width, edge, type = "assistant", instanceKey = "" }) {
     if (!ensureUnicodePlacement(state)) return [];
     const cols = Math.max(8, Math.min(512, Math.trunc(Number(width) || 0)));
     const cell = cellMetrics();
     const height = boxRailHeight(edge);
     const frames = boxRailAnimationEnabled() ? editorAnimationFrames() : 1;
-    const delayMs = editorAnimationDelayMs();
+    const delayMs = Math.max(50, editorAnimationDelayMs());
     const color = getThemeColorHex(activeThemeRef, BOX_TYPE_THEME_TOKENS[type] || "accent", "#88c0d0");
     const glow = getThemeColorHex(activeThemeRef, "borderAccent", "#b48ead");
     const style = boxRailStyle();
-    const rendered = renderEditorBorderFramesPngs({
+    const key = `box-rail-${type}-${edge}-${cols}x${height}-${style}-${frames}-${color}-${glow}-${cell.cellWidthPx}x${cell.cellHeightPx}`;
+    // Render only on a cache miss (the old path encoded two PNGs per message
+    // box on every render before consulting any cache).
+    const render = (frameCount) => renderEditorBorderFramesPngs({
       columns: cols,
       rows: height,
       edge,
       ...cell,
-      frames,
+      frames: frameCount,
       borderColor: color,
       glowColor: glow,
       borderAlpha: Math.max(0.28, Math.min(0.75, editorAlpha() + 0.08)),
@@ -2173,9 +1833,15 @@ export default async function piGraphicsExtension(pi) {
       style,
       context: "idle",
     });
-    const unicodeMode = boxRailUnicodeMode();
-    const key = `box-rail-${type}-${edge}-${cols}x${height}-${style}-${boxRailMode()}-${unicodeMode}-${frames}-${color}-${glow}-${cell.cellWidthPx}x${cell.cellHeightPx}@${cell.lineHeightScale}`;
-    if (boxRailMode() === "unicode" && unicodeMode === "fill") {
+    if (boxRailMode() === "relative" && compositorOverlaysEnabled()) {
+      const imageId = ensureRealImage(key, () => render(1).pngs[0]);
+      const marker = overlayMarker(key, `${instanceKey}.${edge}`, { imageId, cols, rows: height, dRow: 0, dCol: 0, z: PI_GRAPHICS_Z.SURFACE, cell });
+      return [`${marker}${" ".repeat(cols)}`, ...Array.from({ length: Math.max(0, height - 1) }, () => emptyEditorBorderRow(cols))];
+    }
+    // fill and topLeft: one full-width placeholder row (a lone anchor cell only
+    // ever paints a single cell of a wide virtual placement).
+    return cachedPlacementLine(key, () => {
+      const rendered = render(frames);
       const placement = frames > 1 ? buildManualAnimatedPlacement({
         name: key,
         pngs: rendered.pngs,
@@ -2187,45 +1853,21 @@ export default async function piGraphicsExtension(pi) {
       }) : buildPlacement(state, { name: key, png: rendered.pngs[0], columns: rendered.columns, rows: rendered.rows, width: cols, zIndex: PI_GRAPHICS_Z.SURFACE });
       if (frames <= 1) emitGraphicsCommand(placement.transmit);
       return placement.lines;
-    }
-    const imageId = piGraphicsImageId(key);
-    const placementId = boxRailMode() === "relative" ? piGraphicsPlaceholderPlacementId(`box-rail-anchor-placement-${type}-${edge}-${cols}`) : piGraphicsPlaceholderPlacementId(`box-rail-topleft-placement-${type}-${edge}-${cols}x${height}`);
-    if (!uploadedImages.has(imageId)) {
-      const transmit = frames > 1 ? buildPngVirtualPlacementAnimation({
-        imageId,
-        placementId,
-        pngBases: rendered.pngs.map((png) => bufferToBase64(png)),
-        delaysMs: Array.from({ length: frames }, () => delayMs),
-        columns: rendered.columns,
-        rows: rendered.rows,
-        zIndex: PI_GRAPHICS_Z.SURFACE,
-        passthrough: state.config.passthrough,
-        autoLoop: false,
-      }) : serializeKittyGraphicsChunks({ a: "T", f: 100, t: "d", i: imageId, p: placementId, U: 1, c: rendered.columns, r: rendered.rows, z: PI_GRAPHICS_Z.SURFACE, q: 2 }, bufferToBase64(rendered.pngs[0]), { passthrough: state.config.passthrough });
-      emitGraphicsCommand(transmit);
-      state.ownedImageIds.add(imageId);
-      uploadedImages.add(imageId);
-      if (frames > 1) ensureManualAnimationLoop({ imageId, frames, delayMs });
-    }
-    const line = buildKittyUnicodePlaceholderLines({ imageId, placementId, columns: 1, rows: 1, width: cols })[0] ?? "";
-    return [line, ...Array.from({ length: Math.max(0, height - 1) }, () => emptyEditorBorderRow(cols))];
+    });
   }
 
   function createBoxRailsRuntime() {
-    const owned = new Set();
     return {
-      applyToRows({ type, lines, renderWidth }) {
+      applyToRows({ type, lines, renderWidth, instanceId }) {
         const input = Array.isArray(lines) ? lines : [];
         if (!input.length) return input;
-        const width = Math.max(8, Math.trunc(Number(renderWidth) || Math.max(...input.map((line) => String(line || "").replace(/\x1b\[[0-9;]*m/g, "").length), 8)));
-        const before = new Set(state.ownedImageIds || []);
-        const top = buildBoxRailRows({ width, edge: "top", type });
-        const bottom = buildBoxRailRows({ width, edge: "bottom", type });
-        for (const id of state.ownedImageIds || []) if (!before.has(id)) owned.add(id);
+        const width = Math.max(8, Math.trunc(Number(renderWidth) || Math.max(...input.map((line) => approximateVisibleCells(line)), 8)));
+        const top = buildBoxRailRows({ width, edge: "top", type, instanceKey: String(instanceId ?? "") });
+        const bottom = buildBoxRailRows({ width, edge: "bottom", type, instanceKey: String(instanceId ?? "") });
         return [...top, ...input, ...bottom];
       },
-      resetCaches() { owned.clear(); },
-      ownedImageIds() { return new Set(owned); },
+      resetCaches() {},
+      ownedImageIds() { return new Set(); },
     };
   }
 
@@ -2237,7 +1879,11 @@ export default async function piGraphicsExtension(pi) {
     if (command) {
       try { resolveGraphicsWriter(ctx)?.(command); } catch {}
     }
-    for (const id of owned) state.ownedImageIds?.delete?.(id);
+    for (const id of owned) {
+      state.ownedImageIds?.delete?.(id);
+      state.virtualPlacements?.delete?.(id);
+      transmitLog.delete(id);
+    }
     state.boxChromeImageIds?.clear?.();
   }
 
@@ -2245,14 +1891,15 @@ export default async function piGraphicsExtension(pi) {
     restoreUiGraphicsSurfaces(ctx);
     clearBoxChromeImages(ctx);
     try { boxChromeRuntime?.resetCaches?.(); } catch {}
-    try { restoreBuiltInBoxChrome?.(); } catch {}
+    for (const restore of boxChromeRestores.splice(0)) {
+      try { restore(); } catch {}
+    }
     // Extension reloads can leave process-global Pi component prototypes patched
     // while this fresh extension instance has no restore callback yet. Install a
     // null-runtime owner and immediately restore it so boxChrome:false really
     // removes Unicode placeholder edge cells instead of merely disabling new
     // runtime state.
     try { installBoxChromeMonkeyPatch({ components: boxChromeComponentMap(), runtime: null })?.restore?.(); } catch {}
-    restoreBuiltInBoxChrome = null;
     boxChromeRuntime = null;
     boxChromeInstalled = false;
   }
@@ -2264,6 +1911,7 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function installBoxChromeOnce(ctx, { force = false } = {}) {
+    trace(`installBoxChromeOnce force=${force} installed=${boxChromeInstalled} chrome=${gfxEnv().PI_GRAPHICS_AUTO_BOX_CHROME} rails=${gfxEnv().PI_GRAPHICS_AUTO_BOX_RAILS}`);
     if (force) teardownBoxChrome(ctx);
     if (boxChromeInstalled) return;
     const chromeEnabled = envBool("PI_GRAPHICS_AUTO_BOX_CHROME", true);
@@ -2283,6 +1931,7 @@ export default async function piGraphicsExtension(pi) {
       boxUnicodeMode: boxUnicodeMode(),
       debugPlaceholders: envBool("PI_GRAPHICS_DEBUG_PLACEHOLDERS", envBool("PI_GRAPHICS_DEBUG", false)),
       einkMode: settings.piGraphics?.einkMode === true,
+      overlayMarker: compositorOverlaysEnabled() ? overlayMarker : null,
       resolveTheme({ type } = {}) {
         const token = (type && BOX_TYPE_THEME_TOKENS[type]) || "accent";
         const colorRgb = getThemeColorRgb(activeThemeRef, token, "#88c0d0");
@@ -2294,7 +1943,7 @@ export default async function piGraphicsExtension(pi) {
       components: boxChromeComponentMap(),
       runtime,
     });
-    restoreBuiltInBoxChrome = typeof patch?.restore === "function" ? patch.restore : null;
+    if (typeof patch?.restore === "function") boxChromeRestores.push(patch.restore);
     boxChromeInstalled = true;
     patchUiGraphicsSurfaces(ctx);
   }
@@ -2322,9 +1971,25 @@ export default async function piGraphicsExtension(pi) {
     } catch {}
   }
 
+  function discoverHostComponents(ctx) {
+    const tui = captureTuiFromUi(ctx?.ui);
+    if (!tui) return false;
+    hostTui = tui;
+    try { host.discover(tui); } catch {}
+    return true;
+  }
+
   pi.on("session_start", async (_event, ctx) => {
+    lastUiContext = ctx;
+    discoverHostComponents(ctx);
+    trace(`session_start mode=${gfxEnv().PI_GRAPHICS_MODE} host=${host.names().join("|")} importError=${hostImportError?.message || "none"}`);
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     writeGraphicsCommand = resolveGraphicsWriter(ctx);
+    if (hostTui?.terminal) {
+      pixelGeometry.attach(hostTui.terminal);
+      if (!pixelGeometry.known()) pixelGeometry.query(writeGraphicsCommand);
+    }
+    ensureFrameCompositor();
     activeThemeRef = ctx?.ui?.theme || null;
     clearStaleStartupGraphics();
     warnLegacyEditorMode(ctx);
@@ -2541,6 +2206,10 @@ export default async function piGraphicsExtension(pi) {
     const off = modeIsOff(gfxEnv().PI_GRAPHICS_MODE);
     warnLegacyEditorMode(ctx);
     if (off) {
+      const overlayClear = overlayPlacements.clear();
+      if (overlayClear) emitGraphicsCommand(overlayClear);
+      frameCompositor.dispose();
+      compositorInstalled = false;
       releaseEditorSurface();
       releaseOwnedUiSurfaces(ctx);
       teardownBoxChrome(ctx);
@@ -2653,7 +2322,7 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function cursorDoctorLines() {
-    const visible = editorCursorRelativePlacement?.placementId ?? null;
+    const visible = overlayPlacements.keys().includes("cursor-halo") ? "cursor-halo" : null;
     return [
       "Pi Graphics cursor doctor",
       cursorAnchorDiagnosticLine(),
@@ -2712,56 +2381,36 @@ export default async function piGraphicsExtension(pi) {
       return graphicsPreviewUnavailableLines("cursor");
     }
     const cell = cellMetrics();
-    const variants = [
-      { label: "cool beam", heat: 0.05, wpm: 0, trailDirection: 1 },
-      { label: "warm trail", heat: 0.55, wpm: 80, trailDirection: 1 },
-      { label: "hot back", heat: 1, wpm: 220, trailDirection: -1 },
-    ];
+    const calmColor = getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
+    const warmColor = getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead");
+    const coreColor = getThemeColorHex(activeThemeRef, "text", "#eceff4");
     const lines = [
       "Pi Graphics cursor preview",
-      "cool/warm/hot variants use the same 11x5 centered anchor-relative artwork as the live editor cursor.",
+      `cool → hot heat buckets of the ${EDITOR_CURSOR_GLOW_COLUMNS}x${EDITOR_CURSOR_GLOW_ROWS} halo placed by the frame compositor at Pi's cursor.`,
       `live diagnostics: ${cursorAnchorDiagnosticLine()}.`,
       "",
     ];
-    lines.push(buildAnchoredEditorCursorPreviewLine({ label: "anchored", heat: 0.55, wpm: 80, trailDirection: 1 }));
-    lines.push("");
-    variants.forEach((variant) => {
-      const trailBucket = Math.max(0, Math.min(4, Math.round((Number(variant.wpm) || 0) / 60)));
-      const directionBucket = Number(variant.trailDirection) < 0 ? "left" : "right";
-      const heatBucket = Math.max(0, Math.min(5, Math.round((Number(variant.heat) || 0) * 5)));
-      const glowColor = heatBucket >= 4
-        ? "#ff9f5a"
-        : heatBucket >= 2
-          ? getThemeColorHex(activeThemeRef, "thinkingXhigh", "#b48ead")
-          : getThemeColorHex(activeThemeRef, "accent", "#88c0d0");
-      const rendered = renderEditorCursorVline({
-        alpha: Math.max(0.38, editorAlpha() * (0.70 + variant.heat * 0.40)),
-        backgroundColor: getThemeColorHex(activeThemeRef, "editorBg", "#101729"),
-        coreColor: getThemeColorHex(activeThemeRef, "text", "#eceff4"),
-        glowColor,
-        columns: 11,
-        rows: 5,
-        heat: variant.heat,
-        glowRadiusCells: 0.9 + variant.heat * 0.9,
-        trailCells: variant.heat > 0.04 ? 0.8 + trailBucket * 0.42 + variant.heat * 1.2 : 0,
-        trailDirection: variant.trailDirection,
-        ...cell,
-      });
+    // Preview as Unicode placeholders (portable, no real placements needed).
+    const rendered = renderEditorCursorGlowFrames({
+      columns: EDITOR_CURSOR_GLOW_COLUMNS, rows: EDITOR_CURSOR_GLOW_ROWS, frameCount: HEAT_BUCKETS,
+      calmColor, warmColor, coreColor, beam: true, ...cell,
+    });
+    const picks = [0, Math.floor(HEAT_BUCKETS / 2), HEAT_BUCKETS - 1];
+    const blocks = picks.map((bucket) => {
       const placement = buildPlacement(state, {
-        name: `editor-cursor-preview-${heatBucket}-${trailBucket}-${directionBucket}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
-        png: rendered.png,
-        columns: rendered.columns,
-        rows: rendered.rows,
-        width: rendered.columns,
+        name: `cursor-preview-${bucket}-${calmColor}-${warmColor}-${cell.cellWidthPx}x${cell.cellHeightPx}`,
+        png: rendered.frames[bucket],
+        columns: EDITOR_CURSOR_GLOW_COLUMNS,
+        rows: EDITOR_CURSOR_GLOW_ROWS,
+        width: EDITOR_CURSOR_GLOW_COLUMNS,
         zIndex: PI_GRAPHICS_Z.SURFACE,
       });
       emitGraphicsCommand(placement.transmit);
-      const [first, ...rest] = placement.lines;
-      lines.push(`${variant.label.padEnd(12)} ${first ?? ""}`);
-      rest.forEach((line) => lines.push(`${"".padEnd(12)} ${line}`));
-      lines.push("");
+      return placement.lines;
     });
-    lines.push("Use /gfx debug for visible placeholder IDs; /gfx cursor preview only emits bounded cached variants.");
+    for (let row = 0; row < EDITOR_CURSOR_GLOW_ROWS; row += 1) {
+      lines.push(blocks.map((block) => block[row]).join("  "));
+    }
     return lines;
   }
 
@@ -3351,6 +3000,14 @@ export default async function piGraphicsExtension(pi) {
   pi.on("session_shutdown", async (_event, ctx) => {
     if (shutdownComplete) return;
     shutdownComplete = true;
+    try { await fullCanvas?.stop?.({ reason: "shutdown" }); } catch {}
+    try {
+      const overlayClear = overlayPlacements.clear();
+      if (overlayClear) resolveGraphicsWriter(ctx)?.(overlayClear);
+    } catch {}
+    frameCompositor.dispose();
+    compositorInstalled = false;
+    pixelGeometry.dispose();
     releaseEditorSurface();
     releaseOwnedUiSurfaces(ctx);
     teardownBoxChrome(ctx);
@@ -3363,6 +3020,8 @@ export default async function piGraphicsExtension(pi) {
     } catch {}
     resetGraphicsUploadCaches();
     resetPlacementTracking(state);
+    try { host.dispose(); } catch {}
+    hostTui = null;
   });
 
   if (envBool("PI_GRAPHICS_EXPOSE_RENDER_TOOLS", false)) {

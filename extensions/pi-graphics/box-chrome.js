@@ -1,8 +1,13 @@
-// Box chrome wrapper: monkey-patches built-in Pi message components to wrap
-// each rendered row with a non-virtual relative kitty placement anchored to a
-// virtual Unicode placeholder cell. The placement renders a Nord-tinted
-// translucent backing strip per row (top cap, mid rail, bottom cap), themed
-// by the active Pi theme.
+// Box chrome wrapper: monkey-patches built-in Pi message components to frame
+// each rendered row with Nord-tinted translucent strips (top cap, mid rail,
+// bottom cap), themed by the active Pi theme. Two portable placements:
+//   * overlay strips (relative / unicode topLeft): a zero-width marker at the
+//     row start; the frame compositor places the strip under the text at the
+//     marker's absolute cell (works in Kitty, Ghostty and Pi fullscreen);
+//   * fill edge cells (unicode fill): Unicode-placeholder side cells.
+// Transmissions always go through the side channel, never into row text.
+
+import { appendFileSync } from "node:fs";
 
 import {
   bufferToBase64,
@@ -2886,7 +2891,12 @@ function taperEdges(pixels, w, h) {
   }
 }
 
-export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx = 16, color, effect = "glass", type = "assistant", rowIndex = 0 }) {
+// Effect textures sit UNDER text. On content rows they are composited at a
+// low intensity so long transcripts stay readable; the frame rows (top/bottom)
+// carry the stronger identity.
+const EFFECT_INTENSITY = Object.freeze({ mid: 0.28, edge: 0.75 });
+
+export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx = 16, color, effect = "glass", type = "assistant", rowIndex = 0, effectIntensity }) {
   const w = Math.max(8, Math.round(columns * cellWidthPx));
   const h = cellHeightPx;
   const pixels = makeCanvas(w, h, [0, 0, 0, 0]);
@@ -2895,7 +2905,23 @@ export function renderBoxStripPng({ kind, columns, cellWidthPx = 8, cellHeightPx
   else if (kind === "left" || kind === "top-left" || kind === "bot-left") paintSideStrip(pixels, w, h, color, "left", kind.startsWith("top") ? "top" : kind.startsWith("bot") ? "bot" : "mid");
   else if (kind === "right" || kind === "top-right" || kind === "bot-right") paintSideStrip(pixels, w, h, color, "right", kind.startsWith("top") ? "top" : kind.startsWith("bot") ? "bot" : "mid");
   else paintMidStrip(pixels, w, h, color, cellWidthPx);
-  paintEffect(pixels, w, h, color, effect);
+  const intensity = Math.max(0, Math.min(1, effectIntensity ?? (kind === "top" || kind === "bot" ? EFFECT_INTENSITY.edge : EFFECT_INTENSITY.mid)));
+  if (intensity >= 0.999) paintEffect(pixels, w, h, color, effect);
+  else if (intensity > 0) {
+    const layer = makeCanvas(w, h, [0, 0, 0, 0]);
+    paintEffect(layer, w, h, color, effect);
+    for (let i = 0; i < layer.length; i += 4) {
+      const a = Math.round(layer[i + 3] * intensity);
+      if (a <= 0) continue;
+      const da = pixels[i + 3];
+      const out = a + da * (1 - a / 255);
+      const k = a / Math.max(1, out);
+      pixels[i] = Math.round(layer[i] * k + pixels[i] * (1 - k));
+      pixels[i + 1] = Math.round(layer[i + 1] * k + pixels[i + 1] * (1 - k));
+      pixels[i + 2] = Math.round(layer[i + 2] * k + pixels[i + 2] * (1 - k));
+      pixels[i + 3] = Math.round(out);
+    }
+  }
   paintTypeIcon(pixels, w, h, color, { type, rowIndex, cellWidthPx });
   taperEdges(pixels, w, h);
   return { png: encodeRgbaPng(pixels, w, h), widthPx: w, heightPx: h };
@@ -2925,6 +2951,10 @@ export function createBoxChromeRuntime({
   boxUnicodeMode = "fill",
   debugPlaceholders = false,
   einkMode = false,
+  // (bindingKey, instanceKey, spec) -> zero-width marker. When provided, strip
+  // modes are placed by the frame compositor instead of anchor images plus
+  // relative placements (which break in Ghostty and Pi fullscreen).
+  overlayMarker = null,
 } = {}) {
   state.ownedImageIds ||= new Set();
   state.boxChromeImageIds ||= new Set();
@@ -3085,30 +3115,26 @@ export function createBoxChromeRuntime({
         ? debugPlaceholderCell({ imageId: placement.imageId, placementId: placement.placementId })
         : placement.lines[0] || "";
       trackBoxChromeImageId(placement.imageId);
-      const entry = { transmit: placement.transmit, cell, line: `${placement.transmit}${cell}` };
+      // Transmit once through the side channel. Embedding the APC in the row
+      // text made Pi treat every boxed row as an image line: a full-screen
+      // repaint + delete-all-placements on each fullscreen frame, and the PNG
+      // re-sent with every redraw.
+      if (placement.transmit) emitGraphicsCommand(placement.transmit);
+      const entry = { transmit: "", cell, line: cell };
       unicodeCellLines.set(cellKey, entry);
       return entry;
     };
-    const makeTopLeftRow = (rowIndex, kind) => {
+    const makeOverlayRow = (rowIndex, kind, line) => {
+      const stripId = ensureStripUploaded({ kind, type, width, colorRgb, effect, rowIndex });
       const renderRowIndex = stripRenderRowBucket(rowIndex);
-      const rowKey = `box-unicode-topleft-${type}-${kind}-${effect}-${renderRowIndex}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}-${debugPlaceholders ? "debug" : "kitty"}`;
-      const cached = unicodeTopLeftLines.get(rowKey);
-      if (cached) return cached;
-      const rendered = renderBoxStripPng({ kind, columns: width, cellWidthPx, cellHeightPx, color: colorRgb, effect, type, rowIndex: renderRowIndex });
-      const imageId = piGraphicsImageId(rowKey);
-      const placementId = piGraphicsPlaceholderPlacementId(`${rowKey}-placement`);
-      const transmit = serializeKittyGraphicsChunks(
-        { a: "T", f: 100, t: "d", i: imageId, p: placementId, U: 1, c: width, r: 1, z: BOX_Z_INDEX, q: 2 },
-        bufferToBase64(rendered.png),
-        { passthrough: state.config.passthrough },
-      );
-      const cell = debugPlaceholders
-        ? debugPlaceholderCell({ imageId, placementId })
-        : `${placeholderSgr({ imageId, placementId })}${buildKittyUnicodePlaceholderCell({ imageId, placementId, row: 0, column: 0, includeColumn: true })}${ESC}[39;59m`;
-      trackBoxChromeImageId(imageId);
-      const entry = { transmit, cell, line: `${transmit}${cell}${" ".repeat(Math.max(0, width - 1))}` };
-      unicodeTopLeftLines.set(rowKey, entry);
-      return entry;
+      const bindingKey = `box-strip-${type}-${kind}-${effect}-${renderRowIndex}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
+      const marker = overlayMarker(bindingKey, `${instanceId}.${rowIndex}`, {
+        imageId: stripId, cols: width, rows: 1, dRow: 0, dCol: 0, z: BOX_Z_INDEX,
+        cell: { cellWidthPx, cellHeightPx },
+      });
+      const trimmed = truncateAnsiToVisibleWidth(styleContent(String(line || "")), width);
+      const pad = " ".repeat(Math.max(0, width - visibleCellWidth(trimmed)));
+      return `${marker}${trimmed}${pad}`;
     };
     const makeFullBorderRow = (rowIndex, verticalKind) => {
       const leftKind = verticalKind === "bot" ? "bot-left" : "top-left";
@@ -3118,26 +3144,22 @@ export function createBoxChromeRuntime({
       const mid = makeCell("mid", rowIndex, midKind);
       const right = makeCell("right", rowIndex, rightKind);
       const inner = mid.cell.repeat(Math.max(0, width - 2));
-      return `${left.transmit}${mid.transmit}${right.transmit}${left.cell}${inner}${right.cell}`;
+      return `${left.cell}${inner}${right.cell}`;
     };
     const styleContent = (line) => einkMode && type === "thinking" ? `${ESC}[3m${line}${ESC}[23m` : line;
     return lines.map((line, i) => {
       if (hasKittyPlaceholder(line)) return truncateAnsiToVisibleWidth(styleContent(line), width);
       const verticalKind = boxRowKind(i, lines.length);
-      if (normalizedBoxUnicodeMode() === "topLeft") {
-        const kind = verticalKind === "top" ? "top" : verticalKind === "bot" ? "bot" : "mid";
-        const anchor = makeTopLeftRow(i, kind);
-        if (isLikelyBorderLine(line) && verticalKind !== "mid") return anchor.line;
-        const plainWidth = Math.max(0, width - 1);
-        const trimmed = truncateAnsiToVisibleWidth(styleContent(String(line || "")), plainWidth);
-        const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));
-        return `${anchor.transmit}${anchor.cell}${trimmed}${pad}`;
+      if (normalizedBoxUnicodeMode() === "topLeft" && typeof overlayMarker === "function") {
+        return makeOverlayRow(i, verticalKind, line);
       }
+      // Without a compositor, topLeft degrades to the portable fill edge cells
+      // below: a lone anchor cell can only ever paint one cell of the strip.
       if (isLikelyBorderLine(line) && verticalKind !== "mid") return makeFullBorderRow(i, verticalKind);
       const leftKind = verticalKind === "top" ? "top-left" : verticalKind === "bot" ? "bot-left" : "left";
       const rightKind = verticalKind === "top" ? "top-right" : verticalKind === "bot" ? "bot-right" : "right";
-      const left = makeCell("left", i, leftKind).line;
-      const right = makeCell("right", i, rightKind).line;
+      const left = makeCell("left", i, leftKind).cell;
+      const right = makeCell("right", i, rightKind).cell;
       const plainWidth = Math.max(0, width - 2);
       const trimmed = truncateAnsiToVisibleWidth(styleContent(String(line || "")), plainWidth);
       const pad = " ".repeat(Math.max(0, plainWidth - visibleCellWidth(trimmed)));
@@ -3157,8 +3179,11 @@ export function createBoxChromeRuntime({
     // hard line-width guard (for example /settings at 186 cols receiving 188).
     // Unicode mode is text-cell replacement, not an independent overlay, so keep
     // two cells of render-width slack while still honoring genuinely wider content.
+    // Overlay strips (compositor-placed, under text) add no side cells, so
+    // they need no slack; only fill-mode edge cells widen the row.
+    const addsSideCells = boxMode === "unicode" && !(normalizedBoxUnicodeMode() === "topLeft" && typeof overlayMarker === "function");
     const renderWidthHint = Number.isFinite(requestedWidth) && requestedWidth > 0
-      ? (boxMode === "unicode" && requestedWidth > contentWidth ? Math.max(0, requestedWidth - 2) : requestedWidth)
+      ? (addsSideCells && requestedWidth > contentWidth ? Math.max(0, requestedWidth - 2) : requestedWidth)
       : 0;
     const unclampedWidth = renderWidthHint > 0
       ? renderWidthHint
@@ -3172,6 +3197,14 @@ export function createBoxChromeRuntime({
       if (hasKittyPlaceholder(clipped)) return clipped;
       const kind = boxRowKind(i, lines.length);
       const stripId = ensureStripUploaded({ kind, type: effectiveType, width, colorRgb, effect, rowIndex: i });
+      if (typeof overlayMarker === "function") {
+        const bindingKey = `box-strip-${effectiveType}-${kind}-${effect}-${stripRenderRowBucket(i)}-${width}-${colorRgb.join(",")}-${cellWidthPx}x${cellHeightPx}`;
+        const marker = overlayMarker(bindingKey, `${instanceId}.${i}`, {
+          imageId: stripId, cols: width, rows: 1, dRow: 0, dCol: 0, z: BOX_Z_INDEX,
+          cell: { cellWidthPx, cellHeightPx },
+        });
+        return `${marker}${clipped}`;
+      }
       const { anchorImageId, anchorPlacementId } = ensureAnchor({ instanceId, rowIndex: i });
       ensureRelativeStrip({ stripImageId: stripId, anchorImageId, anchorPlacementId, instanceId, rowIndex: i, width });
       return truncateAnsiToVisibleWidth(wrapRowText({ lineText: clipped, anchorImageId, anchorPlacementId }), width);
@@ -3205,7 +3238,7 @@ function isLikelyBorderLine(text) {
   return stripped.length >= 3 && /^[─━═╭╮╰╯╔╗╚╝┌┐└┘┬┴┼·✧\-\s]+$/.test(stripped) && /[─━═\-]/.test(stripped);
 }
 
-const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))|(?:\x1b[_PG][\s\S]*?\x1b\\)/g;
+const CONTROL_RE = /(?:\x1b\[[0-9;?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\))|(?:\x1b_[^\x07\x1b]*(?:\x07|\x1b\\))|(?:\x1b[PG][\s\S]*?\x1b\\)/g;
 
 function readControlAt(text, index) {
   CONTROL_RE.lastIndex = index;
@@ -3361,7 +3394,10 @@ export function installBoxChromeMonkeyPatch({ components, runtime, onWrap = () =
       try {
         activeOnCall(activeType);
         return activeRuntime.applyToRows({ type: activeType, instanceId: this.__piGraphicsInstanceId, lines, component: this, renderWidth: width });
-      } catch {
+      } catch (error) {
+        if (process.env.PI_GRAPHICS_TRACE) {
+          try { appendFileSync(process.env.PI_GRAPHICS_TRACE, `${Date.now()} box-chrome ${activeType} error: ${error?.stack || error}\n`); } catch {}
+        }
         return lines;
       }
     };
