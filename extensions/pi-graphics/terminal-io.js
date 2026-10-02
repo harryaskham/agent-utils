@@ -76,12 +76,22 @@ export function tapTerminalInput(terminal, handler) {
  * `CSI 4;h;w t` (text area) replies — Pi itself consumes the cell-size reply,
  * so this tap only peeks — and can query on demand.
  */
+const KITTY_PROBE_ID = 31337;
+const KITTY_PROBE_RE = /^\x1b_Gi=31337(?:,[^;]*)?;([^\x1b]*)\x1b\\$/;
+
 export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
   const geometry = { cellWidthPx: 0, cellHeightPx: 0, textAreaWidthPx: 0, textAreaHeightPx: 0 };
   let untap = null;
   let terminal = null;
+  const waiters = new Set();
+  let kittyReply = null;
+  const settle = () => { for (const fn of waiters) { try { fn(); } catch {} } };
   const handler = (data) => {
-    if (typeof data !== "string" || data.length > 24 || !data.startsWith("\x1b[")) return undefined;
+    if (typeof data !== "string") return undefined;
+    // Reply to our Kitty graphics support probe (a=q): never Pi input.
+    const kitty = data.length < 256 ? KITTY_PROBE_RE.exec(data) : null;
+    if (kitty) { kittyReply = kitty[1] || "OK"; settle(); return null; }
+    if (data.length > 24 || !data.startsWith("\x1b[")) return undefined;
     const reply = parsePixelGeometryReply(data);
     if (!reply) return undefined;
     let changed = false;
@@ -90,6 +100,7 @@ export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
       geometry.cellWidthPx = reply.widthPx;
       geometry.cellHeightPx = reply.heightPx;
       if (changed) try { onChange({ ...geometry }); } catch {}
+      settle();
       return undefined; // let Pi consume its own cell-size reply
     }
     if (reply.kind === "textArea" && reply.widthPx > 0 && reply.heightPx > 0) {
@@ -97,10 +108,22 @@ export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
       geometry.textAreaWidthPx = reply.widthPx;
       geometry.textAreaHeightPx = reply.heightPx;
       if (changed) try { onChange({ ...geometry }); } catch {}
+      settle();
       return null; // Pi never asks for this one; do not leak it as input
     }
     return undefined;
   };
+  const wait = (predicate, timeoutMs) => new Promise((resolve) => {
+    if (predicate()) { resolve(true); return; }
+    let timer = null;
+    const check = () => {
+      if (!predicate()) return;
+      waiters.delete(check); clearTimeout(timer); resolve(true);
+    };
+    waiters.add(check);
+    timer = setTimeout(() => { waiters.delete(check); resolve(predicate()); }, Math.max(1, timeoutMs));
+    timer.unref?.();
+  });
   return {
     geometry,
     attach(nextTerminal) {
@@ -113,6 +136,42 @@ export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
       try { write?.("\x1b[16t\x1b[14t"); } catch {}
     },
     known() { return geometry.cellWidthPx > 0 && geometry.cellHeightPx > 0; },
+    /**
+     * Resolve the cell size, actively querying when it is unknown: CSI 16 t
+     * (cell px) and CSI 14 t (text-area px). If only the text area answers,
+     * derive cells from the character grid. Resolves { known, source }.
+     */
+    async ensure({ write = terminal?.write?.bind(terminal), timeoutMs = 600, columns, rows } = {}) {
+      if (geometry.cellWidthPx > 0 && geometry.cellHeightPx > 0) return { known: true, source: "cached" };
+      try { write?.("\x1b[16t\x1b[14t"); } catch {}
+      await wait(() => geometry.cellWidthPx > 0 || geometry.textAreaWidthPx > 0, timeoutMs);
+      // Give the second reply a short grace period when one has arrived.
+      if (!(geometry.cellWidthPx > 0)) await wait(() => geometry.cellWidthPx > 0, 120);
+      if (geometry.cellWidthPx > 0 && geometry.cellHeightPx > 0) return { known: true, source: "csi16t" };
+      const cols = Number(columns) || 0; const lines = Number(rows) || 0;
+      if (geometry.textAreaWidthPx > 0 && cols > 0 && lines > 0) {
+        geometry.cellWidthPx = Math.max(1, Math.round(geometry.textAreaWidthPx / cols));
+        geometry.cellHeightPx = Math.max(1, Math.round(geometry.textAreaHeightPx / lines));
+        try { onChange({ ...geometry }); } catch {}
+        return { known: true, source: "csi14t" };
+      }
+      return { known: false, source: "none" };
+    },
+    /** Explicit cell size (settings / command) for terminals that never answer. */
+    assume(widthPx, heightPx) {
+      const w = Math.trunc(Number(widthPx)); const h = Math.trunc(Number(heightPx));
+      if (!(w > 0 && h > 0)) return false;
+      geometry.cellWidthPx = w; geometry.cellHeightPx = h;
+      try { onChange({ ...geometry }); } catch {}
+      return true;
+    },
+    /** Does the terminal speak the Kitty graphics protocol? (a=q probe) */
+    async probeKittyGraphics({ write = terminal?.write?.bind(terminal), timeoutMs = 500 } = {}) {
+      kittyReply = null;
+      try { write?.(`\x1b_Gi=${KITTY_PROBE_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\`); } catch {}
+      await wait(() => kittyReply !== null, timeoutMs);
+      return kittyReply === null ? { supported: false, reply: null } : { supported: kittyReply === "OK", reply: kittyReply };
+    },
     dispose() { untap?.(); untap = null; terminal = null; },
   };
 }

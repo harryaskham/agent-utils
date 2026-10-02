@@ -486,7 +486,20 @@ export function createFullCanvas({
       throw new Error("full canvas is disabled inside tmux (set PI_GRAPHICS_FULL_TMUX=1 to force)");
     }
     Object.assign(state.config, Object.fromEntries(Object.entries(options).filter(([, v]) => v !== undefined && v !== "")));
-    if (!pixelGeometry?.known()) throw new Error("terminal pixel geometry unknown (no CSI 16 t reply); graphics-capable terminal required");
+    if (!pixelGeometry) throw new Error("pixel geometry tracker unavailable");
+    const terminalWrite = (data) => write(data);
+    const explicitCell = String(state.config.cell || "").match(/^(\d+)\s*[x×,]\s*(\d+)$/);
+    if (explicitCell) pixelGeometry.assume(Number(explicitCell[1]), Number(explicitCell[2]));
+    const geometryResult = await pixelGeometry.ensure({ write: terminalWrite, columns: process.stdout.columns, rows: process.stdout.rows });
+    trace(`full canvas geometry ${JSON.stringify(geometryResult)} ${JSON.stringify(pixelGeometry.geometry)}`);
+    if (!geometryResult.known) {
+      const kitty = await pixelGeometry.probeKittyGraphics({ write: terminalWrite });
+      const where = [process.env.TERM_PROGRAM, process.env.TERM].filter(Boolean).join(" / ") || "this terminal";
+      if (!kitty.supported) {
+        throw new Error(`${where} did not answer the Kitty graphics probe${kitty.reply ? ` (${kitty.reply})` : ""}, so it cannot display the canvas (needs Kitty, Ghostty or WezTerm graphics; Termux has none)`);
+      }
+      throw new Error(`${where} supports Kitty graphics but did not report its cell size (CSI 16 t / 14 t). Set it explicitly: /gfx full cell <width>x<height> (pixels), e.g. /gfx full cell 10x22`);
+    }
     state.faces = resolveFontFaces({ family: state.config.family, regular: state.config.font || undefined });
     // DPI-independent default: size the canvas font from the terminal's real
     // (physical-pixel) cell height, then apply zoom. Explicit sizes win.

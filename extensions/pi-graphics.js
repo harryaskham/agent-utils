@@ -543,9 +543,10 @@ export default async function piGraphicsExtension(pi) {
     const walk = (box, depth = 0) => {
       if (!box || depth > 12) return;
       const kids = box.component?.children;
-      if (Array.isArray(kids)) {
-        if (!regions.editor && lastEditorWrapper && kids.includes(lastEditorWrapper)) regions.editor = box.rect;
-        if (!regions.footer && lastFooterComponent && kids.includes(lastFooterComponent)) regions.footer = box.rect;
+      if (Array.isArray(kids) && kids.length) {
+        const names = kids.map((kid) => kid?.constructor?.name || kid?.base?.constructor?.name || "");
+        if (!regions.editor && ((lastEditorWrapper && kids.includes(lastEditorWrapper)) || names.some((n) => n === "CustomEditor" || n === "Editor"))) regions.editor = box.rect;
+        if (!regions.footer && ((lastFooterComponent && kids.includes(lastFooterComponent)) || names.includes("FooterComponent"))) regions.footer = box.rect;
       }
       for (const child of box.children || []) walk(child, depth + 1);
     };
@@ -2032,6 +2033,9 @@ export default async function piGraphicsExtension(pi) {
     if (!tui) return false;
     hostTui = tui;
     try { host.discover(tui); } catch {}
+    // Always observe geometry replies, regardless of piGraphics.mode: /gfx full
+    // is independent of the decorative mode and needs the real cell size.
+    if (tui.terminal) pixelGeometry.attach(tui.terminal);
     return true;
   }
 
@@ -2041,10 +2045,7 @@ export default async function piGraphicsExtension(pi) {
     trace(`session_start mode=${gfxEnv().PI_GRAPHICS_MODE} host=${host.names().join("|")} importError=${hostImportError?.message || "none"}`);
     if (modeIsOff(gfxEnv().PI_GRAPHICS_MODE)) return;
     writeGraphicsCommand = resolveGraphicsWriter(ctx);
-    if (hostTui?.terminal) {
-      pixelGeometry.attach(hostTui.terminal);
-      if (!pixelGeometry.known()) pixelGeometry.query(writeGraphicsCommand);
-    }
+    if (hostTui?.terminal && !pixelGeometry.known()) pixelGeometry.query(writeGraphicsCommand);
     ensureFrameCompositor();
     activeThemeRef = ctx?.ui?.theme || null;
     clearStaleStartupGraphics();
@@ -3041,6 +3042,7 @@ export default async function piGraphicsExtension(pi) {
       caret: pick(overrides.caret, full.caret),
       zoom: Number(pick(overrides.zoom, pick(process.env.PI_GRAPHICS_FULL_ZOOM, full.zoom))) || undefined,
       transport: pick(overrides.transport, full.transport),
+      cell: pick(overrides.cell, pick(process.env.PI_GRAPHICS_FULL_CELL, full.cell)),
       pixelMouse: pick(overrides.pixelMouse, full.pixelMouse),
       tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null),
     };
@@ -3052,13 +3054,14 @@ export default async function piGraphicsExtension(pi) {
     const value = args[1];
     const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
     if (!hostTui) discoverHostComponents(ctx);
+    if (!activeThemeRef) activeThemeRef = ctx?.ui?.theme || null;
     ensureFrameCompositor();
     const describe = () => {
       const st = fullCanvas.status();
       return [
         `Pi Graphics full canvas: ${st.active ? "ON" : "off"}`,
         st.active ? `  virtual grid ${st.virt.cols}x${st.virt.rows} @ cell ${st.cell}px (font ${st.fontSizePx}px) on ${st.real.width}x${st.real.height}px canvas` : "  /gfx full on — render the whole Pi UI as a pixel canvas (fullscreen TUI mode)",
-        st.active ? `  font ${st.font}` : "  /gfx full zoom <x> | font-size <px> | line-height <n> | font <path.ttf> | caret glow|beam | pixel-mouse on|off|auto | transport png|zlib",
+        st.active ? `  font ${st.font}` : "  /gfx full zoom <x> | font-size <px> | line-height <n> | font <path.ttf> | caret glow|beam | pixel-mouse on|off|auto | transport png|zlib | cell <w>x<h>",
         st.active ? `  frames ${st.stats.frames} uploads ${st.stats.uploads} (${Math.round(st.stats.uploadBytes / 1024)} KiB) raster ${st.stats.rasterMs}ms last frame ${st.stats.lastFrameMs}ms cached strips ${st.cachedStrips} pixelMouse=${st.pixelMouse}` : "  /gfx full off — back to the terminal text grid",
       ].join("\n");
     };
@@ -3077,6 +3080,10 @@ export default async function piGraphicsExtension(pi) {
       else if (sub === "caret") fullCanvasOverrides.caret = String(value || "glow");
       else if (sub === "pixel-mouse") fullCanvasOverrides.pixelMouse = String(value || "auto");
       else if (sub === "transport") fullCanvasOverrides.transport = String(value || "png");
+      else if (sub === "cell") {
+        if (!/^\d+\s*[x×,]\s*\d+$/.test(String(value || ""))) throw new Error("cell needs <width>x<height> in pixels, e.g. 10x22");
+        fullCanvasOverrides.cell = String(value);
+      }
       else if (!["on", "toggle", "start"].includes(sub)) { notify(`unknown /gfx full option: ${sub}\n${describe()}`, "warning"); return; }
       if (fullCanvas.active) await fullCanvas.stop({ reason: "reconfigure" });
       await fullCanvas.start(fullCanvasOptions(gfx, fullCanvasOverrides));

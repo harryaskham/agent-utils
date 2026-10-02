@@ -174,7 +174,12 @@ which rasterizes rows itself and places them as Kitty images:
 
 Requires Pi's fullscreen TUI mode (`/settings` → TUI mode or `--tui-mode
 fullscreen`) and a Kitty-graphics terminal; refused inside tmux unless
-`PI_GRAPHICS_FULL_TMUX=1`.
+`PI_GRAPHICS_FULL_TMUX=1`. It is independent of `piGraphics.mode` (works with
+decorations off). The canvas needs the terminal's cell size in pixels: it asks
+with `CSI 16 t` and `CSI 14 t` (deriving cells from the text area if only that
+answers). If neither answers it probes Kitty graphics (`a=q`) and either says
+the terminal cannot show images (e.g. Termux) or asks for an explicit size via
+`/gfx full cell <w>x<h>` / `piGraphics.full.cell` / `PI_GRAPHICS_FULL_CELL`.
 
 ```text
 /gfx full [on|off|toggle|status]
@@ -185,10 +190,11 @@ fullscreen`) and a Kitty-graphics terminal; refused inside tmux unless
 /gfx full caret glow|beam
 /gfx full pixel-mouse auto|on|off
 /gfx full transport png|zlib   # zlib (f=32,o=z) is opt-in: Ghostty 1.3.1 crashes on some zlib streams
+/gfx full cell 10x22           # explicit cell px for terminals that never report it
 ```
 
 Settings live under `piGraphics.full` (`fontSizePx`, `zoom`, `lineHeight`,
-`padding`, `font`, `family`, `caret`, `pixelMouse`, `transport`).
+`padding`, `font`, `family`, `caret`, `pixelMouse`, `transport`, `cell`).
 
 ## Commands
 

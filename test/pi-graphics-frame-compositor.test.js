@@ -125,3 +125,34 @@ test("host component registry learns live classes from the tree and later addChi
   const ui = { widgets: new Map(), setWidget(key, factory) { if (factory) factory({ tag: "tui" }); } };
   assert.deepEqual(captureTuiFromUi(ui), { tag: "tui" });
 });
+
+test("pixel geometry is queried actively, derived from the text area, or reported precisely", async () => {
+  const { createPixelGeometryTracker } = await import("../extensions/pi-graphics/terminal-io.js");
+  const make = (replies) => {
+    class Terminal { inputHandler; constructor() { this.writes = []; } start(fn) { this.inputHandler = fn; } write(data) { this.writes.push(data); setTimeout(() => { for (const reply of replies(data)) this.inputHandler?.(reply); }, 5); } }
+    const terminal = new Terminal(); const seen = [];
+    terminal.start((data) => seen.push(data));
+    const tracker = createPixelGeometryTracker();
+    tracker.attach(terminal);
+    return { terminal, tracker, seen };
+  };
+  // Full reply (Ghostty/Kitty): cell size from CSI 16 t.
+  let t = make((data) => (data.includes("[16t") ? ["\x1b[6;24;10t", "\x1b[4;816;1100t"] : []));
+  assert.deepEqual(await t.tracker.ensure({ columns: 110, rows: 34 }), { known: true, source: "csi16t" });
+  assert.equal(t.tracker.geometry.cellWidthPx, 10);
+  assert.ok(!t.seen.some((d) => d.startsWith("\x1b[4;")), "text-area reply never leaks to Pi as input");
+  // Only the text area answers: derive the cell from the character grid.
+  t = make((data) => (data.includes("[14t") ? ["\x1b[4;800;1200t"] : []));
+  assert.deepEqual(await t.tracker.ensure({ columns: 120, rows: 40, timeoutMs: 50 }), { known: true, source: "csi14t" });
+  assert.deepEqual([t.tracker.geometry.cellWidthPx, t.tracker.geometry.cellHeightPx], [10, 20]);
+  // Silent terminal (Termux): unknown, and the Kitty probe says no graphics.
+  t = make(() => []);
+  assert.deepEqual(await t.tracker.ensure({ columns: 80, rows: 24, timeoutMs: 30 }), { known: false, source: "none" });
+  assert.deepEqual(await t.tracker.probeKittyGraphics({ timeoutMs: 30 }), { supported: false, reply: null });
+  assert.equal(t.tracker.assume(9, 19), true);
+  assert.equal(t.tracker.known(), true);
+  // Kitty-capable but no size reply: the probe succeeds and is swallowed.
+  t = make((data) => (data.includes("a=q") ? ["\x1b_Gi=31337;OK\x1b\\"] : []));
+  assert.deepEqual(await t.tracker.probeKittyGraphics({ timeoutMs: 100 }), { supported: true, reply: "OK" });
+  assert.equal(t.seen.length, 0);
+});
