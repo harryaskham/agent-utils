@@ -58,7 +58,10 @@ import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spaci
 import { captureTuiFromUi, createHostComponentRegistry } from "./pi-graphics/host-components.js";
 import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./pi-graphics/frame-compositor.js";
 import { createPixelGeometryTracker, tapTerminalInput } from "./pi-graphics/terminal-io.js";
-import { createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
+import { FULL_CANVAS_DEFAULTS, createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
+import { ROLE_BY_CLASS, ensureSemanticTaps, tapSemanticClass } from "./pi-graphics/canvas/semantics.js";
+import { BACKGROUNDS, CARET_STYLES, STREAM_EFFECTS } from "./pi-graphics/canvas/effects.js";
+import { listMonospaceFamilies } from "./pi-graphics/canvas/font-atlas.js";
 import { readAgentSettings, readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import { mixHexColor } from "./pi-graphics/color-utils.js";
@@ -163,6 +166,8 @@ export default async function piGraphicsExtension(pi) {
         }).installed !== false;
       }
       if (boxChromeInstalled && BOX_CHROME_CLASS_NAMES.has(name)) patchDiscoveredBoxChromeClass(name, ctor);
+      // Semantic provenance for the pixel canvas; inert unless it is active.
+      if (ROLE_BY_CLASS[name]) tapSemanticClass(name, ctor, () => fullCanvasActive());
     },
   });
   try {
@@ -562,10 +567,24 @@ export default async function piGraphicsExtension(pi) {
     write: (data) => { const writer = terminalWriter(hostTui?.terminal); if (writer && data) writer(data); },
     serialize: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: state.config.passthrough }),
     allocateImageId: (name) => piGraphicsImageId(`canvas:${name}:${canvasImageCounter++}`),
-    z: { background: PI_GRAPHICS_Z.DEEP_BACKGROUND, rows: PI_GRAPHICS_Z.BACKGROUND, caret: PI_GRAPHICS_Z.SURFACE },
+    // background < editor glow < text rows < stream-in/impulse overlays < caret
+    z: {
+      background: PI_GRAPHICS_Z.DEEP_BACKGROUND,
+      glow: PI_GRAPHICS_Z.BACKGROUND,
+      rows: PI_GRAPHICS_Z.SURFACE,
+      overlay: PI_GRAPHICS_Z.ANCHOR,
+      caret: PI_GRAPHICS_Z.BOX_CHROME,
+    },
     themeColor: (token) => getThemeColorHex(activeThemeRef, token, null),
     pixelGeometry,
     getRegions: layoutRegions,
+    getHeat: () => editorCursorHeat,
+    getImpulseAt: () => editorCursorImpulseAt,
+    getActivity: () => currentActivity(),
+    semanticTick: () => {
+      const classes = new Map(host.names().map((name) => [name, host.get(name)]));
+      ensureSemanticTaps(classes, () => fullCanvasActive());
+    },
     trace,
     onStateChange(active) {
       // Pixel-canvas mode draws its own chrome: drop placeholder decorations
@@ -581,6 +600,26 @@ export default async function piGraphicsExtension(pi) {
   function fullCanvasActive() {
     return Boolean(fullCanvas?.active);
   }
+
+  // Agent activity for reactive effects (editor glow). Speech comes from the
+  // TTS narration extension over the shared event bus.
+  const activity = { agent: "idle", speakingUntil: 0, speechDepth: 0 };
+  function currentActivity() {
+    if (activity.speechDepth > 0 || Date.now() < activity.speakingUntil) return "speaking";
+    return activity.agent;
+  }
+  function setAgentActivity(next) {
+    if (activity.agent === next) return;
+    activity.agent = next;
+    if (fullCanvasActive()) fullCanvas.poke();
+  }
+  try {
+    pi.events?.on?.("agent-utils:speech", (event) => {
+      if (event?.state === "start") activity.speechDepth += 1;
+      else if (event?.state === "end") { activity.speechDepth = Math.max(0, activity.speechDepth - 1); activity.speakingUntil = Date.now() + 400; }
+      if (fullCanvasActive()) fullCanvas.poke();
+    });
+  } catch {}
 
   function reassertVirtualPlacements() {
     let command = "";
@@ -841,6 +880,7 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function requestEditorHeatFrame() {
+    if (fullCanvasActive()) { fullCanvas.poke(); return; }
     if (!editorDynamicHeatEnabled()) return;
     if (editorHeatRenderTimer || !editorRenderTui) return;
     if (editorCursorHeat <= 0.01 && editorCursorHeatTarget <= 0.01) return;
@@ -940,7 +980,7 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function updateEditorTypingHeat(plainText, cursorCol = 0) {
-    if (!editorDynamicHeatEnabled()) {
+    if (!editorDynamicHeatEnabled() && !fullCanvasActive()) {
       editorCursorHeat = 0;
       editorCursorHeatTarget = 0;
       editorCursorWpm = 0;
@@ -1596,7 +1636,18 @@ export default async function piGraphicsExtension(pi) {
             // Cheap per-frame check: a regular<->fullscreen switch creates a
             // new renderer that needs the frame hook again.
             if (hostTui) ensureFrameCompositor();
-            if (fullCanvasActive()) return baseLines;
+            if (fullCanvasActive()) {
+              // Track typing heat/impulses for the canvas caret without
+              // touching the rows: the canvas draws its own cursor.
+              for (const line of baseLines) {
+                const anchor = locateEditorCursorAnchor(String(line || ""), width);
+                if (!anchor) continue;
+                const plain = String(line).replace(anchor.matchText, "|").replace(ZERO_WIDTH_CONTROL_RE, "");
+                updateEditorTypingHeat(plain, anchor.cursorCol);
+                break;
+              }
+              return baseLines;
+            }
             // The dash-rule detection + border/decoration/clamp composition is a pure
             // seam (composeEditorRenderRows, bd-f5f802); the stateful pieces stay
             // here and are injected as callbacks.
@@ -2063,6 +2114,15 @@ export default async function piGraphicsExtension(pi) {
     refreshFooterState(ctx, pi, event);
     installSegmentedFooter(ctx, pi, event);
   });
+
+  pi.on("agent_start", async () => { setAgentActivity("working"); });
+  pi.on("agent_end", async () => { setAgentActivity("idle"); });
+  pi.on("message_update", async (event) => {
+    const kind = event?.assistantMessageEvent?.type || "";
+    if (/thinking/.test(kind)) setAgentActivity("thinking");
+    else if (/text|toolcall/i.test(kind)) setAgentActivity("working");
+  });
+  pi.on("tool_execution_start", async () => { setAgentActivity("working"); });
 
   pi.on("message_end", async (event, ctx) => {
     setEditorContextMode("idle");
@@ -2648,9 +2708,9 @@ export default async function piGraphicsExtension(pi) {
     return editor;
   }
 
-  async function showGfxSettingsWindow(ctx, settings, gfx, editor) {
+  async function showGfxSettingsWindow(ctx, settings, gfx, editor, { tab = "classic" } = {}) {
     const effects = ["auto", ...BOX_EFFECT_NAMES];
-    const rows = [
+    const classicRows = [
       { key: "mode", label: "Mode", values: ["on", "off", "debug"], get: () => gfx.mode || "on", set: (v) => { gfx.mode = v; } },
       { key: "boxChrome", label: "Box chrome", values: ["on", "off"], get: () => gfx.boxChrome === true ? "on" : "off", set: (v) => { gfx.boxChrome = v === "on"; } },
       { key: "boxRails", label: "Box rails", values: ["off", "on"], get: () => gfx.boxRails === true ? "on" : "off", set: (v) => { gfx.boxRails = v === "on"; } },
@@ -2673,7 +2733,24 @@ export default async function piGraphicsExtension(pi) {
       { key: "debug", label: "Debug panel", values: ["off", "on"], get: () => gfx.debug ? "on" : "off", set: (v) => { gfx.debug = v === "on"; gfx.debugPlaceholders = gfx.debug; } },
       { key: "placeholders", label: "Debug placeholders", values: ["off", "on"], get: () => gfx.debugPlaceholders ? "on" : "off", set: (v) => { gfx.debugPlaceholders = v === "on"; } },
     ];
+    const fullRows = [
+      { key: "full.enabled", label: "Full canvas", values: ["off", "on"], get: () => (fullCanvas.active ? "on" : "off"), set: () => {}, action: true },
+      ...FULL_SETTING_SPECS.map((spec) => ({
+        key: spec.key,
+        label: spec.label,
+        values: typeof spec.values === "function" ? spec.values : () => spec.values,
+        get: () => getFullSetting(gfx, spec.key),
+        set: (v) => setFullSetting(gfx, spec.key, v),
+      })),
+    ];
+    const tabs = [
+      { id: "classic", title: "Pi graphics", rows: classicRows },
+      { id: "full", title: "Full canvas", rows: fullRows },
+    ];
+    let tabIndex = Math.max(0, tabs.findIndex((t) => t.id === tab));
     let selected = 0;
+    let wantToggle = false;
+    const valuesOf = (row) => (typeof row.values === "function" ? row.values() : row.values);
     const renderLine = (width, text) => String(text).slice(0, Math.max(1, width));
     const componentFactory = (_tui, theme, keybindings, done) => ({
       __piGraphicsNoWrap: true,
@@ -2681,67 +2758,75 @@ export default async function piGraphicsExtension(pi) {
       invalidate() {},
       render(width = 80) {
         const fg = typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_token, text) => text;
+        const bold = typeof theme?.bold === "function" ? theme.bold.bind(theme) : (text) => text;
+        const current = tabs[tabIndex];
+        const tabBar = tabs.map((t, i) => (i === tabIndex ? fg("accent", bold(`[ ${t.title} ]`)) : fg("muted", `  ${t.title}  `))).join(" ");
         const lines = [
-          fg("accent", "Pi Graphics settings"),
-          fg("muted", "↑/↓ select  ←/→ change  Enter save+reload  d debug  q/Esc close"),
+          tabBar,
+          fg("muted", "Tab/[ ] switch tab  ↑/↓ select  ←/→ change  Enter save  q/Esc close (changes apply live)"),
           "",
         ];
-        rows.forEach((row, index) => {
-          const marker = index === selected ? "→" : " ";
-          const value = row.get();
-          lines.push(`${marker} ${row.label.padEnd(20)} ${value}`);
+        const visible = Math.max(6, (_tui?.terminal?.rows || 40) - 14);
+        const first = Math.max(0, Math.min(selected - Math.floor(visible / 2), current.rows.length - visible));
+        current.rows.slice(first, first + visible).forEach((row, offset) => {
+          const index = first + offset;
+          const marker = index === selected ? fg("accent", "→") : " ";
+          const value = String(row.get());
+          lines.push(`${marker} ${row.label.padEnd(24)} ${index === selected ? fg("accent", value) : value}`);
         });
-        lines.push("", "Preview:");
-        lines.push("  assistant=folio  tool=rig  oauth=token");
-        lines.push("  model=gauge  settings=console  thinking=candle");
-        lines.push("  /gfx box audit indexes every box inspection command.");
-        lines.push("  /gfx box status shows mappings without rendering.");
-        lines.push("  /gfx box summary groups mapped surfaces by effect.");
-        lines.push("  /gfx box effects lists mapped and explicit variants.");
-        lines.push("  /gfx box tokens groups surfaces by theme color token.");
-        lines.push("  /gfx box doctor explains box status/summary/preview next steps.");
-        lines.push("  /gfx box preview shows per-surface chrome strips.");
-        lines.push("  /gfx cursor audit indexes cursor diagnostics/recovery.");
-        lines.push("  /gfx cursor preview shows anchored cool/warm/hot variants.");
-        lines.push("  /gfx cursor status prints diagnostics without rendering.");
-        lines.push("  /gfx cursor doctor explains status/preview/clear next steps.");
-        lines.push("  /gfx cursor clear deletes stale live cursor placement only.");
-        lines.push("  This overlay opts out of Pi graphics wrapping to avoid Kitty escape flicker/scroll.");
-        lines.push("  U placeholders appear in debug mode with unique truecolor IDs.");
+        if (current.id === "full") {
+          lines.push("");
+          lines.push(fg("muted", "  Pixel canvas over the same session (needs fullscreen TUI + Kitty graphics)."));
+          lines.push(fg("muted", "  Fonts sit on one monospace grid; per-role fonts use semantic provenance."));
+          lines.push(fg("muted", "  /gfx full status shows resolved fonts, grid and frame costs."));
+        } else {
+          lines.push("", fg("muted", "  /gfx box audit · /gfx cursor audit · /gfx full settings for the pixel canvas"));
+        }
         return lines.map((line) => renderLine(width, line));
       },
       handleInput(data) {
         const key = String(data || "");
         const matches = (name) => { try { return keybindings?.matches?.(data, name); } catch { return false; } };
+        const rows = tabs[tabIndex].rows;
         const move = (delta) => { selected = Math.max(0, Math.min(rows.length - 1, selected + delta)); };
+        const switchTab = (delta) => { tabIndex = (tabIndex + delta + tabs.length) % tabs.length; selected = 0; };
         const change = (delta) => {
           const row = rows[selected];
-          const values = row.values;
-          const current = row.get();
-          const index = Math.max(0, values.indexOf(current));
+          if (row.action) { wantToggle = true; done("toggle-full"); return; }
+          const values = valuesOf(row);
+          const currentValue = String(row.get());
+          const index = Math.max(0, values.indexOf(currentValue));
           row.set(values[(index + delta + values.length) % values.length]);
+          if (tabs[tabIndex].id === "full") { void applyFullCanvasSettings(ctx, settings).catch(() => {}); }
         };
-        if (matches("tui.select.up") || key === "\x1b[A" || key === "k") move(-1);
+        if (key === "\t" || key === "]") switchTab(1);
+        else if (key === "\x1b[Z" || key === "[") switchTab(-1);
+        else if (key === "1" || key === "2") { tabIndex = Number(key) - 1; selected = 0; }
+        else if (matches("tui.select.up") || key === "\x1b[A" || key === "k") move(-1);
         else if (matches("tui.select.down") || key === "\x1b[B" || key === "j") move(1);
         else if (matches("tui.select.left") || key === "\x1b[D" || key === "h") change(-1);
         else if (matches("tui.select.right") || key === "\x1b[C" || key === "l" || key === " ") change(1);
-        else if (key.toLowerCase() === "d") { gfx.debug = !gfx.debug; gfx.debugPlaceholders = gfx.debug; }
+        else if (key.toLowerCase() === "d" && tabs[tabIndex].id === "classic") { gfx.debug = !gfx.debug; gfx.debugPlaceholders = gfx.debug; }
         else if (matches("tui.select.confirm") || key === "\r" || key === "\n") done("save");
         else if (matches("tui.select.cancel") || key === "\x1b" || key.toLowerCase() === "q") done("close");
         try { _tui?.requestRender?.(); } catch {}
       },
     });
     const result = typeof ctx?.ui?.custom === "function"
-      ? await ctx.ui.custom(componentFactory, { overlay: true, piGraphics: false, overlayOptions: { width: "70%", minWidth: 54, maxHeight: "80%", anchor: "center", margin: 1 } })
+      ? await ctx.ui.custom(componentFactory, { overlay: true, piGraphics: false, overlayOptions: { width: "70%", minWidth: 60, maxHeight: "85%", anchor: "center", margin: 1 } })
       : "notify";
+    if (result === "toggle-full" || wantToggle) {
+      await handleFullCanvasCommand(ctx, [fullCanvas.active ? "off" : "on"], settings, gfx);
+      return;
+    }
     if (result === "save") {
       normalizeEditorGraphicsCombination(editor);
-      // Dialog Enter persists (bd-a1853d): adopt the edited settings as the
-      // runtime overlay, apply live, then flush to disk and clear the overlay.
       applyGfxSettingsRuntimeOnly(ctx, settings);
       if (saveGfxRuntimeOverride(ctx)) ctx.ui.notify("Saved Pi Graphics settings.", "info");
     } else if (result === "notify") {
-      ctx.ui.notify("This Pi runtime does not expose custom overlay UI; use /gfx status, /gfx box-effect auto, or /gfx debug.", "warning");
+      ctx.ui.notify("This Pi runtime does not expose custom overlay UI; use /gfx status, /gfx full status, or /gfx box-effect auto.", "warning");
+    } else if (result === "close" && tabs[tabIndex].id === "classic") {
+      // Classic rows only apply on save; nothing to undo.
     }
     setDebugPanel(ctx, settings);
   }
@@ -2827,7 +2912,7 @@ export default async function piGraphicsExtension(pi) {
       if (tokens.length === 0) { await showGfxSettingsWindow(ctx, settings, gfx, editor); return; }
       const action = String(tokens[0] || "").toLowerCase();
       if (action === "full" || action === "canvas") {
-        await handleFullCanvasCommand(ctx, tokens.slice(1), gfx);
+        await handleFullCanvasCommand(ctx, tokens.slice(1), settings, gfx);
         return;
       }
       if (action === "status" || action === "show" || action === "info") { describe(); return; }
@@ -3030,64 +3115,145 @@ export default async function piGraphicsExtension(pi) {
   });
 
 
-  function fullCanvasOptions(gfx = {}, overrides = {}) {
+  // Flat full-canvas settings (piGraphics.full.*). Legacy keys are mapped.
+  const FULL_ENV = {
+    fontSizePx: "PI_GRAPHICS_FULL_FONT_SIZE", lineHeight: "PI_GRAPHICS_FULL_LINE_HEIGHT", zoom: "PI_GRAPHICS_FULL_ZOOM",
+    cell: "PI_GRAPHICS_FULL_CELL", resolution: "PI_GRAPHICS_FULL_RESOLUTION", background: "PI_GRAPHICS_FULL_BACKGROUND",
+  };
+  function fullCanvasConfig(gfx = {}) {
+    const full = { ...(gfx.full || {}) };
+    if (full.fontSize !== undefined && full.fontSizePx === undefined) full.fontSizePx = full.fontSize;
+    const fonts = { ...(full.fonts || {}) };
+    if (full.font && !fonts.default) fonts.default = [full.font, ...FULL_DEFAULT_FONT_CHAIN];
+    if (process.env.PI_GRAPHICS_FULL_FONT) fonts.default = [process.env.PI_GRAPHICS_FULL_FONT, ...FULL_DEFAULT_FONT_CHAIN];
+    const env = {};
+    for (const [key, name] of Object.entries(FULL_ENV)) if (process.env[name]) env[key] = process.env[name];
+    const merged = { ...FULL_CANVAS_DEFAULTS, ...full, ...env, fonts };
+    for (const key of ["fontSizePx", "lineHeight", "zoom", "resolution", "gamma", "caretBloom", "streamInMs", "streamRise", "backgroundFps", "glowIntensity", "padding", "fps"]) {
+      if (merged[key] !== undefined && merged[key] !== "") merged[key] = Number(merged[key]);
+    }
+    return merged;
+  }
+  const FULL_DEFAULT_FONT_CHAIN = ["FiraCode Nerd Font Mono", "monospace"];
+
+  // Key/value surface shared by `/gfx full <key> <value>` and the settings tab.
+  const FULL_SETTING_SPECS = [
+    { key: "zoom", label: "Zoom", values: ["0.75", "0.9", "1", "1.1", "1.25", "1.5", "2"], alias: ["scale"] },
+    { key: "lineHeight", label: "Line height", values: ["1.1", "1.2", "1.3", "1.4", "1.5", "1.7"], alias: ["line-height"] },
+    { key: "resolution", label: "Resolution (HiDPI)", values: ["1", "2", "3"], alias: ["hidpi"] },
+    { key: "gamma", label: "Text weight (gamma)", values: ["1", "1.2", "1.35", "1.5", "1.7"], alias: ["weight"] },
+    { key: "font.default", label: "Font", values: () => ["FiraCode Nerd Font Mono", ...monospaceFamilies()] , alias: ["font"] },
+    { key: "font.thinking", label: "Thinking font", values: () => ["JetBrainsMono Nerd Font Mono", "JetBrains Mono", ...monospaceFamilies()] },
+    { key: "font.heading", label: "Heading font", values: () => ["(default)", ...monospaceFamilies()] },
+    { key: "font.code", label: "Code font", values: () => ["(default)", ...monospaceFamilies()] },
+    { key: "font.editor", label: "Editor font", values: () => ["(default)", ...monospaceFamilies()] },
+    { key: "caretStyle", label: "Caret", values: [...CARET_STYLES, "off"], alias: ["caret"] },
+    { key: "caretBloom", label: "Caret bloom", values: ["0", "0.5", "1", "1.5", "2"], alias: ["bloom"] },
+    { key: "impulse", label: "Typing impulse", values: ["on", "off"] },
+    { key: "trail", label: "Caret glide", values: ["on", "off"], alias: ["glide"] },
+    { key: "streamIn", label: "Stream-in effect", values: STREAM_EFFECTS, alias: ["stream"] },
+    { key: "streamInMs", label: "Stream-in ms", values: ["200", "300", "420", "600", "900"], alias: ["stream-ms"] },
+    { key: "streamRise", label: "Stream-in rise rows", values: ["0", "1", "2", "3", "4"], alias: ["rise"] },
+    { key: "streamRoles", label: "Stream-in applies to", values: ["thinking,assistant", "thinking", "assistant", "thinking,assistant,tool"] },
+    { key: "background", label: "Background", values: BACKGROUNDS, alias: ["bg"] },
+    { key: "backgroundFps", label: "Background fps", values: ["4", "8", "12", "20"], alias: ["bg-fps"] },
+    { key: "edgeBlend", label: "Blend padding (OSC 11)", values: ["on", "off"], alias: ["edge"] },
+    { key: "editorGlow", label: "Editor glow", values: ["on", "off"], alias: ["glow"] },
+    { key: "glowIntensity", label: "Glow intensity", values: ["0.5", "0.75", "1", "1.5", "2"], alias: ["glow-intensity"] },
+    { key: "panels", label: "Panels", values: ["on", "off"] },
+    { key: "fps", label: "Effects fps", values: ["20", "30", "45", "60"] },
+    { key: "pixelMouse", label: "Pixel mouse", values: ["auto", "on", "off"], alias: ["pixel-mouse"] },
+    { key: "transport", label: "Transport", values: ["png", "zlib"] },
+  ];
+  let monospaceFamilyCache = null;
+  function monospaceFamilies() {
+    if (!monospaceFamilyCache) monospaceFamilyCache = listMonospaceFamilies().filter((f) => !/icons|symbol|fixed|clean|emoji|helvetica/i.test(f));
+    return monospaceFamilyCache;
+  }
+  function fullSettingSpec(name) {
+    const lower = String(name || "").toLowerCase();
+    return FULL_SETTING_SPECS.find((spec) => spec.key.toLowerCase() === lower || (spec.alias || []).includes(lower));
+  }
+  function getFullSetting(gfx, key) {
     const full = gfx.full || {};
-    const pick = (value, fallback) => (value === undefined || value === null || value === "" ? fallback : value);
-    return {
-      fontSizePx: Number(pick(overrides.fontSizePx, pick(process.env.PI_GRAPHICS_FULL_FONT_SIZE, full.fontSizePx ?? full.fontSize))) || undefined,
-      lineHeight: Number(pick(overrides.lineHeight, pick(process.env.PI_GRAPHICS_FULL_LINE_HEIGHT, full.lineHeight))) || undefined,
-      padding: Number(pick(overrides.padding, full.padding)) || undefined,
-      font: pick(overrides.font, pick(process.env.PI_GRAPHICS_FULL_FONT, full.font)),
-      family: pick(overrides.family, full.family),
-      caret: pick(overrides.caret, full.caret),
-      zoom: Number(pick(overrides.zoom, pick(process.env.PI_GRAPHICS_FULL_ZOOM, full.zoom))) || undefined,
-      transport: pick(overrides.transport, full.transport),
-      cell: pick(overrides.cell, pick(process.env.PI_GRAPHICS_FULL_CELL, full.cell)),
-      pixelMouse: pick(overrides.pixelMouse, full.pixelMouse),
-      tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null),
-    };
+    if (key.startsWith("font.")) {
+      const role = key.slice(5);
+      const value = full.fonts?.[role];
+      return Array.isArray(value) ? value[0] : value || (role === "default" ? "FiraCode Nerd Font Mono" : role === "thinking" ? "JetBrainsMono Nerd Font Mono" : "(default)");
+    }
+    const value = full[key] ?? FULL_CANVAS_DEFAULTS[key];
+    if (typeof value === "boolean") return value ? "on" : "off";
+    return String(value);
+  }
+  function setFullSetting(gfx, key, value) {
+    const full = (gfx.full = gfx.full || {});
+    if (key.startsWith("font.")) {
+      const role = key.slice(5);
+      full.fonts = { ...(full.fonts || {}) };
+      if (!value || value === "(default)") delete full.fonts[role];
+      else full.fonts[role] = [String(value), ...(role === "default" ? FULL_DEFAULT_FONT_CHAIN : [])];
+      return;
+    }
+    if (["impulse", "trail", "edgeBlend", "editorGlow", "panels"].includes(key)) { full[key] = !/^(off|false|0|no)$/i.test(String(value)); return; }
+    full[key] = /^-?\d+(\.\d+)?$/.test(String(value)) ? Number(value) : String(value);
   }
 
-  let fullCanvasOverrides = {};
-  async function handleFullCanvasCommand(ctx, args, gfx) {
+  async function applyFullCanvasSettings(ctx, settings, { restart = true } = {}) {
+    runtimeSettingsOverride = settings;
+    if (restart && fullCanvas.active) {
+      await fullCanvas.stop({ reason: "reconfigure" });
+      await fullCanvas.start({ ...fullCanvasConfig(settings.piGraphics || {}), tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null) });
+    }
+  }
+
+  function describeFullCanvas() {
+    const st = fullCanvas.status();
+    const lines = [`Pi Graphics full canvas: ${st.active ? "ON" : "off"}`];
+    if (st.active) {
+      lines.push(`  grid ${st.virt.cols}x${st.virt.rows} @ cell ${st.cell}px (font ${st.fontSizePx}px, resolution ${st.resolution}x) on ${st.real.width}x${st.real.height}px (terminal cell ${st.real.cellW}x${st.real.cellH})`);
+      for (const [role, font] of Object.entries(st.fonts || {})) lines.push(`  font ${role.padEnd(8)} ${font.family}${font.missing ? `  (wanted ${font.missing}: not installed)` : ""}`);
+      lines.push(`  caret ${st.config.caretStyle} bloom ${st.config.caretBloom} · stream-in ${st.config.streamIn} ${st.config.streamInMs}ms · background ${st.config.background} · glow ${st.config.editorGlow ? "on" : "off"}`);
+      lines.push(`  terminal ${st.terminal}${st.notes?.length ? ` · ${st.notes.join("; ")}` : ""}`);
+      lines.push(`  frames ${st.stats.frames} ticks ${st.stats.ticks} uploads ${st.stats.uploads} (${Math.round(st.stats.uploadBytes / 1024)} KiB) raster ${st.stats.rasterMs}ms last ${st.stats.lastFrameMs}ms strips ${st.cachedStrips} pixelMouse=${st.pixelMouse}`);
+    }
+    lines.push("  /gfx full on|off|settings|status · /gfx full <key> <value> (zoom, font, font thinking <family>, caret, bloom, stream, background, glow, resolution, …) · /gfx save");
+    return lines.join("\n");
+  }
+
+  async function handleFullCanvasCommand(ctx, args, settings, gfx) {
     const sub = String(args[0] || "toggle").toLowerCase();
-    const value = args[1];
     const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
     if (!hostTui) discoverHostComponents(ctx);
     if (!activeThemeRef) activeThemeRef = ctx?.ui?.theme || null;
     ensureFrameCompositor();
-    const describe = () => {
-      const st = fullCanvas.status();
-      return [
-        `Pi Graphics full canvas: ${st.active ? "ON" : "off"}`,
-        st.active ? `  virtual grid ${st.virt.cols}x${st.virt.rows} @ cell ${st.cell}px (font ${st.fontSizePx}px) on ${st.real.width}x${st.real.height}px canvas` : "  /gfx full on — render the whole Pi UI as a pixel canvas (fullscreen TUI mode)",
-        st.active ? `  font ${st.font}` : "  /gfx full zoom <x> | font-size <px> | line-height <n> | font <path.ttf> | caret glow|beam | pixel-mouse on|off|auto | transport png|zlib | cell <w>x<h>",
-        st.active ? `  frames ${st.stats.frames} uploads ${st.stats.uploads} (${Math.round(st.stats.uploadBytes / 1024)} KiB) raster ${st.stats.rasterMs}ms last frame ${st.stats.lastFrameMs}ms cached strips ${st.cachedStrips} pixelMouse=${st.pixelMouse}` : "  /gfx full off — back to the terminal text grid",
-      ].join("\n");
-    };
+    const startCanvas = async () => fullCanvas.start({ ...fullCanvasConfig(gfx), tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null) });
     try {
-      if (sub === "status") { notify(describe()); return; }
-      if (sub === "off" || (sub === "toggle" && fullCanvas.active)) {
-        await fullCanvas.stop();
-        notify("Pi Graphics full canvas off.");
+      if (sub === "status" || sub === "doctor") { notify(describeFullCanvas()); return; }
+      if (sub === "settings" || sub === "config") { await showGfxSettingsWindow(ctx, settings, gfx, (gfx.editor = gfx.editor || {}), { tab: "full" }); return; }
+      if (sub === "off" || (sub === "toggle" && fullCanvas.active)) { await fullCanvas.stop(); notify("Pi Graphics full canvas off."); return; }
+      if (["on", "toggle", "start"].includes(sub)) {
+        if (fullCanvas.active) await fullCanvas.stop({ reason: "restart" });
+        await startCanvas();
+        notify(describeFullCanvas());
         return;
       }
-      const numeric = (name) => { const n = Number(value); if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} needs a positive number`); return n; };
-      if (sub === "font-size" || sub === "size") fullCanvasOverrides.fontSizePx = numeric("font-size");
-      else if (sub === "zoom" || sub === "scale") { fullCanvasOverrides.zoom = numeric("zoom"); delete fullCanvasOverrides.fontSizePx; }
-      else if (sub === "line-height") fullCanvasOverrides.lineHeight = numeric("line-height");
-      else if (sub === "font") fullCanvasOverrides.font = args.slice(1).join(" ");
-      else if (sub === "caret") fullCanvasOverrides.caret = String(value || "glow");
-      else if (sub === "pixel-mouse") fullCanvasOverrides.pixelMouse = String(value || "auto");
-      else if (sub === "transport") fullCanvasOverrides.transport = String(value || "png");
+      let key; let value;
+      if (sub === "font" && args.length > 2 && ["default", "thinking", "heading", "code", "user", "tool", "editor", "footer"].includes(String(args[1]).toLowerCase())) {
+        key = `font.${String(args[1]).toLowerCase()}`; value = args.slice(2).join(" ");
+      } else if (sub === "font-size" || sub === "size") { key = "fontSizePx"; value = args[1]; }
       else if (sub === "cell") {
-        if (!/^\d+\s*[x×,]\s*\d+$/.test(String(value || ""))) throw new Error("cell needs <width>x<height> in pixels, e.g. 10x22");
-        fullCanvasOverrides.cell = String(value);
+        if (!/^\d+\s*[x×,]\s*\d+$/.test(String(args[1] || ""))) throw new Error("cell needs <width>x<height> in pixels, e.g. 10x22");
+        key = "cell"; value = String(args[1]);
+      } else {
+        const spec = fullSettingSpec(sub) || fullSettingSpec(sub.replace(/-([a-z])/g, (_m, c) => c.toUpperCase()));
+        if (!spec) { notify(`unknown /gfx full option: ${sub}\n${describeFullCanvas()}`, "warning"); return; }
+        key = spec.key; value = args.slice(1).join(" ");
       }
-      else if (!["on", "toggle", "start"].includes(sub)) { notify(`unknown /gfx full option: ${sub}\n${describe()}`, "warning"); return; }
-      if (fullCanvas.active) await fullCanvas.stop({ reason: "reconfigure" });
-      await fullCanvas.start(fullCanvasOptions(gfx, fullCanvasOverrides));
-      notify(describe());
+      if (!value) { notify(`/gfx full ${sub} needs a value`, "warning"); return; }
+      setFullSetting(gfx, key, value);
+      runtimeSettingsOverride = settings;
+      if (fullCanvas.active) { await fullCanvas.stop({ reason: "reconfigure" }); await startCanvas(); }
+      notify(`${describeFullCanvas()}\n(runtime only — /gfx save to persist)`);
     } catch (error) {
       notify(`Pi Graphics full canvas: ${error?.message || error}`, "warning");
     }

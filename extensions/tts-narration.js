@@ -206,7 +206,13 @@ export function createTtsNarrationExtension({
         feedWrites.add(pending);
       }
       const speechKind = kind === "tts" ? "tts" : "narrate";
-      void speechController.speak(text, { ...overrides, speechKind, streamName: `/${speechKind}` }).catch((error) => warnOnce(kind, error, ctx));
+      // Publish speaking state on the shared extension bus so presentation
+      // extensions (Pi graphics editor glow) can react to agent speech.
+      const emitSpeech = (state) => { try { pi.events?.emit?.("agent-utils:speech", { state, kind: speechKind, chars: String(text || "").length, at: Date.now() }); } catch {} };
+      emitSpeech("start");
+      void speechController.speak(text, { ...overrides, speechKind, streamName: `/${speechKind}` })
+        .catch((error) => warnOnce(kind, error, ctx))
+        .finally(() => emitSpeech("end"));
     };
 
     const supersedeNarrationWork = ({ clearBatches = false } = {}) => {

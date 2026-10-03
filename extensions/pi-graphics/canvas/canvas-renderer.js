@@ -51,13 +51,35 @@ function mixRgb(a, b, t) {
  *        bgAbove, bgBelow (Int32Array of per-column bg or DEFAULT) }
  * Returns { rgba, width, height, empty }.
  */
+// Pick the font atlas for a cell: region roles (editor/footer) first, then
+// semantic provenance (thinking/user/tool), then markdown styling heuristics.
+function roleOf(cell, ctx) {
+  if (ctx.regionRole) return ctx.regionRole;
+  const sem = cell.sem?.role;
+  if (sem === "thinking") return "thinking";
+  const t = ctx.theme;
+  if (t?.headingPacked !== undefined && cell.bold && cell.fg === t.headingPacked) return "heading";
+  if (t?.codePacked !== undefined && (cell.fg === t.codePacked || cell.fg === t.codeBlockPacked)) return "code";
+  if (sem === "user") return "user";
+  if (sem === "tool" || sem === "bash") return "tool";
+  return null;
+}
+
 export function renderRow(cells, ctx) {
-  const { atlas, cols, theme } = ctx;
-  const cw = atlas.cellWidth; const ch = atlas.cellHeight;
+  const { cols, theme } = ctx;
+  const fonts = ctx.fonts || null;
+  const baseAtlas = fonts ? fonts.base : ctx.atlas;
+  const atlasFor = (cell) => (fonts ? fonts.forRole(roleOf(cell, ctx)) : baseAtlas);
+  // S: supersample factor. Everything is drawn in device pixels = logical * S;
+  // atlases already produce S-scaled masks.
+  const S = Math.max(1, Math.trunc(ctx.scale || baseAtlas.supersample || 1));
+  const cw = baseAtlas.cellWidth * S; const ch = baseAtlas.cellHeight * S;
+  const baselineS = baseAtlas.baseline * S;
   // marginX: extra transparent pixels either side so panels can breathe
   // outside the text grid; all cell x positions are offset by it.
-  const mx = Math.max(0, Math.round(ctx.marginX || 0));
+  const mx = Math.max(0, Math.round((ctx.marginX || 0) * S));
   const width = cols * cw + mx * 2; const height = ch;
+  const hidden = ctx.hiddenCols || null;
   const fb = Buffer.alloc(width * height * 4);
   let drawn = false;
   const radius = Math.max(2, Math.round(Math.min(cw, ch) * 0.55));
@@ -66,25 +88,26 @@ export function renderRow(cells, ctx) {
   for (const panel of ctx.panels || []) {
     const inset = Math.min(mx, Math.round(cw * 0.8));
     const x = mx + panel.start * cw - inset; const w = (panel.end - panel.start) * cw + inset * 2;
+    const line = Math.max(1, Math.round(S));
     const radii = [panel.top ? radius * 1.4 : 0, panel.top ? radius * 1.4 : 0, panel.bottom ? radius * 1.4 : 0, panel.bottom ? radius * 1.4 : 0];
     const y0 = panel.top ? Math.round(ch * 0.45) : 0;
     const y1 = panel.bottom ? Math.round(ch * 0.55) : ch;
     fillPaths(fb, width, height, [roundedRectPathCorners(x + 0.5, y0, w - 1, y1 - y0, radii)], ...panel.fill, Math.round(255 * panel.alpha));
     if (panel.border) {
       const ba = Math.round(255 * (panel.borderAlpha ?? 0.6));
-      const edge = (x0, y, len) => fillRectRgba(fb, width, height, x0, y, len, 1, ...panel.border, ba);
+      const edge = (x0, y, len) => fillRectRgba(fb, width, height, x0, y, len, line, ...panel.border, ba);
       if (panel.top) edge(x + radii[0], y0, w - radii[0] - radii[1]);
-      if (panel.bottom) edge(x + radii[3], y1 - 1, w - radii[2] - radii[3]);
+      if (panel.bottom) edge(x + radii[3], y1 - line, w - radii[2] - radii[3]);
       const sideTop = panel.top ? y0 + radii[0] : 0; const sideBottom = panel.bottom ? y1 - radii[3] : ch;
-      fillRectRgba(fb, width, height, x, sideTop, 1, sideBottom - sideTop, ...panel.border, ba);
-      fillRectRgba(fb, width, height, x + w - 1, sideTop, 1, sideBottom - sideTop, ...panel.border, ba);
+      fillRectRgba(fb, width, height, x, sideTop, line, sideBottom - sideTop, ...panel.border, ba);
+      fillRectRgba(fb, width, height, x + w - line, sideTop, line, sideBottom - sideTop, ...panel.border, ba);
       if (panel.top) {
-        fillPaths(fb, width, height, [strokeArcPath(x + radii[0] + 0.5, y0 + radii[0] + 0.5, radii[0], Math.PI, Math.PI * 1.5, 1)], ...panel.border, ba);
-        fillPaths(fb, width, height, [strokeArcPath(x + w - radii[1] - 0.5, y0 + radii[1] + 0.5, radii[1], Math.PI * 1.5, Math.PI * 2, 1)], ...panel.border, ba);
+        fillPaths(fb, width, height, [strokeArcPath(x + radii[0] + 0.5, y0 + radii[0] + 0.5, radii[0], Math.PI, Math.PI * 1.5, line)], ...panel.border, ba);
+        fillPaths(fb, width, height, [strokeArcPath(x + w - radii[1] - 0.5, y0 + radii[1] + 0.5, radii[1], Math.PI * 1.5, Math.PI * 2, line)], ...panel.border, ba);
       }
       if (panel.bottom) {
-        fillPaths(fb, width, height, [strokeArcPath(x + w - radii[2] - 0.5, y1 - radii[2] - 0.5, radii[2], 0, Math.PI / 2, 1)], ...panel.border, ba);
-        fillPaths(fb, width, height, [strokeArcPath(x + radii[3] + 0.5, y1 - radii[3] - 0.5, radii[3], Math.PI / 2, Math.PI, 1)], ...panel.border, ba);
+        fillPaths(fb, width, height, [strokeArcPath(x + w - radii[2] - 0.5, y1 - radii[2] - 0.5, radii[2], 0, Math.PI / 2, line)], ...panel.border, ba);
+        fillPaths(fb, width, height, [strokeArcPath(x + radii[3] + 0.5, y1 - radii[3] - 0.5, radii[3], Math.PI / 2, Math.PI, line)], ...panel.border, ba);
       }
     }
     drawn = true;
@@ -125,7 +148,8 @@ export function renderRow(cells, ctx) {
   // 3. Glyphs.
   for (let col = 0; col < cols; col += 1) {
     const cell = cells[col];
-    if (cell.cont || cell.hidden) continue;
+    if (cell.cont || cell.hidden || (hidden && hidden.has(col))) continue;
+    const atlas = atlasFor(cell);
     const cp = cell.cp;
     const selected = cell.inverse && col !== ctx.cursorCol;
     let fg = cell.fg === DEFAULT ? theme.fg : unpackRgb(cell.fg);
@@ -147,7 +171,7 @@ export function renderRow(cells, ctx) {
     }
     if (cell.underline || cell.link) {
       const ul = cell.ul === DEFAULT ? fg : unpackRgb(cell.ul);
-      const y = Math.min(ch - 2, atlas.baseline + Math.max(1, Math.round(ch * 0.08)));
+      const y = Math.min(ch - 2, baselineS + Math.max(1, Math.round(ch * 0.08)));
       const w = cell.wide ? cw * 2 : cw;
       const t = Math.max(1, Math.round(ch / 18));
       if (cell.underline === 3) {

@@ -83,3 +83,48 @@ test("zlib canvas transport stays opt-in (Ghostty 1.3.1 crashes on some o=z stre
   assert.match(source, /transport: process\.env\.PI_GRAPHICS_FULL_TRANSPORT \|\| "png"/);
   assert.ok(deflateSync(Buffer.alloc(4)).length > 0);
 });
+
+test("semantic provenance tags rows per block and line, inert when inactive", async () => {
+  const { tagLines, tapSemanticClass, parseSemanticMarker, SEMANTIC_PREFIX } = await import("../extensions/pi-graphics/canvas/semantics.js");
+  let active = true;
+  class Markdown { constructor(lines, style) { this.lines = lines; this.defaultTextStyle = style; } render() { return this.lines; } }
+  class Container { constructor() { this.children = []; } render(w) { return this.children.flatMap((c) => c.render(w)); } }
+  class AssistantMessageComponent extends Container {
+    constructor() { super(); this.contentContainer = new Container(); this.children.push(this.contentContainer); this.isStreaming = true; }
+  }
+  assert.equal(tapSemanticClass("AssistantMessageComponent", AssistantMessageComponent, () => active), true);
+  const msg = new AssistantMessageComponent();
+  msg.contentContainer.children.push(new Markdown(["think a", "think b"], { italic: true }), new Markdown(["answer"], {}));
+  const lines = msg.render(40);
+  const markers = lines.map(parseSemanticMarker);
+  assert.deepEqual(markers.map((m) => [m.role, m.line, m.streaming]), [["thinking", 0, true], ["thinking", 1, true], ["assistant", 0, true]]);
+  assert.notEqual(markers[0].block, markers[2].block);
+  assert.equal(lines[0].endsWith("think a"), true);
+  // Child instances are recreated while streaming: block ids stay stable by position.
+  msg.contentContainer.children = [new Markdown(["think a", "think b", "think c"], { italic: true })];
+  assert.equal(parseSemanticMarker(msg.render(40)[0]).block, markers[0].block);
+  active = false;
+  assert.deepEqual(new AssistantMessageComponent().render(40), []);
+  assert.equal(tagLines(["x"], "user", "1")[0].startsWith(SEMANTIC_PREFIX), true);
+});
+
+test("effects render bounded images: heat bloom widens, glow states differ, background edges fade out", async () => {
+  const { renderCaret, renderEditorGlow, renderBackground } = await import("../extensions/pi-graphics/canvas/effects.js");
+  const colors = { accent: [136, 192, 208], warm: [208, 135, 112], thinking: [180, 142, 173], speech: [163, 190, 140], top: [40, 44, 52], bottom: [20, 22, 28], edge: [25, 28, 34], accent2: [180, 142, 173] };
+  const ink = (img) => { let n = 0; for (let i = 3; i < img.rgba.length; i += 4) if (img.rgba[i] > 8) n += 1; return n; };
+  const cool = renderCaret({ style: "bloom", cellWidth: 9, cellHeight: 22, heat: 0, colors });
+  const hot = renderCaret({ style: "bloom", cellWidth: 9, cellHeight: 22, heat: 1, colors });
+  assert.equal(cool.width, hot.width, "heat buckets share one anchor box");
+  assert.ok(ink(hot) > ink(cool) * 1.5, "typing heat blooms wider");
+  const idle = renderEditorGlow({ width: 200, height: 40, margin: 20, radius: 12, state: "idle", colors });
+  const working = renderEditorGlow({ width: 200, height: 40, margin: 20, radius: 12, state: "working", phase: 0.25, colors });
+  assert.notDeepEqual(idle.rgba, working.rgba);
+  const bg = renderBackground({ width: 40, height: 30, colors, animated: true, frame: 3, frames: 24 });
+  assert.equal(bg.rgba[3], 0, "corner is transparent so terminal padding shows through");
+  assert.equal(bg.rgba[(15 * 40 + 20) * 4 + 3], 255);
+});
+
+test("in-band resize reports carry font-size changes into the geometry tracker", async () => {
+  const { parsePixelGeometryReply } = await import("../extensions/pi-graphics/terminal-io.js");
+  assert.deepEqual(parsePixelGeometryReply("\x1b[48;29;100;812;1100t"), { kind: "resize", rows: 29, cols: 100, heightPx: 812, widthPx: 1100, cellWidthPx: 11, cellHeightPx: 812 / 29 });
+});

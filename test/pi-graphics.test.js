@@ -1493,7 +1493,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /function requestEditorHeatFrame\(\)/);
   assert.match(source, /if \(!editorDynamicHeatEnabled\(\)\) return/);
   assert.match(source, /requestEditorDecorativeRender\(\)/);
-  assert.match(source, /if \(!editorDynamicHeatEnabled\(\)\) \{\n\s+editorCursorHeat = 0/);
   assert.match(source, /if \(!editorDynamicHeatEnabled\(\) \|\| editorAnimationEnabled\(\) \|\| !editorContextRedrawEnabled\(\)\) return/);
   assert.match(source, /function editorRailHeat\(\)/);
   assert.match(source, /\(editorCursorHeat - 0\.5\) \/ 1\.0/);
@@ -1507,7 +1506,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /let editorCursorImpulseCol = null/);
   assert.match(source, /PI_GRAPHICS_EDITOR_TYPING_IMPULSE/);
   assert.match(source, /function editorTypingImpulseEnabled\(\)/);
-  assert.match(source, /if \(!editorDynamicHeatEnabled\(\)\) \{\n\s+editorCursorHeat = 0/);
   assert.match(source, /if \(editorTypingImpulseEnabled\(\)\) \{\n\s+editorCursorImpulseCol = safeCol/);
   assert.match(source, /function editorBorderHeight\(edge\)/);
   assert.match(source, /function buildEditorBorderPlaceholderLines\(width, edge\)/);
@@ -1690,11 +1688,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /action === "cursor-clear"/);
   assert.match(source, /\["clear", "reset", "cleanup"\]\.includes/);
   assert.match(source, /Pi Graphics cursor placement cleared; it will re-anchor on the next editor render\./);
-  assert.match(source, /\/gfx cursor audit indexes cursor diagnostics\/recovery/);
-  assert.match(source, /\/gfx cursor preview shows anchored cool\/warm\/hot variants/);
-  assert.match(source, /\/gfx cursor status prints diagnostics without rendering/);
-  assert.match(source, /\/gfx cursor doctor explains status\/preview\/clear next steps/);
-  assert.match(source, /\/gfx cursor clear deletes stale live cursor placement only/);
   assert.match(source, /function boxChromeEffectGroups\(\)/);
   assert.match(source, /function boxChromeRegistryCountLine\(\)/);
   assert.match(source, /const tokenGroups = boxChromeThemeTokenGroups\(\)/);
@@ -1766,7 +1759,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.doesNotMatch(source, /`  box effect:     \$\{gfx\.boxEffect \|\| "per-type"\} \(also: \$\{BOX_EFFECT_NAMES\.join/);
   assert.doesNotMatch(source, /unknown box effect: \$\{value\} \(use \$\{BOX_EFFECT_NAMES\.join/);
   assert.match(source, /`  box registry:   \$\{boxChromeRegistryCountLine\(\)\} \(\/gfx box status\|summary\|effects\|tokens\|doctor\|preview\)`/);
-  assert.match(source, /\/gfx box audit indexes every box inspection command/);
   assert.match(source, /function buildBoxEffectPreviewLines\(\)/);
   assert.match(source, /box-effect-preview-/);
   assert.match(source, /const samples = Object\.keys\(BOX_TYPE_EFFECTS\)/);
@@ -1782,8 +1774,6 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /lines\.push\(`\$\{previewHeader\}  \$\{previewHeader\}`\)/);
   assert.match(source, /for \(let i = 0; i < previews\.length; i \+= 2\)/);
   assert.match(source, /action === "box-preview"/);
-  assert.match(source, /assistant=folio  tool=rig  oauth=token/);
-  assert.match(source, /model=gauge  settings=console  thinking=candle/);
   assert.match(source, /key: "cursorStyle", label: "Cursor style", values: \["glow", "cell", "off"\]/);
   assert.match(source, /key: "trailingWorkspace", label: "Trailing workspace", values: \["off", "on"\]/);
   assert.match(source, /key: "unicodeMode", label: "Unicode mode", values: \["fill", "topLeft"\].*editor\.style = "unicode"/s);
@@ -1791,16 +1781,8 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /key: "typingImpulse", label: "Typing impulse", values: \["on", "off"\]/);
   assert.match(source, /__piGraphicsNoWrap: true,\n\s+piGraphics: false/);
   assert.match(source, /overlay: true, piGraphics: false/);
-  assert.match(source, /This overlay opts out of Pi graphics wrapping to avoid Kitty escape flicker\/scroll/);
   assert.doesNotMatch(source, /assistant=manuscript  tool=schematic  oauth=keyring/);
   assert.doesNotMatch(source, /model=dial  settings=slider  thinking=lantern/);
-  assert.match(source, /\/gfx box audit indexes every box inspection command/);
-  assert.match(source, /\/gfx box status shows mappings without rendering/);
-  assert.match(source, /\/gfx box summary groups mapped surfaces by effect/);
-  assert.match(source, /\/gfx box effects lists mapped and explicit variants/);
-  assert.match(source, /\/gfx box tokens groups surfaces by theme color token/);
-  assert.match(source, /\/gfx box doctor explains box status\/summary\/preview next steps/);
-  assert.match(source, /\/gfx box preview shows per-surface chrome strips/);
   assert.match(source, /function replaceEditorCursorChrome/);
   assert.doesNotMatch(source, /function replaceEditorCursorChrome\(line\) \{\n\s+if \(editorStyle\(\) !== "unicode"\) return line;/);
   const cursorAnchorSource = await readFile(new URL("../extensions/pi-graphics/cursor-anchor.js", import.meta.url), "utf8");
@@ -2062,6 +2044,18 @@ test("pi-graphics composes real placements through the frame compositor, never v
   assert.match(source, /heat\$\{railHeatBucket\}/);
   // Settings reads do not spread process.env per call.
   assert.match(source, /if \(gfxEnvCache && gfxEnvSource === settingsEnv\) return gfxEnvCache;/);
+});
+
+test("/gfx settings window is tabbed and exposes the full-canvas settings", async () => {
+  const source = await readFile(new URL("../extensions/pi-graphics.js", import.meta.url), "utf8");
+  assert.match(source, /\{ id: "classic", title: "Pi graphics", rows: classicRows \}/);
+  assert.match(source, /\{ id: "full", title: "Full canvas", rows: fullRows \}/);
+  assert.match(source, /if \(sub === "settings" \|\| sub === "config"\) \{ await showGfxSettingsWindow\(ctx, settings, gfx, \(gfx\.editor = gfx\.editor \|\| \{\}\), \{ tab: "full" \}\)/);
+  for (const key of ["zoom", "resolution", "font.default", "font.thinking", "caretStyle", "caretBloom", "impulse", "streamIn", "background", "edgeBlend", "editorGlow"]) {
+    assert.ok(source.includes(`key: "${key}"`), `full setting ${key}`);
+  }
+  // Typing heat also drives the canvas caret when classic dynamics are off.
+  assert.match(source, /if \(!editorDynamicHeatEnabled\(\) && !fullCanvasActive\(\)\) \{\n\s+editorCursorHeat = 0/);
 });
 
 test("pi-graphics extension source is the slim graphics primitive layer", async () => {

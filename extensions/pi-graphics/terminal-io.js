@@ -10,12 +10,20 @@ const TAP_KEY = Symbol.for("agent-utils.piGraphics.terminalInputTap");
 
 const CELL_SIZE_RE = /^\x1b\[6;(\d+);(\d+)t$/;
 const TEXT_AREA_RE = /^\x1b\[4;(\d+);(\d+)t$/;
+// In-band resize notification (DECSET 2048): CSI 48 ; rows ; cols ; hpx ; wpx t
+const IN_BAND_RESIZE_RE = /^\x1b\[48;(\d+);(\d+);(\d+);(\d+)t$/;
 
 export function parsePixelGeometryReply(data) {
   const cell = CELL_SIZE_RE.exec(data);
   if (cell) return { kind: "cell", heightPx: Number(cell[1]), widthPx: Number(cell[2]) };
   const area = TEXT_AREA_RE.exec(data);
   if (area) return { kind: "textArea", heightPx: Number(area[1]), widthPx: Number(area[2]) };
+  const resize = IN_BAND_RESIZE_RE.exec(data);
+  if (resize) {
+    const rows = Number(resize[1]); const cols = Number(resize[2]);
+    const heightPx = Number(resize[3]); const widthPx = Number(resize[4]);
+    return { kind: "resize", rows, cols, heightPx, widthPx, cellWidthPx: cols ? widthPx / cols : 0, cellHeightPx: rows ? heightPx / rows : 0 };
+  }
   return null;
 }
 
@@ -76,6 +84,7 @@ export function tapTerminalInput(terminal, handler) {
  * `CSI 4;h;w t` (text area) replies — Pi itself consumes the cell-size reply,
  * so this tap only peeks — and can query on demand.
  */
+const XTVERSION_RE = /^\x1bP>\|([^\x1b]*)\x1b\\$/;
 const KITTY_PROBE_ID = 31337;
 const KITTY_PROBE_RE = /^\x1b_Gi=31337(?:,[^;]*)?;([^\x1b]*)\x1b\\$/;
 
@@ -85,9 +94,12 @@ export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
   let terminal = null;
   const waiters = new Set();
   let kittyReply = null;
+  let terminalName = null;
   const settle = () => { for (const fn of waiters) { try { fn(); } catch {} } };
   const handler = (data) => {
     if (typeof data !== "string") return undefined;
+    const version = data.length < 200 ? XTVERSION_RE.exec(data) : null;
+    if (version) { terminalName = version[1].trim(); settle(); return null; }
     // Reply to our Kitty graphics support probe (a=q): never Pi input.
     const kitty = data.length < 256 ? KITTY_PROBE_RE.exec(data) : null;
     if (kitty) { kittyReply = kitty[1] || "OK"; settle(); return null; }
@@ -102,6 +114,18 @@ export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
       if (changed) try { onChange({ ...geometry }); } catch {}
       settle();
       return undefined; // let Pi consume its own cell-size reply
+    }
+    if (reply.kind === "resize" && reply.widthPx > 0 && reply.cols > 0) {
+      // Font-size changes arrive here too (cell px change with the grid).
+      const cw = Math.round(reply.cellWidthPx); const chh = Math.round(reply.cellHeightPx);
+      changed = geometry.cellWidthPx !== cw || geometry.cellHeightPx !== chh
+        || geometry.textAreaWidthPx !== reply.widthPx || geometry.textAreaHeightPx !== reply.heightPx;
+      geometry.cellWidthPx = cw; geometry.cellHeightPx = chh;
+      geometry.textAreaWidthPx = reply.widthPx; geometry.textAreaHeightPx = reply.heightPx;
+      geometry.columns = reply.cols; geometry.rows = reply.rows;
+      if (changed) try { onChange({ ...geometry }); } catch {}
+      settle();
+      return null; // never Pi input
     }
     if (reply.kind === "textArea" && reply.widthPx > 0 && reply.heightPx > 0) {
       changed = geometry.textAreaWidthPx !== reply.widthPx || geometry.textAreaHeightPx !== reply.heightPx;
@@ -165,6 +189,18 @@ export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
       try { onChange({ ...geometry }); } catch {}
       return true;
     },
+    /**
+     * Identify the terminal (XTVERSION, CSI > 0 q). Works through SSH and
+     * multiplexers where TERM_PROGRAM is absent; a multiplexer answers with
+     * its own name. Resolves the name string or null.
+     */
+    async probeTerminalName({ write = terminal?.write?.bind(terminal), timeoutMs = 300 } = {}) {
+      if (terminalName !== null) return terminalName;
+      try { write?.("\x1b[>0q"); } catch {}
+      await wait(() => terminalName !== null, timeoutMs);
+      return terminalName;
+    },
+    get terminalName() { return terminalName; },
     /** Does the terminal speak the Kitty graphics protocol? (a=q probe) */
     async probeKittyGraphics({ write = terminal?.write?.bind(terminal), timeoutMs = 500 } = {}) {
       kittyReply = null;

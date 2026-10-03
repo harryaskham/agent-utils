@@ -156,3 +156,14 @@ test("pixel geometry is queried actively, derived from the text area, or reporte
   assert.deepEqual(await t.tracker.probeKittyGraphics({ timeoutMs: 100 }), { supported: true, reply: "OK" });
   assert.equal(t.seen.length, 0);
 });
+
+test("terminal identity comes from XTVERSION and never leaks to Pi", async () => {
+  const { createPixelGeometryTracker } = await import("../extensions/pi-graphics/terminal-io.js");
+  class Terminal { inputHandler; start(fn) { this.inputHandler = fn; } write(data) { if (data.includes("[>0q")) setTimeout(() => this.inputHandler("\x1bP>|ghostty 1.3.1\x1b\\"), 5); } }
+  const terminal = new Terminal(); const seen = [];
+  terminal.start((d) => seen.push(d));
+  const tracker = createPixelGeometryTracker();
+  tracker.attach(terminal);
+  assert.equal(await tracker.probeTerminalName({ timeoutMs: 100 }), "ghostty 1.3.1");
+  assert.equal(seen.length, 0);
+});

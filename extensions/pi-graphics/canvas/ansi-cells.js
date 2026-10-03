@@ -32,6 +32,10 @@ function newStyle() {
   return { fg: DEFAULT, bg: DEFAULT, ul: DEFAULT, bold: false, dim: false, italic: false, underline: 0, inverse: false, strike: false, hidden: false, link: "" };
 }
 
+// Semantic provenance (see semantics.js) is positional: it applies to the
+// cells after the marker and survives SGR resets.
+const SEMANTIC_BODY_RE = /^pi:gfx:@([a-z]+):([0-9.]+):(\d+)(:s)?$/;
+
 function applySgr(style, params, palette16) {
   const list = params === "" ? [0] : params.split(/[;:]/).map((v) => (v === "" ? 0 : Number(v)));
   // Colon sub-parameters (4:3 curly underline, 38:2::r:g:b) are normalised by
@@ -88,10 +92,12 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
   const style = newStyle();
   let col = 0;
   let image = null;
+  let semantic = null;
+  const semantics = [];
   const text = String(line ?? "");
   const put = (ch, cp, w) => {
     if (col >= width) return;
-    const base = { ch, cp, wide: w === 2, cont: false, fg: style.fg, bg: style.bg, ul: style.ul, bold: style.bold, dim: style.dim, italic: style.italic, underline: style.underline, inverse: style.inverse, strike: style.strike, hidden: style.hidden, link: style.link };
+    const base = { ch, cp, wide: w === 2, cont: false, fg: style.fg, bg: style.bg, ul: style.ul, bold: style.bold, dim: style.dim, italic: style.italic, underline: style.underline, inverse: style.inverse, strike: style.strike, hidden: style.hidden, link: style.link, sem: semantic };
     cells[col] = base;
     if (w === 2 && col + 1 < width) cells[col + 1] = { ...base, ch: "", cp: 0, wide: false, cont: true };
     col += w;
@@ -158,6 +164,11 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
       }
       if (end < 0) break;
       const body = text.slice(i + 2, end);
+      const sem = next === "_" && body.startsWith("pi:gfx:@") ? SEMANTIC_BODY_RE.exec(body) : null;
+      if (sem) {
+        semantic = { role: sem[1], block: sem[2], line: Number(sem[3]), streaming: Boolean(sem[4]), col };
+        semantics.push(semantic);
+      }
       if (next === "_" && body.startsWith("G") && !image) {
         const semi = body.indexOf(";");
         const controls = Object.fromEntries((semi < 0 ? body.slice(1) : body.slice(1, semi)).split(",").filter(Boolean).map((kv) => kv.split("=")));
@@ -175,9 +186,9 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
   flushPlain(text.length);
   const blankStyle = newStyle();
   for (let k = 0; k < width; k += 1) {
-    if (!cells[k]) cells[k] = { ch: " ", cp: 32, wide: false, cont: false, fg: blankStyle.fg, bg: DEFAULT, ul: DEFAULT, bold: false, dim: false, italic: false, underline: 0, inverse: false, strike: false, hidden: false, link: "" };
+    if (!cells[k]) cells[k] = { ch: " ", cp: 32, wide: false, cont: false, fg: blankStyle.fg, bg: DEFAULT, ul: DEFAULT, bold: false, dim: false, italic: false, underline: 0, inverse: false, strike: false, hidden: false, link: "", sem: semantic };
   }
-  return { cells, image };
+  return { cells, image, semantics };
 }
 
 export function unpackRgb(value) {

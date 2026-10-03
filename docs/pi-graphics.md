@@ -153,48 +153,86 @@ its fullscreen screen (transcript, overlays, selection, search, flashes,
 editor, footer) but at a virtual cell grid derived from a canvas font size,
 independent of the terminal's cells. The frame hook hands each composed screen
 to [`canvas/full-canvas.js`](../extensions/pi-graphics/canvas/full-canvas.js),
-which rasterizes rows itself and places them as Kitty images:
+which rasterizes rows itself and places them as Kitty images.
 
-- dependency-free TrueType renderer (cmap 4/12, simple + composite glyf,
-  coverage rasterizer, synthetic bold/italic, fontconfig fallback per
-  codepoint) at any pixel size — DPI independent; the default size follows the
-  terminal's physical cell height;
-- vector box drawing, rounded corners, blocks, braille; rounded panels for
-  background runs; an editor card and footer bar from Pi's layout rects;
-  soft rounded selection; a gradient/vignette background layer; Pi inline
-  images decoded and composited; an eased glowing caret;
-- rows are position-independent, content-keyed strips: scrolling re-places
-  cached strips, only changed rows are rasterized and uploaded (a keystroke is
-  ~1 strip, ~4 ms, a few KiB), each frame is one synchronized update;
-- input keeps Pi's behaviour: keys/paste/IME untouched (the hidden hardware
-  cursor is parked under the caret), SGR mouse is remapped from real pixels
-  (SGR-Pixels 1016 on Kitty/Ghostty/WezTerm) or real cells to virtual cells
-  before Pi's handlers, so wheel scrolling, drag selection, copy, links and
-  the scrollbar work at canvas resolution.
+**Rendering.** Dependency-free TrueType engine (cmap 4/12, simple + composite
+glyf, coverage rasterizer with gamma/stem weight, synthetic bold/italic,
+fontconfig fallback per codepoint), vector box drawing/blocks/braille, rounded
+panels for background runs, an editor card and footer bar from Pi's layout
+rects, soft rounded selection, decoded Pi inline images. Rows are
+position-independent content-keyed strips: scrolling re-places cached strips
+and a keystroke re-uploads about one strip.
 
-Requires Pi's fullscreen TUI mode (`/settings` → TUI mode or `--tui-mode
-fullscreen`) and a Kitty-graphics terminal; refused inside tmux unless
-`PI_GRAPHICS_FULL_TMUX=1`. It is independent of `piGraphics.mode` (works with
-decorations off). The canvas needs the terminal's cell size in pixels: it asks
-with `CSI 16 t` and `CSI 14 t` (deriving cells from the text area if only that
-answers). If neither answers it probes Kitty graphics (`a=q`) and either says
-the terminal cannot show images (e.g. Termux) or asks for an explicit size via
-`/gfx full cell <w>x<h>` / `piGraphics.full.cell` / `PI_GRAPHICS_FULL_CELL`.
+**Fonts per role.** Every face sits on the default font's monospace grid.
+Defaults: FiraCode Nerd Font Mono everywhere, JetBrains Mono (Nerd) for
+thinking, falling back along each chain when not installed (`/gfx full status`
+shows what resolved). Roles: `default`, `thinking`, `heading`, `code`, `user`,
+`tool`, `editor`, `footer`; set with `/gfx full font thinking JetBrains Mono`
+or `piGraphics.full.fonts.<role>` (family name, chain array, or a `.ttf` path).
+
+**Semantic provenance.** Pi exposes the conversation data model (session
+entries, `message_*` events, components' `lastMessage` / `isStreaming`) and a
+layout tree, but the layout stops at the transcript container — there is no API
+for the screen rows of a given thinking block. While the canvas is active the
+extension wraps the render of Pi's message components (learned from the live
+tree) and prefixes each produced line with a zero-width marker
+`ESC _ pi:gfx:@<role>:<block>:<line>[:s] BEL` ([`canvas/semantics.js`](../extensions/pi-graphics/canvas/semantics.js)).
+Markers are per row, survive scroll clipping and compositing, and are stripped
+before output. They drive per-role fonts and stream-in effects.
+
+**Effects** (all configurable): a caret with styles `bloom` (light bleeding
+over neighbouring text, widening and warming with typing speed), `glow`,
+`beam`, `block`, `underline`, `off`; keystroke impulses (expanding ring and
+sparks); eased caret glide; an editor-card glow that reacts to typing heat,
+thinking, working/streaming and agent speech (`agent-utils:speech` events from
+TTS narration); stream-in for newly arriving thinking/assistant glyphs (`float`
+from a few rows up into place, or `fade`); an animated `aurora`, `static`,
+`transparent` or `none` background. Animations re-place small precomputed
+images on a shared ticker that runs only while something animates.
+
+**Window padding.** Images cannot draw outside the cell grid, so the canvas
+sets the terminal background to its edge colour (OSC 11, restored with OSC
+111) and fades the background layer's alpha to zero at the border: the canvas
+blends into Ghostty/Kitty padding without a seam (`edgeBlend`). `transparent`
+draws on the terminal's own (possibly translucent/blurred) background.
+
+**Geometry.** Cell size comes from `CSI 16 t` / `14 t` and DECSET 2048 in-band
+resize reports, so a font-size change (Ctrl+= / Ctrl+-) re-detects the cell
+size and rebuilds the grid live. Terminals that never answer get a precise
+error and `/gfx full cell <w>x<h>`.
+
+**HiDPI.** `resolution 2|3` renders strips at 2–3× and places them as
+cell-aligned scaled boxes (line pitch snapped to terminal rows). Kitty renders
+this correctly; Ghostty 1.3.1 leaves stale pixels when scaled placements are
+replaced while scrolling, so the canvas identifies the terminal (XTVERSION,
+which also works through SSH/multiplexers) and uses 1× on Ghostty unless
+`PI_GRAPHICS_FULL_HIDPI_FORCE=1`. The 1× path places images at the terminal's
+native pixel size (device pixels on Kitty/Ghostty).
+
+**Input.** Keys/paste/IME untouched (the hidden hardware cursor is parked under
+the caret). SGR mouse is remapped from real pixels (SGR-Pixels 1016, enabled
+only when XTVERSION reports Kitty/Ghostty/WezTerm) or real cells to virtual
+cells before Pi's handlers: wheel, drag-select, copy, links and the scrollbar
+work at canvas resolution.
+
+Requires Pi's fullscreen TUI mode and a Kitty-graphics terminal; refused inside
+tmux unless `PI_GRAPHICS_FULL_TMUX=1`; independent of `piGraphics.mode`.
 
 ```text
-/gfx full [on|off|toggle|status]
-/gfx full zoom 1.25            # scale the canvas font relative to the terminal cell
-/gfx full font-size 16         # absolute canvas font px
-/gfx full line-height 1.3
-/gfx full font /path/Face.ttf  # or piGraphics.full.font / PI_GRAPHICS_FULL_FONT
-/gfx full caret glow|beam
-/gfx full pixel-mouse auto|on|off
-/gfx full transport png|zlib   # zlib (f=32,o=z) is opt-in: Ghostty 1.3.1 crashes on some zlib streams
-/gfx full cell 10x22           # explicit cell px for terminals that never report it
+/gfx full [on|off|toggle|status|settings]
+/gfx full zoom 1.25 | font-size 16 | line-height 1.3 | resolution 2 | gamma 1.5
+/gfx full font JetBrains Mono          # default face
+/gfx full font thinking Victor Mono    # per role: default thinking heading code user tool editor footer
+/gfx full caret bloom|glow|beam|block|underline|off | bloom 1.5 | impulse on|off | glide on|off
+/gfx full stream float|fade|none | stream-ms 420 | rise 2 | streamRoles thinking,assistant
+/gfx full background aurora|static|transparent|none | bg-fps 8 | edge on|off
+/gfx full glow on|off | glow-intensity 1.5 | panels on|off | fps 30
+/gfx full pixel-mouse auto|on|off | transport png|zlib | cell 10x22
+/gfx save                              # persist to piGraphics.full
 ```
 
-Settings live under `piGraphics.full` (`fontSizePx`, `zoom`, `lineHeight`,
-`padding`, `font`, `family`, `caret`, `pixelMouse`, `transport`, `cell`).
+`/gfx` opens a tabbed settings window (**Pi graphics** / **Full canvas**;
+Tab or `[` `]` switches). Full-canvas changes apply live.
 
 ## Commands
 
