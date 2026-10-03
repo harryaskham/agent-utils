@@ -34,7 +34,7 @@ function newStyle() {
 
 // Semantic provenance (see semantics.js) is positional: it applies to the
 // cells after the marker and survives SGR resets.
-const SEMANTIC_BODY_RE = /^pi:gfx:@([a-z]+):([0-9.]+):(\d+)(:s)?$/;
+const SEMANTIC_BODY_RE = /^pi:gfx:@([a-z]+)(?:\.([A-Za-z0-9_-]+))?:([0-9.]+):(\d+)(?::([se]+))?$/;
 
 function applySgr(style, params, palette16) {
   const list = params === "" ? [0] : params.split(/[;:]/).map((v) => (v === "" ? 0 : Number(v)));
@@ -94,6 +94,7 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
   let image = null;
   let semantic = null;
   const semantics = [];
+  let overlay = null;
   const text = String(line ?? "");
   const put = (ch, cp, w) => {
     if (col >= width) return;
@@ -164,9 +165,12 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
       }
       if (end < 0) break;
       const body = text.slice(i + 2, end);
+      const ov = next === "_" && body.startsWith("pi:gfx:ov:") ? /^pi:gfx:ov:(\d+):(\d+)$/.exec(body) : null;
+      if (ov) overlay = { col: Number(ov[1]), width: Number(ov[2]) };
       const sem = next === "_" && body.startsWith("pi:gfx:@") ? SEMANTIC_BODY_RE.exec(body) : null;
       if (sem) {
-        semantic = { role: sem[1], block: sem[2], line: Number(sem[3]), streaming: Boolean(sem[4]), col };
+        const flags = sem[5] || "";
+        semantic = { role: sem[1], kind: sem[2] || "", block: sem[3], line: Number(sem[4]), streaming: flags.includes("s"), error: flags.includes("e"), col };
         semantics.push(semantic);
       }
       if (next === "_" && body.startsWith("G") && !image) {
@@ -188,7 +192,10 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
   for (let k = 0; k < width; k += 1) {
     if (!cells[k]) cells[k] = { ch: " ", cp: 32, wide: false, cont: false, fg: blankStyle.fg, bg: DEFAULT, ul: DEFAULT, bold: false, dim: false, italic: false, underline: 0, inverse: false, strike: false, hidden: false, link: "", sem: semantic };
   }
-  return { cells, image, semantics };
+  // Overlay columns (Pi composites dialogs over the transcript) are not part
+  // of the underlying semantic block.
+  if (overlay) for (let k = overlay.col; k < Math.min(width, overlay.col + overlay.width); k += 1) if (cells[k]?.sem) cells[k] = { ...cells[k], sem: null };
+  return { cells, image, semantics, overlay };
 }
 
 export function unpackRgb(value) {

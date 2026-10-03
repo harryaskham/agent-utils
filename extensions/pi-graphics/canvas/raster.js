@@ -121,6 +121,16 @@ export function roundedRectPathCorners(x, y, w, h, radii, segments = 6) {
   return pts;
 }
 
+/** Filled circle polygon. */
+export function circlePath(cx, cy, r, segments = 16) {
+  const pts = [];
+  for (let i = 0; i < segments; i += 1) {
+    const a = (i / segments) * Math.PI * 2;
+    pts.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+  }
+  return pts;
+}
+
 /** A thick line segment as a closed quad (for vector box drawing). */
 export function strokeSegmentPath(x0, y0, x1, y1, thickness) {
   const dx = x1 - x0; const dy = y1 - y0;

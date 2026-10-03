@@ -8,12 +8,13 @@
 // wraps the render of Pi's message components (learned from the live tree)
 // and prefixes every produced line with a zero-width APC marker:
 //
-//     ESC _ pi:gfx:@<role>:<block>:<line>[:s] BEL
+//     ESC _ pi:gfx:@<role>[.<kind>]:<block>:<line>[:<flags>] BEL
 //
 // role  – user | assistant | thinking | tool | bash | custom | skill | summary
+// kind  – optional sub-kind, e.g. the tool name (tool.read, tool.bash)
 // block – stable id of the semantic block (message instance + child index)
 // line  – line index within the block (survives scrolling and clipping)
-// s     – the owning message is streaming
+// flags – s: the owning message/tool is streaming; e: the tool failed
 //
 // pi-tui treats APC as zero-width and keeps it through ScrollView clipping,
 // overlay compositing and selection; the frame compositor strips markers
@@ -21,7 +22,7 @@
 // is partly scrolled off still identifies every visible row.
 
 export const SEMANTIC_PREFIX = "\x1b_pi:gfx:@";
-const SEMANTIC_RE = /\x1b_pi:gfx:@([a-z]+):([0-9.]+):(\d+)(:s)?\x07/;
+const SEMANTIC_RE = /\x1b_pi:gfx:@([a-z]+)(?:\.([A-Za-z0-9_-]+))?:([0-9.]+):(\d+)(?::([se]+))?\x07/;
 
 export const ROLE_BY_CLASS = Object.freeze({
   UserMessageComponent: "user",
@@ -38,13 +39,23 @@ const TAP = Symbol.for("agent-utils.piGraphics.semanticTap");
 const BLOCK = Symbol.for("agent-utils.piGraphics.semanticBlock");
 let blockCounter = 0;
 
-export function semanticMarker(role, block, line, streaming = false) {
-  return `${SEMANTIC_PREFIX}${role}:${block}:${line}${streaming ? ":s" : ""}\x07`;
+// streaming: boolean, or { streaming, error, kind } for tools.
+function flagsOf(state) {
+  if (state && typeof state === "object") return `${state.streaming ? "s" : ""}${state.error ? "e" : ""}`;
+  return state ? "s" : "";
+}
+
+export function semanticMarker(role, block, line, state = false) {
+  const kind = state && typeof state === "object" && state.kind ? `.${String(state.kind).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32)}` : "";
+  const flags = flagsOf(state);
+  return `${SEMANTIC_PREFIX}${role}${kind}:${block}:${line}${flags ? `:${flags}` : ""}\x07`;
 }
 
 export function parseSemanticMarker(text) {
   const match = SEMANTIC_RE.exec(text);
-  return match ? { role: match[1], block: match[2], line: Number(match[3]), streaming: Boolean(match[4]) } : null;
+  if (!match) return null;
+  const flags = match[5] || "";
+  return { role: match[1], kind: match[2] || "", block: match[3], line: Number(match[4]), streaming: flags.includes("s"), error: flags.includes("e") };
 }
 
 function blockIdOf(component) {
@@ -56,13 +67,13 @@ function blockIdOf(component) {
 }
 
 const tagCache = new WeakMap();
-export function tagLines(lines, role, block, streaming = false) {
+export function tagLines(lines, role, block, state = false) {
   if (!Array.isArray(lines)) return lines;
-  const key = `${role}:${block}:${streaming ? 1 : 0}`;
+  const key = `${role}:${block}:${typeof state === "object" && state ? `${state.kind || ""}:${flagsOf(state)}` : flagsOf(state)}`;
   const hit = tagCache.get(lines);
   if (hit && hit.key === key) return hit.tagged;
   const tagged = lines.map((line, index) => (typeof line === "string" && !line.includes(SEMANTIC_PREFIX)
-    ? `${semanticMarker(role, block, index, streaming)}${line}`
+    ? `${semanticMarker(role, block, index, state)}${line}`
     : line));
   tagCache.set(lines, { key, tagged });
   return tagged;
@@ -111,8 +122,11 @@ export function tapSemanticClass(name, ctor, isActive) {
     if (!isActive()) return original.call(this, width);
     if (role === "assistant") tapAssistantChildren(this, isActive);
     const lines = original.call(this, width);
-    const streaming = role === "assistant" ? Boolean(this.isStreaming) : role === "tool" ? Boolean(this.isPartial) : false;
-    return tagLines(lines, role, blockIdOf(this), streaming);
+    let tagState = false;
+    if (role === "assistant") tagState = Boolean(this.isStreaming);
+    else if (role === "tool") tagState = { kind: this.toolName || "", streaming: Boolean(this.isPartial), error: Boolean(this.result?.isError) };
+    else if (role === "bash") tagState = { kind: "bash", streaming: this.status === "running", error: this.status === "error" || (this.exitCode !== undefined && this.exitCode !== 0) };
+    return tagLines(lines, role, blockIdOf(this), tagState);
   };
   tapped[TAP] = { original, role };
   proto.render = tapped;

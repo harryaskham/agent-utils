@@ -178,17 +178,52 @@ extension wraps the render of Pi's message components (learned from the live
 tree) and prefixes each produced line with a zero-width marker
 `ESC _ pi:gfx:@<role>:<block>:<line>[:s] BEL` ([`canvas/semantics.js`](../extensions/pi-graphics/canvas/semantics.js)).
 Markers are per row, survive scroll clipping and compositing, and are stripped
-before output. They drive per-role fonts and stream-in effects.
+before output. Tool rows also carry the tool name and status
+(`@tool.bash:…:se` = streaming, failed). They drive per-role fonts, tool panes
+and stream-in. Overlays (dialogs, selectors, this settings window) are tagged
+the same way (`pi:gfx:ov:<col>:<width>`), so the canvas gives each an opaque
+panel and detaches its cells from the block underneath.
+
+**Stream-in.** A streamed glyph's identity is (block, ordinal among the
+block's non-space glyphs). Ordinals are invariant under re-wrapping and
+scrolling, so only glyphs past a block's previous end are born; a word that
+wraps to the next row is not. New glyphs are held out of the row strips and
+drawn by per-row overlays rebuilt from current positions on every frame and
+tick, so in-flight glyphs follow reflow and auto-scroll; landed glyphs are
+baked back in chunks. Large jumps (resume, pastes) appear without animation.
+Typed letters get their own effect (`typeIn pop|rise|fade|none`).
+
+**Tool panes.** Bash (the `bash` tool and user `!` commands) renders as a
+terminal pane — near-black fill, title band with window dots, status-tinted
+border; other tools render as cards with a status stripe (pending, done,
+failed). The panes absorb Pi's per-cell tool background and draw their own
+rounded fill.
 
 **Effects** (all configurable): a caret with styles `bloom` (light bleeding
 over neighbouring text, widening and warming with typing speed), `glow`,
 `beam`, `block`, `underline`, `off`; keystroke impulses (expanding ring and
 sparks); eased caret glide; an editor-card glow that reacts to typing heat,
-thinking, working/streaming and agent speech (`agent-utils:speech` events from
-TTS narration); stream-in for newly arriving thinking/assistant glyphs (`float`
-from a few rows up into place, or `fade`); an animated `aurora`, `static`,
-`transparent` or `none` background. Animations re-place small precomputed
-images on a shared ticker that runs only while something animates.
+thinking, working and agent speech (`agent-utils:speech` events from TTS
+narration) plus a flare that pulses with every streamed token; stream-in for
+thinking/assistant/tool glyphs (`float` up from a fraction of a row, or
+`fade`).
+
+**Backgrounds.** `aurora`, `nebula`, `waves`, `grid`, `stars`, `static`,
+`transparent`, `none`. Animated backgrounds are a fixed function of a loop
+phase in which every time term is a whole-number harmonic, so one period
+(`backgroundPeriod`, default 24 s) loops seamlessly. Frames are rendered
+lazily into a ring of cached terminal images during the first pass (about one
+per tick, 3–6 ms each at 1/N resolution — soft backdrops upscale smoothly);
+after that playback only re-places cached images (~70 bytes/frame). The frame
+count is `period × backgroundFps`, capped by `backgroundBudgetMB` of terminal
+image memory. With `backgroundReact` the playback speed follows agent activity
+(free: the ring is cached) and a tint layer rising from the editor crossfades
+to the activity colour, flaring as tokens arrive.
+
+**Frame budget.** Effects never stall input: per frame/tick at most one heavy
+cache miss (a background frame, glow frame, flare or tint) is rendered; others
+catch up on the following ticks. Glow band geometry is cached per editor size,
+so a glow frame is a single pass over the band (~1–3 ms).
 
 **Window padding.** Images cannot draw outside the cell grid, so the canvas
 sets the terminal background to its edge colour (OSC 11, restored with OSC
@@ -222,17 +257,27 @@ tmux unless `PI_GRAPHICS_FULL_TMUX=1`; independent of `piGraphics.mode`.
 /gfx full [on|off|toggle|status|settings]
 /gfx full zoom 1.25 | font-size 16 | line-height 1.3 | resolution 2 | gamma 1.5
 /gfx full font JetBrains Mono          # default face
-/gfx full font thinking Victor Mono    # per role: default thinking heading code user tool editor footer
+/gfx full font thinking Victor Mono    # per role: default thinking heading code user tool terminal editor footer
 /gfx full caret bloom|glow|beam|block|underline|off | bloom 1.5 | impulse on|off | glide on|off
-/gfx full stream float|fade|none | stream-ms 420 | rise 2 | streamRoles thinking,assistant
-/gfx full background aurora|static|transparent|none | bg-fps 8 | edge on|off
-/gfx full glow on|off | glow-intensity 1.5 | panels on|off | fps 30
+/gfx full type pop|rise|fade|none | type-ms 170
+/gfx full stream float|fade|none | stream-ms 380 | rise 1 | stagger 8 | stream-roles thinking,assistant,tool
+/gfx full tools on|off                 # Bash terminal panes and tool cards
+/gfx full background aurora|nebula|waves|grid|stars|static|transparent|none
+/gfx full period 24 | bg-fps 20 | bg-scale 8 | bg-budget 64 | react on|off | edge on|off
+/gfx full glow on|off | flare on|off | glow-intensity 1.5 | panels on|off | fps 30
+/gfx full padding 0 | line-height 1
 /gfx full pixel-mouse auto|on|off | transport png|zlib | cell 10x22
 /gfx save                              # persist to piGraphics.full
 ```
 
 `/gfx` opens a tabbed settings window (**Pi graphics** / **Full canvas**;
-Tab or `[` `]` switches). Full-canvas changes apply live.
+Tab or `[` `]` switches; arrows work under the Kitty keyboard protocol).
+Full-canvas changes reconfigure the running canvas in place — no restart;
+font/grid changes are coalesced and repaint once — and Enter saves them to
+`piGraphics.full`. Saving or switching classic graphics off leaves the canvas
+running. Numeric rows step through presets; any value can be set with
+`/gfx full <key> <value>` (e.g. `padding 0` when the terminal has its own
+padding, `line-height 1`).
 
 ## Commands
 

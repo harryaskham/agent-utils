@@ -128,3 +128,61 @@ test("in-band resize reports carry font-size changes into the geometry tracker",
   const { parsePixelGeometryReply } = await import("../extensions/pi-graphics/terminal-io.js");
   assert.deepEqual(parsePixelGeometryReply("\x1b[48;29;100;812;1100t"), { kind: "resize", rows: 29, cols: 100, heightPx: 812, widthPx: 1100, cellWidthPx: 11, cellHeightPx: 812 / 29 });
 });
+
+test("semantic markers carry tool kind and status flags", async () => {
+  const { semanticMarker, parseSemanticMarker } = await import("../extensions/pi-graphics/canvas/semantics.js");
+  const { parseAnsiLine } = await import("../extensions/pi-graphics/canvas/ansi-cells.js");
+  const marker = semanticMarker("tool", "7", 2, { kind: "bash", streaming: true, error: true });
+  assert.deepEqual(parseSemanticMarker(marker), { role: "tool", kind: "bash", block: "7", line: 2, streaming: true, error: true });
+  assert.deepEqual(parseSemanticMarker(semanticMarker("assistant", "3.1", 0, true)), { role: "assistant", kind: "", block: "3.1", line: 0, streaming: true, error: false });
+  const { cells } = parseAnsiLine(`${marker}$ ls`, 8);
+  assert.equal(cells[0].sem.kind, "bash");
+  assert.equal(cells[0].sem.error, true);
+});
+
+test("overlay markers expose the overlay span and detach overlay cells from the block below", async () => {
+  const { semanticMarker } = await import("../extensions/pi-graphics/canvas/semantics.js");
+  const { parseAnsiLine } = await import("../extensions/pi-graphics/canvas/ansi-cells.js");
+  const line = `\x1b_pi:gfx:ov:4:6\x07${semanticMarker("thinking", "9", 0, false)}abcdSETTINGxyz`;
+  const parsed = parseAnsiLine(line, 16);
+  assert.deepEqual(parsed.overlay, { col: 4, width: 6 });
+  assert.equal(parsed.cells[0].sem.role, "thinking");
+  assert.equal(parsed.cells[5].sem, null, "dialog text is not thinking text");
+  assert.equal(parsed.cells[11].sem.role, "thinking");
+});
+
+test("every background type loops seamlessly and renders within a frame budget", async () => {
+  const { BACKGROUNDS, BACKGROUND_SCALE, renderBackground, renderActivityTint } = await import("../extensions/pi-graphics/canvas/effects.js");
+  const colors = { top: [46, 52, 64], bottom: [36, 41, 51], edge: [33, 38, 46], accent: [136, 192, 208], accent2: [180, 142, 173], speech: [163, 190, 140], thinking: [180, 142, 173] };
+  for (const type of BACKGROUNDS.filter((t) => t !== "transparent" && t !== "none")) {
+    const scale = BACKGROUND_SCALE[type];
+    const width = Math.round(1100 / scale); const height = Math.round(816 / scale);
+    const a = renderBackground({ width, height, type, phase: 0, colors });
+    const b = renderBackground({ width, height, type, phase: 1, colors });
+    assert.equal(Buffer.compare(a.rgba, b.rgba), 0, `${type} loops`);
+    const mid = renderBackground({ width, height, type, phase: 0.37, colors });
+    if (type !== "static") assert.notEqual(Buffer.compare(a.rgba, mid.rgba), 0, `${type} animates`);
+    assert.equal(a.rgba[3], 0, `${type} corner is transparent`);
+    const started = performance.now();
+    renderBackground({ width, height, type, phase: 0.5, colors });
+    assert.ok(performance.now() - started < 60, `${type} frame renders quickly`);
+  }
+  const tint = renderActivityTint({ width: 100, height: 80, color: [180, 142, 173], level: 1 });
+  let max = 0; for (let i = 3; i < tint.rgba.length; i += 4) max = Math.max(max, tint.rgba[i]);
+  assert.ok(max > 10 && max < 60, `tint stays subtle (${max})`);
+});
+
+test("editor glow frames reuse cached band geometry and differ by state", async () => {
+  const { renderEditorGlow } = await import("../extensions/pi-graphics/canvas/effects.js");
+  const colors = { accent: [136, 192, 208], warm: [208, 135, 112], thinking: [180, 142, 173], speech: [163, 190, 140] };
+  const args = { width: 400, height: 40, margin: 18, radius: 12, colors };
+  const working = renderEditorGlow({ ...args, state: "working", phase: 0.2 });
+  const working2 = renderEditorGlow({ ...args, state: "working", phase: 0.6 });
+  const flare = renderEditorGlow({ ...args, state: "flare" });
+  assert.notEqual(Buffer.compare(working.rgba, working2.rgba), 0, "travelling highlight moves");
+  assert.notEqual(Buffer.compare(working.rgba, flare.rgba), 0);
+  assert.equal(working.width, 400 + 36);
+  const started = performance.now();
+  for (let i = 0; i < 10; i += 1) renderEditorGlow({ ...args, state: "speaking", phase: i / 10 });
+  assert.ok((performance.now() - started) / 10 < 8, "glow frames are cheap once the band is cached");
+});

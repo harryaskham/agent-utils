@@ -27,6 +27,7 @@ const args = Object.fromEntries(process.argv.slice(2).map((arg) => {
 
 const out = resolve(args.out || `/tmp/pi-gfx-lab-${Date.now()}`);
 const display = args.display || `:${90 + Math.floor(Math.random() * 9)}`;
+const mockPort = 18000 + Math.floor(Math.random() * 900);
 const terminal = args.terminal || "ghostty";
 const fontSize = Number(args["font-size"] || 12);
 const cols = Number(args.cols || 110);
@@ -72,12 +73,28 @@ function isolatedAgentDir() {
   const overlay = args.settings ? JSON.parse(args.settings) : {};
   const merged = { ...base, ...overlay, piGraphics: { ...base.piGraphics, ...(overlay.piGraphics || {}) } };
   writeFileSync(join(agentDir, "settings.json"), `${JSON.stringify(merged, null, 2)}\n`);
+  if (args["mock-model"]) {
+    // A local OpenAI-compatible server that streams thinking + markdown, so
+    // Pi's real streaming path runs without a model (scripts/lab/mock-openai-stream.mjs).
+    writeFileSync(join(agentDir, "models.json"), `${JSON.stringify({
+      providers: {
+        mock: {
+          baseUrl: `http://127.0.0.1:${mockPort}/v1`, api: "openai-completions", apiKey: "mock",
+          compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+          models: [{ id: "mock-stream", name: "Mock stream", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+        },
+      },
+    }, null, 2)}\n`);
+  }
   return agentDir;
 }
 
 async function main() {
   const xvfb = spawn("Xvfb", [display, "-screen", "0", screen, "+extension", "GLX"], { env, stdio: "ignore" });
   await sleep(1200);
+  const mock = args["mock-model"]
+    ? spawn(process.execPath, [join(repo, "scripts/lab/mock-openai-stream.mjs"), String(mockPort)], { env: { ...env, ...(args["mock-env"] ? JSON.parse(args["mock-env"]) : {}) }, stdio: "ignore" })
+    : null;
   const agentDir = isolatedAgentDir();
   const extensions = String(args.extensions || "extensions/pi-graphics.js")
     .split(",").filter(Boolean).flatMap((file) => ["-e", resolve(repo, file)]);
@@ -86,7 +103,7 @@ async function main() {
     : ["--no-session"];
   const piArgs = args.command
     ? ["bash", "-lc", args.command]
-    : ["pi", "--offline", "-ne", "-ns", "-np", "-nc", ...sessionArgs, "--theme", join(repo, "themes"), ...extensions, ...(args.tui ? ["--tui-mode", args.tui] : [])];
+    : ["pi", "--offline", "-ne", "-ns", "-np", "-nc", ...(args["mock-model"] ? ["--provider", "mock", "--model", "mock-stream"] : []), ...sessionArgs, "--theme", join(repo, "themes"), ...extensions, ...(args.tui ? ["--tui-mode", args.tui] : [])];
   const termEnv = { ...env, PI_CODING_AGENT_DIR: agentDir, PI_GRAPHICS_ID_NAMESPACE: `lab-${Date.now()}`, ...(args.env ? JSON.parse(args.env) : {}) };
   const termArgv = terminal === "kitty"
     ? ["-o", `font_size=${fontSize}`, "-o", `initial_window_width=${cols}c`, "-o", `initial_window_height=${rows}c`, "-o", "remember_window_size=no", ...piArgs]
@@ -135,6 +152,7 @@ async function main() {
     try { term.kill("SIGTERM"); } catch {}
     await sleep(300);
     try { xvfb.kill("SIGTERM"); } catch {}
+    try { mock?.kill("SIGTERM"); } catch {}
   }
 }
 

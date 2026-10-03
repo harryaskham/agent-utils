@@ -265,6 +265,24 @@ export function createFrameCompositor({ getTui, onFrame, onError = () => {} } = 
     },
     get lastFrame() { return previousFrame; },
     get frames() { return frames; },
+    /**
+     * Unhook from the renderer but stay reusable: a later ensure() installs
+     * again. Live settings changes use this; dispose() is for shutdown only.
+     */
+    detach() {
+      const tui = installedOn;
+      installedOn = null;
+      previousFrame = null;
+      if (!tui) return;
+      try {
+        if (tui[HOOK_KEY] === token) {
+          const original = Reflect.getPrototypeOf(tui)?.doRender;
+          if (typeof original === "function") tui.doRender = original;
+          tui[HOOK_KEY] = undefined;
+        }
+      } catch {}
+      token = Symbol("frame-compositor");
+    },
     dispose() {
       disposed = true;
       const tui = installedOn;

@@ -241,9 +241,12 @@ export const DEFAULT_ROLE_FONTS = Object.freeze({
   code: [],
   user: [],
   tool: [],
+  terminal: [], // Bash panes; falls back to `tool`
   editor: [],
   footer: [],
 });
+
+const ROLE_FALLBACK = Object.freeze({ terminal: "tool" });
 
 function familyCandidates(value, fallback) {
   if (Array.isArray(value)) return value.filter(Boolean).map(String);
@@ -301,7 +304,8 @@ export class FontSet {
   get supersample() { return this.base.supersample; }
 
   forRole(role) {
-    return (role && this.roles.get(role)) || this.base;
+    if (!role) return this.base;
+    return this.roles.get(role) || (ROLE_FALLBACK[role] && this.roles.get(ROLE_FALLBACK[role])) || this.base;
   }
 }
 

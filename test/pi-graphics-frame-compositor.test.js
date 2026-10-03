@@ -167,3 +167,36 @@ test("terminal identity comes from XTVERSION and never leaks to Pi", async () =>
   assert.equal(await tracker.probeTerminalName({ timeoutMs: 100 }), "ghostty 1.3.1");
   assert.equal(seen.length, 0);
 });
+
+test("detach unhooks the renderer but a later ensure() reinstalls (live settings)", async () => {
+  const { createFrameCompositor } = await import("../extensions/pi-graphics/frame-compositor.js");
+  class Renderer { constructor() { this.terminal = { write: () => {} }; } doRender() { this.terminal.write("x"); } }
+  const tui = new Renderer();
+  let frames = 0;
+  const compositor = createFrameCompositor({ getTui: () => tui, onFrame: () => { frames += 1; return {}; } });
+  assert.equal(compositor.ensure(tui), true);
+  tui.doRender();
+  compositor.detach();
+  tui.doRender();
+  assert.equal(frames, 1, "detached: frames bypass the hook");
+  assert.equal(compositor.ensure(tui), true, "detach is not dispose");
+  tui.doRender();
+  assert.equal(frames, 2);
+  compositor.dispose();
+  assert.equal(compositor.ensure(tui), false);
+});
+
+test("modal key names understand legacy, xterm-modifier and Kitty keyboard sequences", async () => {
+  const { modalKeyName } = await import("../extensions/pi-graphics/key-names.js");
+  assert.equal(modalKeyName("\x1b[C"), "right");
+  assert.equal(modalKeyName("\x1b[1;1:1C"), "right", "kitty press with event type");
+  assert.equal(modalKeyName("\x1b[1;1:3C"), "release");
+  assert.equal(modalKeyName("\x1bOB"), "down");
+  assert.equal(modalKeyName("\x1b[13u"), "enter");
+  assert.equal(modalKeyName("\x1b[27;1:1u"), "escape");
+  assert.equal(modalKeyName("\x1b[9;2u"), "shift-tab");
+  assert.equal(modalKeyName("\x1b[106u"), "j");
+  assert.equal(modalKeyName("\x1b[106;5u"), "", "ctrl+j is not j");
+  assert.equal(modalKeyName("\x1b[6~"), "pagedown");
+  assert.equal(modalKeyName("\t"), "tab");
+});

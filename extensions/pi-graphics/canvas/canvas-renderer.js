@@ -7,7 +7,7 @@
 // genuinely changed are re-rasterized and re-uploaded.
 
 import { DEFAULT, unpackRgb } from "./ansi-cells.js";
-import { blendMask, fillPaths, fillRectRgba, roundedRectPathCorners, strokeArcPath } from "./raster.js";
+import { blendMask, circlePath, fillPaths, fillRectRgba, roundedRectPathCorners, strokeArcPath } from "./raster.js";
 
 // [left, right, up, down]: 1 light, 2 heavy, 3 double.
 const BOX = new Map(Object.entries({
@@ -47,13 +47,16 @@ function mixRgb(a, b, t) {
 /**
  * Render one row.
  * ctx: { atlas, cols, theme: { fg, bg, accent, selection, link }, cursorCol (or -1),
- *        panels: [{ start, end, fill:[r,g,b], alpha, border:[r,g,b], borderAlpha, top, bottom }],
+ *        panels: [{ start, end, fill:[r,g,b], alpha, border:[r,g,b], borderAlpha, top, bottom,
+ *                   absorbBg: Set<packed bg> (cell backgrounds the panel replaces),
+ *                   chrome: "terminal" (title band + window dots on the top row),
+ *                   stripe: [r,g,b] (left accent bar), title: string }],
  *        bgAbove, bgBelow (Int32Array of per-column bg or DEFAULT) }
  * Returns { rgba, width, height, empty }.
  */
 // Pick the font atlas for a cell: region roles (editor/footer) first, then
 // semantic provenance (thinking/user/tool), then markdown styling heuristics.
-function roleOf(cell, ctx) {
+export function cellRole(cell, ctx) {
   if (ctx.regionRole) return ctx.regionRole;
   const sem = cell.sem?.role;
   if (sem === "thinking") return "thinking";
@@ -61,7 +64,7 @@ function roleOf(cell, ctx) {
   if (t?.headingPacked !== undefined && cell.bold && cell.fg === t.headingPacked) return "heading";
   if (t?.codePacked !== undefined && (cell.fg === t.codePacked || cell.fg === t.codeBlockPacked)) return "code";
   if (sem === "user") return "user";
-  if (sem === "tool" || sem === "bash") return "tool";
+  if (sem === "tool" || sem === "bash") return cell.sem?.kind === "bash" || sem === "bash" ? "terminal" : "tool";
   return null;
 }
 
@@ -69,7 +72,7 @@ export function renderRow(cells, ctx) {
   const { cols, theme } = ctx;
   const fonts = ctx.fonts || null;
   const baseAtlas = fonts ? fonts.base : ctx.atlas;
-  const atlasFor = (cell) => (fonts ? fonts.forRole(roleOf(cell, ctx)) : baseAtlas);
+  const atlasFor = (cell) => (fonts ? fonts.forRole(cellRole(cell, ctx)) : baseAtlas);
   // S: supersample factor. Everything is drawn in device pixels = logical * S;
   // atlases already produce S-scaled masks.
   const S = Math.max(1, Math.trunc(ctx.scale || baseAtlas.supersample || 1));
@@ -90,9 +93,27 @@ export function renderRow(cells, ctx) {
     const x = mx + panel.start * cw - inset; const w = (panel.end - panel.start) * cw + inset * 2;
     const line = Math.max(1, Math.round(S));
     const radii = [panel.top ? radius * 1.4 : 0, panel.top ? radius * 1.4 : 0, panel.bottom ? radius * 1.4 : 0, panel.bottom ? radius * 1.4 : 0];
-    const y0 = panel.top ? Math.round(ch * 0.45) : 0;
-    const y1 = panel.bottom ? Math.round(ch * 0.55) : ch;
+    // flush panels (overlays) cover their whole first/last rows: their first
+    // line carries content, not padding.
+    const y0 = panel.top && !panel.flush ? Math.round(ch * 0.45) : 0;
+    const y1 = panel.bottom && !panel.flush ? Math.round(ch * 0.55) : ch;
     fillPaths(fb, width, height, [roundedRectPathCorners(x + 0.5, y0, w - 1, y1 - y0, radii)], ...panel.fill, Math.round(255 * panel.alpha));
+    if (panel.chrome === "terminal" && panel.top) {
+      // Title band with window dots: reads as a terminal pane, not a box.
+      const band = panel.titleFill || mixRgb(panel.fill, [255, 255, 255], 0.06);
+      fillPaths(fb, width, height, [roundedRectPathCorners(x + 0.5, y0, w - 1, ch - y0, [radii[0], radii[1], 0, 0])], ...band, 235);
+      fillRectRgba(fb, width, height, x + line, ch - line, w - line * 2, line, ...mixRgb(band, [0, 0, 0], 0.35), 200);
+      const dotR = Math.max(2, ch * 0.13);
+      const dotY = y0 + (ch - y0) / 2;
+      const dots = panel.dots || [[191, 97, 106], [235, 203, 139], [163, 190, 140]];
+      dots.forEach((rgb, i) => {
+        fillPaths(fb, width, height, [circlePath(x + w - inset - cw * 0.9 - i * dotR * 3, dotY, dotR)], ...rgb, 230);
+      });
+    }
+    if (panel.stripe) {
+      const sy0 = panel.top ? y0 + radii[0] * 0.6 : 0; const sy1 = panel.bottom ? y1 - radii[3] * 0.6 : ch;
+      fillRectRgba(fb, width, height, x + line, sy0, Math.max(2, Math.round(2 * S)), sy1 - sy0, ...panel.stripe, 210);
+    }
     if (panel.border) {
       const ba = Math.round(255 * (panel.borderAlpha ?? 0.6));
       const edge = (x0, y, len) => fillRectRgba(fb, width, height, x0, y, len, line, ...panel.border, ba);
@@ -116,14 +137,18 @@ export function renderRow(cells, ctx) {
   // 2. Background runs → rounded panels (corners where the run ends
   //    vertically), then 2b. selection/inverse highlight above them.
   const isSelected = (cell, c) => cell.inverse && c !== ctx.cursorCol;
-  const bgOf = (cell) => cell.bg;
+  // Panels that absorb a cell background (tool/terminal boxes) replace those
+  // per-cell runs with their own rounded fill.
+  const absorbed = new Map();
+  for (const panel of ctx.panels || []) if (panel.absorbBg?.size) for (let k = panel.start; k < panel.end && k < cols; k += 1) absorbed.set(k, panel.absorbBg);
+  const bgOf = (cell, col) => (absorbed.get(col)?.has(cell.bg) ? DEFAULT : cell.bg);
   let c = 0;
   while (c < cols) {
     const cell = cells[c];
-    const bg = bgOf(cell);
+    const bg = bgOf(cell, c);
     if (bg === DEFAULT) { c += 1; continue; }
     let end = c + 1;
-    while (end < cols && bgOf(cells[end]) === bg) end += 1;
+    while (end < cols && bgOf(cells[end], end) === bg) end += 1;
     const above = ctx.bgAboveRaw || ctx.bgAbove; const below = ctx.bgBelowRaw || ctx.bgBelow;
     const same = (arr, col) => arr && arr[col] === bg;
     const tl = !same(above, c); const tr = !same(above, end - 1);

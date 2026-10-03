@@ -60,8 +60,9 @@ import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./p
 import { createPixelGeometryTracker, tapTerminalInput } from "./pi-graphics/terminal-io.js";
 import { FULL_CANVAS_DEFAULTS, createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
 import { ROLE_BY_CLASS, ensureSemanticTaps, tapSemanticClass } from "./pi-graphics/canvas/semantics.js";
-import { BACKGROUNDS, CARET_STYLES, STREAM_EFFECTS } from "./pi-graphics/canvas/effects.js";
+import { BACKGROUNDS, CARET_STYLES, STREAM_EFFECTS, TYPE_IN_EFFECTS } from "./pi-graphics/canvas/effects.js";
 import { listMonospaceFamilies } from "./pi-graphics/canvas/font-atlas.js";
+import { modalKeyName } from "./pi-graphics/key-names.js";
 import { readAgentSettings, readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { FALSE_RE, modeIsOff, settingsEnvFromPiGraphics } from "./pi-graphics/settings-env.js";
 import { mixHexColor } from "./pi-graphics/color-utils.js";
@@ -581,6 +582,7 @@ export default async function piGraphicsExtension(pi) {
     getHeat: () => editorCursorHeat,
     getImpulseAt: () => editorCursorImpulseAt,
     getActivity: () => currentActivity(),
+    getPulse: () => streamPulse(),
     semanticTick: () => {
       const classes = new Map(host.names().map((name) => [name, host.get(name)]));
       ensureSemanticTaps(classes, () => fullCanvasActive());
@@ -603,7 +605,17 @@ export default async function piGraphicsExtension(pi) {
 
   // Agent activity for reactive effects (editor glow). Speech comes from the
   // TTS narration extension over the shared event bus.
-  const activity = { agent: "idle", speakingUntil: 0, speechDepth: 0 };
+  const activity = { agent: "idle", speakingUntil: 0, speechDepth: 0, pulse: 0, pulseAt: 0 };
+  // Token pulse: each streamed delta bumps it, it decays over ~250 ms. Drives
+  // the canvas editor-glow flare, background speed and activity tint.
+  function streamPulse(now = Date.now()) {
+    return activity.pulse * Math.exp(-(now - activity.pulseAt) / 250);
+  }
+  function bumpStreamPulse(amount = 0.3) {
+    const now = Date.now();
+    activity.pulse = Math.min(1, streamPulse(now) + amount);
+    activity.pulseAt = now;
+  }
   function currentActivity() {
     if (activity.speechDepth > 0 || Date.now() < activity.speakingUntil) return "speaking";
     return activity.agent;
@@ -2121,8 +2133,14 @@ export default async function piGraphicsExtension(pi) {
     const kind = event?.assistantMessageEvent?.type || "";
     if (/thinking/.test(kind)) setAgentActivity("thinking");
     else if (/text|toolcall/i.test(kind)) setAgentActivity("working");
+    if (/delta/.test(kind)) {
+      const text = event?.assistantMessageEvent?.delta;
+      bumpStreamPulse(Math.min(0.45, 0.12 + (typeof text === "string" ? text.length : 4) * 0.015));
+      if (fullCanvasActive()) fullCanvas.poke();
+    }
   });
-  pi.on("tool_execution_start", async () => { setAgentActivity("working"); });
+  pi.on("tool_execution_start", async () => { setAgentActivity("working"); bumpStreamPulse(0.5); });
+  pi.on("tool_execution_update", async () => { bumpStreamPulse(0.2); if (fullCanvasActive()) fullCanvas.poke(); });
 
   pi.on("message_end", async (event, ctx) => {
     setEditorContextMode("idle");
@@ -2325,8 +2343,10 @@ export default async function piGraphicsExtension(pi) {
     if (off) {
       const overlayClear = overlayPlacements.clear();
       if (overlayClear) emitGraphicsCommand(overlayClear);
-      frameCompositor.dispose();
-      compositorInstalled = false;
+      // The pixel canvas renders through the compositor independently of the
+      // classic mode: keep it hooked while the canvas is on, and only detach
+      // (never dispose) so turning graphics back on can reinstall it.
+      if (!fullCanvasActive()) { frameCompositor.detach(); compositorInstalled = false; }
       releaseEditorSurface();
       releaseOwnedUiSurfaces(ctx);
       teardownBoxChrome(ctx);
@@ -2785,7 +2805,8 @@ export default async function piGraphicsExtension(pi) {
         return lines.map((line) => renderLine(width, line));
       },
       handleInput(data) {
-        const key = String(data || "");
+        const key = modalKeyName(data);
+        if (!key || key === "release") return;
         const matches = (name) => { try { return keybindings?.matches?.(data, name); } catch { return false; } };
         const rows = tabs[tabIndex].rows;
         const move = (delta) => { selected = Math.max(0, Math.min(rows.length - 1, selected + delta)); };
@@ -2795,20 +2816,32 @@ export default async function piGraphicsExtension(pi) {
           if (row.action) { wantToggle = true; done("toggle-full"); return; }
           const values = valuesOf(row);
           const currentValue = String(row.get());
-          const index = Math.max(0, values.indexOf(currentValue));
-          row.set(values[(index + delta + values.length) % values.length]);
-          if (tabs[tabIndex].id === "full") { void applyFullCanvasSettings(ctx, settings).catch(() => {}); }
+          let index = values.indexOf(currentValue);
+          const numeric = values.every((v) => /^-?\d+(\.\d+)?$/.test(v)) && /^-?\d+(\.\d+)?$/.test(currentValue);
+          if (index < 0 && numeric) {
+            // Custom value (set by command): step to the nearest preset.
+            const n = Number(currentValue);
+            const next = delta > 0 ? values.find((v) => Number(v) > n) : [...values].reverse().find((v) => Number(v) < n);
+            row.set(next ?? (delta > 0 ? values[0] : values[values.length - 1]));
+          } else {
+            index = Math.max(0, index);
+            const nextIndex = numeric ? Math.max(0, Math.min(values.length - 1, index + delta)) : (index + delta + values.length) % values.length;
+            row.set(values[nextIndex]);
+          }
+          if (tabs[tabIndex].id === "full") { try { applyFullCanvasSettings(ctx, settings); } catch {} }
         };
-        if (key === "\t" || key === "]") switchTab(1);
-        else if (key === "\x1b[Z" || key === "[") switchTab(-1);
+        if (key === "tab" || key === "]") switchTab(1);
+        else if (key === "shift-tab" || key === "[") switchTab(-1);
         else if (key === "1" || key === "2") { tabIndex = Number(key) - 1; selected = 0; }
-        else if (matches("tui.select.up") || key === "\x1b[A" || key === "k") move(-1);
-        else if (matches("tui.select.down") || key === "\x1b[B" || key === "j") move(1);
-        else if (matches("tui.select.left") || key === "\x1b[D" || key === "h") change(-1);
-        else if (matches("tui.select.right") || key === "\x1b[C" || key === "l" || key === " ") change(1);
+        else if (key === "up" || key === "k" || matches("tui.select.up")) move(-1);
+        else if (key === "down" || key === "j" || matches("tui.select.down")) move(1);
+        else if (key === "pageup") move(-8);
+        else if (key === "pagedown") move(8);
+        else if (key === "left" || key === "h") change(-1);
+        else if (key === "right" || key === "l" || key === " ") change(1);
         else if (key.toLowerCase() === "d" && tabs[tabIndex].id === "classic") { gfx.debug = !gfx.debug; gfx.debugPlaceholders = gfx.debug; }
-        else if (matches("tui.select.confirm") || key === "\r" || key === "\n") done("save");
-        else if (matches("tui.select.cancel") || key === "\x1b" || key.toLowerCase() === "q") done("close");
+        else if (key === "enter" || matches("tui.select.confirm")) done("save");
+        else if (key === "escape" || key.toLowerCase() === "q" || matches("tui.select.cancel")) done("close");
         try { _tui?.requestRender?.(); } catch {}
       },
     });
@@ -3129,7 +3162,7 @@ export default async function piGraphicsExtension(pi) {
     const env = {};
     for (const [key, name] of Object.entries(FULL_ENV)) if (process.env[name]) env[key] = process.env[name];
     const merged = { ...FULL_CANVAS_DEFAULTS, ...full, ...env, fonts };
-    for (const key of ["fontSizePx", "lineHeight", "zoom", "resolution", "gamma", "caretBloom", "streamInMs", "streamRise", "backgroundFps", "glowIntensity", "padding", "fps"]) {
+    for (const key of ["fontSizePx", "lineHeight", "zoom", "resolution", "gamma", "caretBloom", "typeInMs", "streamInMs", "streamRise", "streamStagger", "backgroundPeriod", "backgroundFps", "backgroundScale", "backgroundBudgetMB", "glowIntensity", "padding", "fps"]) {
       if (merged[key] !== undefined && merged[key] !== "") merged[key] = Number(merged[key]);
     }
     return merged;
@@ -3137,34 +3170,48 @@ export default async function piGraphicsExtension(pi) {
   const FULL_DEFAULT_FONT_CHAIN = ["FiraCode Nerd Font Mono", "monospace"];
 
   // Key/value surface shared by `/gfx full <key> <value>` and the settings tab.
+  // Numeric lists are presets for ←/→; `/gfx full <key> <value>` accepts any
+  // value, and the modal steps from a custom value to its nearest neighbour.
   const FULL_SETTING_SPECS = [
-    { key: "zoom", label: "Zoom", values: ["0.75", "0.9", "1", "1.1", "1.25", "1.5", "2"], alias: ["scale"] },
-    { key: "lineHeight", label: "Line height", values: ["1.1", "1.2", "1.3", "1.4", "1.5", "1.7"], alias: ["line-height"] },
+    { key: "zoom", label: "Zoom", values: ["0.75", "0.85", "0.9", "1", "1.1", "1.2", "1.25", "1.35", "1.5", "1.75", "2"], alias: ["scale"] },
+    { key: "lineHeight", label: "Line height", values: ["1", "1.05", "1.1", "1.15", "1.2", "1.25", "1.3", "1.4", "1.5", "1.6", "1.8", "2"], alias: ["line-height"] },
+    { key: "padding", label: "Padding px", values: ["0", "1", "2", "4", "6", "8", "12", "16", "24", "32"], alias: ["pad"] },
     { key: "resolution", label: "Resolution (HiDPI)", values: ["1", "2", "3"], alias: ["hidpi"] },
-    { key: "gamma", label: "Text weight (gamma)", values: ["1", "1.2", "1.35", "1.5", "1.7"], alias: ["weight"] },
+    { key: "gamma", label: "Text weight (gamma)", values: ["1", "1.1", "1.2", "1.35", "1.5", "1.7", "2"], alias: ["weight"] },
     { key: "font.default", label: "Font", values: () => ["FiraCode Nerd Font Mono", ...monospaceFamilies()] , alias: ["font"] },
     { key: "font.thinking", label: "Thinking font", values: () => ["JetBrainsMono Nerd Font Mono", "JetBrains Mono", ...monospaceFamilies()] },
     { key: "font.heading", label: "Heading font", values: () => ["(default)", ...monospaceFamilies()] },
     { key: "font.code", label: "Code font", values: () => ["(default)", ...monospaceFamilies()] },
+    { key: "font.terminal", label: "Terminal pane font", values: () => ["(default)", ...monospaceFamilies()] },
     { key: "font.editor", label: "Editor font", values: () => ["(default)", ...monospaceFamilies()] },
     { key: "caretStyle", label: "Caret", values: [...CARET_STYLES, "off"], alias: ["caret"] },
-    { key: "caretBloom", label: "Caret bloom", values: ["0", "0.5", "1", "1.5", "2"], alias: ["bloom"] },
-    { key: "impulse", label: "Typing impulse", values: ["on", "off"] },
+    { key: "caretBloom", label: "Caret bloom", values: ["0", "0.5", "0.75", "1", "1.25", "1.5", "2", "3"], alias: ["bloom"] },
     { key: "trail", label: "Caret glide", values: ["on", "off"], alias: ["glide"] },
+    { key: "impulse", label: "Typing impulse", values: ["on", "off"] },
+    { key: "typeIn", label: "Typed letter effect", values: TYPE_IN_EFFECTS, alias: ["type", "type-in"] },
+    { key: "typeInMs", label: "Typed letter ms", values: ["80", "120", "170", "240", "320"], alias: ["type-ms"] },
     { key: "streamIn", label: "Stream-in effect", values: STREAM_EFFECTS, alias: ["stream"] },
-    { key: "streamInMs", label: "Stream-in ms", values: ["200", "300", "420", "600", "900"], alias: ["stream-ms"] },
-    { key: "streamRise", label: "Stream-in rise rows", values: ["0", "1", "2", "3", "4"], alias: ["rise"] },
-    { key: "streamRoles", label: "Stream-in applies to", values: ["thinking,assistant", "thinking", "assistant", "thinking,assistant,tool"] },
+    { key: "streamInMs", label: "Stream-in ms", values: ["150", "220", "300", "380", "500", "700", "1000"], alias: ["stream-ms"] },
+    { key: "streamRise", label: "Stream-in rise rows", values: ["0", "0.5", "1", "1.5", "2", "3", "4"], alias: ["rise"] },
+    { key: "streamStagger", label: "Stream-in stagger ms", values: ["0", "4", "8", "12", "20"], alias: ["stagger"] },
+    { key: "streamRoles", label: "Stream-in applies to", values: ["thinking,assistant,tool", "thinking,assistant", "thinking", "assistant", "tool"], alias: ["stream-roles"] },
+    { key: "toolPanels", label: "Tool panes", values: ["on", "off"], alias: ["tools"] },
     { key: "background", label: "Background", values: BACKGROUNDS, alias: ["bg"] },
-    { key: "backgroundFps", label: "Background fps", values: ["4", "8", "12", "20"], alias: ["bg-fps"] },
+    { key: "backgroundPeriod", label: "Background loop s", values: ["8", "12", "16", "24", "32", "48", "60", "90", "120"], alias: ["bg-period", "period"] },
+    { key: "backgroundFps", label: "Background fps", values: ["8", "12", "15", "20", "24", "30", "40", "60"], alias: ["bg-fps"] },
+    { key: "backgroundReact", label: "Background reacts", values: ["on", "off"], alias: ["bg-react", "react"] },
+    { key: "backgroundScale", label: "Background 1/N res", values: ["0", "2", "3", "4", "6", "8", "10", "12"], alias: ["bg-scale"] },
+    { key: "backgroundBudgetMB", label: "Background memory MB", values: ["16", "32", "64", "96", "128", "192"], alias: ["bg-budget"] },
     { key: "edgeBlend", label: "Blend padding (OSC 11)", values: ["on", "off"], alias: ["edge"] },
     { key: "editorGlow", label: "Editor glow", values: ["on", "off"], alias: ["glow"] },
-    { key: "glowIntensity", label: "Glow intensity", values: ["0.5", "0.75", "1", "1.5", "2"], alias: ["glow-intensity"] },
+    { key: "glowPulse", label: "Glow token flare", values: ["on", "off"], alias: ["flare", "pulse"] },
+    { key: "glowIntensity", label: "Glow intensity", values: ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "2", "3"], alias: ["glow-intensity"] },
     { key: "panels", label: "Panels", values: ["on", "off"] },
     { key: "fps", label: "Effects fps", values: ["20", "30", "45", "60"] },
     { key: "pixelMouse", label: "Pixel mouse", values: ["auto", "on", "off"], alias: ["pixel-mouse"] },
     { key: "transport", label: "Transport", values: ["png", "zlib"] },
   ];
+  const FULL_BOOLEAN_KEYS = new Set(["impulse", "trail", "edgeBlend", "editorGlow", "panels", "toolPanels", "backgroundReact", "glowPulse"]);
   let monospaceFamilyCache = null;
   function monospaceFamilies() {
     if (!monospaceFamilyCache) monospaceFamilyCache = listMonospaceFamilies().filter((f) => !/icons|symbol|fixed|clean|emoji|helvetica/i.test(f));
@@ -3194,16 +3241,15 @@ export default async function piGraphicsExtension(pi) {
       else full.fonts[role] = [String(value), ...(role === "default" ? FULL_DEFAULT_FONT_CHAIN : [])];
       return;
     }
-    if (["impulse", "trail", "edgeBlend", "editorGlow", "panels"].includes(key)) { full[key] = !/^(off|false|0|no)$/i.test(String(value)); return; }
+    if (FULL_BOOLEAN_KEYS.has(key)) { full[key] = !/^(off|false|0|no)$/i.test(String(value)); return; }
     full[key] = /^-?\d+(\.\d+)?$/.test(String(value)) ? Number(value) : String(value);
   }
 
-  async function applyFullCanvasSettings(ctx, settings, { restart = true } = {}) {
+  // Live settings changes reconfigure the running canvas in place: no
+  // stop/start, no terminal probes, safe to call on every keypress.
+  function applyFullCanvasSettings(ctx, settings) {
     runtimeSettingsOverride = settings;
-    if (restart && fullCanvas.active) {
-      await fullCanvas.stop({ reason: "reconfigure" });
-      await fullCanvas.start({ ...fullCanvasConfig(settings.piGraphics || {}), tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null) });
-    }
+    if (fullCanvas.active) fullCanvas.reconfigure(fullCanvasConfig(settings.piGraphics || {}));
   }
 
   function describeFullCanvas() {
@@ -3212,7 +3258,8 @@ export default async function piGraphicsExtension(pi) {
     if (st.active) {
       lines.push(`  grid ${st.virt.cols}x${st.virt.rows} @ cell ${st.cell}px (font ${st.fontSizePx}px, resolution ${st.resolution}x) on ${st.real.width}x${st.real.height}px (terminal cell ${st.real.cellW}x${st.real.cellH})`);
       for (const [role, font] of Object.entries(st.fonts || {})) lines.push(`  font ${role.padEnd(8)} ${font.family}${font.missing ? `  (wanted ${font.missing}: not installed)` : ""}`);
-      lines.push(`  caret ${st.config.caretStyle} bloom ${st.config.caretBloom} · stream-in ${st.config.streamIn} ${st.config.streamInMs}ms · background ${st.config.background} · glow ${st.config.editorGlow ? "on" : "off"}`);
+      lines.push(`  caret ${st.config.caretStyle} bloom ${st.config.caretBloom} · typed ${st.config.typeIn} · stream-in ${st.config.streamIn} ${st.config.streamInMs}ms · glow ${st.config.editorGlow ? "on" : "off"} · tool panes ${st.config.toolPanels ? "on" : "off"}`);
+      lines.push(st.background ? `  background ${st.background.type} ${st.background.size} · ${st.background.frames} frames (${st.background.cached} cached) · ${st.background.fps} fps over ${st.config.backgroundPeriod}s · speed ×${st.background.speed}` : `  background ${st.config.background}`);
       lines.push(`  terminal ${st.terminal}${st.notes?.length ? ` · ${st.notes.join("; ")}` : ""}`);
       lines.push(`  frames ${st.stats.frames} ticks ${st.stats.ticks} uploads ${st.stats.uploads} (${Math.round(st.stats.uploadBytes / 1024)} KiB) raster ${st.stats.rasterMs}ms last ${st.stats.lastFrameMs}ms strips ${st.cachedStrips} pixelMouse=${st.pixelMouse}`);
     }
@@ -3232,13 +3279,13 @@ export default async function piGraphicsExtension(pi) {
       if (sub === "settings" || sub === "config") { await showGfxSettingsWindow(ctx, settings, gfx, (gfx.editor = gfx.editor || {}), { tab: "full" }); return; }
       if (sub === "off" || (sub === "toggle" && fullCanvas.active)) { await fullCanvas.stop(); notify("Pi Graphics full canvas off."); return; }
       if (["on", "toggle", "start"].includes(sub)) {
-        if (fullCanvas.active) await fullCanvas.stop({ reason: "restart" });
-        await startCanvas();
+        if (fullCanvas.active) fullCanvas.reconfigure(fullCanvasConfig(gfx));
+        else await startCanvas();
         notify(describeFullCanvas());
         return;
       }
       let key; let value;
-      if (sub === "font" && args.length > 2 && ["default", "thinking", "heading", "code", "user", "tool", "editor", "footer"].includes(String(args[1]).toLowerCase())) {
+      if (sub === "font" && args.length > 2 && ["default", "thinking", "heading", "code", "user", "tool", "terminal", "editor", "footer"].includes(String(args[1]).toLowerCase())) {
         key = `font.${String(args[1]).toLowerCase()}`; value = args.slice(2).join(" ");
       } else if (sub === "font-size" || sub === "size") { key = "fontSizePx"; value = args[1]; }
       else if (sub === "cell") {
@@ -3251,8 +3298,7 @@ export default async function piGraphicsExtension(pi) {
       }
       if (!value) { notify(`/gfx full ${sub} needs a value`, "warning"); return; }
       setFullSetting(gfx, key, value);
-      runtimeSettingsOverride = settings;
-      if (fullCanvas.active) { await fullCanvas.stop({ reason: "reconfigure" }); await startCanvas(); }
+      applyFullCanvasSettings(ctx, settings);
       notify(`${describeFullCanvas()}\n(runtime only — /gfx save to persist)`);
     } catch (error) {
       notify(`Pi Graphics full canvas: ${error?.message || error}`, "warning");
