@@ -32,10 +32,12 @@ function boolFromText(value) {
 
 function runCommand(command, {
   env = process.env,
+  cwd = undefined,
   timeoutMs = 1000,
   spawnSyncImpl = spawnSync,
 } = {}) {
   return spawnSyncImpl("bash", ["-lc", String(command || "")], {
+    cwd,
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024,
@@ -55,11 +57,13 @@ export function runBoolCommand(command, options = {}) {
 
 function runShellValueExpression(expression, {
   env = process.env,
+  cwd = undefined,
   timeoutMs = 1000,
   spawnSyncImpl = spawnSync,
 } = {}) {
   const script = 'eval "printf %s \\"$1\\""';
   return spawnSyncImpl("bash", ["-lc", script, "agent-utils-string-command", String(expression || "")], {
+    cwd,
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024,

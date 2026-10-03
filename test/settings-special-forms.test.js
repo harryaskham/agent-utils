@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   resolveAgentUtilsSpecialForms,
@@ -66,9 +67,16 @@ test("$stringCommand supports direct commands and command-substitution value exp
   assert.equal(runStringCommand("printf 'kept  \\n'").value, "kept  ", "only terminal newlines are removed");
   assert.equal(runStringCommand("$(printf 123)").value, "123");
   const expression = "$(env node=\"${CACO_NODE:-\"$(hostname)\"}\" repo=$(basename \"$(git rev-parse --show-toplevel)\") dir=$(basename \"$(pwd)\") bash -c 'echo \"$node ${repo:-\"$dir\"}\"')";
-  const result = runStringCommand(expression, { env: { ...process.env, CACO_NODE: "ms-mac" } });
+  // Run inside a repo whose toplevel is named "checkout" so the expectation
+  // does not depend on where this repository is cloned.
+  const checkout = join(mkdtempSync(join(tmpdir(), "au-string-command-")), "checkout");
+  mkdirSync(join(checkout, "sub"), { recursive: true });
+  spawnSync("git", ["init", "-q"], { cwd: checkout });
+  const result = runStringCommand(expression, { env: { ...process.env, CACO_NODE: "ms-mac" }, cwd: join(checkout, "sub") });
   assert.equal(result.ok, true);
   assert.equal(result.value, "ms-mac checkout");
+  const noRepo = runStringCommand(expression, { env: { ...process.env, CACO_NODE: "ms-mac" }, cwd: tmpdir() });
+  assert.equal(noRepo.value, `ms-mac ${basename(tmpdir())}`, "falls back to the directory name outside a repo");
 });
 
 test("$numberCommand accepts finite integer, float, and scientific output", () => {
