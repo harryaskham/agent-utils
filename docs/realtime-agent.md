@@ -330,12 +330,12 @@ Start with the shared defaults:
 Or configure the complete voice in one command:
 
 ```text
-/read provider=azure lang=en-GB base_url=$AZURE_SPEECH_ENDPOINT api_key=$AZURE_SPEECH_API_KEY speed=1.6 style=hopeful styledegree=1.53 embedding=0daec43c-911f-4529-820a-16dab73630d3 voice=MAI-Voice-2
+/read provider=azure lang=en-GB base_url=$AZURE_SPEECH_ENDPOINT api_key=$AZURE_SPEECH_API_KEY speed=1.6 style=hopeful styledegree=1.53 embedding=0daec43c-911f-4529-820a-16dab73630d3 voice=MAI-Voice-2.1-Flash
 ```
 
 Exact `$NAME` and `${NAME}` values are resolved from the Pi process environment;
 API keys are never included in status output. Defaults are `provider=azure`,
-`voice=MAI-Voice-2`, `lang=en-GB`, `speed=2`, the embedding shown above,
+`voice=MAI-Voice-2.1-Flash`, `lang=en-GB`, `speed=2`, the embedding shown above,
 `delay=2000`, `on_delay=true`, and `on_send=true`. Use `value=none` to remove an
 optional wrapper or override, for example `style=none speed=none embedding=none`.
 A missing style omits `<mstts:express-as>`, a missing speed omits `<prosody>`, and
@@ -460,7 +460,7 @@ per-session voice, the realtime extension also registers a `speak` **tool** the
 agent can call directly: it synthesizes via the direct Azure Speech REST path
 (no daemon) in the configured cascade voice and plays locally.
 
-- Defaults come from the shared TTS library: `MAI-Voice-2`, embedding
+- Defaults come from the shared TTS library: `MAI-Voice-2.1-Flash`, embedding
   `0daec43c-911f-4529-820a-16dab73630d3`, `en-GB`, and speed `2`.
   Durable overrides come from `agentUtils.tts`; `PI_CASCADE_VOICE`,
   `PI_CASCADE_SPEAKER`, `PI_CASCADE_LANG`, `PI_CASCADE_SPEED`, and `PI_TTS_*`
@@ -561,7 +561,7 @@ Start-time arguments (env-style `key=value`):
 Per-participant overrides use a bracket form, e.g.
 `participants=var[voice=cedar,model=haiku];cedar[base_url=http://...]`.
 
-Defaults: cascade gives every agent the shared `MAI-Voice-2` voice and embedding
+Defaults: cascade gives every agent the shared `MAI-Voice-2.1-Flash` voice and embedding
 unless overridden (so distinguish them by name/content, or pass distinct `voice=`). For
 the **peer chat model**, an unpinned peer (no `model=`) now runs through Pi's own
 inference engine on the model already loaded in Pi (bd-15beec) — so `n=1` behaves
@@ -587,7 +587,7 @@ The voice is preserved exactly as supplied and the speaker profile becomes an
 
 ```text
 # one embedding voice, British English, a touch faster
-/cascade start n=1 voice=MAI-Voice-2 speaker=0daec43c-... lang=en-GB speed=1.2
+/cascade start n=1 voice=MAI-Voice-2.1-Flash speaker=0daec43c-... lang=en-GB speed=1.2
 
 # a two-voice room (give each a distinct voice)
 /cascade start n=2 participants="Ava[voice=en-US-AvaMultilingualNeural];Andrew[voice=en-US-AndrewMultilingualNeural]"

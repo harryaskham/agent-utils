@@ -12,9 +12,10 @@ test("session voice and pan assignment is stable, bounded, and purpose-separated
   assert.notDeepEqual(resolveSessionSpeechAssignment("session-other", policy), first);
 });
 
-test("speech policy reads settings and env and defaults to valid MAI Voice 2 Flash pool", () => {
+test("speech policy reads settings and env and defaults to the MAI Voice 2.1 Flash pool", () => {
   assert.ok(DEFAULT_SESSION_VOICES.length > 30);
-  assert.ok(DEFAULT_SESSION_VOICES.every((voice) => voice.endsWith(":MAI-Voice-2-Flash")));
+  assert.ok(DEFAULT_SESSION_VOICES.every((voice) => voice.endsWith(":MAI-Voice-2.1-Flash")));
+  assert.ok(DEFAULT_SESSION_VOICES.includes(resolveSessionSpeechAssignment("default-session").voice));
   assert.deepEqual(resolveSessionSpeechPolicy({ voices: ["x"], panRange: { min: -0.2, max: 0.3 } }, {}), { voices: ["x"], panMin: -0.2, panMax: 0.3 });
   assert.deepEqual(resolveSessionSpeechPolicy({}, { PI_TTS_VOICES: "a,b", PI_TTS_PAN_MIN: "-0.4", PI_TTS_PAN_MAX: "0.5" }), { voices: ["a", "b"], panMin: -0.4, panMax: 0.5 });
 });

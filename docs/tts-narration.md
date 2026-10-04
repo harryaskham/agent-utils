@@ -38,7 +38,7 @@ Pulse client and stream names identify the speech source: `/tts`, `/narrate`, `/
 /tts                 # enable
 /tts off
 /tts status
-/tts voice=MAI-Voice-2 speed=2 style=hopeful styledegree=1.5
+/tts voice=MAI-Voice-2.1-Flash speed=2 style=hopeful styledegree=1.5
 /tts --harry            # Harry embedding, retaining this session's stereo pan
 /tts prefix='Agent: ' suffix=' End.'
 ```
@@ -52,7 +52,7 @@ Synthesis and playback reuse the same first-party direct Azure library, settings
 and defaults as `/read`:
 
 - provider `azure`
-- voice `MAI-Voice-2`
+- voice `MAI-Voice-2.1-Flash`
 - embedding `0daec43c-911f-4529-820a-16dab73630d3`
 - language `en-GB`
 - speed `2`
@@ -78,12 +78,12 @@ At `session_start`, `/tts`, `/narrate`, and spoken interactive choices hash Pi's
 one voice from `agentUtils.tts.voices` and one constant-power stereo position
 within `agentUtils.tts.panRange` (default `-0.9..0.9`). The assignment remains
 stable for the session and differs independently across sessions. The built-in
-pool is the reviewed MAI-Voice-2-Flash list from Cacophony, excluding quarantined
-aliases. `PI_TTS_VOICES`, `PI_TTS_PAN_MIN`, and `PI_TTS_PAN_MAX` override policy.
+pool uses MAI-Voice-2.1-Flash with the same persona order and quarantine
+exclusions as the prior Cacophony pool; the version update is not a live synthesis receipt. `PI_TTS_VOICES`, `PI_TTS_PAN_MIN`, and `PI_TTS_PAN_MAX` override policy.
 These three surfaces therefore retain the same audible identity for one session. `/read` deliberately remains the fixed embedded Harry voice used for editor readback and is not rotated or panned.
 
 Start Pi with `--harry`, or run `/tts --harry` or `/narrate --harry`, to retain
-the session's stereo position while selecting `MAI-Voice-2-Flash` with Harry's
+the session's stereo position while selecting the shared `MAI-Voice-2.1-Flash` default with Harry's
 `0daec43c-911f-4529-820a-16dab73630d3` embedding.
 
 ### Local command playback
@@ -168,11 +168,11 @@ explicitly.
     "tts": {
       "enabled": true,
       "provider": "azure",
-      "voice": "MAI-Voice-2",
+      "voice": "MAI-Voice-2.1-Flash",
       "voices": [
-        "en-US-Harper:MAI-Voice-2-Flash",
-        "en-US-Iris:MAI-Voice-2-Flash",
-        "en-US-Jasper:MAI-Voice-2-Flash"
+        "en-US-Harper:MAI-Voice-2.1-Flash",
+        "en-US-Iris:MAI-Voice-2.1-Flash",
+        "en-US-Jasper:MAI-Voice-2.1-Flash"
       ],
       "panRange": { "min": -0.9, "max": 0.9 },
       "lang": "en-GB",

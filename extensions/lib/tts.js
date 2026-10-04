@@ -15,7 +15,7 @@ import { sharedTtsQueueEnabled } from "./privacy.js";
 
 export const DEFAULT_TTS_PROVIDER = "azure";
 export const AZURE_SPEECH_PROVIDER = "azure-speech"; // accepted legacy alias
-export const DEFAULT_TTS_VOICE = "MAI-Voice-2";
+export const DEFAULT_TTS_VOICE = "MAI-Voice-2.1-Flash";
 export const DEFAULT_TTS_LANG = "en-GB";
 export const DEFAULT_TTS_SPEED = 2;
 export const DEFAULT_TTS_EMBEDDING = "0daec43c-911f-4529-820a-16dab73630d3";

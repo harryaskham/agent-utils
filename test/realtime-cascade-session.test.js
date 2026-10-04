@@ -344,7 +344,7 @@ test("makeCascadeTtsSynth resolves the historical embedding sentinel to shared d
   };
   const synth = makeCascadeTtsSynth({ env: { AZURE_SPEECH_API_KEY: "k" }, fetchImpl });
   await synth("hi", { provider: "azure-speech", voice: "embedding:default" });
-  assert.match(body, /<voice name='MAI-Voice-2'/);
+  assert.match(body, /<voice name='MAI-Voice-2\.1-Flash'/);
 });
 
 test("makeCascadeTtsSynth rejects non-Azure providers instead of spawning a CLI fallback", async () => {

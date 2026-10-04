@@ -44,10 +44,20 @@ test("mono PCM panning produces constant-power stereo", () => {
 
 test("shared TTS defaults match /read voice specification", () => {
   assert.equal(DEFAULT_TTS_PROVIDER, "azure");
-  assert.equal(DEFAULT_TTS_VOICE, "MAI-Voice-2");
+  assert.equal(DEFAULT_TTS_VOICE, "MAI-Voice-2.1-Flash");
   assert.equal(DEFAULT_TTS_LANG, "en-GB");
   assert.equal(DEFAULT_TTS_SPEED, 2);
   assert.equal(DEFAULT_TTS_EMBEDDING, "0daec43c-911f-4529-820a-16dab73630d3");
+});
+
+test("default Azure SSML uses Flash while explicit legacy voices remain selectable", () => {
+  const ssml = buildAzureSpeechSsml({ text: "hello", embedding: "fixture-profile" });
+  assert.match(ssml, /<voice name='MAI-Voice-2\.1-Flash'>/);
+  assert.match(ssml, /speakerProfileId='fixture-profile'/);
+  for (const voice of ["MAI-Voice-2", "MAI-Voice-2-Flash", "MAI-Voice-2.1"]) {
+    assert.equal(resolveSpeakToolParams({ text: "hello", voice }, { env: {} }).voice, voice);
+    assert.ok(buildAzureSpeechSsml({ text: "hello", voice }).includes(`<voice name='${voice}'>`));
+  }
 });
 
 test("speedToProsodyRate preserves fractional percentages and explicit unity", () => {

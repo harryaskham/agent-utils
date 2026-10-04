@@ -272,9 +272,23 @@ test("session identity assigns one deterministic voice and pan while --harry kee
   const h2 = harness({ speech: harry, flags: { harry: true }, persistedSettings: { tts: { voices: ["voice-a"], panRange: { min: -0.4, max: 0.4 } }, narrate: {} } });
   h2.ctx.sessionManager = { getSessionId: () => "stable-session" };
   h2.emit("session_start", {});
-  assert.equal(harry.getConfig().voice, "MAI-Voice-2-Flash");
+  assert.equal(harry.getConfig().voice, "MAI-Voice-2.1-Flash");
   assert.equal(harry.getConfig().embedding, "0daec43c-911f-4529-820a-16dab73630d3");
   assert.equal(harry.getConfig().pan, assigned.pan);
+});
+
+test("/tts and /narrate Harry presets use Flash and preserve session pan and speed", async () => {
+  for (const command of ["tts", "narrate"]) {
+    const speech = createAgentSpeechController({ env: {} });
+    speech.setConfig({ ...speech.getConfig(), voice: "ExplicitLegacyVoice", pan: -0.3, speed: 1.4 });
+    const h = harness({ speech, settingsPath: null });
+    await h.commands.get(command).handler("--harry", h.ctx);
+    assert.equal(speech.getConfig().voice, "MAI-Voice-2.1-Flash");
+    assert.equal(speech.getConfig().embedding, "0daec43c-911f-4529-820a-16dab73630d3");
+    assert.equal(speech.getConfig().pan, -0.3);
+    assert.equal(speech.getConfig().speed, 1.4);
+    speech.dispose();
+  }
 });
 
 test("shared /tts speech controller inherits /read defaults and interrupts stale synthesis/playback", async () => {
@@ -293,7 +307,7 @@ test("shared /tts speech controller inherits /read defaults and interrupts stale
     isPlaying() { return false; },
   };
   const speech = createAgentSpeechController({ env: { PULSE_SINK: "hw_output" }, synthesize, player });
-  assert.equal(speech.getConfig().voice, "MAI-Voice-2");
+  assert.equal(speech.getConfig().voice, "MAI-Voice-2.1-Flash");
   assert.equal(speech.getConfig().speed, 2);
   const first = speech.speak("first");
   await waitForSpeech(() => synthCalls.length === 1);
