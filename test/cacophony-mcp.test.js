@@ -217,3 +217,15 @@ test("adapter registration failure warns once and leaves Pi commands functional"
   assert.ok(h.commands.has("caco-mcp"));
   await h.fire("session_shutdown");
 });
+
+test("Pi host packages are production dependencies so --omit=dev installs keep jiti consumers working", async () => {
+  const pkg = JSON.parse(await import("node:fs").then((fs) => fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")));
+  // Pi installs git packages with `npm install --omit=dev`; editor chips
+  // (CustomEditor) and the bundled pi-mcp-adapter load these through jiti.
+  for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
+    assert.match(pkg.dependencies?.[name] || "", /^\d+\.\d+\.\d+$/, `${name} pinned in dependencies`);
+    assert.equal(pkg.devDependencies?.[name], undefined, `${name} must not be dev-only`);
+  }
+  const npmrc = await import("node:fs").then((fs) => fs.readFileSync(new URL("../.npmrc", import.meta.url), "utf8"));
+  assert.doesNotMatch(npmrc, /^\s*legacy-peer-deps\s*=\s*true/m, "peers like zod must still install");
+});
