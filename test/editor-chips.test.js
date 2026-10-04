@@ -317,3 +317,39 @@ test("editor chips mount without relying on ctx.mode and reassert after a later 
   await handlers.get("thinking_level_select")[0]({ level: "high" }, ctx);
   assert.equal(typeof editorFactory, "function");
 });
+
+test("without an injected host, CustomEditor comes from the Pi host bridge (no reflection)", async () => {
+  const bridge = await import("../extensions/lib/pi-host.js");
+  const host = await import("@earendil-works/pi-coding-agent");
+  // Outside Pi the bridge's static import resolves to the package; inside Pi
+  // the extension loader maps the same import to the running Pi's module.
+  assert.equal(bridge.CustomEditor, host.CustomEditor);
+  const handlers = new Map();
+  const commands = new Map();
+  const notes = [];
+  let factory = null;
+  const pi = {
+    registerCommand(name, definition) { commands.set(name, definition); },
+    on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+    getThinkingLevel: () => "low",
+    exec: async () => ({ code: 1, stdout: "" }),
+  };
+  const ctx = {
+    hasUI: true,
+    ui: {
+      notify: (message, level) => notes.push({ message, level }),
+      getEditorComponent: () => null,
+      setEditorComponent(next) { factory = next; },
+      setFooter() {},
+      setStatus() {},
+    },
+  };
+  await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true } } }, env: { HOME: "/tmp" } })(pi);
+  await handlers.get("session_start")[0]({}, ctx);
+  assert.equal(typeof factory, "function", "editor surface mounted");
+  await commands.get("editor-chips").handler("status", ctx);
+  const status = notes.at(-1);
+  assert.match(status.message, /CustomEditor=pi-host/);
+  assert.equal(status.level, "info");
+  assert.doesNotMatch(notes.map((n) => n.message).join("\n"), /could not mount/);
+});

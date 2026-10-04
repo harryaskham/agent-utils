@@ -37,21 +37,34 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     if (!config.enabled) return;
 
     let CustomEditor = host?.CustomEditor;
+    let customEditorSource = typeof CustomEditor === "function" ? "injected" : "";
     let hostImportError = null;
+    // CustomEditor must be the RUNNING Pi's class (keybindings, abort, focus
+    // and hardware-cursor behaviour live there). Resolution order:
+    //  1. injected (tests / embedders);
+    //  2. the host bridge (lib/pi-host.js): its static import is mapped by
+    //     Pi's extension loader to Pi's own module — the documented path, no
+    //     reflection — and is loaded dynamically so a failure only disables
+    //     the chips instead of failing this module's load;
+    //  3. last resort: Agent Utils' pinned copy, which can drift from the
+    //     running Pi (reported in /editor-chips status).
     const loadCustomEditor = async () => {
       if (typeof CustomEditor === "function") return CustomEditor;
+      try {
+        const bridge = await import("./lib/pi-host.js");
+        if (typeof bridge.CustomEditor === "function") { CustomEditor = bridge.CustomEditor; customEditorSource = "pi-host"; return CustomEditor; }
+      } catch (error) { hostImportError = error; }
       try {
         const require = createRequire(import.meta.url);
         const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "@earendil-works", "pi-coding-agent");
         const nodeModulesRoot = join(packageRoot, "..", "..");
-        // Use absolute paths throughout. Pi's loader deliberately isolates
-        // package roots and can override both bare require resolution and
-        // import.meta.resolve for an extension module.
+        // Absolute paths: Pi's loader isolates package roots and can override
+        // bare require resolution and import.meta.resolve for extensions.
         const { createJiti } = require(join(nodeModulesRoot, "jiti", "lib", "jiti.cjs"));
         const entry = join(packageRoot, "dist", "index.js");
         const module = await createJiti(entry).import(entry);
-        ({ CustomEditor } = module);
-      } catch (error) { hostImportError = error; }
+        if (typeof module.CustomEditor === "function") { CustomEditor = module.CustomEditor; customEditorSource = "bundled-copy"; hostImportError = null; }
+      } catch (error) { hostImportError = hostImportError || error; }
       return CustomEditor;
     };
 
@@ -211,7 +224,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
           installSurfaces(ctx);
         }
         const owners = state.editorRegistry?.owners?.() || [];
-        ctx.ui?.notify?.(`editor-chips:${config.enabled ? "enabled" : "disabled"} · mounted=${owners.includes("editor-chips")} · owners=${owners.join(",") || "none"} · footer=${config.hideFooter ? "hidden" : "normal"}${hostImportError ? ` · host-import-error=${hostImportError.message || String(hostImportError)}` : ""}`, hostImportError ? "warning" : "info");
+        ctx.ui?.notify?.(`editor-chips:${config.enabled ? "enabled" : "disabled"} · mounted=${owners.includes("editor-chips")} · owners=${owners.join(",") || "none"} · footer=${config.hideFooter ? "hidden" : "normal"} · CustomEditor=${customEditorSource || "unavailable"}${hostImportError ? ` · host-import-error=${hostImportError.message || String(hostImportError)}` : ""}`, hostImportError || customEditorSource === "bundled-copy" ? "warning" : "info");
       },
     });
 
