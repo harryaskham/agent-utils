@@ -2051,7 +2051,7 @@ test("/gfx settings window is tabbed and exposes the full-canvas settings", asyn
   assert.match(source, /\{ id: "classic", title: "Pi graphics", rows: classicRows \}/);
   assert.match(source, /\{ id: "full", title: "Full canvas", rows: fullRows \}/);
   assert.match(source, /if \(sub === "settings" \|\| sub === "config"\) \{ await showGfxSettingsWindow\(ctx, settings, gfx, \(gfx\.editor = gfx\.editor \|\| \{\}\), \{ tab: "full" \}\)/);
-  for (const key of ["zoom", "resolution", "font.default", "font.thinking", "caretStyle", "caretBloom", "impulse", "streamIn", "background", "edgeBlend", "editorGlow"]) {
+  for (const key of ["zoom", "resolution", "font.default", "font.thinking", "caretStyle", "caretBloom", "impulse", "streamIn", "background", "edgeBlend", "editorGlow", "frost", "caretLight", "caretLightRadius", "panePulse", "grain", "grainFps", "backgroundPalette"]) {
     assert.ok(source.includes(`key: "${key}"`), `full setting ${key}`);
   }
   // Typing heat also drives the canvas caret when classic dynamics are off.

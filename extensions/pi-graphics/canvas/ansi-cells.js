@@ -165,8 +165,8 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
       }
       if (end < 0) break;
       const body = text.slice(i + 2, end);
-      const ov = next === "_" && body.startsWith("pi:gfx:ov:") ? /^pi:gfx:ov:(\d+):(\d+)$/.exec(body) : null;
-      if (ov) overlay = { col: Number(ov[1]), width: Number(ov[2]) };
+      const ov = next === "_" && body.startsWith("pi:gfx:ov:") ? /^pi:gfx:ov:(\d+):(\d+)(?::([a-z0-9]+))?$/.exec(body) : null;
+      if (ov) overlay = { col: Number(ov[1]), width: Number(ov[2]), base: ov[3] || "" };
       const sem = next === "_" && body.startsWith("pi:gfx:@") ? SEMANTIC_BODY_RE.exec(body) : null;
       if (sem) {
         const flags = sem[5] || "";

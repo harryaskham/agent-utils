@@ -34,7 +34,7 @@ import { FontSet } from "./font-atlas.js";
 import { decodePng, drawScaledImage } from "./png-decode.js";
 import { addRadialGlow, encodeRgbaPng } from "../png-renderer.js";
 import { blendMask } from "./raster.js";
-import { BACKGROUND_SCALE, mixRgb, renderActivityTint, renderBackground, renderCaret, renderEditorGlow, renderEditorSurface, renderImpulse, renderScanlines, renderVignette } from "./effects.js";
+import { BACKGROUND_PALETTES, BACKGROUND_SCALE, autoBackground, mixRgb, renderActivityTint, renderBackground, renderCaret, renderEditorGlow, renderEditorSurface, renderGrainTile, renderImpulse, renderPaneBeacon, renderScanlines, renderVignette } from "./effects.js";
 
 const BSU = "\x1b[?2026h";
 const ESU = "\x1b[?2026l";
@@ -99,6 +99,13 @@ export const FULL_CANVAS_DEFAULTS = Object.freeze({
   vignette: 0.3,
   scanlines: 0,
   renderWorker: true, // render background loop frames off the main thread
+  backgroundPalette: "theme", // theme | auto | nord | ocean | sunset | forest | synthwave | ember | mono
+  frost: 0.5, // dialogs blur the transcript behind them; panes/editor get a milky, grainy glass
+  caretLight: 0.5, // nearby text is lit by the caret (brighter when typing fast)
+  caretLightRadius: 6, // cells
+  panePulse: true, // a light sweeps along running tools' panes
+  grain: 0, // animated film grain over everything (0 = off)
+  grainFps: 12,
   pixelMouse: "auto",
   transport: process.env.PI_GRAPHICS_FULL_TRANSPORT || "png",
   cell: "",
@@ -128,6 +135,7 @@ export function createFullCanvas({
   getImpulseAt = () => 0,
   getActivity = () => "idle",
   getPulse = () => 0,
+  getThemeName = () => "",
   onEditorText = () => {},
   semanticTick = () => {},
   trace = () => {},
@@ -160,6 +168,9 @@ export function createFullCanvas({
     stream: { blocks: new Map(), armedAt: 0 },
     overlay: { hidden: new Map(), items: new Map(), slots: new Map() },
     surface: { key: "", id: null, placedAt: "" },
+    caretLight: { key: "", id: null },
+    beacon: { store: freshStore(), slots: new Map() },
+    grain: { store: freshStore(), key: "", frame: -1, placedId: null },
     fx: { vignetteKey: "", vignetteId: null, scanKey: "", scanId: null, scanPlacements: 0 },
     typed: [],
     prevCursor: null,
@@ -173,6 +184,7 @@ export function createFullCanvas({
   function freshCaret() {
     return { ids: new Map(), key: "", target: null, shown: null, pos: null, from: null, to: null, start: 0, bucket: -1, imageId: null, anchor: null };
   }
+  function freshStore() { return { ids: new Map(), ready: new Map(), requested: new Set(), gen: 0 }; }
   function freshGlow() {
     return { baseKey: "", cache: new Map(), activity: "", index: -1, last: 0, placed: null, flarePlaced: null };
   }
@@ -356,11 +368,28 @@ export function createFullCanvas({
   // ring of cached terminal images (first pass renders ~1 frame per tick;
   // afterwards playback only re-places, ~70 bytes per frame). Agent activity
   // changes the playback speed (free) and crossfades a tint layer.
+  // "auto" picks a background type and palette from the theme name/brightness.
+  function backgroundChoice() {
+    let type = cfg().background;
+    let palette = cfg().backgroundPalette || "theme";
+    if (type === "auto" || palette === "auto") {
+      const auto = autoBackground(getThemeName(), state.theme.bg);
+      if (type === "auto") type = auto.type;
+      if (palette === "auto") palette = auto.palette;
+    }
+    return { type, palette };
+  }
+  /** Theme colours with the backdrop palette applied (text/UI keep the theme). */
+  function backgroundColors(palette) {
+    const p = BACKGROUND_PALETTES[palette];
+    return p ? { ...state.theme, ...p } : state.theme;
+  }
+
   function backgroundKey() {
-    const mode = cfg().background;
+    const { type: mode, palette } = backgroundChoice();
     if (mode === "none" || mode === "transparent") return "";
     const { width, height } = state.real;
-    return [mode, width, height, state.theme.bg, state.theme.accent, state.theme.accent2, cfg().backgroundPeriod, cfg().backgroundFps, cfg().backgroundScale, cfg().backgroundBudgetMB].join(":");
+    return [mode, palette, width, height, state.theme.bg, state.theme.accent, state.theme.accent2, cfg().backgroundPeriod, cfg().backgroundFps, cfg().backgroundScale, cfg().backgroundBudgetMB].join(":");
   }
 
   function freeBackground() {
@@ -377,14 +406,14 @@ export function createFullCanvas({
     if (!force && key === state.background.key) return "";
     let out = freeBackground();
     if (!key) return out;
-    const mode = cfg().background;
+    const { type: mode, palette } = backgroundChoice();
     const scale = Math.max(1, Number(cfg().backgroundScale) || BACKGROUND_SCALE[mode] || 8);
     const bw = Math.max(16, Math.round(state.real.width / scale)); const bh = Math.max(16, Math.round(state.real.height / scale));
     const animated = mode !== "static";
     const period = Math.max(2, Number(cfg().backgroundPeriod) || 24);
     const budgetFrames = Math.max(2, Math.floor((Math.max(4, Number(cfg().backgroundBudgetMB) || 64) * 1024 * 1024) / (bw * bh * 4)));
     const frames = animated ? Math.max(2, Math.min(budgetFrames, Math.round(period * Math.max(1, Math.min(60, Number(cfg().backgroundFps) || 20))))) : 1;
-    Object.assign(state.background, { key, mode, bw, bh, frames, period, ring: new Array(frames).fill(null), lastTick: Date.now(), ready: new Map(), requested: new Set() });
+    Object.assign(state.background, { key, mode, palette, colors: backgroundColors(palette), bw, bh, frames, period, ring: new Array(frames).fill(null), lastTick: Date.now(), ready: new Map(), requested: new Set() });
     return out + backgroundFrameCommand(0);
   }
 
@@ -405,7 +434,7 @@ export function createFullCanvas({
     // only takes budget they left, so a long first pass never starves them.
     if (id == null && bg.placed != null && (renderBudget < HEAVY_RENDERS_PER_TICK || !spendRender())) return out;
     if (id == null) {
-      const frame = renderBackground({ width: bg.bw, height: bg.bh, type: bg.mode, phase: index / bg.frames, colors: state.theme });
+      const frame = renderBackground({ width: bg.bw, height: bg.bh, type: bg.mode, phase: index / bg.frames, colors: bg.colors || state.theme });
       id = allocateImageId(`background-${index}`);
       bg.ring[index] = id;
       out += transmit(id, frame.rgba, frame.width, frame.height);
@@ -422,7 +451,7 @@ export function createFullCanvas({
     const bg = state.background;
     if (!bg.key || bg.ring[index] != null || bg.ready.has(index)) return Boolean(bg.key);
     if (bg.requested.has(index)) return true;
-    const pending = renderOffThread("background", { width: bg.bw, height: bg.bh, type: bg.mode, phase: index / bg.frames, colors: state.theme });
+    const pending = renderOffThread("background", { width: bg.bw, height: bg.bh, type: bg.mode, phase: index / bg.frames, colors: bg.colors || state.theme });
     if (!pending) return false;
     bg.requested.add(index);
     const key = bg.key;
@@ -469,7 +498,7 @@ export function createFullCanvas({
   }
 
   function tintColor(activity) {
-    const t = state.theme;
+    const t = state.background.colors || state.theme;
     return activity === "thinking" ? t.thinking : activity === "speaking" ? t.speech : activity === "typing" ? t.warm : t.accent;
   }
 
@@ -509,7 +538,8 @@ export function createFullCanvas({
   }
 
   function edgeBlendCommand() {
-    if (!bool(cfg().edgeBlend, true) || cfg().background === "transparent" || cfg().background === "none") return "";
+    const bgType = backgroundChoice().type;
+    if (!bool(cfg().edgeBlend, true) || bgType === "transparent" || bgType === "none") return "";
     const [r, g, b] = state.theme.edge;
     const hex = (v) => v.toString(16).padStart(2, "0");
     state.edgeColorSet = true;
@@ -595,6 +625,7 @@ export function createFullCanvas({
     const slice = frame.imageSlices.get(rowIndex);
     const lighting = frame.lighting;
     const xOffset = regionRole === "editor" ? frame.editorIndent || 0 : 0;
+    const frost = frame.frostRows?.get(rowIndex) || null;
     const hidden = state.overlay.hidden.get(rowIndex) || null;
     const scale = S();
     const geo = stripGeometry(rowIndex);
@@ -607,6 +638,7 @@ export function createFullCanvas({
       box ? `${scale}:${box.offX.toFixed(1)}:${box.offY.toFixed(1)}:${box.c}x${box.r}` : "",
       lighting ? lighting.key : "",
       xOffset,
+      frost ? frost.key : "",
     ].join("\u0001");
     const cached = state.stripCache.get(key);
     if (cached !== undefined) {
@@ -623,7 +655,7 @@ export function createFullCanvas({
       panels: rowPanels, bgAbove: above, bgBelow: below, marginX: state.virt.marginX,
       bgAboveRaw: above ? rawBg(frame.parsed[rowIndex - 1].cells) : null,
       bgBelowRaw: below ? rawBg(frame.parsed[rowIndex + 1].cells) : null,
-      regionRole, hiddenCols: hidden, lighting, xOffset,
+      regionRole, hiddenCols: hidden, lighting, xOffset, frostCells: frost?.cells || null,
     });
     if (slice) {
       const cw = state.fonts.cellWidth * scale; const ch = state.fonts.cellHeight * scale;
@@ -1105,6 +1137,7 @@ export function createFullCanvas({
     for (const block of state.stream.blocks.values()) if (block.hold) return true;
     if (bool(cfg().editorGlow, true) && state.frame?.glowRect) return true;
     if (state.background.frames > 1 || state.background.tint.placed != null) return true;
+    if (state.beacon.slots.size || (Number(cfg().grain) > 0 && Number(cfg().grainFps) > 0)) return true;
     return Number(getHeat()) > 0.01 || Number(getPulse()) > 0.01;
   }
 
@@ -1119,7 +1152,7 @@ export function createFullCanvas({
     const t0 = performance.now();
     const marks = [];
     const timed = (name, fn) => { const a = performance.now(); const r = fn(); marks.push(`${name}=${(performance.now() - a).toFixed(1)}`); return r; };
-    out += timed("glow", () => glowCommands(now)) + timed("bg", () => backgroundAdvance(now)) + timed("caret", () => caretCommands(now) + impulseCommands(now)) + timed("ov", () => overlayCommands(now));
+    out += timed("glow", () => glowCommands(now)) + timed("bg", () => backgroundAdvance(now)) + timed("caret", () => caretCommands(now) + caretLightCommands() + impulseCommands(now)) + timed("fx", () => beaconCommands(now) + grainCommands(now)) + timed("ov", () => overlayCommands(now));
     const ms = performance.now() - t0;
     state.stats.tickMs = Math.max(state.stats.tickMs || 0, ms);
     if (ms > 12) trace(`canvas tick ${state.stats.ticks} ms=${ms.toFixed(1)} ${marks.join(" ")} bytes=${out.length} overlays=${state.overlay.items.size}`);
@@ -1218,17 +1251,18 @@ export function createFullCanvas({
       const status = group.error ? "error" : group.streaming ? "pending" : "done";
       const statusColor = status === "error" ? t.error : status === "pending" ? t.pending : t.speech;
       const base = {
-        row0: group.row0, row1: group.row1, col0, col1,
+        row0: group.row0, row1: group.row1, col0, col1, pending: status === "pending", frost: glassFrost(),
         top: group.firstLine === 0,
         bottom: group.row1 < parsed.length - 1,
         absorbBg: dominant === DEFAULT ? null : new Set([dominant]),
       };
       const glass = cfg().paneStyle !== "solid";
       const opacity = Math.max(0.05, Math.min(1, Number(cfg().paneOpacity) || 0.72));
+      base.style = `f${base.frost}`;
       const shadow = Number(cfg().panelShadow) || 0;
       out.push(terminal
-        ? { ...base, style: `term:${status}:${cfg().paneStyle}:${opacity}`, fill: t.terminalBg, alpha: glass ? opacity : 0.97, border: mixRgb(statusColor, t.terminalBg, 0.4), border2: glass ? mixRgb(t.accent2, t.terminalBg, 0.35) : null, borderAlpha: 0.85, sheen: glass ? 0.05 : 0, shadow, chrome: "terminal", titleFill: mixRgb(t.terminalBg, t.fg, 0.08), suppressRules: true }
-        : { ...base, style: `tool:${status}:${cfg().paneStyle}:${opacity}`, fill: mixRgb(t.surface, t.accent, 0.05), alpha: glass ? opacity * 0.8 : 0.9, border: t.accent, border2: glass ? t.accent2 : null, borderAlpha: 0.3, sheen: glass ? 0.04 : 0, shadow, stripe: statusColor });
+        ? { ...base, style: `term:${status}:${cfg().paneStyle}:${opacity}:${base.style}`, fill: t.terminalBg, alpha: glass ? opacity : 0.97, border: mixRgb(statusColor, t.terminalBg, 0.4), border2: glass ? mixRgb(t.accent2, t.terminalBg, 0.35) : null, borderAlpha: 0.85, sheen: glass ? 0.05 : 0, shadow, chrome: "terminal", titleFill: mixRgb(t.terminalBg, t.fg, 0.08), suppressRules: true }
+        : { ...base, style: `tool:${status}:${cfg().paneStyle}:${opacity}:${base.style}`, fill: mixRgb(t.surface, t.accent, 0.05), alpha: glass ? opacity * 0.8 : 0.9, border: t.accent, border2: glass ? t.accent2 : null, borderAlpha: 0.3, sheen: glass ? 0.04 : 0, shadow, stripe: statusColor });
     }
     return out;
   }
@@ -1243,9 +1277,29 @@ export function createFullCanvas({
     const original = renderer.compositeLineAt;
     renderer.compositeLineAt = function piGraphicsOverlayTap(base, line, col, width, total) {
       const out = original.call(this, base, line, col, width, total);
-      return state.active && typeof out === "string" ? `\x1b_pi:gfx:ov:${col}:${width}\x07${out}` : out;
+      if (!state.active || typeof out !== "string") return out;
+      // Remember the transcript line the overlay covers (content-keyed, so
+      // unchanged rows keep their cached strips) for frosted-glass dialogs.
+      const baseKey = typeof base === "string" && base ? rememberOverlayBase(base) : "";
+      return `\x1b_pi:gfx:ov:${col}:${width}${baseKey ? `:${baseKey}` : ""}\x07${out}`;
     };
     renderer[OVERLAY_TAP] = original;
+  }
+
+  const overlayBases = new Map();
+  function rememberOverlayBase(base) {
+    let h = 2166136261;
+    for (let i = 0; i < base.length; i += 1) { h ^= base.charCodeAt(i); h = Math.imul(h, 16777619); }
+    const key = (h >>> 0).toString(36) + base.length.toString(36);
+    overlayBases.delete(key); overlayBases.set(key, base);
+    while (overlayBases.size > 512) overlayBases.delete(overlayBases.keys().next().value);
+    return key;
+  }
+
+  // Panes behind which only the soft background shows get a milky, grainy
+  // frost (half strength) rather than a blur.
+  function glassFrost() {
+    return cfg().paneStyle === "solid" ? 0 : Math.round(Math.max(0, Math.min(1, Number(cfg().frost) || 0)) * 50) / 100;
   }
 
   function lightingContext() {
@@ -1269,12 +1323,12 @@ export function createFullCanvas({
       if (surface.id != null) { out += freeImage(surface.id); state.surface = { key: "", id: null, placedAt: "" }; }
       return out;
     }
-    const key = `${style}:${rect.x},${rect.y},${rect.w}x${rect.h}:${cfg().editorOpacity}:${cfg().panelShadow}:${state.theme.surface}:${state.theme.accent}:${state.theme.accent2}`;
+    const key = `${style}:${rect.x},${rect.y},${rect.w}x${rect.h}:${cfg().editorOpacity}:${cfg().panelShadow}:${glassFrost()}:${state.theme.surface}:${state.theme.accent}:${state.theme.accent2}`;
     if (key !== surface.key) {
       if (surface.id != null) out += freeImage(surface.id);
       const img = renderEditorSurface({
         width: rect.w, height: rect.h, radius: Math.round(state.fonts.cellHeight * 0.7), style,
-        colors: state.theme, opacity: Number(cfg().editorOpacity) || 0.55, shadow: Number(cfg().panelShadow) || 0, scale: 1,
+        colors: state.theme, opacity: Number(cfg().editorOpacity) || 0.55, shadow: Number(cfg().panelShadow) || 0, scale: 1, frost: glassFrost(),
       });
       surface.id = allocateImageId("editor-surface");
       surface.key = key;
@@ -1329,13 +1383,195 @@ export function createFullCanvas({
     return out;
   }
 
-  function overlayPanels(parsed) {
+  // Off-thread image store: cached ids, finished renders awaiting upload,
+  // and in-flight requests (falls back to a budgeted synchronous render).
+  function workerImage(store, key, kind, args, renderSync) {
+    let id = store.ids.get(key);
+    if (id != null) return { id, out: "" };
+    const ready = store.ready.get(key);
+    if (ready) {
+      store.ready.delete(key);
+      id = allocateImageId(`${kind}-${key}`);
+      store.ids.set(key, id);
+      return { id, out: transmitEncoded(id, ready.base64) };
+    }
+    if (store.requested.has(key)) return null;
+    const pending = renderOffThread(kind, args);
+    if (pending) {
+      store.requested.add(key);
+      const gen = store.gen;
+      pending.then((result) => {
+        if (store.gen !== gen) return;
+        store.requested.delete(key);
+        if (result?.ok) { store.ready.set(key, result); wake(); }
+      });
+      return null;
+    }
+    if (!spendRender()) return null;
+    const img = renderSync(args);
+    id = allocateImageId(`${kind}-${key}`);
+    store.ids.set(key, id);
+    return { id, out: transmit(id, img.rgba, img.width, img.height) };
+  }
+  function freeStore(store) {
+    let out = "";
+    for (const id of store.ids.values()) out += freeImage(id);
+    store.ids.clear(); store.ready.clear(); store.requested.clear(); store.gen += 1;
+    return out;
+  }
+
+  // Caret light: glyphs near the caret are redrawn brighter in a light
+  // tint above the rows, falling off with distance; hotter and wider when
+  // typing fast. Re-rendered only when the caret, heat level or nearby text
+  // change.
+  function caretLightCommands() {
+    const light = state.caretLight;
+    const amount = Math.max(0, Math.min(1, Number(cfg().caretLight) || 0));
+    const target = state.caret.target;
+    const frame = state.frame;
+    const remove = () => {
+      if (light.id == null) return "";
+      const out = freeImage(light.id);
+      state.caretLight = { key: "", id: null };
+      return out;
+    };
+    if (!amount || !target || !frame || cfg().caretStyle === "off") return remove();
+    const fonts = state.fonts; const cw = fonts.cellWidth; const ch = fonts.cellHeight;
+    const heat = Math.max(0, Math.min(1, Number(getHeat()) || 0));
+    const heatBucket = Math.round(heat * 4);
+    const radius = Math.max(2, Number(cfg().caretLightRadius) || 6) * (1 + heatBucket * 0.12);
+    const rx = Math.ceil(radius); const ry = Math.max(1, Math.ceil((radius * cw) / (ch * 1.2)));
+    const rows = frame.parsed.length;
+    const row0 = Math.max(0, target.row - ry); const row1 = Math.min(rows - 1, target.row + ry);
+    const col0 = Math.max(0, target.col - rx); const col1 = Math.min(state.virt.cols, target.col + rx + 1);
+    const lines = [];
+    for (let r = row0; r <= row1; r += 1) lines.push(`${frame.parsed[r].line}|${[...(state.overlay.hidden.get(r) || [])].join(",")}`);
+    const key = `${target.row}:${target.col}:${heatBucket}:${amount}:${radius}:${rowIndent(target.row)}:${lines.join("\u0002")}`;
+    if (key === light.key) return "";
+    let out = remove();
+    const maxIndent = Math.max(0, frame.editorIndent || 0);
+    const w = (col1 - col0) * cw + maxIndent + cw; const h = (row1 - row0 + 1) * ch;
+    const fb = Buffer.alloc(w * h * 4);
+    const t = state.theme;
+    const lamp = mixRgb(mixRgb(t.accent, [255, 255, 255], 0.65), t.warm, heat * 0.5);
+    const cx = (target.col + 0.5) * cw + rowIndent(target.row); const cy = (target.row + 0.5) * ch;
+    let lit = 0;
+    for (let r = row0; r <= row1; r += 1) {
+      const cells = frame.parsed[r].cells;
+      const hidden = state.overlay.hidden.get(r);
+      const indent = rowIndent(r);
+      const regionRole = frame.regionRoles.get(r) || null;
+      for (let c = col0; c < col1; c += 1) {
+        const cell = cells[c];
+        if (!cell || cell.cont || cell.hidden || cell.cp === 32 || cell.cp === 0 || cell.inverse || hidden?.has(c)) continue;
+        const d = Math.hypot((c + 0.5) * cw + indent - cx, ((r + 0.5) * ch - cy) * 1.2) / (radius * cw);
+        if (d >= 1) continue;
+        const fall = (1 - d) * (1 - d) * amount * (0.6 + 0.4 * heat);
+        const atlas = fonts.forRole(cellRole(cell, { regionRole, theme: t }));
+        const mask = atlas.supersample > 1 ? null : atlas.mask(cell.cp, { bold: cell.bold, italic: cell.italic, cells: cell.wide ? 2 : 1 });
+        if (!mask) continue;
+        const fg = cell.fg === DEFAULT ? t.fg : [(cell.fg >> 16) & 255, (cell.fg >> 8) & 255, cell.fg & 255];
+        const color = mixRgb(fg, lamp, 0.65);
+        blendMask(fb, w, h, mask, (c - col0) * cw + indent + mask.left, (r - row0) * ch + mask.top, ...color, Math.round(255 * Math.min(1, fall)));
+        lit += 1;
+      }
+    }
+    state.caretLight.key = key;
+    if (!lit) return out;
+    const id = allocateImageId("caret-light");
+    out += transmit(id, fb, w, h);
+    out += placeCropped(id, 1, state.virt.padX + col0 * cw, state.virt.padY + row0 * ch, (z.rows ?? 0) + 1);
+    state.caretLight = { key, id };
+    return out;
+  }
+
+  // Running-tool beacon: a light sweeping along the top (or bottom) edge of
+  // each pending tool pane. Frames are cached per pane width, rendered on
+  // the worker; panes keep their own placement slot.
+  const BEACON_FRAMES = 16;
+  function beaconCommands(now, { force = false } = {}) {
+    const beacon = state.beacon;
+    let out = "";
+    const panes = bool(cfg().panePulse, true) ? (state.frame?.panels || []).filter((p) => p.pending).slice(0, 4) : [];
+    const fonts = state.fonts; const cw = fonts.cellWidth; const ch = fonts.cellHeight;
+    const frame = Math.floor(now / 62) % BEACON_FRAMES;
+    const wanted = new Map();
+    panes.forEach((pane, k) => {
+      const atTop = pane.top !== false; const atBottom = pane.bottom !== false;
+      if (!atTop && !atBottom) return;
+      const inset = Math.min(state.virt.marginX, Math.round(cw * 0.8));
+      const x = state.virt.padX + pane.col0 * cw - inset;
+      const width = Math.round((pane.col1 - pane.col0) * cw + inset * 2);
+      const edgeY = atTop ? state.virt.padY + pane.row0 * ch + ch * 0.45 : state.virt.padY + (pane.row1 + 1) * ch - ch * 0.45;
+      const h = Math.max(4, Math.round(ch * 1.4));
+      wanted.set(k + 1, { x, y: Math.round(edgeY - h / 2), width });
+    });
+    for (const [slot, placed] of beacon.slots) {
+      if (wanted.has(slot)) continue;
+      out += deletePlacement(placed.id, slot);
+      beacon.slots.delete(slot);
+    }
+    for (const [slot, want] of wanted) {
+      const key = `${want.width}:${frame}`;
+      const img = workerImage(beacon.store, key, "beacon", { width: want.width, cellHeight: ch, frame, frames: BEACON_FRAMES, colors: state.theme }, renderPaneBeacon);
+      if (!img) continue;
+      out += img.out;
+      const placed = beacon.slots.get(slot);
+      if (!force && placed && placed.id === img.id && placed.x === want.x && placed.y === want.y) continue;
+      if (placed && placed.id !== img.id) out += deletePlacement(placed.id, slot);
+      out += placeCropped(img.id, slot, want.x, want.y, z.overlay);
+      beacon.slots.set(slot, { id: img.id, x: want.x, y: want.y });
+    }
+    // Bound cached widths (16 frames each).
+    if (beacon.store.ids.size > BEACON_FRAMES * 3) out += freeStore(beacon.store);
+    return out;
+  }
+
+  // Film grain: one 256px noise tile tiled over the window, swapping between
+  // a few tiles at grainFps (deletes all placements of the old tile at once).
+  const GRAIN_TILES = 4; const GRAIN_SIZE = 256;
+  function grainCommands(now, { force = false } = {}) {
+    const grain = state.grain;
+    const amount = Math.max(0, Math.min(1, Number(cfg().grain) || 0));
+    const key = amount > 0 ? `${amount}:${state.real.width}x${state.real.height}` : "";
+    let out = "";
+    if (key !== grain.key) {
+      if (grain.placedId != null) out += serialize({ a: "d", d: "i", i: grain.placedId, q: 2 });
+      out += freeStore(grain.store);
+      grain.key = key; grain.frame = -1; grain.placedId = null;
+      force = true;
+    }
+    if (!key) return out;
+    const fps = Math.max(0, Math.min(30, Number(cfg().grainFps) || 0));
+    const frame = fps > 0 ? Math.floor(now / (1000 / fps)) % GRAIN_TILES : 0;
+    if (frame === grain.frame && !force) return out;
+    const img = workerImage(grain.store, frame, "grain", { size: GRAIN_SIZE, strength: amount, seed: frame + 1 }, renderGrainTile);
+    if (!img) return out;
+    out += img.out;
+    if (grain.placedId != null && grain.placedId !== img.id) out += serialize({ a: "d", d: "i", i: grain.placedId, q: 2 });
+    if (grain.placedId !== img.id || force) {
+      let p = 1;
+      for (let y = 0; y < state.real.height; y += GRAIN_SIZE) {
+        for (let x = 0; x < state.real.width; x += GRAIN_SIZE) out += placeCropped(img.id, p++, x, y, z.fx ?? z.overlay);
+      }
+    }
+    grain.placedId = img.id; grain.frame = frame;
+    return out;
+  }
+
+  function overlayPanels(parsed, frostRows) {
     const panels = []; let current = null;
+    const frost = Math.max(0, Math.min(1, Number(cfg().frost) || 0));
     parsed.forEach(({ overlay }, r) => {
       if (!overlay) { current = null; return; }
+      // Frosted glass: the covered transcript row, parsed for a blurred
+      // underlay (content-keyed so unchanged rows stay cached).
+      if (frost > 0 && overlay.base && overlayBases.has(overlay.base)) {
+        frostRows.set(r, { key: overlay.base, cells: parsedRow(overlayBases.get(overlay.base)).cells });
+      }
       if (current && current.col0 === overlay.col && current.col1 === overlay.col + overlay.width && current.row1 === r - 1) { current.row1 = r; return; }
       const t = state.theme;
-      current = { row0: r, row1: r, col0: overlay.col, col1: overlay.col + overlay.width, style: "overlay", flush: true, fill: mixRgb(t.bg, t.surface, 0.6), alpha: 0.97, border: t.accent, border2: t.accent2, borderAlpha: 0.5, sheen: 0.04, shadow: Number(cfg().panelShadow) || 0 };
+      current = { row0: r, row1: r, col0: overlay.col, col1: overlay.col + overlay.width, style: `overlay:${frost}`, flush: true, fill: mixRgb(t.bg, t.surface, 0.6), alpha: 0.97, border: t.accent, border2: t.accent2, borderAlpha: 0.5, sheen: 0.04, shadow: Number(cfg().panelShadow) || 0, frost };
       panels.push(current);
     });
     return panels;
@@ -1379,8 +1615,10 @@ export function createFullCanvas({
     renderBudget = HEAVY_RENDERS_PER_TICK;
     const regions = buildRegions(renderer);
     regions.panels.unshift(...toolPanels(parsed));
-    regions.panels.push(...overlayPanels(parsed));
-    state.frame = { parsed, cursor, imageSlices, lighting: lightingContext(), ...regions };
+    const frostRows = new Map();
+    regions.panels.push(...overlayPanels(parsed, frostRows));
+    if (process.env.PI_GRAPHICS_TRACE_FROST) trace(`canvas frost rows=${frostRows.size} overlayRows=${parsed.filter((p) => p.overlay).length} withBase=${parsed.filter((p) => p.overlay?.base).length} bases=${overlayBases.size}`);
+    state.frame = { parsed, cursor, imageSlices, lighting: lightingContext(), frostRows, ...regions };
     const now = Date.now();
     // Typing heat comes from the editor rows the canvas sees, independent of
     // the classic graphics mode (which may be off).
@@ -1413,7 +1651,7 @@ export function createFullCanvas({
     out += evictStrips(live);
     const tRows = performance.now();
     state.caret.target = cursor;
-    out += glowCommands(now, { force: frame.cleared }) + backgroundAdvance(now) + surfaceCommands({ force: frame.cleared }) + screenFxCommands({ force: frame.cleared }) + caretCommands(now) + impulseCommands(now) + overlayCommands(now);
+    out += glowCommands(now, { force: frame.cleared }) + backgroundAdvance(now) + surfaceCommands({ force: frame.cleared }) + screenFxCommands({ force: frame.cleared }) + grainCommands(now, { force: frame.cleared }) + beaconCommands(now, { force: frame.cleared }) + caretCommands(now) + caretLightCommands() + impulseCommands(now) + overlayCommands(now);
     const realCursor = cursor
       ? (() => { const p = caretPixel(cursor); const at = cellAt(p.x, p.y); return `\x1b[${at.row + 1};${at.col + 1}H`; })()
       : "";
@@ -1454,6 +1692,9 @@ export function createFullCanvas({
     state.glow = freshGlow();
     state.overlay = { hidden: new Map(), items: new Map(), slots: new Map() };
     state.surface = { key: "", id: null, placedAt: "" };
+    state.caretLight = { key: "", id: null };
+    state.beacon = { store: freshStore(), slots: new Map() };
+    state.grain = { store: freshStore(), key: "", frame: -1, placedId: null };
     state.fx = { vignetteKey: "", vignetteId: null, scanKey: "", scanId: null, scanPlacements: 0 };
     state.typed = [];
     for (const block of state.stream.blocks.values()) { block.hold = null; block.runs = []; }

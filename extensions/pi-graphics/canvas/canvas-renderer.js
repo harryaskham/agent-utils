@@ -68,6 +68,14 @@ export function cellRole(cell, ctx) {
   return null;
 }
 
+/** Deterministic per-pixel luminance grain (frosted glass texture). */
+function grainPixel(fb, i, x, y, amount) {
+  let h = Math.imul(x + 0x9e37, 0x85ebca6b) ^ Math.imul(y + 0x7f4a, 0xc2b2ae35);
+  h ^= h >>> 15; h = Math.imul(h, 0x27d4eb2f); h ^= h >>> 13;
+  const v = ((h & 0xff) / 255 - 0.5) * amount;
+  fb[i] = Math.max(0, Math.min(255, fb[i] + v)); fb[i + 1] = Math.max(0, Math.min(255, fb[i + 1] + v)); fb[i + 2] = Math.max(0, Math.min(255, fb[i + 2] + v));
+}
+
 function blendOver(fb, i, r, g, b, a) {
   if (a <= 0.002) return;
   const sa = Math.min(1, a);
@@ -92,7 +100,12 @@ function drawPanel(fb, width, height, panel, { mx, cw, ch, S, radius }) {
   const y0 = relTop * ch + pad; const y1 = (relBottom + 1) * ch - pad;
   const R = radius * 1.4;
   const bw = Math.max(1, S) * (panel.borderWidth || 1);
-  const fill = panel.fill; const fillA = Math.max(0, panel.alpha ?? 0.9);
+  // Frost: a milkier, more translucent fill with a fine static grain.
+  const frost = Math.max(0, Math.min(1, panel.frost || 0));
+  const fill = frost ? mixRgb(panel.fill, [255, 255, 255], frost * 0.06) : panel.fill;
+  // Frosted dialogs (with a blurred underlay) go more translucent than panes.
+  const fillA = Math.max(0, (panel.alpha ?? 0.9) * (1 - frost * (panel.flush ? 0.55 : 0.35)));
+  const grain = frost * 14;
   const borderA = panel.border ? (panel.borderAlpha ?? 0.6) : 0;
   const borderB = panel.border2 || panel.border;
   const sheen = panel.sheen || 0;
@@ -124,6 +137,7 @@ function drawPanel(fb, width, height, panel, { mx, cw, ch, S, radius }) {
         if (shadowA > 0) blendOver(fb, i, 0, 0, 0, shadowA);
         if (cov <= 0) continue;
         blendOver(fb, i, fill[0], fill[1], fill[2], fillA * cov);
+        if (grain > 0) grainPixel(fb, i, x, y, grain * cov);
         if (sheen > 0) {
           const k = Math.max(0, 1 - (y + 0.5 - y0) / (ch * 1.4));
           if (k > 0) blendOver(fb, i, 255, 255, 255, sheen * k * k * cov);
@@ -150,6 +164,7 @@ function drawPanel(fb, width, height, panel, { mx, cw, ch, S, radius }) {
       const cov = Math.max(0, Math.min(1, 0.5 - d));
       if (cov <= 0) continue;
       blendOver(fb, i, fill[0], fill[1], fill[2], fillA * cov);
+      if (grain > 0) grainPixel(fb, i, x, y, grain * cov);
       if (band && py < ch) blendOver(fb, i, band[0], band[1], band[2], 0.92 * cov);
       if (sheen > 0) {
         const k = Math.max(0, 1 - (py - y0) / (ch * 1.4));
@@ -206,6 +221,21 @@ export function renderRow(cells, ctx) {
   //    canvas controller, drawn with signed distances: anti-aliased at any
   //    size, translucent glass fills, gradient borders and soft shadows.
   for (const panel of ctx.panels || []) {
+    if (panel.frost > 0 && ctx.frostCells) {
+      // Frosted glass: the transcript row this dialog covers, blurred,
+      // shows through the dialog's (more translucent) fill.
+      const blurR = Math.max(1, Math.round(ch * 0.09 * (0.5 + panel.frost)));
+      for (let col = Math.max(0, panel.start); col < Math.min(cols, panel.end); col += 1) {
+        const cell = ctx.frostCells[col];
+        if (!cell || cell.cont || cell.cp === 32 || cell.cp === 0) continue;
+        const atlas = fonts ? fonts.forRole(cellRole(cell, ctx)) : baseAtlas;
+        const mask = atlas.mask(cell.cp, { bold: cell.bold, italic: cell.italic, cells: cell.wide ? 2 : 1 });
+        const soft = mask && atlas.blurred(mask, blurR);
+        if (!soft) continue;
+        const fg = cell.fg === DEFAULT ? theme.fg : unpackRgb(cell.fg);
+        blendMask(fb, width, height, soft, mx + col * cw + soft.left, soft.top, ...fg, 255);
+      }
+    }
     drawPanel(fb, width, height, panel, { mx, cw, ch, S, radius });
     drawn = true;
   }

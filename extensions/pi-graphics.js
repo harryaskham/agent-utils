@@ -60,7 +60,7 @@ import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./p
 import { createPixelGeometryTracker, tapTerminalInput } from "./pi-graphics/terminal-io.js";
 import { FULL_CANVAS_DEFAULTS, createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
 import { ROLE_BY_CLASS, ensureSemanticTaps, tapSemanticClass } from "./pi-graphics/canvas/semantics.js";
-import { BACKGROUNDS, CARET_STYLES, STREAM_EFFECTS, TYPE_IN_EFFECTS } from "./pi-graphics/canvas/effects.js";
+import { BACKGROUNDS, CARET_STYLES, PALETTE_NAMES, STREAM_EFFECTS, TYPE_IN_EFFECTS } from "./pi-graphics/canvas/effects.js";
 import { listMonospaceFamilies } from "./pi-graphics/canvas/font-atlas.js";
 import { modalKeyName } from "./pi-graphics/key-names.js";
 import { readAgentSettings, readJsonIfExists, agentDir, agentSettingsPath } from "./pi-graphics/agent-io.js";
@@ -592,6 +592,9 @@ export default async function piGraphicsExtension(pi) {
     getActivity: () => currentActivity(),
     getPulse: () => streamPulse(),
     onEditorText: (text, col) => updateEditorTypingHeat(text, col),
+    getThemeName: () => {
+      try { return String(activeThemeRef?.name || (runtimeSettingsOverride || readGfxSettingsBase())?.theme || ""); } catch { return ""; }
+    },
     semanticTick: () => {
       const classes = new Map(host.names().map((name) => [name, host.get(name)]));
       ensureSemanticTaps(classes, () => fullCanvasActive());
@@ -3171,7 +3174,7 @@ export default async function piGraphicsExtension(pi) {
     const env = {};
     for (const [key, name] of Object.entries(FULL_ENV)) if (process.env[name]) env[key] = process.env[name];
     const merged = { ...FULL_CANVAS_DEFAULTS, ...full, ...env, fonts };
-    for (const key of ["fontSizePx", "lineHeight", "zoom", "resolution", "gamma", "caretBloom", "caretSpill", "caretSmear", "paneOpacity", "panelShadow", "editorOpacity", "textShadow", "textGlow", "lightAngle", "shadowDistance", "vignette", "scanlines", "typeInMs", "streamInMs", "streamRise", "streamStagger", "backgroundPeriod", "backgroundFps", "backgroundScale", "backgroundBudgetMB", "glowIntensity", "padding", "fps"]) {
+    for (const key of ["fontSizePx", "lineHeight", "zoom", "resolution", "gamma", "caretBloom", "caretSpill", "caretSmear", "paneOpacity", "panelShadow", "editorOpacity", "textShadow", "textGlow", "lightAngle", "shadowDistance", "vignette", "scanlines", "frost", "caretLight", "caretLightRadius", "grain", "grainFps", "typeInMs", "streamInMs", "streamRise", "streamStagger", "backgroundPeriod", "backgroundFps", "backgroundScale", "backgroundBudgetMB", "glowIntensity", "padding", "fps"]) {
       if (merged[key] !== undefined && merged[key] !== "") merged[key] = Number(merged[key]);
     }
     return merged;
@@ -3216,9 +3219,16 @@ export default async function piGraphicsExtension(pi) {
     { key: "textGlow", label: "Text glow", values: ["0", "0.15", "0.3", "0.5", "0.75"], alias: ["text-glow"] },
     { key: "lightAngle", label: "Light angle (shadow °)", values: ["0", "45", "90", "135", "180", "225", "270", "315"], alias: ["light"] },
     { key: "shadowDistance", label: "Shadow distance px", values: ["0", "0.8", "1.2", "2", "3"], alias: ["shadow-distance"] },
+    { key: "frost", label: "Frost (blur behind glass)", values: ["0", "0.25", "0.5", "0.75", "1"] },
+    { key: "caretLight", label: "Caret light on text", values: ["0", "0.25", "0.5", "0.75", "1"], alias: ["caret-light", "lamp"] },
+    { key: "caretLightRadius", label: "Caret light radius", values: ["3", "4", "6", "8", "12"], alias: ["lamp-radius"] },
+    { key: "panePulse", label: "Running tool beacon", values: ["on", "off"], alias: ["pane-pulse", "beacon"] },
     { key: "vignette", label: "Vignette", values: ["0", "0.15", "0.3", "0.45", "0.6"] },
     { key: "scanlines", label: "Scanlines", values: ["0", "0.15", "0.3", "0.5"] },
+    { key: "grain", label: "Film grain", values: ["0", "0.15", "0.3", "0.5", "0.75"] },
+    { key: "grainFps", label: "Film grain fps", values: ["0", "6", "12", "18", "24"], alias: ["grain-fps"] },
     { key: "background", label: "Background", values: BACKGROUNDS, alias: ["bg"] },
+    { key: "backgroundPalette", label: "Background palette", values: PALETTE_NAMES, alias: ["palette", "bg-palette"] },
     { key: "backgroundPeriod", label: "Background loop s", values: ["8", "12", "16", "24", "32", "48", "60", "90", "120"], alias: ["bg-period", "period"] },
     { key: "backgroundFps", label: "Background fps", values: ["8", "12", "15", "20", "24", "30", "40", "60"], alias: ["bg-fps"] },
     { key: "backgroundReact", label: "Background reacts", values: ["on", "off"], alias: ["bg-react", "react"] },
@@ -3233,7 +3243,7 @@ export default async function piGraphicsExtension(pi) {
     { key: "pixelMouse", label: "Pixel mouse", values: ["auto", "on", "off"], alias: ["pixel-mouse"] },
     { key: "transport", label: "Transport", values: ["png", "zlib"] },
   ];
-  const FULL_BOOLEAN_KEYS = new Set(["impulse", "trail", "edgeBlend", "editorGlow", "panels", "toolPanels", "backgroundReact", "glowPulse"]);
+  const FULL_BOOLEAN_KEYS = new Set(["impulse", "trail", "edgeBlend", "editorGlow", "panels", "toolPanels", "backgroundReact", "glowPulse", "panePulse", "renderWorker"]);
   let monospaceFamilyCache = null;
   function monospaceFamilies() {
     if (!monospaceFamilyCache) monospaceFamilyCache = listMonospaceFamilies().filter((f) => !/icons|symbol|fixed|clean|emoji|helvetica/i.test(f));

@@ -145,7 +145,7 @@ test("overlay markers expose the overlay span and detach overlay cells from the 
   const { parseAnsiLine } = await import("../extensions/pi-graphics/canvas/ansi-cells.js");
   const line = `\x1b_pi:gfx:ov:4:6\x07${semanticMarker("thinking", "9", 0, false)}abcdSETTINGxyz`;
   const parsed = parseAnsiLine(line, 16);
-  assert.deepEqual(parsed.overlay, { col: 4, width: 6 });
+  assert.deepEqual(parsed.overlay, { col: 4, width: 6, base: "" });
   assert.equal(parsed.cells[0].sem.role, "thinking");
   assert.equal(parsed.cells[5].sem, null, "dialog text is not thinking text");
   assert.equal(parsed.cells[11].sem.role, "thinking");
@@ -154,7 +154,7 @@ test("overlay markers expose the overlay span and detach overlay cells from the 
 test("every background type loops seamlessly and renders within a frame budget", async () => {
   const { BACKGROUNDS, BACKGROUND_SCALE, renderBackground, renderActivityTint } = await import("../extensions/pi-graphics/canvas/effects.js");
   const colors = { top: [46, 52, 64], bottom: [36, 41, 51], edge: [33, 38, 46], accent: [136, 192, 208], accent2: [180, 142, 173], speech: [163, 190, 140], thinking: [180, 142, 173] };
-  for (const type of BACKGROUNDS.filter((t) => t !== "transparent" && t !== "none")) {
+  for (const type of BACKGROUNDS.filter((t) => t !== "transparent" && t !== "none" && t !== "auto")) {
     const scale = BACKGROUND_SCALE[type];
     const width = Math.round(1100 / scale); const height = Math.round(816 / scale);
     const a = renderBackground({ width, height, type, phase: 0, colors });
@@ -216,4 +216,50 @@ test("render worker returns PNG-encoded background frames off the main thread", 
   assert.equal(reply.ok, true);
   assert.equal(reply.width, 40);
   assert.equal(Buffer.from(reply.base64, "base64").subarray(1, 4).toString(), "PNG");
+});
+
+test("auto background follows the theme and palettes recolour only the backdrop", async () => {
+  const { autoBackground, BACKGROUND_PALETTES, PALETTE_NAMES } = await import("../extensions/pi-graphics/canvas/effects.js");
+  assert.deepEqual(autoBackground("kitty-graphics-nord-transparent", [46, 52, 64]), { type: "aurora", palette: "nord" });
+  assert.deepEqual(autoBackground("dracula", [40, 42, 54]), { type: "grid", palette: "synthwave" });
+  assert.equal(autoBackground("solarized-light", [253, 246, 227]).type, "static", "light themes get a quiet backdrop");
+  assert.equal(autoBackground("whatever", [250, 250, 250]).type, "static", "bright backgrounds count as light");
+  assert.deepEqual(autoBackground("my-dark-theme", [30, 30, 30]), { type: "aurora", palette: "theme" });
+  for (const name of PALETTE_NAMES.filter((n) => n !== "theme" && n !== "auto")) {
+    for (const key of ["accent", "accent2", "speech", "thinking"]) assert.equal(BACKGROUND_PALETTES[name][key].length, 3, `${name}.${key}`);
+  }
+});
+
+test("running-tool beacon sweeps and grain tiles stay subtle", async () => {
+  const { renderPaneBeacon, renderGrainTile } = await import("../extensions/pi-graphics/canvas/effects.js");
+  const colors = { pending: [235, 203, 139], accent: [136, 192, 208] };
+  const brightestX = (img) => {
+    let best = 0; let bx = 0; const row = Math.floor(img.height / 2);
+    for (let x = 0; x < img.width; x += 1) { const a = img.rgba[(row * img.width + x) * 4 + 3]; if (a > best) { best = a; bx = x; } }
+    return bx;
+  };
+  const a = renderPaneBeacon({ width: 400, cellHeight: 22, frame: 2, frames: 16, colors });
+  const b = renderPaneBeacon({ width: 400, cellHeight: 22, frame: 6, frames: 16, colors });
+  assert.equal(a.height, Math.round(22 * 1.4), "beacon height does not depend on the pane height");
+  assert.ok(brightestX(b) > brightestX(a) + 40, "the light sweeps along the edge");
+  const grain = renderGrainTile({ size: 64, strength: 1, seed: 3 });
+  let max = 0; for (let i = 3; i < grain.rgba.length; i += 4) max = Math.max(max, grain.rgba[i]);
+  assert.ok(max > 0 && max <= 24, `grain alpha stays subtle (${max})`);
+});
+
+test("frosted dialogs blur the covered transcript row under a translucent fill", async () => {
+  const { renderRow } = await import("../extensions/pi-graphics/canvas/canvas-renderer.js");
+  const { GlyphAtlas, resolveFontFaces } = await import("../extensions/pi-graphics/canvas/font-atlas.js");
+  const { parseAnsiLine } = await import("../extensions/pi-graphics/canvas/ansi-cells.js");
+  const atlas = new GlyphAtlas({ faces: resolveFontFaces({}), fontSizePx: 14, lineHeight: 1.3 });
+  const theme = { fg: [229, 233, 240], bg: [46, 52, 64], accent: [136, 192, 208], selection: [90, 110, 130] };
+  const dialog = parseAnsiLine("    ", 30).cells;
+  const transcript = parseAnsiLine("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW", 30).cells;
+  const panel = { start: 2, end: 28, fill: [40, 44, 52], alpha: 0.97, border: null, flush: true, top: true, bottom: true, frost: 0.6 };
+  const ctx = { atlas, cols: 30, theme, cursorCol: -1, marginX: 0, panels: [panel] };
+  const plain = renderRow(dialog, ctx);
+  const frosted = renderRow(dialog, { ...ctx, frostCells: transcript });
+  let brighter = 0;
+  for (let i = 0; i < plain.rgba.length; i += 4) if (frosted.rgba[i] > plain.rgba[i] + 8) brighter += 1;
+  assert.ok(brighter > 200, `blurred transcript shows through (${brighter} px)`);
 });

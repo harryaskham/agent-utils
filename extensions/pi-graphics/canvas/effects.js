@@ -8,9 +8,45 @@ import { fillPaths, strokeArcPath } from "./raster.js";
 
 export const CARET_STYLES = Object.freeze(["bloom", "glow", "beam", "block", "underline"]);
 export const EDITOR_STATES = Object.freeze(["idle", "typing", "thinking", "working", "speaking"]);
-export const BACKGROUNDS = Object.freeze(["aurora", "nebula", "waves", "grid", "stars", "static", "transparent", "none"]);
+export const PALETTE_NAMES = Object.freeze(["theme", "auto", "nord", "ocean", "sunset", "forest", "synthwave", "ember", "mono"]);
+export const BACKGROUNDS = Object.freeze(["auto", "aurora", "nebula", "waves", "grid", "stars", "static", "transparent", "none"]);
 export const STREAM_EFFECTS = Object.freeze(["float", "fade", "none"]);
 export const TYPE_IN_EFFECTS = Object.freeze(["pop", "rise", "fade", "none"]);
+/**
+ * Curated background palettes (they recolour only the backdrop; text and UI
+ * keep the theme). "theme" uses the theme's own accent tokens.
+ */
+export const BACKGROUND_PALETTES = Object.freeze({
+  nord: { accent: [136, 192, 208], accent2: [180, 142, 173], speech: [163, 190, 140], thinking: [129, 161, 193] },
+  ocean: { accent: [64, 170, 210], accent2: [40, 110, 170], speech: [90, 200, 190], thinking: [110, 140, 220] },
+  sunset: { accent: [255, 140, 90], accent2: [200, 80, 140], speech: [255, 200, 120], thinking: [230, 110, 160] },
+  forest: { accent: [120, 190, 120], accent2: [60, 130, 100], speech: [190, 210, 120], thinking: [100, 160, 140] },
+  synthwave: { accent: [255, 80, 200], accent2: [80, 220, 255], speech: [255, 200, 80], thinking: [160, 90, 255] },
+  ember: { accent: [255, 120, 60], accent2: [180, 40, 40], speech: [255, 190, 90], thinking: [220, 90, 70] },
+  mono: { accent: [180, 190, 200], accent2: [120, 130, 140], speech: [200, 200, 200], thinking: [150, 160, 170] },
+});
+
+/**
+ * Pick a background type and palette that suit a theme: by name first, then
+ * by brightness (light themes get a quiet static backdrop).
+ */
+export function autoBackground(themeName = "", bg = [46, 52, 64]) {
+  const name = String(themeName || "").toLowerCase();
+  const rules = [
+    [/nord|arctic|ice|frost|polar/, "aurora", "nord"],
+    [/dracula|synth|neon|cyber|vapor|tokyo/, "grid", "synthwave"],
+    [/ocean|sea|deep|abyss|blue|night-owl/, "waves", "ocean"],
+    [/forest|green|gruvbox|everforest|kanagawa|moss/, "nebula", "forest"],
+    [/sunset|rose|pine|catppuccin|pink|peach/, "nebula", "sunset"],
+    [/ember|fire|monokai|ayu/, "nebula", "ember"],
+    [/mono|gray|grey|e-?ink|paper/, "static", "mono"],
+  ];
+  const luminance = (bg[0] * 0.2126 + bg[1] * 0.7152 + bg[2] * 0.0722) / 255;
+  if (/light|latte|day|dawn/.test(name) || luminance > 0.55) return { type: "static", palette: "theme" };
+  for (const [re, type, palette] of rules) if (re.test(name)) return { type, palette };
+  return { type: "aurora", palette: "theme" };
+}
+
 /** Default render scale (1/N of the window's pixels) per background type. */
 export const BACKGROUND_SCALE = Object.freeze({ aurora: 8, nebula: 10, waves: 8, grid: 4, stars: 3, static: 8 });
 
@@ -130,12 +166,13 @@ function capsule(fb, w, h, x, y0, y1, radius, rgb, alpha) {
  * native resolution): styles glass | card | neon | minimal. Includes a soft
  * drop shadow, so the image extends `margin` past the rect.
  */
-export function renderEditorSurface({ width, height, radius, style = "glass", colors, opacity = 0.6, shadow = 0.6, scale = 1 }) {
+export function renderEditorSurface({ width, height, radius, style = "glass", colors, opacity = 0.6, shadow = 0.6, scale = 1, frost = 0 }) {
   const margin = Math.round(Math.max(radius * 1.6, 8 * scale));
   const w = Math.ceil(width + margin * 2); const h = Math.ceil(height + margin * 2);
   const fb = Buffer.alloc(w * h * 4);
   const x0 = margin; const y0 = margin; const x1 = margin + width; const y1 = margin + height;
-  const surface = colors.surface || mixRgb(colors.bg || [46, 52, 64], [255, 255, 255], 0.07);
+  const frosted = clamp01(frost);
+  const surface = mixRgb(colors.surface || mixRgb(colors.bg || [46, 52, 64], [255, 255, 255], 0.07), [255, 255, 255], frosted * 0.07);
   const top = mixRgb(surface, [255, 255, 255], style === "glass" ? 0.07 : 0.03);
   const bottom = mixRgb(surface, [0, 0, 0], style === "glass" ? 0.12 : 0.05);
   const dark = mixRgb(colors.bg || surface, [0, 0, 0], 0.35);
@@ -175,7 +212,7 @@ export function renderEditorSurface({ width, height, radius, style = "glass", co
       const cov = clamp01(0.5 - d);
       if (cov <= 0) continue;
       if (fillA > 0) {
-        const grain = style === "glass" ? noise() * 6 : 0;
+        const grain = style === "glass" || frosted > 0 ? noise() * (6 + frosted * 12) : 0;
         blendPixel(fb, i, clampByte(fillRgb[0] + grain), clampByte(fillRgb[1] + grain), clampByte(fillRgb[2] + grain), Math.round(255 * fillA * cov));
       }
       if (style === "glass") {
@@ -566,4 +603,52 @@ export function renderActivityTint({ width, height, color, level = 1, anchorY = 
     }
   }
   return { rgba: fb, width, height };
+}
+
+
+/**
+ * Running-tool beacon: a light sweeping along a pane's top edge with a soft
+ * breathing glow. Independent of the pane's height, so streaming output does
+ * not force new frames. frame in [0, frames).
+ */
+export function renderPaneBeacon({ width, cellHeight, frame = 0, frames = 16, colors, intensity = 1 }) {
+  const h = Math.max(4, Math.round(cellHeight * 1.4));
+  const w = Math.max(4, Math.round(width));
+  const fb = Buffer.alloc(w * h * 4);
+  const cy = h / 2;
+  const phase = frame / Math.max(1, frames);
+  const sweep = 0.5 - 0.5 * Math.cos(phase * TAU); // ping-pong 0→1→0
+  const breathe = 0.55 + 0.45 * Math.sin(phase * TAU * 2);
+  const color = colors.pending || colors.warm || colors.accent;
+  const hot = mixRgb(color, [255, 255, 255], 0.45);
+  const level = Math.max(0, Number(intensity) || 0);
+  for (let x = 0; x < w; x += 1) {
+    const vx = x / Math.max(1, w - 1);
+    const spot = Math.exp(-(((vx - sweep) / 0.07) ** 2));
+    const edgeFade = Math.min(1, vx / 0.03, (1 - vx) / 0.03);
+    for (let y = 0; y < h; y += 1) {
+      const dy = (y + 0.5 - cy) / (h * 0.32);
+      const fall = Math.exp(-dy * dy);
+      const a = level * edgeFade * fall * (0.16 * breathe + 0.75 * spot);
+      if (a < 0.004) continue;
+      const c = mixRgb(color, hot, spot);
+      blendPixel(fb, (y * w + x) * 4, c[0], c[1], c[2], Math.round(255 * Math.min(1, a)));
+    }
+  }
+  return { rgba: fb, width: w, height: h };
+}
+
+/** Film-grain tile: monochrome luminance noise with alpha. */
+export function renderGrainTile({ size = 256, strength = 0.3, seed = 1 }) {
+  const fb = Buffer.alloc(size * size * 4);
+  let state = (seed * 2654435761) >>> 0 || 1;
+  const amp = clamp01(strength) * 0.09 * 255;
+  for (let i = 0; i < size * size; i += 1) {
+    state ^= state << 13; state >>>= 0; state ^= state >>> 17; state ^= state << 5; state >>>= 0;
+    const v = (state & 0xffff) / 0xffff - 0.5;
+    const o = i * 4;
+    const tone = v > 0 ? 255 : 0;
+    fb[o] = tone; fb[o + 1] = tone; fb[o + 2] = tone; fb[o + 3] = Math.round(Math.abs(v) * 2 * amp);
+  }
+  return { rgba: fb, width: size, height: size };
 }

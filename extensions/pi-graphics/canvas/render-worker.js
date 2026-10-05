@@ -5,9 +5,9 @@
 import { parentPort } from "node:worker_threads";
 
 import { encodeRgbaPng } from "../png-renderer.js";
-import { renderActivityTint, renderBackground, renderEditorGlow } from "./effects.js";
+import { renderActivityTint, renderBackground, renderEditorGlow, renderGrainTile, renderPaneBeacon } from "./effects.js";
 
-const RENDERERS = { background: renderBackground, tint: renderActivityTint, glow: renderEditorGlow };
+const RENDERERS = { background: renderBackground, tint: renderActivityTint, glow: renderEditorGlow, beacon: renderPaneBeacon, grain: renderGrainTile };
 
 parentPort.on("message", (msg) => {
   try {

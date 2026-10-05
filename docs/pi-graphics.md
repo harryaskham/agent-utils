@@ -209,7 +209,12 @@ thinking/assistant/tool glyphs (`float` up from a fraction of a row, or
 `fade`).
 
 **Backgrounds.** `aurora`, `nebula`, `waves`, `grid`, `stars`, `static`,
-`transparent`, `none`. Animated backgrounds are a fixed function of a loop
+`transparent`, `none`, or `auto`, which picks a type and palette from the
+theme name (nord → aurora, dracula/synth → grid, ocean → waves, forest →
+nebula, …) and its brightness (light themes get a quiet static backdrop).
+`backgroundPalette` recolours only the backdrop and tint: `theme` (the theme's
+accent tokens), `auto`, `nord`, `ocean`, `sunset`, `forest`, `synthwave`,
+`ember`, `mono`. Animated backgrounds are a fixed function of a loop
 phase in which every time term is a whole-number harmonic, so one period
 (`backgroundPeriod`, default 24 s) loops seamlessly. Frames are rendered
 lazily into a ring of cached terminal images during the first pass (about one
@@ -233,6 +238,24 @@ Glyphs can cast soft shadows away from a light (`textShadow`, `lightAngle`,
 Screen-space `vignette` and `scanlines` sit above the text. The canvas uses its
 own spaced z ladder (background < tint < glow < flare < editor surface < rows
 < overlays < vignette/scanlines < caret).
+
+**Frost.** With `frost` > 0, dialogs and toasts are frosted glass: the
+transcript row each overlay row covers is remembered when Pi composites it
+(content-keyed, so unchanged rows keep cached strips) and drawn blurred under
+a more translucent fill. Panes and the editor surface, behind which only the
+soft background shows, get a milky fill with fine grain instead.
+
+**Caret light.** `caretLight` relights the glyphs within `caretLightRadius`
+cells of the caret in a lamp tint that warms and widens with typing speed (an
+overlay above the rows, re-rendered only when the caret, heat level or nearby
+text change).
+
+**Running tools.** With `panePulse`, a light sweeps along the top edge (or the
+bottom, when the top is scrolled off) of every pending tool pane. Frames
+depend only on the pane width, so streaming output does not re-render them.
+
+**Grain.** `grain` overlays animated film grain: one 256 px noise tile tiled
+over the window, swapping among four tiles at `grainFps` (0 = static).
 
 **Caret.** The beam is an anti-aliased capsule that spills past its row
 (`caretSpill`) and grows with typing speed; fast typing drags a comet smear
@@ -295,6 +318,8 @@ tmux unless `PI_GRAPHICS_FULL_TMUX=1`; independent of `piGraphics.mode`.
 /gfx full pane glass|solid | pane-opacity 0.72 | panel-shadow 0.6
 /gfx full shadow 0.35 | text-glow 0.3 | light 45 | shadow-distance 1.2
 /gfx full vignette 0.3 | scanlines 0.2 | spill 0.35 | smear 1
+/gfx full frost 0.5 | lamp 0.5 | lamp-radius 6 | beacon on|off | grain 0.3 | grain-fps 12
+/gfx full background auto | palette auto|theme|nord|ocean|sunset|forest|synthwave|ember|mono
 /gfx full pixel-mouse auto|on|off | transport png|zlib | cell 10x22
 /gfx save                              # persist to piGraphics.full
 ```

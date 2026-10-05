@@ -46,7 +46,7 @@ createServer((req, res) => {
       for (const t of tokens("I will run a quick command to list the canvas modules.")) { send({ reasoning_content: t }); await sleep(tokenMs); }
       const useRead = JSON.stringify(last.content || "").includes("read");
       const name = useRead ? "read" : "bash";
-      const args = JSON.stringify(useRead ? { path: "extensions/pi-graphics/canvas/semantics.js", limit: 12 } : { command: "ls extensions/pi-graphics/canvas && echo done" });
+      const args = JSON.stringify(useRead ? { path: "extensions/pi-graphics/canvas/semantics.js", limit: 12 } : { command: `for f in extensions/pi-graphics/canvas/*.js; do echo "$f"; sleep ${Number(process.env.MOCK_TOOL_SLEEP || 0.4)}; done; echo done` });
       send({ tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name, arguments: "" } }] });
       for (let i = 0; i < args.length; i += 6) { send({ tool_calls: [{ index: 0, function: { arguments: args.slice(i, i + 6) } }] }); await sleep(tokenMs); }
       send({}, "tool_calls");
