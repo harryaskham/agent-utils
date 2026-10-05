@@ -6,11 +6,13 @@
 // as CustomEditor, so the class always matches the Pi version that is running,
 // with no reflection over the live component tree.
 //
-// Load this module with a dynamic `import("./lib/pi-host.js")` inside
-// try/catch: its static import is what Pi maps to the host, and keeping it out
-// of an extension's own top-level imports confines any resolution failure to
-// the feature that needs it. Outside Pi (tests, standalone use) the import
-// resolves to Agent Utils' pinned dependency instead.
+// Import this module STATICALLY from an extension. Pi's loader does not map
+// dynamic import() of host packages in its compiled build (verified: a
+// dynamic import from inside this package resolves natively and fails), while
+// static imports always get the host module. Each extension is loaded
+// independently, so a resolution failure could only affect the importing
+// extension. Outside Pi (tests, standalone use) the import resolves to Agent
+// Utils' pinned dependency.
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 
 export { CustomEditor };

@@ -65,3 +65,16 @@ The renderer always applies Pi's ANSI-aware width clamp after composing the rail
 ## Data refresh
 
 Model, effort, context, cost, and MCP status are read at render time. Git branch and tracked `HEAD` diff totals refresh at session start, after editing/shell tool execution, and at turn completion. Git probing is bounded and failures retain the last stable values.
+
+## Host editor class
+
+The chips decorate Pi's own `CustomEditor` instance, so they must use the
+running Pi's class (it carries the app keybindings, abort, focus and
+hardware-cursor behaviour). `extensions/editor-chips.js` gets it from
+`extensions/lib/pi-host.js`, a two-line bridge whose **static** import of
+`@earendil-works/pi-coding-agent` Pi's extension loader maps to Pi's own module
+(the documented extension API; a dynamic `import()` is not mapped in Pi's
+compiled build). There is no reflection over the live component tree, and the
+class follows Pi updates. The behaviour lives in
+`extensions/lib/editor-chips-extension.js`, which tests load with an injected
+stand-in. `/editor-chips status` reports `CustomEditor=pi-host`.

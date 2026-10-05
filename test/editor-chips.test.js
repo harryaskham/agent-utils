@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createEditorChipsExtension } from "../extensions/editor-chips.js";
+import { createEditorChipsExtension } from "../extensions/lib/editor-chips-extension.js";
 import {
   buildEditorChipRails,
   collapseDirectoryToWidth,
@@ -318,9 +318,11 @@ test("editor chips mount without relying on ctx.mode and reassert after a later 
   assert.equal(typeof editorFactory, "function");
 });
 
-test("without an injected host, CustomEditor comes from the Pi host bridge (no reflection)", async () => {
+const hostInstalled = await import("@earendil-works/pi-coding-agent").then(() => true, () => false);
+test("the Pi entry injects CustomEditor from the host bridge (no reflection)", { skip: !hostInstalled && "Pi host packages not installed (bare node --test)" }, async () => {
   const bridge = await import("../extensions/lib/pi-host.js");
   const host = await import("@earendil-works/pi-coding-agent");
+  const { createEditorChipsExtension: createEntry } = await import("../extensions/editor-chips.js");
   // Outside Pi the bridge's static import resolves to the package; inside Pi
   // the extension loader maps the same import to the running Pi's module.
   assert.equal(bridge.CustomEditor, host.CustomEditor);
@@ -344,7 +346,7 @@ test("without an injected host, CustomEditor comes from the Pi host bridge (no r
       setStatus() {},
     },
   };
-  await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true } } }, env: { HOME: "/tmp" } })(pi);
+  await createEntry({ settings: { agentUtils: { editorChips: { enabled: true } } }, env: { HOME: "/tmp" } })(pi);
   await handlers.get("session_start")[0]({}, ctx);
   assert.equal(typeof factory, "function", "editor surface mounted");
   await commands.get("editor-chips").handler("status", ctx);
@@ -352,4 +354,13 @@ test("without an injected host, CustomEditor comes from the Pi host bridge (no r
   assert.match(status.message, /CustomEditor=pi-host/);
   assert.equal(status.level, "info");
   assert.doesNotMatch(notes.map((n) => n.message).join("\n"), /could not mount/);
+});
+
+test("the core reports an unavailable host instead of mounting without CustomEditor", async () => {
+  const handlers = new Map(); const notes = [];
+  const pi = { registerCommand() {}, on(name, handler) { handlers.set(name, [...(handlers.get(name) || []), handler]); }, getThinkingLevel: () => "low", exec: async () => ({ code: 1, stdout: "" }) };
+  const ctx = { hasUI: true, ui: { notify: (message) => notes.push(message), getEditorComponent: () => null, setEditorComponent() { throw new Error("must not mount"); }, setFooter() {}, setStatus() {} } };
+  await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true } } }, env: { HOME: "/tmp" } })(pi);
+  await handlers.get("session_start")[0]({}, ctx);
+  assert.match(notes.join("\n"), /could not mount: CustomEditor host API unavailable/);
 });
