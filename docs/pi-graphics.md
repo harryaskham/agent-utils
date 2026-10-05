@@ -298,8 +298,37 @@ only when XTVERSION reports Kitty/Ghostty/WezTerm) or real cells to virtual
 cells before Pi's handlers: wheel, drag-select, copy, links and the scrollbar
 work at canvas resolution.
 
-Requires Pi's fullscreen TUI mode and a Kitty-graphics terminal; refused inside
-tmux unless `PI_GRAPHICS_FULL_TMUX=1`; independent of `piGraphics.mode`.
+**Multiplexers and tiling.** The canvas identifies what it is talking to with
+XTVERSION (environment variables leak into nested shells, so they are only a
+fallback when nothing answers):
+
+- *Plain terminal* (Ghostty, Kitty, WezTerm): free sub-cell grid at the canvas
+  font size; layers sit just below text but above cell backgrounds.
+- *herdr* (answers `libghostty`): herdr parses each pane's Kitty graphics
+  with libghostty-vt and re-places them on the host translated to the pane,
+  clipped, and cut around its popups — so positioning in split panes is
+  handled for us. It re-places every image with an explicit cell box covering
+  the cells it touches, so the canvas switches to `grid aligned`: rows snap to
+  terminal rows and strips/overlays are padded to whole cells (offsets baked
+  in), making the box equal the natural size (no resampling). Layers must sit
+  above cell backgrounds because herdr paints its theme background into every
+  cell. Pixel mouse is off (cell mouse reports are translated).
+- *tmux* (answers `tmux x.y`): tmux does not track images; passthrough bytes
+  reach the outer terminal wherever tmux's own cursor is. So every placement
+  moves the **outer** cursor to the pane's absolute origin + cell (from
+  `tmux display-message`, including a top status line) inside the same
+  passthrough, restores it, and is cropped to the pane. A poller (300 ms, plus
+  focus events) tracks the pane: switching windows, zooming another pane or
+  detaching removes the canvas; returning, moving or resizing re-places it
+  (and every 5 s, in case tmux cleared the screen). tmux drops passthrough
+  from invisible panes unless `allow-passthrough all`, so the canvas sets that
+  on its own pane only and restores it on stop. Layers sit below cell
+  backgrounds so tmux's status line, popups and menus cover them, and the
+  OSC 11 edge blend is skipped (it would recolour the pane).
+
+Window managers (i3, sway, AeroSpace, …) need nothing special: each terminal
+window is its own canvas. Requires Pi's fullscreen TUI mode and a
+Kitty-graphics terminal; independent of `piGraphics.mode`.
 
 ```text
 /gfx full [on|off|toggle|status|settings]
@@ -320,7 +349,7 @@ tmux unless `PI_GRAPHICS_FULL_TMUX=1`; independent of `piGraphics.mode`.
 /gfx full vignette 0.3 | scanlines 0.2 | spill 0.35 | smear 1
 /gfx full frost 0.5 | lamp 0.5 | lamp-radius 6 | beacon on|off | grain 0.3 | grain-fps 12
 /gfx full background auto | palette auto|theme|nord|ocean|sunset|forest|synthwave|ember|mono
-/gfx full pixel-mouse auto|on|off | transport png|zlib | cell 10x22
+/gfx full pixel-mouse auto|on|off | transport png|zlib | cell 10x22 | grid auto|free|aligned
 /gfx save                              # persist to piGraphics.full
 ```
 

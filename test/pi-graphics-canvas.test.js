@@ -263,3 +263,19 @@ test("frosted dialogs blur the covered transcript row under a translucent fill",
   for (let i = 0; i < plain.rgba.length; i += 4) if (frosted.rgba[i] > plain.rgba[i] + 8) brighter += 1;
   assert.ok(brighter > 200, `blurred transcript shows through (${brighter} px)`);
 });
+
+test("tmux placements move the outer cursor to the pane origin inside one passthrough and crop at the pane edge", async () => {
+  const { tmuxPlacement } = await import("../extensions/pi-graphics/canvas/full-canvas.js");
+  const { serializeKittyGraphicsCommand, wrapForPassthrough } = await import("../extensions/kitty-graphics.js");
+  const serializeRaw = (control) => serializeKittyGraphicsCommand(control, "", { passthrough: "none" });
+  const wrap = (sequence) => wrapForPassthrough(sequence, "tmux", { TMUX: "/tmp/x,1,0" });
+  const pane = { left: 43, top: 1, width: 67, height: 33 };
+  const cell = { cellW: 10, cellH: 24, cols: 67, rows: 33 };
+  const out = tmuxPlacement({ pane, cell, row: 2, col: 60, control: { a: "p", i: 7, p: 1, X: 4, C: 1, q: 2 }, size: { w: 120, h: 30 }, serializeRaw, wrap });
+  assert.ok(out.startsWith("\x1bPtmux;\x1b\x1b7\x1b\x1b[4;104H\x1b\x1b_Ga=p"), "absolute outer cell = pane origin + (row, col), inside the passthrough");
+  assert.ok(out.endsWith("\x1b\x1b8\x1b\\"), "outer cursor restored inside the envelope");
+  assert.match(out, /,w=66[,;\x1b]/, "cropped to the 7 cells (minus the 4px offset) left in the pane");
+  const scaled = tmuxPlacement({ pane, cell, row: 30, col: 0, control: { a: "p", i: 8, p: 1, c: 67, r: 5, C: 1, q: 2 }, serializeRaw, wrap });
+  assert.match(scaled, /r=3[,;]/, "scaled placements are clipped by cells");
+  assert.equal(tmuxPlacement({ pane, cell, row: 40, col: 0, control: { a: "p", i: 9 }, serializeRaw, wrap }), "", "outside the pane: nothing");
+});

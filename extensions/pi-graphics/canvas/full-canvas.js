@@ -25,6 +25,7 @@
 // pass is one synchronized update; effects animate by re-placing small
 // precomputed images rather than re-uploading.
 
+import { execFile } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { deflateSync } from "node:zlib";
 
@@ -106,6 +107,15 @@ export const FULL_CANVAS_DEFAULTS = Object.freeze({
   panePulse: true, // a light sweeps along running tools' panes
   grain: 0, // animated film grain over everything (0 = off)
   grainFps: 12,
+  // free: sub-cell grid at the canvas font size. aligned: rows snapped to
+  // terminal rows and images padded to whole cells, for multiplexers that
+  // re-place images by cell box (herdr). auto: aligned inside a multiplexer.
+  grid: "auto",
+  tmuxPollMs: 300, // tmux: how often to check the pane's position/visibility
+  // tmux drops passthrough from panes that are not visible unless
+  // allow-passthrough is "all", so the canvas could not remove itself when
+  // you switch windows. Set it on this pane only (restored on stop).
+  tmuxPassthroughAll: true,
   pixelMouse: "auto",
   transport: process.env.PI_GRAPHICS_FULL_TRANSPORT || "png",
   cell: "",
@@ -122,10 +132,33 @@ const pack = ([r, g, b]) => ((r & 255) << 16) | ((g & 255) << 8) | (b & 255);
 const luminance = ([r, g, b]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 const bool = (v, fallback) => (v === undefined || v === null || v === "" ? fallback : !/^(0|false|off|no)$/i.test(String(v)));
 
+/**
+ * One placement inside a tmux pane: the outer cursor is moved to the pane's
+ * absolute origin + (row, col) and restored inside a single passthrough, and
+ * the placement is cropped to the pane (cells for scaled placements, source
+ * pixels for natural ones). pane: { left, top, width, height } in outer cells.
+ */
+export function tmuxPlacement({ pane, cell, row, col, control, size = null, serializeRaw, wrap }) {
+  const width = pane.width || cell.cols; const height = pane.height || cell.rows;
+  if (row >= height || col >= width) return "";
+  const ctl = { ...control };
+  if (ctl.c) ctl.c = Math.min(ctl.c, width - col);
+  if (ctl.r) ctl.r = Math.min(ctl.r, height - row);
+  if (size && !control.c) {
+    const visW = width * cell.cellW - (col * cell.cellW + (ctl.X || 0)); const visH = height * cell.cellH - (row * cell.cellH + (ctl.Y || 0));
+    const srcW = size.w - (ctl.x || 0); const srcH = size.h - (ctl.y || 0);
+    if (srcW > visW) ctl.w = Math.max(1, visW);
+    if (srcH > visH) ctl.h = Math.max(1, visH);
+  }
+  return wrap(`\x1b7\x1b[${pane.top + row + 1};${pane.left + col + 1}H${serializeRaw(ctl)}\x1b8`);
+}
+
 export function createFullCanvas({
   getTui,
   write,
   serialize,
+  serializeRaw = serialize, // no multiplexer passthrough wrapping
+  wrapPassthrough = (sequence) => sequence,
   allocateImageId,
   z,
   themeColor,
@@ -173,6 +206,7 @@ export function createFullCanvas({
     grain: { store: freshStore(), key: "", frame: -1, placedId: null },
     fx: { vignetteKey: "", vignetteId: null, scanKey: "", scanId: null, scanPlacements: 0 },
     typed: [],
+    tmux: { known: false, visible: true, left: 0, top: 0, width: 0, height: 0, timer: null, reassertAt: 0 },
     prevCursor: null,
     lastTypedImpulse: 0,
     ticker: null,
@@ -189,9 +223,35 @@ export function createFullCanvas({
     return { baseKey: "", cache: new Map(), activity: "", index: -1, last: 0, placed: null, flarePlaced: null };
   }
   const cfg = () => state.config;
+  // Layer ladder. Canvas layers sit below text (the canvas draws none). Under
+  // tmux they also sit below cell backgrounds so tmux's status line, popups
+  // and menus cover them; elsewhere they sit ABOVE cell backgrounds, because
+  // multiplexers like herdr paint their theme background into every cell.
+  const Z_OFFSETS = { background: 0, glow: 4, surface: 8, rows: 12, overlay: 16, fx: 20, caret: 24 };
+  const zBase = () => (tmuxMode() ? -1_073_741_900 : (z?.base ?? -1_000_000));
+  const Z = new Proxy({}, { get: (_target, key) => (key in Z_OFFSETS ? zBase() + Z_OFFSETS[key] : undefined) });
   let renderBudget = HEAVY_RENDERS_PER_TICK;
   const spendRender = () => (renderBudget > 0 ? (renderBudget -= 1, true) : false);
   const S = () => Math.max(1, Math.min(3, Math.trunc(Number(cfg().resolution) || 1)));
+  // Re-emitting multiplexers (herdr, built on libghostty) re-place every
+  // image with an explicit cell box covering the cells it touches; the host
+  // then scales the image to that box. Snap rows to terminal rows and pad
+  // images to whole cells so the box equals the natural size.
+  // Which multiplexer (if any) sits between Pi and the terminal. The
+  // XTVERSION reply is authoritative (tmux answers "tmux x.y", herdr its
+  // embedded "libghostty"); environment variables leak into nested shells and
+  // other terminals, so they are only a fallback when nothing answers.
+  function muxKind() {
+    const name = state.terminalName || "";
+    if (/tmux/.test(name)) return "tmux";
+    if (/libghostty|herdr/.test(name)) return "herdr";
+    if (name && name !== "unknown" && !/^(xterm|screen|tmux)-/.test(name)) return "none";
+    if (process.env.TMUX) return "tmux";
+    if (process.env.HERDR_ENV) return "herdr";
+    return "none";
+  }
+  const inMultiplexer = () => muxKind() !== "none";
+  const gridAligned = () => S() > 1 || cfg().grid === "aligned" || (cfg().grid === "auto" && inMultiplexer());
 
   // ------------------------------------------------------------ geometry
   function realGeometry() {
@@ -210,8 +270,8 @@ export function createFullCanvas({
     const cols = Math.max(20, Math.floor((real.width - pad * 2) / fonts.cellWidth));
     const rows = Math.max(6, Math.floor((real.height - pad * 2) / fonts.cellHeight));
     const padX = Math.floor((real.width - cols * fonts.cellWidth) / 2);
-    const padY = S() > 1
-      ? Math.floor((real.rows - rows) / 2) * real.cellH // row-aligned for HiDPI boxes
+    const padY = gridAligned()
+      ? Math.floor((real.rows - rows) / 2) * real.cellH // row-aligned boxes
       : Math.floor((real.height - rows * fonts.cellHeight) / 2);
     const marginX = Math.max(0, Math.min(padX, Math.round(fonts.cellWidth * 1.2)));
     state.virt = { cols, rows, padX, padY, marginX };
@@ -228,7 +288,7 @@ export function createFullCanvas({
     // the line pitch to the terminal rows so every strip fills exactly one
     // row: Ghostty corrupts overlapping scaled placements, and aligned rows
     // keep strips position-independent (cacheable on scroll).
-    const snap = S() > 1 ? realCellH : 0;
+    const snap = gridAligned() ? realCellH : 0;
     state.fonts = new FontSet({ fonts, fontSizePx, lineHeight: cfg().lineHeight, gamma: cfg().gamma, supersample: S(), cellHeight: snap });
   }
 
@@ -337,10 +397,100 @@ export function createFullCanvas({
     return { col, row, X: Math.max(0, Math.round(px - col * cellW)), Y: Math.max(0, Math.round(py - row * cellH)) };
   }
 
+  // ---------------------------------------------------------------- tmux
+  // tmux does not track images: passthrough bytes reach the outer terminal
+  // wherever tmux's own cursor is. So under tmux every placement moves the
+  // OUTER cursor to the pane's absolute origin + cell inside the same
+  // passthrough, restores it, and is cropped to the pane. A poller tracks the
+  // pane's position and visibility (window switches, zoom, detach).
+  const tmuxMode = () => muxKind() === "tmux" && cfg().tmux !== "off";
+  const TMUX_FORMAT = "#{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_active} #{session_attached} #{window_zoomed_flag} #{pane_active} #{status} #{status-position}";
+  function pollTmux() {
+    if (!state.active || !tmuxMode()) return;
+    const args = ["display-message", "-p"];
+    if (process.env.TMUX_PANE) args.push("-t", process.env.TMUX_PANE);
+    args.push(TMUX_FORMAT);
+    execFile("tmux", args, { timeout: 1500 }, (error, stdout) => {
+      if (error) trace(`canvas tmux poll failed: ${error.message}`);
+      if (error || !state.active) return;
+      if (!state.tmux.known || process.env.PI_GRAPHICS_TRACE_TMUX) trace(`canvas tmux pane ${String(stdout).trim()}`);
+      const [left, top, width, height, windowActive, attached, zoomed, paneActive, status, statusPosition] = String(stdout).trim().split(/\s+/);
+      const statusLines = status === "off" ? 0 : status === "on" ? 1 : Number(status) || 0;
+      const next = {
+        left: Number(left) || 0,
+        top: (Number(top) || 0) + (statusPosition === "top" ? statusLines : 0),
+        width: Number(width) || 0, height: Number(height) || 0,
+        visible: windowActive === "1" && attached !== "0" && (zoomed !== "1" || paneActive === "1"),
+      };
+      const pane = state.tmux;
+      const moved = !pane.known || pane.left !== next.left || pane.top !== next.top || pane.width !== next.width || pane.height !== next.height;
+      const shown = next.visible && (!pane.visible || !pane.known);
+      const hidden = !next.visible && pane.visible && pane.known;
+      if (hidden) write(deleteAllPlacements());
+      Object.assign(pane, next, { known: true });
+      if (next.visible && (moved || shown || Date.now() >= pane.reassertAt)) {
+        // Re-place everything (tmux may have cleared the screen on redraw).
+        pane.reassertAt = Date.now() + 5000;
+        write(deleteAllPlacements());
+        forgetPlacements();
+        try { getTui()?.requestRender?.(true); } catch {}
+        wake();
+      }
+    });
+  }
+  function tmuxPaneOption(args) {
+    return new Promise((resolve) => {
+      const target = process.env.TMUX_PANE ? ["-t", process.env.TMUX_PANE] : [];
+      execFile("tmux", [args[0], "-p", ...target, ...args.slice(1)], { timeout: 1500 }, (error, stdout) => resolve(error ? null : String(stdout).trim()));
+    });
+  }
+  async function ensureTmuxPassthrough() {
+    if (!bool(cfg().tmuxPassthroughAll, true)) return;
+    // Effective value for this pane (pane, window or global scope).
+    const current = await tmuxPaneOption(["show-options", "-Avq", "allow-passthrough"]);
+    if (current === "all") return;
+    const own = await tmuxPaneOption(["show-options", "-vq", "allow-passthrough"]);
+    if ((await tmuxPaneOption(["set-option", "allow-passthrough", "all"])) !== null) {
+      state.tmuxRestore = own ? ["set-option", "allow-passthrough", own] : ["set-option", "-u", "allow-passthrough"];
+      trace(`canvas tmux allow-passthrough ${current || "?"} → all (this pane)`);
+    }
+  }
+
+  function deleteAllPlacements() {
+    let out = "";
+    for (const id of state.ownedImages) out += serialize({ a: "d", d: "i", i: id, q: 2 });
+    return out;
+  }
+  /** Drop placement bookkeeping (images stay uploaded) so all is re-placed. */
+  function forgetPlacements() {
+    state.slots.clear();
+    state.background.placed = null; state.background.index = -1; state.background.tint.key = ""; state.background.tint.placed = null;
+    Object.assign(state.glow, { placed: null, flarePlaced: null, flareKey: "", activity: "", index: -1 });
+    state.surface.placedAt = "";
+    state.caret.shown = null; state.caret.imageId = null;
+    state.impulses = [];
+    for (const slot of state.overlay.slots.values()) slot.key = "";
+    state.caretLight = { key: "", id: state.caretLight.id };
+    state.beacon.slots.clear();
+    state.grain.placedId = null; state.grain.frame = -1;
+    state.fx.vignetteKey = ""; state.fx.scanKey = "";
+  }
+
+  /**
+   * Emit one placement at a cell (row, col of this pane). size = the drawn
+   * pixel size for natural placements, used to crop at the pane edge under
+   * tmux; scaled (c/r) placements are clipped by cells.
+   */
+  function placeAt(row, col, control, size = null) {
+    if (!tmuxMode()) return `\x1b[${row + 1};${col + 1}H${serialize(control)}`;
+    if (!state.tmux.known || !state.tmux.visible) return "";
+    return tmuxPlacement({ pane: state.tmux, cell: state.real, row, col, control, size, serializeRaw, wrap: wrapPassthrough });
+  }
+
   /** Natural-size placement with sub-cell pixel offsets (portable at S=1). */
   function placeNatural(imageId, placementId, px, py, zIndex) {
     const at = cellAt(Math.max(0, px), Math.max(0, py));
-    return `\x1b[${at.row + 1};${at.col + 1}H${serialize({ a: "p", i: imageId, p: placementId, X: at.X, Y: at.Y, C: 1, q: 2, z: zIndex })}`;
+    return placeAt(at.row, at.col, { a: "p", i: imageId, p: placementId, X: at.X, Y: at.Y, C: 1, q: 2, z: zIndex });
   }
 
   /** Cell-aligned box for HiDPI images; offsets are baked into the image. */
@@ -440,7 +590,7 @@ export function createFullCanvas({
       out += transmit(id, frame.rgba, frame.width, frame.height);
     }
     if (bg.placed != null && bg.placed !== id) out += deletePlacement(bg.placed, 1);
-    out += `\x1b[1;1H${serialize({ a: "p", i: id, p: 1, c: cols, r: rows, C: 1, q: 2, z: z.background })}`;
+    out += placeAt(0, 0, { a: "p", i: id, p: 1, c: cols, r: rows, C: 1, q: 2, z: Z.background });
     bg.placed = id;
     bg.index = index;
     return out;
@@ -526,7 +676,7 @@ export function createFullCanvas({
       out += transmit(id, img.rgba, img.width, img.height);
     }
     if (tint.placed != null && tint.placed !== id) out += deletePlacement(tint.placed, 1);
-    out += `\x1b[1;1H${serialize({ a: "p", i: id, p: 1, c: state.real.cols, r: state.real.rows, C: 1, q: 2, z: z.background + 1 })}`;
+    out += placeAt(0, 0, { a: "p", i: id, p: 1, c: state.real.cols, r: state.real.rows, C: 1, q: 2, z: Z.background + 1 });
     tint.placed = id;
     return out;
   }
@@ -540,6 +690,10 @@ export function createFullCanvas({
   function edgeBlendCommand() {
     const bgType = backgroundChoice().type;
     if (!bool(cfg().edgeBlend, true) || bgType === "transparent" || bgType === "none") return "";
+    // Inside tmux, OSC 11 sets the PANE's default background, which tmux then
+    // paints explicitly into every cell (hiding canvas layers below cell
+    // backgrounds); and a pane has no window padding to blend into.
+    if (tmuxMode()) return "";
     const [r, g, b] = state.theme.edge;
     const hex = (v) => v.toString(16).padStart(2, "0");
     state.edgeColorSet = true;
@@ -629,7 +783,7 @@ export function createFullCanvas({
     const hidden = state.overlay.hidden.get(rowIndex) || null;
     const scale = S();
     const geo = stripGeometry(rowIndex);
-    const box = scale > 1 ? cellBox(geo.lx, geo.ly, geo.lw, geo.lh) : null;
+    const box = gridAligned() ? cellBox(geo.lx, geo.ly, geo.lw, geo.lh) : null;
     const key = [
       state.virt.cols, line, cursorCol, sigKey(above), sigKey(below), regionRole || "",
       rowPanels.map((p) => `${p.style || ""}${p.flush ? "f" : ""}${p.start}-${p.end}:${p.relTop},${p.relBottom}:${p.top ? 1 : 0}${p.bottom ? 1 : 0}${p.fill}:${p.alpha}:${p.border}:${p.border2 || ""}:${p.sheen || 0}:${p.shadow || 0}:${p.absorbBg ? [...p.absorbBg].join("/") : ""}`).join("|"),
@@ -677,10 +831,10 @@ export function createFullCanvas({
   function placeRow(rowIndex, entry) {
     if (entry.box) {
       const b = entry.box;
-      return `\x1b[${b.row0 + 1};${b.col0 + 1}H${serialize({ a: "p", i: entry.imageId, p: rowIndex + 1, c: b.c, r: b.r, C: 1, q: 2, z: z.rows })}`;
+      return placeAt(b.row0, b.col0, { a: "p", i: entry.imageId, p: rowIndex + 1, c: b.c, r: b.r, C: 1, q: 2, z: Z.rows });
     }
     const geo = stripGeometry(rowIndex);
-    return placeNatural(entry.imageId, rowIndex + 1, geo.lx, geo.ly, z.rows);
+    return placeNatural(entry.imageId, rowIndex + 1, geo.lx, geo.ly, Z.rows);
   }
 
   function updateRow(rowIndex, force = false) {
@@ -894,8 +1048,9 @@ export function createFullCanvas({
         if (mask) blendMask(fb, w, h, mask, x + mask.left, y + mask.top, ...fg, Math.round(255 * alpha * (cell.dim ? 0.6 : 1)));
       }
       const imageId = slot?.imageId ?? allocateImageId(`overlay-${row}`);
-      out += transmit(imageId, fb, w, h);
-      out += placeCropped(imageId, 1, state.virt.padX + minCol * cw - pad + rowIndent(row), state.virt.padY + (row - above) * ch, z.overlay);
+      const img = alignedImage(fb, w, h, state.virt.padX + minCol * cw - pad + rowIndent(row), state.virt.padY + (row - above) * ch);
+      out += transmit(imageId, img.rgba, img.w, img.h);
+      out += placeCropped(imageId, 1, img.px, img.py, Z.overlay, { w: img.w, h: img.h });
       state.overlay.slots.set(row, { key, imageId });
     }
     for (const [row, slot] of state.overlay.slots) {
@@ -925,6 +1080,7 @@ export function createFullCanvas({
       id = allocateImageId(`caret-${slot}`);
       caret.ids.set(slot, id);
       caret.anchor = { x: img.anchorX, y: img.anchorY };
+      caret.size = { w: img.width, h: img.height };
       out += transmit(id, img.rgba, img.width, img.height);
     }
     return { id, out };
@@ -974,18 +1130,35 @@ export function createFullCanvas({
     if (caret.shown && caret.shown.x === px && caret.shown.y === py && caret.imageId === image.id) return out;
     if (caret.imageId != null && caret.imageId !== image.id) out += deletePlacement(caret.imageId, 1);
     // Clip by cropping at the canvas origin: placements cannot start off-screen.
-    out += placeCropped(image.id, 1, px, py, z.caret);
+    out += placeCropped(image.id, 1, px, py, Z.caret, caret.size);
     caret.imageId = image.id;
     caret.shown = { x: px, y: py };
     return out;
   }
 
-  function placeCropped(imageId, placementId, px, py, zIndex) {
+  /**
+   * Aligned grid mode: pad an image so it starts on a cell boundary and spans
+   * whole cells (offset baked in), so a multiplexer's cell box equals its
+   * natural size. Identity otherwise.
+   */
+  function alignedImage(rgba, w, h, px, py) {
+    px = Math.round(px); py = Math.round(py);
+    if (!gridAligned()) return { rgba, w, h, px, py };
+    const { cellW, cellH } = state.real;
+    const col0 = Math.floor(px / cellW); const row0 = Math.floor(py / cellH);
+    const offX = px - col0 * cellW; const offY = py - row0 * cellH;
+    const bw = Math.ceil((offX + w) / cellW) * cellW; const bh = Math.ceil((offY + h) / cellH) * cellH;
+    const out = Buffer.alloc(bw * bh * 4);
+    for (let y = 0; y < h; y += 1) rgba.copy(out, ((y + offY) * bw + offX) * 4, y * w * 4, (y + 1) * w * 4);
+    return { rgba: out, w: bw, h: bh, px: col0 * cellW, py: row0 * cellH };
+  }
+
+  function placeCropped(imageId, placementId, px, py, zIndex, size = null) {
     const cropX = Math.max(0, -px); const cropY = Math.max(0, -py);
     const at = cellAt(Math.max(0, px), Math.max(0, py));
     const control = { a: "p", i: imageId, p: placementId, X: at.X, Y: at.Y, C: 1, q: 2, z: zIndex };
     if (cropX || cropY) Object.assign(control, { x: cropX, y: cropY });
-    return `\x1b[${at.row + 1};${at.col + 1}H${serialize(control)}`;
+    return placeAt(at.row, at.col, control, size);
   }
 
   function impulseCommands(now) {
@@ -1017,7 +1190,7 @@ export function createFullCanvas({
       }
       anchor = { x: Math.floor(9 / 2) * fonts.cellWidth, y: Math.floor(5 / 2) * fonts.cellHeight };
       if (impulse.imageId != null && impulse.imageId !== id) out += deletePlacement(impulse.imageId, impulse.slot);
-      out += placeCropped(id, impulse.slot, Math.round(impulse.at.x - anchor.x), Math.round(impulse.at.y - anchor.y), z.overlay);
+      out += placeCropped(id, impulse.slot, Math.round(impulse.at.x - anchor.x), Math.round(impulse.at.y - anchor.y), Z.overlay, { w: 9 * fonts.cellWidth, h: 5 * fonts.cellHeight });
       impulse.imageId = id; impulse.frame = frame;
       return true;
     });
@@ -1110,7 +1283,7 @@ export function createFullCanvas({
       if (image) {
         out += image.out;
         if (glow.placed != null && glow.placed !== image.id) out += deletePlacement(glow.placed, 1);
-        if (glow.placed !== image.id || force) out += placeCropped(image.id, 1, px, py, z.glow);
+        if (glow.placed !== image.id || force) out += placeCropped(image.id, 1, px, py, Z.glow, { w: rect.w + margin * 2, h: rect.h + margin * 2 });
         glow.placed = image.id; glow.index = index; glow.last = now; glow.activity = `${activity}:${heatBucket}`;
       }
     }
@@ -1122,7 +1295,7 @@ export function createFullCanvas({
       const image = level ? glowImage(flareKey, { width: rect.w, height: rect.h, margin, radius, state: "flare", colors: state.theme, intensity: (cfg().glowIntensity || 1) * (0.35 + level * 0.25) }) : null;
       if (!level || image) {
         if (glow.flarePlaced != null) { out += deletePlacement(glow.flarePlaced, 1); glow.flarePlaced = null; }
-        if (image) { out += image.out + placeCropped(image.id, 1, px, py, z.glow + 1); glow.flarePlaced = image.id; }
+        if (image) { out += image.out + placeCropped(image.id, 1, px, py, Z.glow + 1, { w: rect.w + margin * 2, h: rect.h + margin * 2 }); glow.flarePlaced = image.id; }
         glow.flareKey = flareKey;
       }
     }
@@ -1333,12 +1506,13 @@ export function createFullCanvas({
       surface.id = allocateImageId("editor-surface");
       surface.key = key;
       surface.margin = img.margin;
+      surface.size = { w: img.width, h: img.height };
       out += transmit(surface.id, img.rgba, img.width, img.height);
       surface.placedAt = "";
     }
     const at = `${rect.x - surface.margin},${rect.y - surface.margin}`;
     if (force || surface.placedAt !== at) {
-      out += placeCropped(surface.id, 1, Math.round(rect.x - surface.margin), Math.round(rect.y - surface.margin), z.surface ?? z.glow + 2);
+      out += placeCropped(surface.id, 1, Math.round(rect.x - surface.margin), Math.round(rect.y - surface.margin), Z.surface, surface.size);
       surface.placedAt = at;
     }
     return out;
@@ -1362,7 +1536,7 @@ export function createFullCanvas({
         force = true;
       }
     }
-    if (fx.vignetteId != null && force) out += `\x1b[1;1H${serialize({ a: "p", i: fx.vignetteId, p: 1, c: cols, r: rows, C: 1, q: 2, z: z.fx ?? z.overlay })}`;
+    if (fx.vignetteId != null && force) out += placeAt(0, 0, { a: "p", i: fx.vignetteId, p: 1, c: cols, r: rows, C: 1, q: 2, z: Z.fx });
     const scan = Math.max(0, Math.min(1, Number(cfg().scanlines) || 0));
     const tileRows = 4;
     const sKey = scan > 0 ? `${width}:${cellH}:${scan}` : "";
@@ -1378,7 +1552,7 @@ export function createFullCanvas({
     }
     if (fx.scanId != null && force) {
       let p = 1;
-      for (let row = 0; row < rows; row += tileRows, p += 1) out += `\x1b[${row + 1};1H${serialize({ a: "p", i: fx.scanId, p, C: 1, q: 2, z: z.fx ?? z.overlay })}`;
+      for (let row = 0; row < rows; row += tileRows, p += 1) out += placeAt(row, 0, { a: "p", i: fx.scanId, p, C: 1, q: 2, z: Z.fx }, { w: width, h: cellH * tileRows });
     }
     return out;
   }
@@ -1479,8 +1653,9 @@ export function createFullCanvas({
     state.caretLight.key = key;
     if (!lit) return out;
     const id = allocateImageId("caret-light");
-    out += transmit(id, fb, w, h);
-    out += placeCropped(id, 1, state.virt.padX + col0 * cw, state.virt.padY + row0 * ch, (z.rows ?? 0) + 1);
+    const img = alignedImage(fb, w, h, state.virt.padX + col0 * cw, state.virt.padY + row0 * ch);
+    out += transmit(id, img.rgba, img.w, img.h);
+    out += placeCropped(id, 1, img.px, img.py, Z.rows + 1, { w: img.w, h: img.h });
     state.caretLight = { key, id };
     return out;
   }
@@ -1519,7 +1694,7 @@ export function createFullCanvas({
       const placed = beacon.slots.get(slot);
       if (!force && placed && placed.id === img.id && placed.x === want.x && placed.y === want.y) continue;
       if (placed && placed.id !== img.id) out += deletePlacement(placed.id, slot);
-      out += placeCropped(img.id, slot, want.x, want.y, z.overlay);
+      out += placeCropped(img.id, slot, want.x, want.y, Z.overlay, { w: want.width, h: Math.max(4, Math.round(ch * 1.4)) });
       beacon.slots.set(slot, { id: img.id, x: want.x, y: want.y });
     }
     // Bound cached widths (16 frames each).
@@ -1552,7 +1727,7 @@ export function createFullCanvas({
     if (grain.placedId !== img.id || force) {
       let p = 1;
       for (let y = 0; y < state.real.height; y += GRAIN_SIZE) {
-        for (let x = 0; x < state.real.width; x += GRAIN_SIZE) out += placeCropped(img.id, p++, x, y, z.fx ?? z.overlay);
+        for (let x = 0; x < state.real.width; x += GRAIN_SIZE) out += placeCropped(img.id, p++, x, y, Z.fx, { w: GRAIN_SIZE, h: GRAIN_SIZE });
       }
     }
     grain.placedId = img.id; grain.frame = frame;
@@ -1666,6 +1841,7 @@ export function createFullCanvas({
   const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
   function remapInput(data) {
     if (!state.active || typeof data !== "string") return undefined;
+    if (tmuxMode() && (data === "\x1b[I" || data === "\x1b[O")) pollTmux(); // focus change: re-check visibility now
     const match = SGR_MOUSE_RE.exec(data);
     if (!match) return undefined;
     let px; let py;
@@ -1705,8 +1881,9 @@ export function createFullCanvas({
     const tui = getTui();
     if (!tui) throw new Error("Pi TUI is not available yet");
     if (tui.mode !== "fullscreen") throw new Error("full canvas needs Pi's fullscreen TUI mode (/settings → TUI mode, or --tui-mode fullscreen)");
-    if ((process.env.TMUX || /^(screen|tmux)/.test(process.env.TERM || "")) && process.env.PI_GRAPHICS_FULL_TMUX !== "1") {
-      throw new Error("full canvas is disabled inside tmux (set PI_GRAPHICS_FULL_TMUX=1 to force)");
+    // GNU screen has no Kitty graphics passthrough to position through.
+    if (/^screen/.test(process.env.TERM || "") && !process.env.TMUX && process.env.PI_GRAPHICS_FULL_TMUX !== "1") {
+      throw new Error("full canvas does not support GNU screen (tmux, herdr and plain terminals work)");
     }
     const { tapInput, ...rest } = options;
     state.config = { ...FULL_CANVAS_DEFAULTS, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined && v !== "")) };
@@ -1748,7 +1925,8 @@ export function createFullCanvas({
     Object.defineProperty(terminal, "rows", { configurable: true, get: () => (state.active ? state.virt.rows : process.stdout.rows || 24) });
     // SGR-Pixels mouse only when the terminal that answers is one known to
     // support it; a multiplexer (herdr/tmux) answering XTVERSION keeps cells.
-    const pixelCapable = /kitty|ghostty|wezterm/.test(terminalName || envName);
+    // Multiplexers translate cell mouse reports but not SGR-Pixels ones.
+    const pixelCapable = /kitty|ghostty|wezterm/.test(terminalName || envName) && !inMultiplexer();
     state.pixelCapable = pixelCapable;
     state.pixelMouse = cfg().pixelMouse === "on" || (cfg().pixelMouse === "auto" && pixelCapable);
     state.untapInput = tapInput?.(remapInput) || null;
@@ -1758,7 +1936,14 @@ export function createFullCanvas({
     write(`${state.pixelMouse ? "\x1b[?1016h" : ""}\x1b[?2048h\x1b[?25l\x1b[2J${edgeBlendCommand()}`);
     state.slots.clear();
     process.stdout.on?.("resize", onStdoutResize);
-    trace(`full canvas start real=${JSON.stringify(state.real)} virt=${JSON.stringify(state.virt)} cell=${state.fonts.cellWidth}x${state.fonts.cellHeight} fonts=${JSON.stringify(state.fonts.resolved)} S=${S()}`);
+    if (tmuxMode()) {
+      await ensureTmuxPassthrough();
+      state.tmux = { known: false, visible: true, left: 0, top: 0, width: 0, height: 0, timer: null, reassertAt: 0 };
+      pollTmux();
+      state.tmux.timer = setInterval(pollTmux, Math.max(100, Number(cfg().tmuxPollMs) || 300));
+      state.tmux.timer.unref?.();
+    }
+    trace(`full canvas start terminal=${JSON.stringify(state.terminalName)} grid=${gridAligned() ? "aligned" : "free"} real=${JSON.stringify(state.real)} virt=${JSON.stringify(state.virt)} cell=${state.fonts.cellWidth}x${state.fonts.cellHeight} fonts=${JSON.stringify(state.fonts.resolved)} S=${S()}`);
     onStateChange(true);
     try { tui.invalidate?.(); } catch {}
     try { tui.requestRender?.(true); } catch {}
@@ -1776,6 +1961,8 @@ export function createFullCanvas({
     if (!state.active) return status();
     state.active = false;
     clearTimeout(state.geometryTimer);
+    if (state.tmux.timer) { clearInterval(state.tmux.timer); state.tmux.timer = null; }
+    if (state.tmuxRestore) { void tmuxPaneOption(state.tmuxRestore); state.tmuxRestore = null; }
     stopWorker();
     stopTicker();
     process.stdout.removeListener?.("resize", onStdoutResize);
@@ -1882,6 +2069,8 @@ export function createFullCanvas({
       pixelMouse: state.pixelMouse,
       terminal: state.terminalName || null,
       notes: state.notes || [],
+      grid: gridAligned() ? "aligned" : "free",
+      tmux: tmuxMode() ? { ...state.tmux, timer: undefined } : null,
       background: state.background.key ? { type: state.background.mode, frames: state.background.frames, cached: state.background.ring.filter((id) => id != null).length, size: `${state.background.bw}x${state.background.bh}`, fps: Math.round((state.background.frames / state.background.period) * 10) / 10, speed: Math.round(state.background.speed * 100) / 100 } : null,
       config: { ...state.config },
       cachedStrips: state.stripCache.size,

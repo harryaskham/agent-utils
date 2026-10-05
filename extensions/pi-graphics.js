@@ -43,6 +43,7 @@ import {
   buildScopedDeleteCommand,
   detectKittyPassthroughMode,
   serializeKittyGraphicsCommand,
+  wrapForPassthrough,
   serializeKittyGraphicsChunks,
   transparentPixelPngBase64,
 } from "./kitty-graphics.js";
@@ -495,16 +496,9 @@ export default async function piGraphicsExtension(pi) {
 
   let compositorInstalled = false;
   let fullCanvas = null;
-  const CANVAS_Z_BASE = PI_GRAPHICS_Z.DEEP_BACKGROUND - 64;
-  const CANVAS_Z = Object.freeze({
-    background: CANVAS_Z_BASE, // + tint (background + 1)
-    glow: CANVAS_Z_BASE + 4, // + flare (glow + 1)
-    surface: CANVAS_Z_BASE + 8, // editor surface
-    rows: CANVAS_Z_BASE + 12,
-    overlay: CANVAS_Z_BASE + 16, // stream-in, impulses
-    fx: CANVAS_Z_BASE + 20, // vignette, scanlines
-    caret: CANVAS_Z_BASE + 24,
-  });
+  // The canvas computes its own layer ladder (it depends on the multiplexer it
+  // detects); only the base for the plain case is configured here.
+  const CANVAS_Z = Object.freeze({ base: -1_000_000 });
   const frameCompositor = createFrameCompositor({
     getTui: () => hostTui,
     onError: (error) => trace(`compositor error: ${error?.stack || error}`),
@@ -577,6 +571,8 @@ export default async function piGraphicsExtension(pi) {
     getTui: () => hostTui,
     write: (data) => { const writer = terminalWriter(hostTui?.terminal); if (writer && data) writer(data); },
     serialize: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: state.config.passthrough }),
+    serializeRaw: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: "none" }),
+    wrapPassthrough: (sequence) => wrapForPassthrough(sequence, "tmux"),
     allocateImageId: (name) => piGraphicsImageId(`canvas:${name}:${canvasImageCounter++}`),
     // The canvas owns the whole screen (no terminal text), so it uses its own
     // spaced ladder below the reserved band instead of reusing adjacent
@@ -3240,6 +3236,7 @@ export default async function piGraphicsExtension(pi) {
     { key: "glowIntensity", label: "Glow intensity", values: ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "2", "3"], alias: ["glow-intensity"] },
     { key: "panels", label: "Panels", values: ["on", "off"] },
     { key: "fps", label: "Effects fps", values: ["20", "30", "45", "60"] },
+    { key: "grid", label: "Grid (multiplexers)", values: ["auto", "free", "aligned"] },
     { key: "pixelMouse", label: "Pixel mouse", values: ["auto", "on", "off"], alias: ["pixel-mouse"] },
     { key: "transport", label: "Transport", values: ["png", "zlib"] },
   ];
@@ -3292,7 +3289,7 @@ export default async function piGraphicsExtension(pi) {
       for (const [role, font] of Object.entries(st.fonts || {})) lines.push(`  font ${role.padEnd(8)} ${font.family}${font.missing ? `  (wanted ${font.missing}: not installed)` : ""}`);
       lines.push(`  caret ${st.config.caretStyle} bloom ${st.config.caretBloom} · typed ${st.config.typeIn} · stream-in ${st.config.streamIn} ${st.config.streamInMs}ms · glow ${st.config.editorGlow ? "on" : "off"} · tool panes ${st.config.toolPanels ? "on" : "off"}`);
       lines.push(st.background ? `  background ${st.background.type} ${st.background.size} · ${st.background.frames} frames (${st.background.cached} cached) · ${st.background.fps} fps over ${st.config.backgroundPeriod}s · speed ×${st.background.speed}` : `  background ${st.config.background}`);
-      lines.push(`  terminal ${st.terminal}${st.notes?.length ? ` · ${st.notes.join("; ")}` : ""}`);
+      lines.push(`  terminal ${st.terminal} · grid ${st.grid}${st.notes?.length ? ` · ${st.notes.join("; ")}` : ""}`);
       lines.push(`  frames ${st.stats.frames} ticks ${st.stats.ticks} uploads ${st.stats.uploads} (${Math.round(st.stats.uploadBytes / 1024)} KiB) raster ${st.stats.rasterMs}ms last ${st.stats.lastFrameMs}ms strips ${st.cachedStrips} pixelMouse=${st.pixelMouse}`);
     }
     lines.push("  /gfx full on|off|settings|status · /gfx full <key> <value> (zoom, font, font thinking <family>, caret, bloom, stream, background, glow, resolution, …) · /gfx save");
