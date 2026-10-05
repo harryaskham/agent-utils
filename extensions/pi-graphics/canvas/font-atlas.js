@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
 import { TrueTypeFont, flattenContours } from "./ttf.js";
-import { rasterizePolylines } from "./raster.js";
+import { blurMask, rasterizePolylines } from "./raster.js";
 
 const STYLE_QUERIES = {
   regular: ["monospace:style=Regular", "monospace"],
@@ -160,6 +160,17 @@ export class GlyphAtlas {
     this.masks.set(key, result);
     if (this.masks.size > 8192) this.masks.delete(this.masks.keys().next().value);
     return result;
+  }
+
+  /** Blurred (shadow/glow) mask for a glyph mask, cached per mask + radius. */
+  blurred(mask, radius) {
+    if (!mask) return null;
+    if (!this.blurCache) this.blurCache = new WeakMap();
+    let byRadius = this.blurCache.get(mask);
+    if (!byRadius) this.blurCache.set(mask, (byRadius = new Map()));
+    let hit = byRadius.get(radius);
+    if (!hit) { hit = blurMask(mask, radius); byRadius.set(radius, hit); }
+    return hit;
   }
 
   rasterGlyph(face, glyph, { style, cells, fallback }) {

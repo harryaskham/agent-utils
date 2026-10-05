@@ -52,8 +52,8 @@ function ellipseGlow(fb, w, h, cx, cy, rx, ry, rgb, alpha) {
  * cursor cell so every heat bucket shares one anchor. Returns
  * { rgba, width, height, anchorX, anchorY } — anchor = cursor cell origin.
  */
-export function renderCaret({ style = "bloom", cellWidth, cellHeight, heat = 0, bloom = 1, colors }) {
-  const cols = style === "bloom" ? 15 : style === "beam" ? 3 : 7;
+export function renderCaret({ style = "bloom", cellWidth, cellHeight, heat = 0, bloom = 1, colors, spill = 0.35, smear = 1, direction = 1 }) {
+  const cols = style === "bloom" ? 15 : style === "beam" ? 9 : 9;
   const rows = style === "bloom" ? 5 : 3;
   const w = cols * cellWidth; const h = rows * cellHeight;
   const fb = Buffer.alloc(w * h * 4);
@@ -63,6 +63,23 @@ export function renderCaret({ style = "bloom", cellWidth, cellHeight, heat = 0, 
   const base = t < 0.5 ? mixRgb(calm, warm, t / 0.5) : mixRgb(warm, hot, (t - 0.5) / 0.5);
   const cx = anchorX + Math.max(1, cellWidth * 0.12); const cy = anchorY + cellHeight / 2;
   const strength = Math.max(0, Number(bloom) || 0);
+  const dir = direction < 0 ? -1 : 1;
+  // Speed smear: a tapered comet tail behind the caret, longer when hot.
+  const smearLen = Math.max(0, Number(smear) || 0) * t * t * cellWidth * Math.min(cols / 2 - 1, 6);
+  if (smearLen > 1 && style !== "block" && style !== "underline") {
+    const x0 = Math.max(0, Math.floor(dir > 0 ? cx - smearLen : cx)); const x1 = Math.min(w, Math.ceil(dir > 0 ? cx : cx + smearLen));
+    for (let x = x0; x < x1; x += 1) {
+      const u = Math.abs(x + 0.5 - cx) / smearLen;
+      if (u >= 1) continue;
+      const fall = (1 - u) * (1 - u);
+      const sigma = cellHeight * (0.28 - u * 0.16);
+      for (let y = Math.max(0, Math.floor(cy - cellHeight)); y < Math.min(h, Math.ceil(cy + cellHeight)); y += 1) {
+        const dy = (y + 0.5 - cy) / sigma;
+        const a = 0.55 * fall * Math.exp(-dy * dy);
+        if (a > 0.004) blendPixel(fb, (y * w + x) * 4, base[0], base[1], base[2], Math.round(255 * a));
+      }
+    }
+  }
   if (style === "bloom") {
     // Light bleeding over neighbouring text: an anamorphic ellipse that widens
     // and warms with typing speed, plus a tight core halo.
@@ -85,14 +102,137 @@ export function renderCaret({ style = "bloom", cellWidth, cellHeight, heat = 0, 
     const uh = Math.max(2, Math.round(cellHeight * 0.1));
     fillPaths(fb, w, h, [[anchorX, anchorY + cellHeight - uh, anchorX + cellWidth, anchorY + cellHeight - uh, anchorX + cellWidth, anchorY + cellHeight, anchorX, anchorY + cellHeight]], ...core, 255);
   } else if (style !== "block") {
-    const beamW = Math.max(2, Math.round(cellWidth * (0.18 + t * 0.06)));
-    const top = Math.round(anchorY + cellHeight * 0.06); const bottom = Math.round(anchorY + cellHeight * 0.94);
-    const bx = Math.round(cx - beamW / 2);
-    fillPaths(fb, w, h, [[bx, top + beamW / 2, bx + beamW, top + beamW / 2, bx + beamW, bottom - beamW / 2, bx, bottom - beamW / 2]], ...core, 255);
-    fillPaths(fb, w, h, [strokeArcPath(bx + beamW / 2, top + beamW / 2, beamW / 4, Math.PI, Math.PI * 2, beamW / 2)], ...core, 255);
-    fillPaths(fb, w, h, [strokeArcPath(bx + beamW / 2, bottom - beamW / 2, beamW / 4, 0, Math.PI, beamW / 2)], ...core, 255);
+    // Beam: an anti-aliased capsule that may spill past its cell, growing
+    // taller and slightly thicker with typing speed.
+    const overshoot = Math.max(0, Number(spill) || 0) * cellHeight * (0.35 + t * 0.65);
+    const radius = Math.max(1, cellWidth * (0.09 + t * 0.035));
+    const y0 = anchorY + cellHeight * 0.08 - overshoot / 2 + radius; const y1 = anchorY + cellHeight * 0.92 + overshoot / 2 - radius;
+    capsule(fb, w, h, cx, Math.max(radius, y0), Math.min(h - radius, y1), radius, core, 1);
   }
   return { rgba: fb, width: w, height: h, anchorX, anchorY };
+}
+
+/** Anti-aliased vertical capsule (rounded beam). */
+function capsule(fb, w, h, x, y0, y1, radius, rgb, alpha) {
+  for (let y = Math.max(0, Math.floor(y0 - radius - 1)); y < Math.min(h, Math.ceil(y1 + radius + 1)); y += 1) {
+    const py = y + 0.5;
+    const cyy = Math.max(y0, Math.min(y1, py));
+    for (let xx = Math.max(0, Math.floor(x - radius - 1)); xx < Math.min(w, Math.ceil(x + radius + 1)); xx += 1) {
+      const d = Math.hypot(xx + 0.5 - x, py - cyy) - radius;
+      const cov = Math.max(0, Math.min(1, 0.5 - d));
+      if (cov > 0) blendPixel(fb, (y * w + xx) * 4, rgb[0], rgb[1], rgb[2], Math.round(255 * cov * alpha));
+    }
+  }
+}
+
+/**
+ * The editor's surface as one smooth image (signed-distance rounded rect at
+ * native resolution): styles glass | card | neon | minimal. Includes a soft
+ * drop shadow, so the image extends `margin` past the rect.
+ */
+export function renderEditorSurface({ width, height, radius, style = "glass", colors, opacity = 0.6, shadow = 0.6, scale = 1 }) {
+  const margin = Math.round(Math.max(radius * 1.6, 8 * scale));
+  const w = Math.ceil(width + margin * 2); const h = Math.ceil(height + margin * 2);
+  const fb = Buffer.alloc(w * h * 4);
+  const x0 = margin; const y0 = margin; const x1 = margin + width; const y1 = margin + height;
+  const surface = colors.surface || mixRgb(colors.bg || [46, 52, 64], [255, 255, 255], 0.07);
+  const top = mixRgb(surface, [255, 255, 255], style === "glass" ? 0.07 : 0.03);
+  const bottom = mixRgb(surface, [0, 0, 0], style === "glass" ? 0.12 : 0.05);
+  const dark = mixRgb(colors.bg || surface, [0, 0, 0], 0.35);
+  const bw = Math.max(1, scale) * (style === "neon" ? 2 : 1);
+  const fillA = style === "minimal" ? 0 : style === "card" ? Math.max(0.85, opacity) : clamp01(opacity);
+  const borderA = style === "neon" ? 0.95 : style === "card" ? 0.5 : style === "glass" ? 0.6 : 0;
+  const blur = radius * 0.9; const sdy = radius * 0.35;
+  const span = Math.max(1, x1 - x0);
+  let seed = 1234567;
+  const noise = () => { seed = (seed * 1103515245 + 12345) >>> 0; return ((seed >>> 16) & 0xff) / 255 - 0.5; };
+  const sd = (px, py) => {
+    const hw = (x1 - x0) / 2; const hh = (y1 - y0) / 2; const r = Math.min(radius, hw, hh);
+    const qx = Math.abs(px - (x0 + hw)) - hw + r; const qy = Math.abs(py - (y0 + hh)) - hh + r;
+    const ox = qx > 0 ? qx : 0; const oy = qy > 0 ? qy : 0;
+    return (ox === 0 ? oy : oy === 0 ? ox : Math.sqrt(ox * ox + oy * oy)) + Math.min(Math.max(qx, qy), 0) - r;
+  };
+  for (let y = 0; y < h; y += 1) {
+    const py = y + 0.5;
+    const vy = clamp01((py - y0) / Math.max(1, y1 - y0));
+    const fillRgb = style === "neon" ? dark : mixRgb(top, bottom, vy);
+    for (let x = 0; x < w; x += 1) {
+      const px = x + 0.5;
+      const d = sd(px, py);
+      const i = (y * w + x) * 4;
+      if (shadow > 0 && style !== "minimal" && d > -1) {
+        const ds = sd(px, py - sdy);
+        if (ds < blur) {
+          const k = clamp01((ds + blur * 0.25) / (blur * 1.25));
+          blendPixel(fb, i, 0, 0, 0, Math.round(255 * shadow * 0.45 * (1 - k) * (1 - k) * clamp01(d + 0.5)));
+        }
+      }
+      if (style === "neon") {
+        // Neon tube: light spilling out of and into the rim.
+        const tube = mixRgb(colors.accent, colors.accent2 || colors.accent, (px - x0) / span);
+        if (d > 0) blendPixel(fb, i, tube[0], tube[1], tube[2], Math.round(255 * 0.42 * Math.exp(-d / (4 * scale))));
+      }
+      const cov = clamp01(0.5 - d);
+      if (cov <= 0) continue;
+      if (fillA > 0) {
+        const grain = style === "glass" ? noise() * 6 : 0;
+        blendPixel(fb, i, clampByte(fillRgb[0] + grain), clampByte(fillRgb[1] + grain), clampByte(fillRgb[2] + grain), Math.round(255 * fillA * cov));
+      }
+      if (style === "glass") {
+        const k = Math.max(0, 1 - (py - y0) / ((y1 - y0) * 0.45));
+        if (k > 0) blendPixel(fb, i, 255, 255, 255, Math.round(255 * 0.07 * k * k * cov));
+        // Inner light rim along the top edge.
+        if (py - y0 < 2.5 * scale && d > -2.5 * scale) blendPixel(fb, i, 255, 255, 255, Math.round(255 * 0.16 * cov));
+      }
+      if (style === "minimal") {
+        const nearBottom = Math.abs(py - (y1 - bw)) < bw;
+        if (nearBottom) { const c = mixRgb(colors.accent, colors.accent2 || colors.accent, (px - x0) / span); blendPixel(fb, i, c[0], c[1], c[2], Math.round(255 * 0.8 * cov)); }
+        continue;
+      }
+      if (style === "neon" && d < 0) {
+        const tube = mixRgb(colors.accent, colors.accent2 || colors.accent, (px - x0) / span);
+        blendPixel(fb, i, tube[0], tube[1], tube[2], Math.round(255 * 0.2 * Math.exp(d / (5 * scale)) * cov));
+      }
+      if (borderA > 0) {
+        const bc = clamp01(bw / 2 + 0.5 - Math.abs(d + bw / 2));
+        if (bc > 0) {
+          let c = style === "glass" || style === "neon" ? mixRgb(colors.accent, colors.accent2 || colors.accent, (px - x0) / span) : colors.accent;
+          if (style === "neon") c = mixRgb(c, [255, 255, 255], 0.35); // hot core of the tube
+          blendPixel(fb, i, c[0], c[1], c[2], Math.round(255 * borderA * bc));
+        }
+      }
+    }
+  }
+  return { rgba: fb, width: w, height: h, margin };
+}
+
+function clampByte(v) { return v < 0 ? 0 : v > 255 ? 255 : Math.round(v); }
+
+/** Edge vignette (low resolution; upscaled over the whole window). */
+export function renderVignette({ width, height, strength = 0.35 }) {
+  const fb = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const vy = (y + 0.5) / height * 2 - 1;
+    for (let x = 0; x < width; x += 1) {
+      const vx = (x + 0.5) / width * 2 - 1;
+      const r = Math.hypot(vx * 0.85, vy);
+      const a = clamp01((r - 0.55) / 0.75);
+      const o = (y * width + x) * 4;
+      fb[o + 3] = Math.round(255 * strength * a * a);
+    }
+  }
+  return { rgba: fb, width, height };
+}
+
+/** Scanline tile: dark lines every `pitch` px, full width, `rows` px tall. */
+export function renderScanlines({ width, height, pitch = 3, strength = 0.25 }) {
+  const fb = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    if (y % pitch !== pitch - 1) continue;
+    const a = Math.round(255 * strength);
+    for (let x = 0; x < width; x += 1) fb[(y * width + x) * 4 + 3] = a;
+  }
+  return { rgba: fb, width, height };
 }
 
 /** Keystroke impulse: an expanding ring with sparks. frame in [0, frames). */

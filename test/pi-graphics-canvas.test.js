@@ -186,3 +186,34 @@ test("editor glow frames reuse cached band geometry and differ by state", async 
   for (let i = 0; i < 10; i += 1) renderEditorGlow({ ...args, state: "speaking", phase: i / 10 });
   assert.ok((performance.now() - started) / 10 < 8, "glow frames are cheap once the band is cached");
 });
+
+test("panel middle slices take the per-column fast path with identical pixels", async () => {
+  const { renderRow } = await import("../extensions/pi-graphics/canvas/canvas-renderer.js");
+  const { GlyphAtlas, resolveFontFaces } = await import("../extensions/pi-graphics/canvas/font-atlas.js");
+  const { parseAnsiLine } = await import("../extensions/pi-graphics/canvas/ansi-cells.js");
+  const atlas = new GlyphAtlas({ faces: resolveFontFaces({}), fontSizePx: 14, lineHeight: 1.3 });
+  const theme = { fg: [229, 233, 240], bg: [46, 52, 64], accent: [136, 192, 208], selection: [90, 110, 130] };
+  const { cells } = parseAnsiLine("  some text inside a translucent pane", 40);
+  const panel = { start: 1, end: 39, fill: [20, 22, 28], alpha: 0.72, border: [136, 192, 208], border2: [180, 142, 173], borderAlpha: 0.85, sheen: 0.05, shadow: 0.6, stripe: [163, 190, 140], relTop: -3, relBottom: 3 };
+  const ctx = { atlas, cols: 40, theme, cursorCol: -1, marginX: 9 };
+  const fast = renderRow(cells, { ...ctx, panels: [panel] });
+  const exact = renderRow(cells, { ...ctx, panels: [{ ...panel, exact: true }] });
+  let maxDiff = 0;
+  for (let i = 0; i < fast.rgba.length; i += 1) maxDiff = Math.max(maxDiff, Math.abs(fast.rgba[i] - exact.rgba[i]));
+  assert.ok(maxDiff <= 2, `fast path matches the exact signed-distance render (max channel diff ${maxDiff})`);
+});
+
+test("render worker returns PNG-encoded background frames off the main thread", async () => {
+  const { Worker } = await import("node:worker_threads");
+  const worker = new Worker(new URL("../extensions/pi-graphics/canvas/render-worker.js", import.meta.url));
+  const colors = { top: [46, 52, 64], bottom: [36, 41, 51], edge: [33, 38, 46], accent: [136, 192, 208], accent2: [180, 142, 173], speech: [163, 190, 140], thinking: [180, 142, 173] };
+  const reply = await new Promise((resolve, reject) => {
+    worker.once("message", resolve); worker.once("error", reject);
+    worker.postMessage({ id: 7, kind: "background", args: { width: 40, height: 30, type: "aurora", phase: 0.25, colors } });
+  });
+  await worker.terminate();
+  assert.equal(reply.id, 7);
+  assert.equal(reply.ok, true);
+  assert.equal(reply.width, 40);
+  assert.equal(Buffer.from(reply.base64, "base64").subarray(1, 4).toString(), "PNG");
+});

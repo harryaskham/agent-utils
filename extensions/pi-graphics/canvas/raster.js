@@ -121,6 +121,50 @@ export function roundedRectPathCorners(x, y, w, h, radii, segments = 6) {
   return pts;
 }
 
+/**
+ * Blurred copy of a coverage mask, padded by `radius` on every side (three
+ * box passes ≈ gaussian). Used for glyph drop shadows and glow.
+ */
+export function blurMask(mask, radius) {
+  const r = Math.max(1, Math.round(radius));
+  const w = mask.width + r * 2; const h = mask.height + r * 2;
+  let a = new Float32Array(w * h);
+  for (let y = 0; y < mask.height; y += 1) {
+    for (let x = 0; x < mask.width; x += 1) a[(y + r) * w + x + r] = mask.alpha[y * mask.width + x];
+  }
+  let b = new Float32Array(w * h);
+  const k = Math.max(1, Math.round(r / 2));
+  const norm = 1 / (k * 2 + 1);
+  const pass = (src, dst, horizontal) => {
+    const outer = horizontal ? h : w; const inner = horizontal ? w : h;
+    const at = horizontal ? (o, i) => o * w + i : (o, i) => i * w + o;
+    for (let o = 0; o < outer; o += 1) {
+      let sum = 0;
+      for (let i = -k; i <= k; i += 1) if (i >= 0 && i < inner) sum += src[at(o, i)];
+      for (let i = 0; i < inner; i += 1) {
+        dst[at(o, i)] = sum * norm;
+        const add = i + k + 1; const drop = i - k;
+        if (add < inner) sum += src[at(o, add)];
+        if (drop >= 0) sum -= src[at(o, drop)];
+      }
+    }
+  };
+  for (let n = 0; n < 3; n += 1) { pass(a, b, true); pass(b, a, false); }
+  const alpha = new Uint8ClampedArray(w * h);
+  for (let i = 0; i < alpha.length; i += 1) alpha[i] = a[i];
+  return { alpha, width: w, height: h, left: (mask.left || 0) - r, top: (mask.top || 0) - r };
+}
+
+/** Signed distance from (px, py) to a rounded rectangle (negative inside). */
+export function sdRoundRect(px, py, x0, y0, x1, y1, radius) {
+  const hw = (x1 - x0) / 2; const hh = (y1 - y0) / 2;
+  const r = Math.max(0, Math.min(radius, hw, hh));
+  const qx = Math.abs(px - (x0 + hw)) - hw + r; const qy = Math.abs(py - (y0 + hh)) - hh + r;
+  const ox = qx > 0 ? qx : 0; const oy = qy > 0 ? qy : 0;
+  const outside = ox === 0 ? oy : oy === 0 ? ox : Math.sqrt(ox * ox + oy * oy);
+  return outside + Math.min(Math.max(qx, qy), 0) - r;
+}
+
 /** Filled circle polygon. */
 export function circlePath(cx, cy, r, segments = 16) {
   const pts = [];

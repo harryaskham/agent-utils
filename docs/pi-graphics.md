@@ -220,10 +220,35 @@ image memory. With `backgroundReact` the playback speed follows agent activity
 (free: the ring is cached) and a tint layer rising from the editor crossfades
 to the activity colour, flaring as tokens arrive.
 
+**Surfaces and lighting.** Panels (tool panes, dialogs, the classic editor
+card) are drawn with signed distances — anti-aliased edges and corners at any
+size, continuous across row strips — with `paneStyle glass` translucency
+(`paneOpacity`), a top sheen, gradient borders and soft drop shadows
+(`panelShadow`) that fall only outside the panel. The editor gets its own
+smooth surface layer (`editorStyle glass|card|neon|minimal|classic|none`,
+`editorOpacity`); when Pi lays the editor out flush with the window edge its
+text is indented inside the surface (caret, overlays and mouse follow).
+Glyphs can cast soft shadows away from a light (`textShadow`, `lightAngle`,
+`shadowDistance`) and glow (`textGlow`), from blurred masks cached per glyph.
+Screen-space `vignette` and `scanlines` sit above the text. The canvas uses its
+own spaced z ladder (background < tint < glow < flare < editor surface < rows
+< overlays < vignette/scanlines < caret).
+
+**Caret.** The beam is an anti-aliased capsule that spills past its row
+(`caretSpill`) and grows with typing speed; fast typing drags a comet smear
+in the direction of travel (`caretSmear`). Typing heat is measured by the
+canvas from the editor rows it renders, so it works with classic graphics
+off, decays between Pi renders (a stored-up heat no longer flashes when the
+agent finishes), and clearing the editor on submit is not counted as typing.
+
 **Frame budget.** Effects never stall input: per frame/tick at most one heavy
 cache miss (a background frame, glow frame, flare or tint) is rendered; others
 catch up on the following ticks. Glow band geometry is cached per editor size,
-so a glow frame is a single pass over the band (~1–3 ms).
+so a glow frame is a single pass over the band (~1–3 ms). Background loop
+frames and editor-glow frames are rendered and PNG-encoded on a worker thread
+(`renderWorker`), a few frames ahead of playback; the main thread only uploads
+them. Reactive layers (glow, flare, tint) take the per-tick budget before the
+background loop, so a long first pass never delays them.
 
 **Window padding.** Images cannot draw outside the cell grid, so the canvas
 sets the terminal background to its edge colour (OSC 11, restored with OSC
@@ -266,6 +291,10 @@ tmux unless `PI_GRAPHICS_FULL_TMUX=1`; independent of `piGraphics.mode`.
 /gfx full period 24 | bg-fps 20 | bg-scale 8 | bg-budget 64 | react on|off | edge on|off
 /gfx full glow on|off | flare on|off | glow-intensity 1.5 | panels on|off | fps 30
 /gfx full padding 0 | line-height 1
+/gfx full editor glass|card|neon|minimal|classic|none | editor-opacity 0.55
+/gfx full pane glass|solid | pane-opacity 0.72 | panel-shadow 0.6
+/gfx full shadow 0.35 | text-glow 0.3 | light 45 | shadow-distance 1.2
+/gfx full vignette 0.3 | scanlines 0.2 | spill 0.35 | smear 1
 /gfx full pixel-mouse auto|on|off | transport png|zlib | cell 10x22
 /gfx save                              # persist to piGraphics.full
 ```

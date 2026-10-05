@@ -7,7 +7,7 @@
 // genuinely changed are re-rasterized and re-uploaded.
 
 import { DEFAULT, unpackRgb } from "./ansi-cells.js";
-import { blendMask, circlePath, fillPaths, fillRectRgba, roundedRectPathCorners, strokeArcPath } from "./raster.js";
+import { blendMask, circlePath, fillPaths, fillRectRgba, roundedRectPathCorners, sdRoundRect, strokeArcPath } from "./raster.js";
 
 // [left, right, up, down]: 1 light, 2 heavy, 3 double.
 const BOX = new Map(Object.entries({
@@ -68,6 +68,118 @@ export function cellRole(cell, ctx) {
   return null;
 }
 
+function blendOver(fb, i, r, g, b, a) {
+  if (a <= 0.002) return;
+  const sa = Math.min(1, a);
+  const da = fb[i + 3] / 255;
+  const oa = sa + da * (1 - sa);
+  const k = sa / oa;
+  fb[i] += (r - fb[i]) * k; fb[i + 1] += (g - fb[i + 1]) * k; fb[i + 2] += (b - fb[i + 2]) * k;
+  fb[i + 3] = oa * 255;
+}
+
+/**
+ * One row's slice of a panel. The panel's full extent is given relative to
+ * this row (relTop ≤ 0 ≤ relBottom rows; top/bottom when it starts/ends
+ * here), so corners, borders and shadows are continuous across row strips.
+ */
+function drawPanel(fb, width, height, panel, { mx, cw, ch, S, radius }) {
+  const inset = Math.min(mx, Math.round(cw * 0.8));
+  const x0 = mx + panel.start * cw - inset; const x1 = mx + panel.end * cw + inset;
+  const pad = panel.flush ? 0 : ch * 0.45;
+  const relTop = panel.top ? 0 : Math.min(-1, panel.relTop ?? -3);
+  const relBottom = panel.bottom ? 0 : Math.max(1, panel.relBottom ?? 3);
+  const y0 = relTop * ch + pad; const y1 = (relBottom + 1) * ch - pad;
+  const R = radius * 1.4;
+  const bw = Math.max(1, S) * (panel.borderWidth || 1);
+  const fill = panel.fill; const fillA = Math.max(0, panel.alpha ?? 0.9);
+  const borderA = panel.border ? (panel.borderAlpha ?? 0.6) : 0;
+  const borderB = panel.border2 || panel.border;
+  const sheen = panel.sheen || 0;
+  const shadow = panel.shadow || 0;
+  const blur = ch * 0.5; const sdx = panel.shadowDx ?? 0; const sdy = panel.shadowDy ?? ch * 0.16;
+  const spread = shadow > 0 ? Math.ceil(blur + Math.abs(sdx)) : 1;
+  const xa = Math.max(0, Math.floor(x0 - spread)); const xb = Math.min(width, Math.ceil(x1 + spread));
+  const band = panel.chrome === "terminal" && panel.top ? (panel.titleFill || mixRgb(fill, [255, 255, 255], 0.06)) : null;
+  const stripeX0 = x0 + bw + S; const stripeX1 = stripeX0 + Math.max(2, Math.round(2 * S));
+  const span = Math.max(1, x1 - x0);
+  // Middle slices (no corner or top/bottom edge within reach): the signed
+  // distance depends only on x, so compute each column once.
+  if (!band && !panel.exact && y0 < -R - blur - 1 && y1 > height + R + blur + 1) {
+    const cx = (x0 + x1) / 2; const hw = (x1 - x0) / 2;
+    for (let x = xa; x < xb; x += 1) {
+      const px = x + 0.5;
+      const d = Math.abs(px - cx) - hw;
+      let shadowA = 0;
+      if (shadow > 0 && d > -1) {
+        const ds = Math.abs(px - sdx - cx) - hw;
+        if (ds < blur) { const t = Math.max(0, Math.min(1, (ds + blur * 0.25) / (blur * 1.25))); shadowA = shadow * 0.5 * (1 - t) * (1 - t) * Math.min(1, Math.max(0, d + 0.5)); }
+      }
+      const cov = Math.max(0, Math.min(1, 0.5 - d));
+      const bc = borderA > 0 ? Math.max(0, Math.min(1, bw / 2 + 0.5 - Math.abs(d + bw / 2))) : 0;
+      const bcol = bc > 0 ? (borderB === panel.border ? panel.border : mixRgb(panel.border, borderB, (px - x0) / span)) : null;
+      const stripe = panel.stripe && px >= stripeX0 && px < stripeX1;
+      for (let y = 0; y < height; y += 1) {
+        const i = (y * width + x) * 4;
+        if (shadowA > 0) blendOver(fb, i, 0, 0, 0, shadowA);
+        if (cov <= 0) continue;
+        blendOver(fb, i, fill[0], fill[1], fill[2], fillA * cov);
+        if (sheen > 0) {
+          const k = Math.max(0, 1 - (y + 0.5 - y0) / (ch * 1.4));
+          if (k > 0) blendOver(fb, i, 255, 255, 255, sheen * k * k * cov);
+        }
+        if (stripe) blendOver(fb, i, panel.stripe[0], panel.stripe[1], panel.stripe[2], 0.85 * cov);
+        if (bc > 0) blendOver(fb, i, bcol[0], bcol[1], bcol[2], borderA * bc);
+      }
+    }
+    return;
+  }
+  for (let y = 0; y < height; y += 1) {
+    const py = y + 0.5;
+    for (let x = xa; x < xb; x += 1) {
+      const px = x + 0.5;
+      const d = sdRoundRect(px, py, x0, y0, x1, y1, R);
+      const i = (y * width + x) * 4;
+      if (shadow > 0 && d > -1) {
+        const ds = sdRoundRect(px - sdx, py - sdy, x0, y0, x1, y1, R);
+        if (ds < blur) {
+          const t = Math.max(0, Math.min(1, (ds + blur * 0.25) / (blur * 1.25)));
+          blendOver(fb, i, 0, 0, 0, shadow * 0.5 * (1 - t) * (1 - t) * Math.min(1, Math.max(0, d + 0.5)));
+        }
+      }
+      const cov = Math.max(0, Math.min(1, 0.5 - d));
+      if (cov <= 0) continue;
+      blendOver(fb, i, fill[0], fill[1], fill[2], fillA * cov);
+      if (band && py < ch) blendOver(fb, i, band[0], band[1], band[2], 0.92 * cov);
+      if (sheen > 0) {
+        const k = Math.max(0, 1 - (py - y0) / (ch * 1.4));
+        if (k > 0) blendOver(fb, i, 255, 255, 255, sheen * k * k * cov);
+      }
+      if (panel.stripe && px >= stripeX0 && px < stripeX1 && py > y0 + R * 0.6 && py < y1 - R * 0.6) {
+        blendOver(fb, i, panel.stripe[0], panel.stripe[1], panel.stripe[2], 0.85 * cov);
+      }
+      if (borderA > 0) {
+        const bc = Math.max(0, Math.min(1, bw / 2 + 0.5 - Math.abs(d + bw / 2)));
+        if (bc > 0) {
+          const c = borderB === panel.border ? panel.border : mixRgb(panel.border, borderB, (px - x0) / span);
+          blendOver(fb, i, c[0], c[1], c[2], borderA * bc);
+        }
+      }
+    }
+  }
+  if (band) {
+    for (let x = Math.max(0, Math.ceil(x0 + bw)); x < Math.min(width, Math.floor(x1 - bw)); x += 1) {
+      for (let k = 0; k < Math.max(1, Math.round(S)); k += 1) blendOver(fb, ((height - 1 - k) * width + x) * 4, 0, 0, 0, 0.3);
+    }
+    const dotR = Math.max(2, ch * 0.13);
+    const dotY = y0 + (ch - y0) / 2;
+    const dots = panel.dots || [[191, 97, 106], [235, 203, 139], [163, 190, 140]];
+    dots.forEach((rgb, i) => {
+      fillPaths(fb, width, height, [circlePath(x1 - inset - cw * 0.9 - i * dotR * 3, dotY, dotR)], ...rgb, 230);
+    });
+  }
+}
+
 export function renderRow(cells, ctx) {
   const { cols, theme } = ctx;
   const fonts = ctx.fonts || null;
@@ -83,54 +195,18 @@ export function renderRow(cells, ctx) {
   const mx = Math.max(0, Math.round((ctx.marginX || 0) * S));
   const width = cols * cw + mx * 2; const height = ch;
   const hidden = ctx.hiddenCols || null;
+  // Text indent (px) for rows whose text should sit inside a surface (the
+  // editor when it is laid out flush with the window edge).
+  const ox = Math.round((ctx.xOffset || 0) * S);
   const fb = Buffer.alloc(width * height * 4);
   let drawn = false;
   const radius = Math.max(2, Math.round(Math.min(cw, ch) * 0.55));
 
-  // 1. Panels (editor card, footer bar) supplied by the canvas controller.
+  // 1. Panels (editor card, tool panes, overlays, footer) supplied by the
+  //    canvas controller, drawn with signed distances: anti-aliased at any
+  //    size, translucent glass fills, gradient borders and soft shadows.
   for (const panel of ctx.panels || []) {
-    const inset = Math.min(mx, Math.round(cw * 0.8));
-    const x = mx + panel.start * cw - inset; const w = (panel.end - panel.start) * cw + inset * 2;
-    const line = Math.max(1, Math.round(S));
-    const radii = [panel.top ? radius * 1.4 : 0, panel.top ? radius * 1.4 : 0, panel.bottom ? radius * 1.4 : 0, panel.bottom ? radius * 1.4 : 0];
-    // flush panels (overlays) cover their whole first/last rows: their first
-    // line carries content, not padding.
-    const y0 = panel.top && !panel.flush ? Math.round(ch * 0.45) : 0;
-    const y1 = panel.bottom && !panel.flush ? Math.round(ch * 0.55) : ch;
-    fillPaths(fb, width, height, [roundedRectPathCorners(x + 0.5, y0, w - 1, y1 - y0, radii)], ...panel.fill, Math.round(255 * panel.alpha));
-    if (panel.chrome === "terminal" && panel.top) {
-      // Title band with window dots: reads as a terminal pane, not a box.
-      const band = panel.titleFill || mixRgb(panel.fill, [255, 255, 255], 0.06);
-      fillPaths(fb, width, height, [roundedRectPathCorners(x + 0.5, y0, w - 1, ch - y0, [radii[0], radii[1], 0, 0])], ...band, 235);
-      fillRectRgba(fb, width, height, x + line, ch - line, w - line * 2, line, ...mixRgb(band, [0, 0, 0], 0.35), 200);
-      const dotR = Math.max(2, ch * 0.13);
-      const dotY = y0 + (ch - y0) / 2;
-      const dots = panel.dots || [[191, 97, 106], [235, 203, 139], [163, 190, 140]];
-      dots.forEach((rgb, i) => {
-        fillPaths(fb, width, height, [circlePath(x + w - inset - cw * 0.9 - i * dotR * 3, dotY, dotR)], ...rgb, 230);
-      });
-    }
-    if (panel.stripe) {
-      const sy0 = panel.top ? y0 + radii[0] * 0.6 : 0; const sy1 = panel.bottom ? y1 - radii[3] * 0.6 : ch;
-      fillRectRgba(fb, width, height, x + line, sy0, Math.max(2, Math.round(2 * S)), sy1 - sy0, ...panel.stripe, 210);
-    }
-    if (panel.border) {
-      const ba = Math.round(255 * (panel.borderAlpha ?? 0.6));
-      const edge = (x0, y, len) => fillRectRgba(fb, width, height, x0, y, len, line, ...panel.border, ba);
-      if (panel.top) edge(x + radii[0], y0, w - radii[0] - radii[1]);
-      if (panel.bottom) edge(x + radii[3], y1 - line, w - radii[2] - radii[3]);
-      const sideTop = panel.top ? y0 + radii[0] : 0; const sideBottom = panel.bottom ? y1 - radii[3] : ch;
-      fillRectRgba(fb, width, height, x, sideTop, line, sideBottom - sideTop, ...panel.border, ba);
-      fillRectRgba(fb, width, height, x + w - line, sideTop, line, sideBottom - sideTop, ...panel.border, ba);
-      if (panel.top) {
-        fillPaths(fb, width, height, [strokeArcPath(x + radii[0] + 0.5, y0 + radii[0] + 0.5, radii[0], Math.PI, Math.PI * 1.5, line)], ...panel.border, ba);
-        fillPaths(fb, width, height, [strokeArcPath(x + w - radii[1] - 0.5, y0 + radii[1] + 0.5, radii[1], Math.PI * 1.5, Math.PI * 2, line)], ...panel.border, ba);
-      }
-      if (panel.bottom) {
-        fillPaths(fb, width, height, [strokeArcPath(x + w - radii[2] - 0.5, y1 - radii[2] - 0.5, radii[2], 0, Math.PI / 2, line)], ...panel.border, ba);
-        fillPaths(fb, width, height, [strokeArcPath(x + radii[3] + 0.5, y1 - radii[3] - 0.5, radii[3], Math.PI / 2, Math.PI, line)], ...panel.border, ba);
-      }
-    }
+    drawPanel(fb, width, height, panel, { mx, cw, ch, S, radius });
     drawn = true;
   }
 
@@ -153,7 +229,7 @@ export function renderRow(cells, ctx) {
     const same = (arr, col) => arr && arr[col] === bg;
     const tl = !same(above, c); const tr = !same(above, end - 1);
     const bl = !same(below, c); const br = !same(below, end - 1);
-    fillPaths(fb, width, height, [roundedRectPathCorners(mx + c * cw, 0, (end - c) * cw, ch, [tl ? radius : 0, tr ? radius : 0, br ? radius : 0, bl ? radius : 0])], ...unpackRgb(bg), 255);
+    fillPaths(fb, width, height, [roundedRectPathCorners(mx + ox + c * cw, 0, (end - c) * cw, ch, [tl ? radius : 0, tr ? radius : 0, br ? radius : 0, bl ? radius : 0])], ...unpackRgb(bg), 255);
     drawn = true;
     c = end;
   }
@@ -165,9 +241,34 @@ export function renderRow(cells, ctx) {
     const above = ctx.bgAbove; const below = ctx.bgBelow;
     const sel = (arr, col) => arr && arr[col] === -2;
     const r = radius * 0.7;
-    fillPaths(fb, width, height, [roundedRectPathCorners(mx + c * cw, 0, (end - c) * cw, ch, [sel(above, c) ? 0 : r, sel(above, end - 1) ? 0 : r, sel(below, end - 1) ? 0 : r, sel(below, c) ? 0 : r])], ...theme.selection, 150);
+    fillPaths(fb, width, height, [roundedRectPathCorners(mx + ox + c * cw, 0, (end - c) * cw, ch, [sel(above, c) ? 0 : r, sel(above, end - 1) ? 0 : r, sel(below, end - 1) ? 0 : r, sel(below, c) ? 0 : r])], ...theme.selection, 150);
     drawn = true;
     c = end;
+  }
+
+  // 2c. Lighting: soft glyph drop shadows (offset away from the light) and
+  //     glow, from blurred glyph masks cached in the atlas. Drawn for every
+  //     glyph before any glyph so shadows never cover neighbouring text.
+  const fx = ctx.lighting || null;
+  if (fx && (fx.shadow > 0 || fx.glow > 0)) {
+    const blur = Math.max(1, Math.round(ch * 0.09 * (fx.blur || 1)));
+    const sdx = Math.round(Math.cos(fx.angle) * fx.distance * S); const sdy = Math.round(Math.sin(fx.angle) * fx.distance * S);
+    for (let col = 0; col < cols; col += 1) {
+      const cell = cells[col];
+      if (cell.cont || cell.hidden || cell.cp === 32 || cell.cp === 0 || (hidden && hidden.has(col)) || isVectorGlyph(cell.cp)) continue;
+      const atlas = atlasFor(cell);
+      const mask = atlas.mask(cell.cp, { bold: cell.bold, italic: cell.italic, cells: cell.wide ? 2 : 1 });
+      const soft = mask && atlas.blurred(mask, blur);
+      if (!soft) continue;
+      const x = mx + ox + col * cw;
+      if (fx.shadow > 0) blendMask(fb, width, height, soft, x + soft.left + sdx, soft.top + sdy, 0, 0, 0, Math.round(255 * Math.min(1, fx.shadow * 0.75)));
+      if (fx.glow > 0) {
+        const fg = cell.fg === DEFAULT ? theme.fg : unpackRgb(cell.fg);
+        const lum = (fg[0] * 0.3 + fg[1] * 0.55 + fg[2] * 0.15) / 255;
+        blendMask(fb, width, height, soft, x + soft.left, soft.top, ...fg, Math.round(255 * Math.min(1, fx.glow * 0.5 * (0.35 + lum))));
+      }
+      drawn = true;
+    }
   }
 
   // 3. Glyphs.
@@ -181,7 +282,7 @@ export function renderRow(cells, ctx) {
     if (cell.inverse && !selected) fg = cell.fg === DEFAULT ? theme.fg : fg; // editor cursor cell: caret overlay draws the cursor
     let alpha = 255;
     if (cell.dim) alpha = 150;
-    const x = mx + col * cw;
+    const x = mx + ox + col * cw;
     if (cp === 32 || cp === 0) {
       // spaces still carry underline/strike decorations
     } else if (isVectorGlyph(cp)) {

@@ -495,6 +495,16 @@ export default async function piGraphicsExtension(pi) {
 
   let compositorInstalled = false;
   let fullCanvas = null;
+  const CANVAS_Z_BASE = PI_GRAPHICS_Z.DEEP_BACKGROUND - 64;
+  const CANVAS_Z = Object.freeze({
+    background: CANVAS_Z_BASE, // + tint (background + 1)
+    glow: CANVAS_Z_BASE + 4, // + flare (glow + 1)
+    surface: CANVAS_Z_BASE + 8, // editor surface
+    rows: CANVAS_Z_BASE + 12,
+    overlay: CANVAS_Z_BASE + 16, // stream-in, impulses
+    fx: CANVAS_Z_BASE + 20, // vignette, scanlines
+    caret: CANVAS_Z_BASE + 24,
+  });
   const frameCompositor = createFrameCompositor({
     getTui: () => hostTui,
     onError: (error) => trace(`compositor error: ${error?.stack || error}`),
@@ -568,21 +578,20 @@ export default async function piGraphicsExtension(pi) {
     write: (data) => { const writer = terminalWriter(hostTui?.terminal); if (writer && data) writer(data); },
     serialize: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: state.config.passthrough }),
     allocateImageId: (name) => piGraphicsImageId(`canvas:${name}:${canvasImageCounter++}`),
-    // background < editor glow < text rows < stream-in/impulse overlays < caret
-    z: {
-      background: PI_GRAPHICS_Z.DEEP_BACKGROUND,
-      glow: PI_GRAPHICS_Z.BACKGROUND,
-      rows: PI_GRAPHICS_Z.SURFACE,
-      overlay: PI_GRAPHICS_Z.ANCHOR,
-      caret: PI_GRAPHICS_Z.BOX_CHROME,
-    },
+    // The canvas owns the whole screen (no terminal text), so it uses its own
+    // spaced ladder below the reserved band instead of reusing adjacent
+    // reserved values (which made flare/rows and tint/glow tie).
+    z: CANVAS_Z,
     themeColor: (token) => getThemeColorHex(activeThemeRef, token, null),
     pixelGeometry,
     getRegions: layoutRegions,
-    getHeat: () => editorCursorHeat,
+    // Step the decay on read: the canvas ticks between Pi renders, and heat
+    // left frozen until the next render would release a stored-up flash.
+    getHeat: () => stepEditorHeat(),
     getImpulseAt: () => editorCursorImpulseAt,
     getActivity: () => currentActivity(),
     getPulse: () => streamPulse(),
+    onEditorText: (text, col) => updateEditorTypingHeat(text, col),
     semanticTick: () => {
       const classes = new Map(host.names().map((name) => [name, host.get(name)]));
       ensureSemanticTaps(classes, () => fullCanvasActive());
@@ -1013,7 +1022,17 @@ export default async function piGraphicsExtension(pi) {
       return { heat: editorCursorHeat, wpm: editorCursorWpm, trailDirection: editorCursorTrailDirection };
     }
     const elapsed = Math.max(16, now - editorCursorLastAt);
-    if (plainText !== editorCursorLastText) {
+    if (plainText !== editorCursorLastText && plainText.length + 3 < editorCursorLastText.length) {
+      // The editor was cleared or a block deleted (submit, Ctrl-U, history
+      // recall): not typing. Cool down instead of registering a burst.
+      editorCursorHeatTarget = Math.min(editorCursorHeatTarget, 0.05);
+      editorCursorWpm = 0;
+      editorCursorImpulseAt = 0;
+      editorCursorImpulseCol = null;
+      editorCursorLastText = plainText;
+      editorCursorLastAt = now;
+      editorCursorLastCol = safeCol;
+    } else if (plainText !== editorCursorLastText) {
       const delta = Math.max(1, Math.abs(plainText.length - editorCursorLastText.length));
       const instantWpm = Math.min(320, (delta / 5) / (elapsed / 60000));
       editorCursorWpm = Math.min(260, editorCursorWpm * 0.55 + instantWpm * 0.45);
@@ -1648,18 +1667,8 @@ export default async function piGraphicsExtension(pi) {
             // Cheap per-frame check: a regular<->fullscreen switch creates a
             // new renderer that needs the frame hook again.
             if (hostTui) ensureFrameCompositor();
-            if (fullCanvasActive()) {
-              // Track typing heat/impulses for the canvas caret without
-              // touching the rows: the canvas draws its own cursor.
-              for (const line of baseLines) {
-                const anchor = locateEditorCursorAnchor(String(line || ""), width);
-                if (!anchor) continue;
-                const plain = String(line).replace(anchor.matchText, "|").replace(ZERO_WIDTH_CONTROL_RE, "");
-                updateEditorTypingHeat(plain, anchor.cursorCol);
-                break;
-              }
-              return baseLines;
-            }
+            // The canvas measures typing heat from its own frames.
+            if (fullCanvasActive()) return baseLines;
             // The dash-rule detection + border/decoration/clamp composition is a pure
             // seam (composeEditorRenderRows, bd-f5f802); the stateful pieces stay
             // here and are injected as callbacks.
@@ -3162,7 +3171,7 @@ export default async function piGraphicsExtension(pi) {
     const env = {};
     for (const [key, name] of Object.entries(FULL_ENV)) if (process.env[name]) env[key] = process.env[name];
     const merged = { ...FULL_CANVAS_DEFAULTS, ...full, ...env, fonts };
-    for (const key of ["fontSizePx", "lineHeight", "zoom", "resolution", "gamma", "caretBloom", "typeInMs", "streamInMs", "streamRise", "streamStagger", "backgroundPeriod", "backgroundFps", "backgroundScale", "backgroundBudgetMB", "glowIntensity", "padding", "fps"]) {
+    for (const key of ["fontSizePx", "lineHeight", "zoom", "resolution", "gamma", "caretBloom", "caretSpill", "caretSmear", "paneOpacity", "panelShadow", "editorOpacity", "textShadow", "textGlow", "lightAngle", "shadowDistance", "vignette", "scanlines", "typeInMs", "streamInMs", "streamRise", "streamStagger", "backgroundPeriod", "backgroundFps", "backgroundScale", "backgroundBudgetMB", "glowIntensity", "padding", "fps"]) {
       if (merged[key] !== undefined && merged[key] !== "") merged[key] = Number(merged[key]);
     }
     return merged;
@@ -3186,6 +3195,8 @@ export default async function piGraphicsExtension(pi) {
     { key: "font.editor", label: "Editor font", values: () => ["(default)", ...monospaceFamilies()] },
     { key: "caretStyle", label: "Caret", values: [...CARET_STYLES, "off"], alias: ["caret"] },
     { key: "caretBloom", label: "Caret bloom", values: ["0", "0.5", "0.75", "1", "1.25", "1.5", "2", "3"], alias: ["bloom"] },
+    { key: "caretSpill", label: "Caret spill", values: ["0", "0.2", "0.35", "0.5", "0.75", "1"], alias: ["spill"] },
+    { key: "caretSmear", label: "Caret speed smear", values: ["0", "0.5", "1", "1.5", "2"], alias: ["smear"] },
     { key: "trail", label: "Caret glide", values: ["on", "off"], alias: ["glide"] },
     { key: "impulse", label: "Typing impulse", values: ["on", "off"] },
     { key: "typeIn", label: "Typed letter effect", values: TYPE_IN_EFFECTS, alias: ["type", "type-in"] },
@@ -3196,6 +3207,17 @@ export default async function piGraphicsExtension(pi) {
     { key: "streamStagger", label: "Stream-in stagger ms", values: ["0", "4", "8", "12", "20"], alias: ["stagger"] },
     { key: "streamRoles", label: "Stream-in applies to", values: ["thinking,assistant,tool", "thinking,assistant", "thinking", "assistant", "tool"], alias: ["stream-roles"] },
     { key: "toolPanels", label: "Tool panes", values: ["on", "off"], alias: ["tools"] },
+    { key: "paneStyle", label: "Pane style", values: ["glass", "solid"], alias: ["pane"] },
+    { key: "paneOpacity", label: "Pane opacity", values: ["0.35", "0.5", "0.6", "0.72", "0.85", "1"], alias: ["pane-opacity"] },
+    { key: "panelShadow", label: "Panel shadows", values: ["0", "0.3", "0.6", "0.8", "1"], alias: ["panel-shadow"] },
+    { key: "editorStyle", label: "Editor style", values: ["glass", "card", "neon", "minimal", "classic", "none"], alias: ["editor"] },
+    { key: "editorOpacity", label: "Editor opacity", values: ["0.2", "0.35", "0.55", "0.7", "0.85", "1"], alias: ["editor-opacity"] },
+    { key: "textShadow", label: "Text shadow", values: ["0", "0.2", "0.35", "0.5", "0.75", "1"], alias: ["shadow"] },
+    { key: "textGlow", label: "Text glow", values: ["0", "0.15", "0.3", "0.5", "0.75"], alias: ["text-glow"] },
+    { key: "lightAngle", label: "Light angle (shadow °)", values: ["0", "45", "90", "135", "180", "225", "270", "315"], alias: ["light"] },
+    { key: "shadowDistance", label: "Shadow distance px", values: ["0", "0.8", "1.2", "2", "3"], alias: ["shadow-distance"] },
+    { key: "vignette", label: "Vignette", values: ["0", "0.15", "0.3", "0.45", "0.6"] },
+    { key: "scanlines", label: "Scanlines", values: ["0", "0.15", "0.3", "0.5"] },
     { key: "background", label: "Background", values: BACKGROUNDS, alias: ["bg"] },
     { key: "backgroundPeriod", label: "Background loop s", values: ["8", "12", "16", "24", "32", "48", "60", "90", "120"], alias: ["bg-period", "period"] },
     { key: "backgroundFps", label: "Background fps", values: ["8", "12", "15", "20", "24", "30", "40", "60"], alias: ["bg-fps"] },
