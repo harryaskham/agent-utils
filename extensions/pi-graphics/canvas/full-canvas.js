@@ -141,6 +141,12 @@ const bool = (v, fallback) => (v === undefined || v === null || v === "" ? fallb
  * the placement is cropped to the pane (cells for scaled placements, source
  * pixels for natural ones). pane: { left, top, width, height } in outer cells.
  */
+/** True inside gfxsh (unless nesting is explicitly allowed). */
+export function insideGfxsh(env = process.env) {
+  if (env.PI_GRAPHICS_FULL_IN_GFXSH === "1") return false;
+  return env.GFXSH === "1" || String(env.TERM_PROGRAM || "").toLowerCase() === "gfxsh";
+}
+
 export function tmuxPlacement({ pane, cell, row, col, control, size = null, serializeRaw, wrap }) {
   const width = pane.width || cell.cols; const height = pane.height || cell.rows;
   if (row >= height || col >= width) return "";
@@ -2129,6 +2135,13 @@ export function createFullCanvas({
     // GNU screen has no Kitty graphics passthrough to position through.
     if (/^screen/.test(process.env.TERM || "") && !process.env.TMUX && process.env.PI_GRAPHICS_FULL_TMUX !== "1") {
       throw new Error("full canvas does not support GNU screen (tmux, herdr and plain terminals work)");
+    }
+    // gfxsh already draws the terminal as a pixel canvas, and draws Pi (a
+    // full-screen program) on it with its own effects. A second canvas would
+    // make gfxsh decode and re-composite every Pi frame: slow, and rows go
+    // missing. Opt in with PI_GRAPHICS_FULL_IN_GFXSH=1.
+    if (insideGfxsh(process.env)) {
+      throw new Error("Pi is running inside gfxsh, which already draws it on gfxsh's pixel canvas. A second canvas would be redrawn by gfxsh (slow, rows go missing), so it stays off here. Set PI_GRAPHICS_FULL_IN_GFXSH=1 to try anyway");
     }
     const { tapInput, ...rest } = options;
     state.config = { ...FULL_CANVAS_DEFAULTS, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined && v !== "")) };

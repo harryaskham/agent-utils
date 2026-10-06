@@ -254,6 +254,13 @@ text change).
 bottom, when the top is scrolled off) of every pending tool pane. Frames
 depend only on the pane width, so streaming output does not re-render them.
 
+**Inside gfxsh.** gfxsh already draws the terminal as a pixel canvas and
+draws Pi — a full-screen program — on it with its own background and
+effects. Pi's canvas would be decoded and re-composited by gfxsh every frame
+(slow, rows go missing), so `/gfx full on` declines inside gfxsh
+(`TERM_PROGRAM=gfxsh`) with a message; `PI_GRAPHICS_FULL_IN_GFXSH=1` forces
+it.
+
 **Finished tools.** With `paneFlash`, when a tool pane goes from running to
 done its border lights up in the outcome colour — green for success, red for
 a failure — with a bright crest travelling once round it, then fades (about

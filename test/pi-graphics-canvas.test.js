@@ -289,6 +289,14 @@ test("frosted dialogs blur the covered transcript row under a translucent fill",
   assert.ok(brighter > 200, `blurred transcript shows through (${brighter} px)`);
 });
 
+test("the pixel canvas stays off inside gfxsh unless nesting is allowed", async () => {
+  const { insideGfxsh } = await import("../extensions/pi-graphics/canvas/full-canvas.js");
+  assert.equal(insideGfxsh({ GFXSH: "1", TERM_PROGRAM: "gfxsh" }), true);
+  assert.equal(insideGfxsh({ TERM_PROGRAM: "gfxsh" }), true);
+  assert.equal(insideGfxsh({ TERM_PROGRAM: "ghostty" }), false);
+  assert.equal(insideGfxsh({ GFXSH: "1", PI_GRAPHICS_FULL_IN_GFXSH: "1" }), false);
+});
+
 test("tmux placements move the outer cursor to the pane origin inside one passthrough and crop at the pane edge", async () => {
   const { tmuxPlacement } = await import("../extensions/pi-graphics/canvas/full-canvas.js");
   const { serializeKittyGraphicsCommand, wrapForPassthrough } = await import("../extensions/kitty-graphics.js");
