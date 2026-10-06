@@ -279,3 +279,14 @@ test("tmux placements move the outer cursor to the pane origin inside one passth
   assert.match(scaled, /r=3[,;]/, "scaled placements are clipped by cells");
   assert.equal(tmuxPlacement({ pane, cell, row: 40, col: 0, control: { a: "p", i: 9 }, serializeRaw, wrap }), "", "outside the pane: nothing");
 });
+
+test("cell-box strips are positioned by the row they are placed on, not the row they were cut for", async () => {
+  const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../extensions/pi-graphics/canvas/full-canvas.js", import.meta.url), "utf8"));
+  // Regression: scrolled/resized rows reused cached boxes at their old row.
+  const placeRow = source.slice(source.indexOf("function placeRow("), source.indexOf("function updateRow("));
+  assert.match(placeRow, /const at = cellBox\(geo\.lx, geo\.ly, geo\.lw, geo\.lh\)/);
+  assert.match(placeRow, /placeAt\(at\.row0, at\.col0,/);
+  assert.doesNotMatch(placeRow, /entry\.box\.row0|b\.row0/);
+  const updateRow = source.slice(source.indexOf("function updateRow("), source.indexOf("function evictStrips("));
+  assert.match(updateRow, /slot\.at === at/, "re-placed when the grid moves even if content is unchanged");
+});

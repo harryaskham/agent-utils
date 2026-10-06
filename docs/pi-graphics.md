@@ -285,12 +285,12 @@ size and rebuilds the grid live. Terminals that never answer get a precise
 error and `/gfx full cell <w>x<h>`.
 
 **HiDPI.** `resolution 2|3` renders strips at 2–3× and places them as
-cell-aligned scaled boxes (line pitch snapped to terminal rows). Kitty renders
-this correctly; Ghostty 1.3.1 leaves stale pixels when scaled placements are
-replaced while scrolling, so the canvas identifies the terminal (XTVERSION,
-which also works through SSH/multiplexers) and uses 1× on Ghostty unless
-`PI_GRAPHICS_FULL_HIDPI_FORCE=1`. The 1× path places images at the terminal's
-native pixel size (device pixels on Kitty/Ghostty).
+cell-aligned scaled boxes (line pitch snapped to terminal rows), in Kitty and
+Ghostty alike. Strips are content-keyed and reused at any row, so a box's size
+and sub-cell phase belong to the cached image but its position is always
+computed from the row it is placed on (an earlier build cached the position
+too, which misplaced scrolled rows — it was not a terminal bug). The 1× path
+places images at the terminal's native pixel size.
 
 **Input.** Keys/paste/IME untouched (the hidden hardware cursor is parked under
 the caret). SGR mouse is remapped from real pixels (SGR-Pixels 1016, enabled

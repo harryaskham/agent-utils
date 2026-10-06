@@ -829,11 +829,14 @@ export function createFullCanvas({
   }
 
   function placeRow(rowIndex, entry) {
-    if (entry.box) {
-      const b = entry.box;
-      return placeAt(b.row0, b.col0, { a: "p", i: entry.imageId, p: rowIndex + 1, c: b.c, r: b.r, C: 1, q: 2, z: Z.rows });
-    }
     const geo = stripGeometry(rowIndex);
+    if (entry.box) {
+      // Strips are content-keyed and reused at any row (scrolling): the box's
+      // size and sub-cell phase are part of the key, but its position must
+      // come from the row it is placed on NOW, never the row it was cut for.
+      const at = cellBox(geo.lx, geo.ly, geo.lw, geo.lh);
+      return placeAt(at.row0, at.col0, { a: "p", i: entry.imageId, p: rowIndex + 1, c: entry.box.c, r: entry.box.r, C: 1, q: 2, z: Z.rows });
+    }
     return placeNatural(entry.imageId, rowIndex + 1, geo.lx, geo.ly, Z.rows);
   }
 
@@ -841,10 +844,14 @@ export function createFullCanvas({
     const { key, entry, upload } = renderStrip(rowIndex);
     let out = upload;
     const slot = state.slots.get(rowIndex);
-    if (slot && slot.key === key && !force) return { out, key };
+    // Placement position depends on the grid (resize, padding, pane moves),
+    // not only on content: re-place when either changes.
+    const geo = stripGeometry(rowIndex);
+    const at = `${geo.lx},${geo.ly},${state.real.cellW}x${state.real.cellH}`;
+    if (slot && slot.key === key && slot.at === at && !force) return { out, key };
     if (slot?.imageId != null && slot.imageId !== entry?.imageId) out += deletePlacement(slot.imageId, rowIndex + 1);
     if (entry) out += placeRow(rowIndex, entry);
-    state.slots.set(rowIndex, { key, imageId: entry?.imageId ?? null });
+    state.slots.set(rowIndex, { key, imageId: entry?.imageId ?? null, at });
     return { out, key };
   }
 
@@ -1905,12 +1912,6 @@ export function createFullCanvas({
     state.isGhostty = isGhostty;
     state.terminalName = terminalName || envName.trim() || "unknown";
     state.notes = [];
-    if (S() > 1 && isGhostty && process.env.PI_GRAPHICS_FULL_HIDPI_FORCE !== "1") {
-      // Ghostty 1.3.1 leaves stale pixels when scaled (c/r) placements are
-      // replaced during scrolling (reproduced in the lab; Kitty is correct).
-      state.config.resolution = 1;
-      state.notes.push("resolution forced to 1 on Ghostty (scaled-placement repaint bug); PI_GRAPHICS_FULL_HIDPI_FORCE=1 overrides");
-    }
     buildFonts();
     try {
       const bg = await tui.queryTerminalBackgroundColor?.({ timeoutMs: 150 });
@@ -1995,7 +1996,6 @@ export function createFullCanvas({
     const prev = state.config;
     state.config = { ...FULL_CANVAS_DEFAULTS, ...Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined && v !== "")) };
     if (!state.active) return status();
-    if (S() > 1 && state.isGhostty && process.env.PI_GRAPHICS_FULL_HIDPI_FORCE !== "1") state.config.resolution = 1;
     const changed = (key) => JSON.stringify(prev[key]) !== JSON.stringify(state.config[key]);
     let out = "";
     if (changed("cell")) {
