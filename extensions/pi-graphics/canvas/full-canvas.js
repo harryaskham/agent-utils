@@ -35,6 +35,7 @@ import { FontSet } from "./font-atlas.js";
 import { decodePng, drawScaledImage } from "./png-decode.js";
 import { addRadialGlow, encodeRgbaPng } from "../png-renderer.js";
 import { blendMask } from "./raster.js";
+import { createGfxCoreEngine, findGfxWasm, toGfxFrame } from "./gfx-core-engine.js";
 import { BACKGROUND_PALETTES, BACKGROUND_SCALE, autoBackground, mixRgb, renderActivityTint, renderBackground, renderCaret, renderEditorGlow, renderEditorSurface, renderGrainTile, renderImpulse, renderPaneBeacon, renderPaneFlash, renderScanlines, renderShimmer, renderVignette } from "./effects.js";
 
 const BSU = "\x1b[?2026h";
@@ -56,6 +57,11 @@ const ACTIVITY_SPEED = { idle: 1, typing: 1.15, thinking: 1.8, working: 2.4, spe
 const ACTIVITY_TINT = { idle: 0, typing: 0.25, thinking: 0.75, working: 0.6, speaking: 0.9 };
 
 export const FULL_CANVAS_DEFAULTS = Object.freeze({
+  // typescript: this module's renderer. gfx: gfx-core, the Rust renderer
+  // shared with gfxsh (WebAssembly; gfx_wasm.wasm from gfxsh's package,
+  // gfxWasm or $PI_GFX_WASM). Falls back to typescript when unavailable.
+  renderer: "typescript",
+  gfxWasm: "",
   fontSizePx: 0, // 0 = auto from the real cell height
   zoom: 1,
   lineHeight: 1.3,
@@ -221,6 +227,9 @@ export function createFullCanvas({
     lastTypedImpulse: 0,
     ticker: null,
     stats: { frames: 0, uploads: 0, uploadBytes: 0, rasterMs: 0, lastFrameMs: 0, ticks: 0 },
+    gfx: null,
+    gfxLast: null,
+    gfxCursor: "",
   };
   function freshBackground() {
     return { key: "", ring: [], frames: 0, period: 1, phase: 0, speed: 1, lastTick: 0, index: -1, placed: null, bw: 0, bh: 0, tint: { cache: new Map(), level: 0, activity: "idle", placed: null, key: "" } };
@@ -284,6 +293,11 @@ export function createFullCanvas({
   function computeVirtual() {
     const real = realGeometry();
     state.real = real;
+    if (state.gfx) {
+      // gfx-core draws on the terminal's own grid with a one-cell gutter
+      state.virt = { cols: Math.max(20, real.cols - 2), rows: real.rows, padX: real.cellW, padY: 0, marginX: 0 };
+      return state.virt;
+    }
     const fonts = state.fonts;
     const pad = Number(cfg().padding) || 0;
     const cols = Math.max(20, Math.floor((real.width - pad * 2) / fonts.cellWidth));
@@ -295,6 +309,23 @@ export function createFullCanvas({
     const marginX = Math.max(0, Math.min(padX, Math.round(fonts.cellWidth * 1.2)));
     state.virt = { cols, rows, padX, padY, marginX };
     return state.virt;
+  }
+
+  /** The few settings both renderers understand, as gfx-core effects. */
+  function gfxEffects() {
+    const c = cfg();
+    const background = backgroundChoice().type;
+    const known = ["aurora", "nebula", "waves", "grid", "stars", "static", "none"];
+    return {
+      background: known.includes(background) ? background : "aurora",
+      caret: ["bloom", "beam", "block", "underline", "off"].includes(c.caretStyle) ? c.caretStyle : "bloom",
+      caret_bloom: Number(c.caretBloom) || 1,
+      vignette: Number(c.vignette) || 0,
+      scanlines: Number(c.scanlines) || 0,
+      grain: Number(c.grain) || 0,
+      text_shadow: Number(c.textShadow) || 0,
+      text_glow: Number(c.textGlow) || 0,
+    };
   }
 
   function buildFonts() {
@@ -1348,6 +1379,17 @@ export function createFullCanvas({
   }
 
   function tick() {
+    if (state.active && state.gfx && state.gfxLast) {
+      // gfx-core: re-render the last frame; it only emits what changed
+      // (animations), so idle ticks write nothing.
+      try {
+        const out = state.gfx.frame(state.gfxLast);
+        if (out) write(`${BSU}${out}${state.gfxCursor || ""}${ESU}`);
+      } catch (error) {
+        trace(`gfx-core tick failed: ${error.message}`);
+      }
+      return;
+    }
     if (!state.active || !state.frame) return;
     const now = Date.now();
     state.stats.ticks += 1;
@@ -2002,9 +2044,34 @@ export function createFullCanvas({
     return panels;
   }
 
+  function onFrameGfx(frame, renderer) {
+    const started = performance.now();
+    const { rows, cols } = state.virt;
+    const screen = Array.isArray(renderer?.previousScreen) ? renderer.previousScreen : [];
+    const parsed = [];
+    for (let r = 0; r < rows; r += 1) parsed.push({ cells: parsedRow(screen[r] ?? "").cells });
+    const regions = getRegions(renderer) || {};
+    const cursor = frame.cursor && frame.cursor.row < rows && frame.cursor.col < cols ? frame.cursor : null;
+    let out = "";
+    try {
+      state.gfxLast = toGfxFrame(parsed, { cursor, editor: regions.editor || null });
+      out = state.gfx.frame(state.gfxLast);
+    } catch (error) {
+      trace(`gfx-core frame failed: ${error.message}`);
+    }
+    state.stats.frames += 1;
+    state.stats.lastFrameMs = performance.now() - started;
+    const realCursor = cursor ? `\x1b[${cursor.row + 1};${cursor.col + 2}H` : "";
+    state.gfxCursor = realCursor;
+    // keep the effects animating (gfx-core decides what changes)
+    wake();
+    return { replace: out ? `${BSU}${out}${realCursor}\x1b[?25l${ESU}` : realCursor };
+  }
+
   function onFrame(frame, { renderer }) {
     const started = performance.now();
     if (!state.active) return {};
+    if (state.gfx) return onFrameGfx(frame, renderer);
     ensureOverlayTap(renderer);
     try { semanticTick(); } catch {}
     const rows = state.virt.rows; const cols = state.virt.cols;
@@ -2094,6 +2161,10 @@ export function createFullCanvas({
     if (tmuxMode() && (data === "\x1b[I" || data === "\x1b[O")) pollTmux(); // focus change: re-check visibility now
     const match = SGR_MOUSE_RE.exec(data);
     if (!match) return undefined;
+    if (state.gfx) {
+      const col = Math.max(1, Math.min(state.virt.cols, Number(match[2]) - 1));
+      return `\x1b[<${match[1]};${col};${match[3]}${match[4]}`;
+    }
     let px; let py;
     if (state.pixelMouse) { px = Number(match[2]) - 1; py = Number(match[3]) - 1; }
     else { px = (Number(match[2]) - 0.5) * state.real.cellW; py = (Number(match[3]) - 0.5) * state.real.cellH; }
@@ -2105,6 +2176,10 @@ export function createFullCanvas({
   // -------------------------------------------------------------- lifecycle
   function freeEverything() {
     let out = "";
+    if (state.gfx) {
+      try { out += state.gfx.clear(); state.gfx.drop(); } catch {}
+      state.gfx = null;
+    }
     for (const id of state.ownedImages) out += serialize({ a: "d", d: "I", i: id, q: 2 });
     state.ownedImages.clear();
     state.stripCache.clear();
@@ -2143,6 +2218,7 @@ export function createFullCanvas({
     if (insideGfxsh(process.env)) {
       throw new Error("Pi is running inside gfxsh, which already draws it on gfxsh's pixel canvas. A second canvas would be redrawn by gfxsh (slow, rows go missing), so it stays off here. Set PI_GRAPHICS_FULL_IN_GFXSH=1 to try anyway");
     }
+    state.startOptions = options;
     const { tapInput, ...rest } = options;
     state.config = { ...FULL_CANVAS_DEFAULTS, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined && v !== "")) };
     if (!pixelGeometry) throw new Error("pixel geometry tracker unavailable");
@@ -2164,6 +2240,27 @@ export function createFullCanvas({
     state.terminalName = terminalName || envName.trim() || "unknown";
     state.notes = [];
     buildFonts();
+    state.gfx = null;
+    if (/^gfx/.test(String(cfg().renderer || "")) && !inMultiplexer()) {
+      try {
+        const geometry = realGeometry();
+        state.gfx = await createGfxCoreEngine({
+          wasmPath: findGfxWasm(cfg().gfxWasm),
+          font: state.fonts?.resolved?.default?.path || "",
+          cols: geometry.cols,
+          rows: geometry.rows,
+          cell: [geometry.cellW, geometry.cellH],
+          gutter: 1,
+          effects: gfxEffects(),
+        });
+        state.notes.push("renderer: gfx-core (WebAssembly)");
+      } catch (error) {
+        state.gfx = null;
+        state.notes.push(`renderer gfx unavailable, using typescript: ${error.message}`);
+      }
+    } else if (/^gfx/.test(String(cfg().renderer || ""))) {
+      state.notes.push("renderer gfx: not inside multiplexers yet, using typescript");
+    }
     try {
       const bg = await tui.queryTerminalBackgroundColor?.({ timeoutMs: 150 });
       if (bg && typeof bg === "object" && !state.edgeColorSet) state.termBg = [bg.r, bg.g, bg.b].map((v) => (v > 255 ? v >> 8 : v));
@@ -2180,7 +2277,7 @@ export function createFullCanvas({
     // Multiplexers translate cell mouse reports but not SGR-Pixels ones.
     const pixelCapable = /kitty|ghostty|wezterm/.test(terminalName || envName) && !inMultiplexer();
     state.pixelCapable = pixelCapable;
-    state.pixelMouse = cfg().pixelMouse === "on" || (cfg().pixelMouse === "auto" && pixelCapable);
+    state.pixelMouse = !state.gfx && (cfg().pixelMouse === "on" || (cfg().pixelMouse === "auto" && pixelCapable));
     state.untapInput = tapInput?.(remapInput) || null;
     state.stream.armedAt = Date.now() + 600;
     // Mouse pixels, in-band resize reports (font-size changes), hide cursor,
@@ -2263,6 +2360,15 @@ export function createFullCanvas({
       else if (state.edgeColorSet) { state.edgeColorSet = false; out += "\x1b]111\x07"; }
     }
     trace(`full canvas reconfigure ${Object.keys(state.config).filter(changed).join(",")}`);
+    // Switching renderer (or, with gfx-core, anything geometric): restart.
+    if (changed("renderer") || changed("gfxWasm") || (state.gfx && GEOMETRY_KEYS.some(changed))) {
+      const options = { ...(state.startOptions || {}), ...state.config };
+      void stop({ reason: "renderer" }).then(() => start(options)).catch((error) => trace(`renderer restart failed: ${error.message}`));
+      return status();
+    }
+    if (state.gfx) {
+      try { state.gfx.effects(gfxEffects()); } catch (error) { trace(`gfx-core effects: ${error.message}`); }
+    }
     if (out) write(`${BSU}${out}${ESU}`);
     if (GEOMETRY_KEYS.some(changed)) {
       // Font/grid rebuilds are coalesced: holding ←/→ in the settings window
@@ -2320,6 +2426,8 @@ export function createFullCanvas({
       pixelMouse: state.pixelMouse,
       terminal: state.terminalName || null,
       notes: state.notes || [],
+      renderer: state.gfx ? "gfx" : "typescript",
+      gfx: state.gfx ? state.gfx.stats() : null,
       grid: gridAligned() ? "aligned" : "free",
       tmux: tmuxMode() ? { ...state.tmux, timer: undefined } : null,
       background: state.background.key ? { type: state.background.mode, frames: state.background.frames, cached: state.background.ring.filter((id) => id != null).length, size: `${state.background.bw}x${state.background.bh}`, fps: Math.round((state.background.frames / state.background.period) * 10) / 10, speed: Math.round(state.background.speed * 100) / 100 } : null,

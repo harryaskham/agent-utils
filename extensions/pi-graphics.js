@@ -3181,6 +3181,7 @@ export default async function piGraphicsExtension(pi) {
   // Numeric lists are presets for ←/→; `/gfx full <key> <value>` accepts any
   // value, and the modal steps from a custom value to its nearest neighbour.
   const FULL_SETTING_SPECS = [
+    { key: "renderer", label: "Renderer", values: ["typescript", "gfx"], alias: ["engine"] },
     { key: "zoom", label: "Zoom", values: ["0.75", "0.85", "0.9", "1", "1.1", "1.2", "1.25", "1.35", "1.5", "1.75", "2"], alias: ["scale"] },
     { key: "lineHeight", label: "Line height", values: ["1", "1.05", "1.1", "1.15", "1.2", "1.25", "1.3", "1.4", "1.5", "1.6", "1.8", "2"], alias: ["line-height"] },
     { key: "padding", label: "Padding px", values: ["0", "1", "2", "4", "6", "8", "12", "16", "24", "32"], alias: ["pad"] },

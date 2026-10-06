@@ -384,6 +384,27 @@ running. Numeric rows step through presets; any value can be set with
 `/gfx full <key> <value>` (e.g. `padding 0` when the terminal has its own
 padding, `line-height 1`).
 
+### Renderer: `typescript` or `gfx` (gfx-core)
+
+`/gfx full renderer gfx` (setting `piGraphics.full.renderer`) draws the
+canvas with **gfx-core**, the Rust renderer shared with
+[gfxsh](https://github.com/harryaskham/tools/tree/main/cli/gfxsh), compiled
+to WebAssembly; `typescript` (the default) is this extension's own renderer.
+Settings are not shared: gfx-core takes the background, caret style and
+lighting from this canvas's settings and otherwise its own defaults.
+
+- Pi's frame is mapped, not emulated: rows of styled runs plus blocks from
+  the semantic markers — every message and tool call is a glass pane (tools
+  with a header row, a running beacon while streaming, ✓/✗ when done) and
+  the editor is the live input card with gfx-core's caret.
+- `gfx_wasm.wasm` is found next to an installed `gfxsh`
+  (`share/gfxsh/gfx_wasm.wasm`), via `piGraphics.full.gfxWasm`, or
+  `$PI_GFX_WASM`. When it is missing (or inside tmux/herdr, not supported
+  yet) the canvas falls back to `typescript` and says so in
+  `/gfx full status`.
+- Loader: `canvas/gfx-core-engine.js` (Node builtins only; provides the few
+  system calls gfx-core makes itself, fonts passed as bytes).
+
 ## Commands
 
 `/gfx` with no arguments opens the settings UI. Useful direct forms include:
