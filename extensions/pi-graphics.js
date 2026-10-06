@@ -3219,6 +3219,9 @@ export default async function piGraphicsExtension(pi) {
     { key: "caretLight", label: "Caret light on text", values: ["0", "0.25", "0.5", "0.75", "1"], alias: ["caret-light", "lamp"] },
     { key: "caretLightRadius", label: "Caret light radius", values: ["3", "4", "6", "8", "12"], alias: ["lamp-radius"] },
     { key: "panePulse", label: "Running tool beacon", values: ["on", "off"], alias: ["pane-pulse", "beacon"] },
+    { key: "paneFlash", label: "Tool finish flash", values: ["on", "off"], alias: ["pane-flash", "finish-flash"] },
+    { key: "stickyHeaders", label: "Pinned tool headers", values: ["on", "off"], alias: ["sticky-headers", "sticky"] },
+    { key: "thinkingShimmer", label: "Thinking shimmer", values: ["on", "off"], alias: ["thinking-shimmer", "shimmer"] },
     { key: "vignette", label: "Vignette", values: ["0", "0.15", "0.3", "0.45", "0.6"] },
     { key: "scanlines", label: "Scanlines", values: ["0", "0.15", "0.3", "0.5"] },
     { key: "grain", label: "Film grain", values: ["0", "0.15", "0.3", "0.5", "0.75"] },
@@ -3240,7 +3243,7 @@ export default async function piGraphicsExtension(pi) {
     { key: "pixelMouse", label: "Pixel mouse", values: ["auto", "on", "off"], alias: ["pixel-mouse"] },
     { key: "transport", label: "Transport", values: ["png", "zlib"] },
   ];
-  const FULL_BOOLEAN_KEYS = new Set(["impulse", "trail", "edgeBlend", "editorGlow", "panels", "toolPanels", "backgroundReact", "glowPulse", "panePulse", "renderWorker"]);
+  const FULL_BOOLEAN_KEYS = new Set(["impulse", "trail", "edgeBlend", "editorGlow", "panels", "toolPanels", "backgroundReact", "glowPulse", "panePulse", "paneFlash", "stickyHeaders", "thinkingShimmer", "renderWorker"]);
   let monospaceFamilyCache = null;
   function monospaceFamilies() {
     if (!monospaceFamilyCache) monospaceFamilyCache = listMonospaceFamilies().filter((f) => !/icons|symbol|fixed|clean|emoji|helvetica/i.test(f));

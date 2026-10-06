@@ -638,6 +638,59 @@ export function renderPaneBeacon({ width, cellHeight, frame = 0, frames = 16, co
   return { rgba: fb, width: w, height: h };
 }
 
+/**
+ * Finish flash: a pane's border lights up in its outcome colour (green done,
+ * red failed) and fades. A hot crest travels once round the border on the
+ * first steps. step in [0, steps).
+ */
+export function renderPaneFlash({ width, height, margin, radius, status = "done", step = 0, steps = 6, colors, intensity = 1 }) {
+  const geo = glowGeometry(width, height, margin, radius);
+  const fb = Buffer.alloc(geo.w * geo.h * 4);
+  const color = status === "error" ? (colors.error || [191, 97, 106]) : (colors.speech || colors.success || [163, 190, 140]);
+  const hot = mixRgb(color, [255, 255, 255], 0.5);
+  const t = Math.min(1, step / Math.max(1, steps - 1));
+  // Bright onset, then a slow tail so the outcome registers.
+  const level = (t < 0.15 ? 1.25 : Math.pow(1 - (t - 0.15) / 0.85, 0.9) * 1.15) * Math.max(0, Number(intensity) || 0);
+  const crest = t * 1.25; // travels once round, then gone
+  const n = geo.idx.length;
+  for (let k = 0; k < n; k += 1) {
+    let dist = Math.abs(geo.param[k] - (crest % 1));
+    if (dist > 0.5) dist = 1 - dist;
+    const spot = crest < 1 ? Math.exp(-((dist / 0.07) ** 2)) : 0;
+    // Lift the outer halo so the flash reads as light, not a hairline.
+    const alpha = Math.min(1, Math.sqrt(geo.base[k])) * level * (0.7 + spot * 1.1);
+    if (alpha < 0.004) continue;
+    const c = spot > 0.05 ? mixRgb(color, hot, Math.min(1, spot)) : color;
+    const o = geo.idx[k] * 4;
+    fb[o] = c[0]; fb[o + 1] = c[1]; fb[o + 2] = c[2]; fb[o + 3] = Math.round(255 * Math.min(1, alpha));
+  }
+  return { rgba: fb, width: geo.w, height: geo.h };
+}
+
+/**
+ * Thinking shimmer: a soft diagonal band of light, swept across streaming
+ * reasoning by moving the placement (the image never changes).
+ */
+export function renderShimmer({ width, height, colors, intensity = 1 }) {
+  const w = Math.max(4, Math.round(width)); const h = Math.max(4, Math.round(height));
+  const fb = Buffer.alloc(w * h * 4);
+  const color = mixRgb(colors.thinking || colors.accent, [255, 255, 255], 0.55);
+  const level = 0.22 * Math.max(0, Number(intensity) || 0);
+  const skew = w * 0.35;
+  for (let y = 0; y < h; y += 1) {
+    const vy = y / Math.max(1, h - 1);
+    const vertical = Math.min(1, vy / 0.08, (1 - vy) / 0.08);
+    const cx = w * 0.5 + (0.5 - vy) * skew;
+    for (let x = 0; x < w; x += 1) {
+      const d = (x - cx) / (w * 0.22);
+      const a = level * vertical * Math.exp(-d * d);
+      if (a < 0.004) continue;
+      blendPixel(fb, (y * w + x) * 4, color[0], color[1], color[2], Math.round(255 * Math.min(1, a)));
+    }
+  }
+  return { rgba: fb, width: w, height: h };
+}
+
 /** Film-grain tile: monochrome luminance noise with alpha. */
 export function renderGrainTile({ size = 256, strength = 0.3, seed = 1 }) {
   const fb = Buffer.alloc(size * size * 4);

@@ -9,6 +9,7 @@
 //   node scripts/pi-graphics-ghostty-lab.mjs --out=/tmp/gfxlab/run \
 //     --tui=fullscreen --settings='{"piGraphics":{"mode":"on"}}' \
 //     --steps='wait:6000,shot:start,type:hello world,wait:800,shot:typed'
+//   burst:COUNT;GAP_MS;NAME takes rapid screenshots (short-lived effects).
 //
 // Steps: wait:<ms> | shot:<name> | type:<text> | key:<xdotool keysym> |
 //        cmd:<slash command, typed then Enter> | resize:<cols>x<rows>
@@ -127,6 +128,11 @@ async function main() {
       const value = idx < 0 ? "" : step.slice(idx + 1);
       if (kind === "wait") await sleep(Number(value) || 500);
       else if (kind === "shot") await screenshot(value || `shot-${Date.now()}`);
+      else if (kind === "burst") {
+        // burst:COUNT;GAP_MS;NAME — rapid screenshots to catch short effects.
+        const [count = "6", gap = "120", name = "burst"] = value.split(";");
+        for (let k = 0; k < Number(count); k += 1) { await screenshot(`${name}-${String(k).padStart(2, "0")}`); await sleep(Number(gap)); }
+      }
       else if (kind === "type") { xdo("type", "--delay", String(args["type-delay"] || 40), value.replaceAll("\\c", ",")); }
       else if (kind === "key") { for (const key of value.split("+space+")) xdo("key", key); }
       else if (kind === "cmd") { xdo("type", "--delay", "20", value.replaceAll("\\c", ",")); await sleep(250); xdo("key", "Return"); }

@@ -35,7 +35,7 @@ import { FontSet } from "./font-atlas.js";
 import { decodePng, drawScaledImage } from "./png-decode.js";
 import { addRadialGlow, encodeRgbaPng } from "../png-renderer.js";
 import { blendMask } from "./raster.js";
-import { BACKGROUND_PALETTES, BACKGROUND_SCALE, autoBackground, mixRgb, renderActivityTint, renderBackground, renderCaret, renderEditorGlow, renderEditorSurface, renderGrainTile, renderImpulse, renderPaneBeacon, renderScanlines, renderVignette } from "./effects.js";
+import { BACKGROUND_PALETTES, BACKGROUND_SCALE, autoBackground, mixRgb, renderActivityTint, renderBackground, renderCaret, renderEditorGlow, renderEditorSurface, renderGrainTile, renderImpulse, renderPaneBeacon, renderPaneFlash, renderScanlines, renderShimmer, renderVignette } from "./effects.js";
 
 const BSU = "\x1b[?2026h";
 const ESU = "\x1b[?2026l";
@@ -105,6 +105,9 @@ export const FULL_CANVAS_DEFAULTS = Object.freeze({
   caretLight: 0.5, // nearby text is lit by the caret (brighter when typing fast)
   caretLightRadius: 6, // cells
   panePulse: true, // a light sweeps along running tools' panes
+  paneFlash: true, // a tool pane's border flashes green/red when it finishes
+  stickyHeaders: true, // a tool pane's title stays pinned while its output scrolls
+  thinkingShimmer: true, // a band of light sweeps across streaming reasoning
   grain: 0, // animated film grain over everything (0 = off)
   grainFps: 12,
   // free: sub-cell grid at the canvas font size. aligned: rows snapped to
@@ -203,6 +206,7 @@ export function createFullCanvas({
     surface: { key: "", id: null, placedAt: "" },
     caretLight: { key: "", id: null },
     beacon: { store: freshStore(), slots: new Map() },
+    paneFx: freshPaneFx(),
     grain: { store: freshStore(), key: "", frame: -1, placedId: null },
     fx: { vignetteKey: "", vignetteId: null, scanKey: "", scanId: null, scanPlacements: 0 },
     typed: [],
@@ -219,6 +223,15 @@ export function createFullCanvas({
     return { ids: new Map(), key: "", target: null, shown: null, pos: null, from: null, to: null, start: 0, bucket: -1, imageId: null, anchor: null };
   }
   function freshStore() { return { ids: new Map(), ready: new Map(), requested: new Set(), gen: 0 }; }
+  // Per-pane effects: finish flashes, pinned headers, thinking shimmer. Each
+  // effect keeps its own image store and placement slots.
+  function freshPaneFx() {
+    return {
+      status: new Map(), flashes: [], flashStore: freshStore(), flashSlots: new Map(),
+      headers: new Map(), stickyStore: { ids: new Map() }, stickySlots: new Map(),
+      shimmerStore: freshStore(), shimmerSlots: new Map(),
+    };
+  }
   function freshGlow() {
     return { baseKey: "", cache: new Map(), activity: "", index: -1, last: 0, placed: null, flarePlaced: null };
   }
@@ -472,6 +485,7 @@ export function createFullCanvas({
     for (const slot of state.overlay.slots.values()) slot.key = "";
     state.caretLight = { key: "", id: state.caretLight.id };
     state.beacon.slots.clear();
+    state.paneFx.flashSlots.clear(); state.paneFx.stickySlots.clear(); state.paneFx.shimmerSlots.clear();
     state.grain.placedId = null; state.grain.frame = -1;
     state.fx.vignetteKey = ""; state.fx.scanKey = "";
   }
@@ -754,6 +768,20 @@ export function createFullCanvas({
     return { lx, ly, lw, lh: fonts.cellHeight };
   }
 
+  /** The part of a panel that falls on one row. */
+  function paneSlice(p, rowIndex) {
+    return {
+      ...p,
+      start: p.col0, end: p.col1,
+      top: rowIndex === p.row0 && p.top !== false, bottom: rowIndex === p.row1 && p.bottom !== false,
+      // Full extent relative to this row (clamped: beyond ±3 rows a slice
+      // is identical, so tall panels still share cached middle strips).
+      relTop: p.top === false ? -3 : Math.max(-3, p.row0 - rowIndex),
+      relBottom: p.bottom === false ? 3 : Math.min(3, p.row1 - rowIndex),
+      suppressRules: p.suppressRules && (rowIndex === p.row0 || rowIndex === p.row1),
+    };
+  }
+
   function renderStrip(rowIndex) {
     const frame = state.frame;
     const { cells, line } = frame.parsed[rowIndex];
@@ -765,16 +793,7 @@ export function createFullCanvas({
     const hasRuns = own.some((v) => v !== DEFAULT);
     const above = hasRuns && rowIndex > 0 ? bgSignature(frame.parsed[rowIndex - 1].cells, colFor(rowIndex - 1)) : null;
     const below = hasRuns && rowIndex < rows - 1 ? bgSignature(frame.parsed[rowIndex + 1].cells, colFor(rowIndex + 1)) : null;
-    const rowPanels = frame.panels.filter((p) => rowIndex >= p.row0 && rowIndex <= p.row1).map((p) => ({
-      ...p,
-      start: p.col0, end: p.col1,
-      top: rowIndex === p.row0 && p.top !== false, bottom: rowIndex === p.row1 && p.bottom !== false,
-      // Full extent relative to this row (clamped: beyond ±3 rows a slice
-      // is identical, so tall panels still share cached middle strips).
-      relTop: p.top === false ? -3 : Math.max(-3, p.row0 - rowIndex),
-      relBottom: p.bottom === false ? 3 : Math.min(3, p.row1 - rowIndex),
-      suppressRules: p.suppressRules && (rowIndex === p.row0 || rowIndex === p.row1),
-    }));
+    const rowPanels = frame.panels.filter((p) => rowIndex >= p.row0 && rowIndex <= p.row1).map((p) => paneSlice(p, rowIndex));
     const regionRole = frame.regionRoles.get(rowIndex) || null;
     const slice = frame.imageSlices.get(rowIndex);
     const lighting = frame.lighting;
@@ -1318,6 +1337,7 @@ export function createFullCanvas({
     if (bool(cfg().editorGlow, true) && state.frame?.glowRect) return true;
     if (state.background.frames > 1 || state.background.tint.placed != null) return true;
     if (state.beacon.slots.size || (Number(cfg().grain) > 0 && Number(cfg().grainFps) > 0)) return true;
+    if (state.paneFx.flashes.length || state.paneFx.flashSlots.size || state.paneFx.shimmerSlots.size) return true;
     return Number(getHeat()) > 0.01 || Number(getPulse()) > 0.01;
   }
 
@@ -1332,7 +1352,7 @@ export function createFullCanvas({
     const t0 = performance.now();
     const marks = [];
     const timed = (name, fn) => { const a = performance.now(); const r = fn(); marks.push(`${name}=${(performance.now() - a).toFixed(1)}`); return r; };
-    out += timed("glow", () => glowCommands(now)) + timed("bg", () => backgroundAdvance(now)) + timed("caret", () => caretCommands(now) + caretLightCommands() + impulseCommands(now)) + timed("fx", () => beaconCommands(now) + grainCommands(now)) + timed("ov", () => overlayCommands(now));
+    out += timed("glow", () => glowCommands(now)) + timed("bg", () => backgroundAdvance(now)) + timed("caret", () => caretCommands(now) + caretLightCommands() + impulseCommands(now)) + timed("fx", () => beaconCommands(now) + (trackPaneStatus(now), paneFlashCommands(now)) + shimmerCommands(now) + grainCommands(now)) + timed("ov", () => overlayCommands(now));
     const ms = performance.now() - t0;
     state.stats.tickMs = Math.max(state.stats.tickMs || 0, ms);
     if (ms > 12) trace(`canvas tick ${state.stats.ticks} ms=${ms.toFixed(1)} ${marks.join(" ")} bytes=${out.length} overlays=${state.overlay.items.size}`);
@@ -1430,7 +1450,15 @@ export function createFullCanvas({
       const terminal = group.sem.kind === "bash" || group.sem.role === "bash";
       const status = group.error ? "error" : group.streaming ? "pending" : "done";
       const statusColor = status === "error" ? t.error : status === "pending" ? t.pending : t.speech;
+      // Remember each pane's title row so it can stay pinned while the pane
+      // scrolls past it.
+      // (the first non-blank line: tool cards start with a padding row).
+      if (group.firstLine === 0) {
+        const titleIndex = group.rows.slice(0, 3).findIndex((cells) => cells.some((c) => c.sem && !c.cont && c.cp !== 32 && c.cp !== 0));
+        if (titleIndex >= 0) rememberPaneHeader(group.block, group.rows[titleIndex], titleIndex);
+      }
       const base = {
+        block: group.block, status, firstLine: group.firstLine, terminal: group.sem.kind === "bash" || group.sem.role === "bash",
         row0: group.row0, row1: group.row1, col0, col1, pending: status === "pending", frost: glassFrost(),
         top: group.firstLine === 0,
         bottom: group.row1 < parsed.length - 1,
@@ -1445,6 +1473,15 @@ export function createFullCanvas({
         : { ...base, style: `tool:${status}:${cfg().paneStyle}:${opacity}:${base.style}`, fill: mixRgb(t.surface, t.accent, 0.05), alpha: glass ? opacity * 0.8 : 0.9, border: t.accent, border2: glass ? t.accent2 : null, borderAlpha: 0.3, sheen: glass ? 0.04 : 0, shadow, stripe: statusColor });
     }
     return out;
+  }
+
+  function rememberPaneHeader(block, cells, line) {
+    const headers = state.paneFx.headers;
+    const key = cells.map((c) => `${c.cp}:${c.fg}:${c.bg}:${c.bold ? 1 : 0}`).join(",");
+    if (headers.get(block)?.key === key) return;
+    headers.delete(block);
+    headers.set(block, { key, cells, line });
+    while (headers.size > 64) headers.delete(headers.keys().next().value);
   }
 
   // Pi composites overlays (dialogs, selectors, settings) into the screen
@@ -1709,6 +1746,206 @@ export function createFullCanvas({
     return out;
   }
 
+  // ------------------------------------------------------------ pane effects
+  // Finish flash: when a tool pane goes from running to done/failed its
+  // border lights up in the outcome colour and fades (FLASH_STEPS frames,
+  // rendered off-thread, cached per pane size and outcome).
+  const FLASH_STEPS = 9; const FLASH_MS = 1100;
+  function paneMargin() { return Math.max(4, Math.min(state.virt.marginX + Math.round(state.fonts.cellHeight * 0.5), Math.round(state.fonts.cellWidth * 2.4))); }
+  function paneRect(pane) {
+    const cw = state.fonts.cellWidth; const ch = state.fonts.cellHeight;
+    const inset = Math.min(state.virt.marginX, Math.round(cw * 0.8));
+    const top = pane.top !== false ? ch * 0.45 : 0; const bottom = pane.bottom !== false ? ch * 0.45 : 0;
+    return {
+      x: Math.round(state.virt.padX + pane.col0 * cw - inset),
+      y: Math.round(state.virt.padY + pane.row0 * ch + top),
+      w: Math.round((pane.col1 - pane.col0) * cw + inset * 2),
+      h: Math.max(4, Math.round((pane.row1 - pane.row0 + 1) * ch - top - bottom)),
+    };
+  }
+  function trackPaneStatus(now) {
+    const fx = state.paneFx;
+    const panes = (state.frame?.panels || []).filter((p) => p.block && p.status);
+    for (const pane of panes) {
+      const before = fx.status.get(pane.block);
+      if (before === "pending" && pane.status !== "pending" && bool(cfg().paneFlash, true)) {
+        fx.flashes = fx.flashes.filter((f) => f.block !== pane.block);
+        fx.flashes.push({ block: pane.block, status: pane.status, at: now });
+        if (process.env.PI_GRAPHICS_TRACE_FX) trace(`canvas pane flash ${pane.block} ${pane.status}`);
+        if (fx.flashes.length > 4) fx.flashes.shift();
+      }
+      fx.status.delete(pane.block); fx.status.set(pane.block, pane.status);
+    }
+    while (fx.status.size > 256) fx.status.delete(fx.status.keys().next().value);
+    fx.flashes = fx.flashes.filter((f) => now - f.at < FLASH_MS);
+  }
+  function paneFlashCommands(now, { force = false } = {}) {
+    const fx = state.paneFx;
+    let out = "";
+    const panes = state.frame?.panels || [];
+    const wanted = new Map();
+    fx.flashes.forEach((flash, k) => {
+      const pane = panes.find((p) => p.block === flash.block);
+      if (!pane) return;
+      const step = Math.min(FLASH_STEPS - 1, Math.floor(((now - flash.at) / FLASH_MS) * FLASH_STEPS));
+      wanted.set(k + 1, { pane, rect: paneRect(pane), status: flash.status, step });
+    });
+    for (const [slot, placed] of fx.flashSlots) {
+      if (wanted.has(slot)) continue;
+      out += deletePlacement(placed.id, slot);
+      fx.flashSlots.delete(slot);
+    }
+    const margin = paneMargin(); const radius = Math.round(state.fonts.cellHeight * 0.5);
+    for (const [slot, want] of wanted) {
+      const { rect } = want;
+      const key = `${rect.w}x${rect.h}:${want.status}:${want.step}`;
+      const img = workerImage(fx.flashStore, key, "flash", { width: rect.w, height: rect.h, margin, radius, status: want.status, step: want.step, steps: FLASH_STEPS, colors: state.theme, intensity: cfg().glowIntensity ?? 1 }, renderPaneFlash);
+      if (!img) continue;
+      out += img.out;
+      const x = rect.x - margin; const y = rect.y - margin;
+      const placed = fx.flashSlots.get(slot);
+      if (!force && placed && placed.id === img.id && placed.x === x && placed.y === y) continue;
+      if (placed && placed.id !== img.id) out += deletePlacement(placed.id, slot);
+      out += placeCropped(img.id, slot, x, y, Z.overlay + 1, { w: rect.w + margin * 2, h: rect.h + margin * 2 });
+      fx.flashSlots.set(slot, { id: img.id, x, y });
+    }
+    if (fx.flashStore.ids.size > FLASH_STEPS * 6 && !fx.flashes.length) out += freeStore(fx.flashStore);
+    return out;
+  }
+
+  // Sticky headers: while a tool pane's title row is scrolled out of view,
+  // its remembered title is drawn as a floating card on the pane's first
+  // visible row.
+  function stickyCommands({ force = false } = {}) {
+    const fx = state.paneFx;
+    let out = "";
+    const wanted = new Map();
+    if (bool(cfg().stickyHeaders, true)) {
+      (state.frame?.panels || [])
+        .filter((p) => p.block && p.top === false && p.row1 > p.row0 && fx.headers.has(p.block) && (p.firstLine ?? 0) > fx.headers.get(p.block).line)
+        .slice(0, 4)
+        .forEach((pane, k) => wanted.set(k + 1, pane));
+    }
+    for (const [slot, placed] of fx.stickySlots) {
+      if (wanted.has(slot)) continue;
+      out += deletePlacement(placed.id, slot);
+      fx.stickySlots.delete(slot);
+    }
+    for (const [slot, pane] of wanted) {
+      const header = fx.headers.get(pane.block);
+      const row = pane.row0;
+      // A flush one-row card in the title-band colour (no band: its rule
+      // would cross the text), with the pane's border and status stripe.
+      const slice = { ...paneSlice({ ...pane, top: true, bottom: true, row0: row, row1: row }, row), chrome: null, flush: true, fill: pane.titleFill || pane.fill, alpha: 1, shadow: 0, sheen: 0.08, frost: 0 };
+      const key = `${header.key}|${slice.style}|${slice.start}-${slice.end}|${state.virt.cols}|${S()}`;
+      // Rendered and placed exactly like a row strip (HiDPI and aligned
+      // grids use whole-cell boxes).
+      const geo = stripGeometry(row);
+      const box = gridAligned() ? cellBox(geo.lx, geo.ly, geo.lw, geo.lh) : null;
+      const fullKey = `${key}|${box ? `${box.offX.toFixed(1)}:${box.offY.toFixed(1)}:${box.c}x${box.r}` : ""}`;
+      let id = fx.stickyStore.ids.get(fullKey);
+      if (id == null) {
+        const scale = S();
+        const strip = renderRow(header.cells, { fonts: state.fonts, cols: state.virt.cols, theme: state.theme, cursorCol: -1, scale, panels: [slice], marginX: state.virt.marginX, regionRole: null, lighting: state.frame?.lighting });
+        if (strip.empty) continue;
+        opaqueCardBehind(strip, pane, scale);
+        const image = box ? boxed(strip.rgba, strip.width, strip.height, box, scale) : strip;
+        id = allocateImageId(`sticky-${pane.block}`);
+        out += transmit(id, image.rgba, image.width, image.height);
+        fx.stickyStore.ids.set(fullKey, id);
+        if (fx.stickyStore.ids.size > 24) {
+          const [oldKey, oldId] = fx.stickyStore.ids.entries().next().value;
+          if (![...fx.stickySlots.values()].some((p) => p.id === oldId)) { fx.stickyStore.ids.delete(oldKey); out += freeImage(oldId); }
+        }
+      }
+      const at = `${geo.lx},${geo.ly},${state.real.cellW}x${state.real.cellH}`;
+      const placed = fx.stickySlots.get(slot);
+      if (!force && placed && placed.id === id && placed.at === at) continue;
+      if (placed && placed.id !== id) out += deletePlacement(placed.id, slot);
+      if (box) {
+        const cell = cellBox(geo.lx, geo.ly, geo.lw, geo.lh);
+        out += placeAt(cell.row0, cell.col0, { a: "p", i: id, p: slot, c: box.c, r: box.r, C: 1, q: 2, z: Z.overlay });
+      } else {
+        out += placeNatural(id, slot, geo.lx, geo.ly, Z.overlay);
+      }
+      fx.stickySlots.set(slot, { id, at });
+    }
+    return out;
+  }
+
+  // The pinned title must hide the output row it floats over: composite the
+  // rendered title onto an opaque rounded card in the pane's colour.
+  function opaqueCardBehind(strip, pane, scale) {
+    const cw = state.fonts.cellWidth * scale;
+    const inset = Math.min(state.virt.marginX, Math.round(state.fonts.cellWidth * 0.8)) * scale;
+    const x0 = Math.max(0, Math.round(state.virt.marginX * scale + pane.col0 * cw - inset));
+    const x1 = Math.min(strip.width, Math.round(state.virt.marginX * scale + pane.col1 * cw + inset));
+    const h = strip.height; const radius = Math.min(h / 2, Math.round(state.fonts.cellHeight * 0.4 * scale));
+    const fill = pane.titleFill || pane.fill || state.theme.surface;
+    const buf = strip.rgba;
+    for (let y = 0; y < h; y += 1) {
+      for (let x = x0; x < x1; x += 1) {
+        // rounded-rect coverage (1px anti-aliased edge)
+        const dx = Math.max(x0 + radius - (x + 0.5), (x + 0.5) - (x1 - radius), 0);
+        const dy = Math.max(radius - (y + 0.5), (y + 0.5) - (h - radius), 0);
+        const cover = Math.max(0, Math.min(1, radius + 0.5 - Math.hypot(dx, dy)));
+        if (cover <= 0) continue;
+        const i = (y * strip.width + x) * 4; const a = buf[i + 3] / 255;
+        // strip pixel over the card, then the result at the card's coverage
+        const r = buf[i] * a + fill[0] * (1 - a); const g = buf[i + 1] * a + fill[1] * (1 - a); const b = buf[i + 2] * a + fill[2] * (1 - a);
+        const outA = cover + a * (1 - cover);
+        buf[i] = Math.round((r * cover + buf[i] * a * (1 - cover)) / outA);
+        buf[i + 1] = Math.round((g * cover + buf[i + 1] * a * (1 - cover)) / outA);
+        buf[i + 2] = Math.round((b * cover + buf[i + 2] * a * (1 - cover)) / outA);
+        buf[i + 3] = Math.round(255 * outA);
+      }
+    }
+  }
+
+  // Thinking shimmer: a diagonal band of light sweeps across reasoning while
+  // it streams. One image per block size; only its placement moves.
+  const SHIMMER_PERIOD = 2200;
+  function shimmerCommands(now, { force = false } = {}) {
+    const fx = state.paneFx;
+    let out = "";
+    const wanted = new Map();
+    const parsed = state.frame?.parsed || [];
+    if (bool(cfg().thinkingShimmer, true)) {
+      let run = null;
+      parsed.forEach(({ cells }, r) => {
+        const sem = semOf(cells);
+        const thinking = sem && sem.role === "thinking" && sem.streaming;
+        if (thinking && run && run.block === sem.block && run.row1 === r - 1) { run.row1 = r; return; }
+        if (thinking) { run = { block: sem.block, row0: r, row1: r }; if (wanted.size < 2) wanted.set(wanted.size + 1, run); } else run = null;
+      });
+    }
+    for (const [slot, placed] of fx.shimmerSlots) {
+      if (wanted.has(slot)) continue;
+      out += deletePlacement(placed.id, slot);
+      fx.shimmerSlots.delete(slot);
+    }
+    const cw = state.fonts.cellWidth; const ch = state.fonts.cellHeight;
+    for (const [slot, run] of wanted) {
+      const height = (run.row1 - run.row0 + 1) * ch;
+      const width = Math.round(Math.min(state.virt.cols, 28) * cw);
+      const key = `${width}x${height}`;
+      const img = workerImage(fx.shimmerStore, key, "shimmer", { width, height, colors: state.theme, intensity: cfg().glowIntensity ?? 1 }, renderShimmer);
+      if (!img) continue;
+      out += img.out;
+      const span = state.virt.cols * cw + width;
+      const phase = (now % SHIMMER_PERIOD) / SHIMMER_PERIOD;
+      const x = Math.round(state.virt.padX - width + phase * span);
+      const y = Math.round(state.virt.padY + run.row0 * ch);
+      const placed = fx.shimmerSlots.get(slot);
+      if (!force && placed && placed.id === img.id && placed.x === x && placed.y === y) continue;
+      if (placed && placed.id !== img.id) out += deletePlacement(placed.id, slot);
+      out += placeCropped(img.id, slot, x, y, Z.overlay + 2, { w: width, h: height });
+      fx.shimmerSlots.set(slot, { id: img.id, x, y });
+    }
+    if (fx.shimmerStore.ids.size > 8 && !wanted.size) out += freeStore(fx.shimmerStore);
+    return out;
+  }
+
   // Film grain: one 256px noise tile tiled over the window, swapping between
   // a few tiles at grainFps (deletes all placements of the old tile at once).
   const GRAIN_TILES = 4; const GRAIN_SIZE = 256;
@@ -1833,7 +2070,7 @@ export function createFullCanvas({
     out += evictStrips(live);
     const tRows = performance.now();
     state.caret.target = cursor;
-    out += glowCommands(now, { force: frame.cleared }) + backgroundAdvance(now) + surfaceCommands({ force: frame.cleared }) + screenFxCommands({ force: frame.cleared }) + grainCommands(now, { force: frame.cleared }) + beaconCommands(now, { force: frame.cleared }) + caretCommands(now) + caretLightCommands() + impulseCommands(now) + overlayCommands(now);
+    out += glowCommands(now, { force: frame.cleared }) + backgroundAdvance(now) + surfaceCommands({ force: frame.cleared }) + screenFxCommands({ force: frame.cleared }) + grainCommands(now, { force: frame.cleared }) + beaconCommands(now, { force: frame.cleared }) + (trackPaneStatus(now), paneFlashCommands(now, { force: frame.cleared })) + stickyCommands({ force: frame.cleared }) + shimmerCommands(now, { force: frame.cleared }) + caretCommands(now) + caretLightCommands() + impulseCommands(now) + overlayCommands(now);
     const realCursor = cursor
       ? (() => { const p = caretPixel(cursor); const at = cellAt(p.x, p.y); return `\x1b[${at.row + 1};${at.col + 1}H`; })()
       : "";
@@ -1877,6 +2114,7 @@ export function createFullCanvas({
     state.surface = { key: "", id: null, placedAt: "" };
     state.caretLight = { key: "", id: null };
     state.beacon = { store: freshStore(), slots: new Map() };
+    state.paneFx = freshPaneFx();
     state.grain = { store: freshStore(), key: "", frame: -1, placedId: null };
     state.fx = { vignetteKey: "", vignetteId: null, scanKey: "", scanId: null, scanPlacements: 0 };
     state.typed = [];

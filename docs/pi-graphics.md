@@ -254,6 +254,21 @@ text change).
 bottom, when the top is scrolled off) of every pending tool pane. Frames
 depend only on the pane width, so streaming output does not re-render them.
 
+**Finished tools.** With `paneFlash`, when a tool pane goes from running to
+done its border lights up in the outcome colour — green for success, red for
+a failure — with a bright crest travelling once round it, then fades (about
+three quarters of a second; frames are rendered off-thread and cached per
+pane size).
+
+**Pinned headers.** With `stickyHeaders`, while a tool pane's title row (the
+`$ command` of a Bash pane, the tool name of a card) is scrolled out of view,
+the remembered title is drawn as a floating card over the pane's first
+visible row, so long output keeps its context.
+
+**Thinking shimmer.** With `thinkingShimmer`, a soft diagonal band of light
+sweeps across reasoning while it streams. The band is one image per block
+size; animating it only moves its placement.
+
 **Grain.** `grain` overlays animated film grain: one 256 px noise tile tiled
 over the window, swapping among four tiles at `grainFps` (0 = static).
 

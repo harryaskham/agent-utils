@@ -247,6 +247,31 @@ test("running-tool beacon sweeps and grain tiles stay subtle", async () => {
   assert.ok(max > 0 && max <= 24, `grain alpha stays subtle (${max})`);
 });
 
+test("finish flash lights the pane border in the outcome colour and fades; shimmer is a soft band", async () => {
+  const { renderPaneFlash, renderShimmer } = await import("../extensions/pi-graphics/canvas/effects.js");
+  const colors = { speech: [163, 190, 140], error: [191, 97, 106], thinking: [180, 142, 173], accent: [136, 192, 208] };
+  const args = { width: 300, height: 120, margin: 16, radius: 11, steps: 7, colors };
+  const peak = (img) => { let a = 0; for (let i = 3; i < img.rgba.length; i += 4) a = Math.max(a, img.rgba[i]); return a; };
+  const dominant = (img) => {
+    let best = -1; let rgb = null;
+    for (let i = 0; i < img.rgba.length; i += 4) if (img.rgba[i + 3] > best) { best = img.rgba[i + 3]; rgb = [img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]]; }
+    return rgb;
+  };
+  const doneStart = renderPaneFlash({ ...args, status: "done", step: 0 });
+  const doneLate = renderPaneFlash({ ...args, status: "done", step: 5 });
+  const failed = renderPaneFlash({ ...args, status: "error", step: 3 });
+  assert.equal(doneStart.width, 300 + 32, "image covers the pane plus the glow margin");
+  assert.ok(peak(doneStart) > peak(doneLate) * 2, `the flash fades (${peak(doneStart)} → ${peak(doneLate)})`);
+  const [r, g] = dominant(doneStart); assert.ok(g > r, "success flashes green");
+  const [fr, fg] = dominant(failed); assert.ok(fr > fg, "failure flashes red");
+  // The pane interior stays clear: only the border glows.
+  const centre = ((doneStart.height >> 1) * doneStart.width + (doneStart.width >> 1)) * 4 + 3;
+  assert.equal(doneStart.rgba[centre], 0, "interior untouched");
+  const band = renderShimmer({ width: 200, height: 66, colors });
+  const mid = band.rgba[((33 * 200) + 100) * 4 + 3]; const edge = band.rgba[((33 * 200) + 2) * 4 + 3];
+  assert.ok(mid > edge && mid > 0 && mid < 80, `shimmer is brightest in its centre and subtle (${mid} vs ${edge})`);
+});
+
 test("frosted dialogs blur the covered transcript row under a translucent fill", async () => {
   const { renderRow } = await import("../extensions/pi-graphics/canvas/canvas-renderer.js");
   const { GlyphAtlas, resolveFontFaces } = await import("../extensions/pi-graphics/canvas/font-atlas.js");
