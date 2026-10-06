@@ -403,11 +403,13 @@ are reported in `/gfx full status` and the canvas falls back to
   the semantic markers — every message and tool call is a glass pane (tools
   with a header row, a running beacon while streaming, ✓/✗ when done) and
   the editor is the live input card with gfx-core's caret.
-- `gfx_wasm.wasm` is found next to an installed `gfxsh`
-  (`share/gfxsh/gfx_wasm.wasm`), via `piGraphics.full.gfxWasm`, or
-  `$PI_GFX_WASM`. When it is missing (or inside tmux/herdr, not supported
-  yet) the canvas falls back to `typescript` and says so in
-  `/gfx full status`.
+- `gfx_wasm.wasm` comes from gfxsh, which carries it in its binary: the
+  `piGraphics.full.gfxWasm` setting, `$PI_GFX_WASM`,
+  `share/gfxsh/gfx_wasm.wasm` beside the `gfxsh` on `PATH` (Nix), else
+  `gfxsh wasm` (any install, `cargo install` included: it writes the
+  embedded module to `~/.cache/gfxsh/` once per gfxsh build and prints the
+  path). When none is found (or inside tmux/herdr, not supported yet) the
+  canvas falls back to `typescript` and says so in `/gfx full status`.
 - Loader: `canvas/gfx-core-engine.js` (Node builtins only; provides the few
   system calls gfx-core makes itself, fonts passed as bytes).
 

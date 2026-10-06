@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { parseAnsiLine } from "../extensions/pi-graphics/canvas/ansi-cells.js";
 import { createGfxCoreEngine, findGfxWasm, toGfxFrame } from "../extensions/pi-graphics/canvas/gfx-core-engine.js";
@@ -39,6 +42,29 @@ test("renderer=gfx maps Pi's rows and semantics to gfx-core blocks", () => {
   assert.deepEqual([tool.prompt, tool.output, tool.end, tool.status], [5, 6, 7, "running"], "tools: header + output, running while streaming");
   assert.deepEqual(editor, { prompt: 8, status: "prompt" });
   assert.deepEqual(frame.cursor, [7, 9]);
+});
+
+test("renderer=gfx finds gfx-core: setting, $PI_GFX_WASM, beside gfxsh, or `gfxsh wasm`", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gfxwasm-"));
+  const wasm = join(dir, "cached.wasm");
+  writeFileSync(wasm, "\0asm");
+  // a cargo-installed gfxsh: no share/ beside it; `gfxsh wasm` prints the cached copy
+  mkdirSync(join(dir, "bin"));
+  const exe = join(dir, "bin", "gfxsh");
+  writeFileSync(exe, `#!/bin/sh\n[ "$1" = wasm ] && echo ${wasm}\n`);
+  chmodSync(exe, 0o755);
+  const env = { PATH: join(dir, "bin") };
+  assert.equal(findGfxWasm("", env), wasm, "asks gfxsh");
+  assert.equal(findGfxWasm(exe, env), exe, "an explicit path wins");
+  assert.equal(findGfxWasm("", { ...env, PI_GFX_WASM: exe }), exe, "then $PI_GFX_WASM");
+  // installed with share/ beside the binary: no process spawned
+  mkdirSync(join(dir, "share", "gfxsh"), { recursive: true });
+  writeFileSync(join(dir, "share", "gfxsh", "gfx_wasm.wasm"), "\0asm");
+  let spawned = false;
+  assert.equal(findGfxWasm("", env, () => { spawned = true; return { status: 1 }; }), join(dir, "bin", "..", "share", "gfxsh", "gfx_wasm.wasm"));
+  assert.equal(spawned, false);
+  assert.equal(findGfxWasm("", { PATH: join(dir, "nowhere") }), "", "no gfxsh: not found");
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("renderer=gfx renders through gfx-core (WebAssembly) when installed", { skip: !findGfxWasm() && "gfx_wasm.wasm not found (gfxsh / $PI_GFX_WASM)" }, async () => {

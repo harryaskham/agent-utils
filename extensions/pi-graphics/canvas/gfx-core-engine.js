@@ -20,19 +20,32 @@ import { DEFAULT, unpackRgb } from "./ansi-cells.js";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** Where gfx_wasm.wasm is: explicit, $PI_GFX_WASM, or next to gfxsh. */
-export function findGfxWasm(explicit = "", env = process.env) {
-  const candidates = [explicit, env.PI_GFX_WASM];
+/**
+ * Where gfx_wasm.wasm is: the explicit setting, $PI_GFX_WASM, else from the
+ * gfxsh on PATH — `share/gfxsh/gfx_wasm.wasm` beside it when installed that
+ * way (Nix), otherwise `gfxsh wasm`, which writes the copy embedded in the
+ * binary to its cache once per gfxsh build (cargo install, copied binaries).
+ * `run` is injectable for tests.
+ */
+export function findGfxWasm(explicit = "", env = process.env, run = spawnSync) {
+  for (const path of [explicit, env.PI_GFX_WASM]) {
+    if (path && existsSync(path)) return path;
+  }
   for (const dir of String(env.PATH || "").split(":")) {
     const exe = join(dir || ".", "gfxsh");
     if (!existsSync(exe)) continue;
     try {
-      const real = realpathSync(exe);
-      candidates.push(join(dirname(real), "..", "share", "gfxsh", "gfx_wasm.wasm"));
+      const beside = join(dirname(realpathSync(exe)), "..", "share", "gfxsh", "gfx_wasm.wasm");
+      if (existsSync(beside)) return beside;
+    } catch {}
+    try {
+      const r = run(exe, ["wasm"], { encoding: "utf8", timeout: 5000, env });
+      const path = r.status === 0 ? String(r.stdout || "").trim().split("\n").pop() : "";
+      if (path && existsSync(path)) return path;
     } catch {}
     break;
   }
-  return candidates.find((p) => p && existsSync(p)) || "";
+  return "";
 }
 
 function fcMatch(pattern) {
