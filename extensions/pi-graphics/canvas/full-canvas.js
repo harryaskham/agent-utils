@@ -62,6 +62,10 @@ export const FULL_CANVAS_DEFAULTS = Object.freeze({
   // gfxWasm or $PI_GFX_WASM). Falls back to typescript when unavailable.
   renderer: "typescript",
   gfxWasm: "",
+  // renderer=gfx: gfx-core effect options passed through as-is (card_style,
+  // caret, caret_trail, scanlines, crt_frame, light_sweep, … — see gfxsh's
+  // README); they override what is mapped from this canvas's settings.
+  gfx: {},
   fontSizePx: 0, // 0 = auto from the real cell height
   zoom: 1,
   lineHeight: 1.3,
@@ -315,16 +319,19 @@ export function createFullCanvas({
   function gfxEffects() {
     const c = cfg();
     const background = backgroundChoice().type;
-    const known = ["aurora", "nebula", "waves", "grid", "stars", "static", "none"];
+    const known = ["aurora", "nebula", "waves", "grid", "stars", "plasma", "bokeh", "synthwave", "rain", "fireflies", "static", "none"];
+    const carets = ["bloom", "beam", "block", "underline", "outline", "halo", "orb", "comet", "prism", "pulse", "ember", "plasma", "off"];
+    const overrides = c.gfx && typeof c.gfx === "object" && !Array.isArray(c.gfx) ? c.gfx : {};
     return {
       background: known.includes(background) ? background : "aurora",
-      caret: ["bloom", "beam", "block", "underline", "off"].includes(c.caretStyle) ? c.caretStyle : "bloom",
+      caret: carets.includes(c.caretStyle) ? c.caretStyle : "bloom",
       caret_bloom: Number(c.caretBloom) || 1,
       vignette: Number(c.vignette) || 0,
       scanlines: Number(c.scanlines) || 0,
       grain: Number(c.grain) || 0,
       text_shadow: Number(c.textShadow) || 0,
       text_glow: Number(c.textGlow) || 0,
+      ...overrides,
     };
   }
 

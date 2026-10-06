@@ -51,6 +51,11 @@ test("renderer=gfx renders through gfx-core (WebAssembly) when installed", { ski
   assert.match(out, /\x1b_Ga=p,/, "places them");
   const again = engine.frame(toGfxFrame(rows, { cursor: { row: 0, col: 5 } }));
   assert.ok(again.length < out.length / 4, "an unchanged frame is (nearly) free");
+  // gfx-core's own looks pass through (piGraphics.full.gfx); invalid ones are refused
+  engine.effects({ background: "static", card_style: "neon", caret: "comet", scanlines: 0.5, crt_frame: 0.5 });
+  const styled = engine.frame(toGfxFrame(rows, { cursor: { row: 0, col: 5 } }));
+  assert.match(styled, /\x1b_Ga=t,f=100/, "restyled frame re-renders");
+  assert.throws(() => engine.effects({ card_style: "velvet" }), /card_style/);
   assert.match(engine.clear(), /a=d/);
   engine.drop();
 });

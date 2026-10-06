@@ -391,7 +391,13 @@ canvas with **gfx-core**, the Rust renderer shared with
 [gfxsh](https://github.com/harryaskham/tools/tree/main/cli/gfxsh), compiled
 to WebAssembly; `typescript` (the default) is this extension's own renderer.
 Settings are not shared: gfx-core takes the background, caret style and
-lighting from this canvas's settings and otherwise its own defaults.
+lighting from this canvas's settings and otherwise its own defaults. Any
+gfx-core effect can be set directly with `piGraphics.full.gfx`, an object
+of gfx-core option names (as in gfxsh's `[effects]`), for example
+`{"card_style": "neon", "caret": "comet", "caret_trail": 0.6,
+"scanlines": 0.5, "crt_frame": 0.6, "light_sweep": 0.8}`; invalid values
+are reported in `/gfx full status` and the canvas falls back to
+`typescript`.
 
 - Pi's frame is mapped, not emulated: rows of styled runs plus blocks from
   the semantic markers — every message and tool call is a glass pane (tools
