@@ -215,6 +215,7 @@ export function toGfxFrame(parsed, { cursor = null, editor = null } = {}) {
         badge: tool ? (b.failed ? "✗" : b.streaming ? "" : "✓") : (LABELS[b.role] ?? ""),
       };
     });
-  if (editor) out.push({ prompt: editor.y, status: "prompt" });
+  // the editor's whole box (top rule … bottom rule) is the input card
+  if (editor) out.push({ prompt: editor.y, end: editor.y + editor.height, status: "prompt" });
   return { rows, blocks: out, cursor: cursor ? [cursor.col, cursor.row] : null };
 }

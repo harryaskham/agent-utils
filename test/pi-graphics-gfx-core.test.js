@@ -40,7 +40,7 @@ test("renderer=gfx maps Pi's rows and semantics to gfx-core blocks", () => {
   assert.deepEqual([user.prompt, user.end, user.badge], [0, 1, "you"]);
   assert.deepEqual([assistant.prompt, assistant.output, assistant.end], [2, 2, 4], "messages are all body");
   assert.deepEqual([tool.prompt, tool.output, tool.end, tool.status], [5, 6, 7, "running"], "tools: header + output, running while streaming");
-  assert.deepEqual(editor, { prompt: 8, status: "prompt" });
+  assert.deepEqual(editor, { prompt: 8, end: 10, status: "prompt" }, "the card spans the editor's rows");
   assert.deepEqual(frame.cursor, [7, 9]);
 });
 
