@@ -73,6 +73,36 @@ function ttsIsOn(h) {
   return h.pi.ttsNarration.isEnabled();
 }
 
+test("native provider settings persist but literal runtime API keys never do", async () => {
+  const session = makeSession();
+  const first = harness({ sessionEntries: session.entries });
+  await first.run("tts", "provider=openai model=custom-tts voice=alloy api_key=fixture-private-key");
+  assert.ok(!JSON.stringify(session.entries).includes("fixture-private-key"));
+  await first.run("tts", "api_key=$OPENAI_API_KEY");
+  const restored = harness({ sessionEntries: session.entries });
+  restored.emit("session_start", {});
+  assert.equal(restored.speech.getConfig().provider, "openai");
+  assert.equal(restored.speech.getConfig().voice, "alloy");
+  assert.equal(restored.speech.applied.at(-1).api_key, "$OPENAI_API_KEY");
+});
+
+test("provider switches do not restore stale provider-specific runtime fields", async () => {
+  const session = makeSession();
+  const h = harness({ sessionEntries: session.entries });
+  await h.run("tts", "voice=azure-voice embedding=azure-profile endpoint=https://azure.invalid");
+  await h.run("tts", "provider=openai");
+  const saved = h.runtimeSettings.get("tts").speech;
+  assert.equal(saved.provider, "openai");
+  for (const key of ["voice", "embedding", "endpoint"]) assert.ok(!Object.hasOwn(saved, key));
+});
+
+test("narration provider controls configure shared TTS without replacing the summary model", async () => {
+  const h = harness({ sessionEntries: [] });
+  await h.run("narrate", "provider=daemon daemon_url=helsinki tts_model=fixture-speech-model");
+  assert.deepEqual(h.speech.applied.at(-1), { provider: "daemon", daemon_url: "helsinki", model: "fixture-speech-model" });
+  assert.notEqual(h.runtimeSettings.get("narrate").model, "fixture-speech-model");
+});
+
 test("/tts on survives a restart within the same session", async () => {
   const session = makeSession();
 

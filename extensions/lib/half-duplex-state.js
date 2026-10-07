@@ -5,6 +5,15 @@
 // far lighter than acoustic echo cancellation.
 
 let speakingUntil = 0;
+const speakingLeases = new Set();
+
+// Remote playback has no local PCM duration. Hold the same half-duplex gate
+// until its authoritative playback receipt settles, with idempotent cleanup.
+export function holdAssistantSpeaking() {
+  const lease = {};
+  speakingLeases.add(lease);
+  return () => { speakingLeases.delete(lease); markAssistantSpeaking(0); };
+}
 
 /// Estimate spoken duration (ms) for `text` at ~`charsPerSec` speaking rate. Pure.
 /// ~15 chars/s approximates 150 wpm; deliberately conservative so the gate slightly
@@ -27,10 +36,11 @@ export function markAssistantSpeaking(durationMs, { tailMs = 350, now = Date.now
 
 /// True while the assistant is (estimated to be) speaking, including the release tail.
 export function isAssistantSpeaking(now = Date.now()) {
-  return now < speakingUntil;
+  return speakingLeases.size > 0 || now < speakingUntil;
 }
 
 /// Test/reset hook: clears the speaking window.
 export function __resetAssistantSpeaking() {
   speakingUntil = 0;
+  speakingLeases.clear();
 }

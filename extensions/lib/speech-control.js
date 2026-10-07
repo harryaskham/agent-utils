@@ -52,7 +52,17 @@ export async function readSpeechMuteState(path) {
   } finally { await file.close(); }
 }
 
-async function watchLocations(path) {
+// Directory FSEvents teardown can synchronously block Node's event loop for
+// seconds on macOS. Watch the file's vnode instead; the active-only stat loop
+// covers initially absent files and rebinds after atomic inode replacement.
+// Linux keeps directory watches for inotify's rename/ancestor notifications.
+export async function speechMuteWatchLocations(path, { platform = process.platform } = {}) {
+  if (platform === "darwin") {
+    const info = await stat(path).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+    if (!info) return new Map();
+    if (!info.isFile()) throw new Error("Speech mute state must be a regular file ≤16 KiB");
+    return new Map([[`${path}\0${info.dev}:${info.ino}`, { target: path, name: null }]]);
+  }
   const files = [path];
   let target = path;
   for (let hop = 0; hop < 32; hop++) {
@@ -70,7 +80,7 @@ async function watchLocations(path) {
       const info = await stat(parent).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
       if (info?.isDirectory()) {
         const directory = await realpath(parent);
-        locations.set(`${directory}\0${basename(child)}`, { directory, name: basename(child) });
+        locations.set(`${directory}\0${basename(child)}`, { target: directory, name: basename(child) });
         break;
       }
       if (parent === dirname(parent)) throw new Error("No watchable parent for speech mute state");
@@ -91,17 +101,26 @@ function subscribe(path, changed, failed) {
       entry.binding = (async () => {
         while (entry.dirty && !entry.closed) {
           entry.dirty = false;
-          const locations = await watchLocations(path);
+          const locations = await speechMuteWatchLocations(path);
           if (entry.closed) return;
           for (const [key, location] of locations) {
             if (entry.watches.has(key)) continue;
-            const watcher = watch(location.directory, { persistent: false }, (event, name) => {
-              // Atomic publishers can be reported under a temporary filename by
-              // coalescing filesystems. Reconcile directory renames as well.
-              if (event !== "rename" && name != null && String(name) !== location.name) return;
-              for (const listener of [...entry.listeners]) listener.changed();
-              void entry.rebind().catch((error) => { for (const listener of [...entry.listeners]) listener.failed(error); });
-            });
+            let watcher;
+            try {
+              watcher = watch(location.target, { persistent: false }, (event, name) => {
+                // Atomic publishers can be reported under a temporary filename by
+                // coalescing filesystems. Reconcile directory renames as well.
+                if (entry.closed) return;
+                if (location.name != null && event !== "rename" && name != null && String(name) !== location.name) return;
+                for (const listener of [...entry.listeners]) listener.changed();
+                void entry.rebind().catch((error) => { for (const listener of [...entry.listeners]) listener.failed(error); });
+              });
+            } catch (error) {
+              // The file can disappear between stat and watch during rotation.
+              // The active-only reconciliation will bind its replacement.
+              if (location.name === null && error.code === "ENOENT") continue;
+              throw error;
+            }
             watcher.on("error", (error) => { for (const listener of [...entry.listeners]) listener.failed(error); });
             entry.watches.set(key, watcher);
           }

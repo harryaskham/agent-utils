@@ -28,7 +28,8 @@ import {
 import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./lib/tts-identity.js";
 import { speechPrefix } from "./lib/tts-prefix.js";
-import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE } from "./lib/tts.js";
+import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE, isAzureSpeechProvider, usesDaemonPlayback } from "./lib/tts.js";
+import { speechCredentialStatus } from "./lib/tts-provider-config.js";
 import { appendTtsFeed } from "./lib/tts-feed.js";
 import { ttsFeedEnabled } from "./lib/privacy.js";
 import { artifactIdentity } from "./lib/artifact-state.js";
@@ -61,8 +62,8 @@ function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "
     `styledegree:${optional(config.styleDegree)}`,
     `embedding:${config.embedding ? "set" : "none"}`,
     `endpoint:${source(config.endpoint, "AZURE_SPEECH_ENDPOINT", env)}`,
-    `api-key:${source(config.apiKey, "AZURE_SPEECH_API_KEY", env)}`,
-    `output:${config.backend}/${optional(config.device)}`,
+    speechCredentialStatus(config, env),
+    `output:${usesDaemonPlayback(config) ? `daemon/${config.daemonSink || "server-default"}` : `${config.backend}/${optional(config.device)}`}`,
     `prefix:${prefix ? "set" : "none"}`,
     `suffix:${suffix ? "set" : "none"}`,
     "stream:/tts",
@@ -125,13 +126,21 @@ export function createTtsNarrationExtension({
     // so restore cannot drift from the live path.
     const durable = runtimeSettings || createSessionRuntimeSettings(pi);
     let ttsSpeechValues = {};
+    let rememberedProvider = speechController.getConfig().provider;
 
     const rememberTts = (patch) => { try { durable.merge("tts", patch); } catch {} };
     const rememberNarrate = (patch) => { try { durable.merge("narrate", patch); } catch {} };
 
     const rememberTtsSpeechValues = (values) => {
       if (!values || Object.keys(values).length === 0) return;
-      ttsSpeechValues = { ...ttsSpeechValues, ...values };
+      const provider = speechController.getConfig().provider;
+      if (provider !== rememberedProvider) {
+        for (const key of ["voice", "model", "lang", "speed", "embedding", "speaker", "speakerprofileid", "speaker_profile_id", "style", "styledegree", "style_degree", "endpoint", "base_url", "baseurl", "api_key", "apikey", "instructions", "pitch", "volume", "role"]) delete ttsSpeechValues[key];
+        rememberedProvider = provider;
+      }
+      // Runtime secrets must never become durable session entries. Keep only
+      // environment references (resolved afresh on restore), not literal keys.
+      ttsSpeechValues = Object.fromEntries(Object.entries({ ...ttsSpeechValues, ...values }).filter(([key, value]) => !/api_?key|token$|secret|password/i.test(key) || /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(String(value))));
       rememberTts({ speech: ttsSpeechValues });
     };
 
@@ -143,6 +152,7 @@ export function createTtsNarrationExtension({
       if (tts.speech && typeof tts.speech === "object") {
         ttsSpeechValues = { ...tts.speech };
         try { speechController.apply(ttsSpeechValues); } catch {}
+        rememberedProvider = speechController.getConfig().provider;
       }
       if (typeof tts.prefix === "string") ttsPrefix = tts.prefix;
       if (typeof tts.prefixWithSessionName === "boolean") ttsPrefixWithSessionName = tts.prefixWithSessionName;
@@ -170,7 +180,7 @@ export function createTtsNarrationExtension({
         ...current,
         ...(harryFlag
           ? { voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING }
-          : !["command", "local"].includes(current.provider) && sessionSpeechAssignment.voice ? { voice: sessionSpeechAssignment.voice, embedding: null } : {}),
+          : isAzureSpeechProvider(current.provider) && sessionSpeechAssignment.voice ? { voice: sessionSpeechAssignment.voice, embedding: null } : {}),
         pan: sessionSpeechAssignment.pan,
       };
       if (typeof speechController.setConfig === "function") speechController.setConfig(assigned);
@@ -336,7 +346,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("tts", {
-      description: "Automatically speak every plain assistant text message verbatim. Usage: /tts [on|off|status|prefix='...' suffix='...' key=value ...]. Uses /read's Azure or local command settings; command='program \"$@\"' selects local playback.",
+      description: "Speak assistant messages. /tts [on|off|status|provider=azure|openai|daemon|command model=... voice=... daemon_url=helsinki daemon_provider=azure|openai playback=daemon|local prefix='...' suffix='...']. Daemon playback uses its central queue; admitted jobs cannot yet be individually cancelled.",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
@@ -362,7 +372,7 @@ export function createTtsNarrationExtension({
           ttsEnabledSource = "runtime";
           rememberTts({ enabled: false });
           speechController.interrupt();
-          ctx.ui.notify("tts:off · enabled-source:runtime (startup setting unchanged)", "info");
+          ctx.ui.notify(`tts:off · enabled-source:runtime (startup setting unchanged)${usesDaemonPlayback(speechController.getConfig()) ? " · admitted daemon jobs may still play" : ""}`, "info");
           return;
         }
         if (simple === "status") {
@@ -423,8 +433,14 @@ export function createTtsNarrationExtension({
           try {
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
+            const speechKeys = new Set(["provider", "voice", "tts_model", "daemon_url", "daemon_provider", "daemon_sink", "token_file", "playback", "endpoint", "base_url", "lang", "embedding", "instructions", "role", "pitch", "volume", "timeout_ms"]);
             for (const key of Object.keys(parsed.values)) {
-              if (!new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "prefix_with_session_name", "prefixwithsessionname", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!speechKeys.has(key) && !new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "prefix_with_session_name", "prefixwithsessionname", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+            }
+            const speechValues = Object.fromEntries(Object.entries(parsed.values).filter(([key]) => speechKeys.has(key)).map(([key, value]) => [key === "tts_model" ? "model" : key, value]));
+            if (Object.keys(speechValues).length) {
+              speechController.apply(speechValues);
+              rememberTtsSpeechValues(speechValues);
             }
             if (parsed.values.prefix !== undefined) {
               narrationPrefix = expandEnvReferences(parsed.values.prefix, env, "/narrate prefix");

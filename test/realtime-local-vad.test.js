@@ -77,6 +77,27 @@ test("describeLocalVadConfig summarizes the resolved thresholds (bd-9399e7)", ()
 
 // --- LocalVadController ---
 
+test("disposing local STT aborts its in-flight native request and suppresses late text", { timeout: 5000 }, async () => {
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const sent = [], inserted = [], errors = [];
+  let capturedSignal;
+  const controller = new LocalVadController({
+    transcribe: (_audio, { signal }) => {
+      capturedSignal = signal; started();
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("abort", "AbortError")), { once: true }));
+    },
+    sendTurn: text => sent.push(text), insertPartial: text => inserted.push(text), onError: error => errors.push(error),
+  });
+  await controller.pushFrame(frame(500, { speech: true }));
+  await controller.pushFrame(frame(3500));
+  await ready;
+  controller.dispose();
+  await controller.flush();
+  assert.equal(capturedSignal.aborted, true);
+  assert.deepEqual(sent, []); assert.deepEqual(inserted, []); assert.deepEqual(errors, []);
+});
+
 test("LocalVadController requires a transcribe function (bd-9399e7)", () => {
   assert.throws(() => new LocalVadController({}), /requires a transcribe/);
 });

@@ -1,17 +1,19 @@
 // Shared native text-to-speech primitives for agent-utils.
 //
 // This module deliberately owns the fast path end to end:
-//   text -> Azure Speech REST (SSML) -> raw PCM16/24kHz/mono -> playback child.
-// It never shells out to the `tts` CLI and never routes through the Cacophony
-// narration daemon. Callers such as /read, realtime speak-replies, and cascade
+//   text -> Azure/OpenAI/Tools daemon -> raw PCM16/24kHz/mono -> playback child.
+// Daemon-owned playback is separate from raw synthesis. No `tts` CLI hop. Callers such as /read, realtime speak-replies, and cascade
 // share the same defaults, timeout behavior, and SSML builder. Each caller
 // owns its enable/default policy; synthesis must not veto explicit /tts or
 // /narrate activation based on the unrelated cascade auto-speech environment.
 
 import { spawn } from "node:child_process";
-import { combineTimeoutSignal } from "./bounded-exec.js";
 import { speechKind, withSpeechControl } from "./speech-control.js";
 import { sharedTtsQueueEnabled } from "./privacy.js";
+import { synthesizeOpenAiSpeech } from "./tts-openai.js";
+import { requestDaemonTts } from "./speech-daemon.js";
+import { speechHttp } from "./speech-http.js";
+export { usesDaemonPlayback, playDaemonSpeech } from "./speech-daemon.js";
 
 export const DEFAULT_TTS_PROVIDER = "azure";
 export const AZURE_SPEECH_PROVIDER = "azure-speech"; // accepted legacy alias
@@ -98,6 +100,9 @@ export function buildAzureSpeechSsml({
   style,
   styleDegree,
   styledegree,
+  pitch,
+  volume,
+  role,
 } = {}) {
   const body = String(text ?? "");
   const selectedVoice = String(voice ?? "").trim();
@@ -113,10 +118,22 @@ export function buildAzureSpeechSsml({
   const rate = speedToProsodyRate(speed);
 
   let inner = xmlEscape(body);
-  if (rate) inner = `<prosody rate='${xmlEscape(rate)}'>${inner}</prosody>`;
+  const prosody = [];
+  if (rate) prosody.push(`rate='${xmlEscape(rate)}'`);
+  if (pitch != null) {
+    if (!Number.isFinite(pitch) || pitch < -50 || pitch > 50) throw new Error("azure-speech: pitch must be between -50 and 50");
+    prosody.push(`pitch='${pitch >= 0 ? "+" : ""}${pitch}%'`);
+  }
+  if (volume != null) {
+    if (!Number.isFinite(volume) || volume < 0 || volume > 100) throw new Error("azure-speech: volume must be between 0 and 100");
+    prosody.push(`volume='${volume}'`);
+  }
+  if (prosody.length) inner = `<prosody ${prosody.join(" ")}>${inner}</prosody>`;
+  if (role && !selectedStyle) throw new Error("azure-speech: role requires style");
   if (selectedStyle) {
     const degreeAttr = selectedStyleDegree ? ` styledegree='${xmlEscape(selectedStyleDegree)}'` : "";
-    inner = `<mstts:express-as style='${xmlEscape(selectedStyle)}'${degreeAttr}>${inner}</mstts:express-as>`;
+    const roleAttr = role ? ` role='${xmlEscape(role)}'` : "";
+    inner = `<mstts:express-as style='${xmlEscape(selectedStyle)}'${degreeAttr}${roleAttr}>${inner}</mstts:express-as>`;
   }
   if (selectedLang) inner = `<lang xml:lang='${xmlEscape(selectedLang)}'>${inner}</lang>`;
   if (selectedEmbedding) {
@@ -183,6 +200,11 @@ export async function synthesizeAzureSpeechDirect({
   style,
   styleDegree,
   styledegree,
+  pitch,
+  volume,
+  role,
+  instructions,
+  model,
   endpoint,
   baseUrl,
   apiKey,
@@ -194,10 +216,11 @@ export async function synthesizeAzureSpeechDirect({
 } = {}) {
   const body = String(text ?? "");
   if (!body.trim()) throw new Error("azure-speech: refusing to synthesize empty text");
+  if (instructions) throw new Error("azure-speech: instructions are OpenAI-only; use style and role");
 
   const resolved = resolveSpeakToolParams({
     text: body,
-    ...(own(arguments[0], "voice") ? { voice } : {}),
+    ...(own(arguments[0], "voice") ? { voice } : model ? { voice: model } : {}),
     ...(own(arguments[0], "lang") ? { lang } : {}),
     ...(own(arguments[0], "speed") ? { speed } : {}),
     ...(own(arguments[0], "speakerProfileId") ? { speakerProfileId } : {}),
@@ -227,44 +250,37 @@ export async function synthesizeAzureSpeechDirect({
     speakerProfileId: embeddingExplicit && embeddingValue === null ? null : resolved.speakerProfileId,
     style: resolved.style,
     styleDegree: resolved.styleDegree,
+    pitch, volume, role,
   });
 
   const timeout = timeoutMs == null ? resolveBatchTtsTimeoutMs(env) : Number(timeoutMs);
-  const bound = combineTimeoutSignal(signal, timeout);
-  let response;
-  try {
-    response = await doFetch(azureSpeechUrl(creds.endpoint), {
-      method: "POST",
-      headers: {
-        "Ocp-Apim-Subscription-Key": creds.apiKey,
-        "Content-Type": "application/ssml+xml",
-        "X-Microsoft-OutputFormat": String(outputFormat || DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT),
-        "User-Agent": "agent-utils-tts",
-      },
-      body: ssml,
-      signal: bound.signal,
-    });
-  } catch (error) {
-    if (bound.isTimeout()) throw new Error(`azure-speech timed out after ${timeout}ms`);
-    throw error;
-  } finally {
-    bound.cleanup();
-  }
-  if (!response || response.ok === false) {
-    const status = response?.status ?? "??";
-    let detail = "";
-    try { detail = String(await response.text()).slice(0, 300); } catch {}
-    throw new Error(`azure-speech HTTP ${status}${detail ? `: ${detail}` : ""}`);
-  }
-  return Buffer.from(await response.arrayBuffer());
+  return speechHttp(azureSpeechUrl(creds.endpoint), {
+    fetchImpl: doFetch, timeoutMs: timeout, signal, label: "azure-speech",
+    method: "POST",
+    headers: {
+      "Ocp-Apim-Subscription-Key": creds.apiKey,
+      "Content-Type": "application/ssml+xml",
+      "X-Microsoft-OutputFormat": String(outputFormat || DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT),
+      "User-Agent": "agent-utils-tts",
+    },
+    body: ssml,
+  });
+}
+
+export function normalizeTtsProvider(provider = DEFAULT_TTS_PROVIDER) {
+  const value = String(provider).trim().toLowerCase();
+  if (isAzureSpeechProvider(value)) return "azure";
+  if (value === "local") return "command";
+  if (["command", "openai", "daemon"].includes(value)) return value;
+  throw new Error("tts: unsupported provider; use azure, openai, daemon or command");
 }
 
 export async function synthesizeSpeechDirect(text, options = {}) {
-  const provider = options.provider ?? DEFAULT_TTS_PROVIDER;
-  if (!isAzureSpeechProvider(provider)) {
-    throw new Error(`tts: unsupported direct provider '${provider}'; use provider=azure`);
-  }
-  return synthesizeAzureSpeechDirect({ ...options, text });
+  const provider = normalizeTtsProvider(options.provider ?? (options.env ?? process.env).PI_TTS_PROVIDER);
+  if (provider === "openai") return synthesizeOpenAiSpeech(text, options);
+  if (provider === "daemon") return (await requestDaemonTts(text, options, { raw: true })).pcm;
+  if (provider === "azure") return synthesizeAzureSpeechDirect({ ...options, text });
+  throw new Error("tts: command provider has no raw synthesis; use its playback controller");
 }
 
 export function panMonoPcm16le(buffer, pan = 0) {
@@ -299,6 +315,9 @@ export function buildPcmPlaybackSpec({
       : process.platform === "darwin" ? "coreaudio" : "pulse";
   }
   const childEnv = { ...env };
+  for (const key of Object.keys(childEnv)) {
+    if (/^(?:(?:TTS|STT)_(?:DAEMON|DAMEON)_TOKEN|OPENAI_API_KEY|(?:PI_RT_)?AZURE_.*(?:KEY|TOKEN))$/i.test(key)) delete childEnv[key];
+  }
   if (server == null || server === "") delete childEnv.PULSE_SERVER;
   else childEnv.PULSE_SERVER = String(server);
 

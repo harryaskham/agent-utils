@@ -170,7 +170,7 @@ test("explicit native synthesis is independent of cascade auto-speech policy", a
   });
   assert.equal(fetched, true);
   assert.equal(env.PI_CASCADE_SPEECH_ENABLED, "0", "explicit speech does not mutate defaults");
-  await assert.rejects(synthesizeSpeechDirect("hello", { provider: "openai" }), /unsupported direct provider/);
+  await assert.rejects(synthesizeSpeechDirect("hello", { provider: "unknown", env: {} }), /unsupported provider/);
 });
 
 test("native synthesis times out a hung fetch", async () => {

@@ -3,7 +3,8 @@
 import { playTtsCommand } from "./tts-command.js";
 import { speechKind, withSpeechControl } from "./speech-control.js";
 import { defaultReadConfig, applyReadConfigValues } from "../read-aloud.js";
-import { createInterruptiblePcmPlayer, synthesizeSpeechDirect } from "./tts.js";
+import { createInterruptiblePcmPlayer, synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech } from "./tts.js";
+import { ttsSynthesisOptions } from "./tts-provider-config.js";
 
 export const DEFAULT_NARRATION_MODEL = "github-copilot/gpt-6-luna";
 export const TOOL_SUMMARY_CUSTOM_TYPE = "agent-utils-tool-summary";
@@ -144,21 +145,30 @@ function enabledValue(value, fallback = false) {
 export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = {}) {
   let config = defaultAgentTtsConfig({});
   const persistedValues = {};
-  for (const key of ["provider", "command", "voice", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device"]) {
-    if (Object.hasOwn(persisted, key)) persistedValues[key === "styleDegree" ? "styledegree" : key] = persisted[key];
+  const aliases = { styleDegree: "styledegree", daemonUrl: "daemon_url", daemonProvider: "daemon_provider", tokenFile: "token_file", daemonSink: "daemon_sink", timeoutMs: "timeout_ms" };
+  for (const key of ["provider", "command", "voice", "model", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs"]) {
+    if (Object.hasOwn(persisted, key)) persistedValues[aliases[key] || key] = persisted[key];
   }
   config = applyAgentTtsConfig(config, persistedValues, {});
   const envValues = {};
   const envMap = {
     PI_TTS_PROVIDER: "provider", PI_TTS_COMMAND: "command", PI_TTS_VOICE: "voice", PI_TTS_LANG: "lang",
     PI_TTS_SPEED: "speed", PI_TTS_EMBEDDING: "embedding", PI_TTS_STYLE: "style",
-    PI_TTS_STYLEDEGREE: "styledegree", AZURE_SPEECH_ENDPOINT: "endpoint",
+    PI_TTS_STYLEDEGREE: "styledegree", PI_TTS_MODEL: "model", PI_TTS_INSTRUCTIONS: "instructions",
+    TTS_DAEMON_URL: "daemon_url", PI_TTS_DAEMON_URL: "daemon_url", PI_TTS_DAEMON_PROVIDER: "daemon_provider",
+    TTS_TOKEN_FILE: "token_file", PI_TTS_DAEMON_SINK: "daemon_sink", PI_TTS_PLAYBACK: "playback", PI_TTS_TIMEOUT_MS: "timeout_ms",
     PI_TTS_BACKEND: "backend", PULSE_SERVER: "server", PULSE_SINK: "device",
   };
   for (const [envKey, configKey] of Object.entries(envMap)) {
     if (env[envKey] != null && String(env[envKey]).trim() !== "") envValues[configKey] = env[envKey];
   }
   config = applyAgentTtsConfig(config, envValues, env);
+  const endpoint = config.provider === "azure" ? env.AZURE_SPEECH_ENDPOINT : config.provider === "openai" ? env.PI_TTS_BASE_URL || env.OPENAI_BASE_URL : undefined;
+  if (endpoint) config.endpoint = endpoint;
+  if (config.provider === "openai") {
+    if (env.OPENAI_TTS_MODEL && !env.PI_TTS_MODEL) config.model = env.OPENAI_TTS_MODEL;
+    if (env.OPENAI_TTS_VOICE && !env.PI_TTS_VOICE) config.voice = env.OPENAI_TTS_VOICE;
+  }
   return {
     config,
     enabled: enabledValue(env.PI_TTS_ENABLED, enabledValue(persisted.enabled, false)),
@@ -231,19 +241,8 @@ export function createAgentSpeechController({
     try {
       return await withSpeechControl({ ...effective, speechKind: speechKind(effective) || "tts", signal: controller.signal, env }, async (controlled) => {
         if (["command", "local"].includes(effective.provider)) return playTtsCommand(body, controlled);
-        const options = {
-          provider: effective.provider,
-          voice: effective.voice,
-          lang: effective.lang,
-          speed: effective.speed,
-          speakerProfileId: effective.embedding,
-          style: effective.style,
-          styleDegree: effective.styleDegree,
-          signal: controlled.signal,
-          env,
-        };
-        if (effective.endpoint !== undefined) options.endpoint = effective.endpoint;
-        if (effective.apiKey !== undefined) options.apiKey = effective.apiKey;
+        const options = ttsSynthesisOptions(effective, { signal: controlled.signal, env });
+        if (usesDaemonPlayback(effective)) return playDaemonSpeech(body, options);
         const pcm = await synthesize(body, options);
         if (mine !== generation || controlled.signal.aborted) return { interrupted: true };
         return player.play(pcm, {

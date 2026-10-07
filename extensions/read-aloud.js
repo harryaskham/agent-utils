@@ -2,18 +2,17 @@
 //
 // `/read [key=value ...]` enables the mode. While enabled, the whole editor
 // buffer is spoken after a quiet debounce and again when the user submits it.
-// Synthesis uses the shared native Azure REST library; playback is a named,
-// interruptible PCM child (Pulse by default). No daemon or `tts` CLI hop.
+// Native Azure/OpenAI/daemon synthesis shares one provider path. Local PCM is
+// interruptible; daemon-owned playback uses the server queue. No `tts` CLI hop.
 
 import { playTtsCommand } from "./lib/tts-command.js";
+import { ttsProviderDefaults, ttsSynthesisOptions, speechCredentialStatus } from "./lib/tts-provider-config.js";
+import { normalizeTtsProvider, usesDaemonPlayback, playDaemonSpeech } from "./lib/tts.js";
 import { withSpeechControl } from "./lib/speech-control.js";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import {
   DEFAULT_TTS_PROVIDER,
-  DEFAULT_TTS_VOICE,
-  DEFAULT_TTS_LANG,
   DEFAULT_TTS_SPEED,
-  DEFAULT_TTS_EMBEDDING,
   DEFAULT_TTS_BACKEND,
   DEFAULT_TTS_DEVICE,
   DEFAULT_TTS_STREAM_NAME,
@@ -33,7 +32,8 @@ const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, ke
 const NONE = /^(none|null|unset)$/i;
 
 export function defaultReadConfig(env = process.env, persisted = {}, persistedRead = {}) {
-  const configured = (key, fallback) => persisted[key] !== undefined ? persisted[key] : fallback;
+  let source = persisted;
+  const configured = (key, fallback) => source[key] !== undefined ? source[key] : fallback;
   const readConfigured = (key, fallback) => persistedRead[key] !== undefined ? persistedRead[key] : fallback;
   const bool = (value, fallback) => {
     if (value == null || String(value).trim() === "") return fallback;
@@ -50,20 +50,35 @@ export function defaultReadConfig(env = process.env, persisted = {}, persistedRe
     const number = Number(value);
     return Number.isFinite(number) && number > 0 ? number : fallback;
   };
+  const provider = normalizeTtsProvider(env.PI_TTS_PROVIDER || (env.PI_TTS_COMMAND ? "command" : configured("provider", persisted.command ? "command" : DEFAULT_TTS_PROVIDER)));
+  const defaults = ttsProviderDefaults(provider, env);
+  if (env.PI_TTS_PROVIDER && provider !== normalizeTtsProvider(persisted.provider || DEFAULT_TTS_PROVIDER)) {
+    source = { ...persisted };
+    for (const key of ["voice", "model", "lang", "speed", "embedding", "endpoint", "instructions", "pitch", "volume", "role", "style", "styleDegree"]) delete source[key];
+  }
   return {
-    provider: env.PI_TTS_PROVIDER || (env.PI_TTS_COMMAND ? "command" : configured("provider", persisted.command ? "command" : DEFAULT_TTS_PROVIDER)),
+    provider,
+    model: env.PI_TTS_MODEL || configured("model", defaults.model),
+    daemonUrl: env.PI_TTS_DAEMON_URL || env.TTS_DAEMON_URL || configured("daemonUrl", undefined),
+    daemonProvider: env.PI_TTS_DAEMON_PROVIDER || configured("daemonProvider", undefined),
+    tokenFile: env.TTS_TOKEN_FILE || configured("tokenFile", undefined),
+    daemonSink: env.PI_TTS_DAEMON_SINK || configured("daemonSink", undefined),
+    playback: env.PI_TTS_PLAYBACK || configured("playback", "daemon"),
+    instructions: env.PI_TTS_INSTRUCTIONS ?? configured("instructions", undefined),
+    timeoutMs: env.PI_TTS_TIMEOUT_MS != null ? Number(env.PI_TTS_TIMEOUT_MS) : configured("timeoutMs", undefined),
+    pitch: configured("pitch", undefined), volume: configured("volume", undefined), role: configured("role", undefined),
     command: env.PI_TTS_COMMAND ?? configured("command", null),
-    voice: env.PI_TTS_VOICE || configured("voice", DEFAULT_TTS_VOICE),
-    lang: env.PI_TTS_LANG || configured("lang", DEFAULT_TTS_LANG),
+    voice: env.PI_TTS_VOICE || configured("voice", defaults.voice),
+    lang: env.PI_TTS_LANG || configured("lang", defaults.lang),
     speed: env.PI_READ_SPEED != null
       ? positive(env.PI_READ_SPEED, DEFAULT_TTS_SPEED)
       : persistedRead.speed != null
         ? positive(persistedRead.speed, DEFAULT_TTS_SPEED)
-        : env.PI_TTS_SPEED != null ? positive(env.PI_TTS_SPEED, DEFAULT_TTS_SPEED) : configured("speed", DEFAULT_TTS_SPEED),
-    embedding: env.PI_TTS_EMBEDDING || configured("embedding", DEFAULT_TTS_EMBEDDING),
-    style: env.PI_TTS_STYLE ?? configured("style", null),
-    styleDegree: env.PI_TTS_STYLEDEGREE != null ? Number(env.PI_TTS_STYLEDEGREE) : configured("styleDegree", null),
-    endpoint: env.AZURE_SPEECH_ENDPOINT || configured("endpoint", undefined),
+        : env.PI_TTS_SPEED != null ? positive(env.PI_TTS_SPEED, defaults.speed) : configured("speed", defaults.speed),
+    embedding: env.PI_TTS_EMBEDDING || configured("embedding", defaults.embedding),
+    style: env.PI_TTS_STYLE ?? configured("style", provider === "daemon" ? undefined : null),
+    styleDegree: env.PI_TTS_STYLEDEGREE != null ? Number(env.PI_TTS_STYLEDEGREE) : configured("styleDegree", provider === "daemon" ? undefined : null),
+    endpoint: defaults.endpoint || configured("endpoint", undefined),
     apiKey: undefined,
     backend: env.PI_TTS_BACKEND || configured("backend", DEFAULT_TTS_BACKEND),
     server: env.PULSE_SERVER || configured("server", undefined),
@@ -114,7 +129,8 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
     "embedding", "speaker", "speakerprofileid", "speaker_profile_id",
     "base_url", "baseurl", "endpoint", "api_key", "apikey",
     "backend", "server", "device", "sink", "delay", "on_delay", "ondelay",
-    "on_send", "onsend",
+    "on_send", "onsend", "model", "instructions", "pitch", "volume", "role",
+    "daemon_url", "daemon_provider", "token_file", "daemon_sink", "playback", "timeout_ms",
   ]);
   for (const key of Object.keys(values)) {
     if (!known.has(key)) throw new Error(`/read: unknown setting '${key}'`);
@@ -123,16 +139,32 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
   if (own(values, "provider")) {
     const provider = nullableString(values.provider, env);
     const normalized = provider == null ? DEFAULT_TTS_PROVIDER : provider.toLowerCase();
-    if (!["azure", "azure-speech", "direct-azure", "command", "local"].includes(normalized)) {
-      throw new Error(`/read: unsupported provider '${provider}'; use provider=azure or command`);
+    next.provider = normalizeTtsProvider(normalized);
+    if (next.provider !== current.provider) {
+      Object.assign(next, ttsProviderDefaults(next.provider, env), { apiKey: undefined, instructions: undefined, pitch: undefined, volume: undefined, role: undefined, style: next.provider === "daemon" ? undefined : null, styleDegree: next.provider === "daemon" ? undefined : null });
     }
-    next.provider = ["command", "local"].includes(normalized) ? "command" : "azure";
   }
   if (own(values, "command")) {
     // Preserve shell variables for expansion at playback, not configuration.
     next.command = String(values.command ?? "");
     if (!own(values, "provider")) next.provider = "command";
   }
+  for (const [key, field] of Object.entries({ model: "model", instructions: "instructions", role: "role", daemon_url: "daemonUrl", daemon_provider: "daemonProvider", token_file: "tokenFile", daemon_sink: "daemonSink" })) {
+    if (own(values, key)) next[field] = nullableString(values[key], env);
+  }
+  if (next.daemonProvider && !["azure", "openai"].includes(next.daemonProvider)) throw new Error("/read: daemon_provider must be azure, openai or none");
+  if (own(values, "playback")) {
+    if (!["local", "daemon"].includes(values.playback)) throw new Error("/read: playback must be local or daemon");
+    next.playback = values.playback;
+  }
+  for (const [key, field, min, max] of [["pitch", "pitch", -50, 50], ["volume", "volume", 0, 100], ["timeout_ms", "timeoutMs", 1, 600000]]) {
+    if (own(values, key)) {
+      const value = Number(values[key]);
+      if (!Number.isFinite(value) || value < min || value > max) throw new Error(`/read: invalid ${key}`);
+      next[field] = value;
+    }
+  }
+  if (own(values, "model") && next.provider === "azure" && !own(values, "voice")) next.voice = next.model;
   if (own(values, "voice")) next.voice = nullableString(values.voice, env);
   if (own(values, "lang")) next.lang = nullableString(values.lang, env);
   if (own(values, "speed")) next.speed = positiveNumber(values.speed, "speed");
@@ -187,11 +219,11 @@ export function formatReadStatus(enabled, config, env = process.env) {
     `styledegree:${optional(config.styleDegree)}`,
     `embedding:${config.embedding ? "set" : "none"}`,
     `endpoint:${sourceLabel(config.endpoint, "AZURE_SPEECH_ENDPOINT", env)}`,
-    `api-key:${sourceLabel(config.apiKey, "AZURE_SPEECH_API_KEY", env)}`,
+    speechCredentialStatus(config, env),
     `delay:${config.delay}ms`,
     `on-delay:${config.onDelay ? "on" : "off"}`,
     `on-send:${config.onSend ? "on" : "off"}`,
-    `output:${config.backend}/${optional(config.device)}`,
+    `output:${usesDaemonPlayback(config) ? `daemon/${config.daemonSink || "server-default"}` : `${config.backend}/${optional(config.device)}`}`,
     `stream:${config.streamName}`,
   ].join(" · ");
 }
@@ -252,19 +284,8 @@ export function createReadModeController({
           setStatus(ctx, `/read · speaking (${reason})`);
           return playTtsCommand(body, controlled);
         }
-        const synthesisOptions = {
-          provider: config.provider,
-          voice: config.voice,
-          lang: config.lang,
-          speed: config.speed,
-          speakerProfileId: config.embedding,
-          style: config.style,
-          styleDegree: config.styleDegree,
-          signal: controlled.signal,
-          env,
-        };
-        if (config.endpoint !== undefined) synthesisOptions.endpoint = config.endpoint;
-        if (config.apiKey !== undefined) synthesisOptions.apiKey = config.apiKey;
+        const synthesisOptions = ttsSynthesisOptions(config, { signal: controlled.signal, env });
+        if (usesDaemonPlayback(config)) return playDaemonSpeech(body, synthesisOptions);
         const pcm = await synthesize(body, synthesisOptions);
         if (mine !== generation || controlled.signal.aborted) return { interrupted: true };
         markAssistantSpeaking(audioDurationMs(pcm));
@@ -397,7 +418,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
   });
 
   pi.registerCommand("read", {
-    description: "Azure or local-command editor-to-speech mode (command= selects local playback). Usage: /read [on|off|status|text] [provider=azure voice=... lang=... speed=... style=... styledegree=... embedding=... delay=2000 on_delay=true on_send=true backend=pulse server=... device=...].",
+    description: "Editor-to-speech. Usage: /read [on|off|status|text] [provider=azure|openai|daemon|command model=... voice=... lang=... speed=... style=... embedding=... daemon_url=helsinki playback=daemon|local delay=2000 on_delay=true on_send=true backend=pulse]. Daemon playback cannot yet be cancelled per job.",
     handler: async (args, ctx) => {
       try {
         const parsed = parseEnvStyleArgs(String(args || ""));
@@ -405,7 +426,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
         const action = String(parsed.positionals[0] || "").toLowerCase();
         if (["off", "stop", "disable"].includes(action)) {
           controller.disable(ctx);
-          ctx.ui.notify("/read off (runtime; startup setting unchanged)", "info");
+          ctx.ui.notify(`/read off (runtime; startup setting unchanged)${usesDaemonPlayback(controller.getConfig()) ? "; admitted daemon jobs may still play" : ""}`, "info");
           return;
         }
         if (action === "status") {

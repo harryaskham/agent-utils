@@ -127,7 +127,7 @@ test("/read config supports style/styledegree, booleans, and =none unsets", () =
 test("/read rejects unknown settings and unsupported providers", () => {
   const config = defaultReadConfig({});
   assert.throws(() => applyReadConfigValues(config, { typo: "x" }, {}), /unknown setting/);
-  assert.throws(() => applyReadConfigValues(config, { provider: "openai" }, {}), /unsupported provider/);
+  assert.throws(() => applyReadConfigValues(config, { provider: "unknown" }, {}), /unsupported provider/);
   assert.throws(() => applyReadConfigValues(config, { styledegree: "2.1" }, {}), /between 0.01 and 2/);
 });
 
@@ -254,7 +254,7 @@ test("extension registers /read, attaches editor input, and exposes redacted sta
   createReadAloudExtension({ persistedTts: {}, persistedRead: {}, settingsPath: null })(pi);
   handlers.get("session_start")({ reason: "startup" }, harness.ctx);
   assert.ok(commands.has("read"));
-  assert.match(commands.get("read").description, /Azure or local-command editor-to-speech mode/);
+  assert.match(commands.get("read").description, /provider=azure\|openai\|daemon\|command/);
   assert.equal(harness.terminal.length, 1);
   assert.equal(typeof handlers.get("input"), "function");
   assert.equal(pi.readAloud.getConfig().voice, "MAI-Voice-2.1-Flash");

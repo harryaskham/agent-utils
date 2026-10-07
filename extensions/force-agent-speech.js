@@ -16,6 +16,8 @@
 import { spawn } from "node:child_process";
 import { markAssistantSpeaking, estimateSpeechMs } from "./lib/half-duplex-state.js";
 import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./lib/cacophony-runtime.js";
+import { createAgentSpeechController, resolveAgentTtsSettings } from "./lib/tts-narration.js";
+import { readPersistedTtsSettings } from "./lib/tts-settings.js";
 
 export const DEFAULT_MAX_CHARS = 240;
 
@@ -107,22 +109,28 @@ export function __setForceSpeechRunnerForTest(fn) {
 /// Decide what (if anything) to speak for a finished turn. Pure: returns the
 /// spoken precis string, or "" to stay silent. Separated for testability.
 export function plannedSpeech(event, env = process.env) {
-  if (isPiCacoDisabled(env) || !isForceSpeechEnabled(env)) return "";
+  if ((!env.PI_TTS_PROVIDER && isPiCacoDisabled(env)) || !isForceSpeechEnabled(env)) return "";
   const text = extractAssistantText(event?.message);
   return shortSpokenSummary(text, { maxChars: forceSpeechMaxChars(env) });
 }
 
 export default function forceAgentSpeechExtension(pi) {
   let runtimeOverride = null; // null = follow env; true/false = forced by command
+  const persisted = readPersistedTtsSettings();
+  // An explicit shared provider is first-party. Keep the historical Caco route
+  // only when no shared provider was selected at all.
+  const nativeSpeech = process.env.PI_TTS_PROVIDER || persisted.provider
+    ? createAgentSpeechController({ initialConfig: resolveAgentTtsSettings({ persisted }).config }) : null;
+  pi.on("session_shutdown", () => nativeSpeech?.dispose());
 
-  const enabled = () => !isPiCacoDisabled() && (runtimeOverride === null ? isForceSpeechEnabled() : runtimeOverride);
+  const enabled = () => (nativeSpeech || !isPiCacoDisabled()) && (runtimeOverride === null ? isForceSpeechEnabled() : runtimeOverride);
 
   pi.registerCommand?.("force-speech", {
     description: "Toggle speaking a short precis of each assistant reply (on|off|status|env).",
     handler: async (args, ctx) => {
       const arg = String(args || "").trim().toLowerCase();
       if (arg === "on" || arg === "true") runtimeOverride = true;
-      else if (arg === "off" || arg === "false") runtimeOverride = false;
+      else if (arg === "off" || arg === "false") { runtimeOverride = false; nativeSpeech?.interrupt(); }
       else if (arg === "env" || arg === "default") runtimeOverride = null;
       const state = enabled() ? "on" : "off";
       const src = runtimeOverride === null ? "env" : "command";
@@ -141,7 +149,8 @@ export default function forceAgentSpeechExtension(pi) {
       // instead of transcribing the reply's echo back as a phantom turn.
       markAssistantSpeaking(estimateSpeechMs(spoken));
       const identity = getCacophonyRuntimeIdentity();
-      await speakRunner(spoken, { project: identity.project, agentId: identity.agentId });
+      if (nativeSpeech && speakRunner === defaultSpeakRunner) await nativeSpeech.speak(spoken);
+      else await speakRunner(spoken, { project: identity.project, agentId: identity.agentId });
     } catch {
       // best-effort: never break a turn because speech failed.
     }

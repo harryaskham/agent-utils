@@ -10,6 +10,8 @@ import { resolveAgentTtsSettings } from "./tts-narration.js";
 import { playTtsCommand } from "./tts-command.js";
 import { withSpeechControl } from "./speech-control.js";
 import { ChoiceAudioCache } from "./choice-audio-cache.js";
+import { ttsSynthesisOptions } from "./tts-provider-config.js";
+import { isAzureSpeechProvider, usesDaemonPlayback, playDaemonSpeech } from "./tts.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./tts-identity.js";
 import {
   DEFAULT_TTS_BACKEND,
@@ -214,19 +216,22 @@ export function createChoiceSpeaker({
           // Local engines keep their configured voice, not an Azure identity.
           return playTtsCommand(body, { ...controlled, pan: assignment?.pan ?? shared.pan });
         }
-        const options = {
-          voice: assignment?.voice || resolved.voice,
-          lang: resolved.lang,
-          speed: resolved.speed,
-          speakerProfileId: assignment ? undefined : resolved.speakerProfileId,
-          style: resolved.style,
-          styleDegree: resolved.styleDegree,
-          signal: controlled.signal,
-          env,
-        };
-        if (!env.AZURE_SPEECH_ENDPOINT && shared.endpoint !== undefined) options.endpoint = shared.endpoint;
-        const key = JSON.stringify([body, options.voice, options.lang, options.speed, options.speakerProfileId, options.style, options.styleDegree, controlled.speechControl.epoch]);
-        const pcm = await audioCache.get(key, (signal) => withSpeechControl({ ...controlled, signal }, (cached) => synthesize(body, { ...options, signal: cached.signal })), controlled.signal);
+        const options = ttsSynthesisOptions(shared, {
+          ...(isAzureSpeechProvider(shared.provider) ? {
+            voice: assignment?.voice || resolved.voice, lang: resolved.lang, speed: resolved.speed,
+            speakerProfileId: assignment ? undefined : resolved.speakerProfileId,
+            style: resolved.style, styleDegree: resolved.styleDegree,
+          } : {}),
+          streamName, signal: controlled.signal, env,
+        });
+        // Server playback owns its queue; never cache/replay it as local audio.
+        if (usesDaemonPlayback(shared)) return playDaemonSpeech(body, options);
+        const key = JSON.stringify([body, options.provider, options.model, options.endpoint, options.daemonUrl, options.daemonProvider, options.voice, options.lang, options.speed, options.speakerProfileId, options.style, options.styleDegree, options.instructions, options.role, options.pitch, options.volume, controlled.speechControl.epoch]);
+        // Even local daemon playback must consult current server mute policy;
+        // replaying a cached clip would bypass the daemon entirely.
+        const pcm = shared.provider === "daemon"
+          ? await synthesize(body, options)
+          : await audioCache.get(key, (signal) => withSpeechControl({ ...controlled, signal }, (cached) => synthesize(body, { ...options, signal: cached.signal })), controlled.signal);
         if (synthesis !== controller || controlled.signal.aborted || !Buffer.isBuffer(pcm)) return { interrupted: true, ...(pcm?.muted ? { muted: true } : {}) };
         return player.play(pcm, {
           backend: env.PI_TTS_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,

@@ -134,7 +134,12 @@ export class LocalVadController {
     // PTT captures the complete raw hold independently of VAD. Energy controls
     // previews/chunking only; release always transcribes this full buffer.
     this._heldRawChunks = [];
+    this._generation = 0;
+    this._abort = new AbortController();
+    this._disposed = false;
   }
+
+  dispose() { this.discardHeld(); this._disposed = true; }
 
   /// PTT-release semantic (bd-9e06ae): finalize any in-progress segment into the
   /// held buffer (flush drains the pump), then send the WHOLE accumulated turn as
@@ -154,6 +159,9 @@ export class LocalVadController {
   /// Discard any held (and in-progress) transcript without sending it — the PTT
   /// cancel path (Ctrl-C). Clears the accrual; the caller stops capture separately.
   discardHeld() {
+    this._generation++;
+    this._abort.abort();
+    this._abort = new AbortController();
     this._held = [];
     this._heldRawChunks = [];
     this._pending = Buffer.alloc(0);
@@ -178,6 +186,8 @@ export class LocalVadController {
   }
 
   async _finalizeHeldText() {
+    const generation = this._generation;
+    const signal = this._abort.signal;
     if (!this.holdCommits) {
       await this.flush();
       return "";
@@ -190,15 +200,17 @@ export class LocalVadController {
     this._pendingCommit = null;
     try { this.segmenter.flush(); } catch {}
     await this._drain();
+    if (generation !== this._generation || this._disposed) return "";
     const raw = Buffer.concat(this._heldRawChunks);
     this._heldRawChunks = [];
     const previewFallback = this._held.join(" ").replace(/\s+/g, " ").trim();
     this._held = [];
     if (!raw.length) return previewFallback;
     try {
-      const finalText = String(await this.transcribe(raw) ?? "").trim();
-      return finalText || previewFallback;
+      const finalText = String(await this.transcribe(raw, { signal }) ?? "").trim();
+      return generation === this._generation && !this._disposed ? finalText || previewFallback : "";
     } catch (err) {
+      if (signal.aborted || generation !== this._generation) return "";
       this.onError(err);
       return previewFallback;
     }
@@ -215,7 +227,7 @@ export class LocalVadController {
   }
 
   _ingest(chunk) {
-    if (!chunk || chunk.length === 0) return;
+    if (this._disposed || !chunk || chunk.length === 0) return;
     // Half-duplex: drop mic audio while the assistant is speaking (+ release tail)
     // so its own spoken reply is not captured + transcribed as a phantom turn.
     if (this.isSuppressed && this.isSuppressed()) {
@@ -304,7 +316,9 @@ export class LocalVadController {
   // Single-flight transcription: at most one transcribe in flight. Commit beats
   // a pending draft; a newer draft replaces an older one (coalesced re-draft).
   _pump() {
-    if (this._transcribing) return;
+    if (this._disposed || this._transcribing) return;
+    const generation = this._generation;
+    const signal = this._abort.signal;
     let job = null;
     if (this._pendingCommit) {
       job = { kind: "commit", audio: this._pendingCommit.audio, event: this._pendingCommit.event };
@@ -320,8 +334,9 @@ export class LocalVadController {
     this._transcribing = true;
     try { this.onState(job.kind === "commit" ? "transcribing-final" : "transcribing", job.event); } catch { /* best-effort */ }
     this._current = Promise.resolve()
-      .then(() => this.transcribe(job.audio))
+      .then(() => this.transcribe(job.audio, { signal }))
       .then((raw) => {
+        if (generation !== this._generation || this._disposed) return;
         const text = String(raw == null ? "" : raw).trim();
         if (job.kind === "commit") {
           this._hasPartial = false;
@@ -347,7 +362,7 @@ export class LocalVadController {
           this.insertPartial(prefix + text, job.event);
         }
       })
-      .catch((err) => { this.onError(err, job.event); })
+      .catch((err) => { if (!signal.aborted && generation === this._generation) this.onError(err, job.event); })
       .finally(() => { this._transcribing = false; this._current = null; this._pump(); });
   }
 

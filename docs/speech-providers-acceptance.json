@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "scope": "Agent Utils native TTS and standalone STT transports; not the full multimodal Realtime model's audio protocol",
+  "requirements": [
+    {"id":"PROVIDER-1","contract":"Azure remains the compatibility default. Explicit azure/openai/daemon selection routes once, with no shell, local fallback or replay after indeterminate admission.","tests":["test/speech-providers.test.js"]},
+    {"id":"AUTH-1","contract":"Daemon tokens resolve lazily per request from TTS/STT_DAEMON_TOKEN (DAMEON alias accepted), then a configurable symlink-compatible token file. Credentials never enter request bodies, diagnostics, session persistence or downstream audio child environments.","tests":["test/speech-providers.test.js"]},
+    {"id":"TTS-1","contract":"Daemon jobs correlate request IDs and receipts; remote playback owns central queue/output, local playback explicitly downloads bounded PCM from the exact receipt path. Only terminal receipts settle success; no global mute is issued on session cancellation.","tests":["test/speech-providers.test.js"]},
+    {"id":"OPENAI-1","contract":"OpenAI audio/speech uses plain JSON PCM with provider-specific defaults and instruction controls; embeddings/unsupported controls fail explicitly. Body reads and cancellation remain bounded.","tests":["test/speech-providers.test.js"]},
+    {"id":"SURFACES-1","contract":"Read, assistant TTS, narration, choices, cascade and speak-replies share provider selection. STT/PTT, choice freeform and cascade input share batch provider selection; explicit realtime STT can use the daemon stream protocol.","tests":["test/speech-providers.test.js","test/read-aloud.test.js","test/tts-narration.test.js","test/choice.test.js","test/realtime-cascade-session.test.js","test/realtime-agent.test.js","test/force-agent-speech.test.js"]},
+    {"id":"STREAM-1","contract":"Daemon STT streaming has bounded append queues, cursor deduplication, terminal/error handling and session abort/close cleanup; never replays audio after failure.","tests":["test/speech-providers.test.js"]}
+  ],
+  "validation": {
+    "focused": "315 speech/provider/choice/realtime tests passed via node --test, including isolated HTTP servers and stream lifecycle fixtures; 10 consecutive speech-control/playback regression runs passed after fixing Darwin watcher teardown",
+    "full_suite": "AG_TEST_BIN=$PWD/ag/target/debug/ag npm test: 1820 passed, 0 failed, 1 opt-in real-Pi smoke skipped. Declared npm dependencies installed locally; graphics path fixture now expects the canonical executable location; Darwin speech policy uses file-inode watches instead of blocking directory FSEvents.",
+    "rust": "30 ag tests passed; cargo clippy --locked --all-targets -- -D warnings and cargo fmt --check passed",
+    "watcher_latency": "Darwin arm64, Node 26.8.1, 30 isolated withSpeechControl calls: p50 0.272 ms, p95 0.628 ms, max 1.192 ms, zero remaining observers (previous directory watcher close alone took 125–1905 ms)",
+    "checks": "git diff --check and docs:check passed; workflow YAML check passed with actionlint unavailable",
+    "live": "Read-only Helsinki health checks stopped before network: this Mac has neither canonical daemon-token file nor TTS/STT daemon token env. No daemon synthesis/playback or microphone canary performed. An obsolete negative test initially issued one synthetic 'hello' request to the configured OpenAI endpoint when OpenAI became supported; it did not play audio. That test now uses an unknown provider and stays offline.",
+    "activation": "No provider default, user settings, daemon service or installed package was switched"
+  },
+  "tools_followups": {"cancellation":"bd-190093","panning":"bd-ba35ef"},
+  "known_protocol_limits": ["The TTS daemon currently exposes no per-job cancellation. Aborting a client wait cannot retract admitted server playback. playback=local retains interruptible local audio but does not use daemon playback lanes."]
+}

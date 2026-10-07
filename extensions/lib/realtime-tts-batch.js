@@ -2,7 +2,7 @@
 //
 // Native synthesis and playback now live in ./tts.js. The old `tts` CLI batch
 // fallback was intentionally removed: every agent-utils speech consumer uses the
-// shared direct Azure REST path. Keep these re-exports so existing imports do not
+// shared native Azure/OpenAI/daemon path. Keep these re-exports so imports do not
 // need to change in lockstep.
 
 export {

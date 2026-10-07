@@ -6,9 +6,12 @@ use ag::{
     speech::{self, SpeechKind},
     store, terminal_text,
 };
-use clap::{Args, CommandFactory, Parser, Subcommand};
+mod output;
+
+use clap::{Args, ColorChoice, CommandFactory, Parser, Subcommand};
 use configurable_cli::ConfigCommand;
 use mcp_cli::{JsonEnvelope, JsonError};
+use output::SpeechOutput;
 use serde::Serialize;
 use std::{
     fs::OpenOptions,
@@ -33,6 +36,9 @@ struct Cli {
     /// JSON envelope; following emits one envelope per line.
     #[arg(long, global = true)]
     json: bool,
+    /// Color human speech headers (auto honors NO_COLOR and TERM=dumb).
+    #[arg(long, global = true, value_enum, default_value_t = ColorChoice::Auto)]
+    color: ColorChoice,
     /// Select configured nodes (repeatable); default is all enabled nodes.
     #[arg(long = "host", global = true)]
     hosts: Vec<String>,
@@ -263,21 +269,19 @@ fn text(value: &str) -> Result<()> {
     out.flush()?;
     Ok(())
 }
-fn speech_line(host: &str, record: &SpeechRecord) -> String {
-    terminal_text(&format!(
-        "{} [{}] [{}] {}: {}",
-        record.timestamp,
-        host,
-        record.kind,
-        record
-            .agent
-            .as_deref()
-            .or(record.session.as_deref())
-            .unwrap_or("unknown"),
-        record.text
-    ))
+fn speech_entry(output: &SpeechOutput, host: &str, record: &SpeechRecord) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(output.entry(host, record).as_bytes())?;
+    stdout.flush()?;
+    Ok(())
 }
-fn finite_tts(service: &Service, selection: Selection, limit: usize, as_json: bool) -> Result<u8> {
+fn finite_tts(
+    service: &Service,
+    selection: Selection,
+    limit: usize,
+    as_json: bool,
+    output: &SpeechOutput,
+) -> Result<u8> {
     let result = service.tts_list(ListInput {
         selection,
         limit,
@@ -305,7 +309,7 @@ fn finite_tts(service: &Service, selection: Selection, limit: usize, as_json: bo
         }
         records.sort_by(|a, b| a.1.timestamp.cmp(&b.1.timestamp).then(a.0.cmp(b.0)));
         for (host, record) in records {
-            text(&speech_line(host, record))?;
+            speech_entry(output, host, record)?;
         }
     }
     Ok(if partial { 3 } else { 0 })
@@ -351,7 +355,13 @@ fn show_speech_control(result: FleetSpeechControl, as_json: bool) -> Result<u8> 
     Ok(if failed { 3 } else { 0 })
 }
 
-fn follow(service: &Service, selection: Selection, lines: usize, as_json: bool) -> Result<u8> {
+fn follow(
+    service: &Service,
+    selection: Selection,
+    lines: usize,
+    as_json: bool,
+    output: &SpeechOutput,
+) -> Result<u8> {
     service.hosts(&selection)?;
     store::check_limit(lines)?;
     service.runtime.block_on(async {
@@ -369,7 +379,7 @@ fn follow(service: &Service, selection: Selection, lines: usize, as_json: bool) 
                     if let Some(event) = next {
                         let result = match &event.event {
                             TailEvent::Checkpoint { .. } => Ok(()),
-                            TailEvent::Speech { record, .. } if !as_json => text(&speech_line(&event.host, record)),
+                            TailEvent::Speech { record, .. } if !as_json => speech_entry(output, &event.host, record),
                             TailEvent::Status { state, message } if !as_json => { eprintln!("[{}] {}: {}", terminal_text(&event.host), terminal_text(state), terminal_text(message)); Ok(()) },
                             _ => json(&event),
                         };
@@ -584,6 +594,7 @@ fn execute(cli: Cli) -> Result<u8> {
             }
         }
         Commands::Tts { command } => {
+            let output = SpeechOutput::new(cli.color);
             return match command {
                 TtsCommand::Mute(types) => show_speech_control(
                     service.speech_mute(SpeechControlInput {
@@ -604,15 +615,17 @@ fn execute(cli: Cli) -> Result<u8> {
                 TtsCommand::Status => {
                     show_speech_control(service.speech_status(selection)?, cli.json)
                 }
-                TtsCommand::List(args) => finite_tts(&service, selection, args.limit, cli.json),
+                TtsCommand::List(args) => {
+                    finite_tts(&service, selection, args.limit, cli.json, &output)
+                }
                 TtsCommand::Tail {
                     lines,
                     no_follow: true,
-                } => finite_tts(&service, selection, lines, cli.json),
+                } => finite_tts(&service, selection, lines, cli.json, &output),
                 TtsCommand::Tail {
                     lines,
                     no_follow: false,
-                } => follow(&service, selection, lines, cli.json),
+                } => follow(&service, selection, lines, cli.json, &output),
             };
         }
         Commands::Image { command, options } => match command {

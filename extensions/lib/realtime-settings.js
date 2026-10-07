@@ -137,12 +137,13 @@ export function readPersistedRealtimeSettings(path = agentSettingsPath()) {
 // the explicit startup home for shared local-STT/PTT defaults.
 export const PERSISTED_CASCADE_FIELDS = [
   "voice", "model", "baseUrl", "ttsModel", "provider",
-  "speakerProfileId", "lang", "speed", "azure",
+  "speakerProfileId", "lang", "speed", "azure", "daemonUrl", "daemonProvider", "ttsEndpoint", "ttsInstructions", "pitch", "volume", "role", "playback",
 ];
 export const PERSISTED_STT_FIELDS = [
   // Realtime/server-STT compatibility fields.
   "transcriptionModel", "vadThreshold", "backend",
   // Local-VAD batch STT shared by /stt and /ptt.
+  "provider", "endpoint", "daemonUrl", "daemonProvider", "tokenFile", "language", "prompt", "streamingModel",
   "model", "timeoutMs", "energyThreshold", "insertSilenceMs",
   "commitSilenceMs", "minTurnSpeechMs", "shortcutsEnabled",
 ];

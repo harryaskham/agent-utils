@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,8 +44,9 @@ test("renderer=gfx maps Pi's rows and semantics to gfx-core blocks", () => {
   assert.deepEqual(frame.cursor, [7, 9]);
 });
 
-test("renderer=gfx finds gfx-core: setting, $PI_GFX_WASM, beside gfxsh, or `gfxsh wasm`", () => {
+test("renderer=gfx finds gfx-core: setting, $PI_GFX_WASM, beside gfxsh, or `gfxsh wasm`", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "gfxwasm-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const wasm = join(dir, "cached.wasm");
   writeFileSync(wasm, "\0asm");
   // a cargo-installed gfxsh: no share/ beside it; `gfxsh wasm` prints the cached copy
@@ -61,10 +62,16 @@ test("renderer=gfx finds gfx-core: setting, $PI_GFX_WASM, beside gfxsh, or `gfxs
   mkdirSync(join(dir, "share", "gfxsh"), { recursive: true });
   writeFileSync(join(dir, "share", "gfxsh", "gfx_wasm.wasm"), "\0asm");
   let spawned = false;
-  assert.equal(findGfxWasm("", env, () => { spawned = true; return { status: 1 }; }), join(dir, "bin", "..", "share", "gfxsh", "gfx_wasm.wasm"));
+  const installedWasm = realpathSync(join(dir, "share", "gfxsh", "gfx_wasm.wasm"));
+  assert.equal(findGfxWasm("", env, () => { spawned = true; return { status: 1 }; }), installedWasm, "installed lookup follows the real executable (including macOS /var aliases)");
   assert.equal(spawned, false);
+  // A package-manager PATH symlink must resolve beside the real executable,
+  // not beside the link. Keep this portable regression explicit on Linux too.
+  const linkedBin = join(dir, "profile-bin");
+  mkdirSync(linkedBin);
+  symlinkSync(exe, join(linkedBin, "gfxsh"));
+  assert.equal(findGfxWasm("", { PATH: linkedBin }, () => assert.fail("installed lookup must not spawn")), installedWasm);
   assert.equal(findGfxWasm("", { PATH: join(dir, "nowhere") }), "", "no gfxsh: not found");
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("renderer=gfx renders through gfx-core (WebAssembly) when installed", { skip: !findGfxWasm() && "gfx_wasm.wasm not found (gfxsh / $PI_GFX_WASM)" }, async () => {

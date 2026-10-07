@@ -25,7 +25,21 @@ ag --host ms-mac image get 'my-agent/img-<id>.png' -o screenshot.png
 ag hosts
 ```
 
-Human speech output is ordered by arrival when following (not a globally synchronized clock). Finite speech snapshots/images are sorted by producer timestamps. Every line identifies its source node. Host errors go to stderr in human mode and remain structured in JSON. Healthy nodes continue independently while offline tails retry with bounded backoff. `--json` follow emits JSONL envelopes; it does not mix progress prose into stdout.
+Human speech output is ordered by arrival when following (not a globally synchronized clock). Finite speech snapshots/images are sorted by producer timestamps. Each speech entry has a metadata header, a message body on the next logical line, and one blank line between entries:
+
+```text
+2026-10-07T08:09:09.894Z [ms-dev-2] [narrate] android-improvements
+I started a recurring check for the Android release’s Play internal promotion status.
+
+2026-10-07T08:09:16.270Z [ms-dev-2] [tts] android-improvements
+I’ll check the release tags and latest Android workflow run.
+```
+
+`tts tail`, `tts tail --no-follow`, and `tts list` share this layout. Timestamps are dim, hosts cyan, speech types color-coded, and agent names bold, using your terminal palette; bodies use the normal foreground. Paragraph breaks (LF/CRLF) fold into spaces so each body stays on one logical line; long entries wrap naturally without truncation. Other terminal controls remain escaped. Text is otherwise preserved, including any prefixes already in the recorded message.
+
+Color is automatic on stdout terminals, disabled on pipes or with nonempty `NO_COLOR` or `TERM=dumb`. `--color always` forces it (e.g. `ag tts tail --color always | less -R`); `--color never` disables it. These explicit choices override the environment. JSON, MCP, and peer records retain their original text and never include presentation styling.
+
+Host errors go to stderr in human mode and remain structured in JSON. Healthy nodes continue independently while offline tails retry with bounded backoff. `--json` follow emits JSONL envelopes; it does not mix progress prose into stdout.
 
 ## Fleet-wide image gallery
 
@@ -49,7 +63,7 @@ Policy lives at `~/.local/state/agent-utils/tts/mute.json` (XDG state rules appl
 
 Updated Agent Utils sessions suppress synthesis, stop active playback, and discard queued/in-flight speech of muted types. Per-type epochs prevent muted backlog from replaying after unmute. New speech is allowed immediately when unmuted; disabled session features stay disabled. Text feeds and narration text continue. Unrelated apps, realtime audio, and other clients of a remote Pulse server are not muted.
 
-No daemon or polling writer is added. `ag` uses a private atomic write under a short-lived OS advisory lock; speech holds event-driven directory watches only while in flight. Since macOS can drop a cold-start/atomic-rename notification, a shared 200 ms **active-only metadata stat** reconciles changes; unchanged files are not reopened, and all watchers/timers close when the last utterance settles or aborts. There is no idle polling or queue-lock churn. Invalid/unreadable existing policy fails closed and should be inspected/repaired. New files are owner-only. Managed symlinks are preserved.
+No daemon or polling writer is added. `ag` uses a private atomic write under a short-lived OS advisory lock; speech holds event-driven watches only while in flight (file-inode watches on macOS to avoid blocking directory-FSEvents teardown; directory watches elsewhere). A shared 200 ms **active-only metadata stat** covers missing files and dropped notifications, rebinding after atomic inode replacement; unchanged files are not reopened, and all watchers/timers close when the last utterance settles or aborts. There is no idle polling or queue-lock churn. Invalid/unreadable existing policy fails closed and should be inspected/repaired. New files are owner-only. Managed symlinks are preserved.
 
 A successful receipt acknowledges the **policy write**, not synchronous audio-quiescence proof from every agent. A failed remote write can be unconfirmed (the reply may have been lost after application); `ag tts status` reconciles it. Mutations are not automatically retried. Targets need `ag` 0.2+ and updated Agent Utils; older running extensions cannot enforce the file. See [the control contract](https://github.com/harryaskham/agent-utils/blob/main/docs/speech-runtime-control.md).
 

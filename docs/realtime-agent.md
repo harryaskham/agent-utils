@@ -316,10 +316,7 @@ Tuning knobs (all optional; env overrides the matching `agentUtils.stt` value):
 
 ### Read the input editor aloud (`/read`)
 
-`/read` is a persistent editor-to-speech mode backed by the shared native Azure
-Speech library. It never routes through `caco msg speak` and never shells out to
-the `tts` CLI: text becomes SSML in-process, one bounded Azure REST call returns
-raw 24 kHz mono PCM, and an interruptible playback child plays it.
+`/read` is a persistent editor-to-speech mode using the shared native Azure/OpenAI/daemon providers. It never shells out to the `tts` CLI. Local output uses raw 24 kHz mono PCM and an interruptible player; `provider=daemon` can instead use server-owned playback. See [native speech providers](speech-providers.md) for authentication, field mapping and remote cancellation semantics.
 
 Start with the shared defaults:
 
@@ -452,13 +449,9 @@ and `energy(raw)=` use the actual normalized RMS scale consumed by VAD. For
 example, a 10% visual meter is roughly raw 0.008; energy 0.4 scales/clamps its
 marker to 100% and will reject ordinary speech. It needs a 24-bit-color terminal.
 
-### The `speak` tool (low-latency direct-Azure agent voice)
+### Shared native agent speech
 
-`force-agent-speech` above speaks replies through `caco msg speak` (the TTS
-daemon), which adds a daemon round-trip and uses the daemon voice. For a fast,
-per-session voice, the realtime extension also registers a `speak` **tool** the
-agent can call directly: it synthesizes via the direct Azure Speech REST path
-(no daemon) in the configured cascade voice and plays locally.
+The shared native TTS dispatcher supports Azure, OpenAI-compatible and Tools daemon providers without a CLI subprocess. `/tts`, `/read`, narration, choices, cascade and speak-replies use it. `force-agent-speech` also honors an explicitly selected shared provider; with none configured it retains its historical `caco msg speak` path. The remaining Azure-specific settings below describe the unchanged default; see [native speech providers](speech-providers.md) for other selections.
 
 - Defaults come from the shared TTS library: `MAI-Voice-2.1-Flash`, embedding
   `0daec43c-911f-4529-820a-16dab73630d3`, `en-GB`, and speed `2`.
@@ -477,12 +470,11 @@ Pi agent IS the cascade brain (bd-15beec).
 ### Spoken replies, the fast way (`/rt speak-replies`, bd-095b3d)
 
 `speak-replies` is the low-latency completion of the hands-free loop: it auto-
-speaks the **real** Pi agent's replies through the direct-Azure path (no daemon
-round-trip, the configured cascade voice), so `/stt` + `speak-replies`
+speaks the **real** Pi agent's replies through the shared native TTS provider, so `/stt` + `speak-replies`
 gives you a genuine voiced agent — your speech drives your actual agent (with your
 tools, MCP, and session history via `sendUserMessage`), and its reply is spoken
 back. Unlike `force-agent-speech` (which speaks a truncated precis via the TTS
-daemon), this speaks the full reply via the fast direct-Azure REST path.
+daemon by default), this speaks the full reply via the selected native provider.
 
 ```text
 /rt speak-replies on        # off | on ; or env-style: /rt speak_replies=on
@@ -523,9 +515,7 @@ The extension caches recent response PCM clips in memory. `/rt-play latest` repl
 `/cascade` is a multi-agent **voice group chat** (bd-7c6790): you speak once, then
 each participant takes one turn — in arbitrary order — and every agent hears you
 *and* everyone who already spoke that round, answering in its own synthesized
-voice. Speech output uses the same native Azure REST implementation as `/read`
-and the `speak` tool (no daemon or `tts` CLI round trip), so each agent is
-speech-in, think, speech-out.
+voice. Speech output uses the same native Azure/OpenAI/daemon providers as `/read`, with no `tts` CLI hop. Daemon playback admission occurs in the ordered playback phase, not speculative synthesis.
 
 The widget shows the round live: a rolling **transcript** (`you: …`, then each
 agent), a **mic input-level meter** with a caret at the VAD speech threshold while
@@ -552,7 +542,10 @@ Start-time arguments (env-style `key=value`):
 | `participants=a,b` | named peers beyond main (`var,cedar` or `var[voice=...,model=...]`) |
 | `order=fixed\|random\|round-robin` | turn order each round (default `random`) |
 | `voice=` / `model=` / `base_url=` | overrides for the main participant |
-| `azure=true` | compatibility no-op; native Azure Speech REST is now always used |
+| `azure=true` | compatibility no-op; default provider remains Azure |
+| `provider=azure\|openai\|daemon` | select native speech transport |
+| `daemon_url=` / `daemon_provider=` / `playback=` | daemon endpoint, upstream selection and server/local playback |
+| `tts_endpoint=` / `tts_instructions=` | speech endpoint/instructions, separate from the chat URL/persona |
 | `speaker=<profileId>` | Azure `mstts:ttsembedding` speaker profile id (personal/embedding voice) |
 | `lang=<locale>` | `xml:lang` for the SSML (e.g. `en-GB`) |
 | `pipeline=false` | disable concurrent-synthesis pipelining (also `PI_CASCADE_PIPELINE=0`); default on |
@@ -574,8 +567,7 @@ verb is the no-microphone way to try a round.
 
 ### Native Azure Speech voices + embeddings
 
-Cascade synthesizes every turn with the shared **direct Azure Speech REST** path
-(`POST <AZURE_SPEECH_ENDPOINT>/cognitiveservices/v1`). The historical
+With the default `provider=azure`, cascade synthesizes turns with the shared **direct Azure Speech REST** path (`POST <AZURE_SPEECH_ENDPOINT>/cognitiveservices/v1`). The historical
 `azure=true` argument is still accepted but is now redundant: there is no `tts`
 CLI fallback. Credentials come from `AZURE_SPEECH_API_KEY` and
 `AZURE_SPEECH_ENDPOINT` (the endpoint otherwise falls back to the eastus Speech

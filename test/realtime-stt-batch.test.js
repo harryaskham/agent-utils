@@ -177,7 +177,7 @@ test("transcribeAudioDirect throws on a non-2xx response (bd-adde03)", async () 
   const fetchImpl = async () => fakeRes({ ok: false, status: 500, text: "boom", contentType: "text/plain" });
   await assert.rejects(
     transcribeAudioDirect({ pcm: Buffer.from([0]), baseUrl: "http://p:1", apiKey: "k", fetchImpl }),
-    /transcribe HTTP 500: boom/,
+    /transcribe HTTP 500; response body omitted/,
   );
 });
 

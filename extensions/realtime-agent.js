@@ -179,7 +179,13 @@ import { fileQuickfileUtterance } from "./lib/realtime-quickfile.js";
 import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./lib/cacophony-runtime.js";
 import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
 import { makePttIndicator } from "./lib/realtime-ptt-indicator.js";
-import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs, transcribeAudioDirect, transcribeMaiAudioDirect } from "./lib/realtime-stt-batch.js";
+import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs } from "./lib/realtime-stt-batch.js";
+import { resolveSttSettings, normalizeSttProvider, transcribeSpeech } from "./lib/stt-provider.js";
+import { DaemonSttSocket } from "./lib/stt-daemon-stream.js";
+import { ttsSynthesisOptions } from "./lib/tts-provider-config.js";
+import { synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech, isAzureSpeechProvider, resolveSpeakToolParams } from "./lib/tts.js";
+import { resolveAgentTtsSettings } from "./lib/tts-narration.js";
+import { playTtsCommand } from "./lib/tts-command.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
 import { AudioLevelMeter, formatLevelBar, rmsToLevel, shouldRefreshMeter, DEFAULT_METER_REFRESH_MS } from "./lib/realtime-audio-meter.js";
@@ -197,9 +203,6 @@ import {
   DEFAULT_TTS_BACKEND,
   DEFAULT_TTS_DEVICE,
   createInterruptiblePcmPlayer,
-  synthesizeAzureSpeechDirect,
-  resolveAzureSpeechCreds,
-  resolveSpeakToolParams,
   cascadeSpeechEnabled,
 } from "./lib/tts.js";
 import { readPersistedTtsSettings } from "./lib/tts-settings.js";
@@ -337,13 +340,9 @@ let localVadRunShellStream = runShellStream;
 // stays available as an escape hatch via PI_RT_LOCAL_VAD_USE_STT_CLI=1.
 function defaultLocalVadTranscribe(buffer, opts = {}) {
   const e = process.env;
-  if (e.PI_RT_LOCAL_VAD_USE_STT_CLI === "1") return transcribePcmBuffer(buffer, opts);
-  if (String(opts.model || "").startsWith("mai-transcribe-") && e.AZURE_EASTUS_API_KEY && e.AZURE_EASTUS_ENDPOINT) {
-    return transcribeMaiAudioDirect({ pcm: buffer, model: opts.model, deployment: e.PI_RT_LOCAL_VAD_DEPLOYMENT, language: opts.language, timeoutMs: opts.timeoutMs, endpoint: e.AZURE_EASTUS_ENDPOINT, apiKey: e.AZURE_EASTUS_API_KEY });
-  }
-  const baseUrl = e.PI_RT_BASE_URL || e.OPENAI_BASE_URL || "https://api.openai.com";
-  const apiKey = e.PI_RT_API_KEY || e.OPENAI_API_KEY || "";
-  return transcribeAudioDirect({ pcm: buffer, model: opts.model, language: opts.language, timeoutMs: opts.timeoutMs, baseUrl, apiKey });
+  const settings = { ...resolveSttSettings(e, readPersistedSttSettings()), ...opts };
+  if (e.PI_RT_LOCAL_VAD_USE_STT_CLI === "1" && settings.provider === "auto") return transcribePcmBuffer(buffer, opts);
+  return transcribeSpeech(buffer, { ...settings, env: e });
 }
 let localVadTranscribe = defaultLocalVadTranscribe;
 
@@ -761,6 +760,30 @@ class RealtimeSession {
   }
 
   async _connect(ctx) {
+    const stt = resolveSttSettings(process.env, readPersistedSttSettings());
+    this.config.sttProvider = stt.provider;
+    if (this.config.sttOnly && stt.provider === "daemon") {
+      const vad = buildServerVadTurnDetection({ threshold: this.config.vadThreshold });
+      const ws = new DaemonSttSocket({ ...stt,
+        model: this.config.daemonTranscriptionModel || stt.streamingModel || process.env.PI_RT_TRANSCRIPTION_MODEL,
+        language: stt.language ?? process.env.PI_RT_TRANSCRIPTION_LANGUAGE,
+        prompt: stt.prompt ?? process.env.PI_RT_TRANSCRIPTION_PROMPT,
+        vad: this.config.desiredListenMode === "ptt" ? { mode: "none" } : { mode: "auto", threshold: vad.threshold, "silence-ms": vad.silence_duration_ms, "prefix-ms": vad.prefix_padding_ms },
+      });
+      this.ws = ws;
+      await ws.openStream();
+      this.sessionShape = "ga";
+      this.connected = true;
+      // Never reconnect/replay a failed daemon stream automatically.
+      this.config.autoReconnect = false;
+      this.lastConnectError = null;
+      this.setPhase("idle");
+      this.installReceiveLoop();
+      ws.startPoll();
+      this.notify("STT daemon connected (24 kHz PCM)", "info");
+      return;
+    }
+    if (this.config.sttOnly && ["openai", "azure"].includes(stt.provider)) this.config.directAzure = stt.provider === "azure";
     const apiKey = this.config.directAzure
       ? env("PI_RT_AZURE_API_KEY", "AZURE_CANADACENTRAL_API_KEY", "AZURE_OPENAI_API_KEY")
       : env("PI_RT_API_KEY", "OPENAI_API_KEY");
@@ -2348,7 +2371,7 @@ class RealtimeSession {
     await this.stopMic({ commit: false }).catch(() => {});
     this.player.close();
     if (this.ws) {
-      try { this.ws.close(); } catch {}
+      try { await this.ws.close(); } catch {}
       this.ws = null;
     }
     this.connected = false;
@@ -2652,6 +2675,7 @@ export function createRealtimeControls({ pi, session, config }) {
       const next = normalizeTranscriptionModel(String(model || "").trim());
       if (!next) throw new Error("Realtime transcription model cannot be empty");
       config.transcriptionModel = next;
+      config.daemonTranscriptionModel = next;
       session.systemPromptApplied = null;
       session.toolsAppliedKey = null;
       session.audioModeApplied = null;
@@ -2827,8 +2851,14 @@ export default function realtimeAgentExtension(pi) {
   const rememberRealtimeValues = (values) => {
     try { durableSettings.merge("realtime", values); } catch {}
   };
+  let rememberedSttProvider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
   const rememberSttValues = (values) => {
-    try { durableSettings.merge("stt", values); } catch {}
+    try {
+      const provider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
+      if (provider !== rememberedSttProvider) durableSettings.unset("stt", ["model", "endpoint", "base_url", "prompt", "streaming_model"]);
+      rememberedSttProvider = provider;
+      durableSettings.merge("stt", values);
+    } catch {}
   };
 
   let terminalInputUnsub = null;
@@ -2886,6 +2916,7 @@ export default function realtimeAgentExtension(pi) {
       const stt = saved.stt;
       if (stt && Object.keys(stt).length) {
         try { applyLocalSttSettings(stt, ctx); } catch {}
+        rememberedSttProvider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
       }
       const realtime = saved.realtime;
       if (realtime && Object.keys(realtime).length) {
@@ -2962,18 +2993,20 @@ export default function realtimeAgentExtension(pi) {
     if (!body || !cascadeSpeechEnabled({ env: process.env })) return;
     const output = resolvedFastTts();
     if (pi.ttsNarration?.isEnabled?.()) return;
-    const { voice, speakerProfileId, lang, speed, style, styleDegree } = resolveSpeakToolParams({ text: body }, { env: process.env, persisted: output.persisted });
-    if (!voice) return; // no concrete Azure voice configured; stay silent rather than throw
-    const credentialOptions = { env: process.env };
-    if (!process.env.AZURE_SPEECH_ENDPOINT && output.persisted.endpoint !== undefined) credentialOptions.endpoint = output.persisted.endpoint;
-    const { endpoint, apiKey } = resolveAzureSpeechCreds(credentialOptions);
+    const speechConfig = resolveAgentTtsSettings({ env: process.env, persisted: output.persisted }).config;
+    const speechOptions = ttsSynthesisOptions(speechConfig, {
+      ...(isAzureSpeechProvider(speechConfig.provider) ? resolveSpeakToolParams({ text: body }, { env: process.env, persisted: output.persisted }) : {}),
+      env: process.env,
+    });
     fastDirectTtsAbort?.abort();
     fastDirectTtsPlayer.interrupt();
     const abort = new AbortController();
     fastDirectTtsAbort = abort;
     try {
       await withSpeechControl({ speechKind: "tts", streamName: "/tts", signal: abort.signal, env: process.env }, async (controlled) => {
-        const pcm = await synthesizeAzureSpeechDirect({ text: body, voice, lang, speed, speakerProfileId, style, styleDegree, endpoint, apiKey, signal: controlled.signal });
+        if (speechConfig.provider === "command") return playTtsCommand(body, { ...controlled, ...speechConfig });
+        if (usesDaemonPlayback(speechConfig)) return playDaemonSpeech(body, { ...speechOptions, signal: controlled.signal, streamName: "/tts" });
+        const pcm = await synthesizeSpeechDirect(body, { ...speechOptions, signal: controlled.signal });
         if (pcm?.length && !controlled.signal.aborted) {
           markAssistantSpeaking(audioDurationMs(pcm));
           await fastDirectTtsPlayer.play(pcm, { ...controlled, backend: output.backend, server: output.server, device: output.device });
@@ -3007,7 +3040,9 @@ export default function realtimeAgentExtension(pi) {
     activeChoiceSessionId = null;
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = null;
-    stopLocalVad({ flush: false });
+    stopLocalVad({ flush: false, cancel: true });
+    cascade.vadController?.dispose?.();
+    stopCascade();
     speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
     fastDirectTtsAbort?.abort();
     fastDirectTtsAbort = null;
@@ -3072,7 +3107,12 @@ export default function realtimeAgentExtension(pi) {
   async function startRealtime(ctx, { listenMode = "vad", sttOnly = false } = {}) {
     // The capture modes are mutually exclusive: entering explicit /rt always
     // tears down local batch-STT first, so two mic pipelines cannot race.
-    stopLocalVad({ flush: false });
+    stopLocalVad({ flush: false, cancel: true });
+    const daemonStt = sttOnly && resolveSttSettings(process.env, readPersistedSttSettings()).provider === "daemon";
+    if (session.connected && (daemonStt || sttOnly !== !!config.sttOnly || daemonStt !== (session.ws instanceof DaemonSttSocket))) {
+      config.autoReconnect = false;
+      await session.close(false);
+    }
     config.autoReconnect = true;
     config.desiredListenMode = listenMode || "vad";
 
@@ -3165,13 +3205,14 @@ export default function realtimeAgentExtension(pi) {
     return parts.join(" | ");
   }
 
-  function stopLocalVad({ flush = true } = {}) {
+  function stopLocalVad({ flush = true, cancel = false } = {}) {
     const wasActive = localVad.active;
     localVad.active = false;
     localVad.hold = false;
     try { localVad.releaseUnsub?.(); } catch {}
     localVad.releaseUnsub = null;
     const ctrl = localVad.controller;
+    if (cancel) ctrl?.dispose?.();
     const cap = localVad.capture;
     localVad.controller = null;
     localVad.capture = null;
@@ -3196,11 +3237,11 @@ export default function realtimeAgentExtension(pi) {
   async function startLocalVad(ctx, { hold = false, quickfile = false, freeformSessionId = null } = {}) {
     // Free the mic: stop any active WSS realtime session and any prior local-vad.
     try { await controls.disable(ctx, { restoreModel: true }); } catch {}
-    stopLocalVad({ flush: false });
+    stopLocalVad({ flush: false, cancel: true });
 
     const persistedStt = readPersistedSttSettings();
     const cfg = parseLocalVadConfig(process.env, persistedStt);
-    const model = resolveBatchSttModel(process.env, persistedStt);
+    const model = resolveSttSettings(process.env, persistedStt).model;
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
     const freeformDelivery = { submitted: false };
     Object.assign(localVad, { cfg, model, timeoutMs, hold, quickfile, freeformSessionId, freeformDelivery, freeformCommitting: false, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
@@ -3227,7 +3268,7 @@ export default function realtimeAgentExtension(pi) {
       placeholder: "…",
       overlongHintMs: 7000,
       isSuppressed: () => isAssistantSpeaking(),
-      transcribe: (buf) => localVadTranscribe(buf, { model, timeoutMs }),
+      transcribe: (buf, options) => localVadTranscribe(buf, { ...resolveSttSettings(process.env, persistedStt), model, timeoutMs, ...options }),
       insertPartial: (text) => {
         if (freeformSessionId) {
           try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_UPDATE, text, source: "ptt", sessionId: freeformSessionId }); } catch {}
@@ -3311,7 +3352,7 @@ export default function realtimeAgentExtension(pi) {
           // Surface the first failure to the operator (the common first-run mode
           // is a missing stt binary / unavailable model); stay quiet afterwards.
           localVad.warnedError = true;
-          ctx.ui.notify(`local-vad transcription failed: ${localVad.lastError}. Check /rt doctor; ensure the 'stt' binary and model are available.`, "warning");
+          ctx.ui.notify(`local-vad transcription failed: ${localVad.lastError}. Check the selected STT provider, endpoint and credentials.`, "warning");
         } else if (config.debug) {
           ctx.ui.notify(`local-vad: ${localVad.lastError}`, "warning");
         }
@@ -3539,7 +3580,7 @@ export default function realtimeAgentExtension(pi) {
     const usePipeline = pipelineRaw !== "0" && pipelineRaw !== "false" && pipelineRaw !== "off";
     // Cascade always uses the shared native Azure Speech REST path; the
     // directAzureSpeech field is retained only as a compatibility receipt.
-    const cascadeSynthImpl = makeCascadeTtsSynth({ env: process.env });
+    const cascadeSynthImpl = makeCascadeTtsSynth({ env: process.env, persisted: readPersistedTtsSettings() });
     const speakDeps = usePipeline
       ? { synth: makeCascadeSynth({ synthImpl: cascadeSynthImpl }), play: makeCascadePlay({ playImpl }) }
       : { speak: makeCascadeSpeak({ synthImpl: cascadeSynthImpl, playImpl }) };
@@ -3566,25 +3607,25 @@ export default function realtimeAgentExtension(pi) {
     cascade.capture = null;
     cascade.vadController = null;
     if (cap) { try { cap.kill?.(); } catch {} }
-    if (ctrl) { try { ctrl.flush?.().catch?.(() => {}); } catch {} }
+    ctrl?.dispose?.();
     return wasActive;
   }
 
   async function startCascadeMic(ctx) {
     // Free the mic: stop any WSS realtime, prior local-vad, and prior cascade mic.
     try { await controls.disable(ctx, { restoreModel: true }); } catch {}
-    stopLocalVad({ flush: false });
+    stopLocalVad({ flush: false, cancel: true });
     stopCascade();
     const persistedStt = readPersistedSttSettings();
     const cfg = parseLocalVadConfig(process.env, persistedStt);
-    const model = resolveBatchSttModel(process.env, persistedStt);
+    const model = resolveSttSettings(process.env, persistedStt).model;
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
     cascade.cfg = cfg; cascade.model = model; cascade.timeoutMs = timeoutMs; cascade.lastError = null;
     cascade.meter = new AudioLevelMeter({ width: 10 }); cascade.inputLevel = 0; cascade.lastMeterRenderAt = 0;
     const controller = new LocalVadController({
       config: cfg,
       isSuppressed: () => isAssistantSpeaking(),
-      transcribe: (buf) => localVadTranscribe(buf, { model, timeoutMs }),
+      transcribe: (buf, options) => localVadTranscribe(buf, { ...resolveSttSettings(process.env, persistedStt), model, timeoutMs, ...options }),
       insertPartial: (text) => { try { ctx.ui.setWidget("realtime-status", [`cascade ~ ${text}`], { placement: "belowEditor" }); } catch {} },
       sendTurn: (text) => {
         cascade.lastText = text;
@@ -3670,6 +3711,17 @@ export default function realtimeAgentExtension(pi) {
         },
       });
       return { forked: true, cancelled: !!result?.cancelled, snapshot: controls.snapshot() };
+    }
+    if (params.provider !== undefined || params.daemonUrl !== undefined) {
+      const provider = params.provider === undefined ? undefined : normalizeSttProvider(params.provider);
+      if (provider === "daemon" && params.start) throw new Error("provider=daemon is standalone STT; use /rt stt=vad provider=daemon, not full Realtime");
+      const speechValues = { ...(provider ? { provider } : {}), ...(params.daemonUrl !== undefined ? { daemon_url: params.daemonUrl } : {}) };
+      applyLocalSttSettings(speechValues, ctx);
+      rememberSttValues(speechValues);
+      if (["azure", "openai"].includes(provider)) {
+        controls.setDirectAzure(provider === "azure", ctx);
+        rememberRealtimeValues({ directAzure: provider === "azure" });
+      }
     }
     if (params.pulseServer !== undefined || params.pulseSource !== undefined || params.pulseSink !== undefined) {
       controls.setPulseRouting({ server: params.pulseServer, source: params.pulseSource, sink: params.pulseSink }, ctx);
@@ -3762,6 +3814,8 @@ export default function realtimeAgentExtension(pi) {
       mic: v.mic,
       listen: v.listen,
       stt: v.stt,
+      provider: v.provider,
+      daemonUrl: v.daemon_url ?? v.daemonUrl,
     };
   }
 
@@ -3956,6 +4010,8 @@ export default function realtimeAgentExtension(pi) {
         action: ToolSchema.optional(ToolSchema.string({ description: "Lifecycle action: start, stop, off, vad, ptt, nolisten, or status." })),
         start: ToolSchema.optional(ToolSchema.string({ description: "Start full realtime with vad, ptt, or nolisten." })),
         stt: ToolSchema.optional(ToolSchema.string({ description: "Start transcription-only mode with vad or ptt." })),
+        provider: ToolSchema.optional(ToolSchema.string({ description: "Standalone STT provider: auto, azure, openai or daemon. Not a full Realtime audio provider." })),
+        daemonUrl: ToolSchema.optional(ToolSchema.string({ description: "STT daemon HTTP(S) URL or host (default helsinki:7634)." })),
         mic: ToolSchema.optional(ToolSchema.string({ description: "Start mic capture with vad or ptt." })),
         listen: ToolSchema.optional(ToolSchema.string({ description: "Listen mode: vad, ptt, or continuous." })),
         audio: ToolSchema.optional(ToolSchema.string({ description: "Audio output mode: on, off, or toggle." })),
@@ -4060,8 +4116,15 @@ export default function realtimeAgentExtension(pi) {
       "model", "timeout", "timeout_ms", "energy", "energy_threshold",
       "insert", "insert_ms", "insert_silence_ms", "commit", "commit_ms",
       "commit_silence_ms", "min_speech", "min_speech_ms", "shortcuts", "shortcuts_enabled",
+      "provider", "endpoint", "base_url", "daemon_url", "daemon_provider", "token_file", "language", "lang", "prompt", "streaming_model",
     ]);
     for (const key of Object.keys(values)) if (!allowed.has(key)) throw new Error(`/stt: unknown setting '${key}'`);
+    const updates = {};
+    const priorProvider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
+    if (values.provider !== undefined) updates.PI_STT_PROVIDER = normalizeSttProvider(values.provider);
+    const strings = { endpoint: "PI_STT_ENDPOINT", base_url: "PI_STT_ENDPOINT", daemon_url: "PI_STT_DAEMON_URL", daemon_provider: "PI_STT_DAEMON_PROVIDER", token_file: "STT_TOKEN_FILE", language: "PI_STT_LANGUAGE", lang: "PI_STT_LANGUAGE", prompt: "PI_STT_PROMPT", streaming_model: "PI_STT_STREAMING_MODEL" };
+    if (values.daemon_provider && !["azure", "openai"].includes(values.daemon_provider)) throw new Error("/stt: daemon_provider must be azure or openai");
+    for (const [key, envKey] of Object.entries(strings)) if (values[key] !== undefined) updates[envKey] = String(values[key]);
     const envByField = {
       timeoutMs: "PI_RT_LOCAL_VAD_TIMEOUT_MS",
       energyThreshold: "PI_RT_LOCAL_VAD_ENERGY_THRESHOLD",
@@ -4074,12 +4137,12 @@ export default function realtimeAgentExtension(pi) {
       if (!key) return;
       const value = Number(values[key]);
       if (!Number.isFinite(value) || value < min || value > max) throw new Error(`/stt: ${key} must be between ${min} and ${max}`);
-      process.env[envByField[field]] = String(value);
+      updates[envByField[field]] = String(value);
     };
     if (Object.hasOwn(values, "model")) {
       const model = String(values.model).trim();
       if (!model) throw new Error("/stt: model cannot be empty");
-      process.env.PI_RT_LOCAL_VAD_MODEL = model;
+      updates.PI_RT_LOCAL_VAD_MODEL = model;
     }
     numberSetting(["timeout", "timeout_ms"], "timeoutMs");
     numberSetting(["energy", "energy_threshold"], "energyThreshold", { min: 0, max: 1 });
@@ -4087,12 +4150,16 @@ export default function realtimeAgentExtension(pi) {
     numberSetting(["commit", "commit_ms", "commit_silence_ms"], "commitSilenceMs");
     numberSetting(["min_speech", "min_speech_ms"], "minTurnSpeechMs");
     const shortcutsKey = ["shortcuts", "shortcuts_enabled"].find((key) => Object.hasOwn(values, key));
-    if (shortcutsKey) process.env.PI_RT_STT_SHORTCUTS_ENABLED = parseBooleanValue(values[shortcutsKey]) ? "1" : "0";
+    if (shortcutsKey) updates.PI_RT_STT_SHORTCUTS_ENABLED = parseBooleanValue(values[shortcutsKey]) ? "1" : "0";
+    if (updates.PI_STT_PROVIDER && updates.PI_STT_PROVIDER !== priorProvider) {
+      for (const key of ["PI_RT_LOCAL_VAD_MODEL", "PI_STT_MODEL", "PI_STT_ENDPOINT", "PI_STT_PROMPT", "PI_STT_STREAMING_MODEL"]) delete process.env[key];
+    }
+    Object.assign(process.env, updates);
     const persisted = readPersistedSttSettings();
     const cfg = parseLocalVadConfig(process.env, persisted);
-    const model = resolveBatchSttModel(process.env, persisted);
+    const model = resolveSttSettings(process.env, persisted).model ?? "daemon-default";
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persisted);
-    ctx?.ui?.notify?.(`stt settings: model=${model} timeout=${timeoutMs}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
+    ctx?.ui?.notify?.(`stt settings: provider=${resolveSttSettings(process.env, persisted).provider} model=${model} timeout=${timeoutMs}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
   }
 
   async function handleLocalSpeechCommand(args, ctx, { defaultHold = false, commandName = "/stt" } = {}) {
@@ -4149,7 +4216,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   pi.registerCommand("stt", {
-    description: "Local-VAD speech transcription into the current Pi editor. Defaults to mai-transcribe-2; /stt ptt holds until release.",
+    description: "Speech transcription into the editor. /stt provider=auto|azure|openai|daemon model=... daemon_url=helsinki language=en. Shared by /ptt, choice freeform and cascade. /stt ptt holds until release.",
     handler: async (args, ctx) => handleLocalSpeechCommand(args, ctx, { defaultHold: false, commandName: "/stt" }),
   });
 
@@ -4159,7 +4226,7 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.registerCommand("cascade", {
-    description: "Multi-agent voice group chat (STT in, native Azure TTS out, turn-taking). Usage: /cascade start [n=N participants=a,b order=fixed|random|round-robin voice= model= base_url= speaker=<profileId> lang=<locale> style=<style> styledegree=<0.01..2>], /cascade say <text>, /cascade stop, /cascade reset, /cascade status. Speech uses the shared direct Azure REST path; azure=true remains a compatibility no-op.",
+    description: "Multi-agent voice group chat. /cascade start [provider=azure|openai|daemon daemon_url=helsinki playback=daemon|local n=N participants=a,b voice= model= base_url= tts_endpoint= speaker= lang= style= styledegree=], /cascade say <text>, /cascade stop|reset|status. STT inherits /stt settings; chat base_url is separate from speech routing.",
     handler: async (args, ctx) => {
       try {
         const raw = String(args || "").trim();

@@ -103,7 +103,7 @@ export function realtimeContextDiagnosticLine(session, config) {
 export function statusLines(session, config, { full = false } = {}) {
   const conn = session.connected ? "●" : (session.connecting ? "◐" : "○");
   const mic = session.mic ? `mic:${session.micMode || "on"}` : "mic:off";
-  const provider = config.directAzure ? "azure" : "proxy";
+  const provider = config.sttOnly && config.sttProvider === "daemon" ? "daemon" : config.directAzure ? "azure" : "proxy";
   const outBackend = audioOutputBackendLabel(config);
   const inBackend = audioInputBackendLabel(config);
   const reason = config.reasoningEffort === "off"
@@ -176,11 +176,12 @@ export function envPresent(...names) {
 }
 
 export function diagnosticLines(session, config) {
-  const provider = config.directAzure ? "azure" : "openai/proxy";
+  const daemon = config.sttOnly && config.sttProvider === "daemon";
+  const provider = daemon ? "daemon" : config.directAzure ? "azure" : "openai/proxy";
   const backend = process.env.PI_RT_AUDIO_BACKEND || "pulse";
   const record = config.recordCommand || defaultRecordCommand();
   const playback = config.playbackCommand || defaultPlaybackCommand();
-  const apiKey = config.directAzure
+  const apiKey = daemon ? (envPresent("STT_DAEMON_TOKEN", "STT_DAMEON_TOKEN") || "STT token-file (resolved per request)") : config.directAzure
     ? envPresent("PI_RT_AZURE_API_KEY", "AZURE_CANADACENTRAL_API_KEY", "AZURE_OPENAI_API_KEY")
     : envPresent("PI_RT_API_KEY", "OPENAI_API_KEY");
   const requirements = [
@@ -235,7 +236,7 @@ export function diagnosticLines(session, config) {
     "Realtime doctor",
     ...statusLines(session, config, { full: true }),
     `provider: ${provider} · apiKey:${apiKey || "<missing>"}`,
-    `webSocket: ${wsImpl}`,
+    `webSocket: ${daemon ? "daemon HTTP stream (no upstream client key)" : wsImpl}`,
     `audioBackend: ${backend} · ${audioOutputBackendLabel(config)}/${audioInputBackendLabel(config)}`,
     `pulse: ${pulse}`,
     `commands: ${requirements}`,

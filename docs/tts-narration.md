@@ -48,8 +48,7 @@ content blocks whose type is `text`. Thinking/reasoning blocks and tool-call
 arguments are never spoken as verbatim assistant text. Each finalized message is
 spoken exactly once.
 
-Synthesis and playback reuse the same first-party direct Azure library, settings,
-and defaults as `/read`:
+Synthesis and playback reuse `/read`'s first-party Azure, OpenAI-compatible, daemon and command providers. See [native speech providers](speech-providers.md) for `provider=daemon`, central playback, token rotation, direct OpenAI, and the remote cancellation limitation. The unchanged **Azure defaults** are:
 
 - provider `azure`
 - voice `MAI-Voice-2.1-Flash`
@@ -67,14 +66,12 @@ expansion, for example `/tts prefix="$AGENT_ID"`; command substitutions are neve
 executed. `PI_TTS_PREFIX` and `PI_TTS_SUFFIX` override durable values. Editor-only delay/on-send settings remain
 owned by `/read` and are rejected by `/tts`.
 
-The Pulse client/stream is named `/tts`. New synthesis aborts old synthesis and
-terminates prior playback, so only one `/tts` voice is active and a newer agent
-message always wins. Failures produce a warning but never block an agent turn.
+The local Pulse client/stream is named `/tts`. New synthesis aborts old synthesis and terminates prior **local** playback. Server-owned daemon playback cannot yet be cancelled per job; `/tts off` stops waiting but admitted remote speech may continue. Failures produce a warning but never block an agent turn.
 
 `/tts` is off by default. Avoid enabling legacy `speak-replies` simultaneously,
 since it is a separate historical auto-speech surface.
 
-At `session_start`, `/tts`, `/narrate`, and spoken interactive choices hash Pi's stable session ID to choose
+For the Azure provider, at `session_start`, `/tts`, `/narrate`, and spoken interactive choices hash Pi's stable session ID to choose
 one voice from `agentUtils.tts.voices` and one constant-power stereo position
 within `agentUtils.tts.panRange` (default `-0.9..0.9`). The assignment remains
 stable for the session and differs independently across sessions. The built-in

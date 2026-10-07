@@ -8,7 +8,20 @@
 // subprocess plumbing can be tested without the `stt` binary or audio.
 
 import { spawn } from "node:child_process";
-import { runBoundedSubprocess } from "./bounded-exec.js";
+import { runBoundedSubprocess, combineTimeoutSignal } from "./bounded-exec.js";
+import { speechUrl, readSpeechBody, MAX_SPEECH_JSON_BYTES } from "./speech-http.js";
+
+async function transcriptionText(response) {
+  const contentType = String(response.headers?.get?.("content-type") || "");
+  const asJson = contentType.includes("application/json") || !contentType;
+  let value;
+  if (response.body?.getReader || response.arrayBuffer) {
+    const bytes = await readSpeechBody(response, MAX_SPEECH_JSON_BYTES);
+    value = asJson ? JSON.parse(bytes.toString("utf8"))?.text : bytes.toString("utf8");
+  } else value = asJson ? (await response.json())?.text : await response.text();
+  if (typeof value !== "string" || Buffer.byteLength(value) > MAX_SPEECH_JSON_BYTES) throw new Error("transcribe: invalid or oversized transcript");
+  return value.trim();
+}
 
 export const DEFAULT_STT_BATCH_MODEL = "mai-transcribe-2";
 
@@ -95,10 +108,8 @@ export function pcmToWav(pcm, { sampleRate = 24000, channels = 1, bitsPerSample 
 /// normalizing the /v1 suffix (OPENAI_BASE_URL may or may not include it).
 /// Pure. (bd-adde03)
 export function resolveTranscriptionUrl(baseUrl) {
-  let b = String(baseUrl || "").trim().replace(/\/+$/, "");
-  if (!b) return "";
-  if (!/\/v1$/.test(b)) b += "/v1";
-  return `${b}/audio/transcriptions`;
+  if (!String(baseUrl || "").trim()) return "";
+  return speechUrl(baseUrl, "/audio/transcriptions");
 }
 
 /// One-shot transcription of a COMPLETE VAD turn (bd-adde03): wrap the committed
@@ -119,6 +130,7 @@ export async function transcribeMaiAudioDirect({
   apiKey,
   language,
   timeoutMs,
+  signal,
   fetchImpl = fetch,
 } = {}) {
   const root = String(endpoint || "").trim().replace(/\/+$/, "").replace(".cognitiveservices.azure.com", ".services.ai.azure.com");
@@ -129,24 +141,26 @@ export async function transcribeMaiAudioDirect({
     : model === "mai-transcribe-1.5" ? "harryaskham-sandbox-ais-mai-transcribe-1-5" : undefined;
   const selectedDeployment = String(deployment || knownDeployment || `${resource}-${String(model).replaceAll(".", "-")}`);
   const audio = wav ?? pcmToWav(pcm);
-  const controller = new AbortController();
   const timeout = timeoutMs == null ? resolveBatchSttTimeoutMs() : Number(timeoutMs);
-  const timer = Number.isFinite(timeout) && timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
+  const bound = combineTimeoutSignal(signal, timeout);
   let res;
   try {
     res = await fetchImpl(`${root}/mai/v1/audio/transcriptions`, {
       method: "POST",
       headers: { "api-key": String(apiKey || ""), "Content-Type": "application/json" },
       body: JSON.stringify({ model: selectedDeployment, audio_url: `data:audio/wav;base64,${audio.toString("base64")}`, ...(language ? { language } : {}) }),
-      signal: controller.signal,
+      signal: bound.signal, redirect: "error",
     });
+    if (!res?.ok) throw new Error(`transcribe HTTP ${res?.status ?? "?"}; response body omitted`);
+    const text = await transcriptionText(res);
+    bound.signal.throwIfAborted();
+    return text;
   } catch (error) {
-    if (controller.signal.aborted) throw new Error(`transcribe timed out after ${timeout}ms`);
-    throw error;
-  } finally { if (timer) clearTimeout(timer); }
-  if (!res?.ok) throw new Error(`transcribe HTTP ${res?.status ?? "?"}: ${String(await res?.text?.().catch?.(() => "") ?? "").slice(0, 200) || "no body"}`);
-  const value = await res.json();
-  return String(value?.text ?? "").trim();
+    if (bound.isTimeout()) throw new Error(`transcribe timed out after ${timeout}ms`);
+    if (bound.signal.aborted) throw new DOMException("Transcription aborted", "AbortError");
+    if (String(error.message).startsWith("transcribe")) throw error;
+    throw new Error("transcribe: request failed; no automatic retry");
+  } finally { bound.cleanup(); }
 }
 
 export async function transcribeAudioDirect({
@@ -156,7 +170,9 @@ export async function transcribeAudioDirect({
   baseUrl,
   apiKey,
   language,
+  prompt,
   timeoutMs,
+  signal,
   fetchImpl = fetch,
   FormDataImpl = FormData,
   BlobImpl = Blob,
@@ -172,31 +188,25 @@ export async function transcribeAudioDirect({
   form.append("model", String(model));
   form.append("response_format", "json");
   if (language) form.append("language", String(language));
+  if (prompt) form.append("prompt", String(prompt));
 
-  const controller = Number.isFinite(timeout) && timeout > 0 ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), timeout) : null;
+  const bound = combineTimeoutSignal(signal, timeout);
   let res;
   try {
     res = await fetchImpl(url, {
       method: "POST",
       headers: key ? { Authorization: `Bearer ${key}` } : {},
       body: form,
-      signal: controller?.signal,
+      signal: bound.signal, redirect: "error",
     });
+    if (!res?.ok) throw new Error(`transcribe HTTP ${res?.status ?? "?"}; response body omitted`);
+    const text = await transcriptionText(res);
+    bound.signal.throwIfAborted();
+    return text.trim();
   } catch (err) {
-    if (controller?.signal?.aborted) throw new Error(`transcribe timed out after ${timeout}ms`);
-    throw err;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-  if (!res?.ok) {
-    const body = await res?.text?.().catch?.(() => "") ?? "";
-    throw new Error(`transcribe HTTP ${res?.status ?? "?"}: ${String(body).slice(0, 200) || "no body"}`);
-  }
-  const ct = String(res.headers?.get?.("content-type") || "");
-  if (ct.includes("application/json") || ct === "") {
-    const j = await res.json();
-    return String(j?.text ?? "").trim();
-  }
-  return String(await res.text()).trim();
+    if (bound.isTimeout()) throw new Error(`transcribe timed out after ${timeout}ms`);
+    if (bound.signal.aborted) throw new DOMException("Transcription aborted", "AbortError");
+    if (String(err.message).startsWith("transcribe")) throw err;
+    throw new Error("transcribe: request failed; no automatic retry");
+  } finally { bound.cleanup(); }
 }

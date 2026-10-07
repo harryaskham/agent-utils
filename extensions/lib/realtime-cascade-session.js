@@ -18,8 +18,11 @@ import {
   synthesizeSpeechDirect,
   resolveAzureSpeechCreds,
   isAzureSpeechProvider,
-  DEFAULT_TTS_PROVIDER,
+  DEFAULT_TTS_PROVIDER, normalizeTtsProvider, resolveCascadeTtsVoice, usesDaemonPlayback, playDaemonSpeech,
 } from "./tts.js";
+import { resolveAgentTtsSettings } from "./tts-narration.js";
+import { ttsSynthesisOptions } from "./tts-provider-config.js";
+import { readPersistedTtsSettings } from "./tts-settings.js";
 import { parseEnvStyleArgs } from "./env-args.js";
 import { readPersistedCascadeSettings } from "./realtime-settings.js";
 
@@ -34,10 +37,9 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
   // buildParticipantRoster's env/hardcoded default applies. So an operator can
   // move PI_CASCADE_VOICE etc. into settings.json and drop the env var.
   const p = persisted ?? readPersistedCascadeSettings();
-  // TTS is always the shared native Azure REST path. The historical azure=true
-  // switch is accepted but no longer needed; there is deliberately no CLI fallback.
-  const directAzureSpeech = true;
-  const defaultProvider = values.provider ?? p.provider ?? DEFAULT_TTS_PROVIDER;
+  // All providers share the native path; azure=true remains a legacy no-op.
+  // No CLI fallback is introduced.
+  const defaultProvider = normalizeTtsProvider(values.provider ?? env.PI_CASCADE_PROVIDER ?? env.PI_TTS_PROVIDER ?? p.provider ?? readPersistedTtsSettings().provider ?? DEFAULT_TTS_PROVIDER);
   const roster = buildParticipantRoster({
     mode: MODE_CASCADE,
     n: values.n,
@@ -58,12 +60,22 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
     },
     env,
   });
-  // Every participant uses the shared direct Azure REST path unless it already
-  // carries an explicit provider (which the synthesizer validates).
+  // Peers inherit the selected provider unless explicitly pinned.
   for (const participant of (roster?.participants || [])) {
-    if (participant && !participant.provider) participant.provider = DEFAULT_TTS_PROVIDER;
+    if (participant && !participant.provider) participant.provider = defaultProvider;
+    if (participant) {
+      participant.daemonUrl = values.daemon_url ?? p.daemonUrl;
+      participant.daemonProvider = values.daemon_provider ?? p.daemonProvider;
+      participant.playback = values.playback ?? p.playback;
+      participant.ttsEndpoint = values.tts_endpoint ?? p.ttsEndpoint;
+      participant.ttsInstructions = values.tts_instructions ?? p.ttsInstructions;
+      participant.speed = values.speed != null ? Number(values.speed) : env.PI_CASCADE_SPEED != null ? Number(env.PI_CASCADE_SPEED) : p.speed;
+      participant.pitch = values.pitch != null ? Number(values.pitch) : p.pitch;
+      participant.volume = values.volume != null ? Number(values.volume) : p.volume;
+      participant.ttsRole = values.role ?? p.role;
+    }
   }
-  return { roster, values, directAzureSpeech };
+  return { roster, values, directAzureSpeech: isAzureSpeechProvider(defaultProvider) };
 }
 
 export class CascadeController {
@@ -195,14 +207,16 @@ export function makeCascadeSpeak({ synthImpl = synthesizeSpeechDirect, playImpl,
       model: participant?.ttsModel,
       baseUrl: participant?.baseUrl,
       provider: participant?.provider,
+      daemonUrl: participant?.daemonUrl, daemonProvider: participant?.daemonProvider, playback: participant?.playback, endpoint: participant?.ttsEndpoint,
       speakerProfileId: participant?.speakerProfileId,
       lang: participant?.lang,
       style: participant?.style,
       styleDegree: participant?.styleDegree,
-      instructions: participant?.instructions,
-      speed,
+      instructions: participant?.ttsInstructions, pitch: participant?.pitch, volume: participant?.volume, role: participant?.ttsRole,
+      speed: participant?.speed ?? speed,
     });
-    if (pcm && pcm.length) await playImpl(pcm, participant);
+    if (pcm?.playRemote) await pcm.playRemote();
+    else if (pcm && pcm.length) await playImpl(pcm, participant);
   };
 }
 
@@ -218,37 +232,44 @@ export function makeCascadeSynth({ synthImpl = synthesizeSpeechDirect, speed } =
       model: participant?.ttsModel,
       baseUrl: participant?.baseUrl,
       provider: participant?.provider,
+      daemonUrl: participant?.daemonUrl, daemonProvider: participant?.daemonProvider, playback: participant?.playback, endpoint: participant?.ttsEndpoint,
       speakerProfileId: participant?.speakerProfileId,
       lang: participant?.lang,
       style: participant?.style,
       styleDegree: participant?.styleDegree,
-      instructions: participant?.instructions,
-      speed,
+      instructions: participant?.ttsInstructions, pitch: participant?.pitch, volume: participant?.volume, role: participant?.ttsRole,
+      speed: participant?.speed ?? speed,
     });
   };
 }
 
-/// Build a cascade synth `(text, opts) -> Promise<Buffer>` backed exclusively
-/// by the shared native Azure Speech REST implementation. There is intentionally
-/// no `tts` subprocess fallback. Azure endpoint/key come from the dedicated
-/// AZURE_SPEECH_* environment, independent of chat-model base URLs. Injectable for tests.
-export function makeCascadeTtsSynth({ env = process.env, fetchImpl } = {}) {
-  return (text, opts = {}) => {
-    const provider = opts.provider ?? DEFAULT_TTS_PROVIDER;
-    if (!isAzureSpeechProvider(provider)) {
-      return Promise.reject(new Error(`cascade TTS provider '${provider}' is unsupported; use provider=azure`));
+/// Native synthesis returns PCM, or a deferred remote-playback intent for the
+/// ordered playback phase. Speech endpoints stay independent of chat base URLs.
+export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = {} } = {}) {
+  return async (text, opts = {}) => {
+    const shared = resolveAgentTtsSettings({ env, persisted }).config;
+    const provider = normalizeTtsProvider(opts.provider ?? shared.provider);
+    const resolved = ttsSynthesisOptions(shared, { provider, fetchImpl, env });
+    // A chat-model base URL/persona is never a speech endpoint/instruction.
+    for (const [key, value] of Object.entries(opts)) if (value !== undefined && key !== "baseUrl") resolved[key] = value;
+    const voice = resolveCascadeTtsVoice(opts.voice);
+    if (voice) resolved.voice = voice;
+    else if (opts.voice !== undefined && !isAzureSpeechProvider(provider)) delete resolved.voice;
+    if (isAzureSpeechProvider(provider)) {
+      const creds = resolveAzureSpeechCreds({ env });
+      resolved.endpoint = opts.endpoint ?? creds.endpoint;
+      resolved.apiKey = creds.apiKey;
+    } else {
+      // Do not copy Azure fallback identity into another provider.
+      if (shared.provider !== provider) {
+        for (const key of ["model", "speakerProfileId", "endpoint", "lang", "speed"]) if (opts[key] == null) delete resolved[key];
+      }
     }
-    // participant.baseUrl belongs to the chat model; Azure Speech routing is
-    // independent and comes only from AZURE_SPEECH_ENDPOINT / credentials.
-    const { endpoint, apiKey } = resolveAzureSpeechCreds({ env });
-    return synthesizeSpeechDirect(text, {
-      ...opts,
-      provider,
-      endpoint,
-      apiKey,
-      fetchImpl,
-      env,
-    });
+    if (usesDaemonPlayback(resolved)) {
+      // Defer admission until the ordered playback phase, not speculative synth.
+      return { playRemote: () => playDaemonSpeech(text, resolved) };
+    }
+    return synthesizeSpeechDirect(text, resolved);
   };
 }
 
@@ -258,6 +279,7 @@ export function makeCascadeTtsSynth({ env = process.env, fetchImpl } = {}) {
 export function makeCascadePlay({ playImpl } = {}) {
   if (typeof playImpl !== "function") throw new Error("makeCascadePlay requires a playImpl(pcm, participant) dep");
   return async (participant, pcm) => {
-    if (pcm && pcm.length) await playImpl(pcm, participant);
+    if (pcm?.playRemote) await pcm.playRemote();
+    else if (pcm && pcm.length) await playImpl(pcm, participant);
   };
 }

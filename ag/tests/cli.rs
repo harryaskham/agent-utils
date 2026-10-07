@@ -69,7 +69,11 @@ impl Fixture {
             .env_remove("PI_TTS_FEED_PATH")
             .env_remove("PI_TTS_MUTE_PATH")
             .env_remove("PI_SHARED_IMAGES_DIR")
-            .env_remove("PI_AGENT_UTILS_STATE_DIR");
+            .env_remove("PI_AGENT_UTILS_STATE_DIR")
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .env("TERM", "xterm-256color");
         command
     }
     fn run(&self, args: &[&str]) -> (i32, Value, String) {
@@ -193,9 +197,153 @@ fn speech_history_is_bounded_and_human_text_cannot_inject_terminal_escapes() {
     );
     let (_, _, text) = f.run(&["tts", "tail", "--no-follow", "-n", "1"]);
     assert!(!text.contains('\u{1b}'));
-    assert!(text.contains("\\n"));
+    assert_eq!(
+        text,
+        "2026-09-22T12:00:00Z [local] [tts] test\nsecond \\u{1b}[2J\n\n"
+    );
     assert_ne!(f.run(&["tts", "list", "--limit", "1001"]).0, 0);
     assert!(store::speech_list(&f.feed, 0).unwrap().records.is_empty());
+}
+
+#[test]
+fn speech_blocks_share_layout_in_list_and_tail_with_explicit_color_overrides() {
+    let f = Fixture::new();
+    f.append("First message.");
+    f.append("Second message.\n\nAnother paragraph.\r\n");
+    let expected = concat!(
+        "2026-09-22T12:00:00Z [local] [tts] test\nFirst message.\n\n",
+        "2026-09-22T12:00:00Z [local] [tts] test\nSecond message. Another paragraph.\n\n",
+    );
+    for args in [vec!["tts", "list"], vec!["tts", "tail", "--no-follow"]] {
+        let (code, _, text) = f.run(&args);
+        assert_eq!(code, 0);
+        assert_eq!(text, expected); // Auto stays plain on a pipe.
+        let colored = f
+            .command()
+            .args(&args)
+            .args(["--color", "always"])
+            .env("NO_COLOR", "1")
+            .env("TERM", "dumb")
+            .output()
+            .unwrap();
+        assert!(colored.status.success());
+        let colored = String::from_utf8(colored.stdout).unwrap();
+        assert!(colored.contains("\x1b[36m[local]\x1b[0m"));
+        assert!(colored.contains("\x1b[32m[tts]\x1b[0m"));
+        assert!(colored.contains("\x1b[1mtest\x1b[0m\nFirst message.\n\n"));
+        assert_eq!(colored.lines().count(), 6);
+        let plain = f
+            .command()
+            .args(&args)
+            .args(["--color", "never"])
+            .env("CLICOLOR_FORCE", "1")
+            .output()
+            .unwrap();
+        assert!(plain.status.success());
+        assert_eq!(String::from_utf8(plain.stdout).unwrap(), expected);
+    }
+    assert_ne!(f.run(&["tts", "list", "--color", "invalid"]).0, 0);
+}
+
+#[test]
+fn forced_color_never_changes_json_mcp_or_peer_records() {
+    let f = Fixture::new();
+    let original = "Original\n\ntext\r\n\x1b[2J";
+    f.append(original);
+    for args in [
+        vec!["--json", "tts", "list"],
+        vec!["--json", "tts", "tail", "--no-follow"],
+        vec!["call", "ag_tts_list", "{}"],
+    ] {
+        let plain = f.run(&args);
+        let mut colored_args = vec!["--color", "always"];
+        colored_args.extend(args);
+        let colored = f.run(&colored_args);
+        assert_eq!(colored, plain);
+        assert_eq!(colored.0, 0);
+        assert_eq!(
+            colored.1["data"]["hosts"][0]["data"]["records"][0]["text"],
+            original
+        );
+    }
+    let (code, value, text) = f.run(&[
+        "--color",
+        "always",
+        "node",
+        "tts-list",
+        "--path",
+        f.feed.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(!text.contains('\x1b'));
+    assert_eq!(value["data"]["records"][0]["text"], original);
+}
+
+#[test]
+fn live_speech_flushes_complete_blocks_and_keeps_jsonl_unchanged() {
+    for as_json in [false, true] {
+        let f = Fixture::new();
+        let mut config = config::load(Some(&f.config)).unwrap();
+        config.poll_ms = 100;
+        f.save(&config);
+        f.append("Initial message.");
+        let mut command = f.command();
+        command.args(["tts", "tail", "--color", "always"]);
+        if as_json {
+            command.arg("--json");
+        }
+        let mut child = OwnedChild(
+            command
+                .process_group(0)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let stdout = child.0.stdout.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if tx.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        for message in ["Initial message.", "Live\n\nmessage."] {
+            if message.starts_with("Live") {
+                f.append(message);
+            }
+            let next_line = || {
+                rx.recv_timeout(Duration::from_secs(5))
+                    .expect("flushed output")
+            };
+            if as_json {
+                loop {
+                    let line = next_line();
+                    assert!(!line.contains('\x1b'));
+                    let event: Value = serde_json::from_str(&line).unwrap();
+                    if event["data"]["type"] == "speech" {
+                        assert_eq!(event["data"]["record"]["text"], message);
+                        break;
+                    }
+                }
+            } else {
+                let header = next_line();
+                assert!(header.contains("\x1b[36m[local]\x1b[0m"));
+                assert!(header.ends_with("\x1b[1mtest\x1b[0m"));
+                assert_eq!(next_line(), message.replace("\n\n", " "));
+                assert_eq!(next_line(), "");
+            }
+        }
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child.0.id() as i32),
+            nix::sys::signal::Signal::SIGINT,
+        )
+        .unwrap();
+        wait_exit(&mut child.0, 5);
+        assert!(child.0.wait().unwrap().success());
+        reader.join().unwrap();
+    }
 }
 
 #[test]

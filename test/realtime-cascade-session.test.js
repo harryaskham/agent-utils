@@ -347,9 +347,9 @@ test("makeCascadeTtsSynth resolves the historical embedding sentinel to shared d
   assert.match(body, /<voice name='MAI-Voice-2\.1-Flash'/);
 });
 
-test("makeCascadeTtsSynth rejects non-Azure providers instead of spawning a CLI fallback", async () => {
+test("makeCascadeTtsSynth rejects unknown providers instead of spawning a CLI fallback", async () => {
   let fetched = false;
   const synth = makeCascadeTtsSynth({ fetchImpl: async () => { fetched = true; } });
-  await assert.rejects(synth("hi", { provider: "openai" }), /unsupported; use provider=azure/);
+  await assert.rejects(synth("hi", { provider: "unknown" }), /unsupported provider/);
   assert.equal(fetched, false);
 });
