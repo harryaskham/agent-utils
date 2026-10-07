@@ -5,6 +5,7 @@ import { speechKind, withSpeechControl } from "./speech-control.js";
 import { defaultReadConfig, applyReadConfigValues } from "../read-aloud.js";
 import { createInterruptiblePcmPlayer, synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech } from "./tts.js";
 import { ttsSynthesisOptions } from "./tts-provider-config.js";
+import { createSpeechRequests } from "./speech-requests.js";
 
 export const DEFAULT_NARRATION_MODEL = "github-copilot/gpt-6-luna";
 export const TOOL_SUMMARY_CUSTOM_TYPE = "agent-utils-tool-summary";
@@ -146,7 +147,7 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = 
   let config = defaultAgentTtsConfig({});
   const persistedValues = {};
   const aliases = { styleDegree: "styledegree", daemonUrl: "daemon_url", daemonProvider: "daemon_provider", tokenFile: "token_file", daemonSink: "daemon_sink", timeoutMs: "timeout_ms" };
-  for (const key of ["provider", "command", "voice", "model", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs"]) {
+  for (const key of ["provider", "command", "voice", "model", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "pan", "interrupt"]) {
     if (Object.hasOwn(persisted, key)) persistedValues[aliases[key] || key] = persisted[key];
   }
   config = applyAgentTtsConfig(config, persistedValues, {});
@@ -156,7 +157,7 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = 
     PI_TTS_SPEED: "speed", PI_TTS_EMBEDDING: "embedding", PI_TTS_STYLE: "style",
     PI_TTS_STYLEDEGREE: "styledegree", PI_TTS_MODEL: "model", PI_TTS_INSTRUCTIONS: "instructions",
     TTS_DAEMON_URL: "daemon_url", PI_TTS_DAEMON_URL: "daemon_url", PI_TTS_DAEMON_PROVIDER: "daemon_provider",
-    TTS_TOKEN_FILE: "token_file", PI_TTS_DAEMON_SINK: "daemon_sink", PI_TTS_PLAYBACK: "playback", PI_TTS_TIMEOUT_MS: "timeout_ms",
+    TTS_TOKEN_FILE: "token_file", PI_TTS_DAEMON_SINK: "daemon_sink", PI_TTS_PLAYBACK: "playback", PI_TTS_TIMEOUT_MS: "timeout_ms", PI_TTS_PAN: "pan", PI_TTS_INTERRUPT: "interrupt",
     PI_TTS_BACKEND: "backend", PULSE_SERVER: "server", PULSE_SINK: "device",
   };
   for (const [envKey, configKey] of Object.entries(envMap)) {
@@ -220,31 +221,22 @@ export function createAgentSpeechController({
   initialConfig,
 } = {}) {
   let config = initialConfig ? { ...initialConfig, streamName: "/tts" } : defaultAgentTtsConfig(env);
-  let generation = 0;
-  let synthesisAbort = null;
-
-  const interrupt = () => {
-    generation += 1;
-    try { synthesisAbort?.abort(); } catch {}
-    synthesisAbort = null;
-    try { player.interrupt?.(); } catch {}
-  };
+  const requests = createSpeechRequests({ interruptPlayback: () => player.interrupt?.() });
+  const interrupt = (options) => requests.cancel(options);
 
   const speak = async (text, overrides = {}) => {
     const body = String(text ?? "");
     if (!body.trim()) return { skipped: true };
-    interrupt();
-    const mine = generation;
     const effective = { ...config, ...overrides };
-    const controller = new AbortController();
-    synthesisAbort = controller;
+    if (Object.hasOwn(overrides, "pan") && !Object.hasOwn(overrides, "panSource")) effective.panSource = "explicit";
+    const request = requests.start({ ...effective, speechKind: speechKind(effective) || "tts" });
     try {
-      return await withSpeechControl({ ...effective, speechKind: speechKind(effective) || "tts", signal: controller.signal, env }, async (controlled) => {
+      return await withSpeechControl({ ...effective, speechKind: speechKind(effective) || "tts", signal: request.signal, env }, async (controlled) => {
         if (["command", "local"].includes(effective.provider)) return playTtsCommand(body, controlled);
         const options = ttsSynthesisOptions(effective, { signal: controlled.signal, env });
         if (usesDaemonPlayback(effective)) return playDaemonSpeech(body, options);
         const pcm = await synthesize(body, options);
-        if (mine !== generation || controlled.signal.aborted) return { interrupted: true };
+        if (controlled.signal.aborted) return { interrupted: true };
         return player.play(pcm, {
           backend: effective.backend,
           pan: effective.pan,
@@ -258,10 +250,10 @@ export function createAgentSpeechController({
         });
       });
     } catch (error) {
-      if (controller.signal.aborted || error?.name === "AbortError") return { interrupted: true };
+      if (request.signal.aborted || error?.name === "AbortError") return { interrupted: true, cancellation: error.cancellation, remotePending: error.remotePending };
       throw error;
     } finally {
-      if (synthesisAbort === controller) synthesisAbort = null;
+      request.finish();
     }
   };
 
@@ -272,6 +264,6 @@ export function createAgentSpeechController({
     getConfig: () => ({ ...config }),
     setConfig(next) { config = { ...next, streamName: "/tts" }; return { ...config }; },
     apply(values) { config = applyAgentTtsConfig(config, values, env); return { ...config }; },
-    isPlaying: () => !!synthesisAbort || !!player.isPlaying?.(),
+    isPlaying: () => requests.size > 0 || !!player.isPlaying?.(),
   };
 }

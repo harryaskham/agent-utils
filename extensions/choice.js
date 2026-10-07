@@ -885,6 +885,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     };
     syncToolVisibility();
     const setChoiceEnabled = (enabled, ctx) => {
+      let stopped;
       runtimeReady = true; // command handlers run after the runtime is bound
       if (enabled === choiceConfig.enabled) { syncToolVisibility(); return; }
       if (enabled) ensureSpeaker(ctx);
@@ -897,10 +898,11 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
         // Keep the optional bridge registration stable. With no active request
         // its snapshot is empty; only the model's callable tool set changes.
         cancelActive("disabled");
-        speakerController?.dispose?.(); speakerController = speaker || null;
+        stopped = speakerController?.dispose?.(); speakerController = speaker || null;
       }
       syncToolVisibility();
       announceCapability();
+      return stopped;
     };
 
     pi.registerCommand("choice", {
@@ -908,7 +910,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         if (["on", "off"].includes(raw.toLowerCase())) {
-          setChoiceEnabled(raw.toLowerCase() === "on", ctx);
+          await setChoiceEnabled(raw.toLowerCase() === "on", ctx);
           ctx.ui.notify(`choice:${choiceConfig.enabled ? "on" : "off"} · force-choice:${choiceConfig.forceAtAgentEnd ? "on" : "off"}${!choiceConfig.enabled && choiceConfig.forceAtAgentEnd ? " (suspended)" : ""} · runtime only`, "info");
           return;
         }
@@ -1067,7 +1069,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       try { pi.events?.off?.(INPUT_ACTION_EVENT, eventInputHandler); } catch {}
       try { pi.events?.off?.(CHOICE_SYNC_REQUEST_EVENT, choiceSyncRequestHandler); } catch {}
       try { ahpProvider?.dispose?.(); } catch {}
-      try { speakerController?.dispose?.(); } catch {}
+      try { await speakerController?.dispose?.(); } catch {}
       await viewPreferences.flush?.();
     });
   };

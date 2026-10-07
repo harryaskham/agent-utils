@@ -210,7 +210,7 @@ export class LocalVadController {
       const finalText = String(await this.transcribe(raw, { signal }) ?? "").trim();
       return generation === this._generation && !this._disposed ? finalText || previewFallback : "";
     } catch (err) {
-      if (signal.aborted || generation !== this._generation) return "";
+      if (signal.aborted || err?.name === "AbortError" || generation !== this._generation) return "";
       this.onError(err);
       return previewFallback;
     }
@@ -362,7 +362,7 @@ export class LocalVadController {
           this.insertPartial(prefix + text, job.event);
         }
       })
-      .catch((err) => { if (!signal.aborted && generation === this._generation) this.onError(err, job.event); })
+      .catch((err) => { if (!signal.aborted && err?.name !== "AbortError" && generation === this._generation) this.onError(err, job.event); })
       .finally(() => { this._transcribing = false; this._current = null; this._pump(); });
   }
 

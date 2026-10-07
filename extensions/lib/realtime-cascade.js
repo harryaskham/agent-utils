@@ -92,6 +92,7 @@ export async function runCascadeRound({
   play,
   onTurn,
   onSpeak,
+  signal,
 } = {}) {
   const roster = Array.isArray(participants) ? participants : (participants?.participants || []);
   if (typeof runTurn !== "function") {
@@ -114,35 +115,42 @@ export async function runCascadeRound({
   let playChain = Promise.resolve();
   let playError = null;
 
-  for (const turn of plan.turns) {
-    const participant = roster[turn.index] || {};
-    const messages = buildCascadeTurnMessages({ participant, conversation: convo, roster, humanLabel });
-    // eslint-disable-next-line no-await-in-loop -- turns are intentionally sequential so each hears the last.
-    const reply = await runTurn(participant, messages, turn);
-    const text = String(reply ?? "").trim();
-    if (text) convo.push({ speaker: participant.name, text });
-    if (typeof onTurn === "function") onTurn({ participant, text, turn });
-    turns.push({ index: turn.index, name: participant.name, voice: participant.voice, text });
-    if (!text) continue;
+  try {
+    for (const plannedTurn of plan.turns) {
+      signal?.throwIfAborted();
+      const turn = signal ? { ...plannedTurn, signal } : plannedTurn;
+      const participant = roster[turn.index] || {};
+      const messages = buildCascadeTurnMessages({ participant, conversation: convo, roster, humanLabel });
+      // eslint-disable-next-line no-await-in-loop -- turns are intentionally sequential so each hears the last.
+      const reply = await runTurn(participant, messages, turn);
+      signal?.throwIfAborted();
+      const text = String(reply ?? "").trim();
+      if (text) convo.push({ speaker: participant.name, text });
+      if (typeof onTurn === "function") onTurn({ participant, text, turn });
+      turns.push({ index: turn.index, name: participant.name, voice: participant.voice, text });
+      if (!text) continue;
 
-    if (pipelined) {
-      // Kick synthesis off now (concurrent); serialize playback after prior turns.
-      const synthP = Promise.resolve().then(() => synth(participant, text, turn));
-      synthP.catch(() => {}); // chain awaits + surfaces the error; avoid unhandledRejection
-      playChain = playChain
-        .then(async () => {
-          const pcm = await synthP;
-          if (typeof onSpeak === "function") onSpeak({ participant, turn });
-          await play(participant, pcm, turn);
-        })
-        .catch((e) => { if (!playError) playError = e; });
-    } else if (typeof speak === "function") {
-      // eslint-disable-next-line no-await-in-loop -- speech is sequential within a round.
-      await speak(participant, text, turn);
+      if (pipelined) {
+        // Kick synthesis off now (concurrent); serialize playback after prior turns.
+        const synthP = Promise.resolve().then(() => synth(participant, text, turn));
+        synthP.catch(() => {}); // chain awaits + surfaces the error; avoid unhandledRejection
+        playChain = playChain
+          .then(async () => {
+            const pcm = await synthP;
+            signal?.throwIfAborted();
+            if (typeof onSpeak === "function") onSpeak({ participant, turn });
+            await play(participant, pcm, turn);
+          })
+          .catch((e) => { if (!playError) playError = e; });
+      } else if (typeof speak === "function") {
+        // eslint-disable-next-line no-await-in-loop -- speech is sequential within a round.
+        await speak(participant, text, turn);
+      }
     }
+  } finally {
+    // A stop also joins in-flight audio cleanup, not just text generation.
+    await playChain;
   }
-
-  await playChain;
   if (playError) throw playError;
   return { order: plan.order, turns, conversation: convo };
 }

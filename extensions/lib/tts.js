@@ -397,7 +397,7 @@ export function createInterruptiblePcmPlayer({ spawnImpl = spawn, killDelayMs = 
     }
     let pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
     const pan = Number(options.pan);
-    if (Number.isFinite(pan)) {
+    if (options.pan != null && Number.isFinite(pan)) {
       pcm = panMonoPcm16le(pcm, pan);
       options = { ...options, channels: 2 };
     }

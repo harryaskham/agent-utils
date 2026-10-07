@@ -130,7 +130,7 @@ export default function forceAgentSpeechExtension(pi) {
     handler: async (args, ctx) => {
       const arg = String(args || "").trim().toLowerCase();
       if (arg === "on" || arg === "true") runtimeOverride = true;
-      else if (arg === "off" || arg === "false") { runtimeOverride = false; nativeSpeech?.interrupt(); }
+      else if (arg === "off" || arg === "false") { runtimeOverride = false; await nativeSpeech?.interrupt(); }
       else if (arg === "env" || arg === "default") runtimeOverride = null;
       const state = enabled() ? "on" : "off";
       const src = runtimeOverride === null ? "env" : "command";

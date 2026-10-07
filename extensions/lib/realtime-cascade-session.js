@@ -21,7 +21,7 @@ import {
   DEFAULT_TTS_PROVIDER, normalizeTtsProvider, resolveCascadeTtsVoice, usesDaemonPlayback, playDaemonSpeech,
 } from "./tts.js";
 import { resolveAgentTtsSettings } from "./tts-narration.js";
-import { ttsSynthesisOptions } from "./tts-provider-config.js";
+import { ttsSynthesisOptions, speechPan } from "./tts-provider-config.js";
 import { readPersistedTtsSettings } from "./tts-settings.js";
 import { parseEnvStyleArgs } from "./env-args.js";
 import { readPersistedCascadeSettings } from "./realtime-settings.js";
@@ -73,6 +73,7 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
       participant.pitch = values.pitch != null ? Number(values.pitch) : p.pitch;
       participant.volume = values.volume != null ? Number(values.volume) : p.volume;
       participant.ttsRole = values.role ?? p.role;
+      participant.pan = values.pan !== undefined ? speechPan(values.pan) : p.pan;
     }
   }
   return { roster, values, directAzureSpeech: isAzureSpeechProvider(defaultProvider) };
@@ -110,8 +111,10 @@ export class CascadeController {
     if (!body) return null;
     if (this.busy) return null;
     this.busy = true;
+    this.abort = new AbortController();
     try {
-      const res = await runCascadeRound({
+      this.work = runCascadeRound({
+        signal: this.abort.signal,
         participants: this.roster,
         humanText: body,
         order: this.order,
@@ -126,6 +129,7 @@ export class CascadeController {
         onSpeak: this.onSpeak || undefined,
         humanLabel: this.humanLabel,
       });
+      const res = await this.work;
       this.conversation = this.maxHistory && res.conversation.length > this.maxHistory
         ? res.conversation.slice(-this.maxHistory)
         : res.conversation;
@@ -137,11 +141,19 @@ export class CascadeController {
       throw err;
     } finally {
       this.busy = false;
+      this.work = null;
+      this.abort = null;
     }
+  }
+
+  cancel() {
+    this.abort?.abort();
+    return this.work?.catch(() => {});
   }
 
   /// Clear the conversation and round counter (start a fresh group chat).
   reset() {
+    void this.cancel();
     this.conversation = [];
     this.round = 0;
     this.lastError = null;
@@ -152,14 +164,14 @@ export class CascadeController {
 /// chat-completions caller. Per-participant model/base-url win over `defaultModel`.
 /// Defaults keep spoken replies short (maxTokens) unless overridden.
 export function makeCascadeRunTurn({ defaultModel, defaultBaseUrl, envRead, fetchImpl, temperature, maxTokens = 200, piInferenceTurn } = {}) {
-  return (participant, messages) => {
+  return (participant, messages, turn = {}) => {
     // bd-15beec: an UNPINNED peer (no explicit model=) is "just the model loaded
     // in Pi" — route it through Pi's built-in inference on the loaded ctx model
     // (piInferenceTurn) instead of a raw chat-completions call to a possibly-
     // unservable default model (the n=1 "no healthy deployments" 400). A peer
     // that pins its own model= keeps the direct chat-completions path.
     if (typeof piInferenceTurn === "function" && !participant?.model) {
-      return piInferenceTurn(participant, messages);
+      return piInferenceTurn(participant, messages, turn);
     }
     return runChatCompletionTurn({
       messages,
@@ -169,6 +181,7 @@ export function makeCascadeRunTurn({ defaultModel, defaultBaseUrl, envRead, fetc
       maxTokens,
       fetchImpl,
       envRead,
+      signal: turn.signal,
     });
   };
 }
@@ -182,7 +195,8 @@ export function makeCascadePiInferenceTurn({ ctx, model, completeImpl, maxTokens
   const loaded = model || ctx?.model;
   const getAuth = ctx?.modelRegistry?.getApiKeyAndHeaders;
   if (!loaded || typeof getAuth !== "function") return null;
-  return async (participant, messages) => {
+  return async (participant, messages, turn = {}) => {
+    turn.signal?.throwIfAborted();
     const auth = await getAuth.call(ctx.modelRegistry, loaded);
     return runPiInferenceTurn({
       messages,
@@ -191,6 +205,7 @@ export function makeCascadePiInferenceTurn({ ctx, model, completeImpl, maxTokens
       completeImpl,
       maxTokens,
       systemPrompt: participant?.instructions,
+      signal: turn.signal,
     });
   };
 }
@@ -199,10 +214,11 @@ export function makeCascadePiInferenceTurn({ ctx, model, completeImpl, maxTokens
 /// (per-participant voice / tts model / base url) then hand it to `playImpl`.
 export function makeCascadeSpeak({ synthImpl = synthesizeSpeechDirect, playImpl, speed } = {}) {
   if (typeof playImpl !== "function") throw new Error("makeCascadeSpeak requires a playImpl(pcm, participant) dep");
-  return async (participant, text) => {
+  return async (participant, text, turn = {}) => {
     const body = sanitizeForSpeech(text);
     if (!body) return;
     const pcm = await synthImpl(body, {
+      signal: turn.signal, pan: participant?.pan,
       voice: participant?.voice,
       model: participant?.ttsModel,
       baseUrl: participant?.baseUrl,
@@ -224,10 +240,11 @@ export function makeCascadeSpeak({ synthImpl = synthesizeSpeechDirect, playImpl,
 /// runs concurrently with playback). Applies sanitizeForSpeech, returns a PCM
 /// buffer (empty for blank text). Pair with makeCascadePlay.
 export function makeCascadeSynth({ synthImpl = synthesizeSpeechDirect, speed } = {}) {
-  return async (participant, text) => {
+  return async (participant, text, turn = {}) => {
     const body = sanitizeForSpeech(text);
     if (!body) return Buffer.alloc(0);
     return synthImpl(body, {
+      signal: turn.signal, pan: participant?.pan,
       voice: participant?.voice,
       model: participant?.ttsModel,
       baseUrl: participant?.baseUrl,

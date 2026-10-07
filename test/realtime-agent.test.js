@@ -2001,6 +2001,44 @@ test("/ptt alias uses local VAD hold mode and never sends on the commit timeout"
   }
 });
 
+for (const action of ["cancel", "shutdown"]) {
+  test(`released PTT transcription remains owned through ${action} and cleanup`, { timeout: 5000 }, async () => {
+    let capture, signal, cleaned = false;
+    __setLocalVadHooksForTest({
+      capture: () => {
+        capture = new EventEmitter(); capture.stdout = new EventEmitter(); capture.stderr = new EventEmitter();
+        capture.kill = () => { capture.killed = true; }; return capture;
+      },
+      transcribe: (_buffer, options) => {
+        signal = options.signal;
+        return new Promise((_resolve, reject) => signal.addEventListener("abort", () => setTimeout(() => {
+          cleaned = true; reject(new DOMException("cancelled", "AbortError"));
+        }, 20), { once: true }));
+      },
+    });
+    const h = makeHarness();
+    try {
+      realtimeAgentExtension(h.pi);
+      h.handlers.get("session_start")?.({}, h.ctx);
+      await h.commands.get("ptt").handler("", h.ctx);
+      const pcm = Buffer.alloc(24000); // half a second, release before any VAD preview
+      for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(8000, i);
+      capture.stdout.emit("data", pcm);
+      h.sendTerminalInput(" ");
+      assert.ok(await waitFor(() => signal));
+      assert.equal(capture.killed, true, "capture ended but its final transcription is still pending");
+      if (action === "cancel") await h.commands.get("stt").handler("cancel", h.ctx);
+      else await h.handlers.get("session_shutdown")?.({}, h.ctx);
+      assert.equal(signal.aborted, true);
+      assert.equal(cleaned, true, "control waits for cancellation cleanup");
+      assert.equal(h.sentUserMessages.length, 0, "cancelled finalization cannot inject stale transcript text");
+    } finally {
+      await h.handlers.get("session_shutdown")?.({}, h.ctx);
+      __setLocalVadHooksForTest({});
+    }
+  });
+}
+
 test("choice PTT returns successful transcription through the input bus without sending a user turn", async () => {
   const captures = [];
   const captureFn = () => {

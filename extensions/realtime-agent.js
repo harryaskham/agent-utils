@@ -186,6 +186,7 @@ import { ttsSynthesisOptions } from "./lib/tts-provider-config.js";
 import { synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech, isAzureSpeechProvider, resolveSpeakToolParams } from "./lib/tts.js";
 import { resolveAgentTtsSettings } from "./lib/tts-narration.js";
 import { playTtsCommand } from "./lib/tts-command.js";
+import { createSpeechRequests } from "./lib/speech-requests.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
 import { AudioLevelMeter, formatLevelBar, rmsToLevel, shouldRefreshMeter, DEFAULT_METER_REFRESH_MS } from "./lib/realtime-audio-meter.js";
@@ -2484,7 +2485,7 @@ export { RealtimeSession as __RealtimeSessionForTest };
 // session/config internals directly.
 // ---------------------------------------------------------------------------
 
-export function createRealtimeControls({ pi, session, config }) {
+export function createRealtimeControls({ pi, session, config, stopSpeech = () => {} }) {
   const controls = {
     usage() { return REALTIME_USAGE; },
     help() { return this.usage(); },
@@ -2581,7 +2582,7 @@ export function createRealtimeControls({ pi, session, config }) {
 
     setAudio(enabled, ctx) {
       config.audioEnabled = !!enabled;
-      if (!config.audioEnabled) session.player.interrupt();
+      if (!config.audioEnabled) { session.player.interrupt(); void stopSpeech(); }
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2604,6 +2605,7 @@ export function createRealtimeControls({ pi, session, config }) {
     // summaries) aloud. Command changes are runtime-only; settings are startup policy.
     setSpeakReplies(enabled, ctx) {
       config.speakReplies = !!enabled;
+      if (!config.speakReplies) void stopSpeech();
       session.updateStatus(ctx);
       return this.snapshot();
     },
@@ -2810,6 +2812,7 @@ export function createRealtimeControls({ pi, session, config }) {
       await session.stopMic({ commit: false }).catch(() => {});
       await session.close(false).catch(() => {});
       this.setAudio(false, ctx);
+      await stopSpeech();
       config.sttOnly = false;
       const prev = config.previousModel;
       if (restoreModel && prev) {
@@ -2834,7 +2837,23 @@ export function createRealtimeControls({ pi, session, config }) {
 export default function realtimeAgentExtension(pi) {
   const config = makeInitialConfig();
   const session = new RealtimeSession(pi, config);
-  const controls = createRealtimeControls({ pi, session, config });
+  const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
+  const fastDirectTtsRequests = createSpeechRequests({ interruptPlayback: () => fastDirectTtsPlayer.interrupt() });
+  const batchSttRequests = createSpeechRequests();
+  // A released PTT hold can still be transcribing after capture/controller
+  // teardown. Keep its request owned until settlement so shutdown/cancel joins
+  // the daemon cleanup too; a new utterance never cancels an earlier commit.
+  const transcribeLocal = async (buffer, options, cancelOwner) => {
+    const request = batchSttRequests.start({ speechKind: "stt", cancelOwner }, { replace: false });
+    const signal = options.signal ? AbortSignal.any([options.signal, request.signal]) : request.signal;
+    try {
+      signal.throwIfAborted();
+      const text = await localVadTranscribe(buffer, { ...options, signal });
+      signal.throwIfAborted();
+      return text;
+    } finally { request.finish(); }
+  };
+  const controls = createRealtimeControls({ pi, session, config, stopSpeech: () => fastDirectTtsRequests.cancel() });
   try { pi.realtime = controls; } catch {}
   try { pi.events?.emit?.("realtime:controls", controls); } catch {}
 
@@ -2869,8 +2888,6 @@ export default function realtimeAgentExtension(pi) {
   };
   pi.events?.on?.("agent-utils:choice-session", choiceSessionHandler);
   const speechInputState = new SpeechInputStateMachine();
-  const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
-  let fastDirectTtsAbort = null;
   const resolvedFastTts = () => {
     const persisted = readPersistedTtsSettings();
     return {
@@ -2998,23 +3015,21 @@ export default function realtimeAgentExtension(pi) {
       ...(isAzureSpeechProvider(speechConfig.provider) ? resolveSpeakToolParams({ text: body }, { env: process.env, persisted: output.persisted }) : {}),
       env: process.env,
     });
-    fastDirectTtsAbort?.abort();
-    fastDirectTtsPlayer.interrupt();
-    const abort = new AbortController();
-    fastDirectTtsAbort = abort;
+    let request;
     try {
-      await withSpeechControl({ speechKind: "tts", streamName: "/tts", signal: abort.signal, env: process.env }, async (controlled) => {
+      request = fastDirectTtsRequests.start(speechConfig);
+      await withSpeechControl({ speechKind: "tts", streamName: "/tts", signal: request.signal, env: process.env }, async (controlled) => {
         if (speechConfig.provider === "command") return playTtsCommand(body, { ...controlled, ...speechConfig });
         if (usesDaemonPlayback(speechConfig)) return playDaemonSpeech(body, { ...speechOptions, signal: controlled.signal, streamName: "/tts" });
         const pcm = await synthesizeSpeechDirect(body, { ...speechOptions, signal: controlled.signal });
         if (pcm?.length && !controlled.signal.aborted) {
           markAssistantSpeaking(audioDurationMs(pcm));
-          await fastDirectTtsPlayer.play(pcm, { ...controlled, backend: output.backend, server: output.server, device: output.device });
+          await fastDirectTtsPlayer.play(pcm, { ...controlled, pan: speechConfig.pan, backend: output.backend, server: output.server, device: output.device });
         }
       });
     } catch (e) {
-      if (!abort.signal.aborted) { try { ctx?.ui?.notify?.(`speak-replies failed: ${e?.message || String(e)}`, "warning"); } catch {} }
-    } finally { if (fastDirectTtsAbort === abort) fastDirectTtsAbort = null; }
+      if (!request?.signal.aborted) { try { ctx?.ui?.notify?.(`speak-replies failed: ${e?.message || String(e)}`, "warning"); } catch {} }
+    } finally { request?.finish(); }
   }
 
   pi.on("agent_end", async (event, ctx) => {
@@ -3043,9 +3058,10 @@ export default function realtimeAgentExtension(pi) {
     stopLocalVad({ flush: false, cancel: true });
     cascade.vadController?.dispose?.();
     stopCascade();
+    await batchSttRequests.cancel();
+    await cascade.controller?.cancel?.();
     speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
-    fastDirectTtsAbort?.abort();
-    fastDirectTtsAbort = null;
+    await fastDirectTtsRequests.cancel();
     try { fastDirectTtsPlayer.dispose(); } catch {}
     await session.close(false).catch(() => {});
   });
@@ -3268,7 +3284,7 @@ export default function realtimeAgentExtension(pi) {
       placeholder: "…",
       overlongHintMs: 7000,
       isSuppressed: () => isAssistantSpeaking(),
-      transcribe: (buf, options) => localVadTranscribe(buf, { ...resolveSttSettings(process.env, persistedStt), model, timeoutMs, ...options }),
+      transcribe: (buf, options) => transcribeLocal(buf, { ...resolveSttSettings(process.env, persistedStt), model, timeoutMs, ...options }, () => controller.discardHeld()),
       insertPartial: (text) => {
         if (freeformSessionId) {
           try { pi.events?.emit?.(INPUT_ACTION_EVENT, { action: INPUT_ACTIONS.FREEFORM_UPDATE, text, source: "ptt", sessionId: freeformSessionId }); } catch {}
@@ -3584,6 +3600,7 @@ export default function realtimeAgentExtension(pi) {
     const speakDeps = usePipeline
       ? { synth: makeCascadeSynth({ synthImpl: cascadeSynthImpl }), play: makeCascadePlay({ playImpl }) }
       : { speak: makeCascadeSpeak({ synthImpl: cascadeSynthImpl, playImpl }) };
+    void cascade.controller?.cancel?.();
     cascade.controller = new CascadeController({
       roster: roster.participants,
       order: roster.order,
@@ -3599,6 +3616,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   function stopCascade() {
+    void cascade.controller?.cancel?.();
     const wasActive = cascade.active;
     cascade.active = false;
     cascade.inputLevel = 0;
@@ -3625,7 +3643,7 @@ export default function realtimeAgentExtension(pi) {
     const controller = new LocalVadController({
       config: cfg,
       isSuppressed: () => isAssistantSpeaking(),
-      transcribe: (buf, options) => localVadTranscribe(buf, { ...resolveSttSettings(process.env, persistedStt), model, timeoutMs, ...options }),
+      transcribe: (buf, options) => transcribeLocal(buf, { ...resolveSttSettings(process.env, persistedStt), model, timeoutMs, ...options }, () => controller.discardHeld()),
       insertPartial: (text) => { try { ctx.ui.setWidget("realtime-status", [`cascade ~ ${text}`], { placement: "belowEditor" }); } catch {} },
       sendTurn: (text) => {
         cascade.lastText = text;
@@ -4200,6 +4218,7 @@ export default function realtimeAgentExtension(pi) {
       const ctrl = localVad.controller;
       const had = stopLocalVad({ flush: false });
       try { ctrl?.discardHeld?.(); } catch {}
+      await batchSttRequests.cancel();
       ctx.ui.notify(had ? "local speech capture canceled" : "local speech capture was not running", "info");
       return;
     }
@@ -4254,7 +4273,7 @@ export default function realtimeAgentExtension(pi) {
           finally { cascade.speaking = null; cascadeWidget(ctx); }
           return;
         }
-        if (verb === "stop") { const was = stopCascade(); ctx.ui.notify(was ? "cascade mic stopped." : "cascade was not listening.", "info"); cascadeWidget(ctx); return; }
+        if (verb === "stop") { const was = stopCascade(); await cascade.controller?.cancel?.(); ctx.ui.notify(was ? "cascade stopped." : "cascade speech stopped; mic was not listening.", "info"); cascadeWidget(ctx); return; }
         if (verb === "reset") { cascade.controller?.reset(); cascade.transcript = []; ctx.ui.notify("cascade conversation reset.", "info"); cascadeWidget(ctx); return; }
         ctx.ui.notify("Unsupported /cascade verb. Use start, say, stop, reset, or status.", "warning");
       } catch (e) {

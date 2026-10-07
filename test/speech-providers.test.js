@@ -19,6 +19,7 @@ import { speechHttp } from "../extensions/lib/speech-http.js";
 
 const pcm = Buffer.from([0, 0, 1, 0]);
 const json = (value) => new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+const daemonFetch = (run, capabilities = []) => (url, init) => url.endsWith("/health") ? Promise.resolve(json({ capabilities })) : run(url, init);
 const receipt = (request, patch = {}) => ({ status: "ok", job: { id: request.request_id, state: "completed", raw: request.raw, format: "pcm", audio_bytes: pcm.length, audio_path: `/snapshot/audio/${request.request_id}`, ...patch } });
 const waitFor = async (predicate) => { const end = Date.now() + 3000; while (!predicate()) { assert.ok(Date.now() < end, "settlement timeout"); await new Promise(r => setTimeout(r, 5)); } };
 
@@ -31,6 +32,7 @@ async function fixture(t, handler) {
     const bytes = Buffer.concat(chunks);
     let body;
     try { body = JSON.parse(bytes); } catch {}
+    if (req.url === "/health") { respond(res, { capabilities: [] }); return; }
     requests.push({ path: req.url, authorization: req.headers.authorization, body, bytes });
     try { await handler(requests.at(-1), res); }
     catch { res.writeHead(500).end(); }
@@ -152,14 +154,14 @@ test("daemon server playback has no raw download, ambient Pulse routing or autom
 test("daemon rejects receipt/path confusion and reports indeterminate admission without replay or global mute", async () => {
   let calls = 0;
   const options = { env: { TTS_DAEMON_TOKEN: "fixture" }, daemonUrl: "http://fixture.invalid", requestId: "job-1" };
-  await assert.rejects(requestDaemonTts("private", { ...options, fetchImpl: async () => { calls++; throw new Error("secret URL/body"); } }), /job job-1 may still play; no automatic resubmission/);
+  await assert.rejects(requestDaemonTts("private", { ...options, fetchImpl: daemonFetch(async () => { calls++; throw new Error("secret URL/body"); }) }), /tts job job-1; remote work may still continue; no automatic resubmission/);
   assert.equal(calls, 1);
-  await assert.rejects(requestDaemonTts("private", { ...options, fetchImpl: async () => json(receipt({ request_id: "wrong", raw: false })) }), /mismatched TTS receipt/);
-  await assert.rejects(requestDaemonTts("private", { ...options, fetchImpl: async () => json(receipt({ request_id: "job-1", raw: true }, { audio_path: "http://evil/token" })) }, { raw: true }), /invalid audio receipt/);
+  await assert.rejects(requestDaemonTts("private", { ...options, fetchImpl: daemonFetch(async () => json(receipt({ request_id: "wrong", raw: false }))) }), /mismatched TTS receipt/);
+  await assert.rejects(requestDaemonTts("private", { ...options, fetchImpl: daemonFetch(async () => json(receipt({ request_id: "job-1", raw: true }, { audio_path: "http://evil/token" }))) }, { raw: true }), /invalid audio receipt/);
   const abort = new AbortController();
   const operations = [];
-  const pending = requestDaemonTts("private", { ...options, signal: abort.signal, fetchImpl: async (_url, init) => { const { operation, input } = JSON.parse(init.body); operations.push(operation); queueMicrotask(() => abort.abort()); return json(receipt(input, { state: "queued" })); } });
-  await assert.rejects(pending, /wait aborted.*may still play/);
+  const pending = requestDaemonTts("private", { ...options, signal: abort.signal, fetchImpl: daemonFetch(async (_url, init) => { const { operation, input } = JSON.parse(init.body); operations.push(operation); queueMicrotask(() => abort.abort()); return json(receipt(input, { state: "queued" })); }) });
+  await assert.rejects(pending, /wait aborted.*cancellation:unsupported.*remote work may still continue/);
   assert.deepEqual(operations, ["tts"]);
 });
 
@@ -196,7 +198,7 @@ test("all TTS controllers forward native OpenAI options without Azure session vo
 
 test("cascade defers daemon admission to ordered playback and keeps chat URLs out of TTS", async () => {
   const calls = [];
-  const synth = makeCascadeTtsSynth({ env: { PI_TTS_PROVIDER: "daemon", TTS_DAEMON_TOKEN: "fixture" }, fetchImpl: async (url, init) => { const call = JSON.parse(init.body); calls.push({ url, ...call }); return json(receipt(call.input)); } });
+  const synth = makeCascadeTtsSynth({ env: { PI_TTS_PROVIDER: "daemon", TTS_DAEMON_TOKEN: "fixture" }, fetchImpl: daemonFetch(async (url, init) => { const call = JSON.parse(init.body); calls.push({ url, ...call }); return json(receipt(call.input)); }) });
   const audio = await synth("hello", { provider: "daemon", baseUrl: "https://chat.invalid", daemonUrl: "http://fixture.invalid", voice: "embedding:default" });
   assert.equal(calls.length, 0);
   await makeCascadePlay({ playImpl: () => assert.fail("no local playback") })({}, audio);

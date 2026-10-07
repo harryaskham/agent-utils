@@ -181,7 +181,8 @@ export function createTtsNarrationExtension({
         ...(harryFlag
           ? { voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING }
           : isAzureSpeechProvider(current.provider) && sessionSpeechAssignment.voice ? { voice: sessionSpeechAssignment.voice, embedding: null } : {}),
-        pan: sessionSpeechAssignment.pan,
+        pan: current.pan !== undefined ? current.pan : sessionSpeechAssignment.pan,
+        panSource: current.pan !== undefined ? current.panSource || "explicit" : "session",
       };
       if (typeof speechController.setConfig === "function") speechController.setConfig(assigned);
       else if (typeof speechController.apply === "function") speechController.apply({ voice: assigned.voice, embedding: assigned.embedding });
@@ -221,6 +222,7 @@ export function createTtsNarrationExtension({
       const emitSpeech = (state) => { try { pi.events?.emit?.("agent-utils:speech", { state, kind: speechKind, chars: String(text || "").length, at: Date.now() }); } catch {} };
       emitSpeech("start");
       void speechController.speak(text, { ...overrides, speechKind, streamName: `/${speechKind}` })
+        .then(result => { for (const warning of result?.warnings || []) warnOnce("tts daemon", new Error(warning), ctx); })
         .catch((error) => warnOnce(kind, error, ctx))
         .finally(() => emitSpeech("end"));
     };
@@ -346,7 +348,7 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("tts", {
-      description: "Speak assistant messages. /tts [on|off|status|provider=azure|openai|daemon|command model=... voice=... daemon_url=helsinki daemon_provider=azure|openai playback=daemon|local prefix='...' suffix='...']. Daemon playback uses its central queue; admitted jobs cannot yet be individually cancelled.",
+      description: "Speak assistant messages. /tts [on|off|status|provider=azure|openai|daemon|command model=... voice=... daemon_url=helsinki playback=daemon|local pan=-1..1 interrupt=true|false]. Daemon playback queues by default; off cancels owned TTS jobs when supported.",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
@@ -371,8 +373,8 @@ export function createTtsNarrationExtension({
           ttsEnabled = false;
           ttsEnabledSource = "runtime";
           rememberTts({ enabled: false });
-          speechController.interrupt();
-          ctx.ui.notify(`tts:off · enabled-source:runtime (startup setting unchanged)${usesDaemonPlayback(speechController.getConfig()) ? " · admitted daemon jobs may still play" : ""}`, "info");
+          await speechController.interrupt({ kind: "tts" });
+          ctx.ui.notify(`tts:off · enabled-source:runtime (startup setting unchanged)${usesDaemonPlayback(speechController.getConfig()) ? " · scoped cancellation requested (older daemons may continue)" : ""}`, "info");
           return;
         }
         if (simple === "status") {
@@ -433,7 +435,7 @@ export function createTtsNarrationExtension({
           try {
             const parsed = parseEnvStyleArgs(raw);
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
-            const speechKeys = new Set(["provider", "voice", "tts_model", "daemon_url", "daemon_provider", "daemon_sink", "token_file", "playback", "endpoint", "base_url", "lang", "embedding", "instructions", "role", "pitch", "volume", "timeout_ms"]);
+            const speechKeys = new Set(["provider", "voice", "tts_model", "daemon_url", "daemon_provider", "daemon_sink", "token_file", "playback", "endpoint", "base_url", "lang", "embedding", "instructions", "role", "pitch", "volume", "timeout_ms", "pan", "interrupt"]);
             for (const key of Object.keys(parsed.values)) {
               if (!speechKeys.has(key) && !new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "prefix_with_session_name", "prefixwithsessionname", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
@@ -504,6 +506,10 @@ export function createTtsNarrationExtension({
             }
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
         }
+        if (!narrateEnabled && simple !== "status") {
+          stopNarrationWork();
+          await speechController.interrupt({ kind: "narrate" });
+        }
         ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · style:${narrationStyle ?? "tts"} · style-source:${narrationStyleSource} · styledegree:${narrationStyleDegree ?? "tts"} · styledegree-source:${narrationStyleDegreeSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · reasoning-summaries:${narrationReasoningSummaries ? "prefer" : "off"} · reasoning-source:${narrationReasoningSummariesSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
       },
     });
@@ -517,7 +523,7 @@ export function createTtsNarrationExtension({
       ttsEnabled = false;
       narrateEnabled = false;
       stopNarrationWork();
-      speechController.dispose();
+      await speechController.dispose();
       await Promise.allSettled([...feedWrites]);
     });
   };

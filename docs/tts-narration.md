@@ -66,7 +66,7 @@ expansion, for example `/tts prefix="$AGENT_ID"`; command substitutions are neve
 executed. `PI_TTS_PREFIX` and `PI_TTS_SUFFIX` override durable values. Editor-only delay/on-send settings remain
 owned by `/read` and are rejected by `/tts`.
 
-The local Pulse client/stream is named `/tts`. New synthesis aborts old synthesis and terminates prior **local** playback. Server-owned daemon playback cannot yet be cancelled per job; `/tts off` stops waiting but admitted remote speech may continue. Failures produce a warning but never block an agent turn.
+The local Pulse client/stream is named `/tts`. New synthesis aborts old synthesis and terminates prior **local** playback. Daemon-owned playback queues new messages without cancelling earlier narration (`interrupt=false`, the default); `interrupt=true` opts into replacement. Explicit off/mute/shutdown requests scoped cancellation when the daemon advertises it. Older daemons may keep playing. Failures produce a warning but never block an agent turn.
 
 `/tts` is off by default. Avoid enabling legacy `speak-replies` simultaneously,
 since it is a separate historical auto-speech surface.

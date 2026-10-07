@@ -11,6 +11,7 @@
 
 import { env } from "./realtime-helpers.js";
 import { extractPiText, resolvePiComplete } from "./pi-inference.js";
+import { combineTimeoutSignal } from "./bounded-exec.js";
 
 export const DEFAULT_CASCADE_BASE_URL = "https://api.openai.com";
 
@@ -61,6 +62,7 @@ export async function runChatCompletionTurn({
   extra,
   fetchImpl,
   timeoutMs = 60000,
+  signal,
   envRead = env,
 } = {}) {
   const doFetch = fetchImpl || globalThis.fetch;
@@ -69,12 +71,9 @@ export async function runChatCompletionTurn({
   const key = apiKey || envRead("PI_RT_API_KEY", "OPENAI_API_KEY");
   const body = buildChatCompletionBody({ messages, model, temperature, maxTokens, extra });
 
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? setTimeout(() => { try { controller.abort(); } catch {} }, timeoutMs)
-    : null;
-  timer?.unref?.();
+  const bound = combineTimeoutSignal(signal, timeoutMs);
   try {
+    bound.signal.throwIfAborted();
     const res = await doFetch(url, {
       method: "POST",
       headers: {
@@ -82,7 +81,7 @@ export async function runChatCompletionTurn({
         ...(key ? { Authorization: `Bearer ${key}` } : {}),
       },
       body: JSON.stringify(body),
-      ...(controller ? { signal: controller.signal } : {}),
+      signal: bound.signal,
     });
     if (!res.ok) {
       let errText = "";
@@ -90,9 +89,10 @@ export async function runChatCompletionTurn({
       throw new Error(`chat completions ${res.status}${errText ? `: ${String(errText).slice(0, 300)}` : ""}`);
     }
     const json = await res.json();
+    bound.signal.throwIfAborted();
     return extractReplyText(json);
   } finally {
-    if (timer) clearTimeout(timer);
+    bound.cleanup();
   }
 }
 

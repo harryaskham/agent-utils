@@ -6,7 +6,8 @@
 // interruptible; daemon-owned playback uses the server queue. No `tts` CLI hop.
 
 import { playTtsCommand } from "./lib/tts-command.js";
-import { ttsProviderDefaults, ttsSynthesisOptions, speechCredentialStatus } from "./lib/tts-provider-config.js";
+import { ttsProviderDefaults, ttsSynthesisOptions, speechCredentialStatus, speechPan } from "./lib/tts-provider-config.js";
+import { createSpeechRequests } from "./lib/speech-requests.js";
 import { normalizeTtsProvider, usesDaemonPlayback, playDaemonSpeech } from "./lib/tts.js";
 import { withSpeechControl } from "./lib/speech-control.js";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
@@ -64,6 +65,9 @@ export function defaultReadConfig(env = process.env, persisted = {}, persistedRe
     tokenFile: env.TTS_TOKEN_FILE || configured("tokenFile", undefined),
     daemonSink: env.PI_TTS_DAEMON_SINK || configured("daemonSink", undefined),
     playback: env.PI_TTS_PLAYBACK || configured("playback", "daemon"),
+    interrupt: bool(env.PI_TTS_INTERRUPT, configured("interrupt", undefined)),
+    pan: speechPan(env.PI_TTS_PAN || configured("pan", undefined)),
+    panSource: "explicit",
     instructions: env.PI_TTS_INSTRUCTIONS ?? configured("instructions", undefined),
     timeoutMs: env.PI_TTS_TIMEOUT_MS != null ? Number(env.PI_TTS_TIMEOUT_MS) : configured("timeoutMs", undefined),
     pitch: configured("pitch", undefined), volume: configured("volume", undefined), role: configured("role", undefined),
@@ -130,7 +134,7 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
     "base_url", "baseurl", "endpoint", "api_key", "apikey",
     "backend", "server", "device", "sink", "delay", "on_delay", "ondelay",
     "on_send", "onsend", "model", "instructions", "pitch", "volume", "role",
-    "daemon_url", "daemon_provider", "token_file", "daemon_sink", "playback", "timeout_ms",
+    "daemon_url", "daemon_provider", "token_file", "daemon_sink", "playback", "timeout_ms", "pan", "interrupt",
   ]);
   for (const key of Object.keys(values)) {
     if (!known.has(key)) throw new Error(`/read: unknown setting '${key}'`);
@@ -153,6 +157,8 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
     if (own(values, key)) next[field] = nullableString(values[key], env);
   }
   if (next.daemonProvider && !["azure", "openai"].includes(next.daemonProvider)) throw new Error("/read: daemon_provider must be azure, openai or none");
+  if (own(values, "pan")) { next.pan = speechPan(values.pan); next.panSource = "explicit"; }
+  if (own(values, "interrupt")) next.interrupt = values.interrupt == null || NONE.test(String(values.interrupt)) ? undefined : booleanValue(values.interrupt, "interrupt");
   if (own(values, "playback")) {
     if (!["local", "daemon"].includes(values.playback)) throw new Error("/read: playback must be local or daemon");
     next.playback = values.playback;
@@ -213,6 +219,7 @@ export function formatReadStatus(enabled, config, env = process.env) {
     `provider:${config.provider}`,
     `command:${config.command ? "set" : "none"}`,
     `voice:${optional(config.voice)}`,
+    `pan:${optional(config.pan)}`,
     `lang:${optional(config.lang)}`,
     `speed:${optional(config.speed)}`,
     `style:${optional(config.style)}`,
@@ -242,8 +249,7 @@ export function createReadModeController({
   const enabledFrom = env.PI_READ_ENABLED ?? persistedRead.enabled;
   let enabled = ["1", "true", "yes", "on"].includes(String(enabledFrom ?? "").trim().toLowerCase());
   let timer = null;
-  let generation = 0;
-  let synthesisAbort = null;
+  const requests = createSpeechRequests({ interruptPlayback: () => player.interrupt?.() });
   let lastObservedText = "";
   let lastCtx = null;
 
@@ -261,57 +267,52 @@ export function createReadModeController({
     if (timer != null) clearTimer(timer);
     timer = null;
   };
-  const cancelCurrent = () => {
-    generation += 1;
-    try { synthesisAbort?.abort?.(); } catch {}
-    synthesisAbort = null;
-    player.interrupt?.();
-  };
+  const cancelCurrent = () => requests.cancel();
 
   const speak = async (text, reason = "manual", ctx = lastCtx) => {
     const body = String(text ?? "").trim();
     if (!body || isReadControlText(body)) return false;
     lastCtx = ctx || lastCtx;
     clearDebounce();
-    cancelCurrent();
-    const mine = generation;
-    const abort = new AbortController();
-    synthesisAbort = abort;
+    const effective = { ...config };
+    let request;
+    try { request = requests.start(effective); }
+    catch (error) { notify(ctx, error.message, "warning"); return false; }
     setStatus(ctx, `/read · synthesizing (${reason})`);
     try {
-      const result = await withSpeechControl({ ...config, speechKind: "read", signal: abort.signal, env }, async (controlled) => {
-        if (["command", "local"].includes(config.provider)) {
+      const result = await withSpeechControl({ ...effective, speechKind: "read", signal: request.signal, env }, async (controlled) => {
+        if (["command", "local"].includes(effective.provider)) {
           setStatus(ctx, `/read · speaking (${reason})`);
           return playTtsCommand(body, controlled);
         }
-        const synthesisOptions = ttsSynthesisOptions(config, { signal: controlled.signal, env });
-        if (usesDaemonPlayback(config)) return playDaemonSpeech(body, synthesisOptions);
+        const synthesisOptions = ttsSynthesisOptions(effective, { signal: controlled.signal, env });
+        if (usesDaemonPlayback(effective)) return playDaemonSpeech(body, synthesisOptions);
         const pcm = await synthesize(body, synthesisOptions);
-        if (mine !== generation || controlled.signal.aborted) return { interrupted: true };
+        if (controlled.signal.aborted) return { interrupted: true };
         markAssistantSpeaking(audioDurationMs(pcm));
         setStatus(ctx, `/read · speaking (${reason})`);
         return player.play(pcm, {
-          backend: config.backend,
-          server: config.server,
-          device: config.device,
-          streamName: config.streamName,
+          backend: effective.backend,
+          server: effective.server,
+          device: effective.device,
+          streamName: effective.streamName,
+          pan: effective.pan,
           speechKind: controlled.speechKind,
           speechControl: controlled.speechControl,
           signal: controlled.signal,
           env,
         });
       });
-      if (mine !== generation || abort.signal.aborted) return false;
-      synthesisAbort = null;
-      setStatus(ctx, result?.muted ? "/read · muted" : "/read · on");
+      if (request.signal.aborted) return false;
+      if (request.isLatest()) setStatus(ctx, result?.muted ? "/read · muted" : "/read · on");
+      for (const warning of result?.warnings || []) notify(ctx, warning, "warning");
       return !result?.interrupted;
     } catch (error) {
-      if (mine !== generation || abort.signal.aborted) return false;
-      synthesisAbort = null;
-      setStatus(ctx, "/read · error");
+      if (request.signal.aborted) return false;
+      if (request.isLatest()) setStatus(ctx, "/read · error");
       notify(ctx, `/read failed: ${error?.message || String(error)}`, "warning");
       return false;
-    }
+    } finally { request.finish(); }
   };
 
   const scheduleCurrentEditor = (ctx = lastCtx) => {
@@ -361,10 +362,11 @@ export function createReadModeController({
     disable(ctx = lastCtx) {
       enabled = false;
       clearDebounce();
-      cancelCurrent();
+      const stopped = cancelCurrent();
       setStatus(ctx, undefined);
+      return stopped;
     },
-    dispose(ctx = lastCtx) { this.disable(ctx); player.dispose?.(); },
+    dispose(ctx = lastCtx) { const stopped = this.disable(ctx); player.dispose?.(); return stopped; },
     isEnabled: () => enabled,
     getConfig: () => ({ ...config }),
     setConfig(next) { config = { ...next }; return { ...config }; },
@@ -410,23 +412,23 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
     return { action: "continue" };
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     try { terminalInputUnsubscribe?.(); } catch {}
     terminalInputUnsubscribe = null;
-    controller.dispose(sessionCtx);
+    await controller.dispose(sessionCtx);
     sessionCtx = null;
   });
 
   pi.registerCommand("read", {
-    description: "Editor-to-speech. Usage: /read [on|off|status|text] [provider=azure|openai|daemon|command model=... voice=... lang=... speed=... style=... embedding=... daemon_url=helsinki playback=daemon|local delay=2000 on_delay=true on_send=true backend=pulse]. Daemon playback cannot yet be cancelled per job.",
+    description: "Editor-to-speech. /read [on|off|status|text] [provider=azure|openai|daemon|command voice=... daemon_url=helsinki playback=daemon|local pan=-1..1 interrupt=true|false delay=2000 on_delay=true on_send=true]. Daemon playback queues by default; explicit stop cancels owned jobs when supported.",
     handler: async (args, ctx) => {
       try {
         const parsed = parseEnvStyleArgs(String(args || ""));
         controller.updateConfig(parsed.values, ctx);
         const action = String(parsed.positionals[0] || "").toLowerCase();
         if (["off", "stop", "disable"].includes(action)) {
-          controller.disable(ctx);
-          ctx.ui.notify(`/read off (runtime; startup setting unchanged)${usesDaemonPlayback(controller.getConfig()) ? "; admitted daemon jobs may still play" : ""}`, "info");
+          await controller.disable(ctx);
+          ctx.ui.notify(`/read off (runtime; startup setting unchanged)${usesDaemonPlayback(controller.getConfig()) ? "; scoped cancellation requested (older daemons may continue)" : ""}`, "info");
           return;
         }
         if (action === "status") {

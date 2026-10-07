@@ -137,7 +137,7 @@ export function readPersistedRealtimeSettings(path = agentSettingsPath()) {
 // the explicit startup home for shared local-STT/PTT defaults.
 export const PERSISTED_CASCADE_FIELDS = [
   "voice", "model", "baseUrl", "ttsModel", "provider",
-  "speakerProfileId", "lang", "speed", "azure", "daemonUrl", "daemonProvider", "ttsEndpoint", "ttsInstructions", "pitch", "volume", "role", "playback",
+  "speakerProfileId", "lang", "speed", "azure", "daemonUrl", "daemonProvider", "ttsEndpoint", "ttsInstructions", "pitch", "volume", "role", "pan", "playback",
 ];
 export const PERSISTED_STT_FIELDS = [
   // Realtime/server-STT compatibility fields.
