@@ -155,7 +155,7 @@ export class ChoiceView {
     if (!event) return null;
     const layout = this.layout;
     if (!layout || layout.width !== columns || layout.terminalRows !== rows) return { type: "ignored" };
-    const button = Number(event[1]), x = Number(event[2]) - 1, y = Number(event[3]) - 1 - (layout.rowOffset || 0);
+    const button = Number(event[1]), x = Number(event[2]) - 1 - (layout.colOffset || 0), y = Number(event[3]) - 1 - (layout.rowOffset || 0);
     if (x < 0 || x >= layout.width || y < 0 || y >= layout.height) return { type: "ignored" };
     if (event[4] === "m" || button & 32) return { type: "ignored" };
     if (button & 64) {
@@ -175,7 +175,7 @@ export class ChoiceView {
     if (hit) return { type: "choose", index: hit.index };
     return { type: "ignored" };
   }
-  render({ question, choices, index, freeformMode, freeformText, timeoutMs = 0 }, width, terminalRows, theme) {
+  render({ question, choices, index, freeformMode, freeformText, timeoutMs = 0, title: titleOverride, hint }, width, terminalRows, theme) {
     const w = Math.max(0, Math.trunc(Number(width) || 0));
     const h = Math.max(0, Math.trunc(Number(terminalRows) || 0));
     if (!w || !h) { this.layout = null; return []; }
@@ -196,9 +196,9 @@ export class ChoiceView {
       ? [fit(`Reply: ${freeformText || ""}▏`), fit("Enter submit · Esc back · Backspace delete")]
       : freeformMode === "ptt"
         ? [fit("PTT reply · recording/transcribing…"), fit("Enter/Space finish · Esc/Ctrl-C cancel")]
-        : [fit(w >= 75 ? "↑↓/jk choices · Enter/1–9 choose · i reply · Space PTT · Esc/q cancel" : w >= 36 ? "↑↓ pick · Enter · v/f view · ? help" : "↑↓ · Enter · v/f · ?")];
+        : [fit(hint ? (typeof hint === "function" ? hint(w) : hint) : w >= 75 ? "↑↓/jk choices · Enter/1–9 choose · i reply · Space PTT · Esc/q cancel" : w >= 36 ? "↑↓ pick · Enter · v/f view · ? help" : "↑↓ · Enter · v/f · ?")];
     const mode = this.expanded ? "Expanded" : "Compact";
-    const title = fit(`◇ Choice · ${index + 1}/${choices.length} · v ${mode}${w >= 60 ? ` · f ${this.fullscreen ? "Bottom" : "Fullscreen"}` : " · f"}${timeoutMs > 0 ? ` · ${Math.ceil(timeoutMs / 1000)}s` : ""}`);
+    const title = fit(`◇ ${titleOverride || `Choice · ${index + 1}/${choices.length}`} · v ${mode}${w >= 60 ? ` · f ${this.fullscreen ? "Bottom" : "Fullscreen"}` : " · f"}${timeoutMs > 0 ? ` · ${Math.ceil(timeoutMs / 1000)}s` : ""}`);
     if (this.help && !freeformMode) footer = [
       ...wrapChoiceText("↑↓/jk choices · Enter/1–9 choose · i text reply · Space PTT · Esc/q cancel", w),
       ...wrapChoiceText(CHOICE_VIEW_KEYS.filter(k => k.label).map(k => k.label).join(" · "), w),

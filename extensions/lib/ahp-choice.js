@@ -19,7 +19,9 @@ export function choiceAhpRequest(record) {
   if (!record || record.finished) return null;
   return {
     requestId: record.sessionId,
-    message: record.question,
+    // Async choices may carry agent-supplied context; the question remains the
+    // single prompt, so remote clients render the same option list.
+    message: record.ahpMessage || record.question,
     questions: [{
       id: "choice",
       kind: "single_select",
@@ -66,12 +68,20 @@ function normalizedAnswer(command) {
   return null;
 }
 
-export function createAhpChoiceProvider({ pi, env = process.env, getActive, complete, bridge: explicitBridge, providerId, disabled = false } = {}) {
+// One provider may own one blocking choice (`getActive`) or many concurrently
+// pending async choices (`listActive`). Paratenic's v1 bridge already accepts
+// many requests per provider; each record keeps its own opaque request ID.
+export function createAhpChoiceProvider({ pi, env = process.env, getActive, listActive, complete, bridge: explicitBridge, providerId, providerPrefix = "agent-utils.choice", disabled = false } = {}) {
   if (disabled || isAhpDisabled(env)) return { enabled: false, requested() {}, updated() {}, resolved() {}, dispose() {} };
   let handle = null;
   let bridge = null;
   let disposed = false;
-  const id = providerId || `agent-utils.choice.${process.pid}.${++providerSequence}`;
+  const id = providerId || `${providerPrefix}.${process.pid}.${++providerSequence}`;
+  const pending = () => {
+    const records = typeof listActive === "function" ? listActive() : [getActive?.()];
+    return (Array.isArray(records) ? records : []).filter((record) => record && !record.finished);
+  };
+  const find = (requestId) => pending().find((record) => record.sessionId === requestId) || null;
 
   const register = (candidate) => {
     if (disposed || handle || !candidate || candidate.version !== 1 || candidate.enabled !== true || typeof candidate.registerInputProvider !== "function") return false;
@@ -85,13 +95,10 @@ export function createAhpChoiceProvider({ pi, env = process.env, getActive, comp
         drafts: false,
         maxQuestions: 1,
         maxOptions: 9,
-        snapshot: () => {
-          const request = choiceAhpRequest(getActive?.());
-          return request ? [request] : [];
-        },
+        snapshot: () => pending().map(choiceAhpRequest).filter(Boolean),
         complete: async (command) => {
-          const active = getActive?.();
-          if (!active || active.finished || command?.requestId !== active.sessionId) return { accepted: false, error: "Input request is no longer pending" };
+          const active = find(command?.requestId);
+          if (!active) return { accepted: false, error: "Input request is no longer pending" };
           const response = String(command?.response || "").trim().toLowerCase();
           if (response === "accept") {
             const answer = normalizedAnswer(command);
@@ -109,8 +116,7 @@ export function createAhpChoiceProvider({ pi, env = process.env, getActive, comp
           return { accepted: false, error: "Unsupported choice completion response" };
         },
       });
-      const current = choiceAhpRequest(getActive?.());
-      if (current) handle.requested(current);
+      for (const current of pending().map(choiceAhpRequest).filter(Boolean)) handle.requested(current);
       return true;
     } catch {
       handle = null;

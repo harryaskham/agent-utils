@@ -117,6 +117,32 @@ with tempfile.TemporaryDirectory(prefix='choice-pty-', dir='/tmp') as folder:
         key('\x1b'); wait(lambda s: not any('Reply:' in line for line in s['frame']['lines']))
         key('2'); state = wait(lambda s: not s['pending'])
         assert state['result']['status']=='selected' and state['result']['index']==1
+        # Async choices: post two questions, keep working, answer from the view.
+        resize(100, 30); os.kill(child.pid, signal.SIGWINCH)
+        posted = call('async-post')['posted']
+        assert posted['status'] == 'posted' and len(posted['ids']) == 2, posted
+        assert not call('snapshot')['pending'], 'async_choice must not block'
+        call('async-open')
+        state = wait(lambda s: s.get('frame') and (s['frame'].get('view') or {}).get('kind') == 'async' and s['frame']['columns'] == 100)
+        assert state['frame']['view']['composite']['sidebar'], state['frame']['view']
+        assert any('Questions · 2' in line for line in state['frame']['lines'])
+        capture('async-sidebar-100x30', state)
+        key('\x1b[C'); state = wait(lambda s: s['frame']['view']['focusId'] == posted['ids'][1])
+        capture('async-second-100x30', state)
+        key('2'); state = wait(lambda s: s['frame']['view']['pending'] == [posted['ids'][0]])
+        key('i'); key('ship it')
+        state = wait(lambda s: any('Reply:' in line and 'ship it' in line for line in s['frame']['lines']))
+        key('\r')
+        deadline = time.monotonic() + 5
+        while True:  # answers are debounced into steering messages
+            drain(.05); status = call('async-status')
+            if 'ship it' in ''.join(m['content'] for m in status['sent']) or time.monotonic() > deadline: break
+        assert [q['status'] for q in status['status']['questions']] == ['answered', 'answered'], status
+        # Quick successive answers may be batched into one steering message.
+        assert 1 <= len(status['sent']) <= 2 and all(m['customType'] == 'agent-utils-async-choice' and m['options'] == {'deliverAs': 'steer', 'triggerTurn': True} for m in status['sent']), status['sent']
+        delivered = ''.join(m['content'] for m in status['sent'])
+        assert 'selected 2: "East"' in delivered and 'ship it' in delivered, status['sent']
+        resize(40, 20); os.kill(child.pid, signal.SIGWINCH)
         call('open'); wait(lambda s: s['pending'] and s.get('frame'))
         assert call('disable')['enabled'] is False
         state = wait(lambda s: not s['pending'])

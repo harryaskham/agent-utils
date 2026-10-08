@@ -8,13 +8,15 @@ export default function choiceUiFixture(pi) {
   const fixturePath = process.env.CHOICE_QA_FIXTURE;
   if (!socket || !fixturePath) throw new Error("choice UI fixture requires isolated socket and fixture paths");
   let tool, context, frame = null, pending = false, result = null, revision = 0, server;
+  const tools = new Map();
   const clients = new Set();
+  const sent = [];
   const commands = new Map();
   createChoiceExtension({
     cacophonyBridge: false, ahpBridge: false,
     speaker: { speak: async () => {}, interrupt() {}, dispose() {} },
     persistedSettings: { choice: { speechEnabled: false, timeoutMs: 0, expanded: true }, tts: {} },
-  })({ ...pi, registerTool(definition) { tool = definition; pi.registerTool(definition); }, registerCommand(name, definition) { commands.set(name, definition); pi.registerCommand(name, definition); } });
+  })({ ...pi, sendMessage(message, options) { sent.push({ customType: message.customType, content: message.content, options }); pi.sendMessage(message, { ...options, triggerTurn: false }); }, registerTool(definition) { tools.set(definition.name, definition); if (definition.name === "interactive_choice") tool = definition; pi.registerTool(definition); }, registerCommand(name, definition) { commands.set(name, definition); pi.registerCommand(name, definition); } });
 
   pi.on("session_start", async (_event, ctx) => {
     context = { ...ctx, ui: { ...ctx.ui, custom(factory, options) {
@@ -48,6 +50,20 @@ export default function choiceUiFixture(pi) {
             pending = true; result = null; frame = null;
             void tool.execute(`fixture-${revision}`, fixture, undefined, undefined, context).then(value => { result = value.details; pending = false; });
             client.end(JSON.stringify({ id: request.id, accepted: true }) + "\n");
+          } else if (request.action === "async-post") {
+            const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
+            const posted = await tools.get("async_choice").execute(`async-${revision}`, { questions: [
+              { question: fixture.question, choices: fixture.choices, key: "first" },
+              { question: "Which region should the canary run in?", choices: [{ label: "West" }, { label: "East", summary: "Closer to the database" }], key: "second" },
+            ] }, undefined, undefined, context);
+            client.end(JSON.stringify({ id: request.id, posted: posted.details }) + "\n");
+          } else if (request.action === "async-open") {
+            frame = null;
+            await commands.get("choices").handler("", context);
+            client.end(JSON.stringify({ id: request.id, accepted: true }) + "\n");
+          } else if (request.action === "async-status") {
+            const status = await tools.get("async_choice_status").execute("status", {}, undefined, undefined, context);
+            client.end(JSON.stringify({ id: request.id, status: status.details, sent }) + "\n");
           } else if (request.action === "snapshot") {
             client.end(JSON.stringify({ id: request.id, pending, result, revision, frame, enabled: pi.getActiveTools().includes("interactive_choice") }) + "\n");
           } else throw new Error("unknown fixture action");
