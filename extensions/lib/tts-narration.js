@@ -6,6 +6,7 @@ import { defaultReadConfig, applyReadConfigValues } from "../read-aloud.js";
 import { createInterruptiblePcmPlayer, synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech } from "./tts.js";
 import { ttsSynthesisOptions } from "./tts-provider-config.js";
 import { createSpeechRequests } from "./speech-requests.js";
+import { withSpeechOutputRouting } from "./speech-output-routing.js";
 
 export const DEFAULT_NARRATION_MODEL = "github-copilot/gpt-6-luna";
 export const TOOL_SUMMARY_CUSTOM_TYPE = "agent-utils-tool-summary";
@@ -219,6 +220,7 @@ export function createAgentSpeechController({
   synthesize = synthesizeSpeechDirect,
   player = createInterruptiblePcmPlayer({ queue: true }),
   initialConfig,
+  routing,
 } = {}) {
   let config = initialConfig ? { ...initialConfig, streamName: "/tts" } : defaultAgentTtsConfig(env);
   const requests = createSpeechRequests({ interruptPlayback: () => player.interrupt?.() });
@@ -229,15 +231,16 @@ export function createAgentSpeechController({
     if (!body.trim()) return { skipped: true };
     const effective = { ...config, ...overrides };
     if (Object.hasOwn(overrides, "pan") && !Object.hasOwn(overrides, "panSource")) effective.panSource = "explicit";
+    routing?.assertPlayable(effective);
     const request = requests.start({ ...effective, speechKind: speechKind(effective) || "tts" });
     try {
       return await withSpeechControl({ ...effective, speechKind: speechKind(effective) || "tts", signal: request.signal, env }, async (controlled) => {
-        if (["command", "local"].includes(effective.provider)) return playTtsCommand(body, controlled);
+        if (["command", "local"].includes(effective.provider)) return withSpeechOutputRouting(routing, controlled, output => playTtsCommand(body, output));
         const options = ttsSynthesisOptions(effective, { signal: controlled.signal, env });
-        if (usesDaemonPlayback(effective)) return playDaemonSpeech(body, options);
+        if (usesDaemonPlayback(effective)) { routing?.assertPlayable(effective); return playDaemonSpeech(body, options); }
         const pcm = await synthesize(body, options);
         if (controlled.signal.aborted) return { interrupted: true };
-        return player.play(pcm, {
+        return withSpeechOutputRouting(routing, {
           backend: effective.backend,
           pan: effective.pan,
           server: effective.server,
@@ -247,7 +250,7 @@ export function createAgentSpeechController({
           speechControl: controlled.speechControl,
           signal: controlled.signal,
           env,
-        });
+        }, output => player.play(pcm, output));
       });
     } catch (error) {
       if (request.signal.aborted || error?.name === "AbortError") return { interrupted: true, cancellation: error.cancellation, remotePending: error.remotePending };
@@ -262,6 +265,7 @@ export function createAgentSpeechController({
     interrupt,
     dispose: interrupt,
     getConfig: () => ({ ...config }),
+    routingStatus: () => routing?.snapshot(),
     setConfig(next) { config = { ...next, streamName: "/tts" }; return { ...config }; },
     apply(values) { config = applyAgentTtsConfig(config, values, env); return { ...config }; },
     isPlaying: () => requests.size > 0 || !!player.isPlaying?.(),

@@ -30,6 +30,7 @@ import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpee
 import { speechPrefix } from "./lib/tts-prefix.js";
 import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE, isAzureSpeechProvider, usesDaemonPlayback } from "./lib/tts.js";
 import { speechCredentialStatus } from "./lib/tts-provider-config.js";
+import { bindSpeechOutputRouting, speechRoutingStatus } from "./lib/speech-output-routing.js";
 import { appendTtsFeed } from "./lib/tts-feed.js";
 import { ttsFeedEnabled } from "./lib/privacy.js";
 import { artifactIdentity } from "./lib/artifact-state.js";
@@ -67,6 +68,7 @@ function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "
     `prefix:${prefix ? "set" : "none"}`,
     `suffix:${suffix ? "set" : "none"}`,
     "stream:/tts",
+    ...(speech.routingStatus?.() ? [speechRoutingStatus(speech.routingStatus())] : []),
   ].join(" · ");
 }
 
@@ -86,7 +88,11 @@ export function createTtsNarrationExtension({
     const persistedNarrate = persistedSettings?.narrate ?? readPersistedNarrateSettings(settingsPath);
     const resolvedTts = resolveAgentTtsSettings({ env, persisted: persistedTts });
     const resolvedNarrate = resolveNarrateSettings({ env, persisted: persistedNarrate });
-    const speechController = speech || createAgentSpeechController({ env, initialConfig: resolvedTts.config });
+    const outputBinding = bindSpeechOutputRouting(pi, { env });
+    const speechController = speech || createAgentSpeechController({ env, initialConfig: resolvedTts.config, routing: outputBinding.routing });
+    const setRoutingMode = (mode, enabled, ctx) => outputBinding.routing.setMode(mode, enabled, {
+      base: { ...speechController.getConfig(), env }, focus: persistedTts.focus ?? {}, identity: artifactIdentity(pi, ctx, env),
+    });
     const sessionSpeechPolicy = resolveSessionSpeechPolicy(persistedTts, env);
     let sessionSpeechAssignment = null;
     let ttsEnabled = resolvedTts.enabled;
@@ -192,6 +198,8 @@ export function createTtsNarrationExtension({
       pi.ttsNarration = {
         isEnabled: () => ttsEnabled,
         isNarrateEnabled: () => narrateEnabled,
+        getRoutingState: () => outputBinding.routing.snapshot(),
+        setRoutingMode,
       };
     } catch {}
     let lastPlainKey = null;
@@ -348,10 +356,20 @@ export function createTtsNarrationExtension({
     });
 
     pi.registerCommand("tts", {
-      description: "Speak assistant messages. /tts [on|off|status|provider=azure|openai|daemon|command model=... voice=... daemon_url=helsinki playback=daemon|local pan=-1..1 interrupt=true|false]. Daemon playback queues by default; off cancels owned TTS jobs when supported.",
+      description: "Speak assistant messages. /tts [on|off|status|key=value]; /tts focus [on|off|status] toggles shared local Pulse focus routing; /tts solo [on|off|status] uses a session sink and cleans up only sinks it created. Daemon playback queues by default; focus/solo exclude daemon-owned output.",
       handler: async (args, ctx) => {
         const raw = String(args || "").trim();
         const simple = raw.toLowerCase();
+        if (/^(focus|solo)(?:\s|$)/.test(simple)) {
+          try {
+            const [mode, action, ...extra] = simple.split(/\s+/);
+            if (extra.length || (action && !["on", "off", "toggle", "status"].includes(action))) throw new Error(`Usage: /tts ${mode} [on|off|status]`);
+            const state = action === "status" ? outputBinding.routing.snapshot()
+              : await setRoutingMode(mode, action === "on" ? true : action === "off" ? false : undefined, ctx);
+            ctx.ui.notify(speechRoutingStatus(state), state.error ? "warning" : "info");
+          } catch (error) { ctx.ui.notify(error.message || String(error), "warning"); }
+          return;
+        }
         if (!raw || simple === "on") {
           ttsEnabled = true;
           ttsEnabledSource = "runtime";
@@ -524,6 +542,7 @@ export function createTtsNarrationExtension({
       narrateEnabled = false;
       stopNarrationWork();
       await speechController.dispose();
+      await outputBinding.release();
       await Promise.allSettled([...feedWrites]);
     });
   };

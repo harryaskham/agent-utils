@@ -83,6 +83,10 @@ Start Pi with `--harry`, or run `/tts --harry` or `/narrate --harry`, to retain
 the session's stereo position while selecting the shared `MAI-Voice-2.1-Flash` default with Harry's
 `0daec43c-911f-4529-820a-16dab73630d3` embedding.
 
+### Focus and solo output
+
+`/tts focus` toggles the shared `agentUtils.tts.focus` output overlay; `/tts focus on|off` is explicit. `/tts solo on|off` routes the session to a named Pulse virtual sink, cleaning up only a sink this session created. Both affect TTS, narration, readback and choices without enabling those features or changing their normal settings. Solo takes precedence over focus. Focus sinks are retained; solo cleanup waits for admitted playback to settle. These modes are local-Pulse-only, not daemon-owned playback. See [focus/solo routing](speech-output-routing.md) for configuration, ownership and switching boundaries.
+
 ### Local command playback
 
 `/tts command=...` selects the command provider. `/narrate` uses that same

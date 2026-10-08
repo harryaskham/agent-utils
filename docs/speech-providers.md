@@ -76,6 +76,10 @@ Explicit `/rt stt=vad|ptt provider=daemon` uses native `stt.stream.open/append/e
 
 The **full multimodal Realtime conversation** (`/rt start`, model-generated audio) remains its separate Azure/OpenAI protocol, not a TTS-daemon request. `provider=daemon` is not advertised as a full Realtime model. `/rt speak_replies=on` and cascade's standalone TTS do use the shared TTS providers. Legacy `force-speech` also honors an explicitly selected shared provider; without one it retains its Cacophony route. Cascade keeps chat `base_url` separate from `tts_endpoint` / `daemon_url`; remote TTS admission is deferred to its ordered playback phase.
 
+## Focus and solo local output
+
+`/tts focus` and `/tts solo` provide temporary shared output routing for local Pulse playback across TTS, narration, readback and choices. Daemon synthesis is compatible with `playback=local`; server-owned playback is not rerouted. See [focus/solo routing](speech-output-routing.md).
+
 ## Startup configuration
 
 ```json

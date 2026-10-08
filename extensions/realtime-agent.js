@@ -187,6 +187,7 @@ import { synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech, isAzureSp
 import { resolveAgentTtsSettings } from "./lib/tts-narration.js";
 import { playTtsCommand } from "./lib/tts-command.js";
 import { createSpeechRequests } from "./lib/speech-requests.js";
+import { bindSpeechOutputRouting, withSpeechOutputRouting } from "./lib/speech-output-routing.js";
 import { describeRoster } from "./lib/realtime-participants.js";
 import { formatCascadeTranscript } from "./lib/realtime-cascade.js";
 import { AudioLevelMeter, formatLevelBar, rmsToLevel, shouldRefreshMeter, DEFAULT_METER_REFRESH_MS } from "./lib/realtime-audio-meter.js";
@@ -2837,6 +2838,8 @@ export function createRealtimeControls({ pi, session, config, stopSpeech = () =>
 export default function realtimeAgentExtension(pi) {
   const config = makeInitialConfig();
   const session = new RealtimeSession(pi, config);
+  const outputBinding = bindSpeechOutputRouting(pi);
+  const cascadePcmPlayer = createInterruptiblePcmPlayer();
   const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
   const fastDirectTtsRequests = createSpeechRequests({ interruptPlayback: () => fastDirectTtsPlayer.interrupt() });
   const batchSttRequests = createSpeechRequests();
@@ -3017,14 +3020,15 @@ export default function realtimeAgentExtension(pi) {
     });
     let request;
     try {
+      outputBinding.routing.assertPlayable(speechConfig);
       request = fastDirectTtsRequests.start(speechConfig);
       await withSpeechControl({ speechKind: "tts", streamName: "/tts", signal: request.signal, env: process.env }, async (controlled) => {
-        if (speechConfig.provider === "command") return playTtsCommand(body, { ...controlled, ...speechConfig });
-        if (usesDaemonPlayback(speechConfig)) return playDaemonSpeech(body, { ...speechOptions, signal: controlled.signal, streamName: "/tts" });
+        if (speechConfig.provider === "command") return withSpeechOutputRouting(outputBinding.routing, { ...controlled, ...speechConfig }, output => playTtsCommand(body, output));
+        if (usesDaemonPlayback(speechConfig)) { outputBinding.routing.assertPlayable(speechConfig); return playDaemonSpeech(body, { ...speechOptions, signal: controlled.signal, streamName: "/tts" }); }
         const pcm = await synthesizeSpeechDirect(body, { ...speechOptions, signal: controlled.signal });
         if (pcm?.length && !controlled.signal.aborted) {
           markAssistantSpeaking(audioDurationMs(pcm));
-          await fastDirectTtsPlayer.play(pcm, { ...controlled, pan: speechConfig.pan, backend: output.backend, server: output.server, device: output.device });
+          await withSpeechOutputRouting(outputBinding.routing, { ...controlled, pan: speechConfig.pan, backend: output.backend, server: output.server, device: output.device }, routed => fastDirectTtsPlayer.play(pcm, routed));
         }
       });
     } catch (e) {
@@ -3063,7 +3067,9 @@ export default function realtimeAgentExtension(pi) {
     speechInputState.transition(SPEECH_INPUT_MODES.IDLE);
     await fastDirectTtsRequests.cancel();
     try { fastDirectTtsPlayer.dispose(); } catch {}
+    cascadePcmPlayer.dispose();
     await session.close(false).catch(() => {});
+    await outputBinding.release();
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -3583,20 +3589,22 @@ export default function realtimeAgentExtension(pi) {
     const piInferenceTurn = makeCascadePiInferenceTurn({ ctx });
     const runTurn = makeCascadeRunTurn({ defaultModel, defaultBaseUrl, piInferenceTurn });
     const playbackCommand = ttsStream(config.playbackCommand || defaultPlaybackCommand());
-    const playImpl = (pcm) => {
-      // Half-duplex: mark the assistant as speaking for this clip's duration so the
-      // cascade mic suppresses + the level meter mutes while an agent plays, instead
-      // of capturing the agent's own voice as a phantom human turn (echo).
+    const playImpl = (pcm, participant, turn = {}) => {
       if (pcm && pcm.length) markAssistantSpeaking(audioDurationMs(pcm));
-      return playPcmBuffer(pcm, playbackCommand, (m, l) => ctx.ui.notify(m, l), config.debug);
+      const output = resolvedFastTts();
+      return withSpeechOutputRouting(outputBinding.routing, {
+        backend: output.backend, server: output.server, device: output.device,
+        pan: participant?.pan, signal: turn.signal, speechKind: "tts", streamName: "/tts",
+      }, (routed, state) => state.mode === "normal"
+        ? playPcmBuffer(pcm, playbackCommand, (m, l) => ctx.ui.notify(m, l), config.debug)
+        : cascadePcmPlayer.play(pcm, routed));
     };
     // Pipelined by default: synthesise each turn concurrently while playback stays
     // ordered, ~halving a multi-agent round. Opt out with pipeline=false / PI_CASCADE_PIPELINE=0.
     const pipelineRaw = String(values.pipeline ?? env("PI_CASCADE_PIPELINE") ?? "1").toLowerCase();
     const usePipeline = pipelineRaw !== "0" && pipelineRaw !== "false" && pipelineRaw !== "off";
-    // Cascade always uses the shared native Azure Speech REST path; the
-    // directAzureSpeech field is retained only as a compatibility receipt.
-    const cascadeSynthImpl = makeCascadeTtsSynth({ env: process.env, persisted: readPersistedTtsSettings() });
+    // Cascade shares native speech providers and the session's local route.
+    const cascadeSynthImpl = makeCascadeTtsSynth({ env: process.env, persisted: readPersistedTtsSettings(), routing: outputBinding.routing });
     const speakDeps = usePipeline
       ? { synth: makeCascadeSynth({ synthImpl: cascadeSynthImpl }), play: makeCascadePlay({ playImpl }) }
       : { speak: makeCascadeSpeak({ synthImpl: cascadeSynthImpl, playImpl }) };

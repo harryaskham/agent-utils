@@ -15,7 +15,7 @@
   ],
   "validation": {
     "focused": "36 daemon cancellation/panning/queue-policy contract tests passed against isolated HTTP servers, plus two released-PTT cancellation/shutdown regressions and the existing speech suites. Covers old/new capabilities, upgrade discovery, abort during lost admission, cancel_pending, cleanup timeout, token rotation, STT request IDs, generation cancellation and mono/local pan.",
-    "full_suite": "AG_TEST_BIN=$PWD/ag/target/debug/ag npm test: 1858 passed, 0 failed, 1 opt-in real-Pi smoke skipped. Declared npm dependencies installed locally; graphics path fixture now expects the canonical executable location; Darwin speech policy uses file-inode watches instead of blocking directory FSEvents.",
+    "full_suite": "AG_TEST_BIN=$PWD/ag/target/debug/ag PI_RUN_PULSE_ROUTING_SMOKE=1 npm test: 1879 passed, 0 failed, 1 opt-in real-Pi smoke skipped. Declared npm dependencies installed locally; graphics path fixture now expects the canonical executable location; Darwin speech policy uses file-inode watches instead of blocking directory FSEvents.",
     "rust": "30 ag tests passed; cargo clippy --locked --all-targets -- -D warnings and cargo fmt --check passed",
     "watcher_latency": "Darwin arm64, Node 26.8.1, 30 isolated withSpeechControl calls: p50 0.272 ms, p95 0.628 ms, max 1.192 ms, zero remaining observers (previous directory watcher close alone took 125–1905 ms)",
     "checks": "git diff --check and docs:check passed; workflow YAML check passed with actionlint unavailable",

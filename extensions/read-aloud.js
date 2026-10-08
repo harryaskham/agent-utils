@@ -8,6 +8,7 @@
 import { playTtsCommand } from "./lib/tts-command.js";
 import { ttsProviderDefaults, ttsSynthesisOptions, speechCredentialStatus, speechPan } from "./lib/tts-provider-config.js";
 import { createSpeechRequests } from "./lib/speech-requests.js";
+import { bindSpeechOutputRouting, withSpeechOutputRouting } from "./lib/speech-output-routing.js";
 import { normalizeTtsProvider, usesDaemonPlayback, playDaemonSpeech } from "./lib/tts.js";
 import { withSpeechControl } from "./lib/speech-control.js";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
@@ -244,6 +245,7 @@ export function createReadModeController({
   defer = queueMicrotask,
   persistedTts = {},
   persistedRead = {},
+  routing,
 } = {}) {
   let config = defaultReadConfig(env, persistedTts, persistedRead);
   const enabledFrom = env.PI_READ_ENABLED ?? persistedRead.enabled;
@@ -276,22 +278,22 @@ export function createReadModeController({
     clearDebounce();
     const effective = { ...config };
     let request;
-    try { request = requests.start(effective); }
+    try { routing?.assertPlayable(effective); request = requests.start(effective); }
     catch (error) { notify(ctx, error.message, "warning"); return false; }
     setStatus(ctx, `/read · synthesizing (${reason})`);
     try {
       const result = await withSpeechControl({ ...effective, speechKind: "read", signal: request.signal, env }, async (controlled) => {
         if (["command", "local"].includes(effective.provider)) {
           setStatus(ctx, `/read · speaking (${reason})`);
-          return playTtsCommand(body, controlled);
+          return withSpeechOutputRouting(routing, controlled, output => playTtsCommand(body, output));
         }
         const synthesisOptions = ttsSynthesisOptions(effective, { signal: controlled.signal, env });
-        if (usesDaemonPlayback(effective)) return playDaemonSpeech(body, synthesisOptions);
+        if (usesDaemonPlayback(effective)) { routing?.assertPlayable(effective); return playDaemonSpeech(body, synthesisOptions); }
         const pcm = await synthesize(body, synthesisOptions);
         if (controlled.signal.aborted) return { interrupted: true };
         markAssistantSpeaking(audioDurationMs(pcm));
         setStatus(ctx, `/read · speaking (${reason})`);
-        return player.play(pcm, {
+        return withSpeechOutputRouting(routing, {
           backend: effective.backend,
           server: effective.server,
           device: effective.device,
@@ -301,7 +303,7 @@ export function createReadModeController({
           speechControl: controlled.speechControl,
           signal: controlled.signal,
           env,
-        });
+        }, output => player.play(pcm, output));
       });
       if (request.signal.aborted) return false;
       if (request.isLatest()) setStatus(ctx, result?.muted ? "/read · muted" : "/read · on");
@@ -394,7 +396,9 @@ export function createReadModeController({
 
 export function createReadAloudExtension({ settingsPath, persistedTts, persistedRead } = {}) {
   return function readAloudExtension(pi) {
+  const outputBinding = bindSpeechOutputRouting(pi);
   const controller = createReadModeController({
+    routing: outputBinding.routing,
     persistedTts: persistedTts ?? readPersistedTtsSettings(settingsPath),
     persistedRead: persistedRead ?? readPersistedReadSettings(settingsPath),
   });
@@ -416,6 +420,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
     try { terminalInputUnsubscribe?.(); } catch {}
     terminalInputUnsubscribe = null;
     await controller.dispose(sessionCtx);
+    await outputBinding.release();
     sessionCtx = null;
   });
 

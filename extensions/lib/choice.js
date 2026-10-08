@@ -12,6 +12,7 @@ import { withSpeechControl } from "./speech-control.js";
 import { ChoiceAudioCache } from "./choice-audio-cache.js";
 import { ttsSynthesisOptions } from "./tts-provider-config.js";
 import { createSpeechRequests } from "./speech-requests.js";
+import { withSpeechOutputRouting } from "./speech-output-routing.js";
 import { isAzureSpeechProvider, usesDaemonPlayback, playDaemonSpeech } from "./tts.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./tts-identity.js";
 import {
@@ -191,6 +192,7 @@ export function createChoiceSpeaker({
   synthesize = synthesizeSpeechDirect,
   player = createInterruptiblePcmPlayer(),
   streamName = DEFAULT_CHOICE_STREAM_NAME,
+  routing,
 } = {}) {
   const shared = resolveAgentTtsSettings({ env, persisted }).config;
   const speechPolicy = resolveSessionSpeechPolicy(persisted, env);
@@ -202,13 +204,14 @@ export function createChoiceSpeaker({
   const speak = async (text) => {
     const body = String(text ?? "").trim();
     if (!body) return { skipped: true };
+    routing?.assertPlayable(shared);
     const request = requests.start({ ...shared, speechKind: "choices", streamName });
     const resolved = resolveSpeakToolParams({ text: body }, { env, persisted });
     try {
       return await withSpeechControl({ ...shared, speechKind: "choices", streamName, signal: request.signal, env }, async (controlled) => {
         if (["command", "local"].includes(shared.provider)) {
           // Local engines keep their configured voice, not an Azure identity.
-          return playTtsCommand(body, { ...controlled, pan: shared.pan !== undefined ? shared.pan : assignment?.pan });
+          return withSpeechOutputRouting(routing, { ...controlled, pan: shared.pan !== undefined ? shared.pan : assignment?.pan }, output => playTtsCommand(body, output));
         }
         const options = ttsSynthesisOptions(shared, {
           ...(isAzureSpeechProvider(shared.provider) ? {
@@ -221,7 +224,7 @@ export function createChoiceSpeaker({
           streamName, signal: controlled.signal, env,
         });
         // Server playback owns its queue; never cache/replay it as local audio.
-        if (usesDaemonPlayback(shared)) return playDaemonSpeech(body, options);
+        if (usesDaemonPlayback(shared)) { routing?.assertPlayable(shared); return playDaemonSpeech(body, options); }
         const key = JSON.stringify([body, options.provider, options.model, options.endpoint, options.daemonUrl, options.daemonProvider, options.voice, options.lang, options.speed, options.speakerProfileId, options.style, options.styleDegree, options.instructions, options.role, options.pitch, options.volume, controlled.speechControl.epoch]);
         // Even local daemon playback must consult current server mute policy;
         // replaying a cached clip would bypass the daemon entirely.
@@ -229,7 +232,7 @@ export function createChoiceSpeaker({
           ? await synthesize(body, options)
           : await audioCache.get(key, (signal) => withSpeechControl({ ...controlled, signal }, (cached) => synthesize(body, { ...options, signal: cached.signal })), controlled.signal);
         if (controlled.signal.aborted || !Buffer.isBuffer(pcm)) return { interrupted: true, ...(pcm?.muted ? { muted: true } : {}) };
-        return player.play(pcm, {
+        return withSpeechOutputRouting(routing, {
           backend: env.PI_TTS_BACKEND || env.PI_CASCADE_AUDIO_BACKEND || shared.backend || DEFAULT_TTS_BACKEND,
           server: env.PULSE_SERVER || shared.server,
           device: env.PULSE_SINK || shared.device || DEFAULT_TTS_DEVICE,
@@ -239,7 +242,7 @@ export function createChoiceSpeaker({
           signal: controlled.signal,
           pan: shared.pan !== undefined ? shared.pan : assignment?.pan,
           env,
-        });
+        }, output => player.play(pcm, output));
       });
     } catch (error) {
       if (request.signal.aborted || error?.name === "AbortError") return { interrupted: true, cancellation: error.cancellation, remotePending: error.remotePending };

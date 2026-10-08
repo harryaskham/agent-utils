@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "requirements": [
+    {"id":"ROUTE-FOCUS-1","contract":"/tts focus toggles session-wide output overlays without changing TTS/narrate enablement or normal settings. Solo takes priority, then focus, then normal. Only local Pulse output is eligible.","tests":["test/speech-output-routing.test.js"]},
+    {"id":"ROUTE-SHARED-1","contract":"Read, TTS, narration and choices share the same controller within one Pi bus, with no process-global focus flag or routing leaks to another session. Local native speech and Pulse-aware commands receive resolved options.","tests":["test/speech-output-routing.test.js"]},
+    {"id":"ROUTE-FOCUS-2","contract":"Missing focus sinks are created, existing ones reused; no focus sink is ever unloaded, including a solo sink promoted to focus.","tests":["test/speech-output-routing.test.js","test/pulse-routing-integration.test.js"]},
+    {"id":"ROUTE-SOLO-1","contract":"Solo derives a bounded Pulse-safe session ID and human display label. Only positively owned null-sink modules can be removed, after validating marker/module/sink identity and no active inputs. Borrowed sinks and reused IDs are never unloaded.","tests":["test/speech-output-routing.test.js","test/pulse-routing-integration.test.js"]},
+    {"id":"ROUTE-LEASE-1","contract":"Active/queued playback retains its route and holds solo cleanup until settlement. Mode changes affect new playback. Routing objects/secrets are not serialized into the machine queue. No normal startup runs pactl or restores temporary modes.","tests":["test/speech-output-routing.test.js"]},
+    {"id":"ROUTE-IO-1","contract":"Pactl uses bounded explicit argv, selected-server routing, safe nested property quoting and module-ID readback. Lost replies are reconciled; ambiguous mutations are not blindly retried. Production Pulse state is untouched by validation.","tests":["test/speech-output-routing.test.js","test/pulse-routing-integration.test.js"]}
+  ],
+  "limits": {"pactl_timeout_ms":5000,"pactl_output_bytes":1048576,"listing_records":10000,"sink_name_bytes":127,"pending_transitions":64,"owned_solo_allocations":1},
+  "validation": {
+    "focused": "20 routing/ownership/command/surface/queue tests passed; real Pulse integration passed independently and in three consecutive private-server reruns",
+    "full_suite": "AG_TEST_BIN=$PWD/ag/target/debug/ag PI_RUN_PULSE_ROUTING_SMOKE=1 npm test: 1879 passed, 0 failed, 1 opt-in real-Pi smoke skipped",
+    "checks": "git diff --check and npm run check passed (workflow YAML syntax only; actionlint unavailable)",
+    "native": "Isolated PulseAudio 17 server, private Unix socket, no hardware modules: real pactl creation/reuse/ownership/quoted-label/lease cleanup passed. Operator Pulse graph and settings were not changed.",
+    "rollout": "Source integration only. Modes require explicit commands; no live focus or solo activation performed."
+  }
+}

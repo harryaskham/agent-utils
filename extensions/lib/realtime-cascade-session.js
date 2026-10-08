@@ -232,7 +232,7 @@ export function makeCascadeSpeak({ synthImpl = synthesizeSpeechDirect, playImpl,
       speed: participant?.speed ?? speed,
     });
     if (pcm?.playRemote) await pcm.playRemote();
-    else if (pcm && pcm.length) await playImpl(pcm, participant);
+    else if (pcm && pcm.length) await playImpl(pcm, participant, turn);
   };
 }
 
@@ -262,7 +262,7 @@ export function makeCascadeSynth({ synthImpl = synthesizeSpeechDirect, speed } =
 
 /// Native synthesis returns PCM, or a deferred remote-playback intent for the
 /// ordered playback phase. Speech endpoints stay independent of chat base URLs.
-export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = {} } = {}) {
+export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = {}, routing } = {}) {
   return async (text, opts = {}) => {
     const shared = resolveAgentTtsSettings({ env, persisted }).config;
     const provider = normalizeTtsProvider(opts.provider ?? shared.provider);
@@ -282,9 +282,10 @@ export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = 
         for (const key of ["model", "speakerProfileId", "endpoint", "lang", "speed"]) if (opts[key] == null) delete resolved[key];
       }
     }
+    routing?.assertPlayable({ ...shared, ...resolved });
     if (usesDaemonPlayback(resolved)) {
       // Defer admission until the ordered playback phase, not speculative synth.
-      return { playRemote: () => playDaemonSpeech(text, resolved) };
+      return { playRemote: () => { routing?.assertPlayable({ ...shared, ...resolved }); return playDaemonSpeech(text, resolved); } };
     }
     return synthesizeSpeechDirect(text, resolved);
   };
@@ -295,8 +296,8 @@ export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = 
 /// makeCascadeSynth.
 export function makeCascadePlay({ playImpl } = {}) {
   if (typeof playImpl !== "function") throw new Error("makeCascadePlay requires a playImpl(pcm, participant) dep");
-  return async (participant, pcm) => {
+  return async (participant, pcm, turn = {}) => {
     if (pcm?.playRemote) await pcm.playRemote();
-    else if (pcm && pcm.length) await playImpl(pcm, participant);
+    else if (pcm && pcm.length) await playImpl(pcm, participant, turn);
   };
 }
