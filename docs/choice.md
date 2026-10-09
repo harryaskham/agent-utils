@@ -506,3 +506,149 @@ For a manual smoke test:
 ```text
 /choice Pick a mode | Fast | Thorough | Cancel
 ```
+
+## Async choices (`async_choice`)
+
+`interactive_choice` blocks the agent until the operator answers. `async_choice`
+is the non-blocking sibling: the agent posts questions, receives their IDs
+immediately and keeps working. Many questions can wait at once.
+
+| Tool | Purpose |
+| --- | --- |
+| `async_choice` | Post one `question` + `choices`, or a `questions` batch (up to 16). Optional `context` (shown under the question), `key` (caller correlation, echoed back) and `initialIndex` (recommended option). |
+| `async_choice_status` | Non-blocking status by ID or key (`ids`), optionally `pendingOnly`. |
+| `async_choice_cancel` | Withdraw obsolete questions by ID/key or `all`. Withdrawn questions are settled on every surface and no answer is injected. |
+
+Each question keeps the `interactive_choice` option shape (two to nine
+`{id?, label, headline?, summary?, value?}` rows), appended control rows from
+`agentUtils.choice.append`, freeform replies, speech, and the generic input bus.
+
+### Answering in Pi
+
+Posting shows a notification and a one-line widget above the editor,
+`◆ N questions waiting for you · ctrl+alt+q or /choices to answer`. Open the
+view with the shortcut or `/choices`; it never opens on its own, so posting
+does not steal focus from the editor.
+
+![Async choices view](assets/choices/async/async-sidebar.png)
+
+The left sidebar lists pending questions; the main panel is the same wrapped
+choice view as `interactive_choice`. Terminals narrower than 64 columns collapse
+the sidebar into a `‹ 2/5 ›` strip.
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓`, `j`/`k`, `Enter`, `1`–`9` | Navigate and answer the focused question |
+| `←`/`→`, `h`/`l`, click a sidebar row | Switch question |
+| `i` / `Space` | Freeform text / push-to-talk reply |
+| `x` twice, `Delete` twice | Dismiss without answering (the agent is told) |
+| `Esc`, `q`, `Ctrl-C` | Close the view; questions stay pending |
+| `v`, `f`, `Tab`, `PgUp`/`PgDn`, wheel | Same view controls as `interactive_choice` |
+
+Answering advances to the next pending question; the view closes when none
+remain. A blocking `interactive_choice` always takes the screen: it closes an
+open async view, and `/choices` refuses to open while one is active. While the
+view is open, force-choice does not interrupt it.
+
+Omni, ring and choice-owned PTT work unchanged. The view publishes one
+`agent-utils:choice-session` with `sessionId: "async-choices"` and
+`kind: "async"` (`started` on open, `updated` when focus changes, `ended` on
+close). Adapters emit `agent-utils:input-action` with that session ID and the
+focused question receives it; a device `cancel` closes the view.
+
+Without the TUI, `/choices` uses the typed RPC `select`/`input` dialogs, one
+question at a time with reply, skip and dismiss rows. UI-less modes list
+questions and accept `/choices answer <id|key> <option-number|text>` and
+`/choices dismiss <id|key>`. `/choices list` summarises the session.
+
+### Delivery to the agent
+
+Each settlement (answer, freeform reply, dismissal, remote decline, expiry or
+`/choice off`) is injected as an `agent-utils-async-choice` custom message with
+`deliverAs: "steer"` and `triggerTurn: true`: it arrives after the current
+tool calls when the agent is busy, and starts a turn when it is idle. Answers
+settled within 250 ms are batched into one message. The message names the ID,
+key, question and outcome, and `details.results` carries the structured
+`async_choice_status` shape. Agent withdrawals are never echoed back.
+
+Top-level statuses are `pending`, `answered`, `dismissed`, `withdrawn` and
+`expired`; `answer.status` keeps the precise `selected`/`freeform`/`action`/
+`cancelled`/`timeout` detail and the answering `source`.
+
+### Session durability
+
+Posts, Cacophony decision IDs and settlements are recorded as non-context
+`agent-utils-async-choice-state` entries on the current branch. After reload,
+restart or resume, pending questions are re-published to AHP and re-attached to
+their Cacophony decisions without refiling; an answer that was recorded but
+never reached the agent is delivered again. Shutdown stops polling but leaves
+Cacophony decisions pending, so an operator answer given while Pi is down still
+arrives in the next session.
+
+### AHP
+
+Paratenic's v1 bridge already supports many pending requests per input provider
+(bounded at 256). Agent Utils keeps **one** provider for both kinds of choice:
+its snapshot lists the active blocking choice plus every pending async
+question, each with its own opaque request ID (`choice-N` or `ac-…`), and
+completions route to exactly that record. An AHP `accept` answers; `decline` is
+reported to the agent as declined; settlement is published with the original
+command ID. No Paratenic change is needed.
+
+### Cacophony decisions
+
+`caco choices` allows one active choice per agent, so async questions mirror to
+the async operator decision queue (`caco decision`) instead:
+
+- each question is filed with its option labels, the recommended option,
+  and a context block carrying the agent context, option summaries and the
+  async ID; appended Pi control rows are not filed;
+- one bounded `caco decision list --status active --filer <agent>` per tick
+  finds settled decisions, which are then read with `show` (falling back to
+  per-ID reads if the daemon normalises the filer differently);
+- an operator resolution or freeform reply in Cacophony answers the Pi question
+  and settles AHP; a Cacophony discard is delivered to the agent as dismissed;
+- a Pi or AHP answer resolves the decision with `--selected-index` or
+  `--freeform-text`; withdrawal or dismissal uses `caco decision discard`.
+
+Decision discard and the `--notify-filer false` opt-out (which stops the daemon
+sending a second, answer-less wake DM when Pi already delivers the answer) are
+added by Cacophony bd-e1f306. With an older caco, Pi warns once and leaves a
+withdrawn decision pending rather than inventing an answer, and the agent may
+also receive the daemon's `decision_resolution` DM.
+
+### Settings
+
+```json
+{
+  "agentUtils": {
+    "choice": {
+      "async": {
+        "enabled": true,
+        "shortcut": "ctrl+alt+q",
+        "indicator": "widget",
+        "notifyOnPost": true,
+        "speakOnPost": false,
+        "timeoutMs": 0,
+        "maxPending": 32,
+        "cacophony": { "enabled": true, "pollMs": 3000, "notifyFiler": false }
+      }
+    }
+  }
+}
+```
+
+`indicator` is `widget`, `status`, `both` or `none`. `timeoutMs: 0` (the
+default) keeps questions until answered or withdrawn. `cacophony.enabled`
+defaults to the `interactive_choice` mirror setting. Environment overrides:
+`PI_ASYNC_CHOICE_ENABLED`, `PI_ASYNC_CHOICE_SHORTCUT`,
+`PI_ASYNC_CHOICE_INDICATOR`, `PI_ASYNC_CHOICE_NOTIFY`,
+`PI_ASYNC_CHOICE_SPEAK_ON_POST`, `PI_ASYNC_CHOICE_TIMEOUT_MS`,
+`PI_ASYNC_CHOICE_MAX_PENDING`, `PI_ASYNC_CHOICE_CACO_ENABLED`,
+`PI_ASYNC_CHOICE_CACO_POLL_MS` and `PI_ASYNC_CHOICE_CACO_NOTIFY_FILER`.
+`/choice off` withdraws pending async questions (telling the agent) and hides
+all choice tools; `/choice on` restores them.
+
+Pi does not expose extension mouse hooks for the editor or widgets, and
+fullscreen Pi consumes clicks for transcript selection, so the waiting
+indicator itself is not clickable; inside the open view, clicks work.

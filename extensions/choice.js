@@ -9,8 +9,15 @@ import { ChoiceView, choiceViewKey, choicePanelRows } from "./lib/choice-layout.
 import { createChoicePreferenceStore } from "./lib/choice-preferences.js";
 import { ToolSchema } from "./lib/tool-schema.js";
 import { createCacophonyChoiceBridge } from "./lib/cacophony-choice.js";
+import { createCacophonyDecisionBridge } from "./lib/cacophony-decision.js";
 import { createAhpChoiceProvider } from "./lib/ahp-choice.js";
 import { bindSpeechOutputRouting } from "./lib/speech-output-routing.js";
+import {
+  ASYNC_CHOICE_MESSAGE_TYPE,
+  ASYNC_CHOICE_TOOL_NAMES,
+  createAsyncChoiceController,
+  resolveAsyncChoiceSettings,
+} from "./lib/async-choice.js";
 import {
   INPUT_ACTION_EVENT,
   INPUT_ACTIONS,
@@ -91,6 +98,8 @@ export function resolveChoiceSettings(env, persisted = {}) {
     prefix: expandEnvReferences(env.PI_CHOICE_PREFIX ?? persisted.prefix ?? "", env, "/choice prefix"),
     suffix: expandEnvReferences(env.PI_CHOICE_SUFFIX ?? persisted.suffix ?? "", env, "/choice suffix"),
     append: normalizeChoiceAppendEntries(persisted.append),
+    asyncEnabled: boolSetting(env.PI_ASYNC_CHOICE_ENABLED, boolSetting(persisted.async?.enabled, true)),
+    async: resolveAsyncChoiceSettings(env, persisted.async || {}),
     repeat: {
       interval: Number.isFinite(repeatInterval) && repeatInterval > 0 ? repeatInterval : 300,
       limit: repeatLimit,
@@ -158,7 +167,7 @@ export function hasUnavailableForcedChoiceTail(entries) {
   return false;
 }
 
-export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, preferenceStore, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge, ahpBridge, preferenceStore, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   return function choiceExtension(pi) {
     const outputBinding = bindSpeechOutputRouting(pi, { env });
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
@@ -495,13 +504,17 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       return outcome;
     };
 
+    // Lazily bound below: the async controller is created after the provider
+    // factory, and both kinds of request share one AHP input provider.
+    let asyncChoices = null;
     const startAhpProvider = () => createAhpChoiceProvider({
       pi,
       env,
       bridge: ahpBridge,
       disabled: ahpBridge === false,
-      getActive: () => active,
+      listActive: () => [active, ...(asyncChoices?.pending?.() || [])],
       complete(command) {
+        if (asyncChoices?.completeAhp?.(command)) return;
         const record = active;
         if (!choiceConfig.enabled || !record || record.finished || command.requestId !== record.sessionId) return;
         const common = { source: "ahp", commandId: command.commandId, sessionId: record.sessionId };
@@ -519,6 +532,29 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
 
     if (choiceConfig.enabled) ahpProvider = startAhpProvider();
 
+    // Non-blocking async choices share settings, speech, append rows and input
+    // adapters with interactive_choice, but own many concurrent records.
+    const decisions = decisionBridge === false ? null : decisionBridge || createCacophonyDecisionBridge({
+      env,
+      persisted: persistedChoice.async?.cacophony || {},
+      syncPersisted: persistedChoice.cacophony || {},
+      setTimer,
+      clearTimer,
+    });
+    asyncChoices = createAsyncChoiceController({
+      pi,
+      env,
+      choiceConfig,
+      asyncConfig: choiceConfig.async,
+      getSpeaker: () => { if (choiceConfig.enabled) ensureSpeaker(); return speakerController; },
+      getAhp: () => ahpProvider,
+      decisionBridge: decisions,
+      isSyncActive: () => Boolean(active && !active.finished),
+      setTimer,
+      clearTimer,
+    });
+    const asyncEnabled = () => choiceConfig.enabled && choiceConfig.asyncEnabled;
+
     const eventInputHandler = (input) => { handleInput(input); };
     const choiceSyncRequestHandler = (request = {}) => {
       announceCapability(String(request?.requestId || "").trim() || undefined);
@@ -529,6 +565,10 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
     queueMicrotask(() => announceCapability());
     pi.registerMessageRenderer?.(FORCE_CHOICE_CUSTOM_TYPE, (message, _options, theme) => ({
       render: (width) => [theme.fg("dim", String(message.content || "").slice(0, width))],
+      invalidate() {},
+    }));
+    pi.registerMessageRenderer?.(ASYNC_CHOICE_MESSAGE_TYPE, (message, _options, theme) => ({
+      render: (width) => String(message.content || "").split("\n").map((line, index) => theme.fg(index === 0 ? "accent" : "text", line.slice(0, Math.max(0, width)))),
       invalidate() {},
     }));
 
@@ -556,6 +596,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       if (ctx?.mode === "tui") await loadViewPreference(ctx);
       if (!choiceConfig.enabled || generation !== enablementGeneration) return { status: "cancelled", reason: "disabled" };
       if (signal?.aborted) return { status: "cancelled", reason: "aborted" };
+      asyncChoices.yieldToSync();
       cancelActive();
       const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
       const sessionId = `choice-${nextSessionId++}`;
@@ -874,16 +915,26 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
         },
     };
     let toolRegistered = false;
+    let asyncToolsRegistered = false;
     let runtimeReady = false;
     const syncToolVisibility = () => {
       if (choiceConfig.enabled && !toolRegistered && typeof pi.registerTool === "function") {
         pi.registerTool(choiceTool);
         toolRegistered = true;
       }
-      if (!runtimeReady || !toolRegistered || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+      if (asyncEnabled() && !asyncToolsRegistered && typeof pi.registerTool === "function") {
+        for (const tool of asyncChoices.tools) pi.registerTool(tool);
+        asyncToolsRegistered = true;
+      }
+      if (!runtimeReady || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+      const wanted = new Map([
+        ...(toolRegistered ? [["interactive_choice", choiceConfig.enabled]] : []),
+        ...(asyncToolsRegistered ? ASYNC_CHOICE_TOOL_NAMES.map((name) => [name, asyncEnabled()]) : []),
+      ]);
       const current = pi.getActiveTools();
-      const present = current.includes("interactive_choice");
-      if (present !== choiceConfig.enabled) pi.setActiveTools(choiceConfig.enabled ? [...current, "interactive_choice"] : current.filter(name => name !== "interactive_choice"));
+      const next = current.filter((name) => !wanted.has(name) || wanted.get(name));
+      for (const [name, on] of wanted) if (on && !next.includes(name)) next.push(name);
+      if (next.length !== current.length || next.some((name, index) => name !== current[index])) pi.setActiveTools(next);
     };
     syncToolVisibility();
     const setChoiceEnabled = (enabled, ctx) => {
@@ -900,6 +951,10 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
         // Keep the optional bridge registration stable. With no active request
         // its snapshot is empty; only the model's callable tool set changes.
         cancelActive("disabled");
+        // Pending async questions can no longer be answered here; settle them
+        // everywhere and tell the agent rather than leaving it waiting.
+        asyncChoices.closeView("disabled");
+        asyncChoices.cancelAll("disabled");
         stopped = speakerController?.dispose?.(); speakerController = speaker || null;
       }
       syncToolVisibility();
@@ -930,7 +985,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${choiceConfig.enabled ? "on" : "off"} · ${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · append=${choiceConfig.append.length} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+          ctx.ui.notify(`choice:${choiceConfig.enabled ? "on" : "off"} · ${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · append=${choiceConfig.append.length} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd} · async=${asyncEnabled() ? `${asyncChoices.pending().length} pending` : "off"} · async-caco=${decisions?.config?.enabled ? "decisions" : "off"}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
@@ -1001,6 +1056,10 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       try { if (choiceConfig.enabled) ensureSpeaker(ctx); } catch {}
       syncToolVisibility();
       announceCapability();
+      // Rebuild pending async questions from this branch: re-publish them to
+      // AHP, re-attach Cacophony decisions, and deliver recorded-but-unseen answers.
+      if (asyncEnabled()) { try { asyncChoices.restore(ctx); } catch {} }
+      else asyncChoices.remember(ctx);
       if (!choiceConfig.enabled || !choiceConfig.forceAtAgentEnd) return;
       let entries = [];
       try { entries = ctx?.sessionManager?.getBranch?.() || ctx?.sessionManager?.getEntries?.() || []; }
@@ -1035,7 +1094,51 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       },
     });
 
+    pi.registerCommand("choices", {
+      description: "Answer async_choice questions. Usage: /choices [open [id]] | list | answer <id|key> <option-number|text> | dismiss <id|key>",
+      handler: async (args, ctx) => {
+        asyncChoices.remember(ctx);
+        const raw = String(args || "").trim();
+        const [verb = "open", target = "", ...rest] = raw.split(/\s+/).filter(Boolean);
+        const action = verb.toLowerCase();
+        if (!asyncEnabled()) { ctx.ui.notify("async choices are off (/choice on, agentUtils.choice.async.enabled)", "warning"); return; }
+        if (action === "open") { asyncChoices.openView(ctx, { focusId: target || undefined }); return; }
+        if (action === "list" || action === "status") {
+          const all = asyncChoices.records();
+          const waiting = asyncChoices.pending();
+          const lines = all.slice(-20).map((record) => `${record.finished ? "·" : "◆"} ${record.id}${record.key ? ` [${record.key}]` : ""} ${record.status}: ${record.question}`);
+          ctx.ui.notify(lines.length ? `${waiting.length} waiting of ${all.length}\n${lines.join("\n")}` : "No async questions in this session.", "info");
+          return;
+        }
+        if (action === "answer") {
+          const outcome = asyncChoices.answer(target, rest.join(" "));
+          ctx.ui.notify(outcome.ok ? `answered ${outcome.record.id}` : `/choices answer: ${outcome.error}`, outcome.ok ? "info" : "warning");
+          return;
+        }
+        if (action === "dismiss") {
+          ctx.ui.notify(asyncChoices.dismiss(target) ? `dismissed ${target}` : `/choices dismiss: no pending question ${target}`, "info");
+          return;
+        }
+        ctx.ui.notify("Usage: /choices [open [id]] | list | answer <id|key> <option-number|text> | dismiss <id|key>", "warning");
+      },
+    });
+    if (choiceConfig.async.shortcut && typeof pi.registerShortcut === "function") {
+      try {
+        pi.registerShortcut(choiceConfig.async.shortcut, {
+          description: "Open waiting async_choice questions",
+          handler: async (ctx) => {
+            asyncChoices.remember(ctx);
+            if (asyncEnabled()) asyncChoices.openView(ctx);
+          },
+        });
+      } catch {}
+    }
+
     pi.on("agent_end", (_event, ctx) => {
+      asyncChoices.remember(ctx);
+      // The operator is answering async questions; do not pull them out of that
+      // view into a forced blocking choice.
+      if (asyncChoices.viewOpen) return;
       if (!choiceConfig.enabled || !choiceConfig.forceAtAgentEnd || active) return;
       if (forcedRequestOutstanding) {
         if (!warnedUnsatisfiedForce) {
@@ -1071,6 +1174,9 @@ export function createChoiceExtension({ speaker, cacophonyBridge, ahpBridge, pre
       try { pi.events?.off?.(INPUT_ACTION_EVENT, eventInputHandler); } catch {}
       try { pi.events?.off?.(CHOICE_SYNC_REQUEST_EVENT, choiceSyncRequestHandler); } catch {}
       try { ahpProvider?.dispose?.(); } catch {}
+      // Keep remote Cacophony decisions pending: a reload re-attaches them and a
+      // later operator answer still reaches the next session.
+      try { asyncChoices.dispose(); } catch {}
       try { await speakerController?.dispose?.(); } catch {}
       await outputBinding.release();
       await viewPreferences.flush?.();
