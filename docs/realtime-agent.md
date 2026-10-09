@@ -269,7 +269,7 @@ Tuning knobs (all optional; env overrides the matching `agentUtils.stt` value):
 | `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` | `1000` | trailing silence (ms) that inserts a provisional partial |
 | `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS` | `3000` | trailing silence (ms) that finalizes/sends the turn |
 | `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS` | `200` | minimum speech (ms) before a turn can insert/commit |
-| `PI_RT_STT_SHORTCUTS_ENABLED` | `1` | empty-editor Space starts PTT; Ctrl-Space toggles local VAD (`0` disables both) |
+| `PI_RT_STT_SHORTCUTS_ENABLED` | `1` | Ctrl-Space toggles local PTT from Pi's editor (`0` disables the shortcut; `/ptt` still works) |
 
 ```json
 {
@@ -419,7 +419,7 @@ the whole raw hold on release. Even the longer per-segment commit silence does
 **not** send. Instead segments accumulate and the whole turn is controlled by a
 key when you finish:
 
-- **`Enter` / `Space`** — send the accumulated turn now (the editor's text, honoring
+- **`Ctrl-Space` / `Enter` / `Space`** — send the accumulated turn now (the editor's text, honoring
   any edits), then clear the editor.
 - **`Esc`** — early exit (bd-4daaf5): finalize the accrued transcript **into the
   editor without sending**. The text stays there, fully editable; press `Enter` to
@@ -428,11 +428,11 @@ key when you finish:
 - `/ptt stop` preserves the accumulated transcript in the editor and ends the mode;
   `/ptt cancel` discards it.
 
-When the editor is empty, pressing **Space** starts `/ptt` directly; ordinary
-Space remains untouched when the editor already contains text. **Ctrl-Space**
-starts or stops always-listening `/stt` (terminals deliver this chord as NUL).
-Set `PI_RT_STT_SHORTCUTS_ENABLED=0` to disable both global shortcuts. Full
-Realtime mode never starts from these shortcuts.
+**Tap Ctrl-Space to start PTT; tap it again to finish and send.** This uses Pi's registered editor shortcut, not a focus-blind raw capture hook. Dialogs/selectors keep their own keys. Bare Space never starts capture. Legacy NUL and Kitty Ctrl-Space are supported; Kitty repeat/release events are ignored. Use taps rather than holding the chord (legacy terminals cannot distinguish auto-repeat from another press).
+
+Set `agentUtils.stt.shortcutsEnabled=false` or `PI_RT_STT_SHORTCUTS_ENABLED=0` to disable the shortcut; `/ptt` remains available. Ctrl-Space does not switch providers, change acoustic settings, start full Realtime, or take over an already active VAD/Realtime/cascade mode. Stop that mode first. If macOS intercepts Ctrl-Space for input-source switching, change the OS binding so the chord reaches the terminal.
+
+Validation: `python3 scripts/ptt-shortcut-pty.py` starts an isolated real Pi with fake capture/transcription; it verifies both key encodings, dialog isolation, repeat/release behavior, send/preserve/cancel and cleanup without microphones or provider calls.
 
 Because partials mirror into the editor throughout (see bd-0c008d above), you can
 edit at any point; a manual edit is never clobbered by a later partial, and whatever

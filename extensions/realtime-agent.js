@@ -80,6 +80,7 @@
 
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { isKeyRelease, isKeyRepeat } from "@earendil-works/pi-tui";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { isAssistantSpeaking, markAssistantSpeaking } from "./lib/half-duplex-state.js";
@@ -315,7 +316,7 @@ const REALTIME_AUDIO_MODES = new Set(["on", "off", "toggle"]);
 const REALTIME_WIDGET_MODES = new Set(["show", "hide", "on", "off"]);
 const REALTIME_STATUS_MODES = new Set(["compact", "full"]);
 const REALTIME_LISTEN_MODES = new Set(["vad", "ptt", "continuous"]);
-const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|local-vad-ptt|quickfile|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt commentary [thinking|text|hidden], /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false commentary=thinking speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). `/stt` defaults to local-vad with mai-transcribe-2; `/ptt` is its hold-mode alias. Full Realtime transcription requires explicit `/rt stt ...`. Defaults: backend=pulse, server=sgu24:4713, listen=vad on Realtime start.";
+const REALTIME_USAGE = "Usage: /rt start [vad|ptt|nolisten], /rt stop, /rt mic [vad|ptt|off], /rt listen [vad|ptt|continuous], /rt audio [on|off|toggle], /rt stt [vad|ptt|local-vad|local-vad-ptt|quickfile|stop], /rt widget [show|hide], /rt status [compact|full], /rt doctor, /rt voice <voice>, /rt trans <model>, /rt speed <0.25..1.5>, /rt thresh <0..1>, /rt backend <backend>, /rt reasoning <effort>, /rt commentary [thinking|text|hidden], /rt summary [true|false], /rt chime [true|false]. Env-style args are also supported: /rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=... trans=gpt-realtime-whisper speed=1.1 thresh=0.85 energy=0.05 summary=true fork=true chime=false commentary=thinking speak_replies=on speak_thinking=off start=vad model=gpt-realtime-2 azure=true endpoint=<url> deployment=gpt-realtime-2 api_version=none protocol=v1. The model/azure/endpoint/deployment/api_version/protocol keys set the realtime connection at runtime instead of env vars; azure=true does a direct-Azure GA connect to the preset gpt-realtime-2 canadacentral deployment (api key from PI_RT_AZURE_API_KEY, never typed in chat) and applies on the next /rt start. speak_replies=on auto-speaks the REAL agent's replies aloud (pair with stt local-vad for a full voiced-agent loop); speak_thinking=on additionally voices reasoning summaries. local-vad is a websocket-free local capture + batch-stt mode tuned via PI_RT_LOCAL_VAD_* (energy=<0..1> raises/lowers its mic sensitivity live; higher = less sensitive). `/stt` defaults to local-vad with mai-transcribe-2; `/ptt` is its hold-mode alias. Tap Ctrl-Space in the editor to start PTT, then again to finish and send; bare Space never starts capture. Full Realtime transcription requires explicit `/rt stt ...`. Defaults: backend=pulse, server=sgu24:4713, listen=vad on Realtime start.";
 // TOOL_OUTPUT_CAP/truncateToolOutput live in ./lib/realtime-helpers.js;
 // REALTIME_CONTEXT_WINDOW_TOKENS and the summary caps live in
 // ./lib/realtime-summary.js (extracted in bd-e1914a).
@@ -2891,6 +2892,12 @@ export default function realtimeAgentExtension(pi) {
   };
   pi.events?.on?.("agent-utils:choice-session", choiceSessionHandler);
   const speechInputState = new SpeechInputStateMachine();
+  let pttShortcutBusy = false;
+  let pttShortcutNonPress = false;
+  let speechSessionClosed = false;
+  let blockingPromptDepth = 0;
+  pi.on("ui_prompt_start", () => { blockingPromptDepth++; });
+  pi.on("ui_prompt_end", () => { blockingPromptDepth = Math.max(0, blockingPromptDepth - 1); });
   const resolvedFastTts = () => {
     const persisted = readPersistedTtsSettings();
     return {
@@ -2958,34 +2965,11 @@ export default function realtimeAgentExtension(pi) {
 
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = ctx.ui.onTerminalInput?.((data) => {
-      // Custom choice UI is the sole owner of its keys. Raw terminal listeners
-      // are focus-blind and must not steal Space/Enter/Escape/Ctrl-C.
-      if (activeChoiceSessionId) return undefined;
-      if (!session.mic) {
-        // bd-586f58: editor speech shortcuts are local-only. Empty-editor Space
-        // starts PTT; Ctrl-Space (NUL in terminals) toggles always-listening VAD.
-        // Full Realtime never starts from a keystroke and remains behind /rt.
-        if (localVad.active) {
-          if (!localVad.hold) {
-            speechInputState.transition(SPEECH_INPUT_MODES.VAD);
-            const action = speechInputState.terminalAction(data, {
-              shortcutsEnabled: localSttShortcutsEnabled(),
-            });
-            if (action.action === "stop-vad") {
-              stopLocalVad();
-              return { consume: true };
-            }
-          }
-          // PTT release keys are owned by the hold-mode handler installed by
-          // startLocalVad, after this always-present shortcut handler.
-          return undefined;
-        }
-        // Pi currently exposes no safe focus predicate for raw terminal hooks.
-        // Starting PTT/VAD from Space here steals keys from MCP selectors and
-        // overlays. Use explicit /ptt or /stt in the normal editor; choice-owned
-        // PTT is granted separately through the semantic input bus.
-        return undefined;
-      }
+      // Observe event type only. The registered Ctrl-Space shortcut runs from
+      // Pi's focused editor, never from this focus-blind raw input callback.
+      pttShortcutNonPress = isKeyRepeat(data) || isKeyRelease(data);
+      if (activeChoiceSessionId || blockingPromptDepth) return undefined;
+      if (!session.mic) return undefined;
       speechInputState.transition(SPEECH_INPUT_MODES.REALTIME);
       // While a Realtime mic is active, make common keys act like PTT release.
       // Ctrl-C cancels/discards. Enter, Space, and Escape commit/stop.
@@ -3053,6 +3037,7 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.on("session_shutdown", async () => {
+    speechSessionClosed = true;
     config.autoReconnect = false;
     try { pi.events?.off?.(INPUT_ACTION_EVENT, choiceFreeformInputHandler); } catch {}
     try { pi.events?.off?.("agent-utils:choice-session", choiceSessionHandler); } catch {}
@@ -3194,6 +3179,8 @@ export default function realtimeAgentExtension(pi) {
   // inserting provisional partials and sending committed turns to Pi. Built on
   // the unit-tested LocalVadController + transcribePcmBuffer; validated
   // end-to-end by the operator on mic/Pulse.
+  let localVadGeneration = 0;
+  let localPttFinishing = null;
   const localVad = { active: false, capture: null, controller: null, cfg: null, model: null, lastError: null, lastTranscript: null, warnedError: false, startedAt: 0, hold: false, quickfile: false, freeformSessionId: null, freeformDelivery: null, freeformCommitting: false, releaseUnsub: null, pttIndicator: null, clearPttIndicator: null, meter: null, inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 };
 
   // Live-tunable local-vad energy threshold (parallel to /rt thresh= for server
@@ -3228,6 +3215,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   function stopLocalVad({ flush = true, cancel = false } = {}) {
+    localVadGeneration++;
     const wasActive = localVad.active;
     localVad.active = false;
     localVad.hold = false;
@@ -3256,10 +3244,29 @@ export default function realtimeAgentExtension(pi) {
     return wasActive;
   }
 
-  async function startLocalVad(ctx, { hold = false, quickfile = false, freeformSessionId = null } = {}) {
-    // Free the mic: stop any active WSS realtime session and any prior local-vad.
-    try { await controls.disable(ctx, { restoreModel: true }); } catch {}
+  async function finishLocalPtt(ctx) {
+    if (!localVad.active || !localVad.hold || localVad.freeformSessionId || localPttFinishing) return;
+    const ctrl = localVad.controller;
+    // One finish path for Ctrl-Space and Enter/Space: stop capture without a
+    // second flush, then commit the same complete held audio exactly once.
+    stopLocalVad({ flush: false });
+    const pending = Promise.resolve().then(() => ctrl?.commitHeld());
+    localPttFinishing = pending;
+    try { await pending; }
+    catch (error) { localVad.lastError = error?.message || String(error); }
+    finally {
+      if (localPttFinishing === pending) localPttFinishing = null;
+      if (!speechSessionClosed) { try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {} }
+    }
+  }
+
+  async function startLocalVad(ctx, { hold = false, quickfile = false, freeformSessionId = null, shortcut = false } = {}) {
+    // Invalidate pending starts before awaiting teardown. Cancel/shutdown during
+    // that await must not allow a late microphone to appear afterward.
     stopLocalVad({ flush: false, cancel: true });
+    const generation = localVadGeneration;
+    try { await controls.disable(ctx, { restoreModel: true }); } catch {}
+    if (speechSessionClosed || generation !== localVadGeneration || (shortcut && (activeChoiceSessionId || blockingPromptDepth))) return false;
 
     const persistedStt = readPersistedSttSettings();
     const cfg = parseLocalVadConfig(process.env, persistedStt);
@@ -3310,7 +3317,7 @@ export default function realtimeAgentExtension(pi) {
           }
           return;
         }
-        const line = state === "listening" ? "🎤 listening…" : state === "transcribing" ? "✍️ transcribing…" : state === "held" ? "⏸️ held — release (Enter/Space/Esc) to send" : null;
+        const line = state === "listening" ? "🎤 listening…" : state === "transcribing" ? "✍️ transcribing…" : state === "held" ? "⏸️ held — Ctrl-Space/Enter sends; Esc keeps draft" : null;
         if (line) { try { ctx.ui.setWidget("realtime-status", [`local-vad ~ ${line}`], { placement: "belowEditor" }); } catch {} }
         // bd-081267: drive the color-coded state indicator. 'held' (a finalized
         // segment in hold mode) flashes yellow (chunk complete); listening/
@@ -3384,7 +3391,7 @@ export default function realtimeAgentExtension(pi) {
     const cmd = rtStream(config.recordCommand || defaultRecordCommand());
     let capture;
     try { capture = localVadRunShellStream(cmd); }
-    catch (e) { ctx.ui.notify(`local-vad capture failed: ${e.message}`, "error"); return false; }
+    catch (e) { stopLocalVad({ flush: false, cancel: true }); ctx.ui.notify(`local-vad capture failed: ${e.message}`, "error"); return false; }
 
     Object.assign(localVad, { controller, capture, active: true });
     speechInputState.transition(hold ? SPEECH_INPUT_MODES.PTT : SPEECH_INPUT_MODES.VAD);
@@ -3424,13 +3431,14 @@ export default function realtimeAgentExtension(pi) {
     // PTT-hold wiring (bd-9e06ae): while held, VAD segments + transcribes
     // incrementally (drafts render live, just like normal VAD) but a per-segment
     // silence 'commit' accumulates instead of sending. A release key (Enter /
-    // Space / Esc) finalizes + sends the whole accumulated turn ONCE; Ctrl-C
-    // discards it. Registered only in hold mode; the WSS-mic PTT handler in
-    // session_start is inert here (it keys off session.mic, which we never set).
+    // Space) finalizes + sends the whole accumulated turn ONCE; Esc preserves
+    // the draft and Ctrl-C discards it. Ctrl-Space uses the editor shortcut.
+    // Registered only in hold mode; the WSS-mic PTT handler in session_start
+    // is inert here (it keys off session.mic, which we never set).
     if (hold) {
       try { localVad.releaseUnsub?.(); } catch {}
       localVad.releaseUnsub = ctx.ui.onTerminalInput?.((data) => {
-        if (!localVad.active || !localVad.hold) return undefined;
+        if (!localVad.active || !localVad.hold || activeChoiceSessionId || blockingPromptDepth || isKeyRelease(data) || isKeyRepeat(data)) return undefined;
         speechInputState.transition(SPEECH_INPUT_MODES.PTT);
         const action = speechInputState.terminalAction(data);
         if (!action.consume) return undefined;
@@ -3442,13 +3450,7 @@ export default function realtimeAgentExtension(pi) {
           return { consume: true };
         }
         if (action.action === "commit-send") {
-          const ctrl = localVad.controller;
-          // Stop capture first (no more frames), then commitHeld flushes the
-          // already-buffered audio and sends the whole turn once. stopLocalVad
-          // must NOT also flush, or the last segment would send twice.
-          stopLocalVad({ flush: false });
-          ctrl?.commitHeld().catch((e) => { localVad.lastError = e?.message || String(e); });
-          try { ctx.ui.setWidget("realtime-status", [localVadStatusLine()], { placement: "belowEditor" }); } catch {}
+          void finishLocalPtt(ctx);
           return { consume: true };
         }
         if (action.action === "preserve") {
@@ -3469,7 +3471,7 @@ export default function realtimeAgentExtension(pi) {
       quickfile
         ? `local-vad quickfile (${describeLocalVadConfig(cfg)}); speak ideas — each utterance files a caco DRAFT bead for triage; /stt stop to end.`
         : hold
-        ? `local-vad PTT (${describeLocalVadConfig(cfg)}); speak, then Enter/Space to send, Esc to keep in editor for editing, Ctrl-C to cancel; /ptt stop to preserve and end.`
+        ? `local-vad PTT (${describeLocalVadConfig(cfg)}); speak, then Ctrl-Space/Enter/Space to send, Esc to keep in editor for editing, Ctrl-C to cancel; /ptt stop to preserve and end.`
         : `local-vad listening (${describeLocalVadConfig(cfg)}); /stt stop to end.`,
       "info",
     );
@@ -4247,8 +4249,25 @@ export default function realtimeAgentExtension(pi) {
     handler: async (args, ctx) => handleLocalSpeechCommand(args, ctx, { defaultHold: false, commandName: "/stt" }),
   });
 
+  pi.registerShortcut?.("ctrl+space", {
+    description: "Toggle local PTT: start recording, then finish and send (editor only)",
+    handler: async (ctx) => {
+      if (speechSessionClosed || pttShortcutBusy || pttShortcutNonPress || !localSttShortcutsEnabled() || activeChoiceSessionId || blockingPromptDepth) return;
+      if (localPttFinishing || (!localVad.active && batchSttRequests.size > 0)) return;
+      if (session.connected || session.connecting || session.mic || cascade.active || (localVad.active && !localVad.hold)) {
+        ctx.ui.notify("Stop the active voice mode before starting PTT with Ctrl-Space.", "info");
+        return;
+      }
+      pttShortcutBusy = true;
+      try {
+        if (localVad.active && localVad.hold) await finishLocalPtt(ctx);
+        else await startLocalVad(ctx, { hold: true, shortcut: true });
+      } finally { pttShortcutBusy = false; }
+    },
+  });
+
   pi.registerCommand("ptt", {
-    description: "Local-VAD push-to-talk. VAD updates the editor while held; Space/Enter sends, Escape preserves, Ctrl-C cancels.",
+    description: "Local-VAD push-to-talk (Ctrl-Space toggles from the editor). VAD updates the draft; Ctrl-Space/Enter/Space sends, Escape preserves, Ctrl-C cancels.",
     handler: async (args, ctx) => handleLocalSpeechCommand(args, ctx, { defaultHold: true, commandName: "/ptt" }),
   });
 

@@ -16,20 +16,18 @@ test("editor speech state machine validates and reports explicit modes", () => {
   assert.throws(() => state.transition("mystery"), /unsupported speech input mode/);
 });
 
-test("idle Space starts PTT only for an empty editor and enabled shortcuts", () => {
+test("idle Space and Ctrl-Space never start capture from a focus-blind listener", () => {
   const state = new SpeechInputStateMachine();
-  assert.deepEqual(state.terminalAction(" ", { editorEmpty: true }), { action: "start-ptt", consume: true });
-  assert.deepEqual(state.terminalAction(" ", { editorEmpty: false }), { action: "pass", consume: false });
-  assert.deepEqual(state.terminalAction(" ", { editorEmpty: true, shortcutsEnabled: false }), { action: "pass", consume: false });
+  for (const key of [" ", "\u0000", "\x1b[32;5u"]) {
+    assert.deepEqual(state.terminalAction(key, { editorEmpty: true }), { action: "pass", consume: false });
+  }
 });
 
-test("Ctrl-Space toggles always-listening VAD without affecting Realtime", () => {
-  const state = new SpeechInputStateMachine();
-  assert.deepEqual(state.terminalAction("\u0000", { editorEmpty: true }), { action: "start-vad", consume: true });
-  state.transition(SPEECH_INPUT_MODES.VAD);
-  assert.deepEqual(state.terminalAction("\u0000"), { action: "stop-vad", consume: true });
-  state.transition(SPEECH_INPUT_MODES.REALTIME);
-  assert.deepEqual(state.terminalAction("\u0000"), { action: "pass", consume: false });
+test("Ctrl-Space reaches the registered shortcut instead of raw VAD/Realtime control", () => {
+  for (const mode of Object.values(SPEECH_INPUT_MODES)) {
+    const state = new SpeechInputStateMachine(mode);
+    for (const key of ["\u0000", "\x1b[32;5u"]) assert.deepEqual(state.terminalAction(key), { action: "pass", consume: false });
+  }
 });
 
 test("PTT release keys map to send, preserve, and cancel actions", () => {

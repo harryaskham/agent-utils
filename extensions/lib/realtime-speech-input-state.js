@@ -32,17 +32,10 @@ export class SpeechInputStateMachine {
     return { mode: this.mode };
   }
 
-  // Return a semantic action plus whether Pi should consume the terminal input.
-  // Ctrl-Space is delivered by terminals as NUL ("\0").
-  terminalAction(data, { editorEmpty = false, shortcutsEnabled = true } = {}) {
+  // Raw input only releases an already-active PTT hold. Starting/toggling PTT
+  // belongs to Pi's editor-scoped registerShortcut("ctrl+space") path.
+  terminalAction(data) {
     const key = String(data ?? "");
-
-    if (this.mode === SPEECH_INPUT_MODES.IDLE) {
-      if (!shortcutsEnabled) return { action: "pass", consume: false };
-      if (key === " " && editorEmpty) return { action: "start-ptt", consume: true };
-      if (key === "\u0000") return { action: "start-vad", consume: true };
-      return { action: "pass", consume: false };
-    }
 
     if (this.mode === SPEECH_INPUT_MODES.PTT) {
       if (key === "\u0003") return { action: "cancel", consume: true };
@@ -51,13 +44,8 @@ export class SpeechInputStateMachine {
       return { action: "pass", consume: false };
     }
 
-    if (this.mode === SPEECH_INPUT_MODES.VAD) {
-      if (shortcutsEnabled && key === "\u0000") return { action: "stop-vad", consume: true };
-      return { action: "pass", consume: false };
-    }
-
-    // Full Realtime remains controlled exclusively by /rt. Its existing mic
-    // handler owns release/cancel keys; editor-speech shortcuts must pass through.
+    // Idle/VAD must never consume raw Space/Ctrl-Space. Full Realtime remains
+    // exclusively controlled by /rt and its own release/cancel handler.
     return { action: "pass", consume: false };
   }
 }

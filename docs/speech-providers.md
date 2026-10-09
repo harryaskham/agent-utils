@@ -12,7 +12,7 @@ Agent Utils supports `provider=azure`, `provider=openai`, `provider=daemon`, and
 /ptt provider=daemon daemon_url=helsinki
 ```
 
-`/narrate` shares `/tts`'s speech configuration. Its `model=` still selects the **summary LLM**; use `tts_model=` for the speech model. Choices inherit startup `agentUtils.tts` / `PI_TTS_*` settings. `/stt` and `/ptt` share settings with choice freeform PTT and cascade microphone input.
+`/narrate` shares `/tts`'s speech configuration. Its `model=` still selects the **summary LLM**; use `tts_model=` for the speech model. Choices inherit startup `agentUtils.tts` / `PI_TTS_*` settings. `/stt` and `/ptt` share settings with choice freeform PTT and cascade microphone input. Ctrl-Space toggles `/ptt` from Pi's editor (first press starts, second finishes/sends), without changing the provider or model.
 
 TTS defaults to `http://helsinki:7633`; STT to `http://helsinki:7634`. Explicit HTTP(S) URLs, proxy path prefixes and bare `host[:port]` are supported. These clients do not parse the CLI's YAML or support its Unix-socket transport. Set the URL in Agent Utils settings or environment when it differs. HTTP sends the bearer token in plaintext: use the trusted Tailnet or HTTPS termination. Redirects and credential-bearing URLs are refused.
 

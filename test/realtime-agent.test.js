@@ -175,6 +175,7 @@ test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
 
 function makeHarness({ models = new Map(), initialModel } = {}) {
   const commands = new Map();
+  const shortcuts = new Map();
   const tools = new Map();
   const handlers = new Map();
   const providers = new Map();
@@ -219,6 +220,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
 
   const pi = {
     registerCommand(name, definition) { commands.set(name, definition); },
+    registerShortcut(key, definition) { shortcuts.set(key, definition); },
     getCommand(name) { return commands.get(name); },
     registerMessageRenderer() {},
     sendMessage(message, options) { sentMessages.push({ message, options }); },
@@ -252,7 +254,7 @@ function makeHarness({ models = new Map(), initialModel } = {}) {
     return { cancelled: false };
   };
 
-  return { pi, commands, tools, handlers, providers, widgets, statuses, notifications, editorText, editorTextSets, sendTerminalInput, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
+  return { pi, commands, shortcuts, tools, handlers, providers, widgets, statuses, notifications, editorText, editorTextSets, sendTerminalInput, setModelCalls, forkCalls, emittedEvents, sentMessages, sentUserMessages, ctx, get reloadCount() { return reloadCount; } };
 }
 
 test("env-style realtime args parse quoted key/value pairs", () => {
@@ -1910,7 +1912,7 @@ test("/stt and /rt-stt default to local VAD + mai-transcribe-2 without opening R
   }
 });
 
-test("raw Space/Ctrl-Space never start capture; explicit /ptt and /stt own editor speech", async () => {
+test("raw Space/Ctrl-Space never start capture; registered shortcut and commands own editor speech", async () => {
   const captures = [];
   const captureFn = () => {
     const proc = new EventEmitter();
@@ -1950,6 +1952,81 @@ test("raw Space/Ctrl-Space never start capture; explicit /ptt and /stt own edito
     if (previous === undefined) delete process.env.PI_RT_STT_SHORTCUTS_ENABLED;
     else process.env.PI_RT_STT_SHORTCUTS_ENABLED = previous;
     __setLocalVadHooksForTest({});
+  }
+});
+
+test("Ctrl-Space starts and finishes the same PTT pipeline exactly once without changing providers", async () => {
+  const captures = [], transcriptions = [];
+  const before = Object.fromEntries(["PI_STT_PROVIDER", "PI_RT_LOCAL_VAD_MODEL", "PI_STT_ENDPOINT", "OPENAI_BASE_URL", "AZURE_EASTUS_ENDPOINT"].map(key => [key, process.env[key]]));
+  __setLocalVadHooksForTest({
+    capture: () => {
+      const capture = new EventEmitter(); capture.stdout = new EventEmitter(); capture.stderr = new EventEmitter(); capture.kill = () => { capture.killed = true; };
+      captures.push(capture); return capture;
+    },
+    transcribe: async (audio, options) => { transcriptions.push({ bytes: audio.length, provider: options.provider, model: options.model }); return "shortcut transcript"; },
+  });
+  const h = makeHarness();
+  try {
+    realtimeAgentExtension(h.pi); h.handlers.get("session_start")?.({}, h.ctx);
+    assert.deepEqual([...h.shortcuts.keys()], ["ctrl+space"]);
+    const toggle = () => h.shortcuts.get("ctrl+space").handler(h.ctx);
+    const starting = toggle(); await toggle(); await starting;
+    assert.equal(captures.length, 1, "overlapping shortcut invocations cannot open two microphones");
+    captures[0].stdout.emit("data", Buffer.alloc(24000, 1));
+    h.sendTerminalInput("\x1b[32;5:2u"); await toggle();
+    h.sendTerminalInput("\x1b[32;5:3u"); await toggle();
+    assert.equal(captures[0].killed, undefined, "Kitty repeats/releases do not finish the hold");
+    h.sendTerminalInput("\x1b[32;5u");
+    const finishing = toggle(); await toggle(); await finishing;
+    assert.equal(captures[0].killed, true);
+    assert.equal(transcriptions.length, 1);
+    assert.equal(transcriptions[0].bytes, 24000);
+    assert.deepEqual(h.sentUserMessages.map(m => m.content), ["shortcut transcript"]);
+    assert.deepEqual(Object.fromEntries(Object.keys(before).map(key => [key, process.env[key]])), before);
+    assert.equal(h.setModelCalls.length, 0, "no realtime model switch");
+  } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
+});
+
+test("Ctrl-Space respects disabled shortcuts, active voice modes and blocking prompts", async () => {
+  let captures = 0;
+  __setLocalVadHooksForTest({ capture: () => { captures++; const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => {}; return p; }, transcribe: async () => "fixture" });
+  const prior = process.env.PI_RT_STT_SHORTCUTS_ENABLED;
+  const h = makeHarness();
+  try {
+    realtimeAgentExtension(h.pi); h.handlers.get("session_start")?.({}, h.ctx);
+    const toggle = () => h.shortcuts.get("ctrl+space").handler(h.ctx);
+    process.env.PI_RT_STT_SHORTCUTS_ENABLED = "0"; await toggle(); assert.equal(captures, 0);
+    process.env.PI_RT_STT_SHORTCUTS_ENABLED = "1";
+    h.handlers.get("ui_prompt_start")?.({}, h.ctx); await toggle(); assert.equal(captures, 0);
+    h.handlers.get("ui_prompt_end")?.({}, h.ctx);
+    h.pi.events.emit("agent-utils:choice-session", { status: "started", sessionId: "modal" });
+    await toggle(); assert.equal(captures, 0);
+    h.pi.events.emit("agent-utils:choice-session", { status: "ended", sessionId: "modal" });
+    await h.commands.get("stt").handler("", h.ctx);
+    assert.equal(captures, 1);
+    await toggle(); assert.equal(captures, 1);
+    assert.match(h.notifications.at(-1).message, /Stop the active voice mode/);
+    await h.commands.get("stt").handler("cancel", h.ctx);
+    await h.handlers.get("session_shutdown")?.({}, h.ctx);
+    await toggle(); assert.equal(captures, 1, "stale shortcut cannot reopen capture after shutdown");
+  } finally {
+    if (prior === undefined) delete process.env.PI_RT_STT_SHORTCUTS_ENABLED; else process.env.PI_RT_STT_SHORTCUTS_ENABLED = prior;
+    await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({});
+  }
+});
+
+test("a pending Ctrl-Space start cannot survive cancellation or session shutdown", async () => {
+  for (const action of ["cancel", "shutdown"]) {
+    let captures = 0;
+    __setLocalVadHooksForTest({ capture: () => { captures++; throw new Error("must not start"); } });
+    const h = makeHarness();
+    try {
+      realtimeAgentExtension(h.pi); h.handlers.get("session_start")?.({}, h.ctx);
+      const start = h.shortcuts.get("ctrl+space").handler(h.ctx);
+      if (action === "cancel") await h.commands.get("stt").handler("cancel", h.ctx);
+      else await h.handlers.get("session_shutdown")?.({}, h.ctx);
+      await start; assert.equal(captures, 0);
+    } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
   }
 });
 

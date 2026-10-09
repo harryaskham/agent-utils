@@ -11,7 +11,7 @@
   "limits": {"pactl_timeout_ms":5000,"pactl_output_bytes":1048576,"listing_records":10000,"sink_name_bytes":127,"pending_transitions":64,"owned_solo_allocations":1},
   "validation": {
     "focused": "20 routing/ownership/command/surface/queue tests passed; real Pulse integration passed independently and in three consecutive private-server reruns",
-    "full_suite": "AG_TEST_BIN=$PWD/ag/target/debug/ag PI_RUN_PULSE_ROUTING_SMOKE=1 npm test: 1879 passed, 0 failed, 1 opt-in real-Pi smoke skipped",
+    "full_suite": "AG_TEST_BIN=$PWD/ag/target/debug/ag PI_RUN_PULSE_ROUTING_SMOKE=1 npm test: 1895 passed, 0 failed, 1 opt-in real-Pi smoke skipped",
     "checks": "git diff --check and npm run check passed (workflow YAML syntax only; actionlint unavailable)",
     "native": "Isolated PulseAudio 17 server, private Unix socket, no hardware modules: real pactl creation/reuse/ownership/quoted-label/lease cleanup passed. Operator Pulse graph and settings were not changed.",
     "rollout": "Source integration only. Modes require explicit commands; no live focus or solo activation performed."
