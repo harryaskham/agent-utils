@@ -12,7 +12,7 @@ AHP remains authoritative for distributed session, chat, elicitation, terminal, 
 
 The current `interactive_choice` path supports one AHP `single-select` question with optional freeform input. Agent Utils publishes stable lifecycle snapshots on `pi.events`; the Paratenic extension maps them to backend protocol input events and AHP `chat/input*` plus session `inputNeeded`. AHP responses return through the same semantic input bus as keyboard, Omni, ring, and Cacophony.
 
-`async_choice` adds many concurrent pending requests through the same provider: the snapshot lists the active blocking choice plus every pending async question, each with its own opaque request ID, and completions route to the exact record. Paratenic's v1 bridge already bounds and routes many requests per provider, so no bridge change was required. See [async choices](choice.md#async-choices-async_choice).
+`async_choice` adds many concurrent pending requests through the same provider: the snapshot lists the active blocking choice plus every pending async question, each with its own opaque request ID, and completions route to the exact record. Paratenic's v1 JavaScript bridge already bounds and routes many requests per provider, but live testing exposed a separate host lifecycle defect (Paratenic bd-05a533): native source snapshots could erase catalogue input-needed status, while requests and completions were tied to the active turn. The host must preserve runtime-owned requests across idle/reconnect/later turns and keep its session queue and catalogue consistent; bridge registration alone is not end-to-end conformance. See [async choices](choice.md#async-choices-async_choice).
 
 Missing AHP question features:
 
