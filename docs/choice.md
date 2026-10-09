@@ -593,7 +593,24 @@ its snapshot lists the active blocking choice plus every pending async
 question, each with its own opaque request ID (`choice-N` or `ac-…`), and
 completions route to exactly that record. An AHP `accept` answers; `decline` is
 reported to the agent as declined; settlement is published with the original
-command ID. No Paratenic change is needed.
+command ID.
+
+This requires host-side lifecycle support, not just bridge registration.
+Older Paratenic hosts tied inputs to the active transcript turn and rebuilt
+catalogue status from chat activity alone. A request could reach
+`session.inputNeeded` but lose the catalogue's `InputNeeded` flag after a
+native source snapshot; Culture then correctly refused it with
+`session is absent from the fresh input-needed catalogue`. Idle replay and
+completion after later turns also failed. This affects blocking choices as
+well as async ones.
+
+The Paratenic fix ([PR #343](https://github.com/harryaskham/paratenic/pull/343),
+**bd-05a533**) keeps unbound provider requests in
+the independent session queue until explicit resolution or authoritative
+snapshot removal, preserves input-needed catalogue status, and routes replies
+by the exact request ID even at idle. Updating Agent Utils alone cannot fix an
+older running host. The earlier claim that no Paratenic changes were needed
+covered the JavaScript bridge's multi-request API, not its host lifecycle.
 
 ### Cacophony decisions
 
