@@ -2115,6 +2115,19 @@ export function createFullCanvas({
 
   function onFrameGfx(frame, renderer) {
     const started = performance.now();
+    // colours that arrived after gfx-core was made (the terminal's
+    // background answered late, a theme loaded): make it again, once
+    if (!state.gfxRebuilding && started - (state.gfxThemeChecked || 0) > 1000) {
+      state.gfxThemeChecked = started;
+      let key = "";
+      try { key = JSON.stringify(gfxTheme()); } catch {}
+      if (key && state.gfxThemeKey && key !== state.gfxThemeKey) {
+        trace(`gfx-core colours changed: ${state.gfxThemeKey} -> ${key}`);
+        state.gfxThemeKey = key;
+        onGeometry({ reason: "theme" });
+        return {};
+      }
+    }
     // dialogs mark their rows (gfx-core draws them raised glass)
     ensureOverlayTap(renderer);
     const { rows, cols } = state.virt;
@@ -2155,6 +2168,8 @@ export function createFullCanvas({
     const started = performance.now();
     if (!state.active) return {};
     if (state.gfx) return onFrameGfx(frame, renderer);
+    // gfx-core being made again (new size or colours): nothing in between
+    if (state.gfxRebuilding) return { replace: "" };
     ensureOverlayTap(renderer);
     try { semanticTick(); } catch {}
     const rows = state.virt.rows; const cols = state.virt.cols;
@@ -2290,14 +2305,31 @@ export function createFullCanvas({
     return out;
   }
 
+  /** The colours gfx-core is made with (Pi's theme on the terminal's background). */
+  function gfxTheme() {
+    const t = resolveTheme();
+    const hex = (rgb) => `#${rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")}`;
+    return { fg: hex(t.fg), bg: hex(t.bg), accent: hex(t.accent), accent2: hex(t.accent2) };
+  }
+
+  /** The terminal's own background (OSC 11), once: transparent themes take it. */
+  async function learnTerminalBackground(tui, timeoutMs = 300) {
+    if (state.termBg || state.edgeColorSet) return;
+    try {
+      const bg = await tui.queryTerminalBackgroundColor?.({ timeoutMs });
+      if (bg && typeof bg === "object") state.termBg = [bg.r, bg.g, bg.b].map((v) => (v > 255 ? v >> 8 : v));
+    } catch {}
+  }
+
   /** gfx-core for the terminal's current grid and the padding setting. */
   async function createGfx() {
     const geometry = realGeometry();
     const pad = Math.max(0, Math.round(Number(cfg().padding) || 0));
-    // Pi's theme (as the TypeScript renderer uses it), not gfx-core's own
-    const t = state.theme || resolveTheme();
-    const hex = (rgb) => `#${rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")}`;
-    const theme = t ? { fg: hex(t.fg), bg: hex(t.bg), accent: hex(t.accent), accent2: hex(t.accent2) } : null;
+    // Pi's theme (as the TypeScript renderer uses it), not gfx-core's own:
+    // resolved now (the terminal's background may have been learnt since)
+    const theme = gfxTheme();
+    state.gfxThemeKey = JSON.stringify(theme);
+    state.gfxGrid = `${geometry.cols}x${geometry.rows}@${geometry.cellW}x${geometry.cellH}`;
     return createGfxCoreEngine({
       wasmPath: findGfxWasm(cfg().gfxWasm),
       font: state.fonts?.resolved?.default?.path || "",
@@ -2348,6 +2380,8 @@ export function createFullCanvas({
     state.terminalName = terminalName || envName.trim() || "unknown";
     state.notes = [];
     buildFonts();
+    // the terminal's background first: gfx-core takes its colours when made
+    await learnTerminalBackground(tui);
     state.gfx = null;
     if (/^gfx/.test(String(cfg().renderer || "")) && !inMultiplexer()) {
       try {
@@ -2360,10 +2394,7 @@ export function createFullCanvas({
     } else if (/^gfx/.test(String(cfg().renderer || ""))) {
       state.notes.push("renderer gfx: not inside multiplexers yet, using typescript");
     }
-    try {
-      const bg = await tui.queryTerminalBackgroundColor?.({ timeoutMs: 150 });
-      if (bg && typeof bg === "object" && !state.edgeColorSet) state.termBg = [bg.r, bg.g, bg.b].map((v) => (v > 255 ? v >> 8 : v));
-    } catch {}
+    if (!state.termBg) await learnTerminalBackground(tui, 150);
     resolveTheme();
     const terminal = tui.terminal;
     state.terminal = terminal;
@@ -2497,17 +2528,26 @@ export function createFullCanvas({
     if (!state.active) return;
     trace(`full canvas geometry change ${JSON.stringify(geometry)}`);
     if (state.gfx) {
-      // gfx-core is made for one grid: a new one for the new grid (it was
-      // dropped here before, leaving the TypeScript renderer)
+      // gfx-core is made for one grid: a new one for a new grid (it was
+      // dropped here before, leaving the TypeScript renderer). A late reply
+      // that only confirms the grid (start-up probes) changes nothing.
+      const g = realGeometry();
+      if (geometry?.reason !== "theme" && `${g.cols}x${g.rows}@${g.cellW}x${g.cellH}` === state.gfxGrid) {
+        try { getTui()?.requestRender?.(true); } catch {}
+        return;
+      }
       const out = freeEverything();
       write(`${BSU}${out}\x1b[2J${ESU}`);
+      state.gfxRebuilding = true;
       void createGfx().then((engine) => {
+        state.gfxRebuilding = false;
         if (!state.active) { try { engine.drop(); } catch {} return; }
         state.gfx = engine;
         computeVirtual();
         try { getTui()?.invalidate?.(); } catch {}
         try { getTui()?.requestRender?.(true); } catch {}
       }).catch((error) => {
+        state.gfxRebuilding = false;
         trace(`gfx-core rebuild failed: ${error.message}`);
         buildFonts(); computeVirtual();
         try { getTui()?.requestRender?.(true); } catch {}
