@@ -177,10 +177,12 @@ export function parseAnsiLine(line, width, { palette16 = BASE16 } = {}) {
         const semi = body.indexOf(";");
         const controls = Object.fromEntries((semi < 0 ? body.slice(1) : body.slice(1, semi)).split(",").filter(Boolean).map((kv) => kv.split("=")));
         if (controls.a === "T" || controls.a === "p") image = { col, controls, payload: semi < 0 ? "" : body.slice(semi + 1) };
-        else if (image && controls.m !== undefined) image.payload += semi < 0 ? "" : body.slice(semi + 1);
-      } else if (next === "_" && body.startsWith("G") && image && /(?:^|,)m=/.test(body)) {
+      } else if (next === "_" && body.startsWith("G") && image) {
+        // the image's further chunks (`G m=1;…`, the last `m=0`): the whole
+        // payload (a 4 KB first chunk alone is a truncated PNG)
         const semi = body.indexOf(";");
-        image.payload += semi < 0 ? "" : body.slice(semi + 1);
+        const keys = semi < 0 ? body.slice(1) : body.slice(1, semi);
+        if (/(?:^|,)m=/.test(keys)) image.payload += semi < 0 ? "" : body.slice(semi + 1);
       }
       i = end + termLen;
     } else {

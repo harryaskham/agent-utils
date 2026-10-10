@@ -36,6 +36,7 @@ import { decodePng, drawScaledImage } from "./png-decode.js";
 import { addRadialGlow, encodeRgbaPng } from "../png-renderer.js";
 import { blendMask } from "./raster.js";
 import { createGfxCoreEngine, findGfxWasm, toGfxFrame } from "./gfx-core-engine.js";
+import { gfxshEffects, loadGfxshSettings } from "./gfx-settings.js";
 import { BACKGROUND_PALETTES, BACKGROUND_SCALE, autoBackground, mixRgb, renderActivityTint, renderBackground, renderCaret, renderEditorGlow, renderEditorSurface, renderGrainTile, renderImpulse, renderPaneBeacon, renderPaneFlash, renderScanlines, renderShimmer, renderVignette } from "./effects.js";
 
 const BSU = "\x1b[?2026h";
@@ -70,6 +71,10 @@ export const FULL_CANVAS_DEFAULTS = Object.freeze({
   zoom: 1,
   lineHeight: 1.3,
   padding: 2, // px around the grid; terminals like Ghostty add their own padding
+  // renderer=gfx: how far the editor card's border sits out from the
+  // editor's text, cells (1: the outer edge of Pi's rule rows; 0.5: through
+  // their middle, where the editor chips are)
+  editorPadding: 0.5,
   fonts: {},
   resolution: 1, // supersample factor (2 = HiDPI cell-box placement)
   gamma: 1.35,
@@ -234,6 +239,8 @@ export function createFullCanvas({
     gfx: null,
     gfxLast: null,
     gfxCursor: "",
+    // renderer=gfx: Pi's inline images, forwarded as our own placements
+    gfxImages: { byKey: new Map(), placed: new Map() },
   };
   function freshBackground() {
     return { key: "", ring: [], frames: 0, period: 1, phase: 0, speed: 1, lastTick: 0, index: -1, placed: null, bw: 0, bh: 0, tint: { cache: new Map(), level: 0, activity: "idle", placed: null, key: "" } };
@@ -298,8 +305,13 @@ export function createFullCanvas({
     const real = realGeometry();
     state.real = real;
     if (state.gfx) {
-      // gfx-core draws on the terminal's own grid with a one-cell gutter
-      state.virt = { cols: Math.max(20, real.cols - 2), rows: real.rows, padX: real.cellW, padY: 0, marginX: 0 };
+      // gfx-core lays the text out on the terminal's cells inside the
+      // padding (as gfxsh does): its grid, and where it starts
+      let area = null;
+      try { area = state.gfx.area(); } catch {}
+      state.virt = area
+        ? { cols: Math.max(20, area.cols), rows: Math.max(6, area.rows), padX: area.ox, padY: area.oy, marginX: 0 }
+        : { cols: Math.max(20, real.cols - 2), rows: real.rows, padX: real.cellW, padY: 0, marginX: 0 };
       return state.virt;
     }
     const fonts = state.fonts;
@@ -315,24 +327,17 @@ export function createFullCanvas({
     return state.virt;
   }
 
-  /** The few settings both renderers understand, as gfx-core effects. */
+  /**
+   * gfx-core's effects in Pi: gfxsh's own settings (your gfxsh config, so
+   * both look alike) with Pi's overrides on top (piGraphics.full.gfx, set
+   * in /gfx full settings). The TypeScript renderer's settings don't apply.
+   */
   function gfxEffects() {
     const c = cfg();
-    const background = backgroundChoice().type;
-    const known = ["aurora", "nebula", "waves", "grid", "stars", "plasma", "bokeh", "synthwave", "rain", "fireflies", "static", "none"];
-    const carets = ["bloom", "beam", "block", "underline", "outline", "halo", "orb", "comet", "prism", "pulse", "ember", "plasma", "off"];
     const overrides = c.gfx && typeof c.gfx === "object" && !Array.isArray(c.gfx) ? c.gfx : {};
-    return {
-      background: known.includes(background) ? background : "aurora",
-      caret: carets.includes(c.caretStyle) ? c.caretStyle : "bloom",
-      caret_bloom: Number(c.caretBloom) || 1,
-      vignette: Number(c.vignette) || 0,
-      scanlines: Number(c.scanlines) || 0,
-      grain: Number(c.grain) || 0,
-      text_shadow: Number(c.textShadow) || 0,
-      text_glow: Number(c.textGlow) || 0,
-      ...overrides,
-    };
+    let inherited = {};
+    try { inherited = gfxshEffects(loadGfxshSettings()); } catch {}
+    return { ...inherited, ...overrides };
   }
 
   function buildFonts() {
@@ -1390,8 +1395,9 @@ export function createFullCanvas({
       // gfx-core: re-render the last frame; it only emits what changed
       // (animations), so idle ticks write nothing.
       try {
+        state.gfxLast.heat = Math.max(0, Math.min(1, Number(getHeat()) || 0));
         const out = state.gfx.frame(state.gfxLast);
-        if (out) write(`${BSU}${out}${state.gfxCursor || ""}${ESU}`);
+        if (out) write(`${BSU}${out}${state.gfxCursor || ""}\x1b[?25l${ESU}`);
       } catch (error) {
         trace(`gfx-core tick failed: ${error.message}`);
       }
@@ -2051,28 +2057,98 @@ export function createFullCanvas({
     return panels;
   }
 
+  /** A text cell (virtual grid) on the terminal: cell and pixel offset. */
+  function gfxCellAt(row, col) {
+    const { cellW, cellH } = state.real;
+    const px = state.virt.padX + col * cellW; const py = state.virt.padY + row * cellH;
+    return { row: Math.floor(py / cellH), col: Math.floor(px / cellW), X: px % cellW, Y: py % cellH };
+  }
+
+  // Above every gfx-core layer (its base is -1 000 000).
+  const GFX_IMAGE_Z = -999_000;
+
+  /**
+   * Pi's inline images (an agent's screenshot, a tool's picture) on the
+   * gfx-core canvas: Pi's own lines are not written in this mode, so each
+   * image is sent under our id and placed at its cell (re-placed as it
+   * scrolls, removed when it leaves the screen).
+   */
+  function gfxImageCommands(images) {
+    const st = state.gfxImages;
+    let out = "";
+    const live = new Set();
+    for (const im of images) {
+      const ctl = im.controls || {};
+      const key = ctl.i !== undefined ? `i${ctl.i}` : im.payload ? `h${im.payload.length}:${im.payload.slice(0, 48)}:${im.payload.slice(-48)}` : "";
+      if (!key) continue;
+      let rec = st.byKey.get(key);
+      if (!rec && im.payload) { rec = { id: allocateImageId(`gfx-image:${key}`), sent: false }; st.byKey.set(key, rec); }
+      if (!rec) continue; // placed before we saw its data
+      if (!rec.sent && im.payload) {
+        const head = { a: "t", f: Number(ctl.f) || 100, i: rec.id, q: 2, ...(ctl.s ? { s: ctl.s } : {}), ...(ctl.v ? { v: ctl.v } : {}), ...(ctl.o ? { o: ctl.o } : {}) };
+        for (let offset = 0; offset < im.payload.length; offset += CHUNK) {
+          const more = offset + CHUNK < im.payload.length ? 1 : 0;
+          out += serialize(offset === 0 ? { ...head, m: more } : { m: more }, im.payload.slice(offset, offset + CHUNK));
+        }
+        state.ownedImages.add(rec.id);
+        state.stats.uploads += 1;
+        state.stats.uploadBytes += im.payload.length;
+        rec.sent = true;
+      }
+      const at = gfxCellAt(im.row, im.col);
+      const cols = Number(ctl.c) || 0; const rows = Number(ctl.r) || 0;
+      const sig = `${at.row},${at.col},${at.X},${at.Y},${cols},${rows}`;
+      live.add(key);
+      if (st.placed.get(key) === sig) continue;
+      st.placed.set(key, sig);
+      const place = { a: "p", i: rec.id, p: 1, C: 1, q: 2, z: GFX_IMAGE_Z, ...(cols ? { c: cols } : {}), ...(rows ? { r: rows } : {}), ...(at.X ? { X: at.X } : {}), ...(at.Y ? { Y: at.Y } : {}) };
+      out += `\x1b7\x1b[${at.row + 1};${at.col + 1}H${serialize(place)}\x1b8`;
+    }
+    for (const key of [...st.placed.keys()]) {
+      if (live.has(key)) continue;
+      const rec = st.byKey.get(key);
+      if (rec) out += serialize({ a: "d", d: "i", i: rec.id, p: 1, q: 2 });
+      st.placed.delete(key);
+    }
+    return out;
+  }
+
   function onFrameGfx(frame, renderer) {
     const started = performance.now();
+    // dialogs mark their rows (gfx-core draws them raised glass)
+    ensureOverlayTap(renderer);
     const { rows, cols } = state.virt;
     const screen = Array.isArray(renderer?.previousScreen) ? renderer.previousScreen : [];
     const parsed = [];
-    for (let r = 0; r < rows; r += 1) parsed.push({ cells: parsedRow(screen[r] ?? "").cells });
+    const images = [];
+    for (let r = 0; r < rows; r += 1) {
+      const row = parsedRow(screen[r] ?? "");
+      parsed.push({ cells: row.cells, overlay: row.overlay || null });
+      if (row.image && (row.image.controls.a === "T" || row.image.controls.a === "p")) images.push({ row: r, ...row.image });
+      else if (process.env.PI_GRAPHICS_TRACE_IMAGES && /\x1b_G/.test(screen[r] ?? "")) trace(`gfx image line ${r} not parsed: ${JSON.stringify(String(screen[r]).slice(0, 160))}`);
+    }
+    if (process.env.PI_GRAPHICS_TRACE_IMAGES && images.length) trace(`gfx images ${JSON.stringify(images.map((im) => ({ row: im.row, col: im.col, controls: im.controls, bytes: im.payload?.length || 0 })))}`);
     const regions = getRegions(renderer) || {};
     const cursor = frame.cursor && frame.cursor.row < rows && frame.cursor.col < cols ? frame.cursor : null;
     let out = "";
     try {
-      state.gfxLast = toGfxFrame(parsed, { cursor, editor: regions.editor || null });
+      state.gfxLast = toGfxFrame(parsed, { cursor, editor: regions.editor || null, editorPadding: cfg().editorPadding });
+      state.gfxLast.heat = Math.max(0, Math.min(1, Number(getHeat()) || 0));
       out = state.gfx.frame(state.gfxLast);
     } catch (error) {
       trace(`gfx-core frame failed: ${error.message}`);
     }
+    out += gfxImageCommands(images);
     state.stats.frames += 1;
     state.stats.lastFrameMs = performance.now() - started;
-    const realCursor = cursor ? `\x1b[${cursor.row + 1};${cursor.col + 2}H` : "";
+    // the terminal's own cursor stays hidden (gfx-core draws the caret);
+    // parked on the caret's cell for IMEs
+    const at = cursor ? gfxCellAt(cursor.row, cursor.col) : null;
+    const realCursor = at ? `\x1b[${at.row + 1};${at.col + 1}H` : "";
     state.gfxCursor = realCursor;
     // keep the effects animating (gfx-core decides what changes)
     wake();
-    return { replace: out ? `${BSU}${out}${realCursor}\x1b[?25l${ESU}` : realCursor };
+    return { replace: `${BSU}${out}${realCursor}\x1b[?25l${ESU}` };
   }
 
   function onFrame(frame, { renderer }) {
@@ -2169,8 +2245,11 @@ export function createFullCanvas({
     const match = SGR_MOUSE_RE.exec(data);
     if (!match) return undefined;
     if (state.gfx) {
-      const col = Math.max(1, Math.min(state.virt.cols, Number(match[2]) - 1));
-      return `\x1b[<${match[1]};${col};${match[3]}${match[4]}`;
+      // terminal cell → the text grid inside the padding
+      const px = (Number(match[2]) - 0.5) * state.real.cellW; const py = (Number(match[3]) - 0.5) * state.real.cellH;
+      const col = Math.max(1, Math.min(state.virt.cols, Math.floor((px - state.virt.padX) / state.real.cellW) + 1));
+      const row = Math.max(1, Math.min(state.virt.rows, Math.floor((py - state.virt.padY) / state.real.cellH) + 1));
+      return `\x1b[<${match[1]};${col};${row}${match[4]}`;
     }
     let px; let py;
     if (state.pixelMouse) { px = Number(match[2]) - 1; py = Number(match[3]) - 1; }
@@ -2189,6 +2268,7 @@ export function createFullCanvas({
     }
     for (const id of state.ownedImages) out += serialize({ a: "d", d: "I", i: id, q: 2 });
     state.ownedImages.clear();
+    state.gfxImages = { byKey: new Map(), placed: new Map() };
     state.stripCache.clear();
     state.parseCache.clear();
     state.slots.clear();
@@ -2208,6 +2288,27 @@ export function createFullCanvas({
     state.typed = [];
     for (const block of state.stream.blocks.values()) { block.hold = null; block.runs = []; }
     return out;
+  }
+
+  /** gfx-core for the terminal's current grid and the padding setting. */
+  async function createGfx() {
+    const geometry = realGeometry();
+    const pad = Math.max(0, Math.round(Number(cfg().padding) || 0));
+    // Pi's theme (as the TypeScript renderer uses it), not gfx-core's own
+    const t = state.theme || resolveTheme();
+    const hex = (rgb) => `#${rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")}`;
+    const theme = t ? { fg: hex(t.fg), bg: hex(t.bg), accent: hex(t.accent), accent2: hex(t.accent2) } : null;
+    return createGfxCoreEngine({
+      wasmPath: findGfxWasm(cfg().gfxWasm),
+      font: state.fonts?.resolved?.default?.path || "",
+      cols: geometry.cols,
+      rows: geometry.rows,
+      cell: [geometry.cellW, geometry.cellH],
+      gutter: 1,
+      padding: [pad, pad, pad, pad],
+      effects: gfxEffects(),
+      theme,
+    });
   }
 
   async function start(options = {}) {
@@ -2250,16 +2351,7 @@ export function createFullCanvas({
     state.gfx = null;
     if (/^gfx/.test(String(cfg().renderer || "")) && !inMultiplexer()) {
       try {
-        const geometry = realGeometry();
-        state.gfx = await createGfxCoreEngine({
-          wasmPath: findGfxWasm(cfg().gfxWasm),
-          font: state.fonts?.resolved?.default?.path || "",
-          cols: geometry.cols,
-          rows: geometry.rows,
-          cell: [geometry.cellW, geometry.cellH],
-          gutter: 1,
-          effects: gfxEffects(),
-        });
+        state.gfx = await createGfx();
         state.notes.push("renderer: gfx-core (WebAssembly)");
       } catch (error) {
         state.gfx = null;
@@ -2404,6 +2496,24 @@ export function createFullCanvas({
   function onGeometry(geometry) {
     if (!state.active) return;
     trace(`full canvas geometry change ${JSON.stringify(geometry)}`);
+    if (state.gfx) {
+      // gfx-core is made for one grid: a new one for the new grid (it was
+      // dropped here before, leaving the TypeScript renderer)
+      const out = freeEverything();
+      write(`${BSU}${out}\x1b[2J${ESU}`);
+      void createGfx().then((engine) => {
+        if (!state.active) { try { engine.drop(); } catch {} return; }
+        state.gfx = engine;
+        computeVirtual();
+        try { getTui()?.invalidate?.(); } catch {}
+        try { getTui()?.requestRender?.(true); } catch {}
+      }).catch((error) => {
+        trace(`gfx-core rebuild failed: ${error.message}`);
+        buildFonts(); computeVirtual();
+        try { getTui()?.requestRender?.(true); } catch {}
+      });
+      return;
+    }
     const out = freeEverything();
     buildFonts();
     computeVirtual();
@@ -2415,6 +2525,11 @@ export function createFullCanvas({
   function setTheme() {
     if (!state.active) return;
     resolveTheme();
+    if (state.gfx) {
+      // gfx-core takes its theme when made: a new one in the new colours
+      onGeometry({ reason: "theme" });
+      return;
+    }
     write(edgeBlendCommand());
     state.background.key = "";
     state.stripCache.clear();
@@ -2434,6 +2549,8 @@ export function createFullCanvas({
       terminal: state.terminalName || null,
       notes: state.notes || [],
       renderer: state.gfx ? "gfx" : "typescript",
+      gfxEffects: state.gfx ? gfxEffects() : null,
+      gfxArea: state.gfx ? (() => { try { return state.gfx.area(); } catch { return null; } })() : null,
       gfx: state.gfx ? state.gfx.stats() : null,
       grid: gridAligned() ? "aligned" : "free",
       tmux: tmuxMode() ? { ...state.tmux, timer: undefined } : null,

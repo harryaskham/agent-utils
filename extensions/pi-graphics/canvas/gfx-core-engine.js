@@ -98,7 +98,7 @@ function systemImports(memory) {
  * Load gfx-core and make a renderer for a cols × rows grid of cell × pixels.
  * @returns {Promise<{frame(frame): string, clear(): string, stats(): object, drop(): void}>}
  */
-export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gutter = 1, effects = {}, theme = null }) {
+export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gutter = 1, padding = null, effects = {}, theme = null }) {
   if (!wasmPath) throw new Error("gfx-core (gfx_wasm.wasm) not found: install gfxsh or set gfxWasm / $PI_GFX_WASM");
   let instance = null;
   const system = systemImports(() => instance.exports.memory);
@@ -124,7 +124,7 @@ export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gu
     .map((p) => readFileSync(p));
   if (!files.length) throw new Error("gfx-core: no font file found");
   const joined = Buffer.concat(files);
-  const config = { cols, rows, cell, gutter, effects, fonts: files.map((f) => f.length), ...(theme ? { theme } : {}) };
+  const config = { cols, rows, cell, gutter, effects, fonts: files.map((f) => f.length), ...(theme ? { theme } : {}), ...(padding ? { padding } : {}) };
   const [cfgPtr, cfgLen] = put(JSON.stringify(config));
   const [fontPtr, fontLen] = put(joined);
   const handle = guard(() => x.gfx_new(cfgPtr, cfgLen, fontPtr, fontLen));
@@ -151,6 +151,11 @@ export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gu
     stats() {
       try { return JSON.parse(out(x.gfx_stats(handle))); } catch { return {}; }
     },
+    /** The text grid ({ox, oy, cols, rows, view}): inside the padding. */
+    area() {
+      if (!x.gfx_area) return { ox: cell[0] * gutter, oy: 0, cols: Math.max(1, cols - gutter * 2), rows, view: [cols * cell[0], rows * cell[1]] };
+      return JSON.parse(out(x.gfx_area(handle)));
+    },
     drop() { x.gfx_drop(handle); },
   };
 }
@@ -163,15 +168,18 @@ const LABELS = { user: "you", assistant: "", thinking: "thinking", tool: "", bas
  * a status), the editor as the live input card.
  * @param parsed rows of cells from parseAnsiLine (with .sem)
  */
-export function toGfxFrame(parsed, { cursor = null, editor = null } = {}) {
+export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding = 0.5 } = {}) {
   const rows = [];
   for (let r = 0; r < parsed.length; r += 1) {
     const cells = parsed[r].cells || [];
     const inEditor = editor && r >= editor.y && r < editor.y + editor.height;
     const runs = [];
     let run = null;
-    for (const c of cells) {
+    for (let i = 0; i < cells.length; i += 1) {
+      let c = cells[i];
       if (c.cont) continue;
+      // Pi's own cursor (an inverse cell): gfx-core draws the caret
+      if (c.inverse && cursor && r === cursor.row && i === cursor.col) c = { ...c, inverse: false };
       // Pi's rule lines around the editor: the input card replaces them
       const ch = inEditor && /^[─━═]$/.test(c.ch) ? " " : (c.hidden ? " " : c.ch);
       const fg = c.fg === DEFAULT ? null : unpackRgb(c.fg);
@@ -215,7 +223,25 @@ export function toGfxFrame(parsed, { cursor = null, editor = null } = {}) {
         badge: tool ? (b.failed ? "✗" : b.streaming ? "" : "✓") : (LABELS[b.role] ?? ""),
       };
     });
-  // the editor's whole box (top rule … bottom rule) is the input card
-  if (editor) out.push({ prompt: editor.y, end: editor.y + editor.height, status: "prompt" });
-  return { rows, blocks: out, cursor: cursor ? [cursor.col, cursor.row] : null };
+  // the editor's whole box (top rule … bottom rule) is the input card; its
+  // border sits editorPadding cells out from the text (1: the outer edge of
+  // the rule rows; 0.5: through their middle, where Pi's chips are)
+  let card = null;
+  if (editor) {
+    out.push({ prompt: editor.y, end: editor.y + editor.height, status: "prompt" });
+    const p = Math.max(0, Math.min(2, Number(editorPadding)));
+    const top = editor.height > 2 ? editor.y + 1 : editor.y;
+    const bottom = editor.height > 2 ? editor.y + editor.height - 1 : editor.y + editor.height;
+    card = [editor.x - p, top - p, editor.x + editor.width + p, bottom + p];
+  }
+  // dialogs (Pi's overlays): rectangles of consecutive overlay rows
+  const floats = [];
+  for (let r = 0; r < parsed.length; r += 1) {
+    const ov = parsed[r].overlay;
+    if (!ov) continue;
+    const last = floats[floats.length - 1];
+    if (last && last[0] === ov.col && last[2] === ov.width && last[1] + last[3] === r) last[3] += 1;
+    else floats.push([ov.col, r, ov.width, 1]);
+  }
+  return { rows, blocks: out, cursor: cursor ? [cursor.col, cursor.row] : null, ...(card ? { card } : {}), ...(floats.length ? { floats } : {}) };
 }

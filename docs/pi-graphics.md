@@ -390,19 +390,34 @@ padding, `line-height 1`).
 canvas with **gfx-core**, the Rust renderer shared with
 [gfxsh](https://github.com/harryaskham/tools/tree/main/cli/gfxsh), compiled
 to WebAssembly; `typescript` (the default) is this extension's own renderer.
-Settings are not shared: gfx-core takes the background, caret style and
-lighting from this canvas's settings and otherwise its own defaults. Any
-gfx-core effect can be set directly with `piGraphics.full.gfx`, an object
-of gfx-core option names (as in gfxsh's `[effects]`), for example
-`{"card_style": "neon", "caret": "comet", "caret_trail": 0.6,
-"scanlines": 0.5, "crt_frame": 0.6, "light_sweep": 0.8}`; invalid values
-are reported in `/gfx full status` and the canvas falls back to
-`typescript`.
+
+**Settings follow the renderer.** With `gfx`, `/gfx full settings` shows
+gfx-core's own settings — background, panes, the prompt card and its glow,
+the caret, lighting, CRT, frosted dialogs — as gfxsh describes them
+(`gfxsh settings --json`), starting from your gfxsh config (marked
+"(gfxsh)"), so Pi looks like your gfxsh. A value set in Pi is Pi's own
+(`piGraphics.full.gfx`, an object of gfx-core option names as in gfxsh's
+`[effects]`); choosing "(gfxsh)" again drops it. Any gfx-core option can
+also be set directly: `/gfx full card_style neon`, `/gfx full glow_size 1.5`,
+`/gfx full glow_size reset`. Pi's own settings with gfx are the renderer,
+**padding** (pixels; laid out as gfxsh does: cards and panes end there,
+text sits a card's inset further in), the **editor border** (cells out
+from the editor's text: `1` is the outer edge of Pi's rule rows, `0.5` —
+the default — runs through their middle, where the editor chips sit),
+the font and the frame rate. The TypeScript renderer's settings (zoom, line
+height, stream-in, …) only show with `typescript`. Invalid values are
+reported in `/gfx full status` and the canvas falls back to `typescript`.
 
 - Pi's frame is mapped, not emulated: rows of styled runs plus blocks from
   the semantic markers — every message and tool call is a glass pane (tools
   with a header row, a running beacon while streaming, ✓/✗ when done) and
-  the editor is the live input card with gfx-core's caret.
+  the editor is the live input card with gfx-core's caret (Pi's own cursor
+  cell is not drawn). Typing heat warms the card's glow.
+- Dialogs (Pi's overlays: settings, selectors) are raised, frosted glass
+  (`frost`); images (an agent's screenshots, tools' pictures) are placed
+  over the canvas at their cells, following as they scroll.
+- The canvas takes Pi's theme colours; a theme change or a new window size
+  rebuilds gfx-core for it.
 - `gfx_wasm.wasm` comes from gfxsh, which carries it in its binary: the
   `piGraphics.full.gfxWasm` setting, `$PI_GFX_WASM`,
   `share/gfxsh/gfx_wasm.wasm` beside the `gfxsh` on `PATH` (Nix), else
@@ -411,7 +426,8 @@ are reported in `/gfx full status` and the canvas falls back to
   path). When none is found (or inside tmux/herdr, not supported yet) the
   canvas falls back to `typescript` and says so in `/gfx full status`.
 - Loader: `canvas/gfx-core-engine.js` (Node builtins only; provides the few
-  system calls gfx-core makes itself, fonts passed as bytes).
+  system calls gfx-core makes itself, fonts passed as bytes); settings:
+  `canvas/gfx-settings.js`.
 
 ## Commands
 

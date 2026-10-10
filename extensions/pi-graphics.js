@@ -60,6 +60,7 @@ import { captureTuiFromUi, createHostComponentRegistry } from "./pi-graphics/hos
 import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./pi-graphics/frame-compositor.js";
 import { createPixelGeometryTracker, tapTerminalInput } from "./pi-graphics/terminal-io.js";
 import { FULL_CANVAS_DEFAULTS, createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
+import { gfxSettingRows, gfxSettingValue, loadGfxshSettings } from "./pi-graphics/canvas/gfx-settings.js";
 import { ROLE_BY_CLASS, ensureSemanticTaps, tapSemanticClass } from "./pi-graphics/canvas/semantics.js";
 import { BACKGROUNDS, CARET_STYLES, PALETTE_NAMES, STREAM_EFFECTS, TYPE_IN_EFFECTS } from "./pi-graphics/canvas/effects.js";
 import { listMonospaceFamilies } from "./pi-graphics/canvas/font-atlas.js";
@@ -70,7 +71,7 @@ import { mixHexColor } from "./pi-graphics/color-utils.js";
 import { truncateFooterStart, truncateFooterEnd } from "./pi-graphics/footer-truncate.js";
 import { FOOTER_DIVIDER_WIDTH, fitFooterSegments, footerSegmentsWidth } from "./pi-graphics/footer-layout.js";
 import { composeEditorRenderRows, isEditorDashLine } from "./pi-graphics/editor-render.js";
-import { approximateVisibleCells, clampRenderedLineToWidth, clampRenderedRowsToWidth } from "./pi-graphics/ansi-width.js";
+import { approximateVisibleCells, clampRenderedLineToWidth, clampRenderedRowsToWidth, truncateAnsiToVisibleWidth } from "./pi-graphics/ansi-width.js";
 import {
   EDITOR_CURSOR_GLOW_COLUMNS,
   EDITOR_CURSOR_GLOW_ROWS,
@@ -2761,16 +2762,56 @@ export default async function piGraphicsExtension(pi) {
       { key: "debug", label: "Debug panel", values: ["off", "on"], get: () => gfx.debug ? "on" : "off", set: (v) => { gfx.debug = v === "on"; gfx.debugPlaceholders = gfx.debug; } },
       { key: "placeholders", label: "Debug placeholders", values: ["off", "on"], get: () => gfx.debugPlaceholders ? "on" : "off", set: (v) => { gfx.debugPlaceholders = v === "on"; } },
     ];
-    const fullRows = [
-      { key: "full.enabled", label: "Full canvas", values: ["off", "on"], get: () => (fullCanvas.active ? "on" : "off"), set: () => {}, action: true },
-      ...FULL_SETTING_SPECS.map((spec) => ({
-        key: spec.key,
-        label: spec.label,
-        values: typeof spec.values === "function" ? spec.values : () => spec.values,
-        get: () => getFullSetting(gfx, spec.key),
-        set: (v) => setFullSetting(gfx, spec.key, v),
-      })),
-    ];
+    // The canvas's settings follow its renderer: the TypeScript renderer's
+    // own, or — with gfx-core — gfx-core's (as gfxsh describes them, your
+    // gfxsh config's values inherited) plus the few Pi decides itself.
+    const fullRows = [];
+    const buildFullRows = () => {
+      fullRows.length = 0;
+      fullRows.push({ key: "full.enabled", label: "Full canvas", values: ["off", "on"], get: () => (fullCanvas.active ? "on" : "off"), set: () => {}, action: true });
+      const gfxMode = /^gfx/.test(String(getFullSetting(gfx, "renderer")));
+      for (const spec of FULL_SETTING_SPECS) {
+        if (gfxMode && !GFX_PI_KEYS.has(spec.key)) continue;
+        if (!gfxMode && GFX_ONLY_KEYS.has(spec.key)) continue;
+        fullRows.push({
+          key: spec.key,
+          label: spec.label,
+          values: typeof spec.values === "function" ? spec.values : () => spec.values,
+          get: () => getFullSetting(gfx, spec.key),
+          set: (v) => { setFullSetting(gfx, spec.key, v); if (spec.key === "renderer") buildFullRows(); },
+        });
+      }
+      if (!gfxMode) return;
+      const described = loadGfxshSettings({ fresh: true });
+      if (!described) {
+        fullRows.push({ key: "gfx.none", label: "gfx-core settings", values: ["(gfxsh not found)"], get: () => "(gfxsh not found)", set: () => {}, header: true });
+        return;
+      }
+      let section = "";
+      for (const row of gfxSettingRows(described)) {
+        if (row.section !== section) {
+          section = row.section;
+          fullRows.push({ key: `gfx.section.${section}`, label: `── ${section}`, values: [""], get: () => "", set: () => {}, header: true });
+        }
+        const overrides = () => (gfx.full = gfx.full || {}, gfx.full.gfx = gfx.full.gfx || {});
+        fullRows.push({
+          key: `gfx.${row.effect}`,
+          label: `  ${row.label}`,
+          help: row.help,
+          values: () => [`${row.inherited} (gfxsh)`, ...row.values],
+          get: () => {
+            const own = gfx.full?.gfx?.[row.effect];
+            if (own === undefined) return `${row.inherited} (gfxsh)`;
+            return typeof own === "boolean" ? (own ? "on" : "off") : String(own);
+          },
+          set: (v) => {
+            if (String(v).endsWith(" (gfxsh)")) delete overrides()[row.effect];
+            else overrides()[row.effect] = gfxSettingValue(row, v);
+          },
+        });
+      }
+    };
+    buildFullRows();
     const tabs = [
       { id: "classic", title: "Pi graphics", rows: classicRows },
       { id: "full", title: "Full canvas", rows: fullRows },
@@ -2779,7 +2820,7 @@ export default async function piGraphicsExtension(pi) {
     let selected = 0;
     let wantToggle = false;
     const valuesOf = (row) => (typeof row.values === "function" ? row.values() : row.values);
-    const renderLine = (width, text) => String(text).slice(0, Math.max(1, width));
+    const renderLine = (width, text) => truncateAnsiToVisibleWidth(String(text), Math.max(1, width));
     const componentFactory = (_tui, theme, keybindings, done) => ({
       __piGraphicsNoWrap: true,
       piGraphics: false,
@@ -2798,11 +2839,18 @@ export default async function piGraphicsExtension(pi) {
         const first = Math.max(0, Math.min(selected - Math.floor(visible / 2), current.rows.length - visible));
         current.rows.slice(first, first + visible).forEach((row, offset) => {
           const index = first + offset;
+          if (row.header) { lines.push(fg("muted", ` ${row.label}`)); return; }
           const marker = index === selected ? fg("accent", "→") : " ";
           const value = String(row.get());
-          lines.push(`${marker} ${row.label.padEnd(24)} ${index === selected ? fg("accent", value) : value}`);
+          lines.push(`${marker} ${row.label.padEnd(26)} ${index === selected ? fg("accent", value) : value}`);
         });
-        if (current.id === "full") {
+        const help = current.rows[selected]?.help;
+        if (help) lines.push("", fg("muted", `  ${help}`));
+        if (current.id === "full" && /^gfx/.test(String(getFullSetting(gfx, "renderer")))) {
+          lines.push("");
+          lines.push(fg("muted", "  Renderer gfx: gfx-core, as gfxsh draws. Its settings start from your gfxsh config"));
+          lines.push(fg("muted", "  (\"(gfxsh)\"); a value set here is Pi's own. /gfx full status for the grid and costs."));
+        } else if (current.id === "full") {
           lines.push("");
           lines.push(fg("muted", "  Pixel canvas over the same session (needs fullscreen TUI + Kitty graphics)."));
           lines.push(fg("muted", "  Fonts sit on one monospace grid; per-role fonts use semantic provenance."));
@@ -2817,7 +2865,12 @@ export default async function piGraphicsExtension(pi) {
         if (!key || key === "release") return;
         const matches = (name) => { try { return keybindings?.matches?.(data, name); } catch { return false; } };
         const rows = tabs[tabIndex].rows;
-        const move = (delta) => { selected = Math.max(0, Math.min(rows.length - 1, selected + delta)); };
+        const move = (delta) => {
+          // (section headers are passed over)
+          let next = Math.max(0, Math.min(rows.length - 1, selected + delta));
+          while (rows[next]?.header && next + Math.sign(delta) >= 0 && next + Math.sign(delta) < rows.length) next += Math.sign(delta);
+          if (!rows[next]?.header) selected = next;
+        };
         const switchTab = (delta) => { tabIndex = (tabIndex + delta + tabs.length) % tabs.length; selected = 0; };
         const change = (delta) => {
           const row = rows[selected];
@@ -3185,6 +3238,7 @@ export default async function piGraphicsExtension(pi) {
     { key: "zoom", label: "Zoom", values: ["0.75", "0.85", "0.9", "1", "1.1", "1.2", "1.25", "1.35", "1.5", "1.75", "2"], alias: ["scale"] },
     { key: "lineHeight", label: "Line height", values: ["1", "1.05", "1.1", "1.15", "1.2", "1.25", "1.3", "1.4", "1.5", "1.6", "1.8", "2"], alias: ["line-height"] },
     { key: "padding", label: "Padding px", values: ["0", "1", "2", "4", "6", "8", "12", "16", "24", "32"], alias: ["pad"] },
+    { key: "editorPadding", label: "Editor border (cells out)", values: ["0", "0.25", "0.5", "0.75", "1", "1.25", "1.5"], alias: ["editor-padding", "editor-border"] },
     { key: "resolution", label: "Resolution (HiDPI)", values: ["1", "2", "3"], alias: ["hidpi"] },
     { key: "gamma", label: "Text weight (gamma)", values: ["1", "1.1", "1.2", "1.35", "1.5", "1.7", "2"], alias: ["weight"] },
     { key: "font.default", label: "Font", values: () => ["FiraCode Nerd Font Mono", ...monospaceFamilies()] , alias: ["font"] },
@@ -3244,6 +3298,10 @@ export default async function piGraphicsExtension(pi) {
     { key: "pixelMouse", label: "Pixel mouse", values: ["auto", "on", "off"], alias: ["pixel-mouse"] },
     { key: "transport", label: "Transport", values: ["png", "zlib"] },
   ];
+  // renderer=gfx: the canvas settings that are Pi's own (the rest are
+  // gfx-core's, from gfxsh); editorPadding only means something there.
+  const GFX_PI_KEYS = new Set(["renderer", "padding", "editorPadding", "font.default", "fps", "edgeBlend"]);
+  const GFX_ONLY_KEYS = new Set(["editorPadding"]);
   const FULL_BOOLEAN_KEYS = new Set(["impulse", "trail", "edgeBlend", "editorGlow", "panels", "toolPanels", "backgroundReact", "glowPulse", "panePulse", "paneFlash", "stickyHeaders", "thinkingShimmer", "renderWorker"]);
   let monospaceFamilyCache = null;
   function monospaceFamilies() {
@@ -3326,7 +3384,23 @@ export default async function piGraphicsExtension(pi) {
         key = "cell"; value = String(args[1]);
       } else {
         const spec = fullSettingSpec(sub) || fullSettingSpec(sub.replace(/-([a-z])/g, (_m, c) => c.toUpperCase()));
-        if (!spec) { notify(`unknown /gfx full option: ${sub}\n${describeFullCanvas()}`, "warning"); return; }
+        if (!spec) {
+          // a gfx-core setting (renderer=gfx): Pi's own value for it
+          const effect = sub.replace(/^effects\./, "").replace(/-/g, "_");
+          const row = gfxSettingRows(loadGfxshSettings() || {}).find((r) => r.effect === effect);
+          if (row || effect in (fullCanvas.status().gfxEffects || {})) {
+            const raw = args.slice(1).join(" ");
+            gfx.full = gfx.full || {};
+            gfx.full.gfx = { ...(gfx.full.gfx || {}) };
+            if (!raw || /^(reset|gfxsh|inherit)$/i.test(raw)) delete gfx.full.gfx[effect];
+            else gfx.full.gfx[effect] = row ? gfxSettingValue(row, raw) : (/^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw);
+            applyFullCanvasSettings(ctx, settings);
+            notify(`gfx-core ${effect}: ${gfx.full.gfx[effect] ?? "(gfxsh)"} (/gfx save keeps it)`);
+            return;
+          }
+          notify(`unknown /gfx full option: ${sub}\n${describeFullCanvas()}`, "warning");
+          return;
+        }
         key = spec.key; value = args.slice(1).join(" ");
       }
       if (!value) { notify(`/gfx full ${sub} needs a value`, "warning"); return; }

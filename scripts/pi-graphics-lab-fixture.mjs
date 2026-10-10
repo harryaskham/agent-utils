@@ -3,8 +3,30 @@
 // wide glyphs and long wrapped lines so box chrome and fullscreen scrolling
 // have realistic content without copying a real transcript.
 import { writeFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 
-export function writeLabSessionFixture(path, { cwd = process.cwd(), turns = 6 } = {}) {
+/** A small gradient PNG (an image a tool returned), base64. */
+export function labImagePng(w = 96, h = 64) {
+  const crc = (buf) => { let c = ~0; for (const b of buf) { c ^= b; for (let k = 0; k < 8; k += 1) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const sum = Buffer.alloc(4); sum.writeUInt32BE(crc(body));
+    return Buffer.concat([len, body, sum]);
+  };
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y += 1) {
+    raw[y * (w * 3 + 1)] = 0;
+    for (let x = 0; x < w; x += 1) {
+      const o = y * (w * 3 + 1) + 1 + x * 3;
+      raw[o] = 230; raw[o + 1] = Math.round(60 + 160 * (x / w)); raw[o + 2] = Math.round(40 + 180 * (y / h));
+    }
+  }
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]).toString("base64");
+}
+
+export function writeLabSessionFixture(path, { cwd = process.cwd(), turns = 6, image = false } = {}) {
   const t0 = Date.parse("2026-09-29T10:00:00Z");
   const entries = [];
   let parent = null;
@@ -22,7 +44,10 @@ export function writeLabSessionFixture(path, { cwd = process.cwd(), turns = 6 } 
       { type: "text", text: `Here is turn **${turn}**. I'll list the extension directory first.` },
       { type: "toolCall", id: callId, name: "bash", arguments: { command: `ls extensions/pi-graphics | head -${4 + turn}` } },
     ], "toolUse"));
-    push({ type: "message", message: { role: "toolResult", toolCallId: callId, toolName: "bash", content: [{ type: "text", text: ["affordances.js", "box-chrome.js", "canvas-renderer.js", "components.js", "cursor-anchor.js", "editor-render.js", "png-renderer.js", "runtime.js"].slice(0, 4 + turn).join("\n") }], isError: false, timestamp: t0 + n * 1000 } });
+    const listing = { type: "text", text: ["affordances.js", "box-chrome.js", "canvas-renderer.js", "components.js", "cursor-anchor.js", "editor-render.js", "png-renderer.js", "runtime.js"].slice(0, 4 + turn).join("\n") };
+    // the last turn's tool returns an image too (shown inline, as an agent's would be)
+    const content = image && turn === turns - 1 ? [listing, { type: "image", data: labImagePng(), mimeType: "image/png" }] : [listing];
+    push({ type: "message", message: { role: "toolResult", toolCallId: callId, toolName: "bash", content, isError: false, timestamp: t0 + n * 1000 } });
     push(assistant([{ type: "text", text: [
       `### Turn ${turn} summary`,
       "",

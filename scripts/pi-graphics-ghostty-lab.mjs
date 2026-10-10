@@ -100,7 +100,7 @@ async function main() {
   const extensions = String(args.extensions || "extensions/pi-graphics.js")
     .split(",").filter(Boolean).flatMap((file) => ["-e", resolve(repo, file)]);
   const sessionArgs = args.fixture
-    ? ["--session", writeLabSessionFixture(join(out, "fixture-session.jsonl"), { cwd: args.cwd || repo, turns: Number(args.fixture) || 6 })]
+    ? ["--session", writeLabSessionFixture(join(out, "fixture-session.jsonl"), { cwd: args.cwd || repo, turns: Number(args.fixture) || 6, image: Boolean(args["fixture-image"]) })]
     : ["--no-session"];
   const piArgs = args.command
     ? ["bash", "-lc", args.command]
