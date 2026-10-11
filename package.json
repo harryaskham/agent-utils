@@ -31,6 +31,8 @@
     "test": "node --test --test-reporter=spec test/*.test.js",
     "test:choice-ui": "python3 scripts/choice-ui-pty.py",
     "test:ptt-ui": "python3 scripts/ptt-shortcut-pty.py",
+    "test:preview-reload": "PI_RUN_PREVIEW_RELOAD_SMOKE=1 node --test test/kitty-preview-real-reload.test.js",
+    "test:preview-reload-pty": "python3 scripts/kitty-preview-reload-pty.py",
     "test:pi-isolated": "PI_RUN_ISOLATED_EXTENSION_SMOKE=1 node --test --test-reporter=spec test/pi-isolated-extension-smoke.test.js",
     "test:coverage": "node --test --test-reporter=spec --experimental-test-coverage test/*.test.js",
     "test:coverage:summary": "node scripts/coverage-summary.mjs",

@@ -95,7 +95,7 @@ import {
 import {
   buildScopedDeleteCommand,
   releaseOwnedImageData,
-  runHeadlessOwnedFree,
+  resolveGraphicsWriter,
   enumerateGraphicsWriters,
   buildCurrentDisplayCommand,
   resetTransmissionGuard,
@@ -107,6 +107,7 @@ import {
   KittyImagePreviewWidget,
 } from "./kitty-image-preview/widget.js";
 import { registerKittyImagePreviewRuntime } from "./kitty-image-preview/runtime.js";
+import { createPreviewLifecycle, previewIsActive, previewEpoch, deferPreviewUi } from "./kitty-image-preview/lifecycle.js";
 import { KittyImageGalleryOverlay } from "./kitty-image-preview/overlay.js";
 
 import {
@@ -256,6 +257,7 @@ function clearSidePanel(state) {
   if (!panel) return;
   state.sidePanel = undefined;
   panel.cancelled = true;
+  panel.close?.();
   uninstallSidePanelLayout(panel);
   panel.handle?.hide?.();
   panel.component?.dispose?.();
@@ -266,6 +268,7 @@ function clearSideOverlay(state) {
   if (!overlay) return;
   state.sideOverlay = undefined;
   overlay.cancelled = true;
+  overlay.close?.();
   overlay.handle?.hide?.();
   overlay.component?.dispose?.();
 }
@@ -276,10 +279,14 @@ function clearSidePresentation(state) {
 }
 
 function fallbackSideWidget(ctx, state, reason = "rightOverlay is unavailable", { warn = true } = {}) {
-  const componentFactory = () => new KittyImagePreviewWidget(state, {
-    forceUnicodePlaceholders: shouldUseInlineRightPlacement(state),
-    forceSideOverlay: false,
-  });
+  if (!previewIsActive(state)) return;
+  const componentFactory = (tui) => {
+    state.renderTui = tui;
+    return new KittyImagePreviewWidget(state, {
+      forceUnicodePlaceholders: shouldUseInlineRightPlacement(state),
+      forceSideOverlay: false,
+    });
+  };
   ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement: "aboveEditor" });
   if (warn && !state.sideInlineFallbackWarned) {
     state.sideInlineFallbackWarned = true;
@@ -449,6 +456,8 @@ function installSidePanelLayout(tui, state, panel) {
 }
 
 function ensureSidePanel(ctx, state) {
+  const current = previewEpoch(state);
+  if (!current()) return;
   if (state.sidePanel?.tui) {
     installSidePanelLayout(state.sidePanel.tui, state, state.sidePanel);
     requestSidePanelRender(state);
@@ -479,22 +488,27 @@ function ensureSidePanel(ctx, state) {
   let promise;
   try {
     promise = ctx.ui.custom((tui, _theme, _keys, done) => {
+      if (!current() || panel.cancelled) return panel.component;
       panel.pending = false;
       panel.tui = tui;
+      panel.close = done;
       // Fullscreen renders a layout root, bypassing tui.render(). A patch of
       // the document renderer is therefore invisible there. Use a real widget
       // in the fullscreen layout instead of reporting a phantom side panel.
       state.fullscreenTui = typeof tui.setLayoutRoot === "function";
       if (!state.fullscreenTui) installSidePanelLayout(tui, state, panel);
       queueMicrotask(() => {
+        if (!current() || panel.cancelled) return;
+        panel.close = undefined;
         done();
-        if (!panel.cancelled && state.fullscreenTui) syncWidget(ctx, state);
+        if (state.fullscreenTui) syncWidget(ctx, state);
       });
       return panel.component;
     }, {
       overlay: true,
       overlayOptions: { anchor: "top-right", width: 1, maxHeight: 1, visible: () => false, nonCapturing: true },
       onHandle: (handle) => {
+        if (!current() || panel.cancelled) return;
         panel.handle = handle;
         handle.unfocus?.();
         // done() above closes discovery, including its ui_prompt waiting span.
@@ -509,6 +523,7 @@ function ensureSidePanel(ctx, state) {
   }
 
   promise?.catch?.((error) => {
+    if (!current() || panel.cancelled) return;
     if (state.sidePanel === panel) state.sidePanel = undefined;
     uninstallSidePanelLayout(panel);
     ctx.ui.notify?.(`kitty image rightOverlay side panel closed: ${error.message}`, "warning");
@@ -516,6 +531,8 @@ function ensureSidePanel(ctx, state) {
 }
 
 function ensureSideOverlay(ctx, state) {
+  const current = previewEpoch(state);
+  if (!current()) return;
   if (state.sideOverlay?.handle || state.sideOverlay?.pending) {
     state.sideOverlay.handle?.setHidden?.(false);
     requestSideOverlayRender(state);
@@ -538,6 +555,8 @@ function ensureSideOverlay(ctx, state) {
   let promise;
   try {
     promise = ctx.ui.custom((_tui, _theme, _keybindings, _done) => {
+      if (!current() || overlay.cancelled) return { render: () => [], invalidate() {} };
+      overlay.close = _done;
       overlay.pending = false;
       overlay.tui = _tui;
       overlay.component = new KittyImagePreviewWidget(state, { forceSideOverlay: true });
@@ -546,6 +565,7 @@ function ensureSideOverlay(ctx, state) {
       overlay: true,
       overlayOptions: () => buildSideOverlayOptions(state),
       onHandle: (handle) => {
+        if (!current() || overlay.cancelled) return;
         overlay.handle = handle;
         handle.unfocus?.();
         if (overlay.cancelled) handle.hide?.();
@@ -559,13 +579,16 @@ function ensureSideOverlay(ctx, state) {
   }
 
   promise?.catch?.((error) => {
+    if (!current() || overlay.cancelled) return;
     if (state.sideOverlay === overlay) state.sideOverlay = undefined;
     ctx.ui.notify?.(`kitty image rightOverlay closed: ${error.message}`, "warning");
   });
 }
 
 export function syncWidget(ctx, state) {
-  if (!ctx?.hasUI) return;
+  // Check our own lifecycle first: even reading ctx.hasUI/ui throws once Pi
+  // invalidates the old runtime. Optional chaining does not protect a getter.
+  if (!previewIsActive(state) || !ctx?.hasUI) return;
   if (state.galleryOverlay) {
     ctx.ui.setWidget(WIDGET_ID, undefined);
     clearSidePresentation(state);
@@ -597,14 +620,18 @@ export function syncWidget(ctx, state) {
     }
   } else {
     clearSidePresentation(state);
-    const componentFactory = () => new KittyImagePreviewWidget(state, { placement });
+    const componentFactory = (tui) => {
+      state.renderTui = tui;
+      return new KittyImagePreviewWidget(state, { placement });
+    };
     ctx.ui.setWidget(WIDGET_ID, componentFactory, { placement });
   }
   ctx.ui.setStatus(WIDGET_ID, imageStatusLine(state, current));
 }
 
 function flashDeleteWidget(ctx, state, deleteCommand) {
-  if (!ctx?.hasUI) return;
+  const current = previewEpoch(state);
+  if (!current() || !deleteCommand || !ctx?.hasUI) return;
   if (isSideOverlayPlacement(state.config.placement)) {
     clearSidePresentation(state);
     const flashComponent = {
@@ -616,34 +643,43 @@ function flashDeleteWidget(ctx, state, deleteCommand) {
     if (typeof ctx.ui.custom === "function") {
       let close;
       try {
-        const promise = ctx.ui.custom((_tui, _theme, _keys, done) => {
+        const promise = ctx.ui.custom((tui, _theme, _keys, done) => {
+          if (!current()) return { render: () => [], invalidate() {} };
+          state.renderTui = tui;
           close = done;
+          (state.flashClosers ||= new Set()).add(done);
           return flashComponent;
         }, {
           overlay: true,
           overlayOptions: () => buildSideOverlayOptions(state),
         });
         promise?.catch?.(() => {});
-        setTimeout(() => close?.(), 100);
+        deferPreviewUi(state, () => {
+          state.flashClosers?.delete(close);
+          close?.();
+        }, 100);
       } catch {
-        ctx.ui.setWidget(WIDGET_ID, () => flashComponent, { placement: "aboveEditor" });
-        setTimeout(() => ctx.ui.setWidget(WIDGET_ID, undefined), 100);
+        ctx.ui.setWidget(WIDGET_ID, (tui) => { state.renderTui = tui; return flashComponent; }, { placement: "aboveEditor" });
+        deferPreviewUi(state, () => { if (!state.visible) ctx.ui.setWidget(WIDGET_ID, undefined); }, 100);
       }
     } else {
-      ctx.ui.setWidget(WIDGET_ID, () => flashComponent, { placement: "aboveEditor" });
-      setTimeout(() => ctx.ui.setWidget(WIDGET_ID, undefined), 100);
+      ctx.ui.setWidget(WIDGET_ID, (tui) => { state.renderTui = tui; return flashComponent; }, { placement: "aboveEditor" });
+      deferPreviewUi(state, () => { if (!state.visible) ctx.ui.setWidget(WIDGET_ID, undefined); }, 100);
     }
     ctx.ui.setStatus(WIDGET_ID, undefined);
     return;
   }
-  ctx.ui.setWidget(WIDGET_ID, () => ({
-    render(width) {
-      return [`${deleteCommand}${" ".repeat(Math.max(1, width))}`];
-    },
-    invalidate() {},
-  }), { placement: state.config.placement });
+  ctx.ui.setWidget(WIDGET_ID, (tui) => {
+    state.renderTui = tui;
+    return {
+      render(width) {
+        return [`${deleteCommand}${" ".repeat(Math.max(1, width))}`];
+      },
+      invalidate() {},
+    };
+  }, { placement: state.config.placement });
   ctx.ui.setStatus(WIDGET_ID, undefined);
-  setTimeout(() => {
+  deferPreviewUi(state, () => {
     if (!state.visible) ctx.ui.setWidget(WIDGET_ID, undefined);
   }, 100);
 }
@@ -653,9 +689,12 @@ function flashDeleteWidget(ctx, state, deleteCommand) {
 
 
 function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true } = {}) {
+  const current = previewEpoch(state);
+  if (!current()) return;
   stopCycle(state);
   state.cycle = { running: true, intervalMs, direction, loop };
   state.cycleTimer = keepTimerFromHoldingProcess(setInterval(() => {
+    if (!current()) return;
     if (!state.visible || state.items.length === 0) {
       stopCycle(state);
       syncWidget(ctx, state);
@@ -677,6 +716,7 @@ function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true 
     }
     prepareCurrentImage(state, ctx, { forceReload: true })
       .catch((error) => {
+        if (!current() || state.cycle !== cycle) return;
         stopCycle(state);
         ctx?.ui?.notify?.(`kitty image cycle stopped: ${error.message}`, "warning");
       })
@@ -687,9 +727,12 @@ function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true 
 }
 
 function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
+  const current = previewEpoch(state);
+  if (!current()) return;
   stopAnimation(state);
   state.animation = { running: true, intervalMs, loop };
   state.animationTimer = keepTimerFromHoldingProcess(setInterval(() => {
+    if (!current()) return;
     if (!state.visible || state.items.length === 0) {
       stopAnimation(state);
       syncWidget(ctx, state);
@@ -711,6 +754,7 @@ function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
     }
     prepareCurrentImage(state, ctx, { forceReload: true })
       .catch((error) => {
+        if (!current() || state.animation !== animation) return;
         stopAnimation(state);
         ctx?.ui?.notify?.(`kitty image animation stopped: ${error.message}`, "warning");
       })
@@ -727,6 +771,7 @@ function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
 // cycle frames do not re-read base64, and clears the id's transmit-once guard
 // only when the payload is actually rebuilt so the next render re-uploads it.
 async function buildPreparedPayload(state, item, existing) {
+  const isCurrent = previewEpoch(state);
   const useMemory = state.config.transferMode === "memory" || (
     state.config.transferMode === "auto" && shouldUseInMemoryTransfer(process.env)
   );
@@ -735,6 +780,7 @@ async function buildPreparedPayload(state, item, existing) {
   const signature = `${item.id}:${transport}:${zIndex}:${state.config.passthrough}:${state.config.chunkSize}`;
   if (existing && existing.signature === signature) return existing;
   const pngBase64 = useMemory ? await fileToBase64(item.path) : undefined;
+  if (!isCurrent()) return undefined;
   state.transmittedSignatures?.delete?.(item.id);
   return {
     itemId: item.id,
@@ -757,6 +803,8 @@ async function buildPreparedPayload(state, item, existing) {
 // sibling images are not evicted by the single-image prepare's [current.id]
 // exclusion.
 async function preparePagePayloads(state) {
+  const isCurrent = previewEpoch(state);
+  if (!isCurrent()) return;
   const placement = resolvePlacement(state);
   const multiImageSidePanel = state.items.length >= 2
     && isSideOverlayPlacement(placement)
@@ -773,6 +821,7 @@ async function preparePagePayloads(state) {
   for (const item of state.items) {
     const existing = prepared.get(item.id);
     const next = await buildPreparedPayload(state, item, existing);
+    if (!isCurrent()) return;
     if (next !== existing) changed = true;
     prepared.set(item.id, next);
   }
@@ -788,6 +837,8 @@ async function preparePagePayloads(state) {
 }
 
 async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
+  const isCurrent = previewEpoch(state);
+  if (!isCurrent()) return;
   const current = state.items[state.index];
   if (!current) return;
   const useMemory = state.config.transferMode === "memory" || (
@@ -800,6 +851,7 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
   if (!forceReload && state.currentCommand?.signature === signature) return;
 
   const pngBase64 = useMemory ? await fileToBase64(current.path) : undefined;
+  if (!isCurrent()) return;
   // A freshly prepared currentCommand means the payload (or its transport)
   // changed, so any prior transmit-once guard entry for this image is stale and
   // must be cleared to force a re-upload on the next render (bd-d6fa1b).
@@ -836,7 +888,7 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
     rendered: undefined,
   };
   await preparePagePayloads(state).catch(() => {});
-  syncWidget(ctx, state);
+  if (isCurrent()) syncWidget(ctx, state);
 }
 
 async function collectPngFiles(directory, { recursive = false, limit = 200 } = {}) {
@@ -896,8 +948,13 @@ function resolveVisionModel(ctx, params = {}) {
   return resolveDescribeModel(ctx, { params }).model;
 }
 
-async function describeImageFile(filePath, item, ctx, params = {}, signal) {
+async function describeImageFile(filePath, item, ctx, params = {}, signal, isCurrent = () => true) {
+  if (!isCurrent()) return undefined;
+  signal?.throwIfAborted();
   const model = resolveVisionModel(ctx, params);
+  const imageData = await fileToBase64(filePath);
+  if (!isCurrent()) return undefined;
+  signal?.throwIfAborted();
   const extra = params.describePrompt ? `\n\nAdditional instruction: ${params.describePrompt}` : "";
   // Shared Pi-inference turn (bd-f50e0f): auth guard + pi-ai `complete` (lazily
   // imported inside the helper so this extension's top level stays
@@ -910,7 +967,7 @@ async function describeImageFile(filePath, item, ctx, params = {}, signal) {
       timestamp: Date.now(),
       content: [
         { type: "text", text: `${IMAGE_DESCRIPTION_PROMPT}${extra}\n\nImage label: ${item?.label || path.basename(filePath)}${item?.width && item?.height ? ` (${item.width}×${item.height})` : ""}` },
-        { type: "image", data: await fileToBase64(filePath), mimeType: item?.mediaType || "image/png" },
+        { type: "image", data: imageData, mimeType: item?.mediaType || "image/png" },
       ],
     }],
     maxTokens: clampInteger(params.describeMaxTokens, 1200, 128, 8000),
@@ -988,10 +1045,12 @@ async function resolveTendrilTarget(pi, params, signal) {
 // buildTendrilCaptureArgs is imported from
 // ./kitty-image-preview/cli-commands.js (extracted in bd-e1914a).
 
-async function describeTendrilTargetFullResolution(pi, target, ctx, params, signal, onUpdate, fallbackItem) {
+async function describeTendrilTargetFullResolution(pi, target, ctx, params, signal, onUpdate, fallbackItem, isCurrent = () => true) {
+  if (!isCurrent() || signal?.aborted) return undefined;
   if (!params.describe && params.describeIntervalSecs === undefined) return undefined;
   const dir = getDescribeTempDir(ctx);
   await mkdir(dir, { recursive: true });
+  if (!isCurrent() || signal?.aborted) return undefined;
   const filePath = path.join(dir, `describe-${timestampForFilename()}-${sanitizeFilenamePart(target.kind)}-${sanitizeFilenamePart(target.id)}.png`);
   try {
     const fullParams = fullResolutionDescribeParams(params);
@@ -1001,12 +1060,15 @@ async function describeTendrilTargetFullResolution(pi, target, ctx, params, sign
       signal,
       timeout: clampInteger(params.timeoutMs, 30_000, 1_000, 120_000) + 5_000,
     });
+    if (!isCurrent() || signal?.aborted) return undefined;
     const item = await buildItem(ctx.cwd, filePath, `${fallbackItem?.label || defaultScreenshotLabel(target)} full-resolution description frame`);
-    return await describeImageFile(filePath, item, ctx, { ...params, describe: true }, signal);
+    if (!isCurrent() || signal?.aborted) return undefined;
+    return await describeImageFile(filePath, item, ctx, { ...params, describe: true }, signal, isCurrent);
   } catch (error) {
+    if (!isCurrent() || signal?.aborted) return undefined;
     if (!fallbackItem) throw error;
     ctx.ui?.notify?.(`Full-resolution description capture failed; describing preview frame: ${error.message}`, "warning");
-    return describeImageFile(fallbackItem.path, fallbackItem, ctx, { ...params, describe: true }, signal);
+    return describeImageFile(fallbackItem.path, fallbackItem, ctx, { ...params, describe: true }, signal, isCurrent);
   } finally {
     await unlinkIfExists(filePath).catch(() => {});
   }
@@ -1032,6 +1094,7 @@ async function cleanupStreamFiles(stream) {
 async function runPlaywrightCliScreenshot(pi, stream) {
   const args = buildPlaywrightCliScreenshotArgs(stream.params, stream.sourcePath);
   const result = await pi.exec("playwright-cli", args, {
+    signal: stream.currentController?.signal,
     timeout: clampInteger(stream.params.timeoutMs, 30_000, 1_000, 120_000),
   });
   if (result.code !== 0) {
@@ -1041,6 +1104,9 @@ async function runPlaywrightCliScreenshot(pi, stream) {
 }
 
 async function maybeDescribeStreamFrame(pi, state, ctx, stream, item, params, signal) {
+  const epoch = previewEpoch(state);
+  const current = () => epoch() && state.stream === stream && stream.running;
+  if (!current()) return;
   const intervalSeconds = params.describeIntervalSecs === undefined
     ? (params.describe ? DEFAULT_DESCRIBE_INTERVAL_SECONDS : undefined)
     : clampInteger(params.describeIntervalSecs, DEFAULT_DESCRIBE_INTERVAL_SECONDS, 1, 86_400);
@@ -1050,11 +1116,15 @@ async function maybeDescribeStreamFrame(pi, state, ctx, stream, item, params, si
   if (stream.lastDescriptionAt && intervalSeconds !== undefined && now - stream.lastDescriptionAt < intervalSeconds * 1000) return;
   stream.lastDescriptionAt = now;
   stream.descriptionInFlight = true;
+  const controller = new AbortController();
+  stream.descriptionController = controller;
+  const describeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const describePromise = stream.source === "tendril"
-    ? describeTendrilTargetFullResolution(pi, stream.target, ctx, params, signal, undefined, item)
-    : describeImageFile(stream.describeSourcePath || item.path, item, ctx, { ...params, describe: true }, signal);
+    ? describeTendrilTargetFullResolution(pi, stream.target, ctx, params, describeSignal, undefined, item, current)
+    : describeImageFile(stream.describeSourcePath || item.path, item, ctx, { ...params, describe: true }, describeSignal, current);
   describePromise
     .then((description) => {
+      if (!current()) return;
       stream.latestDescription = { ...description, frame: stream.frameCount, path: item.path, at: Date.now() };
       ctx.ui?.setStatus?.(WIDGET_ID, `🖼 stream ${stream.frameCount} • described`);
     })
@@ -1063,11 +1133,14 @@ async function maybeDescribeStreamFrame(pi, state, ctx, stream, item, params, si
     })
     .finally(() => {
       stream.descriptionInFlight = false;
+      if (stream.descriptionController === controller) stream.descriptionController = undefined;
     });
 }
 
 async function captureTendrilStreamFrame(pi, ctx, state, stream) {
-  if (!stream?.running || stream.capturing) return;
+  const epoch = previewEpoch(state);
+  const current = () => epoch() && state.stream === stream && stream?.running;
+  if (!current() || stream.capturing) return;
   stream.capturing = true;
   const frameIndex = stream.nextFrameIndex % 2;
   stream.nextFrameIndex += 1;
@@ -1076,13 +1149,15 @@ async function captureTendrilStreamFrame(pi, ctx, state, stream) {
   stream.currentController = controller;
   try {
     await unlinkIfExists(outputPath);
+    if (!current()) return;
     const args = buildTendrilCaptureArgs(stream.params, stream.target, outputPath);
     await runTendrilJson(pi, args, {
       signal: controller.signal,
       timeout: clampInteger(stream.params.timeoutMs, 30_000, 1_000, 120_000) + 5_000,
     });
-    if (!stream.running) return;
+    if (!current()) return;
     const item = await buildItem(ctx.cwd, outputPath, `stream ${stream.target.kind} ${stream.target.id} frame ${stream.frameCount + 1}`);
+    if (!current()) return;
     // Reuse the stream's single stable image id and overwrite it each frame
     // instead of minting a fresh per-frame id (bd-ded98d element (d)).
     item.id = resolveStreamFrameId(stream, item.id);
@@ -1095,12 +1170,13 @@ async function captureTendrilStreamFrame(pi, ctx, state, stream) {
     stream.lastFrameAt = Date.now();
     stream.lastError = undefined;
     await prepareCurrentImage(state, ctx, { forceReload: true });
+    if (!current()) return;
     syncWidget(ctx, state);
     await maybeDescribeStreamFrame(pi, state, ctx, stream, item, stream.params, controller.signal);
     const previousPath = stream.framePaths[1 - frameIndex];
     if (previousPath !== stream.latestPath) await unlinkIfExists(previousPath).catch(() => {});
   } catch (error) {
-    if (!stream.running || controller.signal.aborted) return;
+    if (!current() || controller.signal.aborted) return;
     stream.lastError = error.message;
     ctx.ui?.notify?.(`kitty image stream frame failed: ${error.message}`, "warning");
   } finally {
@@ -1110,12 +1186,16 @@ async function captureTendrilStreamFrame(pi, ctx, state, stream) {
 }
 
 async function captureFileStreamFrame(pi, ctx, state, stream) {
-  if (!stream?.running || stream.capturing) return;
+  const epoch = previewEpoch(state);
+  const current = () => epoch() && state.stream === stream && stream?.running;
+  if (!current() || stream.capturing) return;
   stream.capturing = true;
   const sourcePath = stream.sourcePath;
   try {
     if (stream.source === "playwright-cli") await runPlaywrightCliScreenshot(pi, stream);
+    if (!current()) return;
     const sourceInfo = await stat(sourcePath);
+    if (!current()) return;
     if (!sourceInfo.isFile()) throw new Error(`Playwright screenshot path is not a file: ${sourcePath}`);
     const signature = `${sourceInfo.mtimeMs}:${sourceInfo.size}`;
     if (signature === stream.sourceSignature) return;
@@ -1124,8 +1204,9 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
     stream.nextFrameIndex += 1;
     const outputPath = stream.framePaths[frameIndex];
     await copyFile(sourcePath, outputPath);
-    if (!stream.running) return;
+    if (!current()) return;
     const item = await buildItem(ctx.cwd, outputPath, `playwright mirror frame ${stream.frameCount + 1}`);
+    if (!current()) return;
     // Reuse the stream's single stable image id and overwrite it each frame
     // instead of minting a fresh per-frame id (bd-ded98d element (d)).
     item.id = resolveStreamFrameId(stream, item.id);
@@ -1139,19 +1220,20 @@ async function captureFileStreamFrame(pi, ctx, state, stream) {
     stream.lastError = undefined;
     stream.consecutiveErrors = 0;
     await prepareCurrentImage(state, ctx, { forceReload: true });
+    if (!current()) return;
     syncWidget(ctx, state);
     await maybeDescribeStreamFrame(pi, state, ctx, stream, item, stream.params, stream.currentController?.signal);
     const previousPath = stream.framePaths[1 - frameIndex];
     if (previousPath !== stream.latestPath) await unlinkIfExists(previousPath).catch(() => {});
   } catch (error) {
-    if (!stream.running) return;
+    if (!current()) return;
     stream.consecutiveErrors = (stream.consecutiveErrors || 0) + 1;
     stream.lastError = error?.code === "ENOENT"
       ? `Waiting for Playwright screenshot at ${sourcePath}`
       : error.message;
     if (stream.source === "playwright-cli" && stream.stopAfterErrors && stream.consecutiveErrors >= stream.stopAfterErrors) {
       stream.running = false;
-      if (stream.timer) clearTimeout(stream.timer);
+      if (stream.timer) state.lifecycle.cancel(stream.timer);
       stream.lastError = `${stream.lastError} (stopped after ${stream.consecutiveErrors} consecutive errors)`;
     }
   } finally {
@@ -1167,11 +1249,12 @@ async function captureAnyStreamFrame(pi, ctx, state, stream) {
 }
 
 function scheduleNextStreamFrame(pi, ctx, state, stream) {
-  if (!stream?.running) return;
-  stream.timer = keepTimerFromHoldingProcess(setTimeout(async () => {
+  const current = previewEpoch(state);
+  if (!current() || state.stream !== stream || !stream?.running) return;
+  stream.timer = deferPreviewUi(state, async () => {
     await captureAnyStreamFrame(pi, ctx, state, stream);
-    scheduleNextStreamFrame(pi, ctx, state, stream);
-  }, stream.intervalMs));
+    if (current()) scheduleNextStreamFrame(pi, ctx, state, stream);
+  }, stream.intervalMs);
 }
 
 async function stopStream(state, { cleanup = false } = {}) {
@@ -1180,16 +1263,18 @@ async function stopStream(state, { cleanup = false } = {}) {
   state.stream = undefined;
   stream.running = false;
   if (stream.timer) {
-    clearTimeout(stream.timer);
+    state.lifecycle.cancel(stream.timer);
     stream.timer = undefined;
   }
   stream.currentController?.abort?.();
+  stream.descriptionController?.abort?.();
   if (cleanup) await cleanupStreamFiles(stream).catch(() => {});
   return stream;
 }
 
 export default function kittyImagePreviewExtension(pi) {
   const state = {
+    lifecycle: createPreviewLifecycle(),
     visible: false,
     index: 0,
     items: [],
@@ -1227,9 +1312,11 @@ export default function kittyImagePreviewExtension(pi) {
     if (unregisterRuntime) return;
     unregisterRuntime = registerKittyImagePreviewRuntime(pi, async (request = {}) => {
       const ctx = activeCtx;
-      if (!ctx?.hasUI || !request.path) return null;
+      const current = previewEpoch(state);
+      if (!current() || !ctx?.hasUI || !request.path) return null;
       applyConfig(state, request.config);
       const item = await buildItem(ctx.cwd, request.path, request.label);
+      if (!current()) return null;
       if (request.replace !== false) {
         stopAnimation(state);
         stopCycle(state);
@@ -1239,6 +1326,7 @@ export default function kittyImagePreviewExtension(pi) {
       state.index = state.items.length - 1;
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
+      if (!current()) return null;
       syncWidget(ctx, state);
       return {
         imageId: item.id,
@@ -1253,6 +1341,8 @@ export default function kittyImagePreviewExtension(pi) {
   installRuntimeBridge();
 
   pi.on("session_start", async (_event, ctx) => {
+    state.lifecycle.begin();
+    const current = previewEpoch(state);
     activeCtx = ctx;
     installRuntimeBridge();
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -1289,36 +1379,59 @@ export default function kittyImagePreviewExtension(pi) {
     }
     if (state.visible && state.items[state.index]) {
       await prepareCurrentImage(state, ctx).catch((error) => {
-        if (ctx.hasUI) ctx.ui.notify(`kitty image preview restore failed: ${error.message}`, "warning");
+        if (current() && ctx.hasUI) ctx.ui.notify(`kitty image preview restore failed: ${error.message}`, "warning");
       });
-      syncWidget(ctx, state);
+      if (current()) syncWidget(ctx, state);
     }
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    if (!state.lifecycle.active) return;
+    // Invalidate first, before closing UI can resolve pending promises. Never
+    // schedule a new flash here: Pi invalidates ctx as soon as this hook returns.
+    state.lifecycle.close();
     unregisterRuntime?.();
     unregisterRuntime = null;
     activeCtx = null;
     stopAnimation(state);
     stopCycle(state);
-    void stopStream(state, { cleanup: true });
+    const stopping = stopStream(state, { cleanup: true });
     state.visible = false;
+    const ownedDelete = releaseOwnedImageData(state, { keepIds: [] });
+    clearOwnedImageIds(state);
+    try {
+      // The widget factory supplies the real terminal even when ctx.ui itself
+      // has no raw writer. Emit scoped d=I now, never into the next generation.
+      const terminal = state.renderTui?.terminal || state.sidePanel?.tui?.terminal || state.sideOverlay?.tui?.terminal;
+      const write = resolveGraphicsWriter(ctx) || terminal?.write?.bind(terminal);
+      if (ownedDelete && write) write(ownedDelete);
+      else if (ownedDelete && ctx?.hasUI && (!ctx.mode || ctx.mode === "tui")) {
+        // A never-shown/hidden gallery may not have mounted a widget yet. Pi's
+        // setWidget factory runs synchronously; use it only to reach the writer,
+        // not to schedule rendering a flash after shutdown. A deferred host
+        // factory is inert once setWidget returns.
+        let mounting = true;
+        try {
+          ctx.ui.setWidget(WIDGET_ID, tui => {
+            if (mounting) tui?.terminal?.write?.(ownedDelete);
+            return { render: () => [], invalidate() {} };
+          });
+        } finally { mounting = false; }
+      }
+    } catch {}
+    for (const close of state.flashClosers || []) { try { close(); } catch {} }
+    state.flashClosers?.clear();
     clearSidePresentation(state);
     if (state.galleryOverlay) {
       state.galleryOverlay.cancelled = true;
       state.galleryOverlay.close?.();
     }
     if (ctx?.hasUI) {
-      const ownedDelete = releaseOwnedImageData(state, { keepIds: [] });
-      clearOwnedImageIds(state);
-      if (ownedDelete) flashDeleteWidget(ctx, state, ownedDelete);
+      ctx.ui.setWidget(WIDGET_ID, undefined);
       ctx.ui.setStatus(WIDGET_ID, undefined);
-    } else {
-      // Headless shutdown: flashDeleteWidget early-returns without a UI, so emit
-      // the owned-data free (d=I) through a non-UI writer instead of only
-      // forgetting the ids (bd-ded98d element (e)).
-      runHeadlessOwnedFree(ctx, state);
     }
+    state.renderTui = undefined;
+    await stopping;
   });
 
   pi.registerTool({
@@ -1570,7 +1683,7 @@ export default function kittyImagePreviewExtension(pi) {
         stopAnimation(state);
         stopCycle(state);
         flashDeleteWidget(ctx, state, state.lastDeleteCommand);
-        setTimeout(() => syncWidget(ctx, state), 120);
+        deferPreviewUi(state, () => syncWidget(ctx, state), 120);
         return { content: [{ type: "text", text: "Hid kitty image preview. Use /image-show to restore it." }], details: makeDetails(state) };
       }
       if (state.items.length === 0) throw new Error("No images have been added yet.");
@@ -1654,12 +1767,16 @@ export default function kittyImagePreviewExtension(pi) {
       })),
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const current = previewEpoch(state);
       await stopStream(state, { cleanup: true });
+      if (!current()) return { content: [{ type: "text", text: "Preview session ended; stream not started." }] };
       stopAnimation(state);
       applyConfig(state, params.config);
       const target = await resolveTendrilTarget(pi, params, signal);
+      if (!current()) return { content: [{ type: "text", text: "Preview session ended; stream not started." }] };
       const dir = getStreamDir(ctx);
       await mkdir(dir, { recursive: true });
+      if (!current()) return { content: [{ type: "text", text: "Preview session ended; stream not started." }] };
       const stream = {
         running: true,
         source: "tendril",
@@ -1723,11 +1840,14 @@ export default function kittyImagePreviewExtension(pi) {
       })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const current = previewEpoch(state);
       await stopStream(state, { cleanup: true });
+      if (!current()) return { content: [{ type: "text", text: "Preview session ended; stream not started." }] };
       stopAnimation(state);
       applyConfig(state, params.config);
       const dir = getStreamDir(ctx);
       await mkdir(dir, { recursive: true });
+      if (!current()) return { content: [{ type: "text", text: "Preview session ended; stream not started." }] };
       const sourcePath = params.screenshotPath
         ? resolveUserPath(ctx.cwd, params.screenshotPath)
         : path.join(dir, "playwright-source.png");
@@ -1796,7 +1916,7 @@ export default function kittyImagePreviewExtension(pi) {
       if (params.hide) {
         state.visible = false;
         flashDeleteWidget(ctx, state, buildScopedDeleteCommand(state));
-        setTimeout(() => syncWidget(ctx, state), 120);
+        deferPreviewUi(state, () => syncWidget(ctx, state), 120);
       } else {
         syncWidget(ctx, state);
       }
@@ -2028,6 +2148,7 @@ export default function kittyImagePreviewExtension(pi) {
       return;
     }
     if (state.galleryOverlay) return;
+    const current = previewEpoch(state);
     const wasVisible = state.visible;
     const owner = {};
     let component;
@@ -2049,6 +2170,7 @@ export default function kittyImagePreviewExtension(pi) {
       state.lastDeleteCommand = buildScopedDeleteCommand(state);
       await ctx.ui.custom((terminalUi, theme, _keys, done) => {
         tui = terminalUi;
+        state.renderTui = tui;
         owner.close = () => done();
         owner.requestRender = () => tui.requestRender();
         component = new KittyImageGalleryOverlay(state, {
@@ -2065,9 +2187,11 @@ export default function kittyImagePreviewExtension(pi) {
       // before remounting the preview so it cannot resurrect the closed modal.
       await component?.pending;
       if (state.galleryOverlay === owner) state.galleryOverlay = undefined;
-      try { tui?.terminal?.write?.(buildScopedDeleteCommand(state)); } catch {}
-      resetTransmissionGuard(state);
-      if (!owner.cancelled) {
+      if (current()) {
+        try { tui?.terminal?.write?.(buildScopedDeleteCommand(state)); } catch {}
+        resetTransmissionGuard(state);
+      }
+      if (current() && !owner.cancelled) {
         state.visible = wasVisible;
         if (wasVisible) await prepareCurrentImage(state, ctx, { forceReload: true });
         syncWidget(ctx, state);
@@ -2086,7 +2210,7 @@ export default function kittyImagePreviewExtension(pi) {
     stopAnimation(state);
     stopCycle(state);
     flashDeleteWidget(ctx, state, state.lastDeleteCommand);
-    setTimeout(() => syncWidget(ctx, state), 120);
+    deferPreviewUi(state, () => syncWidget(ctx, state), 120);
     ctx.ui?.notify?.(`Hid kitty preview. Use /image-show to restore ${state.items.length} ${pluralizeImages(state.items.length)}.`, "info");
   }
 
