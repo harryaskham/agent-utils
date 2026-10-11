@@ -130,8 +130,12 @@ impl Default for ParatenicConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct DashConfig {
     /// Listener address. Wildcard binds are allowed; every route still needs
-    /// the per-run access token.
+    /// an access token.
     pub bind: String,
+    /// Public HTTP(S) origin; also permits this hostname in the Host header.
+    pub public_origin: Option<String>,
+    /// Optional persistent access-token file. Created privately when missing.
+    pub token_file: Option<String>,
     /// Background refresh for choices and node health.
     pub refresh_seconds: u64,
     /// Background incremental image pull.
@@ -140,7 +144,9 @@ pub struct DashConfig {
 impl Default for DashConfig {
     fn default() -> Self {
         Self {
-            bind: "127.0.0.1:7790".into(),
+            bind: "127.0.0.1:7795".into(),
+            public_origin: None,
+            token_file: None,
             refresh_seconds: 300,
             image_refresh_seconds: 300,
         }
@@ -279,6 +285,19 @@ impl AppConfig for Config {
         {
             return Err(invalid(
                 "dash: bind must be ip:port; refresh 30–86400s, image refresh 60–86400s",
+            ));
+        }
+        if let Some(origin) = &self.dash.public_origin {
+            crate::dash::validate_public_origin(origin).map_err(|e| invalid(&e.to_string()))?;
+        }
+        if self
+            .dash
+            .token_file
+            .as_ref()
+            .is_some_and(|p| !safe(p, 4096))
+        {
+            return Err(invalid(
+                "dash.token_file must be a nonempty path without controls",
             ));
         }
         for host in &self.hosts {

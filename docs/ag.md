@@ -37,6 +37,10 @@ A read-only probe of `ms-mac` found that its SSH/login PATH already included the
 
 ![ag choices TUI](assets/ag/fleet/tui-form-118x30.png)
 
+### Persistent dashboard service (ag 0.4.1)
+
+Port **7795** is the new default (7790 belongs to Petri). Both flakes export `homeManagerModules.ag-dash`, an opt-in Linux systemd user service with configurable `bindAddress`, `port`, `publicOrigin`, package/config/token/cache paths and five-minute refresh defaults. Helsinki enables it on its Tailscale IP at `http://helsinki.miku-owl.ts.net:7795`. The persistent runtime access token is stored privately outside Nix and omitted from service logs; use `?token=<token>` on the first browser visit. See [the service configuration and operator activation instructions](../ag/README.md#home-manager-service).
+
 ## Fleet image viewer (ag 0.3)
 
 `ag image` now bulk-syncs selected/all enabled nodes and opens a local browser gallery. `ag image pull` fills the same incremental rsync cache without opening a browser, and `ag image --offline` reads cached images without network. The gallery indexes all validated registrations rather than the recent-list cap, with node/agent filtering, search and full-size previews. Failed nodes retain visibly cached data. See [the gallery guide and validation](ag-gallery.md).

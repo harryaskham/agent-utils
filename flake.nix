@@ -60,6 +60,8 @@
       systems = nixpkgs.lib.systems.flakeExposed;
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in {
+      # Independently usable Linux Home Manager service for the ag dashboard.
+      inherit (ag) homeManagerModules;
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
@@ -167,6 +169,7 @@
 
       checks = forAllSystems (system: {
         ag = ag.packages.${system}.ag;
+        ag-dash-module = ag.checks.${system}.ag-dash-module;
       });
 
       devShells = forAllSystems (system:

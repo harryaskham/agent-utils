@@ -11,10 +11,12 @@
         && nixpkgs.lib.cleanSourceFilter path type;
     };
   in {
+    homeManagerModules.ag-dash = import ./nix/home-manager.nix { inherit self; };
+    homeManagerModules.default = self.homeManagerModules.ag-dash;
     packages = each (system: let pkgs = import nixpkgs { inherit system; }; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
-        version = "0.4.0";
+        version = "0.4.1";
         src = source;
         cargoDeps = (pkgs.rustPlatform.importCargoLock.override {
           fetchurl = attrs: pkgs.fetchurl (attrs // {
@@ -53,7 +55,13 @@
       ag = { type = "app"; program = "${self.packages.${system}.ag}/bin/ag"; };
       default = ag;
     });
-    checks = each (system: { inherit (self.packages.${system}) ag; });
+    checks = each (system: {
+      inherit (self.packages.${system}) ag;
+      ag-dash-module = import ./nix/module-test.nix {
+        pkgs = import nixpkgs { inherit system; };
+        module = self.homeManagerModules.ag-dash;
+      };
+    });
     devShells = each (system: let pkgs = import nixpkgs { inherit system; }; in {
       default = pkgs.mkShell { packages = with pkgs; [ cargo rustc rustfmt clippy openssh rsync ]; };
     });

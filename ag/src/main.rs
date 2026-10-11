@@ -85,9 +85,15 @@ enum Commands {
     Doctor,
     /// Serve a live local web dashboard of choices, health and images.
     Dash {
-        /// Listener (default dash.bind, 127.0.0.1:7790). Wildcards still need the token.
+        /// Listener (default dash.bind, 127.0.0.1:7795). Wildcards still need the token.
         #[arg(long)]
         bind: Option<std::net::SocketAddr>,
+        /// Public HTTP(S) origin, e.g. http://helsinki.miku-owl.ts.net:7795.
+        #[arg(long)]
+        public_origin: Option<String>,
+        /// Persistent access token (created privately if missing; symlinks supported).
+        #[arg(long)]
+        token_file: Option<String>,
         /// Print the URL without opening a browser.
         #[arg(long)]
         no_open: bool,
@@ -1112,6 +1118,8 @@ fn execute(cli: Cli) -> Result<u8> {
         }
         Commands::Dash {
             bind,
+            public_origin,
+            token_file,
             no_open,
             no_images,
             cache_dir,
@@ -1138,6 +1146,11 @@ fn execute(cli: Cli) -> Result<u8> {
             let options = ag::dash::DashOptions {
                 selection,
                 bind,
+                public_origin: public_origin.or_else(|| service.config.dash.public_origin.clone()),
+                token_file: token_file
+                    .or_else(|| service.config.dash.token_file.clone())
+                    .map(|p| config::expand_home(&p))
+                    .transpose()?,
                 refresh: std::time::Duration::from_secs(refresh),
                 image_refresh: std::time::Duration::from_secs(image_refresh),
                 images: !no_images,
@@ -1146,9 +1159,12 @@ fn execute(cli: Cli) -> Result<u8> {
             let as_json = cli.json;
             service.runtime.block_on(ag::dash::run(service.config.clone(), targets, options, |started| {
                 if as_json {
-                    let _ = json(serde_json::json!({"url": started.url, "address": started.address.to_string()}));
+                    let _ = json(serde_json::json!({"url": started.url, "address": started.address.to_string(), "token_file": started.token_file}));
                 } else {
                     let _ = text(&format!("ag dash · {}\nCtrl-C to stop", started.url));
+                    if let Some(path) = &started.token_file {
+                        let _ = text(&format!("Access token: {} (append ?token=<token> on first visit)", terminal_text(&path.display().to_string())));
+                    }
                 }
                 if !no_open && !as_json {
                     if let Err(error) = ag::gallery::open_viewer(std::path::Path::new(&started.url)) {

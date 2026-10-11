@@ -82,6 +82,12 @@
    ]
   },
   {
+   "id": "DASH-SERVICE-1",
+   "contract": "Default port 7795. Root and ag subflake export an opt-in Home Manager systemd user service with configurable IPv4/IPv6/wildcard bind IP, public origin, package/config/cache/token paths and refresh intervals. Restarts on failure or exit and starts under default.target; no firewall/Serve/config mutation. Persistent owner-private runtime tokens survive restarts, preserve managed links and are not logged. Public hostname is admitted without disabling Host checks; SIGTERM releases the HTTP listener.",
+   "tests": ["ag/nix/module-test.nix", "ag/tests/dash_service.rs"],
+   "evidence": ["ag/nix/home-manager.nix", "flake.nix", "ag/flake.nix"]
+  },
+  {
    "id": "MCP-2",
    "contract": "ag_choices_list, ag_doctor and confirmation-gated ag_choices_answer share the CLI domain core.",
    "tests": [
@@ -112,6 +118,7 @@
   "cargo test --locked",
   "cargo clippy --locked --all-targets -- -D warnings",
   "cargo fmt --check",
-  "nix build .#ag --no-link"
+  "nix build .#ag --no-link",
+  "nix build .#checks.aarch64-darwin.ag-dash-module --no-link"
  ]
 }

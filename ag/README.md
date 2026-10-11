@@ -115,12 +115,50 @@ The page answers questions through the same path as the TUI and CLI. Keys: `j`/`
 
 ```yaml
 dash:
-  bind: 127.0.0.1:7790        # --bind overrides; wildcard binds are allowed
+  bind: 127.0.0.1:7795        # --bind overrides; wildcard binds are allowed
+  # public_origin: http://helsinki.miku-owl.ts.net:7795  # --public-origin
+  # token_file: ~/.local/state/ag/dash/token            # --token-file
   refresh_seconds: 300        # --refresh
   image_refresh_seconds: 300  # --image-refresh
 ```
 
-Access: the printed URL carries a random per-run token that is exchanged once for an `HttpOnly; SameSite=Strict` cookie. Every route requires it. Answers and refreshes also require a custom request header and a same-origin `Origin`, so other sites cannot submit forms. Loopback binds pin the `Host` header against DNS rebinding. The gallery route serves only the generated index and verified archive files inside the cache (no traversal or symlink escape); images are served `nosniff` with a sandboxing CSP. Ctrl-C stops the server, background refreshers and the listener.
+Access: by default the printed URL carries a random per-run token that is exchanged once for an `HttpOnly; SameSite=Strict` cookie. `--token-file` / `dash.token_file` instead reads a persistent token, privately creating one if absent; existing managed symlinks are supported, while dangling links and group/world-readable files fail closed. In this mode stdout contains only the bare public URL and token-file path, **never the token**. Append `?token=<file contents>` for the first visit; the browser is redirected to the clean URL. `--public-origin` / `dash.public_origin` accepts a public HTTP(S) origin independently of the bind IP, advertises that URL and permits its hostname in the Host check. HTTPS public origins also mark the cookie Secure. Every route requires it. Answers and refreshes also require a custom request header and a same-origin `Origin`, so other sites cannot submit forms. Loopback binds pin the `Host` header against DNS rebinding. The gallery route serves only the generated index and verified archive files inside the cache (no traversal or symlink escape); images are served `nosniff` with a sandboxing CSP. Ctrl-C or service SIGTERM shuts down the HTTP listener. The Home Manager service supervises the entire process group, including image-pull/SSH children.
+
+### Home Manager service
+
+Both the root flake and `./ag` export `homeManagerModules.ag-dash` (also `default`). The module adds an opt-in Linux user service; it does not rewrite the existing ag/Culture configs, start Paratenic, open firewall ports, or install Tailscale Serve/Funnel routes.
+
+```nix
+{
+  imports = [ inputs.agent-utils.homeManagerModules.ag-dash ];
+  services.ag-dash = {
+    enable = true;
+    # package = pkgs.ag;                       # configured pkgs.ag, or the flake package
+    bindAddress = "100.83.90.42";              # configurable IP; IPv6/wildcards supported
+    port = 7795;
+    publicOrigin = "http://helsinki.miku-owl.ts.net:7795";
+    # configFile = "${config.xdg.configHome}/ag/config.yaml";
+    # refreshSeconds = 300;
+    # imageRefreshSeconds = 300;
+    # images = true;
+    # environment.SSH_AUTH_SOCK = "/run/user/1000/ssh-agent";
+  };
+}
+```
+
+The service uses an immutable executable, runs without opening a browser, starts under `default.target`, and retries after five seconds if the configured IP is not yet available. User lingering must already be enabled to run while logged out. State and the generated token default to `$XDG_STATE_HOME/ag` and `$XDG_STATE_HOME/ag/dash/token`; `stateDirectory`, `tokenFile`, and `cacheDirectory` are configurable. Tokens stay outside the Nix store and journal. Do not put secret contents in `environment`.
+
+After the operator activates Home Manager:
+
+```sh
+systemctl --user status ag-dash
+journalctl --user -u ag-dash -n 30
+# Read the private token on the server for the first browser visit:
+cat ~/.local/state/ag/dash/token
+# Open http://helsinki.miku-owl.ts.net:7795/?token=<token>
+```
+
+The scoped service and runtime checks are `nix build .#checks.<system>.ag-dash-module` and `cargo test --test dash_service`; they cover defaults, disabled mode, IPv6/wildcard/custom listeners, argument quoting, persistent tokens and managed symlinks, named Host admission, and SIGTERM cleanup. Enabling the service is declarative: builds and pin updates do not start it; apply it with your usual Home Manager/system switch.
 
 Human speech output is ordered by arrival when following (not a globally synchronized clock). Finite speech snapshots/images are sorted by producer timestamps. Each speech entry has a metadata header, a message body on the next logical line, and one blank line between entries:
 

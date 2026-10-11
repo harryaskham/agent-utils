@@ -5,8 +5,8 @@
 //! on intervals for the lifetime of the command. Answers go through the same
 //! `paratenic::answer` path as the TUI/CLI/MCP.
 //!
-//! Security: every route requires a per-run random token, exchanged once from
-//! the printed URL for an HttpOnly SameSite=Strict cookie. Mutations also need a
+//! Security: every route requires a random token (per-run, or from a private
+//! persistent file), exchanged once for an HttpOnly SameSite=Strict cookie. Mutations also need a
 //! custom header (blocks cross-site forms) and a same-origin Origin. Loopback
 //! binds additionally pin the Host header against DNS rebinding.
 use crate::{
@@ -27,7 +27,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    io::{Read, Write},
     net::SocketAddr,
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -45,6 +47,8 @@ const CHOICES_STALE_MS: u64 = 20_000;
 pub struct DashOptions {
     pub selection: crate::model::Selection,
     pub bind: SocketAddr,
+    pub public_origin: Option<String>,
+    pub token_file: Option<PathBuf>,
     pub refresh: Duration,
     pub image_refresh: Duration,
     pub images: bool,
@@ -83,6 +87,7 @@ struct Dash {
     options: DashOptions,
     token: String,
     cookie: String,
+    secure_cookie: bool,
     hosts: Option<Vec<String>>,
     snapshot: Mutex<Snapshot>,
     choices_busy: AtomicBool,
@@ -102,6 +107,97 @@ fn eq(a: &str, b: &str) -> bool {
             .zip(b.bytes())
             .fold(0u8, |acc, (x, y)| acc | (x ^ y))
             == 0
+}
+
+/// Only an origin: a path prefix, query, credentials or fragment would misroute
+/// authentication/relative gallery URLs. Binding and public naming are separate.
+pub fn validate_public_origin(value: &str) -> Result<url::Url> {
+    let invalid = || {
+        Error::Config("dash.public_origin must be an HTTP(S) origin without credentials, path, query or fragment".into())
+    };
+    if value.chars().any(char::is_control) || value.trim() != value {
+        return Err(invalid());
+    }
+    let url = url::Url::parse(value).map_err(|_| invalid())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
+/// Runtime secret, never a Nix-store value. Existing managed symlinks are read
+/// normally; a dangling link is an error, not permission to replace it.
+fn persistent_token(path: &Path) -> Result<String> {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => {
+            let meta = file.metadata()?;
+            if !meta.is_file() || meta.permissions().mode() & 0o077 != 0 || meta.len() > 514 {
+                return Err(Error::Config("dash token must be an owner-private regular file (managed symlinks are allowed)".into()));
+            }
+            let mut token = String::new();
+            file.take(514).read_to_string(&mut token)?;
+            let token = token.trim();
+            if !(32..=512).contains(&token.len())
+                || !token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.~+/=".contains(&b))
+            {
+                return Err(Error::Config(
+                    "dash token must contain 32–512 cookie-safe ASCII characters on one line"
+                        .into(),
+                ));
+            }
+            Ok(token.to_owned())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                _ => {
+                    return Err(Error::Config(
+                        "dash token target is unavailable; existing link left intact".into(),
+                    ));
+                }
+            }
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)?;
+            let token = format!(
+                "{}{}",
+                uuid::Uuid::new_v4().simple(),
+                uuid::Uuid::new_v4().simple()
+            );
+            let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+            writeln!(temp, "{token}")?;
+            temp.as_file().sync_all()?;
+            match temp.persist_noclobber(path) {
+                Ok(_) => {
+                    std::fs::File::open(parent)?.sync_all()?;
+                    Ok(token)
+                }
+                Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    persistent_token(path)
+                }
+                Err(e) => Err(e.error.into()),
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -281,11 +377,20 @@ async fn index(
         }
         let mut response = Redirect::to("/").into_response();
         if let Ok(value) = HeaderValue::from_str(&format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Strict",
-            dash.cookie, dash.token
+            "{}={}; Path=/; HttpOnly; SameSite=Strict{}",
+            dash.cookie,
+            dash.token,
+            if dash.secure_cookie { "; Secure" } else { "" }
         )) {
             response.headers_mut().insert(header::SET_COOKIE, value);
         }
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response.headers_mut().insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        );
         return response;
     }
     if let Err(response) = dash.authorized(&headers) {
@@ -508,17 +613,29 @@ async fn gallery_file(
 }
 
 pub struct Started {
+    /// With a persistent token this is the bare public URL: never log the secret.
     pub url: String,
     pub address: SocketAddr,
+    pub token_file: Option<PathBuf>,
 }
 
-/// Bind, start background refreshers, then serve until Ctrl-C.
+/// Bind, start background refreshers, then serve until Ctrl-C or service SIGTERM.
 pub async fn run(
     config: Config,
     targets: Vec<(Host, Option<Endpoint>)>,
     options: DashOptions,
     ready: impl FnOnce(&Started),
 ) -> Result<()> {
+    let public_origin = options
+        .public_origin
+        .as_deref()
+        .map(validate_public_origin)
+        .transpose()?;
+    let token = match &options.token_file {
+        Some(path) => persistent_token(path)?,
+        None => uuid::Uuid::new_v4().simple().to_string(),
+    };
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let listener = tokio::net::TcpListener::bind(options.bind)
         .await
         .map_err(|e| {
@@ -528,7 +645,6 @@ pub async fn run(
             ))
         })?;
     let address = listener.local_addr()?;
-    let token = uuid::Uuid::new_v4().simple().to_string();
     let display_host = if address.ip().is_unspecified() {
         "localhost".to_owned()
     } else if address.is_ipv6() {
@@ -536,7 +652,7 @@ pub async fn run(
     } else {
         address.ip().to_string()
     };
-    let hosts = (!address.ip().is_unspecified()).then(|| {
+    let hosts = (!address.ip().is_unspecified() || public_origin.is_some()).then(|| {
         let port = address.port();
         let mut names = vec![
             format!("{display_host}:{port}"),
@@ -545,8 +661,17 @@ pub async fn run(
         if address.ip().is_loopback() {
             names.extend([format!("127.0.0.1:{port}"), format!("[::1]:{port}")]);
         }
+        if let Some(origin) = &public_origin {
+            names.push(origin[url::Position::BeforeHost..url::Position::AfterPort].to_owned());
+        }
         names
     });
+    let secure_cookie = public_origin
+        .as_ref()
+        .is_some_and(|u| u.scheme() == "https");
+    let public_url = public_origin
+        .map(|u| u.origin().ascii_serialization())
+        .unwrap_or_else(|| format!("http://{display_host}:{}", address.port()));
     let endpoints = targets
         .iter()
         .filter_map(|(h, e)| Some((h.name.clone(), e.clone()?)))
@@ -565,6 +690,7 @@ pub async fn run(
         targets,
         endpoints,
         cookie: format!("ag_dash_{}", address.port()),
+        secure_cookie,
         token: token.clone(),
         hosts,
         options: options.clone(),
@@ -582,8 +708,13 @@ pub async fn run(
         .route("/gallery/{*path}", get(gallery_file))
         .with_state(dash.clone());
     ready(&Started {
-        url: format!("http://{display_host}:{}/?token={token}", address.port()),
+        url: if options.token_file.is_some() {
+            format!("{public_url}/")
+        } else {
+            format!("{public_url}/?token={token}")
+        },
         address,
+        token_file: options.token_file.clone(),
     });
     let background = {
         let dash = dash.clone();
@@ -599,8 +730,11 @@ pub async fn run(
         })
     };
     let result = axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
+        .with_graceful_shutdown(async move {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => (),
+                _ = terminate.recv() => (),
+            }
         })
         .await
         .map_err(|e| Error::Transport(e.to_string()));
