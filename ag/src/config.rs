@@ -76,6 +76,75 @@ pub struct Host {
     /// Installed executable name or absolute path, not a shell snippet.
     pub command: String,
     pub paths: Paths,
+    /// Optional Paratenic AHP endpoint for live choices and health.
+    pub paratenic: HostParatenic,
+}
+
+/// Per-node Paratenic endpoint. Omitted fields fall back to the Culture host
+/// with the same id (`culture_host`, then the node name), so existing Culture
+/// configuration works without duplication.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostParatenic {
+    /// Set false to skip AHP queries for this node.
+    pub enabled: Option<bool>,
+    /// AHP WebSocket URL, for example ws://node:7788/ahp.
+    pub url: Option<String>,
+    /// Owner-only bearer token file (managed symlinks are supported).
+    pub token_file: Option<String>,
+    /// Explicit opt-in for ws:// away from loopback (for example over a tailnet).
+    pub allow_plaintext_non_loopback: Option<bool>,
+    /// Culture host id when it differs from this node name.
+    pub culture_host: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParatenicConfig {
+    /// Query Paratenic hosts for elicitations and health.
+    pub enabled: bool,
+    /// Culture configuration used for zero-config endpoints; missing is fine.
+    pub culture_config: Option<String>,
+    /// Default bearer token file when neither the node nor Culture names one.
+    pub token_file: Option<String>,
+    pub request_timeout_seconds: u64,
+    /// Deadline for the authoritative accept/reject of a submitted answer.
+    pub answer_timeout_seconds: u64,
+    /// Concurrent session snapshots per node while listing choices.
+    pub parallelism: usize,
+}
+impl Default for ParatenicConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            culture_config: None,
+            token_file: None,
+            request_timeout_seconds: 15,
+            answer_timeout_seconds: 30,
+            parallelism: 8,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct DashConfig {
+    /// Listener address. Wildcard binds are allowed; every route still needs
+    /// the per-run access token.
+    pub bind: String,
+    /// Background refresh for choices and node health.
+    pub refresh_seconds: u64,
+    /// Background incremental image pull.
+    pub image_refresh_seconds: u64,
+}
+impl Default for DashConfig {
+    fn default() -> Self {
+        Self {
+            bind: "127.0.0.1:7790".into(),
+            refresh_seconds: 300,
+            image_refresh_seconds: 300,
+        }
+    }
 }
 impl Default for Host {
     fn default() -> Self {
@@ -88,6 +157,7 @@ impl Default for Host {
             enabled: true,
             command: "ag".into(),
             paths: Paths::default(),
+            paratenic: HostParatenic::default(),
         }
     }
 }
@@ -125,6 +195,8 @@ pub struct Config {
     pub version: u32,
     pub paths: Paths,
     pub gallery: GalleryConfig,
+    pub paratenic: ParatenicConfig,
+    pub dash: DashConfig,
     pub hosts: Vec<Host>,
     /// SSH executable (primarily useful for an isolated transport fixture).
     pub ssh_command: String,
@@ -140,6 +212,8 @@ impl Default for Config {
             paths: Paths::default(),
             hosts: vec![Host::local()],
             gallery: GalleryConfig::default(),
+            paratenic: ParatenicConfig::default(),
+            dash: DashConfig::default(),
             ssh_command: "ssh".into(),
             connect_timeout_seconds: 10,
             command_timeout_seconds: 20,
@@ -186,6 +260,43 @@ impl AppConfig for Config {
             ));
         }
         let mut names = HashSet::new();
+        if !(1..=120).contains(&self.paratenic.request_timeout_seconds)
+            || !(1..=300).contains(&self.paratenic.answer_timeout_seconds)
+            || !(1..=64).contains(&self.paratenic.parallelism)
+            || [&self.paratenic.culture_config, &self.paratenic.token_file]
+                .into_iter()
+                .flatten()
+                .any(|p| !safe(p, 4096))
+        {
+            return Err(invalid(
+                "paratenic: request 1–120s, answer 1–300s, parallelism 1–64, paths without control characters",
+            ));
+        }
+        if !safe(&self.dash.bind, 256)
+            || self.dash.bind.parse::<std::net::SocketAddr>().is_err()
+            || !(30..=86_400).contains(&self.dash.refresh_seconds)
+            || !(60..=86_400).contains(&self.dash.image_refresh_seconds)
+        {
+            return Err(invalid(
+                "dash: bind must be ip:port; refresh 30–86400s, image refresh 60–86400s",
+            ));
+        }
+        for host in &self.hosts {
+            let p = &host.paratenic;
+            if [&p.url, &p.token_file, &p.culture_host]
+                .into_iter()
+                .flatten()
+                .any(|v| !safe(v, 4096))
+            {
+                return Err(invalid(
+                    "paratenic url/token_file/culture_host must be nonempty",
+                ));
+            }
+            if let Some(url) = &p.url {
+                crate::paratenic::validate_url(url, p.allow_plaintext_non_loopback == Some(true))
+                    .map_err(|e| invalid(&format!("host {}: {e}", host.name)))?;
+            }
+        }
         for host in &self.hosts {
             if !safe(&host.name, 128) || !names.insert(&host.name) {
                 return Err(invalid(

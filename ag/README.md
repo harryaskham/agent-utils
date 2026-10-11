@@ -1,6 +1,6 @@
 # ag — agent feeds
 
-A Rust CLI for agent speech and durable shared images across a configured SSH fleet. `ag image` opens a local browser gallery. No daemon, listening port, or automatic telemetry.
+A Rust CLI for agent speech, shared images, pending agent questions and node health across a configured fleet. `ag image` opens a local browser gallery; `ag dash` serves one live local page for all of it. No background daemon or automatic telemetry: `ag dash` listens only while it runs.
 
 ```sh
 ag tts tail                           # all configured nodes, live until Ctrl-C
@@ -23,7 +23,104 @@ ag image list --agent my-agent --json
 ag --host ms-mac image info 'my-agent/img-<id>.png'
 ag --host ms-mac image get 'my-agent/img-<id>.png' -o screenshot.png
 ag hosts
+ag choices                           # answer pending agent questions (TUI)
+ag choices list                      # print them; --all adds unanswerable ones
+ag choices answer --node ms-dev --session ahp-session:/… --request choice-1 --option 2
+ag doctor                            # per-node SSH, Paratenic, speech, gallery
+ag dash                              # live web view: choices, health, images
 ```
+
+## Fleet choices (`ag choices`)
+
+Every pending agent elicitation — blocking `interactive_choice`, non-blocking `async_choice`, and Pi Daemon RPC dialogs — is read from each node's **Paratenic AHP host** (`SessionState.inputNeeded`). `ag` keeps no choices database and adds no Pi-side server: Paratenic is the single fleet surface, the same one Culture uses.
+
+`ag choices` is a TUI. The left rail groups questions by node and agent; the right pane is the selected question.
+
+| Key | Action |
+| --- | --- |
+| `j`/`k`, `↑`/`↓` | Move between questions (rail) or options (question pane) |
+| `J`/`K`, PgUp/PgDn | Move between questions from either pane |
+| `Tab`/`l`, `Shift-Tab`/`h` | Switch pane (narrow terminals show one pane at a time) |
+| `1`–`9`, `Enter` | Answer with that option / the highlighted option |
+| `Space` | Toggle a multi-select option |
+| `i` | Reply in your own words (when the question allows it) |
+| `d` `d` | Decline (press twice) |
+| `r` | Refresh now (otherwise every `--interval` seconds, default 60) |
+| `q`, `Esc`, `Ctrl-C` | Quit and restore the terminal |
+
+Mouse: click a question; click an option once to highlight, again to answer; the wheel scrolls either pane. Multi-question forms step through every question; Enter on an empty optional text field skips it.
+
+`ag choices list [--all] [--json]` prints the same data. Each entry shows the exact `--node/--session/--request/--revision` for `ag choices answer`, which accepts `--option` (id, label or 1-based index), `--text`, `--answers '{"question-id": …}'` for forms, and `--response decline|cancel`.
+
+Answers use the standard `chat/inputCompleted` action. Before dispatch, `ag` re-reads the authoritative session and refuses:
+
+- **gone** — already answered elsewhere or withdrawn;
+- **changed** — the request differs from the listed `--revision`;
+- **unavailable** — stale catalogue, read-only chat, or backend/input authority offline (the same rules Culture applies).
+
+Answers are validated locally exactly as Paratenic validates them (required questions, option ids, freeform permission, number/boolean kinds). The result is the host's echo of our exact client id and sequence: **accepted** or **rejected** (with reason). No echo before `paratenic.answer_timeout_seconds` is **indeterminate**: it may still apply, so re-list instead of retrying. Nothing is retried automatically. Exit status is 0 only for accepted.
+
+Tool confirmations, client tool execution and authentication requests are listed with `--all` but must be handled in Culture.
+
+### Endpoints
+
+With no extra configuration, each node uses the Culture host with the same id from `~/.config/culture/config.yaml` (`$XDG_CONFIG_HOME` honored): URL, bearer token file and plaintext policy. Override per node:
+
+```yaml
+paratenic:
+  # culture_config: ~/.config/culture/config.yaml
+  # token_file: ~/.config/paratenic/token     # default when neither node nor Culture names one
+  request_timeout_seconds: 15
+  answer_timeout_seconds: 30
+  parallelism: 8                               # session snapshots per node
+hosts:
+  - name: ms-dev
+    address: ms-dev
+    paratenic:
+      url: ws://ms-dev.example.ts.net:7788/ahp
+      token_file: ~/.config/paratenic/token
+      allow_plaintext_non_loopback: true       # ws:// off-loopback, e.g. inside a tailnet
+      # culture_host: other-id                 # when the Culture id differs
+      # enabled: false
+```
+
+`ws://` away from loopback requires `allow_plaintext_non_loopback`, matching Culture. Token files may be managed symlinks; they are read per connection and never logged. `--local` resolves this machine's Culture host by hostname.
+
+Nodes that are down are reported quietly as **offline** (`not listening`, `timed out`, `unknown host`, `unreachable`) and never hide healthy nodes or change the exit status. Real failures — a refused bearer token, a protocol error — are errors (exit 3).
+
+`ag` uses a small pool of stable logical client ids per host (flock-leased under `$XDG_STATE_HOME/ag/paratenic`) so repeated runs do not grow the host's client table; each id's `clientSeq` is persisted monotonically so a reused id never collides with an earlier dispatch.
+
+## Fleet health (`ag doctor`)
+
+One concurrent, bounded, read-only pass per node:
+
+| Check | What it reads |
+| --- | --- |
+| `ssh` / `local` | `ag` reachability over SSH (or this machine) |
+| `paratenic` | AHP connect + session catalogue (sessions, input-needed, backends offline) and the plaintext `/status` probe when available (uptime, providers, lock contention) |
+| `speech` | Most recent durable speech request and any muted kinds |
+| `images` | Last successful gallery sync from the local cache (no network) |
+
+A node that answers neither SSH nor AHP collapses to one `offline` line. A node reachable over AHP but not SSH is a warning, as is one reachable over SSH whose Paratenic is not answering. Exit 3 only for real errors; offline and warnings exit 0. `--json` and the `ag_doctor` MCP tool return the full report.
+
+## Live dashboard (`ag dash`)
+
+`ag dash` serves one page with **Choices**, **Health** and **Images** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
+
+- choices are re-read from Paratenic whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
+- health runs every `dash.refresh_seconds` and after each image pull;
+- `ag image pull` runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running (`--no-images` serves the existing cache only); the Images tab embeds the same gallery.
+
+The page answers questions through the same path as the TUI and CLI. Keys: `j`/`k` move, `1`–`9` answer, `i` reply, `d` decline (twice), `r` refresh.
+
+```yaml
+dash:
+  bind: 127.0.0.1:7790        # --bind overrides; wildcard binds are allowed
+  refresh_seconds: 300        # --refresh
+  image_refresh_seconds: 300  # --image-refresh
+```
+
+Access: the printed URL carries a random per-run token that is exchanged once for an `HttpOnly; SameSite=Strict` cookie. Every route requires it. Answers and refreshes also require a custom request header and a same-origin `Origin`, so other sites cannot submit forms. Loopback binds pin the `Host` header against DNS rebinding. The gallery route serves only the generated index and verified archive files inside the cache (no traversal or symlink escape); images are served `nosniff` with a sandboxing CSP. Ctrl-C stops the server, background refreshers and the listener.
 
 Human speech output is ordered by arrival when following (not a globally synchronized clock). Finite speech snapshots/images are sorted by producer timestamps. Each speech entry has a metadata header, a message body on the next logical line, and one blank line between entries:
 
@@ -143,9 +240,9 @@ ag completions zsh
 
 `ag_image_pull` provides the same gallery/cache operation over MCP/`ag call`, requires `confirmed=true`, and never opens a browser. Its `offline` option reindexes the local cache without network. It returns gallery path, counts and per-node status/warnings rather than dumping all images into model context.
 
-`ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_tts_status`, `ag_image_list`, `ag_image_info`, plus `ag_tts_mute` / `ag_tts_unmute` (require `confirmed=true` after operator approval) and house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private typed `ag node ...` protocol that ignores fleet config, preventing recursion. Speech-control writes use the same policy implementation as the local CLI and MCP.
+`ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_tts_status`, `ag_image_list`, `ag_image_info`, `ag_choices_list`, `ag_doctor`, plus `ag_tts_mute` / `ag_tts_unmute` / `ag_choices_answer` (require `confirmed=true` after operator approval) and house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private typed `ag node ...` protocol that ignores fleet config, preventing recursion. Speech-control writes use the same policy implementation as the local CLI and MCP.
 
-Exit codes: `0` success/normal Ctrl-C or closed pipe; `1` command/config/I/O failure; `2` clap usage error; `3` finite fleet result with one or more failed nodes (healthy data is still returned). Configured paths/errors are local private diagnostic data. Human output escapes terminal control characters. Limits: 128 nodes, 1000 records per node/request, 8 MiB per speech line, 64 MiB image/response, 64 KiB image sidecar and a 200000-file image scan. Incomplete appended lines are held until newline; malformed/oversized records are reported, not interpreted as commands. Images are checksum-verified before download; downloads refuse traversal, symlink escapes and overwrite of existing destinations.
+Exit codes: `0` success/normal Ctrl-C or closed pipe; `1` command/config/I/O failure; `2` clap usage error; `3` finite fleet result with one or more failed nodes (healthy data is still returned), or an answer that was not accepted. Offline nodes in `choices`/`doctor` are reported but do not set 3. Configured paths/errors are local private diagnostic data. Human output escapes terminal control characters. Limits: 128 nodes, 1000 records per node/request, 8 MiB per speech line, 64 MiB image/response, 64 KiB image sidecar and a 200000-file image scan. Incomplete appended lines are held until newline; malformed/oversized records are reported, not interpreted as commands. Images are checksum-verified before download; downloads refuse traversal, symlink escapes and overwrite of existing destinations.
 
 Live feeds retain byte cursors in memory across reconnects, detect inode replacement and observed truncation, and resume without replaying already delivered records. Stopping and restarting `ag` intentionally starts a new last-N view. Ctrl-C cancels and reaps local SSH children; remote peers stop on stdin EOF. Reads poll at the configured interval but do not touch queue locks or rewrite feeds. A stalled node cannot block other tail producers.
 
@@ -162,4 +259,4 @@ nix run .#ag -- --help
 
 Root `agent-utils` packages/bundle include `bin/ag`; the root overlay exposes `pkgs.ag`. Collective owns permanent installation. After its input pin is updated, `cltv-run ag -- --help` tests the configured package before the next operator-run switch. Do not install a competing Cargo/profile binary. This Nix-only lane deliberately has no self-updater that could overwrite immutable store files, and no feedback submission of private transcripts/images. `mcp-cli-core` and `configurable-cli` provide the shared typed contracts.
 
-`acceptance.json` maps contracts to tests. The process-boundary suite uses isolated state and a fake SSH executable to run real peer processes, test disconnection/cursor recovery, and prove child cleanup; it never connects to the operator's fleet. The current optional AHP bridge exposes input providers only, not attachment/resource registration; this package does not advertise unsupported AHP capabilities.
+`acceptance.json` and `fleet-acceptance.json` map contracts to tests. `tests/fleet.rs` runs the real binary against an in-process fake Paratenic AHP host (`tests/support/fake_ahp.rs`) for listing, answering, rejection/staleness fences, offline nodes, the dash's auth/CSRF/gallery rules and a real pseudo-terminal TUI session. `cargo run --example fake_paratenic -- 2` starts demo hosts for visual QA. The process-boundary suite uses isolated state and a fake SSH executable to run real peer processes, test disconnection/cursor recovery, and prove child cleanup; it never connects to the operator's fleet. The current optional AHP bridge exposes input providers only, not attachment/resource registration; this package does not advertise unsupported AHP capabilities.

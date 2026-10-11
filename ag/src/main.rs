@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 #[command(
     name = "ag",
     version,
-    about = "Agent speech and shared images across your machines",
+    about = "Agent speech, images, choices and health across your machines",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -73,6 +73,37 @@ enum Commands {
         #[command(subcommand)]
         command: Option<ImageCommand>,
     },
+    /// Answer pending agent questions across the fleet (TUI; list/answer for scripts).
+    Choices {
+        /// Background refresh interval for the TUI, in seconds.
+        #[arg(long, default_value_t = 60)]
+        interval: u64,
+        #[command(subcommand)]
+        command: Option<ChoicesCommand>,
+    },
+    /// Check each node: SSH/ag, Paratenic AHP, speech feed and gallery cache.
+    Doctor,
+    /// Serve a live local web dashboard of choices, health and images.
+    Dash {
+        /// Listener (default dash.bind, 127.0.0.1:7790). Wildcards still need the token.
+        #[arg(long)]
+        bind: Option<std::net::SocketAddr>,
+        /// Print the URL without opening a browser.
+        #[arg(long)]
+        no_open: bool,
+        /// Skip periodic image pulls (serve the existing gallery cache only).
+        #[arg(long)]
+        no_images: bool,
+        /// Gallery cache directory (as for ag image).
+        #[arg(long)]
+        cache_dir: Option<String>,
+        /// Choices/health refresh seconds (default dash.refresh_seconds).
+        #[arg(long)]
+        refresh: Option<u64>,
+        /// Image pull seconds (default dash.image_refresh_seconds).
+        #[arg(long)]
+        image_refresh: Option<u64>,
+    },
     /// Manage canonical YAML configuration (symlinks preserved).
     Config {
         #[command(subcommand)]
@@ -98,6 +129,39 @@ enum Commands {
     Node {
         #[command(subcommand)]
         command: NodeCommand,
+    },
+}
+#[derive(Subcommand)]
+enum ChoicesCommand {
+    /// Print pending questions grouped by node and agent.
+    List {
+        /// Include stale and non-chat entries with the reason they cannot be answered here.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Answer one question through Paratenic (ids from `ag choices list --json`).
+    Answer {
+        #[arg(long = "node")]
+        node: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        request: String,
+        /// Option id, label or 1-based index (single question).
+        #[arg(long)]
+        option: Option<String>,
+        /// Freeform/text reply (single question).
+        #[arg(long)]
+        text: Option<String>,
+        /// Answers object keyed by question id, as JSON.
+        #[arg(long)]
+        answers: Option<String>,
+        /// accept, decline or cancel.
+        #[arg(long, default_value = "accept")]
+        response: String,
+        /// Refuse when the request changed since this revision was listed.
+        #[arg(long)]
+        revision: Option<String>,
     },
 }
 #[derive(Subcommand)]
@@ -522,6 +586,215 @@ fn node(command: NodeCommand) -> Result<u8> {
     Ok(0)
 }
 
+fn color_enabled(choice: ColorChoice) -> bool {
+    use std::io::IsTerminal;
+    match choice {
+        ColorChoice::Always => true,
+        ColorChoice::Never => false,
+        ColorChoice::Auto => {
+            io::stdout().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+                && std::env::var_os("TERM").is_none_or(|v| v != "dumb")
+        }
+    }
+}
+fn paint(color: bool, sgr: &str, text: &str) -> String {
+    let text = terminal_text(text);
+    if color {
+        format!("\x1b[{sgr}m{text}\x1b[0m")
+    } else {
+        text
+    }
+}
+fn print_choices(fleet: &ag::paratenic::FleetChoices, color: bool) -> Result<u8> {
+    let mut out = String::new();
+    let offline: Vec<_> = fleet
+        .nodes
+        .iter()
+        .filter(|n| n.state == "offline")
+        .map(|n| n.host.as_str())
+        .collect();
+    if !offline.is_empty() {
+        eprintln!(
+            "{}",
+            paint(color, "2", &format!("offline: {}", offline.join(", ")))
+        );
+    }
+    for node in &fleet.nodes {
+        if node.state == "error" {
+            if let Some(error) = &node.error {
+                eprintln!("[{}] {}", terminal_text(&node.host), terminal_text(error));
+            }
+        }
+        for agent in &node.agents {
+            out.push_str(&format!(
+                "{} {} {}\n",
+                paint(color, "36", &format!("[{}]", node.host)),
+                paint(color, "1", &agent.title),
+                paint(color, "2", &agent.provider)
+            ));
+            for choice in &agent.choices {
+                let mark = if choice.actionable {
+                    paint(color, "33", "◆")
+                } else {
+                    paint(color, "2", "◇")
+                };
+                out.push_str(&format!(
+                    "  {mark} {}\n",
+                    terminal_text(
+                        &choice
+                            .title
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                ));
+                out.push_str(&paint(
+                    color,
+                    "2",
+                    &format!(
+                        "    --node {} --session {} --request {} --revision {}",
+                        choice.host, choice.session, choice.request_id, choice.revision
+                    ),
+                ));
+                out.push('\n');
+                for question in &choice.questions {
+                    if choice.questions.len() > 1 {
+                        out.push_str(&format!(
+                            "    {} ({})\n",
+                            terminal_text(question.title.as_deref().unwrap_or(&question.message)),
+                            question.id
+                        ));
+                    }
+                    for (i, option) in question.options.iter().enumerate() {
+                        out.push_str(&format!(
+                            "    {} {}{}\n",
+                            paint(color, "36", &(i + 1).to_string()),
+                            terminal_text(&option.label),
+                            if option.recommended {
+                                paint(color, "32", " (recommended)")
+                            } else {
+                                String::new()
+                            }
+                        ));
+                    }
+                    if choice.questions.len() == 1
+                        && (question.allow_freeform || question.kind == "text")
+                    {
+                        out.push_str(&paint(color, "2", "    --text \"…\" for a freeform reply"));
+                        out.push('\n');
+                    }
+                }
+                if choice.questions.len() > 1 {
+                    let ids: Vec<_> = choice
+                        .questions
+                        .iter()
+                        .map(|q| format!("\"{}\":…", q.id))
+                        .collect();
+                    out.push_str(&paint(
+                        color,
+                        "2",
+                        &format!("    --answers '{{{}}}'", ids.join(",")),
+                    ));
+                    out.push('\n');
+                }
+                if let Some(reason) = &choice.stale_reason {
+                    out.push_str(&format!("    {}\n", paint(color, "33", reason)));
+                }
+            }
+        }
+    }
+    let reached = fleet.nodes.iter().filter(|n| n.state == "ok").count();
+    let configured = fleet
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.state.as_str(), "ok" | "error" | "offline"))
+        .count();
+    let missing: Vec<_> = fleet
+        .nodes
+        .iter()
+        .filter(|n| n.state == "unconfigured")
+        .map(|n| n.host.as_str())
+        .collect();
+    out.push_str(&paint(
+        color,
+        "2",
+        &format!(
+            "{} waiting · {reached}/{configured} Paratenic hosts reached{}",
+            fleet.actionable,
+            if missing.is_empty() {
+                String::new()
+            } else {
+                format!(" · no endpoint: {}", missing.join(", "))
+            }
+        ),
+    ));
+    text(&out)?;
+    Ok(if fleet.nodes.iter().any(|n| n.state == "error") {
+        3
+    } else {
+        0
+    })
+}
+fn print_doctor(report: &ag::doctor::DoctorReport, color: bool) -> Result<u8> {
+    use ag::doctor::Status;
+    let sgr = |s: Status| match s {
+        Status::Ok => "32",
+        Status::Warn => "33",
+        Status::Error => "31",
+        Status::Skip | Status::Offline => "2",
+    };
+    let mut out = String::new();
+    for node in &report.nodes {
+        if node.status == Status::Offline {
+            let why = node
+                .checks
+                .first()
+                .map(|c| c.summary.trim_start_matches("offline · "))
+                .unwrap_or("offline");
+            out.push_str(&paint(
+                color,
+                "2",
+                &format!("{} {}  offline · {why}", node.status.symbol(), node.host),
+            ));
+            out.push('\n');
+            continue;
+        }
+        out.push_str(&format!(
+            "{} {}\n",
+            paint(color, sgr(node.status), node.status.symbol()),
+            paint(color, "1", &node.host)
+        ));
+        for check in &node.checks {
+            out.push_str(&format!(
+                "  {} {:<10} {}\n",
+                paint(color, sgr(check.status), check.status.symbol()),
+                check.name,
+                terminal_text(&check.summary)
+            ));
+        }
+    }
+    let c = &report.counts;
+    out.push_str(&paint(
+        color,
+        "2",
+        &format!(
+            "{} nodes · {} ok · {} warning · {} error · {} offline · {} sessions waiting",
+            report.nodes.len(),
+            c.ok,
+            c.warn,
+            c.error,
+            c.offline,
+            c.input_needed_sessions
+        ),
+    ));
+    text(&out)?;
+    Ok(match report.status {
+        Status::Error => 3,
+        _ => 0,
+    })
+}
+
 fn execute(cli: Cli) -> Result<u8> {
     if let Commands::Completions { shell } = cli.command {
         clap_complete::generate(shell, &mut Cli::command(), "ag", &mut io::stdout());
@@ -747,6 +1020,143 @@ fn execute(cli: Cli) -> Result<u8> {
                 }
             }
         },
+        Commands::Choices { interval, command } => {
+            return match command {
+                None => {
+                    if !(5..=3600).contains(&interval) {
+                        return Err(Error::Invalid("--interval must be 5–3600 seconds".into()));
+                    }
+                    let targets = service.paratenic_targets(&selection)?;
+                    service.runtime.block_on(ag::choices_tui::run(
+                        service.config.clone(),
+                        targets,
+                        std::time::Duration::from_secs(interval),
+                    ))?;
+                    Ok(0)
+                }
+                Some(ChoicesCommand::List { all }) => {
+                    let fleet = service.choices(ag::paratenic::ChoicesInput { selection, all })?;
+                    if cli.json {
+                        json(&fleet)?;
+                        Ok(if fleet.nodes.iter().any(|n| n.state == "error") {
+                            3
+                        } else {
+                            0
+                        })
+                    } else {
+                        print_choices(&fleet, color_enabled(cli.color))
+                    }
+                }
+                Some(ChoicesCommand::Answer {
+                    node,
+                    session,
+                    request,
+                    option,
+                    text: reply,
+                    answers,
+                    response,
+                    revision,
+                }) => {
+                    let answers = answers
+                        .map(|a| {
+                            serde_json::from_str::<
+                                std::collections::BTreeMap<String, serde_json::Value>,
+                            >(&a)
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    let receipt = service.answer(ag::paratenic::AnswerInput {
+                        host: node,
+                        session,
+                        request_id: request,
+                        response: Some(response),
+                        answers,
+                        option,
+                        text: reply,
+                        revision,
+                        confirmed: true,
+                    })?;
+                    let accepted = matches!(receipt.state, ag::paratenic::AnswerState::Accepted);
+                    if cli.json {
+                        json(&receipt)?;
+                    } else {
+                        text(&terminal_text(
+                            &format!(
+                                "{:?}{}",
+                                receipt.state,
+                                receipt
+                                    .reason
+                                    .as_deref()
+                                    .map(|r| format!(": {r}"))
+                                    .unwrap_or_default()
+                            )
+                            .to_lowercase(),
+                        ))?;
+                    }
+                    Ok(if accepted { 0 } else { 3 })
+                }
+            };
+        }
+        Commands::Doctor => {
+            let report = service.doctor(ag::doctor::DoctorInput { selection })?;
+            return if cli.json {
+                json(&report)?;
+                Ok(if report.status == ag::doctor::Status::Error {
+                    3
+                } else {
+                    0
+                })
+            } else {
+                print_doctor(&report, color_enabled(cli.color))
+            };
+        }
+        Commands::Dash {
+            bind,
+            no_open,
+            no_images,
+            cache_dir,
+            refresh,
+            image_refresh,
+        } => {
+            let bind = match bind {
+                Some(bind) => bind,
+                None => service
+                    .config
+                    .dash
+                    .bind
+                    .parse()
+                    .map_err(|_| Error::Config("dash.bind".into()))?,
+            };
+            let refresh = refresh.unwrap_or(service.config.dash.refresh_seconds);
+            let image_refresh = image_refresh.unwrap_or(service.config.dash.image_refresh_seconds);
+            if !(10..=86_400).contains(&refresh) || !(30..=86_400).contains(&image_refresh) {
+                return Err(Error::Invalid(
+                    "refresh 10–86400s, image refresh 30–86400s".into(),
+                ));
+            }
+            let targets = service.paratenic_targets(&selection)?;
+            let options = ag::dash::DashOptions {
+                selection,
+                bind,
+                refresh: std::time::Duration::from_secs(refresh),
+                image_refresh: std::time::Duration::from_secs(image_refresh),
+                images: !no_images,
+                cache_dir,
+            };
+            let as_json = cli.json;
+            service.runtime.block_on(ag::dash::run(service.config.clone(), targets, options, |started| {
+                if as_json {
+                    let _ = json(serde_json::json!({"url": started.url, "address": started.address.to_string()}));
+                } else {
+                    let _ = text(&format!("ag dash · {}\nCtrl-C to stop", started.url));
+                }
+                if !no_open && !as_json {
+                    if let Err(error) = ag::gallery::open_viewer(std::path::Path::new(&started.url)) {
+                        eprintln!("ag: {}", terminal_text(&error.to_string()));
+                    }
+                }
+            }))?;
+        }
         Commands::Tools => json(service::router().tool_metadata())?,
         Commands::Call { tool, input } => {
             if input.len() > MAX_RECORD_BYTES {

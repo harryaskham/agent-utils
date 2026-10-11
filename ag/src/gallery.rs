@@ -97,10 +97,9 @@ fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     temp.persist(path).map_err(|error| Error::Io(error.error))?;
     Ok(())
 }
-fn cache_root(config: &Config, input: &GalleryInput) -> Result<PathBuf> {
-    let path = input
-        .cache_dir
-        .as_ref()
+/// Configured cache path without creating it (read-only callers such as doctor).
+pub(crate) fn cache_path(config: &Config, cache_dir: Option<&String>) -> Result<PathBuf> {
+    let path = cache_dir
         .or(config.gallery.cache_dir.as_ref())
         .cloned()
         .unwrap_or_else(|| {
@@ -117,13 +116,28 @@ fn cache_root(config: &Config, input: &GalleryInput) -> Result<PathBuf> {
             .to_string_lossy()
             .into()
         });
-    let path = config::expand_home(&path)?;
+    config::expand_home(&path)
+}
+fn cache_root(config: &Config, input: &GalleryInput) -> Result<PathBuf> {
+    let path = cache_path(config, input.cache_dir.as_ref())?;
     // Operator-managed root symlinks are supported; owned descendants are not.
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&path)?;
     Ok(fs::canonicalize(path)?)
+}
+/// Last successful sync recorded for a node, if any (no network or writes).
+pub(crate) fn last_sync_ms(root: &Path, host: &Host) -> Option<u64> {
+    fs::read(
+        root.join("hosts")
+            .join(host_key(host))
+            .join("last-sync.json"),
+    )
+    .ok()
+    .filter(|b| b.len() < 64)
+    .and_then(|b| serde_json::from_slice::<Option<u64>>(&b).ok())
+    .flatten()
 }
 fn host_key(host: &Host) -> String {
     hash(

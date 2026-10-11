@@ -1,0 +1,117 @@
+{
+ "version": 1,
+ "scope": "ag choices, ag doctor and ag dash over each node's Paratenic AHP host",
+ "authority": "Paratenic SessionState.inputNeeded is the only choices store; ag keeps no second queue and adds no Pi-side server.",
+ "requirements": [
+  {
+   "id": "CHOICES-1",
+   "contract": "List input-needed sessions per node via AHP listSessions (paged, bounded) and session snapshots; group by node and agent; actionability mirrors Culture (catalogue, backendOnline/inputAvailable, lifecycle, read-only chat); non-chat inputs are listed with --all but never answered.",
+   "tests": [
+    "ag/tests/fleet.rs::choices_list_reads_authoritative_input_needed_and_marks_unanswerable_entries"
+   ]
+  },
+  {
+   "id": "CHOICES-2",
+   "contract": "Answer with chat/inputCompleted to the request's chat. Re-read the authoritative session first; refuse gone/changed(revision)/unavailable without dispatch; validate answers locally as Paratenic does; settle only on the host echo of our exact clientId/clientSeq (accepted/rejected); missing echo is indeterminate and never retried.",
+   "tests": [
+    "ag/tests/fleet.rs::answer_dispatches_exact_chat_input_completed_and_reports_authoritative_echo",
+    "ag/tests/fleet.rs::freeform_validation_revision_fence_rejection_and_read_only_chats"
+   ]
+  },
+  {
+   "id": "CHOICES-3",
+   "contract": "Stable flock-leased logical client ids per host with persisted monotonic clientSeq; reused ids never replay a retained dispatch.",
+   "tests": [
+    "ag/tests/fleet.rs::stable_pooled_client_ids_and_monotonic_sequences_across_runs"
+   ]
+  },
+  {
+   "id": "CHOICES-4",
+   "contract": "Endpoints come from ag hosts[].paratenic or the Culture host with the same id; ws:// off-loopback needs explicit allow_plaintext_non_loopback; bearer files may be symlinks and are never logged.",
+   "tests": [
+    "ag/tests/fleet.rs::down_and_unauthorized_hosts_fail_per_node_without_hiding_healthy_ones",
+    "ag/src/config.rs"
+   ]
+  },
+  {
+   "id": "CHOICES-5",
+   "contract": "Down nodes are reported quietly as offline with a short reason, never hide healthy nodes and do not set exit 3; refused bearer/protocol errors are errors.",
+   "tests": [
+    "ag/tests/fleet.rs::down_and_unauthorized_hosts_fail_per_node_without_hiding_healthy_ones"
+   ]
+  },
+  {
+   "id": "TUI-1",
+   "contract": "Ratatui TUI: keyboard and mouse, keyed selection survives refresh, recommended default, number/Enter answers, multi-select, freeform, double-press decline, multi-question forms visit every question and skip empty optional text, one answer in flight, narrow single-pane layout; terminal raw mode, alternate screen and mouse capture restored on exit.",
+   "tests": [
+    "ag/src/choices_tui.rs#tests",
+    "ag/tests/fleet.rs::choices_tui_answers_over_a_real_pty_and_restores_the_terminal"
+   ],
+   "evidence": [
+    "docs/assets/ag/fleet/tui-form-118x30.png"
+   ]
+  },
+  {
+   "id": "DOCTOR-1",
+   "contract": "Concurrent bounded read-only checks per node: ssh/local ag, Paratenic AHP catalogue + /status probe, speech recency and mute, gallery cache freshness. Offline nodes collapse to one line; AHP-up/SSH-down and SSH-up/Paratenic-down are warnings; exit 3 only for errors.",
+   "tests": [
+    "ag/tests/fleet.rs::doctor_reports_paratenic_catalogue_and_collapses_offline_nodes",
+    "ag/src/doctor.rs#tests"
+   ],
+   "evidence": [
+    "docs/assets/ag/fleet/health-dark-1440x900.png"
+   ]
+  },
+  {
+   "id": "DASH-1",
+   "contract": "Live server: choices stale-while-revalidate (20s while viewed), per-node refresh after answers, health and image pulls on intervals for the command lifetime; same answer path as CLI/TUI/MCP; duplicate in-flight answers refused.",
+   "tests": [
+    "ag/tests/fleet.rs::dash_serves_live_state_and_answers_only_with_token_cookie_and_same_origin_header"
+   ],
+   "evidence": [
+    "docs/assets/ag/fleet/choices-dark-1440x900.png",
+    "docs/assets/ag/fleet/choices-light-390x844.png"
+   ]
+  },
+  {
+   "id": "DASH-2",
+   "contract": "Per-run token exchanged for HttpOnly SameSite=Strict cookie on every route; mutations need X-Ag-Dash and same-origin Origin; loopback binds pin Host; gallery serves only index and archive files inside the canonical cache (no traversal, .json or symlink escape) with nosniff and sandboxing CSP; Ctrl-C releases the listener.",
+   "tests": [
+    "ag/tests/fleet.rs::dash_serves_live_state_and_answers_only_with_token_cookie_and_same_origin_header",
+    "ag/tests/fleet.rs::dash_serves_the_gallery_cache_with_restrictive_headers"
+   ]
+  },
+  {
+   "id": "MCP-2",
+   "contract": "ag_choices_list, ag_doctor and confirmation-gated ag_choices_answer share the CLI domain core.",
+   "tests": [
+    "ag/tests/fleet.rs::mcp_answer_requires_confirmation"
+   ]
+  }
+ ],
+ "visual_review": {
+  "tool": "playwright-cli screenshots of ag dash and tmux-captured TUI against cargo run --example fake_paratenic; synthetic data only",
+  "findings_fixed": [
+   "health summary text runs merged",
+   "health badge said ok with nodes offline",
+   "images freshness stale after a dash pull",
+   "favicon 404",
+   "CLI --text hint on multi-question forms",
+   "narrow header clipped tabs",
+   "SSH-down/AHP-up node shown offline",
+   "offline glyph undersized",
+   "Pull now wrapped",
+   "tab hover looked selected",
+   "TUI blank line duplicated title",
+   "rail selection loud while question pane focused",
+   "optional form question skipped"
+  ]
+ },
+ "live_observation": "Read-only ag doctor/choices list against the operator fleet: healthy Paratenic hosts listed sessions and waiting questions; down nodes were reported offline; two hosts returned a host-side logical client limit error, reported upstream by the operator. No answer was sent to a real agent.",
+ "commands": [
+  "cargo test --locked",
+  "cargo clippy --locked --all-targets -- -D warnings",
+  "cargo fmt --check",
+  "nix build .#ag --no-link"
+ ]
+}

@@ -394,6 +394,64 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
         .map_err(|e| Error::Transport(format!("reader task failed: {e}")))?
 }
 
+impl Service {
+    pub fn paratenic_targets(
+        &self,
+        selection: &Selection,
+    ) -> Result<Vec<(Host, Option<crate::paratenic::Endpoint>)>> {
+        crate::paratenic::endpoints(&self.config, &self.hosts(selection)?)
+    }
+    pub fn choices(
+        &self,
+        input: crate::paratenic::ChoicesInput,
+    ) -> Result<crate::paratenic::FleetChoices> {
+        let targets = self.paratenic_targets(&input.selection)?;
+        Ok(self.runtime.block_on(crate::paratenic::fleet_choices(
+            &self.config,
+            targets,
+            input.all,
+        )))
+    }
+    pub fn answer(
+        &self,
+        input: crate::paratenic::AnswerInput,
+    ) -> Result<crate::paratenic::AnswerReceipt> {
+        if !input.confirmed {
+            return Err(Error::Invalid(
+                "ag_choices_answer answers a live agent; confirmed=true is required".into(),
+            ));
+        }
+        let endpoint = self.endpoint_for(&input.host)?;
+        self.runtime
+            .block_on(crate::paratenic::answer(&self.config, &endpoint, input))
+    }
+    pub fn endpoint_for(&self, host: &str) -> Result<crate::paratenic::Endpoint> {
+        let selection = Selection {
+            hosts: vec![host.to_owned()],
+            local: false,
+        };
+        let selection = if host == "local" && !self.config.hosts.iter().any(|h| h.name == "local") {
+            Selection {
+                hosts: vec![],
+                local: true,
+            }
+        } else {
+            selection
+        };
+        self.paratenic_targets(&selection)?
+            .into_iter()
+            .next()
+            .and_then(|(_, endpoint)| endpoint)
+            .ok_or_else(|| Error::Config(format!("no Paratenic endpoint for host {host}")))
+    }
+    pub fn doctor(&self, input: crate::doctor::DoctorInput) -> Result<crate::doctor::DoctorReport> {
+        let targets = self.paratenic_targets(&input.selection)?;
+        Ok(self
+            .runtime
+            .block_on(crate::doctor::report(&self.config, targets)))
+    }
+}
+
 pub fn router() -> ToolRouter<Service> {
     let mut router = ToolRouter::new();
     router.add_typed_tool_with_output_schema("ag_tts_status", "Read node-wide runtime speech mute policy on selected/all enabled nodes. Does not change session settings or audio.", Service::speech_status);
@@ -403,6 +461,9 @@ pub fn router() -> ToolRouter<Service> {
     router.add_typed_tool_with_output_schema("ag_image_pull", "Incrementally cache all registered images from selected/all enabled nodes via rsync and generate a private local HTML gallery. No browser launch. Requires confirmed=true for local cache writes. offline=true reads the existing cache without network. Node failures retain cached images and are explicit in the receipt.", Service::image_gallery);
     router.add_typed_tool_with_output_schema("ag_image_list", "List recent durable shared-image metadata across configured nodes. ≤1000 records per node; filter by exact agent name or archive directory.", Service::image_list);
     router.add_typed_tool_with_output_schema("ag_image_info", "Get one image's metadata from an explicitly selected node. Use id from ag_image_list; never resolves paths outside its archive.", Service::image_info);
+    router.add_typed_tool_with_output_schema("ag_choices_list", "List pending agent elicitations (interactive_choice, async_choice and RPC dialogs) across the fleet from each node's Paratenic AHP SessionState.inputNeeded. Read-only. all=true includes stale and non-chat entries (tool confirmations/auth) with reasons.", Service::choices);
+    router.add_typed_tool_with_output_schema("ag_choices_answer", "Answer one pending elicitation through Paratenic chat/inputCompleted. Requires confirmed=true after operator approval. Pass revision from ag_choices_list to refuse a changed request. state=indeterminate means no authoritative echo arrived; re-list instead of retrying.", Service::answer);
+    router.add_typed_tool_with_output_schema("ag_doctor", "Read-only fleet health: SSH/ag reachability, Paratenic AHP catalogue and /status, speech feed recency and mute policy, gallery cache freshness. Bounded per node; failures are per check.", Service::doctor);
     router.add_typed_tool(
         "ag_hosts_list",
         "List configured nodes and effective paths; no network I/O.",

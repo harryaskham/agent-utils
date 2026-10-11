@@ -1,5 +1,5 @@
 {
-  description = "Durable agent speech and shared images across configured nodes";
+  description = "Agent speech, images, choices and health across configured nodes";
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   outputs = { self, nixpkgs }: let
     systems = nixpkgs.lib.systems.flakeExposed;
@@ -14,7 +14,7 @@
     packages = each (system: let pkgs = import nixpkgs { inherit system; }; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
-        version = "0.3.0";
+        version = "0.4.0";
         src = source;
         cargoDeps = (pkgs.rustPlatform.importCargoLock.override {
           fetchurl = attrs: pkgs.fetchurl (attrs // {
@@ -38,10 +38,10 @@
             --fish <($out/bin/ag completions fish)
           wrapProgram $out/bin/ag --prefix PATH : ${pkgs.lib.makeBinPath ([ pkgs.openssh pkgs.rsync ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.xdg-utils ])}
           mkdir -p $out/share/doc/ag
-          cp README.md acceptance.json gallery-acceptance.json $out/share/doc/ag/
+          cp README.md acceptance.json gallery-acceptance.json fleet-acceptance.json $out/share/doc/ag/
         '';
         meta = {
-          description = "Durable agent speech and shared images across your machines";
+          description = "Agent speech, images, choices and health across your machines";
           mainProgram = "ag";
           license = pkgs.lib.licenses.mit;
           platforms = pkgs.lib.platforms.unix;

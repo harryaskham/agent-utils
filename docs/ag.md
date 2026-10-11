@@ -29,6 +29,14 @@ Explicit `kitty_image_preview_show` calls also preserve the shown image, includi
 
 A read-only probe of `ms-mac` found that its SSH/login PATH already included the Nix profile locations, but `ag` was not installed there. Login initialization cannot deploy a missing executable: each target needs the updated Collective package installed, or an explicit `hosts[].command` pointing to an installed binary. Running `cltv-run ag` on the collector alone does not install its peers. The transport now reports that distinction explicitly and never builds or switches a remote system automatically.
 
+## Fleet choices, health and dashboard (ag 0.4)
+
+`ag choices` answers pending agent questions from every node in one TUI, reading Paratenic's AHP `inputNeeded` state directly and answering with `chat/inputCompleted`. `ag doctor` checks SSH, Paratenic, speech and gallery freshness per node, reporting down nodes quietly as offline. `ag dash` serves the three together as one live local page (choices, health, embedded gallery) with periodic refresh and image pulls while it runs. See the [ag guide](../ag/README.md#fleet-choices-ag-choices) and [`fleet-acceptance.json`](../ag/fleet-acceptance.json).
+
+![ag dash choices](assets/ag/fleet/choices-dark-1440x900.png)
+
+![ag choices TUI](assets/ag/fleet/tui-form-118x30.png)
+
 ## Fleet image viewer (ag 0.3)
 
 `ag image` now bulk-syncs selected/all enabled nodes and opens a local browser gallery. `ag image pull` fills the same incremental rsync cache without opening a browser, and `ag image --offline` reads cached images without network. The gallery indexes all validated registrations rather than the recent-list cap, with node/agent filtering, search and full-size previews. Failed nodes retain visibly cached data. See [the gallery guide and validation](ag-gallery.md).

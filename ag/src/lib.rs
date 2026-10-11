@@ -1,9 +1,13 @@
 #![forbid(unsafe_code)]
 
+pub mod choices_tui;
 pub mod config;
+pub mod dash;
+pub mod doctor;
 pub mod error;
 pub mod gallery;
 pub mod model;
+pub mod paratenic;
 pub mod service;
 pub mod speech;
 pub mod store;
