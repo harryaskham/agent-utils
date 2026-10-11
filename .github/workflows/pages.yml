@@ -1,13 +1,18 @@
 name: Deploy GitHub Pages
 
+# Shared self-hosted publisher (harryaskham.github.io publish-pages.yml):
+# deploys docs/ to a.skh.am/agent-utils/ whenever render inputs change on main.
+# Previously tag-only (bd-e9884a); tags were rejected by the github-pages
+# environment (main only) and the azure-ephemeral pool is retired, so the site
+# had not deployed since June.
 on:
-  # bd-e9884a: Pages now publishes on release tag pushes (plus manual dispatch)
-  # rather than every push to main. GitHub does NOT apply `paths:` filters to
-  # tag refs, so the `changes` job below diffs the pushed tag against the
-  # previous tag and skips build/deploy when no render-affecting files changed.
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    paths:
+      - docs/**
+      - scripts/render-pages.mjs
+      - package.json
+      - .github/workflows/pages.yml
   workflow_dispatch:
 
 permissions:
@@ -15,100 +20,9 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: github-pages
-  cancel-in-progress: false
-
 jobs:
-  changes:
-    name: Detect docs changes
-    runs-on: [self-hosted, azure-ephemeral]
-    timeout-minutes: 5
-    outputs:
-      should_deploy: ${{ steps.decide.outputs.should_deploy }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          # Need full history + all tags to diff the pushed tag against its
-          # predecessor.
-          fetch-depth: 0
-          fetch-tags: true
-      - name: Decide whether render inputs changed
-        id: decide
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          CURRENT_REF: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          # Manual runs always deploy (operator explicitly asked for a build).
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "workflow_dispatch: forcing deploy"
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          CURRENT_TAG="$CURRENT_REF"
-          # Most recent tag reachable from the parent of the current tag commit.
-          PREV_TAG="$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || true)"
-          if [ -z "$PREV_TAG" ]; then
-            echo "no previous tag found; deploying"
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "diffing ${PREV_TAG}..${CURRENT_TAG} for render-affecting paths"
-          if git diff --name-only "$PREV_TAG" "$CURRENT_TAG" -- \
-               docs \
-               scripts/render-pages.mjs \
-               package.json \
-               .github/workflows/pages.yml \
-             | grep -q .; then
-            echo "render-affecting changes detected; deploying"
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no render-affecting changes between ${PREV_TAG} and ${CURRENT_TAG}; skipping deploy"
-            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  build:
-    name: Build static SPA
-    needs: changes
-    if: needs.changes.outputs.should_deploy == 'true'
-    # bd-37d130: routed to the azure-ephemeral self-hosted runner pool per
-    # operator directive (2026-06-28). That pool is dedicated ephemeral x86 CI
-    # capacity (not the busy Mac/managed agent fleet), so it does not leave
-    # Pages publication queued indefinitely.
-    runs-on: [self-hosted, azure-ephemeral]
-    timeout-minutes: 10
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-      - name: Set up Pages
-        # bd-e9884a: `enablement: true` was failing ("Create Pages site failed:
-        # Resource not accessible by integration") because the workflow
-        # GITHUB_TOKEN cannot bootstrap the Pages site. The site must be enabled
-        # once via repo Settings -> Pages -> Source = "GitHub Actions"; after
-        # that this step is a no-op read of the existing config.
-        uses: actions/configure-pages@v6
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Validate generated site
-        run: npm run docs:check
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: docs
-
-  deploy:
-    name: Deploy to GitHub Pages
-    needs: build
-    runs-on: [self-hosted, azure-ephemeral]
-    timeout-minutes: 10
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy Pages artifact
-        id: deployment
-        uses: actions/deploy-pages@v5
+  pages:
+    uses: harryaskham/harryaskham.github.io/.github/workflows/publish-pages.yml@main
+    with:
+      path: docs
+      build: nix develop --command node scripts/render-pages.mjs --check
