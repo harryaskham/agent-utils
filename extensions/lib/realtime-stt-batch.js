@@ -10,6 +10,7 @@
 import { spawn } from "node:child_process";
 import { runBoundedSubprocess, combineTimeoutSignal } from "./bounded-exec.js";
 import { speechUrl, readSpeechBody, MAX_SPEECH_JSON_BYTES } from "./speech-http.js";
+import { azureAuthHeaders } from "./azure-speech-auth.js";
 
 async function transcriptionText(response) {
   const contentType = String(response.headers?.get?.("content-type") || "");
@@ -135,7 +136,10 @@ export async function transcribeMaiAudioDirect({
 } = {}) {
   const root = String(endpoint || "").trim().replace(/\/+$/, "").replace(".cognitiveservices.azure.com", ".services.ai.azure.com");
   if (!root) throw new Error("transcribe: no Azure East US endpoint");
-  const resource = new URL(root).hostname.split(".")[0];
+  let parsed;
+  try { parsed = new URL(root); } catch { throw new Error("transcribe: invalid Azure endpoint"); }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("transcribe: Azure endpoint must be HTTP(S) without credentials, query or fragment");
+  const resource = parsed.hostname.split(".")[0];
   const knownDeployment = model === "mai-transcribe-2"
     ? "harryaskham-sandbox-ais-mai-transcribe-2"
     : model === "mai-transcribe-1.5" ? "harryaskham-sandbox-ais-mai-transcribe-1-5" : undefined;
@@ -143,22 +147,28 @@ export async function transcribeMaiAudioDirect({
   const audio = wav ?? pcmToWav(pcm);
   const timeout = timeoutMs == null ? resolveBatchSttTimeoutMs() : Number(timeoutMs);
   const bound = combineTimeoutSignal(signal, timeout);
-  let res;
+  let res, credential;
   try {
+    credential = await azureAuthHeaders({ ...arguments[0], apiKey, signal: bound.signal }, { kind: "stt" });
+    bound.signal.throwIfAborted();
     res = await fetchImpl(`${root}/mai/v1/audio/transcriptions`, {
       method: "POST",
-      headers: { "api-key": String(apiKey || ""), "Content-Type": "application/json" },
+      headers: { ...credential.headers, "Content-Type": "application/json" },
       body: JSON.stringify({ model: selectedDeployment, audio_url: `data:audio/wav;base64,${audio.toString("base64")}`, ...(language ? { language } : {}) }),
       signal: bound.signal, redirect: "error",
     });
-    if (!res?.ok) throw new Error(`transcribe HTTP ${res?.status ?? "?"}; response body omitted`);
+    if (!res?.ok) {
+      if (res?.status === 401) credential.invalidate();
+      try { await res?.body?.cancel?.(); } catch {}
+      throw new Error(`transcribe HTTP ${res?.status ?? "?"}; response body omitted`);
+    }
     const text = await transcriptionText(res);
     bound.signal.throwIfAborted();
     return text;
   } catch (error) {
     if (bound.isTimeout()) throw new Error(`transcribe timed out after ${timeout}ms`);
     if (bound.signal.aborted) throw new DOMException("Transcription aborted", "AbortError");
-    if (String(error.message).startsWith("transcribe")) throw error;
+    if (/^(transcribe|azure-speech)/.test(error.message)) throw error;
     throw new Error("transcribe: request failed; no automatic retry");
   } finally { bound.cleanup(); }
 }

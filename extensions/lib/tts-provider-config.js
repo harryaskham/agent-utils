@@ -1,6 +1,7 @@
 import { normalizeTtsProvider, DEFAULT_TTS_VOICE, DEFAULT_TTS_LANG, DEFAULT_TTS_SPEED, DEFAULT_TTS_EMBEDDING } from "./tts.js";
 import { DEFAULT_OPENAI_TTS_MODEL, DEFAULT_OPENAI_TTS_VOICE } from "./tts-openai.js";
 import { speechReplacesPrevious } from "./speech-requests.js";
+import { azureAuthSettings } from "./azure-speech-auth.js";
 
 export function speechPan(value) {
   if (value === undefined) return undefined;
@@ -20,7 +21,7 @@ export function ttsProviderDefaults(provider, env = {}) {
 
 export function ttsSynthesisOptions(config, extra = {}) {
   const result = {};
-  for (const key of ["provider", "voice", "model", "lang", "speed", "style", "styleDegree", "endpoint", "apiKey", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "streamName", "pan", "panSource"]) {
+  for (const key of ["provider", "voice", "model", "lang", "speed", "style", "styleDegree", "endpoint", "apiKey", "auth", "az", "resource", "tenant", "subscription", "resourceId", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "streamName", "pan", "panSource"]) {
     if (config[key] !== undefined) result[key] = config[key];
   }
   if (config.embedding !== undefined) result.speakerProfileId = config.embedding;
@@ -31,6 +32,10 @@ export function speechCredentialStatus(config, env = process.env) {
   const provider = normalizeTtsProvider(config.provider);
   if (provider === "daemon") return `auth:${env.TTS_DAEMON_TOKEN || env.TTS_DAMEON_TOKEN ? "env-token" : "token-file"} · playback:${config.playback || "daemon"} · interrupt:${speechReplacesPrevious(config) ? "replace" : "queue"} · cancel:capability-gated`;
   if (provider === "command") return "auth:command";
+  if (provider === "azure") {
+    const auth = azureAuthSettings({ env, options: config });
+    if (auth.auth === "entra") return `auth:entra · broker:${auth.az} · refresh:on-demand`;
+  }
   const key = provider === "openai" ? "OPENAI_API_KEY" : "AZURE_SPEECH_API_KEY";
   return `api-key:${config.apiKey ? "override" : env[key] ? "env" : "missing"}`;
 }

@@ -274,7 +274,7 @@ export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = 
     else if (opts.voice !== undefined && !isAzureSpeechProvider(provider)) delete resolved.voice;
     if (isAzureSpeechProvider(provider)) {
       const creds = resolveAzureSpeechCreds({ env });
-      resolved.endpoint = opts.endpoint ?? creds.endpoint;
+      resolved.endpoint = opts.endpoint ?? shared.endpoint ?? creds.endpoint;
       resolved.apiKey = creds.apiKey;
     } else {
       // Do not copy Azure fallback identity into another provider.

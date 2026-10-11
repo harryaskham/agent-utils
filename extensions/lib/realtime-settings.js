@@ -159,5 +159,10 @@ export function readPersistedCascadeSettings(path = agentSettingsPath()) {
   return readPersistedSlice("cascade", path);
 }
 export function readPersistedSttSettings(path = agentSettingsPath()) {
-  return readPersistedSlice("stt", path);
+  const stt = readPersistedSlice("stt", path);
+  const ttsAzure = readPersistedSlice("tts", path).providers?.azure;
+  if (!ttsAzure) return stt;
+  // Shared Azure auth/broker policy, never the TTS endpoint or voice identity.
+  const inherited = Object.fromEntries(["auth", "az", "resource", "tenant", "subscription"].filter(k => ttsAzure[k] !== undefined).map(k => [k, ttsAzure[k]]));
+  return { ...stt, providers: { ...stt.providers, azure: { ...inherited, ...stt.providers?.azure } } };
 }

@@ -2,6 +2,51 @@
 
 Agent Utils supports `provider=azure`, `provider=openai`, `provider=daemon`, and the existing TTS `provider=command` (`local` alias). These are native JavaScript HTTP clients, not `tts --remote`/`stt --remote` subprocess wrappers. Existing Azure TTS and automatic Azure/OpenAI batch-STT defaults remain unchanged; selecting a new provider is explicit.
 
+## Azure key or Microsoft Entra authentication
+
+The provider stays `azure`. `agentUtils.tts.providers.azure.auth` selects `"key"` (backward-compatible default) or `"entra"`. Entra runs the configured executable via argv, not a shell:
+
+```text
+az account get-access-token --resource https://cognitiveservices.azure.com/ --output json --only-show-errors
+```
+
+`providers.azure.az` defaults to `"az"`; an absolute executable path or a compatible broker such as `"az-token"` works unchanged. The broker must return Azure CLI JSON (`accessToken` and UTC epoch-seconds `expires_on`, or a JWT with `exp`). A timezone-less legacy `expiresOn` from a remote broker is not reliable expiry evidence. Tokens are held only in memory, shared between TTS and STT, acquired lazily, and refreshed on the next request before expiry (normally five minutes early). No idle refresh timer, `az login`, key fallback, or secret persistence is added.
+
+```json
+{
+  "agentUtils": {
+    "tts": {
+      "provider": "azure",
+      "providers": {
+        "azure": {
+          "auth": "entra",
+          "az": "az",
+          "endpoint": "https://YOUR-RESOURCE.cognitiveservices.azure.com/tts"
+        }
+      },
+      "voice": "en-US-Harper:MAI-Voice-2.1-Flash"
+    },
+    "stt": {
+      "provider": "azure",
+      "model": "mai-transcribe-2",
+      "providers": {
+        "azure": {
+          "endpoint": "https://YOUR-RESOURCE.services.ai.azure.com"
+        }
+      }
+    }
+  }
+}
+```
+
+STT inherits auth, broker, audience, tenant and subscription from `tts.providers.azure`; `stt.providers.azure` overrides those individually. It never inherits the TTS endpoint or Speech resource ID. Readback, TTS, narration, choices and cascade synthesis share the TTS config; normal `/stt`, `/ptt`, choice freeform and cascade transcription share STT config. Full multimodal `/rt` WebSocket authentication remains separate.
+
+Azure custom-domain TTS uses `/tts/cognitiveservices/v1` (an already-qualified endpoint is preserved); regional TTS uses `/cognitiveservices/v1`. Choose a resource custom subdomain for Entra. That endpoint may require a locale/persona-qualified MAI voice rather than a bare embedding base. Existing explicit voices and embeddings are never silently rewritten. Optional `resourceId` makes the Speech-only bearer `aad#RESOURCE_ID#TOKEN`; MAI transcription always uses a raw Entra bearer. The Cognitive Services data-plane RBAC role must already permit the signed-in identity to use the resource.
+
+Optional provider fields: `resource` (audience, default above), `tenant`, `subscription`, and TTS-only `resourceId`. Non-secret runtime overrides are accepted as `/tts auth=entra az=az-token`, `/read auth=entra az=az-token`, `/narrate auth=entra az=az-token`, or `/stt auth=entra az=az-token` (the latter starts capture like other STT setters). Environment: `PI_TTS_AZURE_AUTH/AZ/RESOURCE/TENANT/SUBSCRIPTION/RESOURCE_ID`, `PI_TTS_AZURE_ENDPOINT`, and corresponding `PI_STT_AZURE_*` auth fields; `AZURE_SPEECH_AUTH/AZ/RESOURCE/TENANT/SUBSCRIPTION/RESOURCE_ID` are shared fallbacks. Auth precedence: explicit/runtime options > per-surface env > shared env > provider settings > defaults. An explicit TTS provider endpoint overrides the legacy `AZURE_SPEECH_ENDPOINT` regional default; `PI_TTS_AZURE_ENDPOINT` overrides both.
+
+In key mode, the existing Speech/STT key environment variables and explicit key override remain unchanged. In Entra mode, no subscription-key/api-key header is sent even if old key variables are set. Acquisition is bounded to 45 s / 128 KiB output, also covered by the speech request deadline. Concurrent waiters share acquisition; cancelling one leaves others intact, cancelling the last terminates owned broker children. A 401 invalidates only the rejected token for the next request; the failed speech HTTP request is **not** automatically replayed. Broker error output and HTTP error bodies are omitted from diagnostics.
+
 ## Use the Helsinki daemons
 
 ```text

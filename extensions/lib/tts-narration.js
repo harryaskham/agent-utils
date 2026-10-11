@@ -145,10 +145,10 @@ function enabledValue(value, fallback = false) {
 // Resolve env > persisted > shared defaults. API keys are deliberately absent
 // from the persisted shape and remain environment/runtime-only.
 export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = {}) {
-  let config = defaultAgentTtsConfig({});
+  let config = { ...defaultReadConfig({}, { providers: persisted.providers }), streamName: "/tts" };
   const persistedValues = {};
-  const aliases = { styleDegree: "styledegree", daemonUrl: "daemon_url", daemonProvider: "daemon_provider", tokenFile: "token_file", daemonSink: "daemon_sink", timeoutMs: "timeout_ms" };
-  for (const key of ["provider", "command", "voice", "model", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "backend", "server", "device", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "pan", "interrupt"]) {
+  const aliases = { styleDegree: "styledegree", daemonUrl: "daemon_url", daemonProvider: "daemon_provider", tokenFile: "token_file", daemonSink: "daemon_sink", timeoutMs: "timeout_ms", resourceId: "resource_id" };
+  for (const key of ["provider", "command", "voice", "model", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "auth", "az", "resource", "tenant", "subscription", "resourceId", "backend", "server", "device", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "pan", "interrupt"]) {
     if (Object.hasOwn(persisted, key)) persistedValues[aliases[key] || key] = persisted[key];
   }
   config = applyAgentTtsConfig(config, persistedValues, {});
@@ -160,12 +160,19 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = 
     TTS_DAEMON_URL: "daemon_url", PI_TTS_DAEMON_URL: "daemon_url", PI_TTS_DAEMON_PROVIDER: "daemon_provider",
     TTS_TOKEN_FILE: "token_file", PI_TTS_DAEMON_SINK: "daemon_sink", PI_TTS_PLAYBACK: "playback", PI_TTS_TIMEOUT_MS: "timeout_ms", PI_TTS_PAN: "pan", PI_TTS_INTERRUPT: "interrupt",
     PI_TTS_BACKEND: "backend", PULSE_SERVER: "server", PULSE_SINK: "device",
+    AZURE_SPEECH_AUTH: "auth", PI_TTS_AZURE_AUTH: "auth", AZURE_SPEECH_AZ: "az", PI_TTS_AZURE_AZ: "az",
+    AZURE_SPEECH_RESOURCE: "resource", PI_TTS_AZURE_RESOURCE: "resource", AZURE_SPEECH_TENANT: "tenant", PI_TTS_AZURE_TENANT: "tenant",
+    AZURE_SPEECH_SUBSCRIPTION: "subscription", PI_TTS_AZURE_SUBSCRIPTION: "subscription", AZURE_SPEECH_RESOURCE_ID: "resource_id", PI_TTS_AZURE_RESOURCE_ID: "resource_id",
+    PI_TTS_AZURE_ENDPOINT: "endpoint",
   };
   for (const [envKey, configKey] of Object.entries(envMap)) {
     if (env[envKey] != null && String(env[envKey]).trim() !== "") envValues[configKey] = env[envKey];
   }
   config = applyAgentTtsConfig(config, envValues, env);
-  const endpoint = config.provider === "azure" ? env.AZURE_SPEECH_ENDPOINT : config.provider === "openai" ? env.PI_TTS_BASE_URL || env.OPENAI_BASE_URL : undefined;
+  const providerSwitched = env.PI_TTS_PROVIDER && env.PI_TTS_PROVIDER !== (persisted.provider || "azure");
+  const endpoint = config.provider === "azure"
+    ? env.PI_TTS_AZURE_ENDPOINT || (!providerSwitched && persisted.endpoint) || persisted.providers?.azure?.endpoint || env.AZURE_SPEECH_ENDPOINT
+    : config.provider === "openai" ? env.PI_TTS_BASE_URL || env.OPENAI_BASE_URL : undefined;
   if (endpoint) config.endpoint = endpoint;
   if (config.provider === "openai") {
     if (env.OPENAI_TTS_MODEL && !env.PI_TTS_MODEL) config.model = env.OPENAI_TTS_MODEL;

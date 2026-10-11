@@ -12,6 +12,7 @@ import { bindSpeechOutputRouting, withSpeechOutputRouting } from "./lib/speech-o
 import { normalizeTtsProvider, usesDaemonPlayback, playDaemonSpeech } from "./lib/tts.js";
 import { withSpeechControl } from "./lib/speech-control.js";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
+import { azureAuthSettings, normalizeAzureAuth } from "./lib/azure-speech-auth.js";
 import {
   DEFAULT_TTS_PROVIDER,
   DEFAULT_TTS_SPEED,
@@ -60,6 +61,7 @@ export function defaultReadConfig(env = process.env, persisted = {}, persistedRe
   }
   return {
     provider,
+    ...(provider === "azure" ? azureAuthSettings({ env, persisted }) : {}),
     model: env.PI_TTS_MODEL || configured("model", defaults.model),
     daemonUrl: env.PI_TTS_DAEMON_URL || env.TTS_DAEMON_URL || configured("daemonUrl", undefined),
     daemonProvider: env.PI_TTS_DAEMON_PROVIDER || configured("daemonProvider", undefined),
@@ -83,7 +85,9 @@ export function defaultReadConfig(env = process.env, persisted = {}, persistedRe
     embedding: env.PI_TTS_EMBEDDING || configured("embedding", defaults.embedding),
     style: env.PI_TTS_STYLE ?? configured("style", provider === "daemon" ? undefined : null),
     styleDegree: env.PI_TTS_STYLEDEGREE != null ? Number(env.PI_TTS_STYLEDEGREE) : configured("styleDegree", provider === "daemon" ? undefined : null),
-    endpoint: defaults.endpoint || configured("endpoint", undefined),
+    endpoint: provider === "azure"
+      ? env.PI_TTS_AZURE_ENDPOINT || configured("endpoint", persisted.providers?.azure?.endpoint) || defaults.endpoint
+      : defaults.endpoint || configured("endpoint", undefined),
     apiKey: undefined,
     backend: env.PI_TTS_BACKEND || configured("backend", DEFAULT_TTS_BACKEND),
     server: env.PULSE_SERVER || configured("server", undefined),
@@ -136,6 +140,7 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
     "backend", "server", "device", "sink", "delay", "on_delay", "ondelay",
     "on_send", "onsend", "model", "instructions", "pitch", "volume", "role",
     "daemon_url", "daemon_provider", "token_file", "daemon_sink", "playback", "timeout_ms", "pan", "interrupt",
+    "auth", "az", "resource", "tenant", "subscription", "resource_id",
   ]);
   for (const key of Object.keys(values)) {
     if (!known.has(key)) throw new Error(`/read: unknown setting '${key}'`);
@@ -146,7 +151,7 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
     const normalized = provider == null ? DEFAULT_TTS_PROVIDER : provider.toLowerCase();
     next.provider = normalizeTtsProvider(normalized);
     if (next.provider !== current.provider) {
-      Object.assign(next, ttsProviderDefaults(next.provider, env), { apiKey: undefined, instructions: undefined, pitch: undefined, volume: undefined, role: undefined, style: next.provider === "daemon" ? undefined : null, styleDegree: next.provider === "daemon" ? undefined : null });
+      Object.assign(next, { auth: undefined, az: undefined, resource: undefined, tenant: undefined, subscription: undefined, resourceId: undefined }, ttsProviderDefaults(next.provider, env), { apiKey: undefined, instructions: undefined, pitch: undefined, volume: undefined, role: undefined, style: next.provider === "daemon" ? undefined : null, styleDegree: next.provider === "daemon" ? undefined : null });
     }
   }
   if (own(values, "command")) {
@@ -157,6 +162,11 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
   for (const [key, field] of Object.entries({ model: "model", instructions: "instructions", role: "role", daemon_url: "daemonUrl", daemon_provider: "daemonProvider", token_file: "tokenFile", daemon_sink: "daemonSink" })) {
     if (own(values, key)) next[field] = nullableString(values[key], env);
   }
+  if (own(values, "auth")) next.auth = normalizeAzureAuth(values.auth);
+  for (const [key, field] of Object.entries({ az: "az", resource: "resource", tenant: "tenant", subscription: "subscription", resource_id: "resourceId" })) {
+    if (own(values, key)) next[field] = nullableString(values[key], env);
+  }
+  if (next.provider === "azure") Object.assign(next, azureAuthSettings({ env, options: next }));
   if (next.daemonProvider && !["azure", "openai"].includes(next.daemonProvider)) throw new Error("/read: daemon_provider must be azure, openai or none");
   if (own(values, "pan")) { next.pan = speechPan(values.pan); next.panSource = "explicit"; }
   if (own(values, "interrupt")) next.interrupt = values.interrupt == null || NONE.test(String(values.interrupt)) ? undefined : booleanValue(values.interrupt, "interrupt");

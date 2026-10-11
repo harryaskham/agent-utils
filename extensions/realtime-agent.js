@@ -184,6 +184,7 @@ import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs } f
 import { resolveSttSettings, normalizeSttProvider, transcribeSpeech } from "./lib/stt-provider.js";
 import { DaemonSttSocket } from "./lib/stt-daemon-stream.js";
 import { ttsSynthesisOptions } from "./lib/tts-provider-config.js";
+import { azureAuthSettings, normalizeAzureAuth } from "./lib/azure-speech-auth.js";
 import { synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech, isAzureSpeechProvider, resolveSpeakToolParams } from "./lib/tts.js";
 import { resolveAgentTtsSettings } from "./lib/tts-narration.js";
 import { playTtsCommand } from "./lib/tts-command.js";
@@ -4145,14 +4146,18 @@ export default function realtimeAgentExtension(pi) {
       "insert", "insert_ms", "insert_silence_ms", "commit", "commit_ms",
       "commit_silence_ms", "min_speech", "min_speech_ms", "shortcuts", "shortcuts_enabled",
       "provider", "endpoint", "base_url", "daemon_url", "daemon_provider", "token_file", "language", "lang", "prompt", "streaming_model",
+      "auth", "az", "resource", "tenant", "subscription",
     ]);
     for (const key of Object.keys(values)) if (!allowed.has(key)) throw new Error(`/stt: unknown setting '${key}'`);
     const updates = {};
     const priorProvider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
     if (values.provider !== undefined) updates.PI_STT_PROVIDER = normalizeSttProvider(values.provider);
-    const strings = { endpoint: "PI_STT_ENDPOINT", base_url: "PI_STT_ENDPOINT", daemon_url: "PI_STT_DAEMON_URL", daemon_provider: "PI_STT_DAEMON_PROVIDER", token_file: "STT_TOKEN_FILE", language: "PI_STT_LANGUAGE", lang: "PI_STT_LANGUAGE", prompt: "PI_STT_PROMPT", streaming_model: "PI_STT_STREAMING_MODEL" };
+    const strings = { endpoint: "PI_STT_ENDPOINT", base_url: "PI_STT_ENDPOINT", daemon_url: "PI_STT_DAEMON_URL", daemon_provider: "PI_STT_DAEMON_PROVIDER", token_file: "STT_TOKEN_FILE", language: "PI_STT_LANGUAGE", lang: "PI_STT_LANGUAGE", prompt: "PI_STT_PROMPT", streaming_model: "PI_STT_STREAMING_MODEL", auth: "PI_STT_AZURE_AUTH", az: "PI_STT_AZURE_AZ", resource: "PI_STT_AZURE_RESOURCE", tenant: "PI_STT_AZURE_TENANT", subscription: "PI_STT_AZURE_SUBSCRIPTION" };
     if (values.daemon_provider && !["azure", "openai"].includes(values.daemon_provider)) throw new Error("/stt: daemon_provider must be azure or openai");
     for (const [key, envKey] of Object.entries(strings)) if (values[key] !== undefined) updates[envKey] = String(values[key]);
+    if (values.auth !== undefined) updates.PI_STT_AZURE_AUTH = normalizeAzureAuth(values.auth);
+    // Validate broker selection before applying any runtime settings.
+    azureAuthSettings({ env: { ...process.env, ...updates }, persisted: readPersistedSttSettings(), kind: "stt" });
     const envByField = {
       timeoutMs: "PI_RT_LOCAL_VAD_TIMEOUT_MS",
       energyThreshold: "PI_RT_LOCAL_VAD_ENERGY_THRESHOLD",

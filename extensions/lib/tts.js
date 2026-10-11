@@ -13,6 +13,8 @@ import { sharedTtsQueueEnabled } from "./privacy.js";
 import { synthesizeOpenAiSpeech } from "./tts-openai.js";
 import { requestDaemonTts } from "./speech-daemon.js";
 import { speechHttp } from "./speech-http.js";
+import { azureAuthHeaders } from "./azure-speech-auth.js";
+import { combineTimeoutSignal } from "./bounded-exec.js";
 export { usesDaemonPlayback, playDaemonSpeech } from "./speech-daemon.js";
 
 export const DEFAULT_TTS_PROVIDER = "azure";
@@ -184,10 +186,18 @@ export function resolveSpeakToolParams(params = {}, { env = process.env, persist
   return { text, voice, speakerProfileId, lang, speed, style, styleDegree };
 }
 
-function azureSpeechUrl(endpoint) {
-  const base = String(endpoint || "").trim().replace(/\/+$/, "");
-  if (/\/cognitiveservices\/v1$/i.test(base)) return base;
-  return `${base}/cognitiveservices/v1`;
+export function azureSpeechUrl(endpoint) {
+  let url;
+  try { url = new URL(String(endpoint)); } catch { throw new Error("azure-speech: invalid endpoint"); }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("azure-speech: endpoint must be HTTP(S) without credentials, query or fragment");
+  // Resource-specific Speech endpoints use /tts; regional endpoints don't.
+  // Keep already-qualified paths (including explicit proxy routes) intact.
+  const path = url.pathname.replace(/\/+$/, "");
+  if (!/\/cognitiveservices\/v1$/i.test(path)) {
+    const prefix = !path && /\.(?:cognitiveservices\.azure\.com|services\.ai\.azure\.com)$/i.test(url.hostname) ? "/tts" : path;
+    url.pathname = `${prefix}/cognitiveservices/v1`;
+  }
+  return url.toString();
 }
 
 export async function synthesizeAzureSpeechDirect({
@@ -236,7 +246,6 @@ export async function synthesizeAzureSpeechDirect({
     ...(own(arguments[0], "apiKey") ? { apiKey } : {}),
   });
   if (!creds.endpoint) throw new Error("azure-speech: no endpoint (set AZURE_SPEECH_ENDPOINT)");
-  if (!creds.apiKey) throw new Error("azure-speech: no API key (set AZURE_SPEECH_API_KEY)");
 
   const doFetch = typeof fetchImpl === "function" ? fetchImpl : globalThis.fetch;
   if (typeof doFetch !== "function") throw new Error("azure-speech: no fetch implementation available");
@@ -254,17 +263,29 @@ export async function synthesizeAzureSpeechDirect({
   });
 
   const timeout = timeoutMs == null ? resolveBatchTtsTimeoutMs(env) : Number(timeoutMs);
-  return speechHttp(azureSpeechUrl(creds.endpoint), {
-    fetchImpl: doFetch, timeoutMs: timeout, signal, label: "azure-speech",
-    method: "POST",
-    headers: {
-      "Ocp-Apim-Subscription-Key": creds.apiKey,
-      "Content-Type": "application/ssml+xml",
-      "X-Microsoft-OutputFormat": String(outputFormat || DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT),
-      "User-Agent": "agent-utils-tts",
-    },
-    body: ssml,
-  });
+  const url = azureSpeechUrl(creds.endpoint);
+  // One deadline covers credential acquisition plus HTTP/body consumption.
+  const bound = combineTimeoutSignal(signal, timeout);
+  let credential;
+  try {
+    credential = await azureAuthHeaders({ ...arguments[0], apiKey: creds.apiKey, env, signal: bound.signal }, { keyHeader: "Ocp-Apim-Subscription-Key", speechResource: true });
+    return await speechHttp(url, {
+      fetchImpl: doFetch, timeoutMs: 0, signal: bound.signal, label: "azure-speech",
+      method: "POST",
+      headers: {
+        ...credential.headers,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": String(outputFormat || DEFAULT_AZURE_SPEECH_OUTPUT_FORMAT),
+        "User-Agent": "agent-utils-tts",
+      },
+      body: ssml,
+    });
+  } catch (error) {
+    if (/HTTP 401\b/.test(error.message)) credential?.invalidate();
+    if (bound.isTimeout()) throw new Error(`azure-speech timed out after ${timeout}ms`);
+    if (bound.signal.aborted) throw new DOMException("Speech request aborted", "AbortError");
+    throw error;
+  } finally { bound.cleanup(); }
 }
 
 export function normalizeTtsProvider(provider = DEFAULT_TTS_PROVIDER) {
