@@ -25,12 +25,13 @@ import { ttsSynthesisOptions, speechPan } from "./tts-provider-config.js";
 import { readPersistedTtsSettings } from "./tts-settings.js";
 import { parseEnvStyleArgs } from "./env-args.js";
 import { readPersistedCascadeSettings } from "./realtime-settings.js";
+import { selectTtsProvider, withAudioConnection } from "./audio-providers.js";
 
 /// Build a cascade roster from a raw `/cascade` argument string. Maps the
 /// env-style args (n=, participants=, order=, plus main overrides voice/model/
 /// base_url/tts/instructions/name) onto buildParticipantRoster. Pure given an
 /// injected `parseArgs` / `env`. Returns { roster, values }.
-export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = parseEnvStyleArgs, persisted } = {}) {
+export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = parseEnvStyleArgs, persisted, audioProviders } = {}) {
   const { values } = parseArgs(rawArgs || "");
   // Durable cascade defaults (bd-b45224): a /cascade arg wins; otherwise fall
   // back to the persisted agentUtils.cascade slice in settings.json; otherwise
@@ -39,7 +40,8 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
   const p = persisted ?? readPersistedCascadeSettings();
   // All providers share the native path; azure=true remains a legacy no-op.
   // No CLI fallback is introduced.
-  const defaultProvider = normalizeTtsProvider(values.provider ?? env.PI_CASCADE_PROVIDER ?? env.PI_TTS_PROVIDER ?? p.provider ?? readPersistedTtsSettings().provider ?? DEFAULT_TTS_PROVIDER);
+  const defaultSelection = selectTtsProvider(values.provider ?? env.PI_CASCADE_PROVIDER ?? env.PI_TTS_PROVIDER ?? p.provider ?? readPersistedTtsSettings().provider ?? DEFAULT_TTS_PROVIDER, { audioProviders });
+  const defaultProvider = defaultSelection.provider;
   const roster = buildParticipantRoster({
     mode: MODE_CASCADE,
     n: values.n,
@@ -64,6 +66,7 @@ export function cascadeRosterFromArgs(rawArgs, { env = process.env, parseArgs = 
   for (const participant of (roster?.participants || [])) {
     if (participant && !participant.provider) participant.provider = defaultProvider;
     if (participant) {
+      participant.providerName = defaultSelection.providerName;
       participant.daemonUrl = values.daemon_url ?? p.daemonUrl;
       participant.daemonProvider = values.daemon_provider ?? p.daemonProvider;
       participant.playback = values.playback ?? p.playback;
@@ -222,7 +225,7 @@ export function makeCascadeSpeak({ synthImpl = synthesizeSpeechDirect, playImpl,
       voice: participant?.voice,
       model: participant?.ttsModel,
       baseUrl: participant?.baseUrl,
-      provider: participant?.provider,
+      provider: participant?.provider, providerName: participant?.providerName,
       daemonUrl: participant?.daemonUrl, daemonProvider: participant?.daemonProvider, playback: participant?.playback, endpoint: participant?.ttsEndpoint,
       speakerProfileId: participant?.speakerProfileId,
       lang: participant?.lang,
@@ -248,7 +251,7 @@ export function makeCascadeSynth({ synthImpl = synthesizeSpeechDirect, speed } =
       voice: participant?.voice,
       model: participant?.ttsModel,
       baseUrl: participant?.baseUrl,
-      provider: participant?.provider,
+      provider: participant?.provider, providerName: participant?.providerName,
       daemonUrl: participant?.daemonUrl, daemonProvider: participant?.daemonProvider, playback: participant?.playback, endpoint: participant?.ttsEndpoint,
       speakerProfileId: participant?.speakerProfileId,
       lang: participant?.lang,
@@ -262,11 +265,13 @@ export function makeCascadeSynth({ synthImpl = synthesizeSpeechDirect, speed } =
 
 /// Native synthesis returns PCM, or a deferred remote-playback intent for the
 /// ordered playback phase. Speech endpoints stay independent of chat base URLs.
-export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = {}, routing } = {}) {
+export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = {}, routing, audioProviders } = {}) {
   return async (text, opts = {}) => {
-    const shared = resolveAgentTtsSettings({ env, persisted }).config;
-    const provider = normalizeTtsProvider(opts.provider ?? shared.provider);
-    const resolved = ttsSynthesisOptions(shared, { provider, fetchImpl, env });
+    const shared = resolveAgentTtsSettings({ env, persisted, audioProviders }).config;
+    const selection = selectTtsProvider(opts.providerName ?? opts.provider ?? shared.providerName ?? shared.provider, { audioProviders });
+    const provider = selection.provider;
+    // Resolve connection after applying participant voice defaults, at dispatch.
+    let resolved = { ...ttsSynthesisOptions({ ...shared, providerName: undefined }, { provider, fetchImpl, env }), ...selection };
     // A chat-model base URL/persona is never a speech endpoint/instruction.
     for (const [key, value] of Object.entries(opts)) if (value !== undefined && key !== "baseUrl") resolved[key] = value;
     const voice = resolveCascadeTtsVoice(opts.voice);
@@ -282,6 +287,7 @@ export function makeCascadeTtsSynth({ env = process.env, fetchImpl, persisted = 
         for (const key of ["model", "speakerProfileId", "endpoint", "lang", "speed"]) if (opts[key] == null) delete resolved[key];
       }
     }
+    resolved = withAudioConnection(resolved);
     routing?.assertPlayable({ ...shared, ...resolved });
     if (usesDaemonPlayback(resolved)) {
       // Defer admission until the ordered playback phase, not speculative synth.

@@ -13,6 +13,7 @@ import { normalizeTtsProvider, usesDaemonPlayback, playDaemonSpeech } from "./li
 import { withSpeechControl } from "./lib/speech-control.js";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { azureAuthSettings, normalizeAzureAuth } from "./lib/azure-speech-auth.js";
+import { selectTtsProvider, rejectSurfaceAuthKeys, bindAudioProviders } from "./lib/audio-providers.js";
 import {
   DEFAULT_TTS_PROVIDER,
   DEFAULT_TTS_SPEED,
@@ -34,7 +35,7 @@ export const DEFAULT_READ_DELAY_MS = 2000;
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const NONE = /^(none|null|unset)$/i;
 
-export function defaultReadConfig(env = process.env, persisted = {}, persistedRead = {}) {
+export function defaultReadConfig(env = process.env, persisted = {}, persistedRead = {}, audioProviders) {
   let source = persisted;
   const configured = (key, fallback) => source[key] !== undefined ? source[key] : fallback;
   const readConfigured = (key, fallback) => persistedRead[key] !== undefined ? persistedRead[key] : fallback;
@@ -53,14 +54,16 @@ export function defaultReadConfig(env = process.env, persisted = {}, persistedRe
     const number = Number(value);
     return Number.isFinite(number) && number > 0 ? number : fallback;
   };
-  const provider = normalizeTtsProvider(env.PI_TTS_PROVIDER || (env.PI_TTS_COMMAND ? "command" : configured("provider", persisted.command ? "command" : DEFAULT_TTS_PROVIDER)));
+  const { provider, providerName } = selectTtsProvider(env.PI_TTS_PROVIDER || (env.PI_TTS_COMMAND ? "command" : configured("provider", persisted.command ? "command" : DEFAULT_TTS_PROVIDER)), { audioProviders });
   const defaults = ttsProviderDefaults(provider, env);
-  if (env.PI_TTS_PROVIDER && provider !== normalizeTtsProvider(persisted.provider || DEFAULT_TTS_PROVIDER)) {
+  if (env.PI_TTS_PROVIDER && String(env.PI_TTS_PROVIDER).trim().toLowerCase() !== String(persisted.provider || DEFAULT_TTS_PROVIDER).trim().toLowerCase()) {
     source = { ...persisted };
     for (const key of ["voice", "model", "lang", "speed", "embedding", "endpoint", "instructions", "pitch", "volume", "role", "style", "styleDegree"]) delete source[key];
   }
   return {
     provider,
+    providerName,
+    ...(audioProviders ? { audioProviders } : {}),
     ...(provider === "azure" ? azureAuthSettings({ env, persisted }) : {}),
     model: env.PI_TTS_MODEL || configured("model", defaults.model),
     daemonUrl: env.PI_TTS_DAEMON_URL || env.TTS_DAEMON_URL || configured("daemonUrl", undefined),
@@ -148,16 +151,17 @@ export function applyReadConfigValues(current, values = {}, env = process.env) {
 
   if (own(values, "provider")) {
     const provider = nullableString(values.provider, env);
-    const normalized = provider == null ? DEFAULT_TTS_PROVIDER : provider.toLowerCase();
-    next.provider = normalizeTtsProvider(normalized);
-    if (next.provider !== current.provider) {
+    const selected = selectTtsProvider(provider == null ? DEFAULT_TTS_PROVIDER : provider.toLowerCase(), { audioProviders: current.audioProviders });
+    next.provider = selected.provider;
+    next.providerName = selected.providerName;
+    if (next.provider !== current.provider || (current.providerName && next.providerName !== current.providerName)) {
       Object.assign(next, { auth: undefined, az: undefined, resource: undefined, tenant: undefined, subscription: undefined, resourceId: undefined }, ttsProviderDefaults(next.provider, env), { apiKey: undefined, instructions: undefined, pitch: undefined, volume: undefined, role: undefined, style: next.provider === "daemon" ? undefined : null, styleDegree: next.provider === "daemon" ? undefined : null });
     }
   }
   if (own(values, "command")) {
     // Preserve shell variables for expansion at playback, not configuration.
     next.command = String(values.command ?? "");
-    if (!own(values, "provider")) next.provider = "command";
+    if (!own(values, "provider")) { next.provider = "command"; next.providerName = "command"; }
   }
   for (const [key, field] of Object.entries({ model: "model", instructions: "instructions", role: "role", daemon_url: "daemonUrl", daemon_provider: "daemonProvider", token_file: "tokenFile", daemon_sink: "daemonSink" })) {
     if (own(values, key)) next[field] = nullableString(values[key], env);
@@ -227,7 +231,7 @@ export function formatReadStatus(enabled, config, env = process.env) {
   const optional = (value) => value == null || value === "" ? "none" : String(value);
   return [
     `read:${enabled ? "on" : "off"}`,
-    `provider:${config.provider}`,
+    `provider:${config.providerName && config.providerName !== config.provider ? `${config.providerName}(${config.provider})` : config.provider}`,
     `command:${config.command ? "set" : "none"}`,
     `voice:${optional(config.voice)}`,
     `pan:${optional(config.pan)}`,
@@ -255,9 +259,10 @@ export function createReadModeController({
   defer = queueMicrotask,
   persistedTts = {},
   persistedRead = {},
+  audioProviders,
   routing,
 } = {}) {
-  let config = defaultReadConfig(env, persistedTts, persistedRead);
+  let config = defaultReadConfig(env, persistedTts, persistedRead, audioProviders);
   const enabledFrom = env.PI_READ_ENABLED ?? persistedRead.enabled;
   let enabled = ["1", "true", "yes", "on"].includes(String(enabledFrom ?? "").trim().toLowerCase());
   let timer = null;
@@ -407,8 +412,10 @@ export function createReadModeController({
 export function createReadAloudExtension({ settingsPath, persistedTts, persistedRead } = {}) {
   return function readAloudExtension(pi) {
   const outputBinding = bindSpeechOutputRouting(pi);
+  const audioBinding = bindAudioProviders(pi, { settingsPath });
   const controller = createReadModeController({
     routing: outputBinding.routing,
+    audioProviders: audioBinding.providers,
     persistedTts: persistedTts ?? readPersistedTtsSettings(settingsPath),
     persistedRead: persistedRead ?? readPersistedReadSettings(settingsPath),
   });
@@ -431,6 +438,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
     terminalInputUnsubscribe = null;
     await controller.dispose(sessionCtx);
     await outputBinding.release();
+    audioBinding.release();
     sessionCtx = null;
   });
 
@@ -439,6 +447,7 @@ export function createReadAloudExtension({ settingsPath, persistedTts, persisted
     handler: async (args, ctx) => {
       try {
         const parsed = parseEnvStyleArgs(String(args || ""));
+        rejectSurfaceAuthKeys(parsed.values, "/read", controller.getConfig());
         controller.updateConfig(parsed.values, ctx);
         const action = String(parsed.positionals[0] || "").toLowerCase();
         if (["off", "stop", "disable"].includes(action)) {

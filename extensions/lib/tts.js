@@ -14,6 +14,7 @@ import { synthesizeOpenAiSpeech } from "./tts-openai.js";
 import { requestDaemonTts } from "./speech-daemon.js";
 import { speechHttp } from "./speech-http.js";
 import { azureAuthHeaders } from "./azure-speech-auth.js";
+import { withAudioConnection, builtinProviderType, selectTtsProvider } from "./audio-providers.js";
 import { combineTimeoutSignal } from "./bounded-exec.js";
 export { usesDaemonPlayback, playDaemonSpeech } from "./speech-daemon.js";
 
@@ -297,6 +298,9 @@ export function normalizeTtsProvider(provider = DEFAULT_TTS_PROVIDER) {
 }
 
 export async function synthesizeSpeechDirect(text, options = {}) {
+  const name = options.providerName ?? options.provider ?? (options.env ?? process.env).PI_TTS_PROVIDER ?? DEFAULT_TTS_PROVIDER;
+  if (!options.providerName && !builtinProviderType(name)) options = { ...options, ...selectTtsProvider(name, { audioProviders: options.audioProviders }) };
+  options = withAudioConnection(options, { kind: "tts" });
   const provider = normalizeTtsProvider(options.provider ?? (options.env ?? process.env).PI_TTS_PROVIDER);
   if (provider === "openai") return synthesizeOpenAiSpeech(text, options);
   if (provider === "daemon") return (await requestDaemonTts(text, options, { raw: true })).pcm;

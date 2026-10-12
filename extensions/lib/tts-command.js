@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { speechKind, withSpeechControl } from "./speech-control.js";
 import { sharedTtsQueueEnabled } from "./privacy.js";
+import { withAudioConnection } from "./audio-providers.js";
 
 function speechOptions(options) {
   const kind = speechKind(options) || "tts";
@@ -64,6 +65,7 @@ function runTtsCommandRaw(text, options) {
 }
 
 export function playTtsCommand(text, options = {}) {
+  options = withAudioConnection(options, { kind: "tts" });
   return withSpeechControl(speechOptions(options), (controlled) => playTtsCommandControlled(text, controlled));
 }
 

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "scope": "Shared named audio connections; legacy configurations and Pebble/direct callers retained",
+  "requirements": [
+    {"id":"AUDIO-1","contract":"Startup audio.providers lookup by name/type plus shared session runtime overrides; no process-global mutable selection or settings.json rewrite.","tests":["test/audio-providers.test.js","scripts/audio-providers-pty.py"]},
+    {"id":"AUDIO-2","contract":"TTS/read/narration/choices/cascade and STT/PTT dispatch through the selected named connection; admitted requests retain their resolved settings.","tests":["test/audio-providers.test.js","test/realtime-agent.test.js"]},
+    {"id":"AUDIO-3","contract":"Unconfigured builtins preserve legacy provider blocks, environment, aliases and saved overrides. Partial shared edits retain legacy endpoint/auth. No active capture/routing change.","tests":["test/audio-providers.test.js","test/azure-speech-auth.test.js","test/speech-providers.test.js"]},
+    {"id":"AUDIO-4","contract":"OpenAI uses keys; Azure supports Entra az-token and keys. Key references never resolve to another account when missing. Secrets are not accepted by /audio, shown in status, or persisted.","tests":["test/audio-providers.test.js","test/azure-speech-auth.test.js"]},
+    {"id":"AUDIO-5","contract":"MAI STT accepts a shared Azure resource endpoint or /stt-/tts-qualified resource URL, preserves non-Azure proxy prefixes and uses raw bearer auth. Pebble explicit library options remain independent.","tests":["test/audio-providers.test.js","test/realtime-stt-batch.test.js"]},
+    {"id":"AUDIO-6","contract":"Real Pi settings select/input/cancel, reload restore, same process, unchanged startup provider config and clean terminal exit; late dialogs cannot use retired ctx or mutate state.","tests":["scripts/audio-providers-pty.py","test/audio-providers.test.js"]}
+  ],
+  "budgets":{"providers_per_layer":64,"field_chars":4096,"runtime_flush":"synchronous per successful user edit; no idle timer"},
+  "evidence":{"pty":"/tmp/audio-providers-pty3.log","unit":"/tmp/audio-model-focus.log","full":"/tmp/audio-node26-full.log"},
+  "activation":"Source changes only; no live agents reloaded, settings migrated, microphone opened or audio played. No unsupported AHP capability advertised."
+}

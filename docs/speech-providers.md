@@ -2,6 +2,15 @@
 
 Agent Utils supports `provider=azure`, `provider=openai`, `provider=daemon`, and the existing TTS `provider=command` (`local` alias). These are native JavaScript HTTP clients, not `tts --remote`/`stt --remote` subprocess wrappers. Existing Azure TTS and automatic Azure/OpenAI batch-STT defaults remain unchanged; selecting a new provider is explicit.
 
+## Shared named connections
+
+[Named audio providers](audio-providers.md) add `agentUtils.audio.providers` and
+`/audio settings` as one connection/auth authority. Select the same name from
+`/tts`, `/read`, `/narrate`, `/stt` or `/ptt`; choices follow the startup TTS
+provider. Existing configurations keep working without migration. The legacy
+fields below remain fallbacks; a configured shared provider owns its connection,
+so edit its auth with `/audio <name> ...`, not a competing per-surface override.
+
 ## Azure key or Microsoft Entra authentication
 
 The provider stays `azure`. `agentUtils.tts.providers.azure.auth` selects `"key"` (backward-compatible default) or `"entra"`. Entra runs the configured executable via argv, not a shell:

@@ -122,6 +122,25 @@ export function resolveTranscriptionUrl(baseUrl) {
 /// and cannot hang "transcribing" forever. The api key travels only in the
 /// Authorization header and is never logged. fetch/FormData/Blob injectable for
 /// tests.
+// One Azure resource endpoint serves both TTS and MAI STT. Accept the custom
+// domain in either cognitiveservices or services.ai form, with or without a
+// surface suffix (/stt, /tts, /tts/cognitiveservices/v1). Other paths are
+// preserved as proxy prefixes.
+export function maiTranscriptionRoot(endpoint) {
+  let value = String(endpoint || "").trim().replace(/\/+$/, "");
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    const azure = /\.(?:cognitiveservices\.azure\.com|services\.ai\.azure\.com)$/i.test(url.hostname);
+    if (azure) {
+      url.hostname = url.hostname.replace(/\.cognitiveservices\.azure\.com$/i, ".services.ai.azure.com");
+      url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/(?:stt|tts(?:\/cognitiveservices\/v1)?)$/i, "");
+    }
+    value = url.toString().replace(/\/+$/, "");
+  } catch { /* validated below */ }
+  return value;
+}
+
 export async function transcribeMaiAudioDirect({
   pcm,
   wav,
@@ -134,7 +153,7 @@ export async function transcribeMaiAudioDirect({
   signal,
   fetchImpl = fetch,
 } = {}) {
-  const root = String(endpoint || "").trim().replace(/\/+$/, "").replace(".cognitiveservices.azure.com", ".services.ai.azure.com");
+  const root = maiTranscriptionRoot(endpoint);
   if (!root) throw new Error("transcribe: no Azure East US endpoint");
   let parsed;
   try { parsed = new URL(root); } catch { throw new Error("transcribe: invalid Azure endpoint"); }

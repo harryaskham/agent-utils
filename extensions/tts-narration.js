@@ -26,6 +26,7 @@ import {
   readPersistedTtsSettings,
 } from "./lib/tts-settings.js";
 import { createSessionRuntimeSettings } from "./lib/session-runtime-settings.js";
+import { rejectSurfaceAuthKeys, bindAudioProviders } from "./lib/audio-providers.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy, sessionSpeechIdentity } from "./lib/tts-identity.js";
 import { speechPrefix } from "./lib/tts-prefix.js";
 import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE, isAzureSpeechProvider, usesDaemonPlayback } from "./lib/tts.js";
@@ -53,7 +54,7 @@ function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "
   return [
     `tts:${enabled ? "on" : "off"}`,
     `enabled-source:${enabledSource}`,
-    `provider:${config.provider}`,
+    `provider:${config.providerName && config.providerName !== config.provider ? `${config.providerName}(${config.provider})` : config.provider}`,
     `command:${config.command ? "set" : "none"}`,
     `voice:${optional(config.voice)}`,
     `pan:${optional(config.pan == null ? null : Number(config.pan).toFixed(2))}`,
@@ -86,7 +87,8 @@ export function createTtsNarrationExtension({
     const harryFlag = pi.getFlag?.("harry") === true;
     const persistedTts = persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath);
     const persistedNarrate = persistedSettings?.narrate ?? readPersistedNarrateSettings(settingsPath);
-    const resolvedTts = resolveAgentTtsSettings({ env, persisted: persistedTts });
+    const audioBinding = bindAudioProviders(pi, { settingsPath });
+    const resolvedTts = resolveAgentTtsSettings({ env, persisted: persistedTts, audioProviders: audioBinding.providers });
     const resolvedNarrate = resolveNarrateSettings({ env, persisted: persistedNarrate });
     const outputBinding = bindSpeechOutputRouting(pi, { env });
     const speechController = speech || createAgentSpeechController({ env, initialConfig: resolvedTts.config, routing: outputBinding.routing });
@@ -132,14 +134,15 @@ export function createTtsNarrationExtension({
     // so restore cannot drift from the live path.
     const durable = runtimeSettings || createSessionRuntimeSettings(pi);
     let ttsSpeechValues = {};
-    let rememberedProvider = speechController.getConfig().provider;
+    const providerIdentity = () => { const c = speechController.getConfig(); return c.providerName || c.provider; };
+    let rememberedProvider = providerIdentity();
 
     const rememberTts = (patch) => { try { durable.merge("tts", patch); } catch {} };
     const rememberNarrate = (patch) => { try { durable.merge("narrate", patch); } catch {} };
 
     const rememberTtsSpeechValues = (values) => {
       if (!values || Object.keys(values).length === 0) return;
-      const provider = speechController.getConfig().provider;
+      const provider = providerIdentity();
       if (provider !== rememberedProvider) {
         for (const key of ["voice", "model", "lang", "speed", "embedding", "speaker", "speakerprofileid", "speaker_profile_id", "style", "styledegree", "style_degree", "endpoint", "base_url", "baseurl", "api_key", "apikey", "instructions", "pitch", "volume", "role"]) delete ttsSpeechValues[key];
         rememberedProvider = provider;
@@ -156,9 +159,11 @@ export function createTtsNarrationExtension({
 
       const tts = saved.tts || {};
       if (tts.speech && typeof tts.speech === "object") {
+        // Preserve legacy session intent; an explicitly named audio connection
+        // takes precedence at request admission without rewriting history.
         ttsSpeechValues = { ...tts.speech };
         try { speechController.apply(ttsSpeechValues); } catch {}
-        rememberedProvider = speechController.getConfig().provider;
+        rememberedProvider = providerIdentity();
       }
       if (typeof tts.prefix === "string") ttsPrefix = tts.prefix;
       if (typeof tts.prefixWithSessionName === "boolean") ttsPrefixWithSessionName = tts.prefixWithSessionName;
@@ -416,6 +421,7 @@ export function createTtsNarrationExtension({
             ttsSuffix = expandEnvReferences(suffix, env, "/tts suffix");
             rememberTts({ suffix: ttsSuffix });
           }
+          rejectSurfaceAuthKeys(speechValues, "/tts", speechController.getConfig());
           speechController.apply(speechValues);
           rememberTtsSpeechValues(speechValues);
           ttsEnabled = true;
@@ -459,6 +465,7 @@ export function createTtsNarrationExtension({
             }
             const speechValues = Object.fromEntries(Object.entries(parsed.values).filter(([key]) => speechKeys.has(key)).map(([key, value]) => [key === "tts_model" ? "model" : key, value]));
             if (Object.keys(speechValues).length) {
+              rejectSurfaceAuthKeys(speechValues, "/narrate", speechController.getConfig());
               speechController.apply(speechValues);
               rememberTtsSpeechValues(speechValues);
             }
@@ -542,6 +549,7 @@ export function createTtsNarrationExtension({
       narrateEnabled = false;
       stopNarrationWork();
       await speechController.dispose();
+      audioBinding.release();
       await outputBinding.release();
       await Promise.allSettled([...feedWrites]);
     });

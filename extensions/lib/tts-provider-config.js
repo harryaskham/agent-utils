@@ -2,6 +2,7 @@ import { normalizeTtsProvider, DEFAULT_TTS_VOICE, DEFAULT_TTS_LANG, DEFAULT_TTS_
 import { DEFAULT_OPENAI_TTS_MODEL, DEFAULT_OPENAI_TTS_VOICE } from "./tts-openai.js";
 import { speechReplacesPrevious } from "./speech-requests.js";
 import { azureAuthSettings } from "./azure-speech-auth.js";
+import { resolveAudioConnection, withAudioConnection } from "./audio-providers.js";
 
 export function speechPan(value) {
   if (value === undefined) return undefined;
@@ -21,14 +22,21 @@ export function ttsProviderDefaults(provider, env = {}) {
 
 export function ttsSynthesisOptions(config, extra = {}) {
   const result = {};
-  for (const key of ["provider", "voice", "model", "lang", "speed", "style", "styleDegree", "endpoint", "apiKey", "auth", "az", "resource", "tenant", "subscription", "resourceId", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "streamName", "pan", "panSource"]) {
+  for (const key of ["provider", "providerName", "audioProviders", "voice", "model", "lang", "speed", "style", "styleDegree", "endpoint", "apiKey", "auth", "az", "resource", "tenant", "subscription", "resourceId", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "streamName", "pan", "panSource"]) {
     if (config[key] !== undefined) result[key] = config[key];
   }
   if (config.embedding !== undefined) result.speakerProfileId = config.embedding;
-  return { ...result, ...extra };
+  return withAudioConnection({ ...result, ...extra }, { kind: "tts" });
 }
 
 export function speechCredentialStatus(config, env = process.env) {
+  let connection;
+  try { connection = config.providerName ? resolveAudioConnection(config.providerName, { kind: "tts", env, audioProviders: config.audioProviders }) : undefined; } catch (error) { return `audio-provider:${config.providerName} invalid (${error.message})`; }
+  if (connection) {
+    const auth = connection.type === "azure" ? (connection.auth === "entra" ? `entra · broker:${connection.az || "az"}` : `key:${connection.apiKeyEnv || "default-env"}`)
+      : connection.type === "openai" ? `key:${connection.apiKeyEnv || "default-env"}` : connection.type === "daemon" ? "daemon-token" : "command";
+    return `audio-provider:${connection.name} · auth:${auth}`;
+  }
   const provider = normalizeTtsProvider(config.provider);
   if (provider === "daemon") return `auth:${env.TTS_DAEMON_TOKEN || env.TTS_DAMEON_TOKEN ? "env-token" : "token-file"} · playback:${config.playback || "daemon"} · interrupt:${speechReplacesPrevious(config) ? "replace" : "queue"} · cancel:capability-gated`;
   if (provider === "command") return "auth:command";

@@ -147,7 +147,7 @@ function fakeRes({ ok = true, status = 200, json, text, contentType = "applicati
 test("transcribeMaiAudioDirect uses East US JSON audio_url and derives the deployment", async () => {
   let request;
   const fetchImpl = async (url, init) => { request = { url, init, body: JSON.parse(init.body) }; return fakeRes({ json: { text: "new model" } }); };
-  const text = await transcribeMaiAudioDirect({ pcm: Buffer.from([0, 0]), model: "mai-transcribe-2", endpoint: "https://resource.cognitiveservices.azure.com", apiKey: "secret", language: "en", fetchImpl });
+  const text = await transcribeMaiAudioDirect({ pcm: Buffer.from([0, 0]), model: "mai-transcribe-2", endpoint: "https://resource.cognitiveservices.azure.com", auth: "key", env: {}, apiKey: "secret", language: "en", fetchImpl });
   assert.equal(text, "new model");
   assert.equal(request.url, "https://resource.services.ai.azure.com/mai/v1/audio/transcriptions");
   assert.equal(request.body.model, "harryaskham-sandbox-ais-mai-transcribe-2");

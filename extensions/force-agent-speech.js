@@ -19,6 +19,7 @@ import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./lib/cacophony-r
 import { createAgentSpeechController, resolveAgentTtsSettings } from "./lib/tts-narration.js";
 import { readPersistedTtsSettings } from "./lib/tts-settings.js";
 import { bindSpeechOutputRouting } from "./lib/speech-output-routing.js";
+import { bindAudioProviders } from "./lib/audio-providers.js";
 
 export const DEFAULT_MAX_CHARS = 240;
 
@@ -119,11 +120,12 @@ export default function forceAgentSpeechExtension(pi) {
   let runtimeOverride = null; // null = follow env; true/false = forced by command
   const persisted = readPersistedTtsSettings();
   const outputBinding = bindSpeechOutputRouting(pi);
+  const audioBinding = bindAudioProviders(pi);
   // An explicit shared provider is first-party. Keep the historical Caco route
   // only when no shared provider was selected at all.
   const nativeSpeech = process.env.PI_TTS_PROVIDER || persisted.provider
-    ? createAgentSpeechController({ initialConfig: resolveAgentTtsSettings({ persisted }).config, routing: outputBinding.routing }) : null;
-  pi.on("session_shutdown", async () => { await nativeSpeech?.dispose(); await outputBinding.release(); });
+    ? createAgentSpeechController({ initialConfig: resolveAgentTtsSettings({ persisted, audioProviders: audioBinding.providers }).config, routing: outputBinding.routing }) : null;
+  pi.on("session_shutdown", async () => { await nativeSpeech?.dispose(); await outputBinding.release(); audioBinding.release(); });
 
   const enabled = () => (nativeSpeech || !isPiCacoDisabled()) && (runtimeOverride === null ? isForceSpeechEnabled() : runtimeOverride);
 

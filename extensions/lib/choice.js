@@ -192,9 +192,10 @@ export function createChoiceSpeaker({
   synthesize = synthesizeSpeechDirect,
   player = createInterruptiblePcmPlayer(),
   streamName = DEFAULT_CHOICE_STREAM_NAME,
+  audioProviders,
   routing,
 } = {}) {
-  const shared = resolveAgentTtsSettings({ env, persisted }).config;
+  const shared = resolveAgentTtsSettings({ env, persisted, audioProviders }).config;
   const speechPolicy = resolveSessionSpeechPolicy(persisted, env);
   let assignment = null;
   const requests = createSpeechRequests({ interruptPlayback: () => player.interrupt?.() });

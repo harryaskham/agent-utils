@@ -144,8 +144,8 @@ function enabledValue(value, fallback = false) {
 
 // Resolve env > persisted > shared defaults. API keys are deliberately absent
 // from the persisted shape and remain environment/runtime-only.
-export function resolveAgentTtsSettings({ env = process.env, persisted = {} } = {}) {
-  let config = { ...defaultReadConfig({}, { providers: persisted.providers }), streamName: "/tts" };
+export function resolveAgentTtsSettings({ env = process.env, persisted = {}, audioProviders } = {}) {
+  let config = { ...defaultReadConfig({}, { providers: persisted.providers }, {}, audioProviders), streamName: "/tts" };
   const persistedValues = {};
   const aliases = { styleDegree: "styledegree", daemonUrl: "daemon_url", daemonProvider: "daemon_provider", tokenFile: "token_file", daemonSink: "daemon_sink", timeoutMs: "timeout_ms", resourceId: "resource_id" };
   for (const key of ["provider", "command", "voice", "model", "lang", "speed", "embedding", "style", "styleDegree", "endpoint", "auth", "az", "resource", "tenant", "subscription", "resourceId", "backend", "server", "device", "instructions", "pitch", "volume", "role", "daemonUrl", "daemonProvider", "tokenFile", "daemonSink", "playback", "timeoutMs", "pan", "interrupt"]) {

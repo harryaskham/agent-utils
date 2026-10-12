@@ -181,10 +181,10 @@ import { getCacophonyRuntimeIdentity, isPiCacoDisabled } from "./lib/cacophony-r
 import { makeEditorTranscriptMirror } from "./lib/realtime-editor-mirror.js";
 import { makePttIndicator } from "./lib/realtime-ptt-indicator.js";
 import { transcribePcmBuffer, resolveBatchSttModel, resolveBatchSttTimeoutMs } from "./lib/realtime-stt-batch.js";
-import { resolveSttSettings, normalizeSttProvider, transcribeSpeech } from "./lib/stt-provider.js";
+import { resolveSttSettings, sttSettingsResolver, normalizeSttProvider, selectSttProvider, transcribeSpeech } from "./lib/stt-provider.js";
 import { DaemonSttSocket } from "./lib/stt-daemon-stream.js";
 import { ttsSynthesisOptions } from "./lib/tts-provider-config.js";
-import { azureAuthSettings, normalizeAzureAuth } from "./lib/azure-speech-auth.js";
+import { rejectSurfaceAuthKeys, bindAudioProviders, withAudioConnection } from "./lib/audio-providers.js";
 import { synthesizeSpeechDirect, usesDaemonPlayback, playDaemonSpeech, isAzureSpeechProvider, resolveSpeakToolParams } from "./lib/tts.js";
 import { resolveAgentTtsSettings } from "./lib/tts-narration.js";
 import { playTtsCommand } from "./lib/tts-command.js";
@@ -344,7 +344,7 @@ let localVadRunShellStream = runShellStream;
 // stays available as an escape hatch via PI_RT_LOCAL_VAD_USE_STT_CLI=1.
 function defaultLocalVadTranscribe(buffer, opts = {}) {
   const e = process.env;
-  const settings = { ...resolveSttSettings(e, readPersistedSttSettings()), ...opts };
+  const settings = { ...resolveSttSettings(e, readPersistedSttSettings(), {}, opts.audioProviders), ...opts };
   if (e.PI_RT_LOCAL_VAD_USE_STT_CLI === "1" && settings.provider === "auto") return transcribePcmBuffer(buffer, opts);
   return transcribeSpeech(buffer, { ...settings, env: e });
 }
@@ -501,9 +501,10 @@ export async function eventDataToString(data) {
 // ---------------------------------------------------------------------------
 
 class RealtimeSession {
-  constructor(pi, config) {
+  constructor(pi, config, audioProviders) {
     this.pi = pi;
     this.config = config;
+    this.audioProviders = audioProviders;
     this.state = new RealtimeStateController();
     this.ws = null;
     this.connected = false;
@@ -764,7 +765,7 @@ class RealtimeSession {
   }
 
   async _connect(ctx) {
-    const stt = resolveSttSettings(process.env, readPersistedSttSettings());
+    const stt = withAudioConnection(resolveSttSettings(process.env, readPersistedSttSettings(), {}, this.audioProviders), { kind: "stt" });
     this.config.sttProvider = stt.provider;
     if (this.config.sttOnly && stt.provider === "daemon") {
       const vad = buildServerVadTurnDetection({ threshold: this.config.vadThreshold });
@@ -2839,8 +2840,10 @@ export function createRealtimeControls({ pi, session, config, stopSpeech = () =>
 
 export default function realtimeAgentExtension(pi) {
   const config = makeInitialConfig();
-  const session = new RealtimeSession(pi, config);
+  const audioBinding = bindAudioProviders(pi);
+  const session = new RealtimeSession(pi, config, audioBinding.providers);
   const outputBinding = bindSpeechOutputRouting(pi);
+  const resolveSttSettings = sttSettingsResolver(audioBinding.providers);
   const cascadePcmPlayer = createInterruptiblePcmPlayer();
   const fastDirectTtsPlayer = createInterruptiblePcmPlayer();
   const fastDirectTtsRequests = createSpeechRequests({ interruptPlayback: () => fastDirectTtsPlayer.interrupt() });
@@ -2853,7 +2856,7 @@ export default function realtimeAgentExtension(pi) {
     const signal = options.signal ? AbortSignal.any([options.signal, request.signal]) : request.signal;
     try {
       signal.throwIfAborted();
-      const text = await localVadTranscribe(buffer, { ...options, signal });
+      const text = await localVadTranscribe(buffer, { ...options, audioProviders: audioBinding.providers, signal });
       signal.throwIfAborted();
       return text;
     } finally { request.finish(); }
@@ -2875,10 +2878,11 @@ export default function realtimeAgentExtension(pi) {
   const rememberRealtimeValues = (values) => {
     try { durableSettings.merge("realtime", values); } catch {}
   };
-  let rememberedSttProvider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
+  const sttProviderIdentity = () => { const s = resolveSttSettings(process.env, readPersistedSttSettings()); return s.providerName || s.provider; };
+  let rememberedSttProvider = sttProviderIdentity();
   const rememberSttValues = (values) => {
     try {
-      const provider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
+      const provider = sttProviderIdentity();
       if (provider !== rememberedSttProvider) durableSettings.unset("stt", ["model", "endpoint", "base_url", "prompt", "streaming_model"]);
       rememberedSttProvider = provider;
       durableSettings.merge("stt", values);
@@ -2943,8 +2947,8 @@ export default function realtimeAgentExtension(pi) {
       const saved = durableSettings.restore(ctx) || {};
       const stt = saved.stt;
       if (stt && Object.keys(stt).length) {
-        try { applyLocalSttSettings(stt, ctx); } catch {}
-        rememberedSttProvider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
+        try { applyLocalSttSettings(stt, ctx, { restoring: true }); } catch {}
+        rememberedSttProvider = sttProviderIdentity();
       }
       const realtime = saved.realtime;
       if (realtime && Object.keys(realtime).length) {
@@ -2998,7 +3002,7 @@ export default function realtimeAgentExtension(pi) {
     if (!body || !cascadeSpeechEnabled({ env: process.env })) return;
     const output = resolvedFastTts();
     if (pi.ttsNarration?.isEnabled?.()) return;
-    const speechConfig = resolveAgentTtsSettings({ env: process.env, persisted: output.persisted }).config;
+    const speechConfig = resolveAgentTtsSettings({ env: process.env, persisted: output.persisted, audioProviders: audioBinding.providers }).config;
     const speechOptions = ttsSynthesisOptions(speechConfig, {
       ...(isAzureSpeechProvider(speechConfig.provider) ? resolveSpeakToolParams({ text: body }, { env: process.env, persisted: output.persisted }) : {}),
       env: process.env,
@@ -3056,6 +3060,7 @@ export default function realtimeAgentExtension(pi) {
     cascadePcmPlayer.dispose();
     await session.close(false).catch(() => {});
     await outputBinding.release();
+    audioBinding.release();
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -3580,7 +3585,7 @@ export default function realtimeAgentExtension(pi) {
   }
 
   function ensureCascadeController(ctx, rawArgs) {
-    const { roster, values } = cascadeRosterFromArgs(rawArgs, { env: process.env });
+    const { roster, values } = cascadeRosterFromArgs(rawArgs, { env: process.env, audioProviders: audioBinding.providers });
     const defaultModel = values.model || env("PI_CASCADE_MODEL", "OPENAI_CHAT_MODEL", "MAPI_MODEL_ID") || "gpt-5-mini";
     const defaultBaseUrl = values.base_url || values.baseurl || env("PI_RT_BASE_URL", "OPENAI_BASE_URL");
     // bd-15beec: unpinned cascade peers (n=1 = "the model loaded in Pi") run
@@ -3607,7 +3612,7 @@ export default function realtimeAgentExtension(pi) {
     const pipelineRaw = String(values.pipeline ?? env("PI_CASCADE_PIPELINE") ?? "1").toLowerCase();
     const usePipeline = pipelineRaw !== "0" && pipelineRaw !== "false" && pipelineRaw !== "off";
     // Cascade shares native speech providers and the session's local route.
-    const cascadeSynthImpl = makeCascadeTtsSynth({ env: process.env, persisted: readPersistedTtsSettings(), routing: outputBinding.routing });
+    const cascadeSynthImpl = makeCascadeTtsSynth({ env: process.env, persisted: readPersistedTtsSettings(), routing: outputBinding.routing, audioProviders: audioBinding.providers });
     const speakDeps = usePipeline
       ? { synth: makeCascadeSynth({ synthImpl: cascadeSynthImpl }), play: makeCascadePlay({ playImpl }) }
       : { speak: makeCascadeSpeak({ synthImpl: cascadeSynthImpl, playImpl }) };
@@ -4140,7 +4145,7 @@ export default function realtimeAgentExtension(pi) {
     },
   });
 
-  function applyLocalSttSettings(values, ctx) {
+  function applyLocalSttSettings(values, ctx, { restoring = false } = {}) {
     const allowed = new Set([
       "model", "timeout", "timeout_ms", "energy", "energy_threshold",
       "insert", "insert_ms", "insert_silence_ms", "commit", "commit_ms",
@@ -4148,16 +4153,15 @@ export default function realtimeAgentExtension(pi) {
       "provider", "endpoint", "base_url", "daemon_url", "daemon_provider", "token_file", "language", "lang", "prompt", "streaming_model",
       "auth", "az", "resource", "tenant", "subscription",
     ]);
+    if (!restoring) rejectSurfaceAuthKeys(values, "/stt", { providerName: values.provider || process.env.PI_STT_PROVIDER || readPersistedSttSettings().provider || "azure", audioProviders: audioBinding.providers });
     for (const key of Object.keys(values)) if (!allowed.has(key)) throw new Error(`/stt: unknown setting '${key}'`);
     const updates = {};
     const priorProvider = resolveSttSettings(process.env, readPersistedSttSettings()).provider;
-    if (values.provider !== undefined) updates.PI_STT_PROVIDER = normalizeSttProvider(values.provider);
+    const priorName = resolveSttSettings(process.env, readPersistedSttSettings()).providerName;
+    if (values.provider !== undefined) { const selected = selectSttProvider(values.provider, { audioProviders: audioBinding.providers }); updates.PI_STT_PROVIDER = selected.providerName || selected.provider; }
     const strings = { endpoint: "PI_STT_ENDPOINT", base_url: "PI_STT_ENDPOINT", daemon_url: "PI_STT_DAEMON_URL", daemon_provider: "PI_STT_DAEMON_PROVIDER", token_file: "STT_TOKEN_FILE", language: "PI_STT_LANGUAGE", lang: "PI_STT_LANGUAGE", prompt: "PI_STT_PROMPT", streaming_model: "PI_STT_STREAMING_MODEL", auth: "PI_STT_AZURE_AUTH", az: "PI_STT_AZURE_AZ", resource: "PI_STT_AZURE_RESOURCE", tenant: "PI_STT_AZURE_TENANT", subscription: "PI_STT_AZURE_SUBSCRIPTION" };
     if (values.daemon_provider && !["azure", "openai"].includes(values.daemon_provider)) throw new Error("/stt: daemon_provider must be azure or openai");
     for (const [key, envKey] of Object.entries(strings)) if (values[key] !== undefined) updates[envKey] = String(values[key]);
-    if (values.auth !== undefined) updates.PI_STT_AZURE_AUTH = normalizeAzureAuth(values.auth);
-    // Validate broker selection before applying any runtime settings.
-    azureAuthSettings({ env: { ...process.env, ...updates }, persisted: readPersistedSttSettings(), kind: "stt" });
     const envByField = {
       timeoutMs: "PI_RT_LOCAL_VAD_TIMEOUT_MS",
       energyThreshold: "PI_RT_LOCAL_VAD_ENERGY_THRESHOLD",
@@ -4184,7 +4188,7 @@ export default function realtimeAgentExtension(pi) {
     numberSetting(["min_speech", "min_speech_ms"], "minTurnSpeechMs");
     const shortcutsKey = ["shortcuts", "shortcuts_enabled"].find((key) => Object.hasOwn(values, key));
     if (shortcutsKey) updates.PI_RT_STT_SHORTCUTS_ENABLED = parseBooleanValue(values[shortcutsKey]) ? "1" : "0";
-    if (updates.PI_STT_PROVIDER && updates.PI_STT_PROVIDER !== priorProvider) {
+    if (updates.PI_STT_PROVIDER && (normalizeSttProvider(updates.PI_STT_PROVIDER, { audioProviders: audioBinding.providers }) !== priorProvider || (priorName && updates.PI_STT_PROVIDER !== priorName))) {
       for (const key of ["PI_RT_LOCAL_VAD_MODEL", "PI_STT_MODEL", "PI_STT_ENDPOINT", "PI_STT_PROMPT", "PI_STT_STREAMING_MODEL"]) delete process.env[key];
     }
     Object.assign(process.env, updates);
@@ -4192,7 +4196,8 @@ export default function realtimeAgentExtension(pi) {
     const cfg = parseLocalVadConfig(process.env, persisted);
     const model = resolveSttSettings(process.env, persisted).model ?? "daemon-default";
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persisted);
-    ctx?.ui?.notify?.(`stt settings: provider=${resolveSttSettings(process.env, persisted).provider} model=${model} timeout=${timeoutMs}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
+    const sttSelection = resolveSttSettings(process.env, persisted);
+    ctx?.ui?.notify?.(`stt settings: provider=${sttSelection.providerName && sttSelection.providerName !== sttSelection.provider ? `${sttSelection.providerName}(${sttSelection.provider})` : sttSelection.provider} model=${model} timeout=${timeoutMs}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
   }
 
   async function handleLocalSpeechCommand(args, ctx, { defaultHold = false, commandName = "/stt" } = {}) {

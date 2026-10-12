@@ -12,6 +12,7 @@ import { createCacophonyChoiceBridge } from "./lib/cacophony-choice.js";
 import { createCacophonyDecisionBridge } from "./lib/cacophony-decision.js";
 import { createAhpChoiceProvider } from "./lib/ahp-choice.js";
 import { bindSpeechOutputRouting } from "./lib/speech-output-routing.js";
+import { bindAudioProviders } from "./lib/audio-providers.js";
 import {
   ASYNC_CHOICE_MESSAGE_TYPE,
   ASYNC_CHOICE_TOOL_NAMES,
@@ -170,11 +171,12 @@ export function hasUnavailableForcedChoiceTail(entries) {
 export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge, ahpBridge, preferenceStore, env = process.env, settingsPath, persistedSettings, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   return function choiceExtension(pi) {
     const outputBinding = bindSpeechOutputRouting(pi, { env });
+    const audioBinding = bindAudioProviders(pi, { settingsPath });
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
     let speakerController = speaker || null;
     const ensureSpeaker = (ctx) => {
-      if (!speakerController) speakerController = createChoiceSpeaker({ env, routing: outputBinding.routing, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
+      if (!speakerController) speakerController = createChoiceSpeaker({ env, routing: outputBinding.routing, audioProviders: audioBinding.providers, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
       if (ctx) speakerController.assignSession?.(ctx);
     };
     if (choiceConfig.enabled) ensureSpeaker();
@@ -1179,6 +1181,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
       try { asyncChoices.dispose(); } catch {}
       try { await speakerController?.dispose?.(); } catch {}
       await outputBinding.release();
+      audioBinding.release();
       await viewPreferences.flush?.();
     });
   };

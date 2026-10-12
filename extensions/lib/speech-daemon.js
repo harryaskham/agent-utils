@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { combineTimeoutSignal } from "./bounded-exec.js";
 import { speechHttp, MAX_SPEECH_AUDIO_BYTES } from "./speech-http.js";
+import { withAudioConnection } from "./audio-providers.js";
 import { holdAssistantSpeaking } from "./half-duplex-state.js";
 
 export function daemonUrl(kind, options = {}) {
@@ -159,6 +160,7 @@ function validateAudioMetadata(job, request) {
 }
 
 export async function requestDaemonTts(text, options = {}, { raw = false } = {}) {
+  options = withAudioConnection(options, { kind: "tts" });
   const request = daemonTtsRequest(text, options, raw);
   const configuredTimeout = Number(options.timeoutMs ?? 120000);
   const timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 120000;
