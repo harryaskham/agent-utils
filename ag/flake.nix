@@ -16,7 +16,7 @@
     packages = each (system: let pkgs = import nixpkgs { inherit system; }; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
-        version = "0.4.1";
+        version = "0.5.0";
         src = source;
         cargoDeps = (pkgs.rustPlatform.importCargoLock.override {
           fetchurl = attrs: pkgs.fetchurl (attrs // {
@@ -32,7 +32,7 @@
           };
         };
         nativeBuildInputs = [ pkgs.makeWrapper pkgs.installShellFiles ];
-        nativeCheckInputs = [ pkgs.rsync ];
+        nativeCheckInputs = [ pkgs.rsync pkgs.python3 ];
         postInstall = ''
           installShellCompletion --cmd ag \
             --bash <($out/bin/ag completions bash) \
@@ -40,7 +40,7 @@
             --fish <($out/bin/ag completions fish)
           wrapProgram $out/bin/ag --prefix PATH : ${pkgs.lib.makeBinPath ([ pkgs.openssh pkgs.rsync ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.xdg-utils ])}
           mkdir -p $out/share/doc/ag
-          cp README.md acceptance.json gallery-acceptance.json fleet-acceptance.json $out/share/doc/ag/
+          cp README.md acceptance.json gallery-acceptance.json fleet-acceptance.json tts-dash-acceptance.json $out/share/doc/ag/
         '';
         meta = {
           description = "Agent speech, images, choices and health across your machines";

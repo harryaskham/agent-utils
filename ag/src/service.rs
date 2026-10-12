@@ -274,58 +274,76 @@ impl Service {
         tx: mpsc::Sender<FleetEvent>,
         cancel: CancellationToken,
     ) -> Result<()> {
-        store::check_limit(lines)?;
-        let hosts = self.hosts(&selection)?;
-        let mut jobs = JoinSet::new();
-        for host in hosts {
-            let config = self.config.clone();
-            let tx = tx.clone();
-            let cancel = cancel.clone();
-            jobs.spawn(async move {
-                let (node_tx, mut node_rx) = mpsc::channel(16);
-                let forwarding_cancel = cancel.clone(); let name = host.name.clone();
-                let forward = tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = forwarding_cancel.cancelled() => break,
-                            event = node_rx.recv() => {
-                                let Some(event) = event else { break; };
-                                tokio::select! {
-                                    _ = forwarding_cancel.cancelled() => break,
-                                    result = tx.send(FleetEvent { host: name.clone(), event }) => if result.is_err() { forwarding_cancel.cancel(); break; },
-                                }
+        follow_hosts(
+            self.config.clone(),
+            self.hosts(&selection)?,
+            lines,
+            tx,
+            cancel,
+        )
+        .await
+    }
+}
+
+/// Shared async collector for CLI and dashboard. Callers own its lifetime and
+/// resolved host selection; no nested runtime or per-browser subprocess.
+pub async fn follow_hosts(
+    config: Config,
+    hosts: Vec<Host>,
+    lines: usize,
+    tx: mpsc::Sender<FleetEvent>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    store::check_limit(lines)?;
+    let mut jobs = JoinSet::new();
+    for host in hosts {
+        let config = config.clone();
+        let tx = tx.clone();
+        let cancel = cancel.clone();
+        jobs.spawn(async move {
+            let (node_tx, mut node_rx) = mpsc::channel(16);
+            let forwarding_cancel = cancel.clone(); let name = host.name.clone();
+            let forward = tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = forwarding_cancel.cancelled() => break,
+                        event = node_rx.recv() => {
+                            let Some(event) = event else { break; };
+                            tokio::select! {
+                                _ = forwarding_cancel.cancelled() => break,
+                                result = tx.send(FleetEvent { host: name.clone(), event }) => if result.is_err() { forwarding_cancel.cancel(); break; },
                             }
                         }
                     }
-                });
-                let mut cursor = None;
-                let mut delay = config.reconnect_seconds;
-                loop {
-                    let result = if host.local {
-                        match host.paths.tts() {
-                            Ok(path) => local_tail(path, lines, &mut cursor, config.poll_ms, &node_tx, &cancel).await,
-                            Err(e) => Err(e),
-                        }
-                    } else { transport::stream(&config, &host, lines, &mut cursor, &node_tx, &cancel).await };
-                    if cancel.is_cancelled() { break; }
-                    let message = result.err().map(|e| e.to_string()).unwrap_or_else(|| "stream ended".into());
-                    tokio::select! {
-                        _ = cancel.cancelled() => break,
-                        _ = node_tx.send(TailEvent::Status { state: "offline".into(), message: format!("{}; retrying in {delay}s", message.chars().take(500).collect::<String>()) }) => (),
-                    }
-                    tokio::select! { _ = cancel.cancelled() => break, _ = tokio::time::sleep(Duration::from_secs(delay)) => () }
-                    delay = (delay * 2).min(60);
                 }
-                drop(node_tx);
-                let _ = forward.await;
             });
-        }
-        drop(tx);
-        while let Some(result) = jobs.join_next().await {
-            result.map_err(|e| Error::Transport(format!("tail task failed: {e}")))?;
-        }
-        Ok(())
+            let mut cursor = None;
+            let mut delay = config.reconnect_seconds;
+            loop {
+                let result = if host.local {
+                    match host.paths.tts() {
+                        Ok(path) => local_tail(path, lines, &mut cursor, config.poll_ms, &node_tx, &cancel).await,
+                        Err(e) => Err(e),
+                    }
+                } else { transport::stream(&config, &host, lines, &mut cursor, &node_tx, &cancel).await };
+                if cancel.is_cancelled() { break; }
+                let message = result.err().map(|e| e.to_string()).unwrap_or_else(|| "stream ended".into());
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = node_tx.send(TailEvent::Status { state: "offline".into(), message: format!("{}; retrying in {delay}s", message.chars().take(500).collect::<String>()) }) => (),
+                }
+                tokio::select! { _ = cancel.cancelled() => break, _ = tokio::time::sleep(Duration::from_secs(delay)) => () }
+                delay = (delay * 2).min(60);
+            }
+            drop(node_tx);
+            let _ = forward.await;
+        });
     }
+    drop(tx);
+    while let Some(result) = jobs.join_next().await {
+        result.map_err(|e| Error::Transport(format!("tail task failed: {e}")))?;
+    }
+    Ok(())
 }
 
 pub async fn local_tail(

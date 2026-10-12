@@ -3,6 +3,7 @@
 pub mod choices_tui;
 pub mod config;
 pub mod dash;
+pub mod dash_tts;
 pub mod doctor;
 pub mod error;
 pub mod gallery;

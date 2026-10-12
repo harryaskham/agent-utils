@@ -27,7 +27,7 @@ ag choices                           # answer pending agent questions (TUI)
 ag choices list                      # print them; --all adds unanswerable ones
 ag choices answer --node ms-dev --session ahp-session:/… --request choice-1 --option 2
 ag doctor                            # per-node SSH, Paratenic, speech, gallery
-ag dash                              # live web view: choices, health, images
+ag dash                              # live web view: choices, health, TTS, images
 ```
 
 ## Fleet choices (`ag choices`)
@@ -105,10 +105,11 @@ A node that answers neither SSH nor AHP collapses to one `offline` line. A node 
 
 ## Live dashboard (`ag dash`)
 
-`ag dash` serves one page with **Choices**, **Health** and **Images** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
+`ag dash` serves one page with **Choices**, **Health**, **TTS** and **Images** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
 
 - choices are re-read from Paratenic whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
 - health runs every `dash.refresh_seconds` and after each image pull;
+- TTS starts **one shared collector per dashboard process**, reusing `ag tts`'s local file readers and remote SSH cursor/reconnect path. It starts with 20 recent lines per selected host and follows continuously, even with no browser open. Each browser reads the shared stream over authenticated SSE—not another set of SSH tails. This is the **speech-request text feed**, not an audio player or proof that a request played;
 - `ag image pull` runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running (`--no-images` serves the existing cache only); the Images tab embeds the same gallery.
 
 The page answers questions through the same path as the TUI and CLI. Keys: `j`/`k` move, `1`–`9` answer, `i` reply, `d` decline (twice), `r` refresh.
@@ -120,9 +121,23 @@ dash:
   # token_file: ~/.local/state/ag/dash/token            # --token-file
   refresh_seconds: 300        # --refresh
   image_refresh_seconds: 300  # --image-refresh
+  tts: true                  # --no-tts disables collection
+  tts_lines: 20              # --tts-lines; 0–1000 per host on startup
 ```
 
 Access: by default the printed URL carries a random per-run token that is exchanged once for an `HttpOnly; SameSite=Strict` cookie. `--token-file` / `dash.token_file` instead reads a persistent token, privately creating one if absent; existing managed symlinks are supported, while dangling links and group/world-readable files fail closed. In this mode stdout contains only the bare public URL and token-file path, **never the token**. Append `?token=<file contents>` for the first visit; the browser is redirected to the clean URL. `--public-origin` / `dash.public_origin` accepts a public HTTP(S) origin independently of the bind IP, advertises that URL and permits its hostname in the Host check. HTTPS public origins also mark the cookie Secure. Every route requires it. Answers and refreshes also require a custom request header and a same-origin `Origin`, so other sites cannot submit forms. Loopback binds pin the `Host` header against DNS rebinding. The gallery route serves only the generated index and verified archive files inside the cache (no traversal or symlink escape); images are served `nosniff` with a sandboxing CSP. Ctrl-C or service SIGTERM shuts down the HTTP listener. The Home Manager service supervises the entire process group, including image-pull/SSH children.
+
+### Streaming speech (ag 0.5)
+
+The **TTS** tab filters by node, speech kind and text/agent. Metadata sits above the message, matching the terminal feed. Scrolling up or **Pause** freezes the rendered history while collection continues; **Live · N new** returns to the tail. Tab switches preserve filters and scroll state. Hidden/background tabs disconnect their EventSource and resume from the last event ID on return. No audio is played, and no microphone or speech-provider settings are changed.
+
+- `GET /api/tts` returns a bounded version-1 snapshot, node connection states, collector/subscriber counts, retained bytes and eviction counts.
+- `GET /api/tts/events` sends `snapshot` and `feed` events with process-epoch-qualified IDs. `Last-Event-ID` (or `?after=<event-id>` on a new EventSource) resumes within retained history. `snapshot.reason` reports `initial`, `expired`, `restarted` or `invalid` when a complete replacement is necessary; no gap is silently presented as continuous history.
+- Existing cookie authentication and Host checks protect both endpoints. Cross-origin SSE is refused; keep-alives run every 15 seconds, reconnect retry is 2 seconds, responses are `no-store` / `X-Accel-Buffering: no`. A reverse proxy must pass streaming bodies without buffering. Tokens never enter SSE URLs.
+- The in-memory journal keeps at most **500 events / 2 MiB of encoded entries** (whichever fills first), plus bounded node state; text is capped at **16 KiB per entry**, visibly marked when shortened. The original feed remains on its node; the dashboard writes no second transcript. The frontend retains at most 500 entries, batches renders at 100 ms, and keeps paused content stable. There are at most 32 simultaneous SSE connections; surplus requests receive 503 with retry guidance.
+- Offline nodes remain quiet in the node summary; authentication/protocol errors stay visible in its expandable details. Slow readers never block the collector; falling outside retained history produces an explicit reset. Ctrl-C/SIGTERM cancels and reaps owned tails, closes streams, and bounds HTTP draining to four seconds even when a browser has stopped reading.
+
+The TTS collector follows the same top-level `--local` / `--host` selection as the rest of dash. `--tts-lines 0` starts with new appends only. The finite CLI/MCP read remains `ag tts list` / `ag_tts_list`; SSE is a dashboard transport, not a new feed authority.
 
 ### Home Manager service
 
@@ -140,6 +155,8 @@ Both the root flake and `./ag` export `homeManagerModules.ag-dash` (also `defaul
     # configFile = "${config.xdg.configHome}/ag/config.yaml";
     # refreshSeconds = 300;
     # imageRefreshSeconds = 300;
+    # tts = true;                             # same job; no extra service
+    # ttsLines = 20;                           # startup history per host
     # images = true;
     # environment.SSH_AUTH_SOCK = "/run/user/1000/ssh-agent";
   };
@@ -297,4 +314,4 @@ nix run .#ag -- --help
 
 Root `agent-utils` packages/bundle include `bin/ag`; the root overlay exposes `pkgs.ag`. Collective owns permanent installation. After its input pin is updated, `cltv-run ag -- --help` tests the configured package before the next operator-run switch. Do not install a competing Cargo/profile binary. This Nix-only lane deliberately has no self-updater that could overwrite immutable store files, and no feedback submission of private transcripts/images. `mcp-cli-core` and `configurable-cli` provide the shared typed contracts.
 
-`acceptance.json` and `fleet-acceptance.json` map contracts to tests. `tests/fleet.rs` runs the real binary against an in-process fake Paratenic AHP host (`tests/support/fake_ahp.rs`) for listing, answering, rejection/staleness fences, offline nodes, the dash's auth/CSRF/gallery rules and a real pseudo-terminal TUI session. `cargo run --example fake_paratenic -- 2` starts demo hosts for visual QA. The process-boundary suite uses isolated state and a fake SSH executable to run real peer processes, test disconnection/cursor recovery, and prove child cleanup; it never connects to the operator's fleet. The current optional AHP bridge exposes input providers only, not attachment/resource registration; this package does not advertise unsupported AHP capabilities.
+`acceptance.json`, `fleet-acceptance.json` and `tts-dash-acceptance.json` map contracts to tests. `cargo test --test dash_tts` exercises real HTTP/SSE, multi-browser fan-out, replay/reset, rotation, slow consumers, auth, limits and shutdown with isolated real peer processes. `node ../scripts/ag-dash-tts-qa.mjs` (from `ag/`, Playwright installed; optional `AG_TEST_BIN`, `PLAYWRIGHT_MODULE`, `AG_TTS_QA_OUT`) validates actual Chromium rendering, filters, pause, tab/offline reconnect, plain-text safety, keyboard/narrow layouts and event-to-visible latency. It never visits live fleet data. `tests/fleet.rs` runs the real binary against an in-process fake Paratenic AHP host (`tests/support/fake_ahp.rs`) for listing, answering, rejection/staleness fences, offline nodes, the dash's auth/CSRF/gallery rules and a real pseudo-terminal TUI session. `cargo run --example fake_paratenic -- 2` starts demo hosts for visual QA. The process-boundary suite uses isolated state and a fake SSH executable to run real peer processes, test disconnection/cursor recovery, and prove child cleanup; it never connects to the operator's fleet. The current optional AHP bridge exposes input providers only, not attachment/resource registration; this package does not advertise unsupported AHP capabilities.

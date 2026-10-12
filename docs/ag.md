@@ -31,7 +31,7 @@ A read-only probe of `ms-mac` found that its SSH/login PATH already included the
 
 ## Fleet choices, health and dashboard (ag 0.4)
 
-`ag choices` answers pending agent questions from every node in one TUI, reading Paratenic's AHP `inputNeeded` state directly and answering with `chat/inputCompleted`. `ag doctor` checks SSH, Paratenic, speech and gallery freshness per node, reporting down nodes quietly as offline. `ag dash` serves the three together as one live local page (choices, health, embedded gallery) with periodic refresh and image pulls while it runs. See the [ag guide](../ag/README.md#fleet-choices-ag-choices) and [`fleet-acceptance.json`](../ag/fleet-acceptance.json).
+`ag choices` answers pending agent questions from every node in one TUI, reading Paratenic's AHP `inputNeeded` state directly and answering with `chat/inputCompleted`. `ag doctor` checks SSH, Paratenic, speech and gallery freshness per node, reporting down nodes quietly as offline. `ag dash` serves them together as one live local page (choices, health, streaming TTS, embedded gallery) with periodic refresh and image pulls while it runs. See the [ag guide](../ag/README.md#fleet-choices-ag-choices) and [`fleet-acceptance.json`](../ag/fleet-acceptance.json).
 
 ![ag dash choices](assets/ag/fleet/choices-dark-1440x900.png)
 
@@ -40,6 +40,14 @@ A read-only probe of `ms-mac` found that its SSH/login PATH already included the
 ### Persistent dashboard service (ag 0.4.1)
 
 Port **7795** is the new default (7790 belongs to Petri). Both flakes export `homeManagerModules.ag-dash`, an opt-in Linux systemd user service with configurable `bindAddress`, `port`, `publicOrigin`, package/config/token/cache paths and five-minute refresh defaults. Helsinki enables it on its Tailscale IP at `http://helsinki.miku-owl.ts.net:7795`. The persistent runtime access token is stored privately outside Nix and omitted from service logs; use `?token=<token>` on the first browser visit. See [the service configuration and operator activation instructions](../ag/README.md#home-manager-service).
+
+### Shared streaming TTS (ag 0.5)
+
+The **TTS** tab streams the same request feed as `ag tts`: one collector inside the existing dashboard job, shared by all browsers through authenticated SSE. It continues with no viewers, reconnects with event IDs, and resets explicitly when bounded history expires. Filter by node/kind/text; scroll up to pause, then jump back to live. No browser audio or provider changes.
+
+Default startup history is 20 lines per host; `dash.tts`, `dash.tts_lines`, `--no-tts`, `--tts-lines` and Home Manager `tts`/`ttsLines` are configurable. The buffer is bounded to 500 events / 2 MiB, with 16 KiB visible text per entry and no persisted duplicate transcript. See [streaming operation and diagnostics](../ag/README.md#streaming-speech-ag-05), [acceptance inventory](../ag/tts-dash-acceptance.json) and [visual review](assets/ag/tts/review.md).
+
+![Streaming speech](assets/ag/tts/tts-dark-1440x900.png)
 
 ## Fleet image viewer (ag 0.3)
 

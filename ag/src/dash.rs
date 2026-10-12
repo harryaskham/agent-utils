@@ -1,4 +1,4 @@
-//! `ag dash`: one live local web view of fleet choices, health and images.
+//! `ag dash`: one live local web view of speech, choices, health and images.
 //!
 //! A real server, not a static generator: choices are re-read from Paratenic
 //! while the page is open (stale-while-revalidate), doctor and image pulls run
@@ -12,6 +12,7 @@
 use crate::{
     Error, Result,
     config::{Config, Host},
+    dash_tts::{self, Delivery, Feed},
     doctor::{self, DoctorReport},
     gallery::{self, GalleryInput, GalleryReceipt},
     paratenic::{self, AnswerInput, AnswerReceipt, Endpoint, FleetChoices},
@@ -21,7 +22,10 @@ use axum::{
     Json, Router,
     extract::{Path as UrlPath, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Redirect, Response},
+    response::{
+        IntoResponse, Redirect, Response, Sse,
+        sse::{Event, KeepAlive},
+    },
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -52,6 +56,8 @@ pub struct DashOptions {
     pub refresh: Duration,
     pub image_refresh: Duration,
     pub images: bool,
+    pub tts: bool,
+    pub tts_lines: usize,
     pub cache_dir: Option<String>,
 }
 
@@ -78,6 +84,7 @@ pub struct Snapshot {
     pub receipts: VecDeque<AnswerReceipt>,
     pub refresh_seconds: u64,
     pub image_refresh_seconds: u64,
+    pub tts: Option<dash_tts::Summary>,
 }
 
 struct Dash {
@@ -94,6 +101,8 @@ struct Dash {
     doctor_busy: AtomicBool,
     images_busy: Arc<AtomicBool>,
     inflight: Mutex<HashSet<String>>,
+    tts: Arc<Feed>,
+    shutdown: tokio_util::sync::CancellationToken,
 }
 type Shared = Arc<Dash>;
 
@@ -397,7 +406,7 @@ async fn index(
         return *response;
     }
     let mut response = ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], PAGE).into_response();
-    let csp = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+    let csp = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(csp),
@@ -419,6 +428,7 @@ async fn state(State(dash): State<Shared>, headers: HeaderMap) -> Response {
         refresh_choices(&dash);
     }
     let mut snapshot = lock(&dash).clone();
+    snapshot.tts = Some(dash.tts.summary());
     snapshot.images.available = snapshot.images.available
         || dash
             .gallery_root()
@@ -427,6 +437,121 @@ async fn state(State(dash): State<Shared>, headers: HeaderMap) -> Response {
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn tts_script(State(dash): State<Shared>, headers: HeaderMap) -> Response {
+    if let Err(response) = dash.authorized(&headers) {
+        return *response;
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        include_str!("../dash-tts.js"),
+    )
+        .into_response()
+}
+
+async fn tts_snapshot(State(dash): State<Shared>, headers: HeaderMap) -> Response {
+    if let Err(response) = dash.authorized(&headers) {
+        return *response;
+    }
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(dash.tts.snapshot()),
+    )
+        .into_response()
+}
+
+/// Cookie-authenticated EventSource. Only event cursors (never bearer tokens)
+/// appear in reconnect URLs. Slow readers pull from the bounded shared journal.
+async fn tts_events(
+    State(dash): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    if let Err(response) = dash.authorized(&headers) {
+        return *response;
+    }
+    if headers.get(header::ORIGIN).is_some_and(|origin| {
+        origin
+            .to_str()
+            .ok()
+            .and_then(|o| o.split_once("://").map(|(_, h)| h))
+            .zip(headers.get(header::HOST).and_then(|h| h.to_str().ok()))
+            .is_none_or(|(o, h)| !o.eq_ignore_ascii_case(h))
+    }) {
+        return (StatusCode::FORBIDDEN, "cross-origin request refused").into_response();
+    }
+    let Ok(permit) = dash.tts.clients.clone().try_acquire_owned() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "5")],
+            "too many speech viewers",
+        )
+            .into_response();
+    };
+    let after = headers
+        .get("last-event-id")
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| query.get("after").cloned())
+        .filter(|id| id.len() <= 96);
+    let changed = dash.tts.changed.subscribe();
+    let stream = futures_util::stream::unfold(
+        (dash, changed, after, permit),
+        |(dash, mut changed, mut after, permit)| async move {
+            loop {
+                if dash.shutdown.is_cancelled() {
+                    return None;
+                }
+                changed.borrow_and_update();
+                let event = match dash.tts.next(after.as_deref()) {
+                    Some(Delivery::Reset(snapshot)) => {
+                        after = Some(snapshot.summary.event_id.clone());
+                        Some(
+                            Event::default()
+                                .event("snapshot")
+                                .id(&snapshot.summary.event_id)
+                                .retry(Duration::from_secs(2))
+                                .json_data(snapshot)
+                                .expect("speech snapshot serializes"),
+                        )
+                    }
+                    Some(Delivery::Event { id, json }) => {
+                        after = Some(id.clone());
+                        Some(Event::default().event("feed").id(id).data(json.as_ref()))
+                    }
+                    None => None,
+                };
+                if let Some(event) = event {
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(event),
+                        (dash, changed, after, permit),
+                    ));
+                }
+                tokio::select! {
+                    _ = dash.shutdown.cancelled() => return None,
+                    result = changed.changed() => if result.is_err() { return None; },
+                }
+            }
+        },
+    );
+    let mut response = Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     response
 }
 
@@ -685,6 +810,16 @@ pub async fn run(
         },
         ..Snapshot::default()
     };
+    crate::store::check_limit(options.tts_lines)?;
+    let speech_hosts: Vec<_> = targets.iter().map(|(h, _)| h.clone()).collect();
+    let tts = Feed::new(options.tts, &speech_hosts);
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let mut collector = tokio::spawn(tts.clone().run(
+        config.clone(),
+        speech_hosts,
+        options.tts_lines,
+        shutdown.child_token(),
+    ));
     let dash: Shared = Arc::new(Dash {
         config,
         targets,
@@ -699,10 +834,15 @@ pub async fn run(
         doctor_busy: AtomicBool::new(false),
         images_busy: Arc::new(AtomicBool::new(false)),
         inflight: Mutex::new(HashSet::new()),
+        tts,
+        shutdown: shutdown.clone(),
     });
     let router = Router::new()
         .route("/", get(index))
         .route("/api/state", get(state))
+        .route("/tts.js", get(tts_script))
+        .route("/api/tts", get(tts_snapshot))
+        .route("/api/tts/events", get(tts_events))
         .route("/api/refresh", post(refresh))
         .route("/api/answer", post(answer))
         .route("/gallery/{*path}", get(gallery_file))
@@ -729,15 +869,30 @@ pub async fn run(
             }
         })
     };
-    let result = axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => (),
-                _ = terminate.recv() => (),
-            }
-        })
-        .await
-        .map_err(|e| Error::Transport(e.to_string()));
+    let stopping = shutdown.clone();
+    let serving = axum::serve(listener, router).with_graceful_shutdown(async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => (),
+            _ = terminate.recv() => (),
+        }
+        // Close streaming responses before waiting for graceful HTTP drain.
+        stopping.cancel();
+    });
+    // A peer that stopped reading can have an already-buffered SSE frame in
+    // the HTTP writer. Do not let it hold the foreground service open forever.
+    // The process-owned runtime drops any remaining connections on return.
+    let result = tokio::select! {
+        result = serving => result.map_err(|e| Error::Transport(e.to_string())),
+        _ = async { shutdown.cancelled().await; tokio::time::sleep(Duration::from_secs(4)).await; } => Ok(()),
+    };
     background.abort();
+    shutdown.cancel();
+    if tokio::time::timeout(Duration::from_secs(4), &mut collector)
+        .await
+        .is_err()
+    {
+        collector.abort();
+        let _ = collector.await;
+    }
     result
 }

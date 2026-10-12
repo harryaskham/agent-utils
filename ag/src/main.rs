@@ -100,6 +100,12 @@ enum Commands {
         /// Skip periodic image pulls (serve the existing gallery cache only).
         #[arg(long)]
         no_images: bool,
+        /// Disable the shared live speech collector.
+        #[arg(long)]
+        no_tts: bool,
+        /// Recent speech lines per host when dash starts (0–1000).
+        #[arg(long)]
+        tts_lines: Option<usize>,
         /// Gallery cache directory (as for ag image).
         #[arg(long)]
         cache_dir: Option<String>,
@@ -1122,6 +1128,8 @@ fn execute(cli: Cli) -> Result<u8> {
             token_file,
             no_open,
             no_images,
+            no_tts,
+            tts_lines,
             cache_dir,
             refresh,
             image_refresh,
@@ -1143,6 +1151,8 @@ fn execute(cli: Cli) -> Result<u8> {
                 ));
             }
             let targets = service.paratenic_targets(&selection)?;
+            let tts_lines = tts_lines.unwrap_or(service.config.dash.tts_lines);
+            ag::store::check_limit(tts_lines)?;
             let options = ag::dash::DashOptions {
                 selection,
                 bind,
@@ -1154,6 +1164,8 @@ fn execute(cli: Cli) -> Result<u8> {
                 refresh: std::time::Duration::from_secs(refresh),
                 image_refresh: std::time::Duration::from_secs(image_refresh),
                 images: !no_images,
+                tts: !no_tts && service.config.dash.tts,
+                tts_lines,
                 cache_dir,
             };
             let as_json = cli.json;

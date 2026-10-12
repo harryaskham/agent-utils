@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "feature": "One dashboard-owned speech collector, authenticated SSE fan-out",
+  "direction": "Compact, technical, quiet: retain ag's green/neutral theme, metadata rail above plain speech, full-height tail with a single filter/status toolbar; no cards or explanatory subtitle. Read-only request feed, never browser audio playback.",
+  "requirements": [
+    {"id":"TTS-DASH-1","contract":"Start one shared follow_hosts pipeline per ag dash process, including when no browser is open. Reuse ag tts local/SSH readers, cursor reconnect and isolated host failures. Browsers never start another collector.","evidence":["ag/tests/dash_tts.rs"]},
+    {"id":"TTS-DASH-2","contract":"SSE and snapshot require existing token-cookie and Host checks. No token in stream URLs, permissive CORS, transcript logs or persistent duplicate feed. Render untrusted fields as text.","evidence":["ag/tests/dash_tts.rs","scripts/ag-dash-tts-qa.mjs"]},
+    {"id":"TTS-DASH-3","contract":"Ordered epoch-qualified event IDs; atomic snapshot/replay boundary; Last-Event-ID reconnect within retained history; explicit snapshot reset after eviction/restart. Slow browsers cannot backpressure the collector.","evidence":["ag/src/dash_tts.rs","ag/tests/dash_tts.rs"]},
+    {"id":"TTS-DASH-4","contract":"Memory bounded by 500 events/2 MiB encoded journal, 16 KiB text per entry, 32 SSE connections, bounded metadata. Explicit truncation/reset. SIGTERM/Ctrl-C closes SSE and cancels/reaps owned tails.","evidence":["ag/src/dash_tts.rs","ag/tests/dash_tts.rs"]},
+    {"id":"TTS-DASH-5","contract":"TTS tab: host/kind/text filters, connected/offline/error state, follow tail pauses while reading history, new-message indicator, jump-to-live. Keyboard and narrow/light/dark layouts; bounded batched render updates and no hidden-pane rendering.","evidence":["scripts/ag-dash-tts-qa.mjs","docs/assets/ag/tts/"]},
+    {"id":"TTS-DASH-6","contract":"Enabled by default in existing ag-dash Home Manager job. CLI/config/HM opt-out and initial-line count; no extra service, microphone, playback or live deployment for testing.","evidence":["ag/nix/module-test.nix","ag/tests/dash_tts.rs","ag/README.md"]}
+  ],
+  "budgets":{"steady_local_append_to_sse_ms":1500,"browser_render_batch_ms":100,"shutdown_ms":5000,"journal_encoded_bytes":2097152,"journal_events":500,"sse_clients":32},
+  "delivery":"Nix package and source publication; activation remains operator-owned"
+}

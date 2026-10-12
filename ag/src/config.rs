@@ -140,6 +140,10 @@ pub struct DashConfig {
     pub refresh_seconds: u64,
     /// Background incremental image pull.
     pub image_refresh_seconds: u64,
+    /// One process-owned speech collector, shared by all dashboard browsers.
+    pub tts: bool,
+    /// Recent lines per host on collector startup (not per browser).
+    pub tts_lines: usize,
 }
 impl Default for DashConfig {
     fn default() -> Self {
@@ -149,6 +153,8 @@ impl Default for DashConfig {
             token_file: None,
             refresh_seconds: 300,
             image_refresh_seconds: 300,
+            tts: true,
+            tts_lines: 20,
         }
     }
 }
@@ -282,9 +288,10 @@ impl AppConfig for Config {
             || self.dash.bind.parse::<std::net::SocketAddr>().is_err()
             || !(30..=86_400).contains(&self.dash.refresh_seconds)
             || !(60..=86_400).contains(&self.dash.image_refresh_seconds)
+            || self.dash.tts_lines > crate::model::MAX_ITEMS
         {
             return Err(invalid(
-                "dash: bind must be ip:port; refresh 30–86400s, image refresh 60–86400s",
+                "dash: bind must be ip:port; refresh 30–86400s, image refresh 60–86400s, tts_lines 0–1000",
             ));
         }
         if let Some(origin) = &self.dash.public_origin {

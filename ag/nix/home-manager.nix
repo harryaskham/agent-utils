@@ -24,6 +24,8 @@ let
     (toString cfg.refreshSeconds)
     "--image-refresh"
     (toString cfg.imageRefreshSeconds)
+    "--tts-lines"
+    (toString cfg.ttsLines)
   ]
   ++ lib.optionals (cfg.publicOrigin != null) [
     "--public-origin"
@@ -33,7 +35,8 @@ let
     "--cache-dir"
     cfg.cacheDirectory
   ]
-  ++ lib.optional (!cfg.images) "--no-images";
+  ++ lib.optional (!cfg.images) "--no-images"
+  ++ lib.optional (!cfg.tts) "--no-tts";
   # Use a store-owned launcher so systemd does not reinterpret %, $, quotes or
   # whitespace in user-specified arguments/environment. Never shell-eval config.
   launcher = pkgs.writeShellScript "ag-dash-start" ''
@@ -110,6 +113,16 @@ in
       type = lib.types.bool;
       default = true;
       description = "Periodically pull images; false serves only existing cached images.";
+    };
+    tts = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Collect the ag tts request feed once in this job and stream it to authenticated browsers; no audio playback. False adds --no-tts. Runtime dash.tts=false also disables collection.";
+    };
+    ttsLines = lib.mkOption {
+      type = lib.types.ints.between 0 1000;
+      default = 20;
+      description = "Recent speech records per host on service startup (not per browser). Live appends then follow automatically.";
     };
     environment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
