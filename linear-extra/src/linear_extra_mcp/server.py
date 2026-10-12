@@ -17,8 +17,13 @@ Auth resolution (first match wins):
        "session:<acct>=<jwt>; uploadsSig:<acct>=<jwt>"
   2. LINEAR_COOKIE_FILE     — path to a file whose contents are that cookie string
   3. settings.json (PI agent dir or --settings): keys linear-extra.cookie / linearExtra.cookie
+  4. ~/.pi/agent/linear-session.cookie
 User / org / account ids are derived from the cookie's JWT claims when not provided explicitly; the
 Linear `user` id (distinct from accountId) is fetched once via a `viewer { id }` query.
+
+Cookie files are re-read whenever they change. When Linear rejects the session, the server opens a
+sign-in browser in the background (`linear-extra-mcp login`, see login.py) and asks the caller to
+retry once the window has captured a fresh cookie and closed.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import base64
 import json
 import logging
 import os
+import subprocess
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -56,6 +62,15 @@ class ServerConfig:
     org_id: str | None = None
     user_id: str | None = None  # Linear user id (for `user` header); resolved lazily if absent
     _resolved_user: str | None = field(default=None, repr=False)
+    # Cookie file to watch for refreshed credentials (None for literal/env cookies).
+    cookie_source: Path | None = None
+    _cookie_stamp: tuple[int, int] | None = field(default=None, repr=False)
+    _explicit_account: bool = field(default=False, repr=False)
+    _explicit_org: bool = field(default=False, repr=False)
+
+
+class LinearAuthError(RuntimeError):
+    """Linear rejected (or never received) the session cookie."""
 
 
 def configure_logging(level: str = "WARNING") -> None:
@@ -98,52 +113,147 @@ def _parse_cookie_claims(cookie: str) -> dict[str, Any]:
     return claims
 
 
-def resolve_cookie(args: argparse.Namespace) -> str:
-    if args.cookie:
-        return args.cookie.strip()
+def _settings_section(args: argparse.Namespace) -> dict[str, Any]:
+    """Return the first linear-extra settings section that configures a cookie."""
+    settings_path = Path(
+        getattr(args, "settings", None)
+        or os.environ.get("LINEAR_EXTRA_SETTINGS", DEFAULT_SETTINGS_PATH)
+    ).expanduser()
+    if not settings_path.exists():
+        return {}
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    for key in ("linear-extra", "linearExtra"):
+        section = data.get(key)
+        if isinstance(section, dict) and (
+            section.get("cookie") or section.get("cookieFile") or section.get("cookie_file")
+        ):
+            return section
+    return {}
+
+
+def _read_cookie_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Linear cookie file not found: {path}") from exc
+
+
+def resolve_cookie_source(args: argparse.Namespace) -> tuple[str, Path | None]:
+    """Return (cookie, source file) using the documented precedence; literal sources have no file."""
+    if getattr(args, "cookie", None):
+        return args.cookie.strip(), None
     env_cookie = os.environ.get("LINEAR_SESSION_COOKIE")
     if env_cookie:
-        return env_cookie.strip()
-    cookie_file = args.cookie_file or os.environ.get("LINEAR_COOKIE_FILE")
+        return env_cookie.strip(), None
+    cookie_file = getattr(args, "cookie_file", None) or os.environ.get("LINEAR_COOKIE_FILE")
     if cookie_file:
-        return Path(cookie_file).expanduser().read_text(encoding="utf-8").strip()
-    settings_path = Path(args.settings or os.environ.get("LINEAR_EXTRA_SETTINGS", DEFAULT_SETTINGS_PATH)).expanduser()
-    if settings_path.exists():
-        try:
-            data = json.loads(settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            data = {}
-        for key in ("linear-extra", "linearExtra"):
-            section = data.get(key)
-            if not isinstance(section, dict):
-                continue
-            # A literal cookie value takes precedence over a referenced file.
-            if section.get("cookie"):
-                return str(section["cookie"]).strip()
-            cookie_file_setting = section.get("cookieFile") or section.get("cookie_file")
-            if cookie_file_setting:
-                return Path(str(cookie_file_setting)).expanduser().read_text(encoding="utf-8").strip()
+        path = Path(cookie_file).expanduser()
+        return _read_cookie_file(path), path
+    section = _settings_section(args)
+    # A literal cookie value takes precedence over a referenced file.
+    if section.get("cookie"):
+        return str(section["cookie"]).strip(), None
+    cookie_file_setting = section.get("cookieFile") or section.get("cookie_file")
+    if cookie_file_setting:
+        path = Path(str(cookie_file_setting)).expanduser()
+        return _read_cookie_file(path), path
     # Final fallback: the conventional cookie file location, so the server works with no config.
     if DEFAULT_COOKIE_PATH.exists():
-        return DEFAULT_COOKIE_PATH.read_text(encoding="utf-8").strip()
+        return _read_cookie_file(DEFAULT_COOKIE_PATH), DEFAULT_COOKIE_PATH
     raise RuntimeError(
-        "No Linear session cookie found. Set LINEAR_SESSION_COOKIE, LINEAR_COOKIE_FILE, "
-        "a linear-extra.cookie or linear-extra.cookieFile entry in settings.json, "
-        f"or place the cookie at {DEFAULT_COOKIE_PATH}."
+        "No Linear session cookie found. Run `linear-extra-mcp login`, or set "
+        "LINEAR_SESSION_COOKIE, LINEAR_COOKIE_FILE, a linear-extra.cookie or "
+        f"linear-extra.cookieFile entry in settings.json, or place the cookie at {DEFAULT_COOKIE_PATH}."
     )
 
 
+def resolve_cookie(args: argparse.Namespace) -> str:
+    return resolve_cookie_source(args)[0]
+
+
+def cookie_target_path(args: argparse.Namespace) -> tuple[Path, bool]:
+    """Return the file a refreshed cookie belongs in, and whether a literal cookie overrides it."""
+    shadowed = bool(getattr(args, "cookie", None) or os.environ.get("LINEAR_SESSION_COOKIE"))
+    cookie_file = getattr(args, "cookie_file", None) or os.environ.get("LINEAR_COOKIE_FILE")
+    if cookie_file:
+        return Path(cookie_file).expanduser(), shadowed
+    section = _settings_section(args)
+    shadowed = shadowed or bool(section.get("cookie"))
+    cookie_file_setting = section.get("cookieFile") or section.get("cookie_file")
+    if cookie_file_setting:
+        return Path(str(cookie_file_setting)).expanduser(), shadowed
+    return DEFAULT_COOKIE_PATH, shadowed
+
+
+def state_dir() -> Path:
+    """Private directory for the sign-in browser profile, lock and log."""
+    base = os.environ.get("LINEAR_EXTRA_STATE_DIR")
+    path = (
+        Path(base).expanduser()
+        if base
+        else Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "linear-extra"
+    )
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return path
+
+
+def _file_stamp(path: Path | None) -> tuple[int, int] | None:
+    if path is None:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
 def build_config(args: argparse.Namespace) -> ServerConfig:
-    cookie = resolve_cookie(args)
+    try:
+        cookie, source = resolve_cookie_source(args)
+    except RuntimeError:
+        # Start anyway: the first tool call reports the missing session and opens sign-in.
+        cookie, source = "", cookie_target_path(args)[0]
     claims = _parse_cookie_claims(cookie)
+    account_id = args.account_id or os.environ.get("LINEAR_ACCOUNT_ID")
+    org_id = args.org_id or os.environ.get("LINEAR_ORG_ID")
     return ServerConfig(
         cookie=cookie,
         endpoint=args.endpoint,
         client_version=args.client_version,
-        account_id=args.account_id or os.environ.get("LINEAR_ACCOUNT_ID") or claims.get("account_id"),
-        org_id=args.org_id or os.environ.get("LINEAR_ORG_ID") or claims.get("org_id"),
+        account_id=account_id or claims.get("account_id"),
+        org_id=org_id or claims.get("org_id"),
         user_id=args.user_id or os.environ.get("LINEAR_USER_ID"),
+        cookie_source=source,
+        _cookie_stamp=_file_stamp(source),
+        _explicit_account=bool(account_id),
+        _explicit_org=bool(org_id),
     )
+
+
+def _maybe_reload(config: ServerConfig) -> bool:
+    """Re-read the cookie file if it changed since it was last loaded."""
+    stamp = _file_stamp(config.cookie_source)
+    if stamp is None or stamp == config._cookie_stamp:
+        return False
+    try:
+        cookie = _read_cookie_file(config.cookie_source)
+    except RuntimeError:
+        return False
+    config._cookie_stamp = stamp
+    if cookie == config.cookie:
+        return False
+    config.cookie = cookie
+    claims = _parse_cookie_claims(cookie)
+    if not config._explicit_account:
+        config.account_id = claims.get("account_id")
+    if not config._explicit_org:
+        config.org_id = claims.get("org_id")
+    config._resolved_user = None
+    log.info("Reloaded Linear session cookie from %s", config.cookie_source)
+    return True
 
 
 def _headers(config: ServerConfig, user_id: str | None) -> dict[str, str]:
@@ -163,13 +273,28 @@ def _headers(config: ServerConfig, user_id: str | None) -> dict[str, str]:
     return headers
 
 
-def graphql(
+def _is_auth_error(errors: Any) -> bool:
+    for err in errors if isinstance(errors, list) else []:
+        ext = (err or {}).get("extensions") or {}
+        if ext.get("code") == "AUTHENTICATION_ERROR" or "authentication" in str(ext.get("type", "")):
+            return True
+    return False
+
+
+def _error_messages(errors: Any, fallback: str) -> str:
+    messages = [str(e.get("message")) for e in errors or [] if isinstance(e, dict) and e.get("message")]
+    return "; ".join(messages) or fallback[:300]
+
+
+def _graphql_once(
     config: ServerConfig,
     query: str,
     variables: dict[str, Any] | None = None,
     operation_name: str | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
+    if not config.cookie:
+        raise LinearAuthError("No Linear session cookie is configured.")
     payload = {"query": query, "variables": variables or {}}
     if operation_name:
         payload["operationName"] = operation_name
@@ -182,10 +307,111 @@ def graphql(
             data = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")
+        try:
+            errors = json.loads(detail).get("errors")
+        except (json.JSONDecodeError, AttributeError):
+            errors = None
+        if exc.code == 401 or _is_auth_error(errors):
+            raise LinearAuthError(
+                f"Linear GraphQL HTTP {exc.code}: {_error_messages(errors, detail)}"
+            ) from exc
         raise RuntimeError(f"Linear GraphQL HTTP {exc.code}: {detail}") from exc
     if data.get("errors"):
+        if _is_auth_error(data["errors"]):
+            raise LinearAuthError(f"Linear GraphQL error: {_error_messages(data['errors'], '')}")
         raise RuntimeError(f"Linear GraphQL error: {json.dumps(data['errors'])}")
     return data.get("data", {})
+
+
+def graphql(
+    config: ServerConfig,
+    query: str,
+    variables: dict[str, Any] | None = None,
+    operation_name: str | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    _maybe_reload(config)
+    try:
+        return _graphql_once(config, query, variables, operation_name, user_id)
+    except LinearAuthError as first:
+        cause: LinearAuthError = first
+    if _maybe_reload(config):
+        try:
+            return _graphql_once(config, query, variables, operation_name, user_id)
+        except LinearAuthError as retry:
+            cause = retry
+    login = start_background_login(config)
+    raise LinearAuthError(_expired_message(login)) from cause
+
+
+def _expired_message(login: dict[str, Any]) -> str:
+    status = login.get("status")
+    prefix = "Linear session expired or missing (Linear rejected the session cookie)."
+    if status == "started":
+        return (
+            f"{prefix} Opened a Linear sign-in browser window: sign in there; it closes itself once "
+            "the new session is saved. Then retry this call."
+        )
+    if status == "running":
+        return (
+            f"{prefix} A Linear sign-in browser window is already open (pid {login.get('pid')}): "
+            "finish signing in there, then retry this call."
+        )
+    reason = {
+        "disabled": "automatic sign-in is disabled (LINEAR_EXTRA_AUTO_LOGIN=0)",
+        "no-display": "no graphical display is available here",
+    }.get(str(status), f"could not open sign-in automatically: {login.get('error', status)}")
+    return f"{prefix} {reason[0].upper()}{reason[1:]}. Run `linear-extra-mcp login`, then retry."
+
+
+def _display_available() -> bool:
+    return sys.platform == "darwin" or bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+
+
+_LOGIN_PROCS: list[subprocess.Popen] = []
+
+
+def start_background_login(config: ServerConfig) -> dict[str, Any]:
+    """Open the interactive sign-in flow in a detached process (at most one at a time)."""
+    _LOGIN_PROCS[:] = [p for p in _LOGIN_PROCS if p.poll() is None]
+    if os.environ.get("LINEAR_EXTRA_AUTO_LOGIN", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return {"status": "disabled"}
+    if not _display_available():
+        return {"status": "no-display"}
+    from .login import login_lock_holder  # local import: login imports this module
+
+    holder = login_lock_holder()
+    if holder:
+        return {"status": "running", "pid": holder}
+    cmd = [
+        sys.executable,
+        "-m",
+        "linear_extra_mcp",
+        "login",
+        "--timeout",
+        "900",
+        "--endpoint",
+        config.endpoint,
+        "--client-version",
+        config.client_version,
+    ]
+    if config.cookie_source is not None:
+        cmd += ["--cookie-file", str(config.cookie_source)]
+    try:
+        with open(state_dir() / "login.log", "a", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,  # never read the MCP stdio stream
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        return {"status": "failed", "error": str(exc)}
+    _LOGIN_PROCS.append(proc)
+    return {"status": "started", "pid": proc.pid}
 
 
 def resolve_user_id(config: ServerConfig) -> str:
@@ -329,8 +555,7 @@ def create_server(config: ServerConfig) -> FastMCP:
     return server
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the linear-extra MCP server over stdio")
+def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cookie", default=None, help="Full Linear session cookie string")
     parser.add_argument("--cookie-file", default=None, help="Path to a file containing the cookie")
     parser.add_argument("--settings", default=None, help="settings.json path for linear-extra.cookie")
@@ -343,10 +568,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--org-id", default=None)
     parser.add_argument("--user-id", default=None)
     parser.add_argument("--log-level", default=os.environ.get("LINEAR_EXTRA_LOG_LEVEL", "WARNING"))
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the linear-extra MCP server over stdio "
+        "(`linear-extra-mcp login --help` refreshes the Linear session)"
+    )
+    add_common_args(parser)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["login"]:
+        from .login import login_main
+
+        raise SystemExit(login_main(argv[1:]))
     args = parse_args(argv)
     configure_logging(args.log_level)
     config = build_config(args)

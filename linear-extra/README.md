@@ -29,8 +29,8 @@ comments safely, and you publish (or discard) them yourself.
 
 ## Auth
 
-Drafts require the Linear **session cookie** (the OAuth token used by the official MCP is not
-accepted by the internal endpoint). Resolution order (first match wins):
+Drafts require the Linear **session cookie**: the internal endpoint rejects API keys (`Auth method
+not allowed: apiKey`) and the official MCP's OAuth token. Resolution order (first match wins):
 
 1. `LINEAR_SESSION_COOKIE` — the full cookie string:
    `session:<acct>=<jwt>; uploadsSig:<acct>=<jwt>`
@@ -46,6 +46,34 @@ Override any of them with `LINEAR_ACCOUNT_ID` / `LINEAR_ORG_ID` / `LINEAR_USER_I
 > The session cookie is a sensitive, full-account credential. Prefer `LINEAR_COOKIE_FILE` (mode
 > `600`) or an env var injected at runtime; do not commit it. Rotate the Linear session if a copy
 > leaks.
+
+## Signing in / refreshing the session
+
+Linear sessions expire or get revoked. Refresh the cookie without DevTools:
+
+```sh
+linear-extra-mcp login --check   # exit 0 valid, 2 expired/missing; opens nothing
+linear-extra-mcp login           # keep a valid cookie, otherwise sign in
+linear-extra-mcp login --force   # sign in even if the cookie still works
+```
+
+`login` opens a headed browser at `https://linear.app/login` with a dedicated persistent profile
+(`~/.cache/linear-extra/browser-profile`, so later sign-ins are usually one click). Sign in normally;
+it reads the cookies the browser would send to `client-api.linear.app` (including httpOnly ones),
+validates them with a `viewer` query, writes the cookie file atomically with mode `600`, and closes
+the window. It prints only the account and cookie names, never values, and waits up to 10 minutes
+(`--timeout`). It writes to the same file the server reads (`--cookie-file`, `LINEAR_COOKIE_FILE`,
+`settings.json` `cookieFile`, else the default path).
+
+The running server re-reads its cookie file whenever it changes, so no restart is needed. When Linear
+rejects the session, a tool call fails with "Linear session expired" and the server opens the same
+sign-in window in the background (one at a time); sign in, then retry the call.
+
+Requires [`playwright-cli`](https://www.npmjs.com/package/@playwright/cli) (on `PATH`, at
+`~/.local/pnpm/playwright-cli`, or `LINEAR_EXTRA_PLAYWRIGHT_CLI`). Other settings:
+`LINEAR_EXTRA_AUTO_LOGIN=0` (never open a browser from the server; also off without a display),
+`LINEAR_EXTRA_BROWSER` (`chrome` default, or `msedge`), `LINEAR_EXTRA_PROFILE_DIR`,
+`LINEAR_EXTRA_STATE_DIR` (profile, lock and `login.log`).
 
 ## mcp.json wiring
 
@@ -70,7 +98,8 @@ Exposed through the agent-utils nix flake as `linear-extra-mcp`:
 ```sh
 cd linear-extra
 uv lock            # if dependencies changed
-PYTHONPATH=src python3 -m pytest -q   # converter tests (no network)
+PYTHONPATH=src python3 -m pytest -q   # unit tests (local fake Linear, no network)
+LINEAR_EXTRA_E2E=1 uv run --group dev python -m pytest -q  # + real headless browser sign-in
 ```
 
 The ProseMirror converter (`prosemirror.py`) is pure and unit-tested. The GraphQL layer mirrors the
