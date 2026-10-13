@@ -218,14 +218,16 @@ test("adapter registration failure warns once and leaves Pi commands functional"
   await h.fire("session_shutdown");
 });
 
-test("Pi host packages are production dependencies so --omit=dev installs keep jiti consumers working", async () => {
+test("Pi host packages use wildcard peers, with pinned copies only for development", async () => {
   const pkg = JSON.parse(await import("node:fs").then((fs) => fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")));
-  // Pi installs git packages with `npm install --omit=dev`; editor chips
-  // (CustomEditor) and the bundled pi-mcp-adapter load these through jiti.
-  for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
-    assert.match(pkg.dependencies?.[name] || "", /^\d+\.\d+\.\d+$/, `${name} pinned in dependencies`);
-    assert.equal(pkg.devDependencies?.[name], undefined, `${name} must not be dev-only`);
+  // Pi 1.x supplies these modules through its loader and suppresses peer installs.
+  // Shipping physical runtime copies can bypass that loader and split host state.
+  for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "@sinclair/typebox", "typebox"]) {
+    assert.equal(pkg.dependencies?.[name], undefined, `${name} must not be a runtime dependency`);
+    assert.equal(pkg.optionalDependencies?.[name], undefined, `${name} must not be an optional runtime dependency`);
+    assert.equal(pkg.peerDependencies?.[name], "*", `${name} must accept the running Pi host`);
   }
-  const npmrc = await import("node:fs").then((fs) => fs.readFileSync(new URL("../.npmrc", import.meta.url), "utf8"));
-  assert.doesNotMatch(npmrc, /^\s*legacy-peer-deps\s*=\s*true/m, "peers like zod must still install");
+  for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"]) {
+    assert.match(pkg.devDependencies?.[name] || "", /^\d+\.\d+\.\d+$/, `${name} stays pinned for standalone tests`);
+  }
 });
