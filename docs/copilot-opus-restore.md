@@ -33,6 +33,31 @@ thinking signatures, response IDs and usage are unchanged. Other providers,
 models, genuine fallback responses and already canonical replies are untouched.
 The extension never selects a model or rewrites settings/history.
 
+## Preferred recovery: upgrade and select the model once
+
+No Pi source patch or model alias is required. With **stock Pi 1.1.0 or newer**:
+
+1. Exit the old Pi process and launch the installed newer Pi in the same working
+   directory with `pi --continue`.
+2. If the old entry causes an initial fallback, run
+   `/model github-copilot/claude-opus-5.5` (or select that entry in `/model`).
+   Ordinary selection saves the choice for this session; **Ctrl+S is not needed**
+   and would change the default for new sessions.
+3. Subsequent plain `pi --continue` restores Opus. No prompt or model request is
+   needed to record the one-time selection.
+
+This workflow was verified against unpatched Pi 1.1.0 with the Agent Utils
+compatibility hook disabled: reproduce the old fallback, perform one standard
+`set_model` operation (the RPC equivalent of `/model`), exit, continue without
+model flags, generate a new reply, and continue again. Both continues retained
+the dotted ID, emitted no restore warning, preserved the old message metadata,
+and left the default model unchanged. `--session <file>` was verified too.
+
+The proposed Collective/Pi lookup patch was withdrawn; do not reintroduce it.
+Installing a new executable does not upgrade already-running processes. Do not
+start a second Pi writer against a live session file or blindly bulk-restart
+agents whose ownership/work state is unknown.
+
 ## Runtime version and restart boundary
 
 Pi **1.1.0** now preserves the requested ID in `message.model` and puts the wire
@@ -62,6 +87,8 @@ canonical ID. Only synthetic messages are used in the regression tests.
 `PI_RUN_MODEL_RESTORE_SMOKE=1 node --test test/copilot-restore-process.test.js`
 exercises an actual Pi process, local SSE response with the hyphenated wire ID,
 session persistence, and restart planning against a synthetic pre-fix session.
-It verifies the dotted request/selected ID and no restore warning or prompt replay.
-It passed with both Pi 0.84.4 and 1.1.0; `PI_BIN` can select a runtime. The test
-never connects to GitHub or uses operator credentials/history.
+The restart case verifies the dotted request/selected ID and no restore warning
+or prompt replay; that case passed on Pi 0.84.4 and 1.1.0. The continue/session
+cases verify the preferred one-time-selection recovery on **stock Pi 1.1+** with
+no compatibility hook. `PI_BIN` can select the installed runtime. The test never
+connects to GitHub or uses operator credentials/history.

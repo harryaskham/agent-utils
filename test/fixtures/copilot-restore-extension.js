@@ -10,6 +10,6 @@ export default function fixture(pi) {
     baseUrl, api: "anthropic-messages", apiKey: "fixture-only",
     models: ["claude-opus-5.5", "gpt-6-astra"].map(id => ({ id, name: id, reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 100 })),
   });
-  identity(pi);
+  if (process.env.COPILOT_RESTORE_QA_NO_HOOK !== "1") identity(pi);
   pi.on("session_start", (_event, ctx) => appendFileSync(receipt, JSON.stringify({ model: { provider: ctx.model?.provider, id: ctx.model?.id }, file: ctx.sessionManager.getSessionFile() }) + "\n", { mode: 0o600 }));
 }

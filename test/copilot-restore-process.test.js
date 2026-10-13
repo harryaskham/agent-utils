@@ -9,7 +9,7 @@ import { buildPiRestartPlan } from "../extensions/pi-self-update.js";
 const enabled = process.env.PI_RUN_MODEL_RESTORE_SMOKE === "1";
 const pause = () => new Promise(resolve => setTimeout(resolve, 25));
 
-test("real Pi persists canonical Opus and resumes legacy wire metadata using the restart model", { skip: !enabled, timeout: 60000 }, async () => {
+for (const mode of ["restart", "continue", "session"]) test(`real Pi ${mode}: legacy resume${mode === "restart" ? " preserves the selected model" : " recovers after one normal model selection"}`, { skip: !enabled, timeout: 60000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "copilot-restore-"));
   const requests = [], children = [];
   const server = http.createServer(async (req, res) => {
@@ -59,10 +59,13 @@ test("real Pi persists canonical Opus and resumes legacy wire metadata using the
   try {
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     Object.assign(env, { HOME: root, PI_CODING_AGENT_DIR: root, PI_DISABLE_AHP: "1", DISABLE_PI_CACO: "1", PI_OFFLINE: "1", PI_TELEMETRY: "0", COPILOT_RESTORE_QA_URL: `http://127.0.0.1:${server.address().port}`, COPILOT_RESTORE_QA_RECEIPT: receipt });
+    // Continue/session recovery must work on stock Pi 1.1+, without the Agent
+    // Utils compatibility hook, aliases, CLI model flags or Pi source patches.
+    if (mode !== "restart") env.COPILOT_RESTORE_QA_NO_HOOK = "1";
     await writeFile(path.join(root, "settings.json"), JSON.stringify({ packages: [], defaultProvider: "github-copilot", defaultModel: "gpt-6-astra" }));
-    const session = path.join(root, "session.jsonl");
-    const first = await launch([...common, "--model", "github-copilot/claude-opus-5.5", "--session", session]);
+    const first = await launch([...common, "--model", "github-copilot/claude-opus-5.5"]);
     await wait(async () => (await notes()).length === 1);
+    const session = (await notes())[0].file;
     first.proc.stdin.write(JSON.stringify({ id: "first", type: "prompt", message: "Reply OK." }) + "\n");
     await wait(() => first.events.some(e => e.type === "agent_end"));
     await stop(first.proc);
@@ -71,17 +74,42 @@ test("real Pi persists canonical Opus and resumes legacy wire metadata using the
     assert.equal(message.message.model, "claude-opus-5.5");
     // ONLY synthetic test-owned history is altered to reproduce a pre-fix file.
     message.message.model = "claude-opus-5-5";
-    const legacy = path.join(root, "legacy.jsonl");
-    await writeFile(legacy, entries.map(e => JSON.stringify(e)).join("\n") + "\n");
-    const plan = buildPiRestartPlan({ argv: ["pi", "/old/pi", ...common, "--model", "gpt-6-astra", "do-not-replay-this-prompt"], env, sessionFile: legacy, model: { provider: "github-copilot", id: "claude-opus-5.5" } });
-    const second = await launch(plan.restartArgs);
+    await writeFile(session, entries.map(e => JSON.stringify(e)).join("\n") + "\n");
+    const plan = buildPiRestartPlan({ argv: ["pi", "/old/pi", ...common, "--model", "gpt-6-astra", "do-not-replay-this-prompt"], env, sessionFile: session, model: { provider: "github-copilot", id: "claude-opus-5.5" } });
+    const args = mode === "restart" ? plan.restartArgs : mode === "continue" ? [...common, "--continue"] : [...common, "--session", session];
+    // The continue/session cases deliberately contain NO provider/model override.
+    if (mode !== "restart") assert.ok(!args.includes("--model") && !args.includes("--provider"));
+    let second = await launch(args);
     await wait(async () => (await notes()).length === 2);
-    assert.equal((await notes())[1].model.id, "claude-opus-5.5");
+    if (mode !== "restart") {
+      // Reproduce the old entry fallback, then do exactly what /model does:
+      // append one ordinary session-scoped selection using Pi's supported RPC.
+      assert.equal((await notes())[1].model.id, "gpt-6-astra");
+      second.proc.stdin.write(JSON.stringify({ id: "save-model", type: "set_model", provider: "github-copilot", modelId: "claude-opus-5.5" }) + "\n");
+      await wait(() => second.events.some(e => e.id === "save-model" && e.type === "response"));
+      assert.equal(second.events.find(e => e.id === "save-model" && e.type === "response").success, true);
+      await stop(second.proc);
+      assert.equal(requests.length, 1, "selecting a model must not generate an assistant turn");
+      const settings = JSON.parse(await readFile(path.join(root, "settings.json"), "utf8"));
+      assert.equal(settings.defaultModel, "gpt-6-astra", "selection must not change the default for other sessions");
+      second = await launch(args);
+      await wait(async () => (await notes()).length === 3);
+    }
+    assert.equal((await notes()).at(-1).model.id, "claude-opus-5.5");
     assert.doesNotMatch(second.stderr(), /Could not restore model/);
-    assert.equal(requests.length, 1, "restart replayed an old prompt");
+    assert.equal(requests.length, 1, "resume replayed an old prompt");
+    const resumedEntries = (await readFile(session, "utf8")).trim().split("\n").map(JSON.parse);
+    assert.equal(resumedEntries.find(e => e.id === message.id).message.model, "claude-opus-5-5", "resume must not rewrite old response metadata");
     second.proc.stdin.write(JSON.stringify({ id: "second", type: "prompt", message: "Reply OK." }) + "\n");
     await wait(() => second.events.some(e => e.type === "agent_end"));
     await stop(second.proc);
+    if (mode !== "restart") {
+      const final = await launch(args);
+      await wait(async () => (await notes()).length === 4);
+      assert.equal((await notes()).at(-1).model.id, "claude-opus-5.5", "a new reply must not reintroduce the bad restore identity");
+      assert.doesNotMatch(final.stderr(), /Could not restore model/);
+      await stop(final.proc);
+    }
     assert.deepEqual(requests.map(r => r.model), ["claude-opus-5.5", "claude-opus-5.5"]);
     assert.ok(requests.every(r => r.url.startsWith("/v1/messages")));
   } finally {
