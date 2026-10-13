@@ -6,7 +6,9 @@ you sign in, it reads the cookies the browser would send to the Linear client AP
 httpOnly ones), validates them with a `viewer` query, atomically writes the cookie file (mode 600)
 and closes the window. The cookie value is never printed.
 
-The MCP server runs this automatically in the background when a tool call hits an expired session.
+With PLAYWRIGHT_MCP_EXTENSION_TOKEN set (or --extension msedge), reuse the operator's existing
+browser instead of opening a new profile. After capture, detach without closing that browser.
+The MCP server runs recovery in the background when a tool call hits an expired session.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -137,7 +140,13 @@ def write_cookie_file(path: Path, cookie: str) -> None:
 
 
 def validate_cookie(
-    cookie: str, endpoint: str, client_version: str = server.DEFAULT_CLIENT_VERSION
+    cookie: str,
+    endpoint: str,
+    client_version: str = server.DEFAULT_CLIENT_VERSION,
+    *,
+    account_id: str | None = None,
+    org_id: str | None = None,
+    user_id: str | None = None,
 ) -> tuple[str, dict[str, Any] | str]:
     """Return ("valid", viewer), ("invalid", reason) or ("error", reason)."""
     claims = server._parse_cookie_claims(cookie)
@@ -145,11 +154,12 @@ def validate_cookie(
         cookie=cookie,
         endpoint=endpoint,
         client_version=client_version,
-        account_id=claims.get("account_id"),
-        org_id=claims.get("org_id"),
+        account_id=account_id or claims.get("account_id"),
+        org_id=org_id or claims.get("org_id"),
+        user_id=user_id,
     )
     try:
-        data = server._graphql_once(config, VIEWER_QUERY, operation_name="Viewer")
+        data = server._graphql_once(config, VIEWER_QUERY, operation_name="Viewer", user_id=user_id)
     except server.LinearAuthError as exc:
         return "invalid", str(exc)[:300]
     except (RuntimeError, OSError) as exc:
@@ -157,6 +167,10 @@ def validate_cookie(
     viewer = data.get("viewer") or {}
     if not viewer.get("id"):
         return "error", "Linear viewer query returned no user."
+    if user_id and viewer["id"] != user_id:
+        return "error", "Linear session belongs to a different configured user; cookie not saved."
+    if org_id and (viewer.get("organization") or {}).get("id") != org_id:
+        return "error", "Linear session belongs to a different configured workspace; cookie not saved."
     return "valid", viewer
 
 
@@ -219,6 +233,30 @@ class PlaywrightCli:
             tail = log_path.read_text(encoding="utf-8", errors="replace")[-500:]
             raise RuntimeError(f"playwright-cli open failed ({result.returncode}): {tail}")
 
+    def attach(self, browser: str) -> None:
+        # The current bridge uses protocol v2; CLI 0.1.10 cannot connect to it.
+        result = self._run("--version", timeout=15)
+        version = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", result.stdout)
+        if result.returncode or not version or tuple(map(int, version.groups())) < (0, 1, 22):
+            raise RuntimeError(
+                "The Edge bridge requires playwright-cli 0.1.22 or newer. "
+                "Select a compatible binary with LINEAR_EXTRA_PLAYWRIGHT_CLI."
+            )
+        result = self._run("--raw", "attach", f"--extension={browser}", timeout=90)
+        if result.returncode:
+            # CLI output may contain the extension token in its connection URL. Never echo it.
+            raise RuntimeError(
+                "Playwright extension attachment failed. Check the installed bridge, CLI version "
+                "and PLAYWRIGHT_MCP_EXTENSION_TOKEN; no separate browser was opened."
+            )
+
+    def detach(self) -> None:
+        # Never close/kill an operator-owned browser, even when refresh fails.
+        try:
+            self._run("detach", timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
     def cookies(self, url: str) -> list[dict[str, Any]]:
         code = f"async page => JSON.stringify(await page.context().cookies([{json.dumps(url)}]))"
         result = self._run("--raw", "run-code", code, timeout=30)
@@ -258,6 +296,11 @@ def login(
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     endpoint = args.endpoint
+    context = {
+        "account_id": args.account_id or os.environ.get("LINEAR_ACCOUNT_ID"),
+        "org_id": args.org_id or os.environ.get("LINEAR_ORG_ID"),
+        "user_id": args.user_id or os.environ.get("LINEAR_USER_ID"),
+    }
     target, shadowed = server.cookie_target_path(args)
     result: dict[str, Any] = {"cookie_file": str(target)}
     if shadowed:
@@ -271,7 +314,7 @@ def login(
     except RuntimeError:
         current, source = "", None
     if current and not args.force:
-        status, info = validate_cookie(current, endpoint, args.client_version)
+        status, info = validate_cookie(current, endpoint, args.client_version, **context)
         if status == "valid":
             return {
                 **result,
@@ -293,17 +336,23 @@ def login(
         cwd = server.state_dir()
         if pw is None:
             pw = PlaywrightCli(args.session, cwd)
-        profile_dir = Path(args.profile_dir or cwd / "browser-profile").expanduser()
-        profile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        pw.close()  # clear a session left behind by an interrupted run
-        pw.open(args.login_url, headless=args.headless, browser=args.browser, profile_dir=profile_dir)
+        if args.extension:
+            pw.attach(args.extension)
+            message = (
+                f"Attached to existing {args.extension}. Keep your signed-in Linear tab available; "
+                "the helper will detach after saving the session, leaving the browser open."
+            )
+        else:
+            profile_dir = Path(args.profile_dir or cwd / "browser-profile").expanduser()
+            profile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            pw.close()  # only our dedicated browser, never the extension-attached browser
+            pw.open(args.login_url, headless=args.headless, browser=args.browser, profile_dir=profile_dir)
+            message = (
+                f"Opened Linear sign-in ({args.browser}). Sign in there; the window closes itself "
+                "once the session is saved."
+            )
         opened = True
-        print(
-            f"Opened Linear sign-in ({args.browser}). Sign in there; the window closes itself "
-            f"once the session is saved. Waiting up to {int(args.timeout)}s.",
-            file=sys.stderr,
-            flush=True,
-        )
+        print(f"{message} Waiting up to {int(args.timeout)}s.", file=sys.stderr, flush=True)
         cookie_url = args.cookie_url or endpoint
         deadline = clock() + args.timeout
         last_header: str | None = None
@@ -328,7 +377,7 @@ def login(
                 and now - last_validated >= args.validate_interval
             ):
                 last_header, last_validated = header, now
-                status, info = validate_cookie(header, endpoint, args.client_version)
+                status, info = validate_cookie(header, endpoint, args.client_version, **context)
                 last_status = status
                 if status == "valid":
                     write_cookie_file(target, header)
@@ -343,8 +392,12 @@ def login(
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
         return {**result, "status": "error", "detail": str(exc)[:500]}
     finally:
-        if opened and pw is not None:
-            pw.close()
+        if pw is not None:
+            if args.extension:
+                # Also detach after a failed/partially completed attachment.
+                pw.detach()
+            elif opened:
+                pw.close()
         release_login_lock()
 
 
@@ -364,6 +417,14 @@ def _login_parser() -> argparse.ArgumentParser:
         help="playwright-cli browser/channel: chrome (default), msedge, firefox, webkit",
     )
     parser.add_argument(
+        "--extension",
+        choices=("msedge", "chrome", "none"),
+        default=os.environ.get("LINEAR_EXTRA_EXTENSION")
+        or ("msedge" if os.environ.get("PLAYWRIGHT_MCP_EXTENSION_TOKEN") else "none"),
+        help="Reuse a running browser via the Playwright bridge; defaults to msedge when the "
+        "extension token is set. 'none' uses a dedicated sign-in profile.",
+    )
+    parser.add_argument(
         "--profile-dir",
         default=os.environ.get("LINEAR_EXTRA_PROFILE_DIR"),
         help="Persistent sign-in browser profile (default: <state dir>/browser-profile)",
@@ -380,7 +441,10 @@ def _login_parser() -> argparse.ArgumentParser:
 
 
 def parse_login_args(argv: list[str] | None = None) -> argparse.Namespace:
-    return _login_parser().parse_args(argv)
+    args = _login_parser().parse_args(argv)
+    if args.extension == "none":
+        args.extension = None
+    return args
 
 
 EXIT_CODES = {"valid": 0, "refreshed": 0, "invalid": 2, "missing": 2, "timeout": 3, "aborted": 3, "busy": 4}

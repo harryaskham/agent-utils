@@ -30,6 +30,8 @@ def isolated(tmp_path, monkeypatch):
         "LINEAR_EXTRA_AUTO_LOGIN",
         "LINEAR_EXTRA_PROFILE_DIR",
         "LINEAR_EXTRA_LOGIN_URL",
+        "LINEAR_EXTRA_EXTENSION",
+        "PLAYWRIGHT_MCP_EXTENSION_TOKEN",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("LINEAR_EXTRA_STATE_DIR", str(tmp_path / "state"))
@@ -74,7 +76,12 @@ def fake_linear():
             if state["forbidden"]:
                 errors = [{"message": "Auth method not allowed", "extensions": {"code": "FORBIDDEN", "type": "forbidden"}}]
                 self._send(400, json.dumps({"errors": errors}).encode())
-            elif state["session"] in pairs:
+            elif state["session"] in pairs and (
+                not state.get("require_context")
+                or (self.headers.get("user") == "user-1"
+                    and self.headers.get("organization") == "org-1"
+                    and self.headers.get("useraccount") == "account-1")
+            ):
                 viewer = {"id": "user-1", "name": "Test User", "email": "t@example.com",
                           "organization": {"id": "org-1", "name": "Org", "urlKey": "org"}}
                 self._send(200, json.dumps({"data": {"viewer": viewer}}).encode())
@@ -100,7 +107,15 @@ class FakePlaywright:
         self.states = list(states)
         self.opened = None
         self.closed = 0
+        self.attached = None
+        self.detached = 0
         self.open_after_failure = open_after_failure
+
+    def attach(self, browser):
+        self.attached = browser
+
+    def detach(self):
+        self.detached += 1
 
     def open(self, url, *, headless, browser, profile_dir):
         self.opened = {"url": url, "headless": headless, "browser": browser, "profile_dir": profile_dir}
@@ -193,7 +208,7 @@ def test_graphql_reloads_rotated_cookie_file(fake_linear, tmp_path, monkeypatch)
     started = []
     monkeypatch.setattr(server, "start_background_login", lambda cfg: started.append(cfg) or {"status": "started", "pid": 1})
 
-    with pytest.raises(server.LinearAuthError, match="sign-in browser window"):
+    with pytest.raises(server.LinearAuthError, match="session recovery"):
         server.graphql(config, "query { viewer { id } }")
     assert len(started) == 1
 
@@ -216,7 +231,8 @@ def test_missing_cookie_starts_server_then_recovers(fake_linear, tmp_path, monke
 
 def test_background_login_disabled_running_and_started(tmp_path, monkeypatch):
     config = server.ServerConfig(cookie="", endpoint="https://example.invalid/graphql",
-                                 cookie_source=tmp_path / "linear.cookie")
+                                 cookie_source=tmp_path / "linear.cookie", user_id="u1",
+                                 org_id="o1", account_id="a1")
     monkeypatch.setattr(server, "_display_available", lambda: True)
 
     monkeypatch.setenv("LINEAR_EXTRA_AUTO_LOGIN", "0")
@@ -241,6 +257,9 @@ def test_background_login_disabled_running_and_started(tmp_path, monkeypatch):
     assert cmd[1:4] == ["-m", "linear_extra_mcp", "login"]
     assert cmd[cmd.index("--cookie-file") + 1] == str(tmp_path / "linear.cookie")
     assert kwargs["stdin"] is subprocess.DEVNULL and kwargs["start_new_session"]
+    assert cmd[cmd.index("--user-id") + 1] == "u1"
+    assert cmd[cmd.index("--org-id") + 1] == "o1"
+    assert cmd[cmd.index("--account-id") + 1] == "a1"
 
     (server.state_dir() / "login.lock").write_text(str(os.getppid()))
     assert server.start_background_login(config) == {"status": "running", "pid": os.getppid()}
@@ -360,3 +379,97 @@ def test_e2e_real_browser_captures_httponly_cookie(fake_linear, tmp_path):
     listed = json.loads(subprocess.run(["playwright-cli", "list", "--json"], capture_output=True,
                                        text=True, check=True).stdout)
     assert not any(b.get("name") == session and b.get("status") == "open" for b in listed["browsers"])
+
+
+def test_extension_token_selects_edge_and_can_be_disabled(monkeypatch):
+    assert login.parse_login_args([]).extension is None
+    monkeypatch.setenv("PLAYWRIGHT_MCP_EXTENSION_TOKEN", "test-token")
+    assert login.parse_login_args([]).extension == "msedge"
+    assert login.parse_login_args(["--extension", "none"]).extension is None
+    monkeypatch.setenv("LINEAR_EXTRA_EXTENSION", "chrome")
+    assert login.parse_login_args([]).extension == "chrome"
+
+
+def test_extension_refresh_never_closes_existing_browser(fake_linear, tmp_path):
+    fake_linear["require_context"] = True
+    target = tmp_path / "linear.cookie"
+    args = login_args(fake_linear, target, tmp_path, "--extension", "msedge",
+                      "--user-id", "user-1", "--org-id", "org-1", "--account-id", "account-1")
+    pw = FakePlaywright([[cookie("session:a", "good")]])
+    result = login.login(args, playwright=pw)
+    assert result["status"] == "refreshed", result
+    assert pw.attached == "msedge" and pw.detached == 1
+    assert pw.opened is None and pw.closed == 0
+    assert not (tmp_path / "profile").exists()
+    assert target.read_text() == "session:a=good"
+
+
+def test_check_preserves_user_context_without_browser(fake_linear, tmp_path, monkeypatch):
+    fake_linear["require_context"] = True
+    target = tmp_path / "linear.cookie"
+    target.write_text("session:a=good")
+    args = login_args(fake_linear, target, tmp_path, "--check")
+    pw = FakePlaywright([])
+    assert login.login(args, playwright=pw)["status"] == "invalid"
+    monkeypatch.setenv("LINEAR_USER_ID", "user-1")
+    monkeypatch.setenv("LINEAR_ORG_ID", "org-1")
+    monkeypatch.setenv("LINEAR_ACCOUNT_ID", "account-1")
+    assert login.login(args, playwright=pw)["status"] == "valid"
+    assert pw.opened is None and pw.attached is None
+
+
+@pytest.mark.parametrize("identity", [{"user_id": "different-user"}, {"org_id": "different-org"}])
+def test_validation_rejects_wrong_identity(fake_linear, identity):
+    status, info = login.validate_cookie("session:a=good", fake_linear["endpoint"], **identity)
+    assert status == "error" and "different configured" in info
+
+
+def test_failed_attachment_does_not_open_or_close_browser(fake_linear, tmp_path):
+    class FailedAttachment(FakePlaywright):
+        def attach(self, browser):
+            raise RuntimeError("attachment failed")
+
+    pw = FailedAttachment([])
+    args = login_args(fake_linear, tmp_path / "c", tmp_path, "--extension", "msedge")
+    assert login.login(args, playwright=pw)["status"] == "error"
+    assert pw.opened is None and pw.closed == 0 and pw.detached == 1
+    assert not (tmp_path / "c").exists()
+
+
+def test_extension_timeout_detaches_without_overwriting(fake_linear, tmp_path):
+    target = tmp_path / "linear.cookie"
+    target.write_text("session:a=bad")
+    args = login_args(fake_linear, target, tmp_path, "--extension", "msedge", "--timeout", "0.03")
+    pw = FakePlaywright([[]])
+    assert login.login(args, playwright=pw, sleep=lambda _: None)["status"] == "timeout"
+    assert target.read_text() == "session:a=bad"
+    assert pw.closed == 0 and pw.detached == 1
+
+
+def test_bridge_version_check_fails_before_attachment(tmp_path, monkeypatch):
+    pw = login.PlaywrightCli("lx-test", tmp_path, binary="fake-cli")
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess([], 0, "0.1.10\n", "")
+
+    monkeypatch.setattr(pw, "_run", run)
+    with pytest.raises(RuntimeError, match="0.1.22"):
+        pw.attach("msedge")
+    assert calls == [("--version",)]
+
+
+def test_attachment_failure_does_not_leak_extension_token(tmp_path, monkeypatch):
+    pw = login.PlaywrightCli("lx-test", tmp_path, binary="fake-cli")
+
+    def run(*args, **kwargs):
+        if args == ("--version",):
+            return subprocess.CompletedProcess([], 0, "0.1.22\n", "")
+        assert args == ("--raw", "attach", "--extension=msedge")
+        return subprocess.CompletedProcess([], 1, "https://extension/?token=secret-test", "secret-test")
+
+    monkeypatch.setattr(pw, "_run", run)
+    with pytest.raises(RuntimeError) as exc:
+        pw.attach("msedge")
+    assert "secret-test" not in str(exc.value)

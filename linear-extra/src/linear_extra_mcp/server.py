@@ -21,9 +21,9 @@ Auth resolution (first match wins):
 User / org / account ids are derived from the cookie's JWT claims when not provided explicitly; the
 Linear `user` id (distinct from accountId) is fetched once via a `viewer { id }` query.
 
-Cookie files are re-read whenever they change. When Linear rejects the session, the server opens a
-sign-in browser in the background (`linear-extra-mcp login`, see login.py) and asks the caller to
-retry once the window has captured a fresh cookie and closed.
+Cookie files are re-read whenever they change. When Linear rejects the session, the server starts
+background recovery (`linear-extra-mcp login`, see login.py) and asks the caller to retry. With an
+extension token it reuses Edge and detaches; otherwise it owns a dedicated sign-in browser.
 """
 
 from __future__ import annotations
@@ -349,13 +349,13 @@ def _expired_message(login: dict[str, Any]) -> str:
     prefix = "Linear session expired or missing (Linear rejected the session cookie)."
     if status == "started":
         return (
-            f"{prefix} Opened a Linear sign-in browser window: sign in there; it closes itself once "
-            "the new session is saved. Then retry this call."
+            f"{prefix} Started Linear session recovery. Complete any sign-in or Edge connection "
+            "prompt, then retry this call. Recovery leaves an existing browser open."
         )
     if status == "running":
         return (
-            f"{prefix} A Linear sign-in browser window is already open (pid {login.get('pid')}): "
-            "finish signing in there, then retry this call."
+            f"{prefix} Linear session recovery is already running (pid {login.get('pid')}): "
+            "complete any sign-in or Edge connection prompt, then retry this call."
         )
     reason = {
         "disabled": "automatic sign-in is disabled (LINEAR_EXTRA_AUTO_LOGIN=0)",
@@ -399,6 +399,13 @@ def start_background_login(config: ServerConfig) -> dict[str, Any]:
     ]
     if config.cookie_source is not None:
         cmd += ["--cookie-file", str(config.cookie_source)]
+    for option, value in (
+        ("--account-id", config.account_id),
+        ("--org-id", config.org_id),
+        ("--user-id", config.user_id or config._resolved_user),
+    ):
+        if value:
+            cmd += [option, value]
     try:
         with open(state_dir() / "login.log", "a", encoding="utf-8") as log_file:
             proc = subprocess.Popen(

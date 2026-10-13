@@ -40,8 +40,11 @@ not allowed: apiKey`) and the official MCP's OAuth token. Resolution order (firs
 4. Default file: `~/.pi/agent/linear-session.cookie` — picked up automatically with no config
 
 `accountId` and `organizationId` are derived from the cookie's JWT claims automatically; the Linear
-`user` id (needed for one header, distinct from the account id) is fetched once via `viewer { id }`.
-Override any of them with `LINEAR_ACCOUNT_ID` / `LINEAR_ORG_ID` / `LINEAR_USER_ID` if needed.
+`user` id (distinct from the account id) is fetched via `viewer { id }` when supported. Some sessions
+require an explicit user header even for that query: configure `LINEAR_USER_ID` / `--user-id` (the
+repository wrapper already supplies it). Override account/workspace with `LINEAR_ACCOUNT_ID` /
+`LINEAR_ORG_ID` or the corresponding flags. Login validation preserves this context, rejects a
+mismatching viewer/workspace, and background recovery forwards the server's resolved context.
 
 > The session cookie is a sensitive, full-account credential. Prefer `LINEAR_COOKIE_FILE` (mode
 > `600`) or an env var injected at runtime; do not commit it. Rotate the Linear session if a copy
@@ -54,10 +57,27 @@ Linear sessions expire or get revoked. Refresh the cookie without DevTools:
 ```sh
 linear-extra-mcp login --check   # exit 0 valid, 2 expired/missing; opens nothing
 linear-extra-mcp login           # keep a valid cookie, otherwise sign in
-linear-extra-mcp login --force   # sign in even if the cookie still works
+linear-extra-mcp login --force   # capture again even if the cookie still works
+linear-extra-mcp login --extension msedge  # reuse your already-signed-in Edge
 ```
 
-`login` opens a headed browser at `https://linear.app/login` with a dedicated persistent profile
+For enterprise SAML, prefer your existing Edge profile. Install the
+[Playwright MCP Bridge](https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm)
+in that profile, keep a signed-in Linear tab available, and inject
+`PLAYWRIGHT_MCP_EXTENSION_TOKEN` through your secret manager. When that variable is present, login
+**defaults to attaching to Edge**, reads only cookies applicable to the Linear client API, and
+**detaches without closing your browser**. It does not start a new profile or replay SAML. Use
+`LINEAR_EXTRA_EXTENSION=chrome` to choose Chrome, or `--extension none` to opt into a dedicated
+profile. A rejected attachment never silently falls back to a new browser. This reuses a valid
+session; it does not resolve Entra application-assignment failures for future fresh logins.
+
+The bridge requires **playwright-cli 0.1.22 or newer** (0.1.10 fails with "unsupported protocol
+version"). Check `playwright-cli --version`; select a compatible executable with
+`LINEAR_EXTRA_PLAYWRIGHT_CLI` if the one on PATH is older. Tokens are inherited through the environment,
+not placed in CLI arguments or printed. CLI attachment output is suppressed because its connection
+URL can contain the token.
+
+Without an extension, `login` opens a headed browser at `https://linear.app/login` with a dedicated persistent profile
 (`~/.cache/linear-extra/browser-profile`, so later sign-ins are usually one click). Sign in normally;
 it reads the cookies the browser would send to `client-api.linear.app` (including httpOnly ones),
 validates them with a `viewer` query, writes the cookie file atomically with mode `600`, and closes
@@ -66,8 +86,9 @@ the window. It prints only the account and cookie names, never values, and waits
 `settings.json` `cookieFile`, else the default path).
 
 The running server re-reads its cookie file whenever it changes, so no restart is needed. When Linear
-rejects the session, a tool call fails with "Linear session expired" and the server opens the same
-sign-in window in the background (one at a time); sign in, then retry the call.
+rejects the session, a tool call fails with "Linear session expired" and starts recovery in the
+background (one at a time), using the extension when configured. Complete any connection/sign-in
+prompt, then retry the call. A spawned process is not proof that authentication succeeded.
 
 Requires [`playwright-cli`](https://www.npmjs.com/package/@playwright/cli) (on `PATH`, at
 `~/.local/pnpm/playwright-cli`, or `LINEAR_EXTRA_PLAYWRIGHT_CLI`). Other settings:
