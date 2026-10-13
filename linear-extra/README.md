@@ -96,6 +96,51 @@ Requires [`playwright-cli`](https://www.npmjs.com/package/@playwright/cli) (on `
 `LINEAR_EXTRA_BROWSER` (`chrome` default, or `msedge`), `LINEAR_EXTRA_PROFILE_DIR`,
 `LINEAR_EXTRA_STATE_DIR` (profile, lock and `login.log`).
 
+## Shared auth across sessions and nodes
+
+Credentials are per OS user, not per Pi conversation. Every local MCP session can reuse the same
+cookie file. Configure the authority host once in **`~/.config/linear/config.json`** (or
+`$XDG_CONFIG_HOME/linear/config.json`, `LINEAR_AUTH_CONFIG`, `--config`):
+
+```json
+{ "authRemote": "harryaskham@ms-mac" }
+```
+
+On the authority Mac use `{"authRemote": null}`. Optional non-secret fields: `userId`, `orgId`,
+`accountId`, `cookieFile`, `apiKeyFile`, `remoteCookieFile`, `remoteApiKeyFile`. `--remote` overrides
+`LINEAR_AUTH_REMOTE`, which overrides the config; `--local` explicitly disables remote import.
+Collective generates this routing config for enabled Linear clients: ms-mac is local; other nodes
+use ms-mac. No credentials go into Nix or the JSON config.
+
+```sh
+linear-extra-mcp auth status                     # read-only: API key + session status
+linear-extra-mcp auth sync                       # local/SOPS first, configured remote if needed
+linear-extra-mcp auth sync --remote harryaskham@ms-mac
+linear-extra-mcp login --remote harryaskham@ms-mac # cookie only; no worker browser
+# Only on the authority when a fresh browser capture is required:
+linear-extra-mcp login --local --extension msedge --force
+```
+
+`auth sync` handles both normal Linear and drafts; `--only api` / `--only cookie` selects one.
+It keeps a valid local credential. API-key precedence is `LINEAR_API_KEY`, the existing Collective
+SOPS secret (`keys/ms/linear`), then `apiKeyFile` (default `~/.config/linear/api-key`). A rejected
+managed environment/SOPS key must be renewed there: importing a shadowed file cannot fix it.
+
+The remote path uses SSH's encrypted stream rather than leaving an SCP staging file. It requires
+working SSH keys and a trusted host key (`BatchMode=yes`, `StrictHostKeyChecking=yes`, no agent
+forwarding), plus Python 3 on the source. The source runs a bounded **read-only** export; it needs no
+new helper version, opens no browser, and never follows its own `authRemote`. The receiver validates
+against Linear before atomically installing mode-600 credentials. Failed transfers/validation
+preserve the previous local credential. Valid cookie identity is saved in the adjacent
+`.identity.json`, bound to the cookie's SHA-256, so workers and new MCP processes inherit the verified
+user/workspace without extra flags. Valid operator-managed symlinks are preserved.
+
+Headless MCP nodes automatically start the cookie import flow when Linear rejects their cookie.
+If the authority's cookie is also invalid, refresh **once on the authority**, then retry on the
+workers. Workers do **not** need `PLAYWRIGHT_MCP_EXTENSION_TOKEN` or a browser. This shares your
+full-account Linear credentials only with your trusted nodes; it does not fix an Entra assignment
+problem or promise that a server-revoked/device-bound session will validate elsewhere.
+
 ## mcp.json wiring
 
 Exposed through the agent-utils nix flake as `linear-extra-mcp`:
@@ -103,6 +148,11 @@ Exposed through the agent-utils nix flake as `linear-extra-mcp`:
 ```json
 {
   "mcpServers": {
+    "linear": {
+      "url": "https://mcp.linear.app/mcp",
+      "auth": "bearer",
+      "bearerToken": "!linear-extra-mcp auth token --for-mcp"
+    },
     "linear-extra": {
       "command": "linear-extra-mcp",
       "env": { "LINEAR_COOKIE_FILE": "~/.pi/agent/linear-session.cookie" }
@@ -111,8 +161,16 @@ Exposed through the agent-utils nix flake as `linear-extra-mcp`:
 }
 ```
 
-(`nix run .#linear-extra-mcp`, or add the flake package to your profile so `linear-extra-mcp` is on
-`PATH`.)
+The official server's secret command resolves the same local/SOPS/imported API key, importing from
+the configured authority only when absent. It emits the key only to a non-terminal pipe explicitly
+requested with `--for-mcp`; do not run it as a diagnostic or paste its output. The Pi MCP adapter
+captures it privately. The existing `auth: "bearer", bearerTokenEnv: "LINEAR_API_KEY"` wiring remains
+valid on nodes already provisioned by SOPS; change to the secret command only after installing a
+helper version with `auth token` support.
+
+Use the root flake's `nix run .#linear-extra-mcp -- ...` for project validation or the declarative
+Collective package for installed use. Source publication, the Collective input pin, and the next
+operator switch are separate steps.
 
 ## Develop / test
 

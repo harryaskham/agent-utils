@@ -25,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import server
+from . import auth, server
 
 DEFAULT_LOGIN_URL = "https://linear.app/login"
 # Keep short: playwright-cli embeds it in a Unix socket path (104-byte limit on macOS).
@@ -58,8 +58,11 @@ def login_lock_holder() -> int | None:
     except FileNotFoundError:
         return None
     except (OSError, ValueError):
-        pid = 0
-    if pid > 0 and _pid_alive(pid):
+        # A just-created/partially written lock is not proof of a dead owner.
+        return -1
+    if pid <= 0:
+        return -1
+    if _pid_alive(pid):
         return pid
     try:
         path.unlink()
@@ -124,19 +127,7 @@ def parse_cookies_output(output: str) -> list[dict[str, Any]]:
 
 def write_cookie_file(path: Path, cookie: str) -> None:
     """Atomically replace `path` with the cookie, readable only by the owner."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(cookie)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        os.chmod(path, 0o600)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    auth.write_private(path, cookie)
 
 
 def validate_cookie(
@@ -165,8 +156,8 @@ def validate_cookie(
     except (RuntimeError, OSError) as exc:
         return "error", str(exc)[:300]
     viewer = data.get("viewer") or {}
-    if not viewer.get("id"):
-        return "error", "Linear viewer query returned no user."
+    if not viewer.get("id") or not (viewer.get("organization") or {}).get("id"):
+        return "error", "Linear viewer query returned no user/workspace identity."
     if user_id and viewer["id"] != user_id:
         return "error", "Linear session belongs to a different configured user; cookie not saved."
     if org_id and (viewer.get("organization") or {}).get("id") != org_id:
@@ -296,11 +287,6 @@ def login(
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     endpoint = args.endpoint
-    context = {
-        "account_id": args.account_id or os.environ.get("LINEAR_ACCOUNT_ID"),
-        "org_id": args.org_id or os.environ.get("LINEAR_ORG_ID"),
-        "user_id": args.user_id or os.environ.get("LINEAR_USER_ID"),
-    }
     target, shadowed = server.cookie_target_path(args)
     result: dict[str, Any] = {"cookie_file": str(target)}
     if shadowed:
@@ -313,6 +299,7 @@ def login(
         current, source = server.resolve_cookie_source(args)
     except RuntimeError:
         current, source = "", None
+    context = auth.context_for(args, source, current)
     if current and not args.force:
         status, info = validate_cookie(current, endpoint, args.client_version, **context)
         if status == "valid":
@@ -322,7 +309,7 @@ def login(
                 "source": str(source) if source else "literal",
                 "viewer": _viewer_summary(info),
             }
-        if args.check:
+        if args.check or status == "error":
             return {**result, "status": status, "detail": info}
     elif args.check:
         return {**result, "status": "missing"}
@@ -333,6 +320,8 @@ def login(
     pw = playwright
     opened = False
     try:
+        if args.remote:
+            return auth.pull_cookie(args, context)
         cwd = server.state_dir()
         if pw is None:
             pw = PlaywrightCli(args.session, cwd)
@@ -380,7 +369,7 @@ def login(
                 status, info = validate_cookie(header, endpoint, args.client_version, **context)
                 last_status = status
                 if status == "valid":
-                    write_cookie_file(target, header)
+                    auth.save_session(target, header, info)
                     return {
                         **result,
                         "status": "refreshed",
@@ -392,7 +381,7 @@ def login(
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
         return {**result, "status": "error", "detail": str(exc)[:500]}
     finally:
-        if pw is not None:
+        if pw is not None and not args.remote:
             if args.extension:
                 # Also detach after a failed/partially completed attachment.
                 pw.detach()
@@ -441,13 +430,13 @@ def _login_parser() -> argparse.ArgumentParser:
 
 
 def parse_login_args(argv: list[str] | None = None) -> argparse.Namespace:
-    args = _login_parser().parse_args(argv)
+    args = auth.apply_settings(_login_parser().parse_args(argv))
     if args.extension == "none":
         args.extension = None
     return args
 
 
-EXIT_CODES = {"valid": 0, "refreshed": 0, "invalid": 2, "missing": 2, "timeout": 3, "aborted": 3, "busy": 4}
+EXIT_CODES = {"valid": 0, "refreshed": 0, "imported": 0, "invalid": 2, "missing": 2, "timeout": 3, "aborted": 3, "busy": 4}
 
 
 def login_main(argv: list[str] | None = None) -> int:

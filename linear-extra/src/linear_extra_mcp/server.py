@@ -43,6 +43,7 @@ from urllib import error, request
 
 from mcp.server.fastmcp import FastMCP
 
+from . import auth
 from .prosemirror import markdown_to_body_data
 
 DEFAULT_ENDPOINT = "https://client-api.linear.app/graphql"
@@ -55,7 +56,7 @@ log = logging.getLogger("linear-extra-mcp")
 
 @dataclass
 class ServerConfig:
-    cookie: str
+    cookie: str = field(repr=False)
     endpoint: str = DEFAULT_ENDPOINT
     client_version: str = DEFAULT_CLIENT_VERSION
     account_id: str | None = None
@@ -67,6 +68,9 @@ class ServerConfig:
     _cookie_stamp: tuple[int, int] | None = field(default=None, repr=False)
     _explicit_account: bool = field(default=False, repr=False)
     _explicit_org: bool = field(default=False, repr=False)
+    _explicit_user: bool = field(default=False, repr=False)
+    auth_remote: str | None = None
+    auth_config: str | None = None
 
 
 class LinearAuthError(RuntimeError):
@@ -217,19 +221,24 @@ def build_config(args: argparse.Namespace) -> ServerConfig:
         # Start anyway: the first tool call reports the missing session and opens sign-in.
         cookie, source = "", cookie_target_path(args)[0]
     claims = _parse_cookie_claims(cookie)
+    context = auth.context_for(args, source, cookie)
     account_id = args.account_id or os.environ.get("LINEAR_ACCOUNT_ID")
     org_id = args.org_id or os.environ.get("LINEAR_ORG_ID")
+    user_id = args.user_id or os.environ.get("LINEAR_USER_ID")
     return ServerConfig(
         cookie=cookie,
         endpoint=args.endpoint,
         client_version=args.client_version,
-        account_id=account_id or claims.get("account_id"),
-        org_id=org_id or claims.get("org_id"),
-        user_id=args.user_id or os.environ.get("LINEAR_USER_ID"),
+        account_id=context["account_id"] or claims.get("account_id"),
+        org_id=context["org_id"] or claims.get("org_id"),
+        user_id=context["user_id"],
         cookie_source=source,
         _cookie_stamp=_file_stamp(source),
         _explicit_account=bool(account_id),
         _explicit_org=bool(org_id),
+        _explicit_user=bool(user_id),
+        auth_remote=args.remote,
+        auth_config=args.auth_config,
     )
 
 
@@ -243,20 +252,22 @@ def _maybe_reload(config: ServerConfig) -> bool:
     except RuntimeError:
         return False
     config._cookie_stamp = stamp
-    if cookie == config.cookie:
-        return False
     config.cookie = cookie
     claims = _parse_cookie_claims(cookie)
+    identity = auth.cookie_identity(config.cookie_source, cookie)
     if not config._explicit_account:
-        config.account_id = claims.get("account_id")
+        config.account_id = identity.get("account_id") or claims.get("account_id")
     if not config._explicit_org:
-        config.org_id = claims.get("org_id")
+        config.org_id = identity.get("org_id") or claims.get("org_id")
+    if not config._explicit_user:
+        config.user_id = identity.get("user_id")
     config._resolved_user = None
     log.info("Reloaded Linear session cookie from %s", config.cookie_source)
     return True
 
 
 def _headers(config: ServerConfig, user_id: str | None) -> dict[str, str]:
+    user_id = user_id or config.user_id or config._resolved_user
     headers = {
         "accept": "*/*",
         "content-type": "application/json",
@@ -303,7 +314,7 @@ def _graphql_once(
     for key, value in _headers(config, user_id).items():
         req.add_header(key, value)
     try:
-        with request.urlopen(req, timeout=30) as resp:
+        with request.build_opener(auth.NoRedirect).open(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")
@@ -378,7 +389,7 @@ def start_background_login(config: ServerConfig) -> dict[str, Any]:
     _LOGIN_PROCS[:] = [p for p in _LOGIN_PROCS if p.poll() is None]
     if os.environ.get("LINEAR_EXTRA_AUTO_LOGIN", "1").strip().lower() in {"0", "false", "no", "off"}:
         return {"status": "disabled"}
-    if not _display_available():
+    if not config.auth_remote and not _display_available():
         return {"status": "no-display"}
     from .login import login_lock_holder  # local import: login imports this module
 
@@ -397,6 +408,9 @@ def start_background_login(config: ServerConfig) -> dict[str, Any]:
         "--client-version",
         config.client_version,
     ]
+    if config.auth_config:
+        cmd += ["--config", config.auth_config]
+    cmd += ["--remote", config.auth_remote] if config.auth_remote else ["--local"]
     if config.cookie_source is not None:
         cmd += ["--cookie-file", str(config.cookie_source)]
     for option, value in (
@@ -423,6 +437,7 @@ def start_background_login(config: ServerConfig) -> dict[str, Any]:
 
 def resolve_user_id(config: ServerConfig) -> str:
     """Fetch and cache the Linear user id (for the `user` header) via viewer { id }."""
+    _maybe_reload(config)
     if config.user_id:
         return config.user_id
     if config._resolved_user:
@@ -563,6 +578,10 @@ def create_server(config: ServerConfig) -> FastMCP:
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config", dest="auth_config", default=None, help="Shared Linear auth config (default: ~/.config/linear/config.json)")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--remote", default=None, help="Import existing credentials over SSH from user@host")
+    source.add_argument("--local", action="store_true", help="Ignore authRemote; refresh on this node")
     parser.add_argument("--cookie", default=None, help="Full Linear session cookie string")
     parser.add_argument("--cookie-file", default=None, help="Path to a file containing the cookie")
     parser.add_argument("--settings", default=None, help="settings.json path for linear-extra.cookie")
@@ -583,11 +602,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "(`linear-extra-mcp login --help` refreshes the Linear session)"
     )
     add_common_args(parser)
-    return parser.parse_args(argv)
+    return auth.apply_settings(parser.parse_args(argv))
 
 
 def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["auth"]:
+        raise SystemExit(auth.auth_main(argv[1:]))
     if argv[:1] == ["login"]:
         from .login import login_main
 

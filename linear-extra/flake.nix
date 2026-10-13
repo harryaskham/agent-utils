@@ -115,6 +115,11 @@
           linear-extra-mcp = pkgs.symlinkJoin {
             name = "linear-extra-mcp";
             paths = [ base ];
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postBuild = ''
+              wrapProgram "$out/bin/linear-extra-mcp" \
+                --prefix PATH : ${lib.makeBinPath [ pkgs.openssh ]}
+            '';
           };
         })
       );

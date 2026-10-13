@@ -32,9 +32,11 @@ def isolated(tmp_path, monkeypatch):
         "LINEAR_EXTRA_LOGIN_URL",
         "LINEAR_EXTRA_EXTENSION",
         "PLAYWRIGHT_MCP_EXTENSION_TOKEN",
+        "LINEAR_AUTH_REMOTE",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("LINEAR_EXTRA_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("LINEAR_AUTH_CONFIG", str(tmp_path / "no-auth-config.json"))
     monkeypatch.setattr(server, "DEFAULT_SETTINGS_PATH", tmp_path / "no-settings.json")
     monkeypatch.setattr(server, "DEFAULT_COOKIE_PATH", tmp_path / "default.cookie")
 
