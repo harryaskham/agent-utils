@@ -24,6 +24,7 @@ parser.add_argument('--pi', default=os.environ.get('PI_BIN') or shutil.which('pi
 parser.add_argument('--extension-entry', default=str(repo / 'extensions/kitty-image-preview.js'))
 parser.add_argument('--placement', default='aboveEditor', choices=['aboveEditor', 'belowEditor', 'rightOverlay'])
 parser.add_argument('--reloads', type=int, default=5)
+parser.add_argument('--prune', action='store_true', help='remove the visible fixture and verify the gallery empties/hides')
 parser.add_argument('--out')
 args = parser.parse_args()
 if not args.pi or not 1 <= args.reloads <= 20:
@@ -43,6 +44,8 @@ with tempfile.TemporaryDirectory(prefix='kitty-reload-pty-', dir='/tmp') as fold
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
     env = {k: os.environ[k] for k in ['PATH', 'TMPDIR', 'LANG'] if k in os.environ}
     env.update(HOME=str(root), TERM='xterm-256color', COLORTERM='truecolor', PI_OFFLINE='1', PI_TELEMETRY='0', DISABLE_PI_CACO='1', PI_DISABLE_AHP='1', PI_INCOGNITO='1', PI_CODING_AGENT_DIR=str(config), PI_AGENT_UTILS_STATE_DIR=str(root / 'state'), KITTY_PREVIEW_QA_FIXTURE=str(image), KITTY_PREVIEW_QA_ENTRY=str(Path(args.extension_entry).resolve()), KITTY_PREVIEW_QA_PLACEMENT=args.placement, KITTY_PREVIEW_QA_RECEIPT=str(ready_file))
+    if args.prune:
+        env['KITTY_PREVIEW_QA_PRUNE'] = '1'
     child = subprocess.Popen([args.pi, '--no-session', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-themes', '--use-theme', 'dark', '--tui-mode', 'regular', '-e', str(repo / 'test/fixtures/kitty-preview-reload-extension.js')], cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     transcript = bytearray()
 
@@ -63,9 +66,10 @@ with tempfile.TemporaryDirectory(prefix='kitty-reload-pty-', dir='/tmp') as fold
     def wait_ready(sequence):
         deadline = time.monotonic() + 30
         while True:
-            reports = ready_file.read_text().splitlines() if ready_file.exists() else []
+            reports = [json.loads(x) for x in ready_file.read_text().splitlines()] if ready_file.exists() else []
+            reports = [r for r in reports if r.get('event') == 'start']
             if len(reports) >= sequence:
-                assert json.loads(reports[-1])['pid'] == child.pid, 'Pi process identity changed'
+                assert reports[-1]['pid'] == child.pid, 'Pi process identity changed'
                 break
             drain()
             if child.poll() is not None:
@@ -82,6 +86,21 @@ with tempfile.TemporaryDirectory(prefix='kitty-reload-pty-', dir='/tmp') as fold
         for i in range(args.reloads):
             os.write(master, b'/reload\r')
             wait_ready(i + 2)
+        if args.prune:
+            at = len(transcript)
+            image.unlink()
+            drain(2.3)
+            assert b'd=I' in transcript[at:], 'idle cleanup did not free deleted image before inspection'
+            os.write(master, b'/qa-preview-state\r')
+            deadline = time.monotonic() + 10
+            while True:
+                drain()
+                states = [json.loads(x) for x in ready_file.read_text().splitlines() if json.loads(x).get('event') == 'state']
+                if states: break
+                assert child.poll() is None and time.monotonic() < deadline, 'prune snapshot timed out'
+            assert states[-1]['images'] == 0 and not states[-1]['visible'], states[-1]
+            assert b'd=I' in transcript[at:], 'pruning did not free the owned graphics data'
+            assert b'ENOENT' not in transcript[at:], 'missing file leaked as a load error'
         assert b'uncaughtException' not in transcript and b'This extension ctx is stale' not in transcript
         assert b'd=I' in transcript, 'owned image free was not written during shutdown'
         os.write(master, b'\x04')
@@ -96,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix='kitty-reload-pty-', dir='/tmp') as fold
             if error.args[0] != 25:
                 raise
             assert all(code in transcript for code in [b'\x1b[?25h', b'\x1b[?2004l', b'\x1b[<u']), 'no terminal/keyboard restoration before hangup'
-        receipt = {'ok': True, 'reloads': args.reloads, 'placement': args.placement, 'sameProcessSurvived': True, 'ownedDataFreeWritten': True, 'cleanExit': True, 'privateState': True}
+        receipt = {'ok': True, 'reloads': args.reloads, 'placement': args.placement, 'sameProcessSurvived': True, 'ownedDataFreeWritten': True, 'cleanExit': True, 'privateState': True, 'missingFilesPruned': args.prune}
         (out / 'receipt.json').write_text(json.dumps(receipt, indent=2))
         print(json.dumps({**receipt, 'evidence': str(out)}))
     finally:

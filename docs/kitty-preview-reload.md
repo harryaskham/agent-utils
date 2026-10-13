@@ -54,6 +54,26 @@ the fixed extension. This crash does not intentionally delete session transcript
 Do not delete sessions, clear provider state, or weaken Pi's stale-context guard.
 No live session is automatically restarted or reloaded by this fix.
 
+## Removed screenshot files
+
+Temporary screenshots are not an archive. On restore, before preparing a frame,
+when inspecting/navigating, and every two seconds while an ordinary gallery is
+visible, preview checks that its files still exist. Checks are asynchronous,
+non-overlapping and limited to eight in-flight stats; rendering does no filesystem
+I/O. Streams use their own prepare path instead of the idle reconciliation timer.
+
+Missing paths (`ENOENT`, `ENOTDIR`) and paths that are no longer files are removed
+from the list. Valid symlinks work normally. Permission and other I/O failures are
+not treated as proof of deletion. Selection is preserved when its file survives;
+counts/indices and page/transmission caches are repaired. An empty gallery hides
+its widget/side pane/overlay, clears status and stops cycling/animation. Removed
+owned graphics data is freed synchronously, even with `clearPrevious=false`.
+
+File removal between stat and read is handled as well. Late checks cannot remove
+a replacement stream frame or access a retired Pi context. Sharing a deleted
+selection repairs the gallery but returns **no image**—it never substitutes a
+survivor into the model's context. No source/archive file or transcript is deleted.
+
 ## Validation
 
 - `test/kitty-image-preview-lifecycle.test.js`: fake-clock regression reproduces
@@ -71,6 +91,13 @@ No live session is automatically restarted or reloaded by this fix.
   placement. Verified same PID, scoped `d=I` output, clean exit and restored
   terminal modes. The test-only harness was supplied by the paused audio-worktree
   agent; it tests this checkout's implementation, not the competing patch.
+- `test/kitty-image-preview-missing.test.js`: memory/file transfer and all three
+  placements, partial/empty restore, idle deletion, selection/counter repair,
+  overlays, sharing, filesystem concurrency and shutdown races.
+- `npm run test:preview-reload-pty -- --prune --placement aboveEditor` (also
+  `belowEditor` / `rightOverlay`): removes the test-owned visible image, observes
+  its scoped GPU free **before** inspecting state, then verifies empty/hidden
+  gallery and clean terminal exit. No operator screenshot is touched.
 - Existing preview, graphics, stream and widget tests remain required.
 
 RPC and TUI smokes create only isolated processes/state. The TUI harness also

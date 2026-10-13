@@ -17,12 +17,20 @@ export default async function fixture(pi) {
   pi.on("session_start", async (event, ctx) => {
     if (pty) {
       await tools.get("kitty_image_preview_add").execute("qa-owned-image", {
-        path: file, show: false,
+        path: file, show: process.env.KITTY_PREVIEW_QA_PRUNE === "1",
         config: { placement: process.env.KITTY_PREVIEW_QA_PLACEMENT || "aboveEditor", passthrough: "none" },
       }, undefined, undefined, ctx);
       ctx.ui.notify("PREVIEW-QA-READY", "info");
     }
     note({ event: "start", reason: event.reason, pid: process.pid });
+  });
+  pi.registerCommand("qa-preview-state", {
+    description: "Isolated preview liveness snapshot",
+    handler: async (_args, ctx) => {
+      const result = await tools.get("kitty_image_preview_status").execute("state", {}, undefined, undefined, ctx);
+      const state = result.details.kittyImagePreviewState;
+      note({ event: "state", pid: process.pid, images: state.items.length, visible: state.visible });
+    },
   });
   pi.registerCommand("qa-preview-reload", {
     description: "Isolated preview reload regression (test only)",

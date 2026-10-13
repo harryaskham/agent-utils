@@ -95,8 +95,8 @@ import {
 import {
   buildScopedDeleteCommand,
   releaseOwnedImageData,
-  resolveGraphicsWriter,
   enumerateGraphicsWriters,
+  writeOwnedDeleteNow,
   buildCurrentDisplayCommand,
   resetTransmissionGuard,
 } from "./kitty-image-preview/display-commands.js";
@@ -109,6 +109,7 @@ import {
 import { registerKittyImagePreviewRuntime } from "./kitty-image-preview/runtime.js";
 import { createPreviewLifecycle, previewIsActive, previewEpoch, deferPreviewUi } from "./kitty-image-preview/lifecycle.js";
 import { KittyImageGalleryOverlay } from "./kitty-image-preview/overlay.js";
+import { findMissingImages, removeMissingImages, isMissingImageError } from "./kitty-image-preview/files.js";
 
 import {
   fullResolutionDescribeParams,
@@ -585,20 +586,71 @@ function ensureSideOverlay(ctx, state) {
   });
 }
 
+// Remove only paths confirmed missing/non-files. Permission and transient I/O
+// failures remain reportable by the load path. All UI commits stay in this epoch.
+function discardMissingImages(ctx, state, missing) {
+  if (!previewIsActive(state)) return 0;
+  const removed = removeMissingImages(state, missing);
+  if (!removed.length) return 0;
+  const liveIds = new Set(state.items.map(item => item.id));
+  const removedIds = new Set(removed.map(item => item.id).filter(id => !liveIds.has(id)));
+  const keepIds = state.items.length ? [...state.ownedImageIds || []].filter(id => !removedIds.has(id)) : [];
+  const command = releaseOwnedImageData(state, { keepIds });
+  writeOwnedDeleteNow(ctx, state, command);
+  state.lastDeleteCommand = "";
+  if (!state.items.length) {
+    stopAnimation(state); stopCycle(state);
+    if (state.galleryOverlay) { state.galleryOverlay.cancelled = true; state.galleryOverlay.close?.(); }
+  }
+  syncWidget(ctx, state);
+  return removed.length;
+}
+async function pruneMissingImages(ctx, state) {
+  const current = previewEpoch(state);
+  if (!current()) return 0;
+  const missing = await findMissingImages(state.items, { current });
+  if (!current()) return 0;
+  return discardMissingImages(ctx, state, missing);
+}
+function scheduleFileReconcile(ctx, state) {
+  // No filesystem polling for hidden/empty galleries or high-rate stream temp
+  // buffers. Stream frames are checked by their own prepare path instead.
+  if (!state.lifecycle) return;
+  if (!state.visible || !state.items.length || state.stream?.running) {
+    state.lifecycle.cancel(state.fileReconcileTimer);
+    state.fileReconcileTimer = undefined;
+    return;
+  }
+  if (state.fileReconcileTimer || state.fileReconcileBusy) return;
+  const current = previewEpoch(state);
+  state.fileReconcileTimer = deferPreviewUi(state, async () => {
+    state.fileReconcileTimer = undefined;
+    state.fileReconcileBusy = true;
+    try {
+      const removed = await pruneMissingImages(ctx, state);
+      if (current() && removed && state.visible) await prepareCurrentImage(state, ctx, { forceReload: true });
+    } finally {
+      if (current()) { state.fileReconcileBusy = false; scheduleFileReconcile(ctx, state); }
+    }
+  }, 2000);
+}
+
 export function syncWidget(ctx, state) {
   // Check our own lifecycle first: even reading ctx.hasUI/ui throws once Pi
   // invalidates the old runtime. Optional chaining does not protect a getter.
   if (!previewIsActive(state) || !ctx?.hasUI) return;
+  scheduleFileReconcile(ctx, state);
+  if (state.items.length === 0) {
+    state.visible = false;
+    ctx.ui.setWidget(WIDGET_ID, undefined);
+    clearSidePresentation(state);
+    ctx.ui.setStatus(WIDGET_ID, undefined);
+    return;
+  }
   if (state.galleryOverlay) {
     ctx.ui.setWidget(WIDGET_ID, undefined);
     clearSidePresentation(state);
     state.galleryOverlay.requestRender?.();
-    return;
-  }
-  if (state.items.length === 0) {
-    ctx.ui.setWidget(WIDGET_ID, undefined);
-    clearSidePresentation(state);
-    ctx.ui.setStatus(WIDGET_ID, undefined);
     return;
   }
   if (!state.visible) {
@@ -690,7 +742,7 @@ function flashDeleteWidget(ctx, state, deleteCommand) {
 
 function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true } = {}) {
   const current = previewEpoch(state);
-  if (!current()) return;
+  if (!current() || !state.visible || !state.items.length) return;
   stopCycle(state);
   state.cycle = { running: true, intervalMs, direction, loop };
   state.cycleTimer = keepTimerFromHoldingProcess(setInterval(() => {
@@ -728,7 +780,7 @@ function startCycle(state, ctx, { intervalMs = 5000, direction = 1, loop = true 
 
 function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
   const current = previewEpoch(state);
-  if (!current()) return;
+  if (!current() || !state.visible || !state.items.length) return;
   stopAnimation(state);
   state.animation = { running: true, intervalMs, loop };
   state.animationTimer = keepTimerFromHoldingProcess(setInterval(() => {
@@ -770,8 +822,7 @@ function startAnimation(state, ctx, { intervalMs = 250, loop = true } = {}) {
 // Reuses an unchanged `existing` payload (matching signature) so animation /
 // cycle frames do not re-read base64, and clears the id's transmit-once guard
 // only when the payload is actually rebuilt so the next render re-uploads it.
-async function buildPreparedPayload(state, item, existing) {
-  const isCurrent = previewEpoch(state);
+async function buildPreparedPayload(state, item, existing, isCurrent = previewEpoch(state)) {
   const useMemory = state.config.transferMode === "memory" || (
     state.config.transferMode === "auto" && shouldUseInMemoryTransfer(process.env)
   );
@@ -802,8 +853,7 @@ async function buildPreparedPayload(state, item, existing) {
 // scoped clear-previous delete to exclude every current page image, so the
 // sibling images are not evicted by the single-image prepare's [current.id]
 // exclusion.
-async function preparePagePayloads(state) {
-  const isCurrent = previewEpoch(state);
+async function preparePagePayloads(state, ctx, isCurrent = previewEpoch(state)) {
   if (!isCurrent()) return;
   const placement = resolvePlacement(state);
   const multiImageSidePanel = state.items.length >= 2
@@ -818,14 +868,24 @@ async function preparePagePayloads(state) {
   const liveIds = new Set(state.items.map((item) => item.id));
   for (const id of [...prepared.keys()]) if (!liveIds.has(id)) prepared.delete(id);
   let changed = false;
-  for (const item of state.items) {
+  for (const item of [...state.items]) {
+    const candidate = { item, path: item.path };
     const existing = prepared.get(item.id);
-    const next = await buildPreparedPayload(state, item, existing);
+    let next;
+    try { next = await buildPreparedPayload(state, item, existing, isCurrent); }
+    catch (error) {
+      if (!isCurrent()) return;
+      if (!isMissingImageError(error)) throw error;
+      discardMissingImages(ctx, state, [candidate]);
+      prepared.delete(item.id);
+      changed = true;
+      continue;
+    }
     if (!isCurrent()) return;
     if (next !== existing) changed = true;
     prepared.set(item.id, next);
   }
-  state.pagePrepared = prepared;
+  state.pagePrepared = state.items.length ? prepared : undefined;
   if (changed) {
     state.lastDeleteCommand = state.config.clearPrevious
       // Eviction (images dropped from the list): free their terminal image data
@@ -837,10 +897,15 @@ async function preparePagePayloads(state) {
 }
 
 async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
-  const isCurrent = previewEpoch(state);
+  const epoch = previewEpoch(state);
+  const work = {};
+  state.prepareWork = work;
+  const isCurrent = () => epoch() && state.prepareWork === work;
+  if (!isCurrent()) return;
+  await pruneMissingImages(ctx, state);
   if (!isCurrent()) return;
   const current = state.items[state.index];
-  if (!current) return;
+  if (!current) { state.visible = false; syncWidget(ctx, state); return; }
   const useMemory = state.config.transferMode === "memory" || (
     state.config.transferMode === "auto" && shouldUseInMemoryTransfer(process.env)
   );
@@ -850,8 +915,18 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
 
   if (!forceReload && state.currentCommand?.signature === signature) return;
 
-  const pngBase64 = useMemory ? await fileToBase64(current.path) : undefined;
-  if (!isCurrent()) return;
+  const currentPath = current.path;
+  let pngBase64;
+  try { pngBase64 = useMemory ? await fileToBase64(currentPath) : undefined; }
+  catch (error) {
+    if (!isCurrent()) return;
+    if (!isMissingImageError(error)) throw error;
+    // File was removed between stat and read: discard exactly this item and
+    // prepare the next survivor rather than leaving an empty selected slot.
+    discardMissingImages(ctx, state, [{ item: current, path: currentPath }]);
+    return prepareCurrentImage(state, ctx, { forceReload: true });
+  }
+  if (!isCurrent() || state.items[state.index] !== current || current.path !== currentPath) return;
   // A freshly prepared currentCommand means the payload (or its transport)
   // changed, so any prior transmit-once guard entry for this image is stale and
   // must be cleared to force a re-upload on the next render (bd-d6fa1b).
@@ -887,8 +962,10 @@ async function prepareCurrentImage(state, ctx, { forceReload = false } = {}) {
     chunkSize: state.config.chunkSize,
     rendered: undefined,
   };
-  await preparePagePayloads(state).catch(() => {});
-  if (isCurrent()) syncWidget(ctx, state);
+  await preparePagePayloads(state, ctx, isCurrent);
+  if (!isCurrent()) return;
+  if (state.items[state.index] !== current) return prepareCurrentImage(state, ctx, { forceReload: true });
+  syncWidget(ctx, state);
 }
 
 async function collectPngFiles(directory, { recursive = false, limit = 200 } = {}) {
@@ -1326,7 +1403,7 @@ export default function kittyImagePreviewExtension(pi) {
       state.index = state.items.length - 1;
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
-      if (!current()) return null;
+      if (!current() || !state.items.includes(item)) return null;
       syncWidget(ctx, state);
       return {
         imageId: item.id,
@@ -1342,6 +1419,8 @@ export default function kittyImagePreviewExtension(pi) {
 
   pi.on("session_start", async (_event, ctx) => {
     state.lifecycle.begin();
+    state.fileReconcileTimer = undefined;
+    state.fileReconcileBusy = false;
     const current = previewEpoch(state);
     activeCtx = ctx;
     installRuntimeBridge();
@@ -1350,6 +1429,10 @@ export default function kittyImagePreviewExtension(pi) {
         restorePublicState(state, entry.message.details);
       }
     }
+    // Temporary screenshots may have disappeared since the persisted snapshot.
+    // Reconcile before choosing a current image, even for a hidden gallery.
+    await pruneMissingImages(ctx, state);
+    if (!current()) return;
     // Cross-generation startup reclaim (bd-b257e8 / bd-ad43f8): images transmitted
     // by a PRIOR session persist as IOSurfaces in the terminal. Because managed
     // agents now use a stable (pid-free) image-id namespace, those prior-session
@@ -1381,8 +1464,8 @@ export default function kittyImagePreviewExtension(pi) {
       await prepareCurrentImage(state, ctx).catch((error) => {
         if (current() && ctx.hasUI) ctx.ui.notify(`kitty image preview restore failed: ${error.message}`, "warning");
       });
-      if (current()) syncWidget(ctx, state);
     }
+    if (current()) syncWidget(ctx, state);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -1390,6 +1473,7 @@ export default function kittyImagePreviewExtension(pi) {
     // Invalidate first, before closing UI can resolve pending promises. Never
     // schedule a new flash here: Pi invalidates ctx as soon as this hook returns.
     state.lifecycle.close();
+    state.fileReconcileTimer = undefined;
     unregisterRuntime?.();
     unregisterRuntime = null;
     activeCtx = null;
@@ -1399,26 +1483,7 @@ export default function kittyImagePreviewExtension(pi) {
     state.visible = false;
     const ownedDelete = releaseOwnedImageData(state, { keepIds: [] });
     clearOwnedImageIds(state);
-    try {
-      // The widget factory supplies the real terminal even when ctx.ui itself
-      // has no raw writer. Emit scoped d=I now, never into the next generation.
-      const terminal = state.renderTui?.terminal || state.sidePanel?.tui?.terminal || state.sideOverlay?.tui?.terminal;
-      const write = resolveGraphicsWriter(ctx) || terminal?.write?.bind(terminal);
-      if (ownedDelete && write) write(ownedDelete);
-      else if (ownedDelete && ctx?.hasUI && (!ctx.mode || ctx.mode === "tui")) {
-        // A never-shown/hidden gallery may not have mounted a widget yet. Pi's
-        // setWidget factory runs synchronously; use it only to reach the writer,
-        // not to schedule rendering a flash after shutdown. A deferred host
-        // factory is inert once setWidget returns.
-        let mounting = true;
-        try {
-          ctx.ui.setWidget(WIDGET_ID, tui => {
-            if (mounting) tui?.terminal?.write?.(ownedDelete);
-            return { render: () => [], invalidate() {} };
-          });
-        } finally { mounting = false; }
-      }
-    } catch {}
+    writeOwnedDeleteNow(ctx, state, ownedDelete);
     for (const close of state.flashClosers || []) { try { close(); } catch {} }
     state.flashClosers?.clear();
     clearSidePresentation(state);
@@ -1443,8 +1508,17 @@ export default function kittyImagePreviewExtension(pi) {
       "Use kitty_image_preview_share_current only when sharing the selected image is intended. Preview, gallery navigation, and streams stay local by default.",
     ],
     parameters: Type.Object({}),
-    async execute(_toolCallId, _params, signal) {
-      return shareCurrentImage(state, signal);
+    async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      // Freeze the explicit selection. If it vanished, never substitute another
+      // image into model context while repairing the local gallery.
+      const selected = state.items[state.index];
+      try { return shareCurrentImage(state, signal); }
+      catch (error) {
+        if (!selected || !isMissingImageError(error)) throw error;
+        discardMissingImages(ctx, state, [{ item: selected, path: selected.path }]);
+        await prepareCurrentImage(state, ctx, { forceReload: true });
+        return { content: [{ type: "text", text: "Selected image no longer exists; removed from preview. No image was shared." }], details: makeDetails(state, { shared: false }) };
+      }
     },
   });
 
@@ -1686,7 +1760,8 @@ export default function kittyImagePreviewExtension(pi) {
         deferPreviewUi(state, () => syncWidget(ctx, state), 120);
         return { content: [{ type: "text", text: "Hid kitty image preview. Use /image-show to restore it." }], details: makeDetails(state) };
       }
-      if (state.items.length === 0) throw new Error("No images have been added yet.");
+      await pruneMissingImages(ctx, state);
+      if (state.items.length === 0) return { content: makeContent(state), details: makeDetails(state) };
       if (params.action === "next") state.index = (state.index + 1) % state.items.length;
       if (params.action === "previous") state.index = (state.index - 1 + state.items.length) % state.items.length;
       if (params.action === "first") state.index = 0;
@@ -1723,6 +1798,7 @@ export default function kittyImagePreviewExtension(pi) {
       if (state.items.length === 0) throw new Error("No images have been added yet.");
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
+      if (!state.items.length) return { content: makeContent(state), details: makeDetails(state) };
       startAnimation(state, ctx, {
         intervalMs: clampInteger(params.intervalMs, 250, 50, 60_000),
         loop: params.loop !== false,
@@ -2049,7 +2125,9 @@ export default function kittyImagePreviewExtension(pi) {
     description: "Report the current kitty image preview state, terminal passthrough detection, and loaded image list.",
     promptSnippet: "Inspect current kitty image preview state and loaded image list.",
     parameters: Type.Object({}),
-    async execute() {
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const removed = await pruneMissingImages(ctx, state);
+      if (removed && state.visible) await prepareCurrentImage(state, ctx, { forceReload: true });
       const snapshot = serializePublicState(state);
       const diagnostics = previewDiagnostics();
       const lines = [
@@ -2091,6 +2169,7 @@ export default function kittyImagePreviewExtension(pi) {
       if (state.items.length === 0) throw new Error("No images have been added yet.");
       state.visible = true;
       await prepareCurrentImage(state, ctx, { forceReload: true });
+      if (!state.items.length) return { content: makeContent(state), details: makeDetails(state) };
       const intervalSeconds = clampInteger(params.intervalSeconds, 5, 1, 3600);
       startCycle(state, ctx, {
         intervalMs: intervalSeconds * 1000,
@@ -2114,6 +2193,7 @@ export default function kittyImagePreviewExtension(pi) {
   }
 
   async function navigateCommand(ctx, direction) {
+    await pruneMissingImages(ctx, state);
     if (state.items.length === 0) {
       noImages(ctx);
       return;
@@ -2126,6 +2206,7 @@ export default function kittyImagePreviewExtension(pi) {
   }
 
   async function showCommand(ctx) {
+    await pruneMissingImages(ctx, state);
     if (state.items.length === 0) {
       noImages(ctx);
       return;
@@ -2142,6 +2223,7 @@ export default function kittyImagePreviewExtension(pi) {
   }
 
   async function overlayCommand(ctx) {
+    await pruneMissingImages(ctx, state);
     if (!state.items.length) return noImages(ctx);
     if (!ctx.hasUI || typeof ctx.ui.custom !== "function" || (ctx.mode && ctx.mode !== "tui")) {
       ctx.ui?.notify?.("Image overlay requires a terminal UI.", "warning");
@@ -2166,7 +2248,7 @@ export default function kittyImagePreviewExtension(pi) {
       await stopStream(state, { cleanup: false });
       if (owner.cancelled) return;
       await prepareCurrentImage(state, ctx, { forceReload: true });
-      if (owner.cancelled) return;
+      if (owner.cancelled || !state.items.length || !current()) return;
       state.lastDeleteCommand = buildScopedDeleteCommand(state);
       await ctx.ui.custom((terminalUi, theme, _keys, done) => {
         tui = terminalUi;
@@ -2232,13 +2314,16 @@ export default function kittyImagePreviewExtension(pi) {
     ctx.ui?.notify?.("Cleared kitty image preview.", "info");
   }
 
-  function statusCommand(ctx) {
+  async function statusCommand(ctx) {
+    const removed = await pruneMissingImages(ctx, state);
+    if (removed && state.visible) await prepareCurrentImage(state, ctx, { forceReload: true });
     syncWidget(ctx, state);
     const controls = imageControlHint(state, { includeCount: true });
     ctx.ui?.notify?.(`${summarizeCurrent(state)} Controls: ${controls}`, "info");
   }
 
   async function startCycleCommand(args, ctx) {
+    await pruneMissingImages(ctx, state);
     if (state.items.length === 0) {
       noImages(ctx);
       return;
@@ -2247,6 +2332,7 @@ export default function kittyImagePreviewExtension(pi) {
     const seconds = clampInteger(arg, 5, 1, 3600);
     state.visible = true;
     await prepareCurrentImage(state, ctx, { forceReload: true });
+    if (!state.items.length) return noImages(ctx);
     startCycle(state, ctx, { intervalMs: seconds * 1000, direction: 1, loop: true });
     syncWidget(ctx, state);
     ctx.ui?.notify?.(`Cycling kitty preview every ${seconds}s. Use /image-stop-cycle to stop.`, "info");

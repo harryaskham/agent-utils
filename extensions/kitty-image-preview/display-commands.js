@@ -28,6 +28,28 @@ export function resolveGraphicsWriter(ctx) {
   return null;
 }
 
+// Synchronous, scoped cleanup before removing UI. A hidden/restored gallery may
+// not have mounted yet; Pi's synchronous widget factory can supply its terminal.
+// A deferred host factory is inert after this function returns. Never schedule a
+// flash that could clear a successor widget or outlive the extension context.
+export function writeOwnedDeleteNow(ctx, state, command) {
+  if (!command) return;
+  try {
+    const terminal = state.renderTui?.terminal || state.sidePanel?.tui?.terminal || state.sideOverlay?.tui?.terminal;
+    const write = resolveGraphicsWriter(ctx) || terminal?.write?.bind(terminal);
+    if (write) write(command);
+    else if (ctx?.hasUI && (!ctx.mode || ctx.mode === "tui")) {
+      let mounting = true;
+      try {
+        ctx.ui.setWidget("kitty-image-preview", tui => {
+          if (mounting) { state.renderTui = tui; tui?.terminal?.write?.(command); }
+          return { render: () => [], invalidate() {} };
+        });
+      } finally { mounting = false; }
+    }
+  } catch { /* terminal already detached; never use a global graphics clear */ }
+}
+
 // Enumerate ALL reachable terminal writers from a Pi context, in the same
 // precedence order resolveGraphicsWriter picks the first of, each tagged with a
 // stable name. The kitty passthrough probe (bd-15374a) emits a test cell through
