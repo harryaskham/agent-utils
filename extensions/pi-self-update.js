@@ -351,6 +351,7 @@ export function buildPiRestartPlan({
   env = process.env,
   sessionFile,
   sessionDir,
+  model,
   cwd = process.cwd(),
   command = PI_RESTART_PREFER_PATH,
   getFlag,
@@ -360,7 +361,24 @@ export function buildPiRestartPlan({
   }
   const rawArgs = argv.slice(2);
   const { preserved, dropped } = stripPromptArgs(rawArgs, getFlag);
-  const restartArgs = [...preserved];
+  const restartArgs = [];
+  // Restoring from assistant metadata can pick an unresolvable upstream wire
+  // ID (Copilot Opus 5-5 vs 5.5). Preserve the actual selected model explicitly,
+  // not an old launch flag and not an inferred/re-written historical entry.
+  for (let i = 0; i < preserved.length; i++) {
+    if (model && ["--provider", "--model"].includes(preserved[i])) {
+      dropped.push(preserved[i], preserved[++i]);
+    } else {
+      const flag = preserved[i];
+      restartArgs.push(flag);
+      // Preserve option values opaquely, even if a value itself is '--model'.
+      if (VALUE_FLAGS.has(flag) || typeof getFlag?.(flag.replace(/^--/, "")) === "string") restartArgs.push(preserved[++i]);
+    }
+  }
+  if (model) {
+    if (![model.provider, model.id].every(v => typeof v === "string" && v.length > 0 && !/[\r\n\0]/.test(v))) throw new Error("/restart: invalid current model identity");
+    restartArgs.push("--provider", model.provider, "--model", model.id);
+  }
   if (sessionDir) restartArgs.push("--session-dir", sessionDir);
   restartArgs.push("--session", sessionFile);
   const executable = findExecutableOnPath(command, env) || argv[1] || command;
@@ -593,11 +611,12 @@ export default async function piSelfUpdateExtension(pi) {
         ctx.ui.notify("Usage: /restart [--dry-run] — re-exec Pi with the current session via --session, omitting initial prompt and @file args so startup instructions are not replayed.", "info");
         return;
       }
+      if (!options.dryRun) await ctx.waitForIdle?.();
       const sessionFile = ctx.sessionManager?.getSessionFile?.();
       const sessionDir = ctx.sessionManager?.getSessionDir?.();
       let plan;
       try {
-        plan = buildPiRestartPlan({ sessionFile, sessionDir, cwd: ctx.cwd, getFlag: (name) => pi.getFlag?.(name) });
+        plan = buildPiRestartPlan({ sessionFile, sessionDir, model: ctx.model, cwd: ctx.cwd, getFlag: (name) => pi.getFlag?.(name) });
       } catch (error) {
         ctx.ui.notify(error.message || String(error), "error");
         return;
@@ -606,7 +625,6 @@ export default async function piSelfUpdateExtension(pi) {
         ctx.ui.notify(formatRestartPlan(plan), "info");
         return;
       }
-      await ctx.waitForIdle?.();
       pi.appendEntry?.(PI_RESTART_ENTRY_TYPE, {
         at: new Date().toISOString(),
         executable: plan.executable,

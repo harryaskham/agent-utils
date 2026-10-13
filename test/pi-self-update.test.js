@@ -227,6 +227,25 @@ test("buildPiRestartPlan preserves runtime flags, switches to current session, a
   assert.equal(plan.env.PI_RESTART_SESSION_FILE, "/tmp/pi-session/session.jsonl");
 });
 
+test("restart pins the selected model instead of launch flags or saved response IDs", () => {
+  const model = { provider: "github-copilot", id: "claude-opus-5.5" };
+  const plan = buildPiRestartPlan({
+    argv: ["pi", "/old/pi", "--provider", "old-provider", "--model=old-model", "--append-system-prompt=--model", "--models", "scope-pattern"],
+    env: { PATH: "" }, sessionFile: "/tmp/session.jsonl", model,
+  });
+  assert.deepEqual(plan.restartArgs, ["--append-system-prompt", "--model", "--models", "scope-pattern", "--provider", model.provider, "--model", model.id, "--session", "/tmp/session.jsonl"]);
+  assert.ok(!plan.restartArgs.includes("claude-opus-5-5"));
+  assert.throws(() => buildPiRestartPlan({ sessionFile: "/tmp/session", model: { provider: "github-copilot", id: "" } }), /invalid current model/);
+});
+
+test("/restart dry-run includes current canonical model without switching models", async () => {
+  const h = makeHarness(); await piSelfUpdateExtension(h.pi);
+  h.ctx.model = { provider: "github-copilot", id: "claude-opus-5.5" };
+  await h.commands.get("restart").handler("--dry-run", h.ctx);
+  assert.match(h.notifications.at(-1).message, /"--provider" "github-copilot" "--model" "claude-opus-5.5"/);
+  assert.equal(h.execCount, 0);
+});
+
 test("restart keeps names, fullscreen mode and quoted values attached to their flags", () => {
   const name = 'Agent "two words" $(not-a-command)';
   const sessionFile = '/tmp/session dir/a "quoted" session.jsonl';
