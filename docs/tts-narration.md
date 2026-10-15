@@ -8,6 +8,8 @@ Agent Utils separates two voice-output modes:
 
 Neither mode requires the agent to call the `speak` tool.
 
+pi-daemon sessions get the same modes, plus `ask_user` choice audio, from a Durable module; see [agent audio in pi-daemon sessions](durable-tts.md).
+
 ## Machine-wide speech feed
 
 Every `/tts` and `/narrate` speech request appends its full text (including spoken prefixes/suffixes) to `~/.local/state/agent-utils/tts/speech.jsonl`, separate from the disposable PCM queue. `XDG_STATE_HOME`, `PI_AGENT_UTILS_STATE_DIR`, and `PI_TTS_FEED_PATH` can override the producer destination. Each JSON line contains a timestamp, kind, agent/session identity, host, PID, cwd, and text. Embedded newlines are escaped so each request occupies one physical line.

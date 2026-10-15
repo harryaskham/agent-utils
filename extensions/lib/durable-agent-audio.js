@@ -1,0 +1,625 @@
+// Host-neutral agent audio core for Durable hosts such as pi-daemon (bd-832b7a).
+//
+// This module owns /tts, /narrate and choice-audio behaviour for a host that
+// delivers read-only agent events and per-session durable JSON state. It never
+// imports Pi TUI APIs: the TUI extension (extensions/tts-narration.js and
+// extensions/choice.js) and the Durable adaptor (extensions/durable/tts.mjs) are
+// thin adaptors over the same speech, routing and provider libraries.
+//
+// Host contract (pi-daemon extension modules):
+//   commands.<name>.run(args, ctx)  ctx: { sessionId, conversationId?, notify(text), state? }
+//   observe(event, ctx)             ctx: { sessionId, conversationId, state? }
+//   state: { get(key) -> Promise<json|undefined>, set(key, json) -> Promise }
+// When a host does not provide `state` yet, an in-process map stands in so the
+// commands still work; such settings last until the worker restarts.
+//
+// Playback is tied to agent events on the host where the session runs. It is
+// never tied to whether a client is attached.
+
+import { spawn } from "node:child_process";
+import { accessSync, constants as fsConstants } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
+import { parseEnvStyleArgs, expandEnvReferences } from "./env-args.js";
+import {
+  applyAgentTtsConfig,
+  assistantPlainText,
+  assistantReasoningSummary,
+  assistantToolCalls,
+  createAgentSpeechController,
+  normalizeNarrationText,
+  resolveAgentTtsSettings,
+  resolveNarrateSettings,
+} from "./tts-narration.js";
+import { createChoiceSpeaker, formatChoiceIntroduction } from "./choice.js";
+import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy } from "./tts-identity.js";
+import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE, isAzureSpeechProvider, usesDaemonPlayback, createInterruptiblePcmPlayer } from "./tts.js";
+import { speechCredentialStatus } from "./tts-provider-config.js";
+import { createSpeechOutputRouting } from "./speech-output-routing.js";
+import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.js";
+
+export const DURABLE_AUDIO_SETTINGS_KEY = "settings";
+export const DURABLE_AUDIO_LEDGER_KEY = "spoken";
+export const DURABLE_AUDIO_LEDGER_LIMIT = 256;
+export const DURABLE_AUDIO_MAX_SESSIONS = 64;
+export const DEFAULT_DURABLE_REPLAY_GRACE_MS = 60_000;
+export const ASK_USER_TOOL = "ask_user";
+export const NARRATE_PHASES = Object.freeze(["before", "after", "both"]);
+
+const SECRET_KEY = /api_?key|token$|secret|password/i;
+const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
+const PROVIDER_SPECIFIC_KEYS = ["voice", "model", "lang", "speed", "embedding", "speaker", "speakerprofileid", "speaker_profile_id", "style", "styledegree", "style_degree", "endpoint", "base_url", "baseurl", "api_key", "apikey", "instructions", "pitch", "volume", "role"];
+const NARRATE_SPEECH_KEYS = new Set(["provider", "voice", "tts_model", "daemon_url", "daemon_provider", "daemon_sink", "token_file", "playback", "endpoint", "base_url", "lang", "embedding", "instructions", "role", "pitch", "volume", "timeout_ms", "pan", "interrupt", "auth", "az", "resource", "tenant", "subscription", "resource_id"]);
+const NARRATE_OWN_KEYS = new Set(["enabled", "on", "phases", "phase", "mode", "speed", "style", "styledegree", "style_degree", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]);
+
+function boolValue(value, name) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error(`${name} must be on or off`);
+}
+
+function optionalBool(value, fallback) {
+  try { return value == null || String(value).trim() === "" ? fallback : boolValue(value, "value"); }
+  catch { return fallback; }
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizePhases(value, name = "/narrate phases") {
+  const phase = String(value ?? "").trim().toLowerCase();
+  if (!NARRATE_PHASES.includes(phase)) throw new Error(`${name} must be before, after or both`);
+  return phase;
+}
+
+function phaseEnabled(phases, phase) {
+  return phases === "both" || phases === phase;
+}
+
+/** Keep only environment references for secrets; literal keys never become durable. */
+export function durableSpeechValues(values = {}) {
+  return Object.fromEntries(Object.entries(values).filter(([key, value]) => !SECRET_KEY.test(key) || ENV_REFERENCE.test(String(value))));
+}
+
+/** Short, deterministic spoken description of a tool batch. Never reads arguments aloud. */
+export function describeToolBatch(names = [], phase = "before", { failed = [] } = {}) {
+  const unique = [...new Set(names.map((name) => String(name || "tool").replace(/[_-]+/g, " ").trim()).filter(Boolean))];
+  if (!unique.length) return "";
+  const list = unique.length <= 3
+    ? unique.length === 1 ? unique[0] : `${unique.slice(0, -1).join(", ")} and ${unique.at(-1)}`
+    : `${unique.slice(0, 2).join(", ")} and ${unique.length - 2} more tools`;
+  if (phase === "before") return `Running ${list}.`;
+  const failedNames = [...new Set(failed.map((name) => String(name || "tool").replace(/[_-]+/g, " ").trim()))];
+  if (failedNames.length) return `${failedNames.length === 1 ? failedNames[0] : `${failedNames.length} tools`} failed.`;
+  return `Finished ${list}.`;
+}
+
+/** The assistant message of a message_end event: Durable's `entry.model` or the coding agent's `message`. */
+export function eventAssistantMessage(event) {
+  if (event?.message?.role === "assistant") return event.message;
+  const model = Array.isArray(event?.entry?.model) ? event.entry.model : [];
+  for (let i = model.length - 1; i >= 0; i -= 1) if (model[i]?.role === "assistant") return model[i];
+  return null;
+}
+
+/** Whether a tool_execution_end reported an error, for both event shapes. */
+export function eventToolFailed(event) {
+  if (event?.isError === true) return true;
+  const model = Array.isArray(event?.entry?.model) ? event.entry.model : [];
+  if (model.some((message) => message?.isError === true)) return true;
+  // Durable omits the entry when the tool task faulted or was orphaned.
+  return event?.type === "tool_execution_end" && "entry" in (event || {}) && event.entry == null;
+}
+
+function textHash(text) {
+  let hash = 0;
+  for (const ch of String(text)) hash = (Math.imul(hash, 31) + ch.codePointAt(0)) | 0;
+  return (hash >>> 0).toString(36);
+}
+
+function messageKey(event, message, text) {
+  return String(event?.entry?.id ?? message?.responseId ?? `${message?.timestamp ?? ""}:${textHash(text)}`);
+}
+
+function askUserIntroduction(args = {}) {
+  const question = String(args?.question ?? "").trim();
+  const choices = Array.isArray(args?.choices) ? args.choices.map((choice) => String(choice ?? "").trim()).filter(Boolean) : [];
+  if (choices.length >= 2) {
+    try { return formatChoiceIntroduction(question, choices, 0); } catch {}
+  }
+  return question;
+}
+
+/** Resolve an executable on PATH (or an absolute override) without spawning it. */
+export function findExecutable(command, { env = process.env, overrides = {} } = {}) {
+  const candidate = overrides[command] || command;
+  const check = (path) => { try { accessSync(path, fsConstants.X_OK); return true; } catch { return false; } };
+  if (isAbsolute(candidate)) return check(candidate) ? candidate : null;
+  for (const dir of String(env.PATH || "").split(delimiter).filter(Boolean)) {
+    const full = join(dir, candidate);
+    if (check(full)) return full;
+  }
+  return null;
+}
+
+function playbackCommand(config) {
+  const backend = String(config.backend || "pulse").trim().toLowerCase();
+  if (["pulse", "pulseaudio", "pacat", "paplay", "auto"].includes(backend)) return "pacat";
+  if (["sox", "play"].includes(backend)) return "play";
+  if (["coreaudio", "ffplay", "ffmpeg"].includes(backend)) return "ffplay";
+  return null;
+}
+
+/** Problems that would stop speech on this host, as short phrases. Empty when ready. */
+export function speechReadiness(config, { env = process.env, executables = {}, which = findExecutable } = {}) {
+  const problems = [];
+  let credentials = "";
+  try { credentials = speechCredentialStatus(config, env); } catch (error) { credentials = `invalid (${error?.message || error})`; }
+  if (/missing|invalid/.test(credentials)) problems.push(`credentials ${credentials}`);
+  if (["command", "local"].includes(config.provider)) {
+    if (!String(config.command || "").trim()) problems.push("provider=command has no command");
+  } else if (!usesDaemonPlayback(config)) {
+    const command = playbackCommand(config);
+    if (command && !which(command, { env, overrides: executables })) problems.push(`playback needs ${command} on PATH`);
+  }
+  return problems;
+}
+
+/** A spawn that maps bare playback commands to packaged absolute paths. */
+export function spawnWithExecutables(spawnImpl, executables = {}) {
+  return (command, args, options) => spawnImpl(executables[command] || command, args, options);
+}
+
+function memoryStateStore(map, sessionId) {
+  return {
+    async get(key) { const value = map.get(`${sessionId}\0${key}`); return value === undefined ? undefined : JSON.parse(value); },
+    async set(key, value) { map.set(`${sessionId}\0${key}`, JSON.stringify(value)); },
+  };
+}
+
+/**
+ * Create the agent audio core for one host process.
+ *
+ * Options are injection points for tests and adaptors:
+ * - `createSpeech({ sessionId, config, env })` returns a controller shaped like
+ *   createAgentSpeechController (speak/interrupt/apply/getConfig/setConfig/dispose).
+ * - `createChoiceSpeech({ sessionId, env })` returns { speak, interrupt, dispose }.
+ * - `persistedSettings` is the immutable startup `{ tts, narrate, choice }` slice.
+ */
+export function createDurableAgentAudio({
+  env = process.env,
+  persistedSettings = {},
+  createSpeech,
+  createChoiceSpeech,
+  executables = {},
+  spawnImpl,
+  which = findExecutable,
+  now = Date.now,
+  loadedAt = now(),
+  replayGraceMs,
+  memoryState = new Map(),
+  maxSessions = DURABLE_AUDIO_MAX_SESSIONS,
+  log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
+} = {}) {
+  const persistedTts = plainObject(persistedSettings.tts);
+  const persistedNarrate = plainObject(persistedSettings.narrate);
+  const persistedChoice = plainObject(persistedSettings.choice);
+  const graceMs = Number.isFinite(Number(replayGraceMs ?? env.PI_DURABLE_AUDIO_REPLAY_GRACE_MS))
+    ? Number(replayGraceMs ?? env.PI_DURABLE_AUDIO_REPLAY_GRACE_MS)
+    : DEFAULT_DURABLE_REPLAY_GRACE_MS;
+  const audioProviders = createAudioProviders({});
+  let routing;
+  const sharedRouting = () => (routing ||= createSpeechOutputRouting({ env }));
+  const speechPolicy = resolveSessionSpeechPolicy(persistedTts, env);
+  const makePlayer = () => createInterruptiblePcmPlayer({ queue: true, ...(spawnImpl || Object.keys(executables).length ? { spawnImpl: spawnWithExecutables(spawnImpl || spawn, executables) } : {}) });
+  const speechFactory = createSpeech || (({ config }) => createAgentSpeechController({ env, initialConfig: config, routing: sharedRouting(), player: makePlayer() }));
+  const choiceFactory = createChoiceSpeech || (() => createChoiceSpeaker({ env, persisted: persistedTts, routing: sharedRouting(), audioProviders, player: makePlayer() }));
+
+  /** sessionId -> runtime record; bounded, least recently used first. */
+  const sessions = new Map();
+  const pending = new Set();
+  let disposed = false;
+
+  const defaults = () => {
+    const tts = resolveAgentTtsSettings({ env, persisted: persistedTts, audioProviders });
+    const narrate = resolveNarrateSettings({ env, persisted: persistedNarrate });
+    let phases = "before";
+    try { phases = normalizePhases(env.PI_NARRATE_PHASES ?? persistedNarrate.phases ?? "before", "PI_NARRATE_PHASES"); } catch {}
+    return {
+      config: tts.config,
+      tts: { enabled: tts.enabled, prefix: tts.prefix, suffix: tts.suffix, choices: optionalBool(env.PI_CHOICE_SPEECH_ENABLED, optionalBool(persistedChoice.speechEnabled, true)), speech: {} },
+      narrate: { enabled: narrate.enabled, phases, speed: narrate.speed, style: narrate.style, styleDegree: narrate.styleDegree, reasoningSummaries: narrate.reasoningSummaries, prefix: narrate.prefix, suffix: narrate.suffix },
+    };
+  };
+
+  const stateFor = (ctx) => {
+    const store = ctx?.state;
+    if (store && typeof store.get === "function" && typeof store.set === "function") return { store, durable: true };
+    return { store: memoryStateStore(memoryState, String(ctx?.sessionId ?? "default")), durable: false };
+  };
+
+  const evict = () => {
+    while (sessions.size > maxSessions) {
+      const [oldest, record] = sessions.entries().next().value;
+      sessions.delete(oldest);
+      void Promise.resolve(record.loading).then((loaded) => { try { loaded?.speech?.dispose?.(); loaded?.choices?.dispose?.(); } catch {} }).catch(() => {});
+    }
+  };
+
+  const loadSession = async (ctx) => {
+    const sessionId = String(ctx?.sessionId ?? "default");
+    let entry = sessions.get(sessionId);
+    if (entry) {
+      sessions.delete(sessionId);
+      sessions.set(sessionId, entry);
+      const session = await entry.loading;
+      // A host may begin passing durable state after the first event; prefer it.
+      if (!session.durable && stateFor(ctx).durable) { sessions.delete(sessionId); return loadSession(ctx); }
+      return session;
+    }
+    entry = { loading: (async () => {
+      const { store, durable } = stateFor(ctx);
+      const base = defaults();
+      let saved = {};
+      let ledger = [];
+      try { saved = plainObject(await store.get(DURABLE_AUDIO_SETTINGS_KEY)); } catch (error) { log(`agent-utils durable audio: state read failed: ${error?.message || error}`); }
+      try { const value = await store.get(DURABLE_AUDIO_LEDGER_KEY); ledger = Array.isArray(value) ? value.map(String) : Array.isArray(value?.ids) ? value.ids.map(String) : []; } catch {}
+      const tts = { ...base.tts, ...plainObject(saved.tts) };
+      tts.speech = durableSpeechValues(plainObject(saved.tts?.speech));
+      const narrate = { ...base.narrate, ...plainObject(saved.narrate) };
+      if (!NARRATE_PHASES.includes(narrate.phases)) narrate.phases = base.narrate.phases;
+      let config = base.config;
+      try { if (Object.keys(tts.speech).length) config = applyAgentTtsConfig(config, tts.speech, env); }
+      catch (error) { log(`agent-utils durable audio: saved speech settings ignored: ${error?.message || error}`); }
+      config = assignSessionVoice(config, sessionId, tts.speech);
+      const session = {
+        sessionId,
+        store,
+        durable,
+        tts,
+        narrate,
+        speech: speechFactory({ sessionId, config, env }),
+        choices: null,
+        ledger: new Set(ledger.slice(-DURABLE_AUDIO_LEDGER_LIMIT)),
+        batches: new Map(),
+        lastError: null,
+        reported: new Set(),
+      };
+      return session;
+    })() };
+    sessions.set(sessionId, entry);
+    evict();
+    try { return await entry.loading; }
+    catch (error) { sessions.delete(sessionId); throw error; }
+  };
+
+  const assignSessionVoice = (config, sessionId, speechValues) => {
+    const assignment = resolveSessionSpeechAssignment(sessionId, speechPolicy);
+    const explicitVoice = ["voice", "embedding", "speaker", "speakerprofileid", "speaker_profile_id"].some((key) => Object.hasOwn(speechValues, key));
+    return {
+      ...config,
+      ...(isAzureSpeechProvider(config.provider) && assignment.voice && !explicitVoice && !persistedTts.voice && !env.PI_TTS_VOICE ? { voice: assignment.voice, embedding: null } : {}),
+      pan: config.pan !== undefined ? config.pan : assignment.pan,
+      panSource: config.pan !== undefined ? config.panSource || "explicit" : "session",
+    };
+  };
+
+  const saveSettings = async (session) => {
+    await session.store.set(DURABLE_AUDIO_SETTINGS_KEY, {
+      version: 1,
+      tts: { ...session.tts, speech: durableSpeechValues(session.tts.speech) },
+      narrate: Object.fromEntries(Object.entries(session.narrate).filter(([, value]) => value !== undefined)),
+    });
+  };
+
+  /** Claim a once-only speech key. Persisted before speaking: at most once across restarts. */
+  const claim = async (session, key) => {
+    if (session.ledger.has(key)) return false;
+    session.ledger.add(key);
+    while (session.ledger.size > DURABLE_AUDIO_LEDGER_LIMIT) session.ledger.delete(session.ledger.values().next().value);
+    try { await session.store.set(DURABLE_AUDIO_LEDGER_KEY, [...session.ledger]); }
+    catch (error) { log(`agent-utils durable audio: ledger write failed: ${error?.message || error}`); }
+    return true;
+  };
+
+  const report = (session, kind, error) => {
+    const message = error?.message || String(error);
+    session.lastError = { kind, message, at: now() };
+    if (session.reported.has(kind)) return;
+    session.reported.add(kind);
+    log(`agent-utils durable audio (${session.sessionId}) ${kind}: ${message}`);
+  };
+
+  const track = (promise) => {
+    const tracked = Promise.resolve(promise).finally(() => pending.delete(tracked));
+    pending.add(tracked);
+    return tracked;
+  };
+
+  const speak = (session, kind, text, overrides = {}) => {
+    const body = String(text ?? "");
+    if (disposed || !body.trim()) return;
+    track(Promise.resolve()
+      .then(() => session.speech.speak(body, { ...overrides, speechKind: kind, streamName: `/${kind}` }))
+      .then((result) => { for (const warning of result?.warnings || []) report(session, `${kind} daemon`, new Error(warning)); })
+      .catch((error) => report(session, kind, error)));
+  };
+
+  const speakChoice = (session, text) => {
+    if (disposed || !String(text || "").trim()) return;
+    session.choices ||= choiceFactory({ sessionId: session.sessionId, env });
+    try { session.choices.assignSession?.({ sessionManager: { getSessionId: () => session.sessionId } }); } catch {}
+    track(Promise.resolve().then(() => session.choices.speak(text)).catch((error) => report(session, "choices", error)));
+  };
+
+  const narrateOverrides = (session) => ({
+    ...(session.narrate.speed ? { speed: session.narrate.speed } : {}),
+    ...(session.narrate.style ? { style: session.narrate.style } : {}),
+    ...(session.narrate.styleDegree ? { styleDegree: session.narrate.styleDegree } : {}),
+  });
+
+  const affix = (prefix, text, suffix) => `${prefix || ""}${text}${suffix || ""}`;
+
+  const stale = (message) => {
+    const timestamp = Number(message?.timestamp);
+    return graceMs >= 0 && Number.isFinite(timestamp) && timestamp > 0 && timestamp < loadedAt - graceMs;
+  };
+
+  const onMessageEnd = async (session, event) => {
+    const message = eventAssistantMessage(event);
+    if (!message) return;
+    const calls = assistantToolCalls(message);
+    const text = assistantPlainText(message);
+    const key = messageKey(event, message, text);
+    const narratedCalls = calls.filter((call) => call.name !== ASK_USER_TOOL);
+    if (session.narrate.enabled && narratedCalls.length) {
+      const batch = { key, calls: narratedCalls, results: new Map() };
+      for (const call of narratedCalls) session.batches.set(call.id, batch);
+    }
+    const speakTts = session.tts.enabled && text && !(session.narrate.enabled && narratedCalls.length);
+    const narrateBefore = session.narrate.enabled && narratedCalls.length && phaseEnabled(session.narrate.phases, "before");
+    if (!speakTts && !narrateBefore) return;
+    // Tool starts covered by this message's line are marked with the same write.
+    if (narrateBefore) for (const call of narratedCalls) session.ledger.add(`start:${call.id}`);
+    if (stale(message)) { await claim(session, `message:${key}`); return; }
+    if (!await claim(session, `message:${key}`)) return;
+    if (speakTts) speak(session, "tts", affix(session.tts.prefix, text, session.tts.suffix));
+    if (narrateBefore) {
+      const reasoning = session.narrate.reasoningSummaries ? normalizeNarrationText(assistantReasoningSummary(message), "before") : "";
+      const line = reasoning || normalizeNarrationText(text, "before") || describeToolBatch(narratedCalls.map((call) => call.name), "before");
+      speak(session, "narrate", affix(session.narrate.prefix, line, session.narrate.suffix), narrateOverrides(session));
+    }
+  };
+
+  const onToolStart = async (session, event) => {
+    const id = String(event?.toolCallId ?? "");
+    const name = String(event?.toolName ?? "");
+    if (name === ASK_USER_TOOL) {
+      if (!session.tts.choices) return;
+      const intro = askUserIntroduction(event?.args);
+      if (!intro || !await claim(session, `ask:${id}`)) return;
+      speakChoice(session, intro);
+      return;
+    }
+    // A tool whose assistant message was coalesced away still gets a before line.
+    if (!session.narrate.enabled || !phaseEnabled(session.narrate.phases, "before") || !id) return;
+    if (session.batches.has(id) || session.ledger.has(`start:${id}`)) return;
+    if (!await claim(session, `start:${id}`)) return;
+    speak(session, "narrate", affix(session.narrate.prefix, describeToolBatch([name], "before"), session.narrate.suffix), narrateOverrides(session));
+  };
+
+  const onToolEnd = async (session, event) => {
+    const id = String(event?.toolCallId ?? "");
+    const batch = session.batches.get(id);
+    if (!batch) return;
+    batch.results.set(id, { name: String(event?.toolName ?? batch.calls.find((call) => call.id === id)?.name ?? "tool"), failed: eventToolFailed(event) });
+    if (batch.results.size < batch.calls.length) return;
+    for (const call of batch.calls) session.batches.delete(call.id);
+    if (!session.narrate.enabled || !phaseEnabled(session.narrate.phases, "after")) return;
+    if (!await claim(session, `after:${batch.key}`)) return;
+    const results = [...batch.results.values()];
+    const line = describeToolBatch(results.map((result) => result.name), "after", { failed: results.filter((result) => result.failed).map((result) => result.name) });
+    speak(session, "narrate", affix(session.narrate.prefix, line, session.narrate.suffix), narrateOverrides(session));
+  };
+
+  async function observe(event, ctx = {}) {
+    if (disposed || !event || typeof event !== "object") return;
+    const type = event.type;
+    if (!["message_end", "tool_execution_start", "tool_execution_end"].includes(type)) return;
+    let session;
+    try { session = await loadSession(ctx); } catch (error) { log(`agent-utils durable audio: session load failed: ${error?.message || error}`); return; }
+    if (!session.tts.enabled && !session.narrate.enabled && !(type === "tool_execution_start" && event.toolName === ASK_USER_TOOL && session.tts.choices)) return;
+    if (type === "message_end") return onMessageEnd(session, event);
+    if (type === "tool_execution_start") return onToolStart(session, event);
+    return onToolEnd(session, event);
+  }
+
+  const optional = (value) => value == null || value === "" ? "none" : String(value);
+
+  const readinessNote = (session) => {
+    const problems = speechReadiness(session.speech.getConfig(), { env, executables, which });
+    return problems.length ? ` · warning: speech unavailable on this host (${problems.join("; ")}); events will be skipped quietly` : "";
+  };
+
+  const lastErrorNote = (session) => session.lastError ? ` · last-error:${session.lastError.kind}: ${session.lastError.message}` : "";
+  const scopeNote = (session) => `scope:session${session.durable ? "" : " (in-memory: host has no durable state)"}`;
+
+  const ttsStatus = (session, { check = false } = {}) => {
+    const config = session.speech.getConfig();
+    let credentials = "";
+    try { credentials = speechCredentialStatus(config, env); } catch {}
+    return [
+      `tts:${session.tts.enabled ? "on" : "off"}`,
+      `provider:${config.providerName && config.providerName !== config.provider ? `${config.providerName}(${config.provider})` : config.provider}`,
+      `voice:${optional(config.voice)}`,
+      `speed:${optional(config.speed)}`,
+      `pan:${optional(config.pan == null ? null : Number(config.pan).toFixed(2))}`,
+      credentials,
+      `output:${usesDaemonPlayback(config) ? `daemon/${config.daemonSink || "server-default"}` : `${config.backend}/${optional(config.device)}`}`,
+      `choices:${session.tts.choices ? "on" : "off"}`,
+      `prefix:${session.tts.prefix ? "set" : "none"}`,
+      `suffix:${session.tts.suffix ? "set" : "none"}`,
+      scopeNote(session),
+    ].filter(Boolean).join(" · ") + (check ? readinessNote(session) : "") + lastErrorNote(session);
+  };
+
+  const narrateStatus = (session, { check = false } = {}) => [
+    `narrate:${session.narrate.enabled ? "on" : "off"}`,
+    `phases:${session.narrate.phases}`,
+    `speed:${session.narrate.speed ?? "tts"}`,
+    `style:${session.narrate.style ?? "tts"}`,
+    `styledegree:${session.narrate.styleDegree ?? "tts"}`,
+    `reasoning-summaries:${session.narrate.reasoningSummaries ? "prefer" : "off"}`,
+    `prefix:${session.narrate.prefix ? "set" : "none"}`,
+    `suffix:${session.narrate.suffix ? "set" : "none"}`,
+    "lines:agent preamble or tool names",
+    scopeNote(session),
+  ].join(" · ") + (check ? readinessNote(session) : "") + lastErrorNote(session);
+
+  const reply = (ctx, text) => {
+    try { ctx?.notify?.(text); } catch {}
+    return text;
+  };
+
+  const applySpeechValues = (session, values, surface) => {
+    if (!Object.keys(values).length) return;
+    rejectSurfaceAuthKeys(values, surface, session.speech.getConfig());
+    const before = session.speech.getConfig();
+    session.speech.apply(values);
+    const after = session.speech.getConfig();
+    const providerOf = (config) => config.providerName || config.provider;
+    if (providerOf(before) !== providerOf(after)) for (const key of PROVIDER_SPECIFIC_KEYS) delete session.tts.speech[key];
+    session.tts.speech = durableSpeechValues({ ...session.tts.speech, ...values });
+  };
+
+  const useHarryVoice = (session) => {
+    session.speech.setConfig({ ...session.speech.getConfig(), voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING });
+    session.tts.speech = { ...session.tts.speech, voice: DEFAULT_TTS_VOICE, embedding: DEFAULT_TTS_EMBEDDING };
+  };
+
+  async function runTts(args, ctx = {}) {
+    const session = await loadSession(ctx);
+    const raw = String(args ?? "").trim();
+    const simple = raw.toLowerCase();
+    try {
+      if (/^(focus|solo)(?:\s|$)/.test(simple)) throw new Error("focus and solo are Pulse routing for an interactive Pi; set PULSE_SERVER/PULSE_SINK in the host's environment instead");
+      if (simple === "status") return reply(ctx, ttsStatus(session, { check: true }));
+      if (simple === "off") {
+        session.tts.enabled = false;
+        await saveSettings(session);
+        await session.speech.interrupt({ kind: "tts" });
+        return reply(ctx, `tts:off · ${scopeNote(session)}`);
+      }
+      if (simple === "harry" || simple === "--harry") useHarryVoice(session);
+      else if (raw && simple !== "on") {
+        const parsed = parseEnvStyleArgs(raw);
+        if (parsed.positionals.length) throw new Error(`/tts: unexpected argument '${parsed.positionals[0]}'`);
+        const { prefix, suffix, choices, prefix_with_session_name, prefixwithsessionname, ...speechValues } = parsed.values;
+        if (prefix_with_session_name !== undefined || prefixwithsessionname !== undefined) throw new Error("/tts: prefix_with_session_name needs a Pi session name; use prefix= instead");
+        if (prefix !== undefined) session.tts.prefix = expandEnvReferences(prefix, env, "/tts prefix");
+        if (suffix !== undefined) session.tts.suffix = expandEnvReferences(suffix, env, "/tts suffix");
+        if (choices !== undefined) session.tts.choices = boolValue(choices, "/tts choices");
+        applySpeechValues(session, speechValues, "/tts");
+      }
+      session.tts.enabled = true;
+      session.reported.clear();
+      session.lastError = null;
+      await saveSettings(session);
+      return reply(ctx, ttsStatus(session, { check: true }));
+    } catch (error) {
+      return reply(ctx, `/tts: ${String(error?.message || error).replace(/^\/tts:\s*/, "")}`);
+    }
+  }
+
+  async function runNarrate(args, ctx = {}) {
+    const session = await loadSession(ctx);
+    const raw = String(args ?? "").trim();
+    const simple = raw.toLowerCase();
+    try {
+      if (simple === "status") return reply(ctx, narrateStatus(session, { check: true }));
+      if (simple === "off") {
+        session.narrate.enabled = false;
+        session.batches.clear();
+        await saveSettings(session);
+        await session.speech.interrupt({ kind: "narrate" });
+        return reply(ctx, narrateStatus(session));
+      }
+      if (simple === "harry" || simple === "--harry") { useHarryVoice(session); session.narrate.enabled = true; }
+      else if (NARRATE_PHASES.includes(simple)) { session.narrate.phases = simple; session.narrate.enabled = true; }
+      else if (!raw || simple === "on") session.narrate.enabled = true;
+      else {
+        const parsed = parseEnvStyleArgs(raw);
+        if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
+        const values = parsed.values;
+        for (const key of Object.keys(values)) {
+          if (key === "model" || key === "text" || key === "text_enabled") throw new Error(`/narrate: ${key}= is not available in Durable sessions; narration speaks the agent's own preamble or reasoning summary, or the tool names`);
+          if (!NARRATE_SPEECH_KEYS.has(key) && !NARRATE_OWN_KEYS.has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+        }
+        const next = { ...session.narrate };
+        const phases = values.phases ?? values.phase ?? values.mode;
+        if (phases !== undefined) next.phases = normalizePhases(phases);
+        if (values.speed !== undefined) {
+          const speed = Number(values.speed);
+          if (!Number.isFinite(speed) || speed <= 0) throw new Error("/narrate: speed must be greater than zero");
+          next.speed = speed;
+        }
+        if (values.style !== undefined) next.style = String(values.style).trim() || undefined;
+        const degreeRaw = values.styledegree ?? values.style_degree;
+        if (degreeRaw !== undefined) {
+          const degree = Number(degreeRaw);
+          if (!Number.isFinite(degree) || degree < 0.01 || degree > 2) throw new Error("/narrate: styledegree must be between 0.01 and 2");
+          next.styleDegree = degree;
+        }
+        const reasoning = values.reasoning_summaries ?? values.reasoningsummaries ?? values.reasoning;
+        if (reasoning !== undefined) next.reasoningSummaries = boolValue(reasoning, "/narrate reasoning_summaries");
+        if (values.prefix !== undefined) next.prefix = expandEnvReferences(values.prefix, env, "/narrate prefix");
+        if (values.suffix !== undefined) next.suffix = expandEnvReferences(values.suffix, env, "/narrate suffix");
+        next.enabled = values.enabled !== undefined ? boolValue(values.enabled, "/narrate enabled")
+          : values.on !== undefined ? boolValue(values.on, "/narrate on") : true;
+        const speechValues = Object.fromEntries(Object.entries(values).filter(([key]) => NARRATE_SPEECH_KEYS.has(key)).map(([key, value]) => [key === "tts_model" ? "model" : key, value]));
+        applySpeechValues(session, speechValues, "/narrate");
+        session.narrate = next;
+      }
+      if (!session.narrate.enabled) { session.batches.clear(); await session.speech.interrupt({ kind: "narrate" }); }
+      session.reported.clear();
+      session.lastError = null;
+      await saveSettings(session);
+      return reply(ctx, narrateStatus(session, { check: session.narrate.enabled }));
+    } catch (error) {
+      return reply(ctx, `/narrate: ${String(error?.message || error).replace(/^\/narrate:\s*/, "")}`);
+    }
+  }
+
+  const commands = {
+    tts: {
+      description: "Speak this session's final assistant messages on the daemon host. /tts [on|off|status|harry|key=value …]; choices=on|off speaks ask_user questions; prefix=/suffix= wrap speech.",
+      run: runTts,
+    },
+    narrate: {
+      description: "Speak short lines about this session's tool work on the daemon host. /narrate [on|off|status|before|after|both|key=value …] (phases=, speed=, style=, styledegree=, reasoning_summaries=, prefix=, suffix=).",
+      run: runNarrate,
+    },
+  };
+
+  return {
+    commands,
+    observe,
+    memoryState,
+    loadedAt,
+    /** Settle every in-flight speech request (tests and orderly shutdown). */
+    async idle() { while (pending.size) await Promise.allSettled([...pending]); },
+    async dispose() {
+      disposed = true;
+      const loaded = await Promise.allSettled([...sessions.values()].map((entry) => entry.loading));
+      sessions.clear();
+      for (const result of loaded) {
+        if (result.status !== "fulfilled") continue;
+        try { await result.value.speech?.dispose?.(); } catch {}
+        try { await result.value.choices?.dispose?.(); } catch {}
+      }
+      try { await routing?.shutdown?.(); } catch {}
+    },
+  };
+}
+

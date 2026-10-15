@@ -92,6 +92,28 @@
             skillServerUnchecked
             agUnchecked
           ];
+          # pi-daemon Durable extension modules (bd-832b7a). `$out/tts.mjs` is the
+          # module a pi-daemon profile lists under `extensions:`; it loads the
+          # shared agent-utils speech libraries from `$out/extensions`. Playback
+          # binaries are recorded as absolute paths so the worker's PATH does not
+          # need Pulse tools.
+          durableExtensions = pkgs.runCommand "agent-utils-durable-extensions" {
+            nativeBuildInputs = [ pkgs.nodejs ];
+          } ''
+            mkdir -p $out
+            cp -r ${./extensions} $out/extensions
+            chmod -R u+w $out
+            echo '{ "type": "module" }' > $out/package.json
+            ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              echo '{ "pacat": "${pkgs.pulseaudio}/bin/pacat" }' > $out/extensions/durable/runtime-paths.json
+            ''}
+            echo 'export * from "./extensions/durable/tts.mjs";' > $out/tts.mjs
+            # The module must load with nothing but Node built-ins.
+            HOME=$TMPDIR node --input-type=module -e "
+              const m = await import('$out/tts.mjs');
+              if (typeof m.observe !== 'function' || typeof m.commands?.tts?.run !== 'function' || typeof m.commands?.narrate?.run !== 'function') process.exit(1);
+            "
+          '';
           uncheckedJoin = pkgs.symlinkJoin {
             name = "agent-utils-unchecked";
             paths = uncheckedPackages;
@@ -122,6 +144,7 @@
           # of the `default`/`all` symlinkJoin because it is a web bundle, not a
           # bin. Build: `nix build .#pi-wasm`. Serve: `nix run .#pi-wasm-serve`.
           pi-wasm = pi-wasm.packages.${system}.pi-wasm;
+          durable-extensions = durableExtensions;
           pi-wasm-serve = pi-wasm.packages.${system}.pi-wasm-serve;
         });
 
