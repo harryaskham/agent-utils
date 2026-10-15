@@ -64,6 +64,7 @@ impl Fixture {
                 tts_feed: Some(temp.path().join("speech.jsonl").display().to_string()),
                 image_dir: Some(temp.path().join("images").display().to_string()),
                 tts_mute: Some(temp.path().join("mute.json").display().to_string()),
+                audio_dir: None,
             },
             paratenic: ParatenicConfig {
                 culture_config: Some(temp.path().join("no-culture.yaml").display().to_string()),
@@ -491,6 +492,7 @@ fn start_dash(fixture: &Fixture, extra: &[&str]) -> (Dash, String, String) {
             "127.0.0.1:0",
             "--no-open",
             "--no-images",
+            "--no-audio",
         ])
         .args(extra)
         .stdout(Stdio::piped())
@@ -683,6 +685,94 @@ fn dash_serves_the_gallery_cache_with_restrictive_headers() {
 }
 
 // ---- TUI over a real pseudo-terminal -------------------------------------
+
+#[test]
+fn dash_serves_the_audio_cache_with_ranges_and_restrictive_headers() {
+    let (address, _fake) = fake_host();
+    let fixture = Fixture::new(&[("alpha", url(address))]);
+    let cache = fixture.temp.path().join("cache/ag/audio");
+    let archive = cache.join("hosts/abc/archive/agent");
+    std::fs::create_dir_all(&archive).unwrap();
+    std::fs::write(
+        cache.join("index.html"),
+        "<!doctype html><title>audio</title>",
+    )
+    .unwrap();
+    let clip: Vec<u8> = (0..100u8).map(|i| b'A' + i % 26).collect();
+    std::fs::write(archive.join("aud-1.wav"), &clip).unwrap();
+    std::fs::write(archive.join("aud-1.wav.json"), "{}").unwrap();
+    std::fs::write(fixture.temp.path().join("secret.txt"), "nope").unwrap();
+    std::os::unix::fs::symlink(
+        fixture.temp.path().join("secret.txt"),
+        archive.join("escape.wav"),
+    )
+    .unwrap();
+    let (_dash, url, bind) = start_dash(&fixture, &[]);
+    let file = "/audio/hosts/abc/archive/agent/aud-1.wav";
+    assert_eq!(http(&bind, "GET", file, &[], None).0, 401);
+    let cookie = session_cookie(&bind, &url);
+    let auth = [("Cookie", cookie.as_str())];
+    let (_, _, page) = http(&bind, "GET", "/", &auth, None);
+    assert!(page.contains("tab-audio") && page.contains("/audio/index.html"));
+    let (code, head, _) = http(&bind, "GET", "/audio/index.html", &auth, None);
+    assert_eq!(code, 200);
+    assert!(head.contains("media-src 'self'") && head.contains("frame-ancestors 'self'"));
+    let (code, head, body) = http(&bind, "GET", file, &auth, None);
+    assert_eq!(code, 200);
+    let lower = head.to_ascii_lowercase();
+    assert!(lower.contains("content-type: audio/wav") && lower.contains("accept-ranges: bytes"));
+    assert!(head.contains("sandbox") && lower.contains("nosniff"));
+    assert_eq!(body.as_bytes(), clip.as_slice());
+    let ranged = [("Cookie", cookie.as_str()), ("Range", "bytes=10-19")];
+    let (code, head, body) = http(&bind, "GET", file, &ranged, None);
+    assert_eq!(code, 206);
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-range: bytes 10-19/100")
+    );
+    assert_eq!(body.as_bytes(), &clip[10..20]);
+    let suffix = [("Cookie", cookie.as_str()), ("Range", "bytes=-5")];
+    assert_eq!(
+        http(&bind, "GET", file, &suffix, None).2.as_bytes(),
+        &clip[95..]
+    );
+    let open = [("Cookie", cookie.as_str()), ("Range", "bytes=90-")];
+    assert_eq!(
+        http(&bind, "GET", file, &open, None).2.as_bytes(),
+        &clip[90..]
+    );
+    let beyond = [("Cookie", cookie.as_str()), ("Range", "bytes=200-")];
+    let (code, head, _) = http(&bind, "GET", file, &beyond, None);
+    assert_eq!(code, 416);
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-range: bytes */100")
+    );
+    for path in [
+        "/audio/hosts/abc/archive/agent/aud-1.wav.json",
+        "/audio/hosts/abc/archive/agent/escape.wav",
+        "/audio/../config.yaml",
+        "/audio/hosts/abc/archive/../../index.html",
+    ] {
+        assert_eq!(http(&bind, "GET", path, &auth, None).0, 404, "{path}");
+    }
+    let (_, _, state) = http(&bind, "GET", "/api/state", &auth, None);
+    let state: Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(state["audio"]["available"], true);
+    assert_eq!(state["audio"]["enabled"], false);
+    let refresh = [("Cookie", cookie.as_str()), ("X-Ag-Dash", "1")];
+    let body = json!({"what": ["audio"]}).to_string();
+    assert_eq!(
+        http(&bind, "POST", "/api/refresh", &refresh, Some(&body)).0,
+        202
+    );
+    let (_, _, state) = http(&bind, "GET", "/api/state", &auth, None);
+    assert_eq!(
+        serde_json::from_str::<Value>(&state).unwrap()["audio"]["running"],
+        false,
+        "--no-audio never starts a pull"
+    );
+}
 
 #[test]
 fn choices_tui_answers_over_a_real_pty_and_restores_the_terminal() {

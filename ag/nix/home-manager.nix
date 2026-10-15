@@ -35,7 +35,12 @@ let
     "--cache-dir"
     cfg.cacheDirectory
   ]
+  ++ lib.optionals (cfg.audioCacheDirectory != null) [
+    "--audio-cache-dir"
+    cfg.audioCacheDirectory
+  ]
   ++ lib.optional (!cfg.images) "--no-images"
+  ++ lib.optional (!cfg.audio) "--no-audio"
   ++ lib.optional (!cfg.tts) "--no-tts";
   # Use a store-owned launcher so systemd does not reinterpret %, $, quotes or
   # whitespace in user-specified arguments/environment. Never shell-eval config.
@@ -101,6 +106,11 @@ in
       default = null;
       description = "Optional gallery cache override; null uses the ag config/XDG default.";
     };
+    audioCacheDirectory = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Optional shared-audio cache override; null uses gallery.audio_cache_dir or ~/.cache/ag/audio.";
+    };
     refreshSeconds = lib.mkOption {
       type = lib.types.ints.between 30 86400;
       default = 300;
@@ -108,11 +118,17 @@ in
     imageRefreshSeconds = lib.mkOption {
       type = lib.types.ints.between 60 86400;
       default = 300;
+      description = "Media sync cadence: images and shared audio are pulled together on this interval.";
     };
     images = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = "Periodically pull images; false serves only existing cached images.";
+    };
+    audio = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Periodically pull explicitly shared audio (same cadence as images) for the Audio tab; false serves only the existing audio cache. Playback happens in the browser, never on the server.";
     };
     tts = lib.mkOption {
       type = lib.types.bool;

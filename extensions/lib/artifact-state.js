@@ -16,6 +16,10 @@ export function sharedImagesRoot(env = process.env) {
   return expandStatePath(env.PI_SHARED_IMAGES_DIR || join(agentUtilsStateRoot(env), "images"), env);
 }
 
+export function sharedAudioRoot(env = process.env) {
+  return expandStatePath(env.PI_SHARED_AUDIO_DIR || join(agentUtilsStateRoot(env), "audio"), env);
+}
+
 export function artifactIdentity(pi, ctx, env = process.env) {
   let session, name;
   try { session = ctx?.sessionManager?.getSessionId?.(); } catch {}

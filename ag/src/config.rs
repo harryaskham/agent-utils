@@ -15,6 +15,8 @@ pub struct Paths {
     pub image_dir: Option<String>,
     /// Runtime mute policy consumed by Agent Utils on the target node.
     pub tts_mute: Option<String>,
+    /// Explicitly shared audio archive (audio_share / /audio-add).
+    pub audio_dir: Option<String>,
 }
 impl Paths {
     pub fn over(&self, base: &Self) -> Self {
@@ -22,6 +24,7 @@ impl Paths {
             tts_feed: self.tts_feed.clone().or_else(|| base.tts_feed.clone()),
             image_dir: self.image_dir.clone().or_else(|| base.image_dir.clone()),
             tts_mute: self.tts_mute.clone().or_else(|| base.tts_mute.clone()),
+            audio_dir: self.audio_dir.clone().or_else(|| base.audio_dir.clone()),
         }
     }
     pub fn tts(&self) -> Result<PathBuf> {
@@ -60,6 +63,19 @@ impl Paths {
                 .clone()
                 .or_else(|| std::env::var("PI_SHARED_IMAGES_DIR").ok())
                 .unwrap_or_else(|| state_root().join("images").to_string_lossy().into()),
+        )
+    }
+    pub fn audio(&self) -> Result<PathBuf> {
+        expand_home(
+            &self
+                .audio_dir
+                .clone()
+                .or_else(|| {
+                    std::env::var("PI_SHARED_AUDIO_DIR")
+                        .ok()
+                        .filter(|v| !v.is_empty())
+                })
+                .unwrap_or_else(|| state_root().join("audio").to_string_lossy().into()),
         )
     }
 }
@@ -138,8 +154,10 @@ pub struct DashConfig {
     pub token_file: Option<String>,
     /// Background refresh for choices and node health.
     pub refresh_seconds: u64,
-    /// Background incremental image pull.
+    /// Background incremental media sync (images and audio share one cadence).
     pub image_refresh_seconds: u64,
+    /// Sync shared audio and serve the Audio tab.
+    pub audio: bool,
     /// One process-owned speech collector, shared by all dashboard browsers.
     pub tts: bool,
     /// Recent lines per host on collector startup (not per browser).
@@ -153,6 +171,7 @@ impl Default for DashConfig {
             token_file: None,
             refresh_seconds: 300,
             image_refresh_seconds: 300,
+            audio: true,
             tts: true,
             tts_lines: 20,
         }
@@ -186,6 +205,8 @@ impl Host {
 #[serde(default, deny_unknown_fields)]
 pub struct GalleryConfig {
     pub cache_dir: Option<String>,
+    /// Shared-audio cache (default ~/.cache/ag/audio).
+    pub audio_cache_dir: Option<String>,
     pub rsync_command: String,
     pub sync_timeout_seconds: u64,
     pub parallelism: usize,
@@ -194,6 +215,7 @@ impl Default for GalleryConfig {
     fn default() -> Self {
         Self {
             cache_dir: None,
+            audio_cache_dir: None,
             rsync_command: "rsync".into(),
             sync_timeout_seconds: 300,
             parallelism: 4,
@@ -259,11 +281,10 @@ impl AppConfig for Config {
             ));
         }
         if !safe(&self.gallery.rsync_command, 4096)
-            || self
-                .gallery
-                .cache_dir
-                .as_ref()
-                .is_some_and(|p| !safe(p, 4096))
+            || [&self.gallery.cache_dir, &self.gallery.audio_cache_dir]
+                .into_iter()
+                .flatten()
+                .any(|p| !safe(p, 4096))
             || !(1..=3600).contains(&self.gallery.sync_timeout_seconds)
             || !(1..=16).contains(&self.gallery.parallelism)
         {
@@ -360,9 +381,11 @@ impl AppConfig for Config {
                 &host.paths.tts_feed,
                 &host.paths.image_dir,
                 &host.paths.tts_mute,
+                &host.paths.audio_dir,
                 &self.paths.tts_feed,
                 &self.paths.image_dir,
                 &self.paths.tts_mute,
+                &self.paths.audio_dir,
             ]
             .into_iter()
             .flatten()

@@ -275,6 +275,20 @@
           "sourceOfTruth": "extensions/kitty-image-preview.js and extensions/kitty-graphics.js"
         },
         {
+          "name": "Audio reel Pi extension",
+          "command": "audio_share, audio_reel, /audio-reel, /audio-play, /audio-output",
+          "audience": "Pi agents, operators",
+          "purpose": "Let agents deliberately share audio (file, base64 or raw PCM) into a terminal reel/player with keyboard and mouse transport, Pulse-by-default output routing and a durable archive synced by ag audio/ag sync. Never used for speech.",
+          "commonActions": [
+            "audio_share path=…",
+            "audio_share data=… pcm={…}",
+            "audio_reel action=play",
+            "/audio-reel",
+            "/audio-output sink=…"
+          ],
+          "sourceOfTruth": "extensions/audio-reel.js and docs/audio-reel.md"
+        },
+        {
           "name": "Pi graphics theme + extension",
           "command": "pi_graphics_render_prompt_enclosure, pi_graphics_render_message_border, pi_graphics_clear, /pi-graphics-status, /pi-graphics-demo",
           "audience": "Pi agents, operators using kitty-compatible terminals",

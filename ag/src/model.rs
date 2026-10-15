@@ -7,7 +7,53 @@ use serde_json::Value;
 pub const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+/// Songs and long recordings (e.g. ~25 minutes of 48 kHz stereo WAV).
+pub const MAX_AUDIO_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_ITEMS: usize = 1000;
+
+/// Durable shared-artifact archives. Both use the same producer contract:
+/// `<root>/<agent>/<file>` plus an atomically published `<file>.json` sidecar.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Image,
+    Audio,
+}
+impl MediaKind {
+    pub const ALL: [Self; 2] = [Self::Image, Self::Audio];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Audio => "audio",
+        }
+    }
+    /// Human plural for receipts, e.g. "3 images" / "3 clips".
+    pub fn plural(self) -> &'static str {
+        match self {
+            Self::Image => "images",
+            Self::Audio => "clips",
+        }
+    }
+    pub fn max_bytes(self) -> usize {
+        match self {
+            Self::Image => MAX_IMAGE_BYTES,
+            Self::Audio => MAX_AUDIO_BYTES,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SpeechRecord {
@@ -32,8 +78,11 @@ pub struct SpeechRecord {
     pub extra: std::collections::BTreeMap<String, Value>,
 }
 
+/// One registered image or audio sidecar. Audio sidecars may add optional
+/// `title`, `description`, `durationMs`, `sampleRate` and `channels`, retained
+/// in `extra`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ImageRecord {
+pub struct MediaRecord {
     pub version: u32,
     pub id: String,
     pub sha256: String,
@@ -52,6 +101,26 @@ pub struct ImageRecord {
     pub source: Value,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, Value>,
+}
+
+pub type ImageRecord = MediaRecord;
+pub type AudioRecord = MediaRecord;
+impl MediaRecord {
+    pub fn label(&self) -> &str {
+        self.source
+            .get("label")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+    }
+    pub fn text(&self, key: &str) -> Option<&str> {
+        self.extra
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+    }
+    pub fn number(&self, key: &str) -> Option<u64> {
+        self.extra.get(key).and_then(|v| v.as_u64())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -178,8 +247,10 @@ pub struct FleetSpeechControl {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ImageInput {
+pub struct MediaInput {
     #[serde(flatten)]
     pub selection: Selection,
     pub id: String,
 }
+pub type ImageInput = MediaInput;
+pub type AudioInput = MediaInput;

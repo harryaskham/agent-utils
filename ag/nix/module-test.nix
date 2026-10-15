@@ -72,10 +72,12 @@ let
       configFile = "/home/test user/config's 100%.yaml";
       tokenFile = "/home/test user/token link";
       cacheDirectory = "/home/test user/gallery";
+      audioCacheDirectory = "/home/test user/audio cache";
       environment.SSH_AUTH_SOCK = "/run/user/1000/agent socket";
       refreshSeconds = 60;
       imageRefreshSeconds = 600;
       images = false;
+      audio = false;
       tts = false;
       ttsLines = 7;
     };
@@ -121,6 +123,9 @@ assert lib.hasInfix "--no-tts" customScript;
 assert lib.hasInfix "--bind 100.64.1.2:7796" customScript;
 assert lib.hasInfix "--public-origin http://fleet.example.ts.net:7796" customScript;
 assert lib.hasInfix "--no-images" customScript;
+assert lib.hasInfix "--no-audio" customScript;
+assert !(lib.hasInfix "--no-audio" script);
+assert !(lib.hasInfix "--audio-cache-dir" script);
 assert lib.hasInfix "export SSH_AUTH_SOCK='/run/user/1000/agent socket'" customScript;
 assert lib.hasInfix "[::]:7795" (
   builtins.readFile ipv6.systemd.user.services.ag-dash.Service.ExecStart
@@ -149,7 +154,10 @@ pkgs.runCommand "ag-dash-home-manager-check" { nativeBuildInputs = [ package ]; 
   http://fleet.example.ts.net:7796
   --cache-dir
   /home/test user/gallery
+  --audio-cache-dir
+  /home/test user/audio cache
   --no-images
+  --no-audio
   --no-tts
   EOF
     diff -u expected actual

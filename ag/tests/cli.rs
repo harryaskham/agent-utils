@@ -50,6 +50,7 @@ impl Fixture {
                 tts_feed: Some(fixture.feed.display().to_string()),
                 image_dir: Some(fixture.images.display().to_string()),
                 tts_mute: Some(fixture.temp.path().join("mute.json").display().to_string()),
+                audio_dir: None,
             },
             ..Config::default()
         });
@@ -138,6 +139,7 @@ impl Fixture {
                                 .display()
                                 .to_string(),
                         ),
+                        audio_dir: None,
                     },
                     ..Host::default()
                 })

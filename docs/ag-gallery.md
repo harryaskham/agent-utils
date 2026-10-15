@@ -8,6 +8,7 @@ ag --host ms-mac --host sgu24 image
 ag image --cache-dir ~/Pictures/ag-cache
 ag image pull --checksum              # repair corrupt same-size/mtime cache entries
 ag --json image                      # counts, node receipts, HTML path; no browser
+ag sync                              # images and shared audio together (see ag-audio.md)
 ```
 
 The gallery sees **all valid registered image/sidecar pairs** in the collected archives, not just the latest 100 or the existing list command's 1,000-record ceiling. Registration is the producer sidecar commit marker; arbitrary files, missing/invalid sidecars and checksum failures are not presented as valid images. The HTML index is bounded to 64 MiB with an explicit error, not truncation. Browser format support still applies; an unsupported HEIC/TIFF or failed decode displays a placeholder with metadata.

@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 #[command(
     name = "ag",
     version,
-    about = "Agent speech, images, choices and health across your machines",
+    about = "Agent speech, images, audio, choices and health across your machines",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -51,6 +51,9 @@ struct Cli {
     /// Override the image archive on selected nodes.
     #[arg(long, global = true)]
     image_dir: Option<String>,
+    /// Override the shared-audio archive on selected nodes.
+    #[arg(long, global = true)]
+    audio_dir: Option<String>,
     /// Override the runtime speech mute file on selected nodes.
     #[arg(long, global = true)]
     mute_state: Option<String>,
@@ -73,6 +76,34 @@ enum Commands {
         #[command(subcommand)]
         command: Option<ImageCommand>,
     },
+    /// Open a fleet-wide player for explicitly shared audio (or list/pull/get/play clips).
+    Audio {
+        #[command(flatten)]
+        options: GalleryArgs,
+        #[command(subcommand)]
+        command: Option<AudioCommand>,
+    },
+    /// Sync every media pathway (images and shared audio) and regenerate both viewers.
+    Sync {
+        /// Only images (combine with --audio; neither selects all pathways).
+        #[arg(long)]
+        images: bool,
+        /// Only shared audio.
+        #[arg(long)]
+        audio: bool,
+        /// Read caches only; no SSH or rsync.
+        #[arg(long)]
+        offline: bool,
+        /// Ask rsync to checksum files too, repairing same-size/mtime cache corruption.
+        #[arg(long)]
+        checksum: bool,
+        /// Image cache directory (default gallery.cache_dir or ~/.cache/ag/images).
+        #[arg(long)]
+        image_cache_dir: Option<String>,
+        /// Audio cache directory (default gallery.audio_cache_dir or ~/.cache/ag/audio).
+        #[arg(long)]
+        audio_cache_dir: Option<String>,
+    },
     /// Answer pending agent questions across the fleet (TUI; list/answer for scripts).
     Choices {
         /// Background refresh interval for the TUI, in seconds.
@@ -83,7 +114,7 @@ enum Commands {
     },
     /// Check each node: SSH/ag, Paratenic AHP, speech feed and gallery cache.
     Doctor,
-    /// Serve a live local web dashboard of choices, health and images.
+    /// Serve a live local web dashboard of choices, health, speech, images and audio.
     Dash {
         /// Listener (default dash.bind, 127.0.0.1:7795). Wildcards still need the token.
         #[arg(long)]
@@ -100,6 +131,9 @@ enum Commands {
         /// Skip periodic image pulls (serve the existing gallery cache only).
         #[arg(long)]
         no_images: bool,
+        /// Skip periodic shared-audio pulls (serve the existing audio cache only).
+        #[arg(long)]
+        no_audio: bool,
         /// Disable the shared live speech collector.
         #[arg(long)]
         no_tts: bool,
@@ -109,10 +143,13 @@ enum Commands {
         /// Gallery cache directory (as for ag image).
         #[arg(long)]
         cache_dir: Option<String>,
+        /// Audio cache directory (as for ag audio).
+        #[arg(long)]
+        audio_cache_dir: Option<String>,
         /// Choices/health refresh seconds (default dash.refresh_seconds).
         #[arg(long)]
         refresh: Option<u64>,
-        /// Image pull seconds (default dash.image_refresh_seconds).
+        /// Media (image + audio) sync seconds (default dash.image_refresh_seconds).
         #[arg(long)]
         image_refresh: Option<u64>,
     },
@@ -270,6 +307,50 @@ enum ImageCommand {
     },
 }
 #[derive(Subcommand)]
+enum AudioCommand {
+    /// Open the fleet audio player; same as ag audio without a subcommand.
+    View(GalleryArgs),
+    /// Incrementally cache all selected audio archives and write the player, without opening it.
+    Pull(GalleryArgs),
+    /// List newest shared-audio metadata across all selected nodes.
+    List {
+        #[arg(short = 'n', long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Show metadata for an id from audio list (select one node).
+    Info { id: String },
+    /// Download and checksum-verify a clip. Never overwrites an existing file.
+    Get {
+        id: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Play a clip locally (from the audio cache, or fetched from one --host).
+    Play {
+        id: String,
+        /// auto (default), pulse, sox or ffplay (CoreAudio).
+        #[arg(long)]
+        backend: Option<String>,
+        /// Pulse server (default PI_AUDIO_SERVER, then PULSE_SERVER).
+        #[arg(long)]
+        server: Option<String>,
+        /// Pulse sink / sox device (default PI_AUDIO_SINK, then PULSE_SINK).
+        #[arg(long, alias = "device")]
+        sink: Option<String>,
+        /// Volume percent, 0–150.
+        #[arg(long, default_value_t = 100)]
+        volume: u32,
+        /// Start offset in seconds.
+        #[arg(long, default_value_t = 0.0)]
+        start: f64,
+        /// Audio cache directory to search first.
+        #[arg(long)]
+        cache_dir: Option<String>,
+    },
+}
+#[derive(Subcommand)]
 enum NodeCommand {
     TtsMute {
         #[arg(long)]
@@ -322,6 +403,26 @@ enum NodeCommand {
         id: String,
     },
     ImageRead {
+        #[arg(long)]
+        root: Option<String>,
+        #[arg(long)]
+        id: String,
+    },
+    AudioList {
+        #[arg(long)]
+        root: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    AudioInfo {
+        #[arg(long)]
+        root: Option<String>,
+        #[arg(long)]
+        id: String,
+    },
+    AudioRead {
         #[arg(long)]
         root: Option<String>,
         #[arg(long)]
@@ -530,6 +631,34 @@ fn node(command: NodeCommand) -> Result<u8> {
                     ..Paths::default()
                 }
                 .images()?,
+                &id,
+            )?;
+            io::stdout().lock().write_all(&bytes)?;
+        }
+        NodeCommand::AudioList { root, limit, agent } => json(store::audio_list(
+            &Paths {
+                audio_dir: root,
+                ..Paths::default()
+            }
+            .audio()?,
+            limit,
+            agent.as_deref(),
+        )?)?,
+        NodeCommand::AudioInfo { root, id } => json(store::audio_info(
+            &Paths {
+                audio_dir: root,
+                ..Paths::default()
+            }
+            .audio()?,
+            &id,
+        )?)?,
+        NodeCommand::AudioRead { root, id } => {
+            let bytes = store::audio_bytes(
+                &Paths {
+                    audio_dir: root,
+                    ..Paths::default()
+                }
+                .audio()?,
                 &id,
             )?;
             io::stdout().lock().write_all(&bytes)?;
@@ -807,6 +936,288 @@ fn print_doctor(report: &ag::doctor::DoctorReport, color: bool) -> Result<u8> {
     })
 }
 
+fn clock(ms: u64) -> String {
+    let total = ms / 1000;
+    let (h, m, s) = (total / 3600, total % 3600 / 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+fn host_line(kind: &str, host: &str, state: &str, count: usize, warnings: &[String]) -> String {
+    format!(
+        "[{kind}] [{host}] {state} · {count} {}{}",
+        if kind == "audio" { "clips" } else { "images" },
+        if warnings.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", warnings.join("; "))
+        }
+    )
+}
+fn merge_gallery_args(outer: GalleryArgs, inner: Option<GalleryArgs>) -> GalleryArgs {
+    match inner {
+        Some(inner) => GalleryArgs {
+            cache_dir: inner.cache_dir.or(outer.cache_dir),
+            offline: inner.offline || outer.offline,
+            no_open: inner.no_open || outer.no_open,
+            checksum: inner.checksum || outer.checksum,
+        },
+        None => outer,
+    }
+}
+fn write_new_file(output: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(output)?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(output);
+        return Err(error.into());
+    }
+    Ok(())
+}
+fn audio_command(
+    service: &Service,
+    selection: Selection,
+    options: GalleryArgs,
+    command: Option<AudioCommand>,
+    as_json: bool,
+) -> Result<u8> {
+    match command {
+        None | Some(AudioCommand::View(_)) | Some(AudioCommand::Pull(_)) => {
+            let pull_only = matches!(command, Some(AudioCommand::Pull(_)));
+            let options = merge_gallery_args(
+                options,
+                match command {
+                    Some(AudioCommand::View(inner) | AudioCommand::Pull(inner)) => Some(inner),
+                    _ => None,
+                },
+            );
+            let result = service.audio_gallery(ag::gallery::GalleryInput {
+                selection,
+                cache_dir: options.cache_dir,
+                offline: options.offline,
+                checksum: options.checksum,
+                confirmed: true,
+            })?;
+            let partial = result.hosts.iter().any(|host| {
+                host.state == "unavailable" || host.invalid > 0 || !host.warnings.is_empty()
+            });
+            if as_json {
+                json(&result)?;
+            } else {
+                for host in &result.hosts {
+                    eprintln!(
+                        "{}",
+                        terminal_text(&host_line(
+                            "audio",
+                            &host.host,
+                            &host.state,
+                            host.clips,
+                            &host.warnings
+                        ))
+                    );
+                }
+                text(&terminal_text(&format!(
+                    "{} audio clips · {} · {}\n{}",
+                    result.clips,
+                    clock(result.duration_ms),
+                    if options.offline {
+                        "cached / offline"
+                    } else {
+                        "local fleet snapshot"
+                    },
+                    result.index.display()
+                )))?;
+                if !pull_only && !options.no_open {
+                    ag::gallery::open_viewer(&result.index)?;
+                }
+            }
+            Ok(if partial { 3 } else { 0 })
+        }
+        Some(AudioCommand::List { limit, agent }) => {
+            let result = service.audio_list(ListInput {
+                selection,
+                limit,
+                agent,
+            })?;
+            let partial = result.hosts.iter().any(|h| h.error.is_some());
+            if as_json {
+                json(&result)?;
+            } else {
+                let mut records = vec![];
+                for host in &result.hosts {
+                    if let Some(error) = &host.error {
+                        eprintln!(
+                            "[{}] {}",
+                            terminal_text(&host.host),
+                            terminal_text(&error.message)
+                        );
+                    }
+                    if let Some(data) = &host.data {
+                        for w in &data.warnings {
+                            eprintln!("[{}] {}", terminal_text(&host.host), terminal_text(w));
+                        }
+                        records.extend(data.records.iter().map(|r| (&host.host, r)));
+                    }
+                }
+                records.sort_by(|a, b| b.1.timestamp.cmp(&a.1.timestamp).then(a.0.cmp(b.0)));
+                for (host, record) in records {
+                    let name = record.text("title").unwrap_or(record.label());
+                    text(&terminal_text(&format!(
+                        "{} [{}] {} {}{} ({}{} bytes)",
+                        record.timestamp,
+                        host,
+                        record.agent,
+                        record.id,
+                        if name.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {name}")
+                        },
+                        record
+                            .number("durationMs")
+                            .map(|ms| format!("{} · ", clock(ms)))
+                            .unwrap_or_default(),
+                        record.bytes
+                    )))?;
+                }
+            }
+            Ok(if partial { 3 } else { 0 })
+        }
+        Some(AudioCommand::Info { id }) => {
+            json(service.audio_info(AudioInput { selection, id })?)?;
+            Ok(0)
+        }
+        Some(AudioCommand::Get { id, output }) => {
+            let bytes = service.audio_bytes(AudioInput { selection, id })?;
+            write_new_file(&output, &bytes)?;
+            if as_json {
+                json(serde_json::json!({"path":output,"bytes":bytes.len()}))?;
+            } else {
+                text(&terminal_text(&format!(
+                    "{} ({} bytes)",
+                    output.display(),
+                    bytes.len()
+                )))?;
+            }
+            Ok(0)
+        }
+        Some(AudioCommand::Play {
+            id,
+            backend,
+            server,
+            sink,
+            volume,
+            start,
+            cache_dir,
+        }) => {
+            let hosts = service.hosts(&selection)?;
+            let root = ag::gallery::media_cache_path(
+                &service.config,
+                MediaKind::Audio,
+                cache_dir.or(options.cache_dir).as_ref(),
+            )?;
+            // Prefer a verified synced copy; otherwise fetch from one node.
+            let cached = hosts.iter().find_map(|host| {
+                let archive = root
+                    .join("hosts")
+                    .join(ag::gallery::host_key(MediaKind::Audio, host))
+                    .join("archive");
+                store::verify_media(&archive, &id, MediaKind::Audio)
+                    .ok()
+                    .map(|(path, record)| (path, record, format!("cache:{}", host.name)))
+            });
+            let mut _temp = None;
+            let (path, record, source) = match cached {
+                Some(found) => found,
+                None => {
+                    if hosts.len() != 1 {
+                        return Err(Error::Invalid(
+                            "clip is not in the local audio cache; run ag audio pull or select one --host to fetch it".into(),
+                        ));
+                    }
+                    let input = AudioInput {
+                        selection: selection.clone(),
+                        id: id.clone(),
+                    };
+                    let record = service.audio_info(input.clone())?;
+                    let bytes = service.audio_bytes(input)?;
+                    let extension = std::path::Path::new(&id)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .filter(|e| e.chars().all(|c| c.is_ascii_alphanumeric()))
+                        .unwrap_or("bin")
+                        .to_owned();
+                    let mut temp = tempfile::Builder::new()
+                        .prefix("ag-audio-")
+                        .suffix(&format!(".{extension}"))
+                        .tempfile()?;
+                    temp.write_all(&bytes)?;
+                    temp.as_file().sync_all()?;
+                    let path = temp.path().to_path_buf();
+                    _temp = Some(temp);
+                    (path, record, format!("fetched:{}", hosts[0].name))
+                }
+            };
+            let label = record
+                .text("title")
+                .map(str::to_owned)
+                .or_else(|| (!record.label().is_empty()).then(|| record.label().to_owned()))
+                .unwrap_or_else(|| id.clone());
+            if !as_json {
+                eprintln!(
+                    "{}",
+                    terminal_text(&format!("▶ {label} · {source} · Ctrl-C stops"))
+                );
+            }
+            let (output, completed) = service.runtime.block_on(ag::audio_play::play(
+                &path,
+                &label,
+                &ag::audio_play::PlayOptions {
+                    backend,
+                    server,
+                    sink,
+                    volume,
+                    start_seconds: start,
+                },
+            ))?;
+            let receipt = ag::audio_play::PlayReceipt {
+                id,
+                source,
+                output,
+                completed,
+            };
+            if as_json {
+                json(&receipt)?;
+            } else {
+                text(&terminal_text(&format!(
+                    "{} {label} via {}{}{}",
+                    if completed { "played" } else { "stopped" },
+                    receipt.output.backend,
+                    receipt
+                        .output
+                        .sink
+                        .as_deref()
+                        .map(|s| format!(" · sink {s}"))
+                        .unwrap_or_default(),
+                    receipt
+                        .output
+                        .server
+                        .as_deref()
+                        .map(|s| format!(" · server {s}"))
+                        .unwrap_or_default()
+                )))?;
+            }
+            Ok(0)
+        }
+    }
+}
+
 fn execute(cli: Cli) -> Result<u8> {
     if let Commands::Completions { shell } = cli.command {
         clap_complete::generate(shell, &mut Cli::command(), "ag", &mut io::stdout());
@@ -840,6 +1251,12 @@ fn execute(cli: Cli) -> Result<u8> {
         config.paths.image_dir = Some(path.clone());
         for host in &mut config.hosts {
             host.paths.image_dir = Some(path.clone());
+        }
+    }
+    if let Some(path) = cli.audio_dir {
+        config.paths.audio_dir = Some(path.clone());
+        for host in &mut config.hosts {
+            host.paths.audio_dir = Some(path.clone());
         }
     }
     if let Some(path) = cli.mute_state {
@@ -1032,6 +1449,83 @@ fn execute(cli: Cli) -> Result<u8> {
                 }
             }
         },
+        Commands::Audio { command, options } => {
+            return audio_command(&service, selection, options, command, cli.json);
+        }
+        Commands::Sync {
+            images,
+            audio,
+            offline,
+            checksum,
+            image_cache_dir,
+            audio_cache_dir,
+        } => {
+            let kinds = [(images, MediaKind::Image), (audio, MediaKind::Audio)]
+                .into_iter()
+                .filter_map(|(selected, kind)| selected.then_some(kind))
+                .collect();
+            let receipt = service.sync(ag::gallery::SyncInput {
+                selection,
+                kinds,
+                image_cache_dir,
+                audio_cache_dir,
+                offline,
+                checksum,
+                confirmed: true,
+            })?;
+            if cli.json {
+                json(&receipt)?;
+            } else {
+                for (kind, error) in &receipt.errors {
+                    eprintln!("[{kind}] {}", terminal_text(error));
+                }
+                let mode = if offline {
+                    "cached / offline"
+                } else {
+                    "local fleet snapshot"
+                };
+                if let Some(r) = &receipt.images {
+                    for h in &r.hosts {
+                        eprintln!(
+                            "{}",
+                            terminal_text(&host_line(
+                                "images",
+                                &h.host,
+                                &h.state,
+                                h.images,
+                                &h.warnings
+                            ))
+                        );
+                    }
+                    text(&terminal_text(&format!(
+                        "{} images · {mode}\n{}",
+                        r.images,
+                        r.index.display()
+                    )))?;
+                }
+                if let Some(r) = &receipt.audio {
+                    for h in &r.hosts {
+                        eprintln!(
+                            "{}",
+                            terminal_text(&host_line(
+                                "audio",
+                                &h.host,
+                                &h.state,
+                                h.clips,
+                                &h.warnings
+                            ))
+                        );
+                    }
+                    text(&terminal_text(&format!(
+                        "{} audio clips · {} · {mode}\n{}",
+                        r.clips,
+                        clock(r.duration_ms),
+                        r.index.display()
+                    )))?;
+                }
+            }
+            return Ok(if receipt.partial() { 3 } else { 0 });
+        }
         Commands::Choices { interval, command } => {
             return match command {
                 None => {
@@ -1128,9 +1622,11 @@ fn execute(cli: Cli) -> Result<u8> {
             token_file,
             no_open,
             no_images,
+            no_audio,
             no_tts,
             tts_lines,
             cache_dir,
+            audio_cache_dir,
             refresh,
             image_refresh,
         } => {
@@ -1164,9 +1660,11 @@ fn execute(cli: Cli) -> Result<u8> {
                 refresh: std::time::Duration::from_secs(refresh),
                 image_refresh: std::time::Duration::from_secs(image_refresh),
                 images: !no_images,
+                audio: !no_audio && service.config.dash.audio,
                 tts: !no_tts && service.config.dash.tts,
                 tts_lines,
                 cache_dir,
+                audio_cache_dir,
             };
             let as_json = cli.json;
             service.runtime.block_on(ag::dash::run(service.config.clone(), targets, options, |started| {
@@ -1215,6 +1713,8 @@ fn main() {
                     | NodeCommand::TtsStatus { .. }
                     | NodeCommand::ImageList { .. }
                     | NodeCommand::ImageInfo { .. }
+                    | NodeCommand::AudioList { .. }
+                    | NodeCommand::AudioInfo { .. }
             } | Commands::Call { .. }
         );
     let code = match execute(cli) {

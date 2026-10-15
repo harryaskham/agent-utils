@@ -1,8 +1,10 @@
-//! `ag dash`: one live local web view of speech, choices, health and images.
+//! `ag dash`: one live local web view of speech, choices, health, images and
+//! shared audio.
 //!
 //! A real server, not a static generator: choices are re-read from Paratenic
-//! while the page is open (stale-while-revalidate), doctor and image pulls run
-//! on intervals for the lifetime of the command. Answers go through the same
+//! while the page is open (stale-while-revalidate), doctor and the merged media
+//! sync (images + audio, one cadence) run on intervals for the lifetime of the
+//! command. Answers go through the same
 //! `paratenic::answer` path as the TUI/CLI/MCP.
 //!
 //! Security: every route requires a random token (per-run, or from a private
@@ -14,7 +16,8 @@ use crate::{
     config::{Config, Host},
     dash_tts::{self, Delivery, Feed},
     doctor::{self, DoctorReport},
-    gallery::{self, GalleryInput, GalleryReceipt},
+    gallery::{self, SyncInput, SyncReceipt},
+    model::MediaKind,
     paratenic::{self, AnswerInput, AnswerReceipt, Endpoint, FleetChoices},
     service::Service,
 };
@@ -56,9 +59,11 @@ pub struct DashOptions {
     pub refresh: Duration,
     pub image_refresh: Duration,
     pub images: bool,
+    pub audio: bool,
     pub tts: bool,
     pub tts_lines: usize,
     pub cache_dir: Option<String>,
+    pub audio_cache_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -73,6 +78,18 @@ pub struct ImageStatus {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
+pub struct AudioStatus {
+    pub enabled: bool,
+    pub running: bool,
+    pub available: bool,
+    pub clips: usize,
+    pub duration_ms: u64,
+    pub finished_ms: Option<u64>,
+    pub error: Option<String>,
+    pub hosts: Vec<gallery::AudioHost>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Snapshot {
     pub choices: Option<FleetChoices>,
     pub choices_ms: Option<u64>,
@@ -81,6 +98,7 @@ pub struct Snapshot {
     pub doctor_ms: Option<u64>,
     pub doctor_refreshing: bool,
     pub images: ImageStatus,
+    pub audio: AudioStatus,
     pub receipts: VecDeque<AnswerReceipt>,
     pub refresh_seconds: u64,
     pub image_refresh_seconds: u64,
@@ -100,6 +118,7 @@ struct Dash {
     choices_busy: AtomicBool,
     doctor_busy: AtomicBool,
     images_busy: Arc<AtomicBool>,
+    audio_busy: Arc<AtomicBool>,
     inflight: Mutex<HashSet<String>>,
     tts: Arc<Feed>,
     shutdown: tokio_util::sync::CancellationToken,
@@ -330,22 +349,35 @@ fn refresh_doctor(dash: &Shared) {
     });
 }
 
-fn refresh_images(dash: &Shared) {
-    if !dash.options.images || dash.images_busy.swap(true, Ordering::AcqRel) {
+/// One merged media sync (the same code path as `ag sync`) for the requested,
+/// enabled and idle pathways. Each pathway keeps its own status and busy flag.
+fn refresh_media(dash: &Shared, images: bool, audio: bool) {
+    let images = images && dash.options.images && !dash.images_busy.swap(true, Ordering::AcqRel);
+    let audio = audio && dash.options.audio && !dash.audio_busy.swap(true, Ordering::AcqRel);
+    if !images && !audio {
         return;
     }
-    lock(dash).images.running = true;
+    {
+        let mut snapshot = lock(dash);
+        snapshot.images.running |= images;
+        snapshot.audio.running |= audio;
+    }
     let dash = dash.clone();
     let runtime = tokio::runtime::Handle::current();
-    // Gallery pulls own their own runtime (rsync children, Ctrl-C handling); a
+    // Pulls own their own runtime (rsync children, Ctrl-C handling); a
     // dedicated thread keeps them off the server's runtime.
     std::thread::spawn(move || {
-        let selection = dash.options.selection.clone();
-        let result: Result<GalleryReceipt> =
+        let kinds = [(images, MediaKind::Image), (audio, MediaKind::Audio)]
+            .into_iter()
+            .filter_map(|(on, kind)| on.then_some(kind))
+            .collect();
+        let result: Result<SyncReceipt> =
             Service::new(dash.config.clone(), None).and_then(|service| {
-                service.image_gallery(GalleryInput {
-                    selection,
-                    cache_dir: dash.options.cache_dir.clone(),
+                service.sync(SyncInput {
+                    selection: dash.options.selection.clone(),
+                    kinds,
+                    image_cache_dir: dash.options.cache_dir.clone(),
+                    audio_cache_dir: dash.options.audio_cache_dir.clone(),
                     offline: false,
                     checksum: false,
                     confirmed: true,
@@ -353,21 +385,50 @@ fn refresh_images(dash: &Shared) {
             });
         {
             let mut snapshot = lock(&dash);
-            let images = &mut snapshot.images;
-            images.running = false;
-            images.finished_ms = Some(now_ms());
-            match result {
-                Ok(receipt) => {
-                    images.available = true;
-                    images.images = receipt.images;
-                    images.hosts = receipt.hosts;
-                    images.error = None;
+            let finished = Some(now_ms());
+            let failure = result.as_ref().err().map(|e| e.to_string());
+            let receipt = result.ok().unwrap_or_default();
+            if images {
+                let status = &mut snapshot.images;
+                status.running = false;
+                status.finished_ms = finished;
+                match &receipt.images {
+                    Some(r) => {
+                        status.available = true;
+                        status.images = r.images;
+                        status.hosts = r.hosts.clone();
+                        status.error = None;
+                    }
+                    None => {
+                        status.error = failure
+                            .clone()
+                            .or_else(|| receipt.errors.get("image").cloned())
+                    }
                 }
-                Err(error) => images.error = Some(error.to_string()),
+            }
+            if audio {
+                let status = &mut snapshot.audio;
+                status.running = false;
+                status.finished_ms = finished;
+                match &receipt.audio {
+                    Some(r) => {
+                        status.available = true;
+                        status.clips = r.clips;
+                        status.duration_ms = r.duration_ms;
+                        status.hosts = r.hosts.clone();
+                        status.error = None;
+                    }
+                    None => status.error = failure.or_else(|| receipt.errors.get("audio").cloned()),
+                }
             }
         }
-        dash.images_busy.store(false, Ordering::Release);
-        // Gallery freshness is part of node health.
+        if images {
+            dash.images_busy.store(false, Ordering::Release);
+        }
+        if audio {
+            dash.audio_busy.store(false, Ordering::Release);
+        }
+        // Media freshness is part of node health.
         runtime.spawn(async move { refresh_doctor(&dash) });
     });
 }
@@ -431,7 +492,11 @@ async fn state(State(dash): State<Shared>, headers: HeaderMap) -> Response {
     snapshot.tts = Some(dash.tts.summary());
     snapshot.images.available = snapshot.images.available
         || dash
-            .gallery_root()
+            .media_root(MediaKind::Image)
+            .is_some_and(|r| r.join("index.html").is_file());
+    snapshot.audio.available = snapshot.audio.available
+        || dash
+            .media_root(MediaKind::Audio)
             .is_some_and(|r| r.join("index.html").is_file());
     let mut response = Json(snapshot).into_response();
     response
@@ -576,9 +641,12 @@ async fn refresh(
     if all || request.what.iter().any(|w| w == "doctor") {
         refresh_doctor(&dash);
     }
-    if request.what.iter().any(|w| w == "images") {
-        refresh_images(&dash);
-    }
+    let media = request.what.iter().any(|w| w == "media" || w == "sync");
+    refresh_media(
+        &dash,
+        media || request.what.iter().any(|w| w == "images"),
+        media || request.what.iter().any(|w| w == "audio"),
+    );
     StatusCode::ACCEPTED.into_response()
 }
 
@@ -636,8 +704,12 @@ async fn answer(
 }
 
 impl Dash {
-    fn gallery_root(&self) -> Option<PathBuf> {
-        gallery::cache_path(&self.config, self.options.cache_dir.as_ref())
+    fn media_root(&self, kind: MediaKind) -> Option<PathBuf> {
+        let cache_dir = match kind {
+            MediaKind::Image => self.options.cache_dir.as_ref(),
+            MediaKind::Audio => self.options.audio_cache_dir.as_ref(),
+        };
+        gallery::media_cache_path(&self.config, kind, cache_dir)
             .ok()?
             .canonicalize()
             .ok()
@@ -660,8 +732,50 @@ fn mime(path: &Path) -> &'static str {
         Some("bmp") => "image/bmp",
         Some("tif" | "tiff") => "image/tiff",
         Some("heic") => "image/heic",
+        Some("wav") => "audio/wav",
+        Some("mp3") => "audio/mpeg",
+        Some("ogg" | "oga") => "audio/ogg",
+        Some("opus") => "audio/ogg; codecs=opus",
+        Some("flac") => "audio/flac",
+        Some("m4a" | "mp4") => "audio/mp4",
+        Some("aac") => "audio/aac",
+        Some("webm") => "audio/webm",
+        Some("mka") => "audio/x-matroska",
+        Some("aif" | "aiff") => "audio/aiff",
+        Some("mid" | "midi") => "audio/midi",
         _ => "application/octet-stream",
     }
+}
+
+/// Single `bytes=` range (players seek with these). None serves the whole
+/// file; Some(Err) is unsatisfiable (416).
+fn byte_range(headers: &HeaderMap, len: u64) -> Option<std::result::Result<(u64, u64), ()>> {
+    let spec = headers
+        .get(header::RANGE)?
+        .to_str()
+        .ok()?
+        .trim()
+        .strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (first, last) = spec.split_once('-')?;
+    let range = if first.is_empty() {
+        let suffix: u64 = last.parse().ok()?;
+        (suffix > 0 && len > 0).then(|| (len.saturating_sub(suffix), len - 1))
+    } else {
+        let start: u64 = first.parse().ok()?;
+        let end = if last.is_empty() {
+            len.checked_sub(1)
+        } else {
+            last.parse::<u64>()
+                .ok()
+                .map(|e| e.min(len.saturating_sub(1)))
+        };
+        end.filter(|end| len > 0 && start <= *end && start < len)
+            .map(|end| (start, end))
+    };
+    Some(range.ok_or(()))
 }
 
 async fn gallery_file(
@@ -669,13 +783,27 @@ async fn gallery_file(
     headers: HeaderMap,
     UrlPath(path): UrlPath<String>,
 ) -> Response {
-    if let Err(response) = dash.authorized(&headers) {
+    media_file(&dash, MediaKind::Image, &headers, &path).await
+}
+
+async fn audio_file(
+    State(dash): State<Shared>,
+    headers: HeaderMap,
+    UrlPath(path): UrlPath<String>,
+) -> Response {
+    media_file(&dash, MediaKind::Audio, &headers, &path).await
+}
+
+/// Serve only a cache's generated index and archive files inside it (no
+/// traversal, sidecars or symlink escape). Media bytes stream with Range.
+async fn media_file(dash: &Shared, kind: MediaKind, headers: &HeaderMap, path: &str) -> Response {
+    if let Err(response) = dash.authorized(headers) {
         return *response;
     }
-    let Some(root) = dash.gallery_root() else {
-        return (StatusCode::NOT_FOUND, "no gallery yet").into_response();
+    let Some(root) = dash.media_root(kind) else {
+        return (StatusCode::NOT_FOUND, "no cache yet").into_response();
     };
-    let relative = PathBuf::from(&path);
+    let relative = PathBuf::from(path);
     let index = path == "index.html";
     let safe = index
         || (path.starts_with("hosts/")
@@ -693,34 +821,91 @@ async fn gallery_file(
     let Ok(full) = root.join(&relative).canonicalize() else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
-    if !full.starts_with(&root)
-        || tokio::fs::metadata(&full)
-            .await
-            .map(|m| !m.is_file() || m.len() > MAX_FILE)
-            .unwrap_or(true)
-    {
+    let Some(len) = tokio::fs::metadata(&full)
+        .await
+        .ok()
+        .filter(|m| m.is_file() && m.len() <= MAX_FILE.max(kind.max_bytes() as u64))
+        .map(|m| m.len())
+    else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    if !full.starts_with(&root) {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
-    let Ok(bytes) = tokio::fs::read(&full).await else {
+    if index {
+        let Ok(bytes) = tokio::fs::read(&full).await else {
+            return (StatusCode::NOT_FOUND, "not found").into_response();
+        };
+        let csp = match kind {
+            MediaKind::Image => {
+                "default-src 'none'; img-src 'self' data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'self'"
+            }
+            MediaKind::Audio => {
+                "default-src 'none'; media-src 'self'; img-src 'self' data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'self'"
+            }
+        };
+        let mut response =
+            ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response();
+        let h = response.headers_mut();
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(csp),
+        );
+        h.insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return response;
+    }
+    let (status, start, end) = match byte_range(headers, len) {
+        Some(Ok((start, end))) => (StatusCode::PARTIAL_CONTENT, start, end),
+        Some(Err(())) => {
+            let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+            if let Ok(value) = HeaderValue::from_str(&format!("bytes */{len}")) {
+                response.headers_mut().insert(header::CONTENT_RANGE, value);
+            }
+            return response;
+        }
+        None => (StatusCode::OK, 0, len.saturating_sub(1)),
+    };
+    let Ok(mut file) = tokio::fs::File::open(&full).await else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
-    let (content_type, csp) = if index {
-        (
-            "text/html; charset=utf-8",
-            "default-src 'none'; img-src 'self' data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'self'",
-        )
-    } else {
-        // Navigated-to images (including SVG) render sandboxed and inert.
-        (
-            mime(&full),
-            "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
-        )
-    };
-    let mut response = ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    if file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let length = if len == 0 { 0 } else { end - start + 1 };
+    let stream = futures_util::stream::unfold(Some(file.take(length)), |reader| async move {
+        let mut reader = reader?;
+        let mut buffer = vec![0u8; 64 * 1024];
+        match reader.read(&mut buffer).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buffer.truncate(n);
+                Some((Ok(axum::body::Bytes::from(buffer)), Some(reader)))
+            }
+            Err(error) => Some((Err::<axum::body::Bytes, _>(error), None)),
+        }
+    });
+    let mut response = axum::body::Body::from_stream(stream).into_response();
+    *response.status_mut() = status;
     let h = response.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime(&full)));
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if status == StatusCode::PARTIAL_CONTENT {
+        if let Ok(value) = HeaderValue::from_str(&format!("bytes {start}-{end}/{len}")) {
+            h.insert(header::CONTENT_RANGE, value);
+        }
+    }
+    // Navigated-to media (including SVG) render sandboxed and inert.
     h.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(csp),
+        HeaderValue::from_static(
+            "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox",
+        ),
     );
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -728,11 +913,7 @@ async fn gallery_file(
     );
     h.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static(if index {
-            "no-store"
-        } else {
-            "private, max-age=3600"
-        }),
+        HeaderValue::from_static("private, max-age=3600"),
     );
     response
 }
@@ -808,6 +989,10 @@ pub async fn run(
             enabled: options.images,
             ..ImageStatus::default()
         },
+        audio: AudioStatus {
+            enabled: options.audio,
+            ..AudioStatus::default()
+        },
         ..Snapshot::default()
     };
     crate::store::check_limit(options.tts_lines)?;
@@ -833,6 +1018,7 @@ pub async fn run(
         choices_busy: AtomicBool::new(false),
         doctor_busy: AtomicBool::new(false),
         images_busy: Arc::new(AtomicBool::new(false)),
+        audio_busy: Arc::new(AtomicBool::new(false)),
         inflight: Mutex::new(HashSet::new()),
         tts,
         shutdown: shutdown.clone(),
@@ -846,6 +1032,7 @@ pub async fn run(
         .route("/api/refresh", post(refresh))
         .route("/api/answer", post(answer))
         .route("/gallery/{*path}", get(gallery_file))
+        .route("/audio/{*path}", get(audio_file))
         .with_state(dash.clone());
     ready(&Started {
         url: if options.token_file.is_some() {
@@ -864,7 +1051,7 @@ pub async fn run(
             loop {
                 tokio::select! {
                     _ = status.tick() => { refresh_choices(&dash); refresh_doctor(&dash); }
-                    _ = images.tick() => refresh_images(&dash),
+                    _ = images.tick() => refresh_media(&dash, true, true),
                 }
             }
         })

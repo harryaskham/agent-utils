@@ -1,4 +1,5 @@
-//! Explicit, incremental fleet image snapshots. Static local HTML, no web daemon.
+//! Explicit, incremental fleet media snapshots: shared images and shared audio.
+//! Static local HTML, no web daemon. `ag sync` runs every pathway at once.
 use crate::{
     Error, Result,
     config::{self, Config, Host},
@@ -12,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
@@ -24,6 +26,7 @@ use tokio::{io::AsyncReadExt, process::Command, sync::Semaphore, task::JoinSet};
 
 const MAX_INDEX_BYTES: usize = 64 * 1024 * 1024;
 const PAGE: &str = include_str!("../viewer.html");
+const AUDIO_PAGE: &str = include_str!("../audio.html");
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct GalleryInput {
@@ -44,6 +47,15 @@ pub struct GalleryHost {
     pub warnings: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AudioHost {
+    pub host: String,
+    pub state: String,
+    pub last_sync_ms: Option<u64>,
+    pub clips: usize,
+    pub invalid: usize,
+    pub warnings: Vec<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GalleryImage {
     pub host: String,
     pub agent: String,
@@ -56,6 +68,21 @@ pub struct GalleryImage {
     pub src: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GalleryClip {
+    pub host: String,
+    pub agent: String,
+    pub id: String,
+    pub timestamp: String,
+    pub mime_type: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub label: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub src: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GalleryReceipt {
     pub index: PathBuf,
     pub cache_dir: PathBuf,
@@ -63,11 +90,63 @@ pub struct GalleryReceipt {
     pub bytes: u64,
     pub hosts: Vec<GalleryHost>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AudioReceipt {
+    pub index: PathBuf,
+    pub cache_dir: PathBuf,
+    pub clips: usize,
+    pub bytes: u64,
+    /// Sum of known clip durations.
+    pub duration_ms: u64,
+    pub hosts: Vec<AudioHost>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SyncInput {
+    #[serde(flatten)]
+    pub selection: Selection,
+    /// Pathways to sync; empty means all (image and audio).
+    pub kinds: Vec<MediaKind>,
+    pub image_cache_dir: Option<String>,
+    pub audio_cache_dir: Option<String>,
+    pub offline: bool,
+    pub checksum: bool,
+    pub confirmed: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SyncReceipt {
+    pub images: Option<GalleryReceipt>,
+    pub audio: Option<AudioReceipt>,
+    /// Whole-pathway failures (for example a cache already being pulled).
+    pub errors: BTreeMap<String, String>,
+}
+impl SyncReceipt {
+    /// Any pathway or node needing attention (CLI exit 3).
+    pub fn partial(&self) -> bool {
+        !self.errors.is_empty()
+            || self.images.as_ref().is_some_and(|r| {
+                r.hosts
+                    .iter()
+                    .any(|h| h.state == "unavailable" || h.invalid > 0 || !h.warnings.is_empty())
+            })
+            || self.audio.as_ref().is_some_and(|r| {
+                r.hosts
+                    .iter()
+                    .any(|h| h.state == "unavailable" || h.invalid > 0 || !h.warnings.is_empty())
+            })
+    }
+}
 #[derive(Serialize)]
-struct Manifest {
+struct ImageManifest {
     version: u32,
     images: Vec<GalleryImage>,
     hosts: Vec<GalleryHost>,
+}
+#[derive(Serialize)]
+struct AudioManifest {
+    version: u32,
+    clips: Vec<GalleryClip>,
+    hosts: Vec<AudioHost>,
 }
 fn hash(bytes: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(bytes.as_ref()))
@@ -97,29 +176,53 @@ fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     temp.persist(path).map_err(|error| Error::Io(error.error))?;
     Ok(())
 }
+fn source_dir(kind: MediaKind, host: &Host) -> &Option<String> {
+    match kind {
+        MediaKind::Image => &host.paths.image_dir,
+        MediaKind::Audio => &host.paths.audio_dir,
+    }
+}
+fn source_path(kind: MediaKind, host: &Host) -> Result<PathBuf> {
+    match kind {
+        MediaKind::Image => host.paths.images(),
+        MediaKind::Audio => host.paths.audio(),
+    }
+}
 /// Configured cache path without creating it (read-only callers such as doctor).
 pub(crate) fn cache_path(config: &Config, cache_dir: Option<&String>) -> Result<PathBuf> {
-    let path = cache_dir
-        .or(config.gallery.cache_dir.as_ref())
-        .cloned()
-        .unwrap_or_else(|| {
-            PathBuf::from(
-                std::env::var_os("XDG_CACHE_HOME")
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or_else(|| {
-                        PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-                            .join(".cache")
-                            .into_os_string()
-                    }),
-            )
-            .join("ag/images")
-            .to_string_lossy()
-            .into()
-        });
+    media_cache_path(config, MediaKind::Image, cache_dir)
+}
+pub fn media_cache_path(
+    config: &Config,
+    kind: MediaKind,
+    cache_dir: Option<&String>,
+) -> Result<PathBuf> {
+    let configured = match kind {
+        MediaKind::Image => config.gallery.cache_dir.as_ref(),
+        MediaKind::Audio => config.gallery.audio_cache_dir.as_ref(),
+    };
+    let leaf = match kind {
+        MediaKind::Image => "ag/images",
+        MediaKind::Audio => "ag/audio",
+    };
+    let path = cache_dir.or(configured).cloned().unwrap_or_else(|| {
+        PathBuf::from(
+            std::env::var_os("XDG_CACHE_HOME")
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                        .join(".cache")
+                        .into_os_string()
+                }),
+        )
+        .join(leaf)
+        .to_string_lossy()
+        .into()
+    });
     config::expand_home(&path)
 }
-fn cache_root(config: &Config, input: &GalleryInput) -> Result<PathBuf> {
-    let path = cache_path(config, input.cache_dir.as_ref())?;
+fn cache_root(config: &Config, kind: MediaKind, cache_dir: Option<&String>) -> Result<PathBuf> {
+    let path = media_cache_path(config, kind, cache_dir)?;
     // Operator-managed root symlinks are supported; owned descendants are not.
     fs::DirBuilder::new()
         .recursive(true)
@@ -127,11 +230,14 @@ fn cache_root(config: &Config, input: &GalleryInput) -> Result<PathBuf> {
         .create(&path)?;
     Ok(fs::canonicalize(path)?)
 }
-/// Last successful sync recorded for a node, if any (no network or writes).
+/// Last successful image sync recorded for a node, if any (no network or writes).
 pub(crate) fn last_sync_ms(root: &Path, host: &Host) -> Option<u64> {
+    media_last_sync_ms(root, MediaKind::Image, host)
+}
+pub(crate) fn media_last_sync_ms(root: &Path, kind: MediaKind, host: &Host) -> Option<u64> {
     fs::read(
         root.join("hosts")
-            .join(host_key(host))
+            .join(host_key(kind, host))
             .join("last-sync.json"),
     )
     .ok()
@@ -139,16 +245,22 @@ pub(crate) fn last_sync_ms(root: &Path, host: &Host) -> Option<u64> {
     .and_then(|b| serde_json::from_slice::<Option<u64>>(&b).ok())
     .flatten()
 }
-fn host_key(host: &Host) -> String {
+/// Stable per-node cache directory. The image key is unchanged from earlier
+/// releases so existing caches and last-sync stamps are reused.
+pub fn host_key(kind: MediaKind, host: &Host) -> String {
+    let identity = (
+        host.name.as_str(),
+        host.address.as_str(),
+        &host.username,
+        host.port,
+        host.local,
+        source_dir(kind, host),
+    );
     hash(
-        serde_json::to_vec(&(
-            host.name.as_str(),
-            host.address.as_str(),
-            &host.username,
-            host.port,
-            host.local,
-            &host.paths.image_dir,
-        ))
+        match kind {
+            MediaKind::Image => serde_json::to_vec(&identity),
+            MediaKind::Audio => serde_json::to_vec(&("audio", identity)),
+        }
         .expect("serializable target"),
     )
 }
@@ -166,7 +278,21 @@ fn url_path(path: &str) -> String {
 /// The rsync server runs in the remote login environment. Its protocol argv
 /// remains argv at every shell hop; profile stdout is diverted away from rsync.
 pub fn remote_rsync(host: &Host) -> String {
-    let root = host.paths.image_dir.as_ref().map(|p| format!("root={};", shell_quote(p))).unwrap_or_else(|| "root=\"${PI_SHARED_IMAGES_DIR:-${PI_AGENT_UTILS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-utils}/images}\";".into());
+    remote_media_rsync(MediaKind::Image, host)
+}
+pub fn remote_media_rsync(kind: MediaKind, host: &Host) -> String {
+    let default = match kind {
+        MediaKind::Image => {
+            "root=\"${PI_SHARED_IMAGES_DIR:-${PI_AGENT_UTILS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-utils}/images}\";"
+        }
+        MediaKind::Audio => {
+            "root=\"${PI_SHARED_AUDIO_DIR:-${PI_AGENT_UTILS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-utils}/audio}\";"
+        }
+    };
+    let root = source_dir(kind, host)
+        .as_ref()
+        .map(|p| format!("root={};", shell_quote(p)))
+        .unwrap_or_else(|| default.into());
     let payload = format!(
         "{root} case \"$root\" in '~') root=\"$HOME\";; '~/'*) root=\"$HOME/${{root#\\~/}}\";; esac; cd -- \"$root\" || exit 23; exec rsync \"$@\" 1>&3 3>&-"
     );
@@ -183,6 +309,15 @@ pub fn rsync_command(
     destination: &Path,
     checksum: bool,
 ) -> Result<Command> {
+    media_rsync_command(config, MediaKind::Image, host, destination, checksum)
+}
+pub fn media_rsync_command(
+    config: &Config,
+    kind: MediaKind,
+    host: &Host,
+    destination: &Path,
+    checksum: bool,
+) -> Result<Command> {
     let mut command = Command::new(&config.gallery.rsync_command);
     command.args([
         "-rltp",
@@ -190,17 +325,15 @@ pub fn rsync_command(
         "--no-specials",
         "--no-devices",
         "--chmod=Du=rwx,Dgo=,Fu=rw,Fgo=",
-        "--max-size=67108864",
-        "--include=/*/",
-        "--include=/*/*",
-        "--exclude=*",
     ]);
+    command.arg(format!("--max-size={}", kind.max_bytes()));
+    command.args(["--include=/*/", "--include=/*/*", "--exclude=*"]);
     command.arg(format!("--timeout={}", config.gallery.sync_timeout_seconds));
     if checksum {
         command.arg("--checksum");
     }
     let source = if host.local {
-        format!("{}/", fs::canonicalize(host.paths.images()?)?.display())
+        format!("{}/", fs::canonicalize(source_path(kind, host)?)?.display())
     } else {
         let mut ssh = vec![shell_quote(&config.ssh_command), "-T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ClearAllForwardings=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=2".into(), format!("-o ConnectTimeout={} -p {}", config.connect_timeout_seconds, host.port)];
         if let Some(user) = &host.username {
@@ -210,7 +343,7 @@ pub fn rsync_command(
             .arg("-e")
             .arg(ssh.join(" "))
             .arg("--rsync-path")
-            .arg(remote_rsync(host));
+            .arg(remote_media_rsync(kind, host));
         let address = if host.address.contains(':') && !host.address.starts_with('[') {
             format!("[{}]", host.address)
         } else {
@@ -238,8 +371,14 @@ impl Drop for OwnedSyncGroup {
         }
     }
 }
-async fn sync(config: &Config, host: &Host, destination: &Path, checksum: bool) -> Result<()> {
-    let mut child = rsync_command(config, host, destination, checksum)?.spawn()?;
+async fn sync(
+    config: &Config,
+    kind: MediaKind,
+    host: &Host,
+    destination: &Path,
+    checksum: bool,
+) -> Result<()> {
+    let mut child = media_rsync_command(config, kind, host, destination, checksum)?.spawn()?;
     let mut group = OwnedSyncGroup(child.id().map(|pid| nix::unistd::Pid::from_raw(pid as i32)));
     let mut stderr = child.stderr.take().expect("stderr pipe");
     let work = async {
@@ -267,10 +406,11 @@ async fn sync(config: &Config, host: &Host, destination: &Path, checksum: bool) 
         }
         Ok(())
     };
+    let (noun, plural) = (kind.name(), kind.plural());
     let result = tokio::select! {
         value = tokio::time::timeout(Duration::from_secs(config.gallery.sync_timeout_seconds), work) =>
-            value.unwrap_or_else(|_| Err(Error::Transport("image sync timed out; cached images retained".into()))),
-        _ = tokio::signal::ctrl_c() => Err(Error::Transport("image sync cancelled; cached images retained".into())),
+            value.unwrap_or_else(|_| Err(Error::Transport(format!("{noun} sync timed out; cached {plural} retained")))),
+        _ = tokio::signal::ctrl_c() => Err(Error::Transport(format!("{noun} sync cancelled; cached {plural} retained"))),
     };
     if result.is_err() {
         if let Some(group) = group.0 {
@@ -282,8 +422,20 @@ async fn sync(config: &Config, host: &Host, destination: &Path, checksum: bool) 
     group.0 = None;
     result
 }
-fn catalog(path: &Path, host: &str, key: &str) -> Result<(Vec<GalleryImage>, usize, Vec<String>)> {
-    let mut images = vec![];
+/// One verified registration in a host's cached archive.
+struct Entry {
+    host: String,
+    record: MediaRecord,
+    bytes: u64,
+    src: String,
+}
+fn catalog(
+    kind: MediaKind,
+    path: &Path,
+    host: &str,
+    key: &str,
+) -> Result<(Vec<Entry>, usize, Vec<String>)> {
+    let mut entries = vec![];
     let mut invalid = 0;
     let mut warnings = vec![];
     let mut size = 0;
@@ -302,10 +454,10 @@ fn catalog(path: &Path, host: &str, key: &str) -> Result<(Vec<GalleryImage>, usi
                 continue;
             };
             let id = format!("{}/{name}", directory.file_name().to_string_lossy());
-            let read = || -> Result<GalleryImage> {
-                let record = store::image_info(path, &id)?;
-                // Stream validation, never allocate all fleet image bytes in RAM.
-                let mut file = File::open(store::image_path(path, &id)?)?;
+            let read = || -> Result<Entry> {
+                let record = store::media_info(path, &id, kind)?;
+                // Stream validation, never allocate all fleet media bytes in RAM.
+                let mut file = File::open(store::media_path(path, &id, kind)?)?;
                 let mut digest = Sha256::new();
                 let mut bytes = 0u64;
                 let mut buffer = [0; 65536];
@@ -315,46 +467,42 @@ fn catalog(path: &Path, host: &str, key: &str) -> Result<(Vec<GalleryImage>, usi
                         break;
                     }
                     bytes += n as u64;
-                    if bytes > MAX_IMAGE_BYTES as u64 {
-                        return Err(Error::Limit("image exceeds 64 MiB".into()));
+                    if bytes > kind.max_bytes() as u64 {
+                        return Err(Error::Limit(format!(
+                            "{} exceeds {} MiB",
+                            kind.name(),
+                            kind.max_bytes() / 1024 / 1024
+                        )));
                     }
                     digest.update(&buffer[..n]);
                 }
                 if bytes != record.bytes
                     || format!("{:x}", digest.finalize()) != record.sha256.to_lowercase()
                 {
-                    return Err(Error::Invalid(
-                        "image checksum mismatch; use image pull --checksum to repair".into(),
-                    ));
+                    return Err(Error::Invalid(format!(
+                        "{} checksum mismatch; use {} pull --checksum to repair",
+                        kind.name(),
+                        kind.name()
+                    )));
                 }
-                Ok(GalleryImage {
+                Ok(Entry {
                     host: host.into(),
-                    agent: record.agent,
-                    id: id.clone(),
-                    timestamp: record.timestamp,
-                    mime_type: record.mime_type,
-                    bytes,
-                    sha256: record.sha256,
-                    label: record
-                        .source
-                        .get("label")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .chars()
-                        .take(512)
-                        .collect(),
                     src: format!("hosts/{key}/archive/{}", url_path(&id)),
+                    bytes,
+                    record,
                 })
             };
             match read() {
-                Ok(image) => {
-                    size += serde_json::to_vec(&image)?.len();
+                Ok(entry) => {
+                    // Conservative: the full sidecar is larger than its manifest row.
+                    size += serde_json::to_vec(&entry.record)?.len() + entry.src.len();
                     if size > MAX_INDEX_BYTES {
-                        return Err(Error::Limit(
-                            "gallery index exceeds 64 MiB; select fewer hosts".into(),
-                        ));
+                        return Err(Error::Limit(format!(
+                            "{} index exceeds 64 MiB; select fewer hosts",
+                            kind.name()
+                        )));
                     }
-                    images.push(image);
+                    entries.push(entry);
                 }
                 Err(error) => {
                     invalid += 1;
@@ -365,7 +513,249 @@ fn catalog(path: &Path, host: &str, key: &str) -> Result<(Vec<GalleryImage>, usi
             }
         }
     }
-    Ok((images, invalid, warnings))
+    Ok((entries, invalid, warnings))
+}
+fn bounded(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
+}
+fn image_entry(entry: Entry) -> GalleryImage {
+    let label = bounded(entry.record.label(), 512);
+    GalleryImage {
+        host: entry.host,
+        agent: entry.record.agent,
+        id: entry.record.id,
+        timestamp: entry.record.timestamp,
+        mime_type: entry.record.mime_type,
+        bytes: entry.bytes,
+        sha256: entry.record.sha256,
+        label,
+        src: entry.src,
+    }
+}
+fn clip_entry(entry: Entry) -> GalleryClip {
+    let record = &entry.record;
+    GalleryClip {
+        label: bounded(record.label(), 512),
+        title: record.text("title").map(|t| bounded(t, 512)),
+        description: record.text("description").map(|t| bounded(t, 4096)),
+        duration_ms: record.number("durationMs"),
+        host: entry.host,
+        agent: entry.record.agent,
+        id: entry.record.id,
+        timestamp: entry.record.timestamp,
+        mime_type: entry.record.mime_type,
+        bytes: entry.bytes,
+        sha256: entry.record.sha256,
+        src: entry.src,
+    }
+}
+
+#[derive(Clone)]
+struct HostPull {
+    host: String,
+    state: String,
+    last_sync_ms: Option<u64>,
+    count: usize,
+    invalid: usize,
+    warnings: Vec<String>,
+}
+/// A completed per-kind pull. Holds the cache lock until its index is written.
+struct Pull {
+    root: PathBuf,
+    hosts: Vec<HostPull>,
+    entries: Vec<Entry>,
+    _lock: Flock<File>,
+}
+async fn pull(
+    config: Config,
+    hosts: Vec<Host>,
+    kind: MediaKind,
+    cache_dir: Option<String>,
+    offline: bool,
+    checksum: bool,
+    gate: Arc<Semaphore>,
+) -> Result<Pull> {
+    let root = cache_root(&config, kind, cache_dir.as_ref())?;
+    private_dir(&root.join("hosts"))?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(root.join("gallery.lock"))?;
+    let lock = Flock::lock(lock, FlockArg::LockExclusiveNonblock)
+        .map_err(|_| Error::Invalid(format!("another {} pull is using this cache", kind.name())))?;
+    let mut jobs = JoinSet::new();
+    for host in hosts {
+        let config = config.clone();
+        let root = root.clone();
+        let gate = gate.clone();
+        jobs.spawn(async move {
+            let _permit = gate
+                .acquire()
+                .await
+                .map_err(|e| Error::Transport(e.to_string()))?;
+            let key = host_key(kind, &host);
+            let directory = root.join("hosts").join(&key);
+            private_dir(&directory)?;
+            let archive = directory.join("archive");
+            private_dir(&archive)?;
+            let stamp = directory.join("last-sync.json");
+            let mut last_sync_ms = fs::read(&stamp)
+                .ok()
+                .filter(|b| b.len() < 64)
+                .and_then(|b| serde_json::from_slice::<u64>(&b).ok());
+            let result = if offline {
+                Ok(())
+            } else {
+                sync(&config, kind, &host, &archive, checksum).await
+            };
+            let state = if offline {
+                "cached"
+            } else if result.is_ok() {
+                "synced"
+            } else {
+                "unavailable"
+            };
+            let error = result.err().map(|e| e.to_string());
+            if state == "synced" {
+                last_sync_ms = Some(now_ms());
+                atomic(&stamp, &serde_json::to_vec(&last_sync_ms)?)?;
+            }
+            let name = host.name.clone();
+            let k = key.clone();
+            let scan = tokio::task::spawn_blocking(move || catalog(kind, &archive, &name, &k))
+                .await
+                .map_err(|e| Error::Transport(e.to_string()))?;
+            let (entries, invalid, mut warnings) = match scan {
+                Ok(value) => value,
+                Err(error) => (vec![], 0, vec![format!("cache scan incomplete: {error}")]),
+            };
+            if let Some(error) = error {
+                warnings.insert(0, error);
+            }
+            Ok::<_, Error>((
+                HostPull {
+                    host: host.name,
+                    state: state.to_owned(),
+                    last_sync_ms,
+                    count: entries.len(),
+                    invalid,
+                    warnings,
+                },
+                entries,
+            ))
+        });
+    }
+    let mut statuses = vec![];
+    let mut all = vec![];
+    while let Some(result) = tokio::select! {
+        result = jobs.join_next() => result,
+        _ = tokio::signal::ctrl_c() => {
+            jobs.abort_all();
+            while jobs.join_next().await.is_some() {}
+            return Err(Error::Transport(format!("fleet {} pull cancelled; existing cache retained", kind.name())));
+        }
+    } {
+        let (status, entries) = result.map_err(|e| Error::Transport(e.to_string()))??;
+        statuses.push(status);
+        all.extend(entries);
+    }
+    statuses.sort_by(|a, b| a.host.cmp(&b.host));
+    all.sort_by(|a, b| {
+        b.record
+            .timestamp
+            .cmp(&a.record.timestamp)
+            .then(a.host.cmp(&b.host))
+            .then(a.record.id.cmp(&b.record.id))
+    });
+    Ok(Pull {
+        root,
+        hosts: statuses,
+        entries: all,
+        _lock: lock,
+    })
+}
+fn write_index(root: &Path, page: &str, manifest: &impl Serialize) -> Result<PathBuf> {
+    let json = serde_json::to_string(manifest)?;
+    if json.len() > MAX_INDEX_BYTES {
+        return Err(Error::Limit(
+            "fleet gallery index exceeds 64 MiB; select fewer hosts".into(),
+        ));
+    }
+    let encoded = json.replace('<', "\\u003c").replace('&', "\\u0026");
+    let index = root.join("index.html");
+    atomic(&index, page.replace("__MANIFEST__", &encoded).as_bytes())?;
+    Ok(index)
+}
+fn image_receipt(pull: Pull) -> Result<GalleryReceipt> {
+    let hosts: Vec<GalleryHost> = pull
+        .hosts
+        .iter()
+        .cloned()
+        .map(|h| GalleryHost {
+            host: h.host,
+            state: h.state,
+            last_sync_ms: h.last_sync_ms,
+            images: h.count,
+            invalid: h.invalid,
+            warnings: h.warnings,
+        })
+        .collect();
+    let images: Vec<GalleryImage> = pull.entries.into_iter().map(image_entry).collect();
+    let receipt = GalleryReceipt {
+        index: pull.root.join("index.html"),
+        cache_dir: pull.root.clone(),
+        images: images.len(),
+        bytes: images.iter().map(|i| i.bytes).sum(),
+        hosts: hosts.clone(),
+    };
+    write_index(
+        &pull.root,
+        PAGE,
+        &ImageManifest {
+            version: 1,
+            images,
+            hosts,
+        },
+    )?;
+    Ok(receipt)
+}
+fn audio_receipt(pull: Pull) -> Result<AudioReceipt> {
+    let hosts: Vec<AudioHost> = pull
+        .hosts
+        .iter()
+        .cloned()
+        .map(|h| AudioHost {
+            host: h.host,
+            state: h.state,
+            last_sync_ms: h.last_sync_ms,
+            clips: h.count,
+            invalid: h.invalid,
+            warnings: h.warnings,
+        })
+        .collect();
+    let clips: Vec<GalleryClip> = pull.entries.into_iter().map(clip_entry).collect();
+    let receipt = AudioReceipt {
+        index: pull.root.join("index.html"),
+        cache_dir: pull.root.clone(),
+        clips: clips.len(),
+        bytes: clips.iter().map(|c| c.bytes).sum(),
+        duration_ms: clips.iter().filter_map(|c| c.duration_ms).sum(),
+        hosts: hosts.clone(),
+    };
+    write_index(
+        &pull.root,
+        AUDIO_PAGE,
+        &AudioManifest {
+            version: 1,
+            clips,
+            hosts,
+        },
+    )?;
+    Ok(receipt)
 }
 impl Service {
     pub fn image_gallery(&self, input: GalleryInput) -> Result<GalleryReceipt> {
@@ -375,133 +765,90 @@ impl Service {
             ));
         }
         let hosts = self.hosts(&input.selection)?;
-        let root = cache_root(&self.config, &input)?;
-        private_dir(&root.join("hosts"))?;
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(nix::libc::O_NOFOLLOW)
-            .open(root.join("gallery.lock"))?;
-        let _lock = Flock::lock(lock, FlockArg::LockExclusiveNonblock)
-            .map_err(|_| Error::Invalid("another gallery pull is using this cache".into()))?;
-        let mut all = vec![];
-        let mut statuses = vec![];
-        self.runtime.block_on(async {
-            let semaphore = Arc::new(Semaphore::new(self.config.gallery.parallelism));
-            let mut jobs = JoinSet::new();
-            for host in hosts {
-                let config = self.config.clone();
-                let root = root.clone();
-                let gate = semaphore.clone();
-                let options = input.clone();
-                jobs.spawn(async move {
-                    let _permit = gate
-                        .acquire()
-                        .await
-                        .map_err(|e| Error::Transport(e.to_string()))?;
-                    let key = host_key(&host);
-                    let directory = root.join("hosts").join(&key);
-                    private_dir(&directory)?;
-                    let archive = directory.join("archive");
-                    private_dir(&archive)?;
-                    let stamp = directory.join("last-sync.json");
-                    let mut last_sync_ms = fs::read(&stamp)
-                        .ok()
-                        .filter(|b| b.len() < 64)
-                        .and_then(|b| serde_json::from_slice::<u64>(&b).ok());
-                    let result = if options.offline {
-                        Ok(())
-                    } else {
-                        sync(&config, &host, &archive, options.checksum).await
-                    };
-                    let state = if options.offline {
-                        "cached"
-                    } else if result.is_ok() {
-                        "synced"
-                    } else {
-                        "unavailable"
-                    };
-                    let error = result.err().map(|e| e.to_string());
-                    if state == "synced" {
-                        last_sync_ms = Some(now_ms());
-                        atomic(&stamp, &serde_json::to_vec(&last_sync_ms)?)?;
-                    }
-                    let name = host.name.clone();
-                    let k = key.clone();
-                    let scan = tokio::task::spawn_blocking(move || catalog(&archive, &name, &k))
-                        .await
-                        .map_err(|e| Error::Transport(e.to_string()))?;
-                    let (images, invalid, mut warnings) = match scan {
-                        Ok(value) => value,
-                        Err(error) => (vec![], 0, vec![format!("cache scan incomplete: {error}")]),
-                    };
-                    if let Some(error) = error {
-                        warnings.insert(0, error);
-                    }
-                    Ok::<_, Error>((
-                        GalleryHost {
-                            host: host.name,
-                            state: state.into(),
-                            last_sync_ms,
-                            images: images.len(),
-                            invalid,
-                            warnings,
-                        },
-                        images,
-                    ))
-                });
-            }
-            let mut index_bytes = 0;
-            while let Some(result) = tokio::select! {
-                result = jobs.join_next() => result,
-                _ = tokio::signal::ctrl_c() => {
-                    jobs.abort_all();
-                    while jobs.join_next().await.is_some() {}
-                    return Err(Error::Transport("fleet image pull cancelled; existing cache retained".into()));
-                }
-            } {
-                let (status, images) = result.map_err(|e| Error::Transport(e.to_string()))??;
-                index_bytes += serde_json::to_vec(&images)?.len();
-                if index_bytes > MAX_INDEX_BYTES {
-                    return Err(Error::Limit(
-                        "fleet gallery index exceeds 64 MiB; select fewer hosts".into(),
-                    ));
-                }
-                statuses.push(status);
-                all.extend(images);
-            }
-            Ok::<_, Error>(())
-        })?;
-        statuses.sort_by(|a, b| a.host.cmp(&b.host));
-        all.sort_by(|a, b| {
-            b.timestamp
-                .cmp(&a.timestamp)
-                .then(a.host.cmp(&b.host))
-                .then(a.id.cmp(&b.id))
-        });
-        let receipt = GalleryReceipt {
-            index: root.join("index.html"),
-            cache_dir: root,
-            images: all.len(),
-            bytes: all.iter().map(|i| i.bytes).sum(),
-            hosts: statuses.clone(),
-        };
-        let json = serde_json::to_string(&Manifest {
-            version: 1,
-            images: all,
-            hosts: statuses,
-        })?;
-        if json.len() > MAX_INDEX_BYTES {
-            return Err(Error::Limit(
-                "fleet gallery index exceeds 64 MiB; select fewer hosts".into(),
+        let gate = Arc::new(Semaphore::new(self.config.gallery.parallelism));
+        let result = self.runtime.block_on(pull(
+            self.config.clone(),
+            hosts,
+            MediaKind::Image,
+            input.cache_dir,
+            input.offline,
+            input.checksum,
+            gate,
+        ))?;
+        image_receipt(result)
+    }
+    pub fn audio_gallery(&self, input: GalleryInput) -> Result<AudioReceipt> {
+        if !input.confirmed {
+            return Err(Error::Invalid(
+                "audio gallery/pull writes a local cache; confirmed=true is required".into(),
             ));
         }
-        let encoded = json.replace('<', "\\u003c").replace('&', "\\u0026");
-        let html = PAGE.replace("__MANIFEST__", &encoded);
-        atomic(&receipt.index, html.as_bytes())?;
+        let hosts = self.hosts(&input.selection)?;
+        let gate = Arc::new(Semaphore::new(self.config.gallery.parallelism));
+        let result = self.runtime.block_on(pull(
+            self.config.clone(),
+            hosts,
+            MediaKind::Audio,
+            input.cache_dir,
+            input.offline,
+            input.checksum,
+            gate,
+        ))?;
+        audio_receipt(result)
+    }
+    /// Every sync pathway at once (images and audio by default), sharing one
+    /// transfer-parallelism budget. One pathway failing never hides another.
+    pub fn sync(&self, input: SyncInput) -> Result<SyncReceipt> {
+        if !input.confirmed {
+            return Err(Error::Invalid(
+                "sync writes local caches; confirmed=true is required".into(),
+            ));
+        }
+        let kinds: Vec<MediaKind> = if input.kinds.is_empty() {
+            MediaKind::ALL.to_vec()
+        } else {
+            MediaKind::ALL
+                .into_iter()
+                .filter(|k| input.kinds.contains(k))
+                .collect()
+        };
+        let hosts = self.hosts(&input.selection)?;
+        let gate = Arc::new(Semaphore::new(self.config.gallery.parallelism));
+        let run = |kind: MediaKind| {
+            let cache_dir = match kind {
+                MediaKind::Image => input.image_cache_dir.clone(),
+                MediaKind::Audio => input.audio_cache_dir.clone(),
+            };
+            let wanted = kinds.contains(&kind);
+            let future = pull(
+                self.config.clone(),
+                hosts.clone(),
+                kind,
+                cache_dir,
+                input.offline,
+                input.checksum,
+                gate.clone(),
+            );
+            async move { if wanted { Some(future.await) } else { None } }
+        };
+        let (images, audio) = self
+            .runtime
+            .block_on(async { tokio::join!(run(MediaKind::Image), run(MediaKind::Audio)) });
+        let mut receipt = SyncReceipt::default();
+        match images.map(|r| r.and_then(image_receipt)) {
+            Some(Ok(value)) => receipt.images = Some(value),
+            Some(Err(error)) => {
+                receipt.errors.insert("image".into(), error.to_string());
+            }
+            None => (),
+        }
+        match audio.map(|r| r.and_then(audio_receipt)) {
+            Some(Ok(value)) => receipt.audio = Some(value),
+            Some(Err(error)) => {
+                receipt.errors.insert("audio".into(), error.to_string());
+            }
+            None => (),
+        }
         Ok(receipt)
     }
 }

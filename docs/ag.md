@@ -8,6 +8,8 @@ Source entrypoints:
 - `extensions/lib/tts-feed.js`: request feed appends and non-destructive legacy migration.
 - `extensions/shared-images.js`: explicit Pi tool/message sharing hooks.
 - `extensions/lib/shared-images.js`: private atomic image copies and provenance sidecars.
+- `extensions/audio-reel.js`, `extensions/audio-reel/`: explicit `audio_share`/`audio_reel` tools and the terminal player ([audio reel](audio-reel.md)).
+- `extensions/lib/shared-audio.js`: audio sniffing, PCM→WAV and private atomic clip copies with sidecars.
 - `ag/src/`: one Rust domain core consumed by CLI, MCP and SSH peer protocol.
 - `ag/flake.nix`: independently buildable CLI; root `flake.nix` exports `ag` and adds it to the binary bundle.
 - `ag/acceptance.json`: contract/test inventory.
@@ -28,6 +30,12 @@ Explicit `kitty_image_preview_show` calls also preserve the shown image, includi
 `ag` 0.1.1 launches peers through the remote account's noninteractive login shell, rather than assuming SSH's command PATH includes user packages. Startup chatter is routed away from protocol stdout; JSON, binary image downloads and live streams retain exact argument quoting and stdin/EOF cleanup. The 11-test Rust integration suite includes login-only PATH, noisy profiles, missing binaries, downloads, reconnects and cancellation.
 
 A read-only probe of `ms-mac` found that its SSH/login PATH already included the Nix profile locations, but `ag` was not installed there. Login initialization cannot deploy a missing executable: each target needs the updated Collective package installed, or an explicit `hosts[].command` pointing to an installed binary. Running `cltv-run ag` on the collector alone does not install its peers. The transport now reports that distinction explicitly and never builds or switches a remote system automatically.
+
+## Shared audio and merged sync (ag 0.6)
+
+Agents can now share audio deliberately — songs, sound candidates, samples — with `audio_share` (file path, base64 bytes or raw PCM). Clips join a terminal [audio reel](audio-reel.md) (two-line now-playing widget; `/audio-reel` overlay with keyboard and mouse transport; `/audio-*` commands) that plays through Pulse by default with per-reel or per-play routing, and are archived beside shared images. `ag audio` syncs, lists, fetches and plays them; `ag sync` runs the image and audio pathways together; the dashboard's **Audio** tab follows the same five-minute media cadence and streams clips with HTTP ranges, never reloading under a playing clip. Speech audio is never part of this pathway. See [fleet audio and merged sync](ag-audio.md) and [`audio-acceptance.json`](../ag/audio-acceptance.json).
+
+![ag dash audio](assets/ag/audio/audio-playing-dark-1440x900.png)
 
 ## Fleet choices, health and dashboard (ag 0.4)
 

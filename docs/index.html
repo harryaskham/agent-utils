@@ -25,7 +25,7 @@
         <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
         <div class="hero-stats" aria-label="Inventory summary">
           <span><strong>4</strong> sections</span>
-          <span><strong>35</strong> tools and surfaces</span>
+          <span><strong>36</strong> tools and surfaces</span>
           <span><strong>2026-06-25</strong> reviewed</span>
         </div>
       </div>
@@ -585,6 +585,34 @@
               <li><code>show next or previous image</code></li>
               <li><code>animate a loaded series</code></li>
               <li><code>hide or clear the preview widget</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Audio reel Pi extension</h3>
+              <code>audio_share, audio_reel, /audio-reel, /audio-play, /audio-output</code>
+            </div>
+            <p>Let agents deliberately share audio (file, base64 or raw PCM) into a terminal reel/player with keyboard and mouse transport, Pulse-by-default output routing and a durable archive synced by ag audio/ag sync. Never used for speech.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>Pi agents, operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/audio-reel.js and docs/audio-reel.md</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>audio_share path=…</code></li>
+              <li><code>audio_share data=… pcm={…}</code></li>
+              <li><code>audio_reel action=play</code></li>
+              <li><code>/audio-reel</code></li>
+              <li><code>/audio-output sink=…</code></li>
               </ul>
             </details>
           </article>

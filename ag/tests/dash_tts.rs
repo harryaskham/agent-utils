@@ -33,7 +33,15 @@ impl Server {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let ssh = root.join("ssh");
-        fs::write(&ssh, format!(r#"#!/usr/bin/env python3
+        // Absolute interpreter: /usr/bin/env does not exist in Linux Nix sandboxes.
+        let python = std::env::var_os("PATH")
+            .and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|dir| dir.join("python3"))
+                    .find(|candidate| candidate.is_file())
+            })
+            .expect("python3 on PATH for the fake SSH peer");
+        fs::write(&ssh, format!(r#"#!{python}
 import os,sys
 host=sys.argv[sys.argv.index('--')+1]
 if host in ['down','denied']:
@@ -42,7 +50,7 @@ if host in ['down','denied']:
 if '--watch-stdin' in sys.argv[-1]:
     with open({log:?},'a') as f: f.write(str(os.getpid())+'\n')
 os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
-"#,log=root.join("tails.log").display().to_string())).unwrap();
+"#,python=python.display(),log=root.join("tails.log").display().to_string())).unwrap();
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(root.join("local.jsonl"), line("initial local")).unwrap();
         fs::write(root.join("remote.jsonl"), line("initial remote")).unwrap();
@@ -65,7 +73,14 @@ os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
             .env_remove("AG_STATE_DIR")
             .args(["--json", "--config"])
             .arg(root.join("config.json"))
-            .args(["dash", "--no-open", "--no-images", "--bind", "127.0.0.1:0"])
+            .args([
+                "dash",
+                "--no-open",
+                "--no-images",
+                "--no-audio",
+                "--bind",
+                "127.0.0.1:0",
+            ])
             .args(extra)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

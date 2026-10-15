@@ -250,6 +250,29 @@ impl TailReader {
 }
 
 pub fn image_path(root: &Path, id: &str) -> Result<PathBuf> {
+    media_path(root, id, MediaKind::Image)
+}
+pub fn image_info(root: &Path, id: &str) -> Result<ImageRecord> {
+    media_info(root, id, MediaKind::Image)
+}
+pub fn image_bytes(root: &Path, id: &str) -> Result<Vec<u8>> {
+    media_bytes(root, id, MediaKind::Image)
+}
+pub fn image_list(root: &Path, limit: usize, agent: Option<&str>) -> Result<Listing<ImageRecord>> {
+    media_list(root, limit, agent, MediaKind::Image)
+}
+pub fn audio_info(root: &Path, id: &str) -> Result<AudioRecord> {
+    media_info(root, id, MediaKind::Audio)
+}
+pub fn audio_bytes(root: &Path, id: &str) -> Result<Vec<u8>> {
+    media_bytes(root, id, MediaKind::Audio)
+}
+pub fn audio_list(root: &Path, limit: usize, agent: Option<&str>) -> Result<Listing<AudioRecord>> {
+    media_list(root, limit, agent, MediaKind::Audio)
+}
+
+pub fn media_path(root: &Path, id: &str, kind: MediaKind) -> Result<PathBuf> {
+    let noun = kind.name();
     let path = Path::new(id);
     let components: Vec<_> = path.components().collect();
     if components.len() != 2
@@ -257,67 +280,105 @@ pub fn image_path(root: &Path, id: &str) -> Result<PathBuf> {
         || id.contains('\\')
         || id.contains('\0')
     {
-        return Err(Error::Invalid(
-            "image id must be agent/filename without traversal".into(),
-        ));
+        return Err(Error::Invalid(format!(
+            "{noun} id must be agent/filename without traversal"
+        )));
     }
     let directory = root.join(components[0]);
     if !fs::symlink_metadata(&directory)?.is_dir() {
-        return Err(Error::Invalid(
-            "image directory must not be a symlink".into(),
-        ));
+        return Err(Error::Invalid(format!(
+            "{noun} directory must not be a symlink"
+        )));
     }
     let full = root.join(path);
     if !fs::symlink_metadata(&full)?.is_file() {
-        return Err(Error::Invalid(
-            "image must be a regular non-symlink file".into(),
-        ));
+        return Err(Error::Invalid(format!(
+            "{noun} must be a regular non-symlink file"
+        )));
     }
     Ok(full)
 }
-pub fn image_info(root: &Path, id: &str) -> Result<ImageRecord> {
-    let image = image_path(root, id)?;
-    let sidecar = PathBuf::from(format!("{}.json", image.display()));
+pub fn media_info(root: &Path, id: &str, kind: MediaKind) -> Result<MediaRecord> {
+    let noun = kind.name();
+    let file = media_path(root, id, kind)?;
+    let sidecar = PathBuf::from(format!("{}.json", file.display()));
     let meta = fs::symlink_metadata(&sidecar)?;
     if !meta.is_file() || meta.len() > 65536 {
-        return Err(Error::Limit(
-            "image metadata must be a non-symlink file ≤64 KiB".into(),
-        ));
+        return Err(Error::Limit(format!(
+            "{noun} metadata must be a non-symlink file ≤64 KiB"
+        )));
     }
     let mut data = vec![];
     File::open(&sidecar)?.take(65537).read_to_end(&mut data)?;
     if data.len() > 65536 {
-        return Err(Error::Limit("image metadata exceeds 64 KiB".into()));
+        return Err(Error::Limit(format!("{noun} metadata exceeds 64 KiB")));
     }
-    let record: ImageRecord = serde_json::from_slice(&data)?;
+    let record: MediaRecord = serde_json::from_slice(&data)?;
     if record.version != 1
         || record.id != id
         || record.bytes == 0
-        || record.bytes > MAX_IMAGE_BYTES as u64
+        || record.bytes > kind.max_bytes() as u64
         || record.sha256.len() != 64
         || !record.sha256.bytes().all(|c| c.is_ascii_hexdigit())
-        || fs::metadata(&image)?.len() != record.bytes
+        || (kind == MediaKind::Audio && !record.mime_type.starts_with("audio/"))
+        || fs::metadata(&file)?.len() != record.bytes
     {
-        return Err(Error::Invalid(
-            "image metadata identity/size/version mismatch".into(),
-        ));
+        return Err(Error::Invalid(format!(
+            "{noun} metadata identity/size/version mismatch"
+        )));
     }
     Ok(record)
 }
-pub fn image_bytes(root: &Path, id: &str) -> Result<Vec<u8>> {
-    let record = image_info(root, id)?;
+pub fn media_bytes(root: &Path, id: &str, kind: MediaKind) -> Result<Vec<u8>> {
+    let record = media_info(root, id, kind)?;
     let mut bytes = Vec::new();
-    File::open(image_path(root, id)?)?
-        .take(MAX_IMAGE_BYTES as u64 + 1)
+    File::open(media_path(root, id, kind)?)?
+        .take(kind.max_bytes() as u64 + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 != record.bytes
         || format!("{:x}", Sha256::digest(&bytes)) != record.sha256
     {
-        return Err(Error::Invalid("image checksum/size mismatch".into()));
+        return Err(Error::Invalid(format!(
+            "{} checksum/size mismatch",
+            kind.name()
+        )));
     }
     Ok(bytes)
 }
-pub fn image_list(root: &Path, limit: usize, agent: Option<&str>) -> Result<Listing<ImageRecord>> {
+/// Stream-verify a registered file against its sidecar without loading it.
+pub fn verify_media(root: &Path, id: &str, kind: MediaKind) -> Result<(PathBuf, MediaRecord)> {
+    let record = media_info(root, id, kind)?;
+    let path = media_path(root, id, kind)?;
+    let mut file = File::open(&path)?;
+    let mut digest = Sha256::new();
+    let mut total = 0u64;
+    let mut buffer = [0; 65536];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if total > record.bytes {
+            break;
+        }
+        digest.update(&buffer[..n]);
+    }
+    if total != record.bytes || format!("{:x}", digest.finalize()) != record.sha256.to_lowercase() {
+        return Err(Error::Invalid(format!(
+            "{} checksum/size mismatch",
+            kind.name()
+        )));
+    }
+    Ok((path, record))
+}
+pub fn media_list(
+    root: &Path,
+    limit: usize,
+    agent: Option<&str>,
+    kind: MediaKind,
+) -> Result<Listing<MediaRecord>> {
+    let noun = kind.name();
     check_limit(limit)?;
     let mut result = Listing::default();
     if limit == 0 {
@@ -326,7 +387,9 @@ pub fn image_list(root: &Path, limit: usize, agent: Option<&str>) -> Result<List
     let dirs = match fs::read_dir(root) {
         Ok(dirs) => dirs,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            result.warnings.push("image archive not created yet".into());
+            result
+                .warnings
+                .push(format!("{noun} archive not created yet"));
             return Ok(result);
         }
         Err(e) => return Err(e.into()),
@@ -357,7 +420,7 @@ pub fn image_list(root: &Path, limit: usize, agent: Option<&str>) -> Result<List
                 continue;
             };
             let id = format!("{}/{filename}", dir.file_name().to_string_lossy());
-            match image_info(root, &id) {
+            match media_info(root, &id, kind) {
                 Ok(record)
                     if agent.is_none_or(|filter| {
                         record.agent == filter || dir.file_name() == filter
@@ -372,7 +435,7 @@ pub fn image_list(root: &Path, limit: usize, agent: Option<&str>) -> Result<List
                 Ok(_) => (),
                 Err(_) => warning(
                     &mut result.warnings,
-                    format!("invalid image metadata skipped: {id}"),
+                    format!("invalid {noun} metadata skipped: {id}"),
                 ),
             }
         }

@@ -1,10 +1,10 @@
 [package]
 name = "ag"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.87"
 license = "MIT"
-description = "Agent speech, images, choices and health across your machines"
+description = "Agent speech, images, audio, choices and health across your machines"
 repository = "https://github.com/harryaskham/agent-utils"
 
 [dependencies]

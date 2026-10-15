@@ -4,7 +4,7 @@ use crate::{
     Result,
     config::{Config, Host},
     gallery,
-    model::{Listing, SpeechRecord},
+    model::{Listing, MediaKind, SpeechRecord},
     paratenic::{self, Endpoint},
     speech::{self, MuteReceipt, SpeechKind},
     store, transport,
@@ -52,7 +52,7 @@ impl Status {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Check {
-    /// ssh | paratenic | speech | images
+    /// ssh | paratenic | speech | images | audio
     pub name: String,
     pub status: Status,
     pub summary: String,
@@ -469,6 +469,20 @@ fn images_check(config: &Config, host: &Host) -> Check {
     }
 }
 
+fn audio_check(config: &Config, host: &Host) -> Check {
+    let Ok(root) = gallery::media_cache_path(config, MediaKind::Audio, None) else {
+        return check("audio", Status::Skip, "no audio cache");
+    };
+    match gallery::media_last_sync_ms(&root, MediaKind::Audio, host) {
+        Some(ms) => check("audio", Status::Ok, format!("audio synced {}", age(ms))),
+        None => check(
+            "audio",
+            Status::Skip,
+            "not pulled yet (ag audio pull / ag sync)",
+        ),
+    }
+}
+
 pub async fn report(config: &Config, targets: Vec<(Host, Option<Endpoint>)>) -> DoctorReport {
     let mut jobs = JoinSet::new();
     for (host, endpoint) in targets {
@@ -480,14 +494,17 @@ pub async fn report(config: &Config, targets: Vec<(Host, Option<Endpoint>)>) -> 
             );
             let link_offline = checks.first().is_some_and(|c| c.status == Status::Offline);
             let images = images_check(&config, &host);
+            let audio = audio_check(&config, &host);
             let paratenic_down = matches!(paratenic.status, Status::Offline | Status::Skip);
             let (status, checks) = if link_offline && paratenic_down {
                 // A down node is one quiet line: why, plus what is still cached.
                 let reason = checks[0].summary.clone();
-                (
-                    Status::Offline,
-                    vec![check("node", Status::Offline, reason), images],
-                )
+                let mut cached = vec![check("node", Status::Offline, reason), images];
+                // Only mention audio for a down node once something was cached.
+                if audio.status == Status::Ok {
+                    cached.push(audio);
+                }
+                (Status::Offline, cached)
             } else {
                 let mut paratenic = paratenic;
                 if link_offline {
@@ -504,6 +521,7 @@ pub async fn report(config: &Config, targets: Vec<(Host, Option<Endpoint>)>) -> 
                 }
                 checks.insert(1.min(checks.len()), paratenic);
                 checks.push(images);
+                checks.push(audio);
                 let status = checks
                     .iter()
                     .map(|c| {

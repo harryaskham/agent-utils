@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src 'self' file: data:; img-src 'self' data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<title>ag · Fleet audio</title>
+<style>
+:root{color-scheme:dark;--bg:#131719;--surface:#1c2225;--raised:#222a2d;--text:#edf1ee;--muted:#a5b3ae;--faint:#6f7d78;--line:#2c3734;--accent:#b9e584;--accent-ink:#131719;--warn:#efc384;--select:#26332c}
+body.light{color-scheme:light;--bg:#f4f5ef;--surface:#fff;--raised:#f8f9f4;--text:#1c2b24;--muted:#52665a;--faint:#7f8f86;--line:#d3dbd2;--accent:#315e20;--accent-ink:#fff;--warn:#855600;--select:#e3ecd9}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,sans-serif;display:grid;grid-template-rows:auto minmax(0,1fr) auto;grid-template-columns:minmax(0,1fr)}
+button,input,select{font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:7px 10px}
+button{cursor:pointer}button:hover{border-color:var(--accent)}button:disabled{opacity:.45;cursor:default}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+header{background:var(--bg);border-bottom:1px solid var(--line);padding:14px 22px 12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+h1{font-size:19px;letter-spacing:-.5px;margin:0;white-space:nowrap}h1 b{color:var(--accent);font:600 22px ui-monospace,monospace;margin-right:9px}
+#count{color:var(--muted);font:12px ui-monospace,monospace;margin-left:auto}
+.filters{display:flex;gap:8px;width:100%}.filters input{flex:1;min-width:80px}.filters select{max-width:210px}
+main{overflow:auto;padding:12px 22px 24px;min-height:0;min-width:0}
+details{margin-bottom:10px;color:var(--muted);font-size:13px}summary{cursor:pointer;color:var(--text)}
+.hosts{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin:10px 0}
+.host{border-left:2px solid var(--accent);padding:4px 10px;overflow-wrap:anywhere}.host.stale{border-color:var(--warn)}.host strong{display:block;color:var(--text)}.host small{display:block}.warning{color:var(--warn)}
+#list{list-style:none;margin:0;padding:0;max-width:1180px}
+.clip{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:2px 14px;align-items:start;padding:10px 12px;border-bottom:1px solid var(--line);border-left:2px solid transparent;cursor:pointer}
+.clip:hover{background:var(--raised)}.clip[aria-selected=true]{background:var(--select);border-left-color:var(--accent)}
+.clip .go{width:34px;height:34px;padding:0;border-radius:50%;display:grid;place-items:center;font-size:13px;grid-row:span 3}
+.clip.current .go{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.title{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dur{font:13px ui-monospace,monospace;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.meta{grid-column:2/4;font:12px ui-monospace,monospace;color:var(--faint);overflow-wrap:anywhere}.meta .node{color:var(--accent)}.meta .agent{color:var(--muted)}
+.desc{grid-column:2/4;color:var(--muted);font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.unsupported{grid-column:2/4;color:var(--warn);font-size:12px;overflow-wrap:anywhere}
+#empty{padding:60px 0;text-align:center;color:var(--muted)}
+#paging{display:flex;gap:14px;align-items:center;justify-content:center;margin:20px 0}#page{font:12px ui-monospace,monospace;color:var(--muted)}
+#dock{border-top:1px solid var(--line);background:var(--surface);padding:10px 22px;display:grid;grid-template-columns:auto minmax(0,1fr) minmax(260px,46%) auto;gap:14px;align-items:center}
+.transport{display:flex;gap:6px}.transport button{width:38px;height:34px;padding:0}
+#play{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+.np{min-width:0}.np strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.np span{display:block;font:12px ui-monospace,monospace;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+audio{width:100%;height:36px}
+.side{display:flex;gap:12px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap}.side a{color:var(--accent)}
+#keys{color:var(--faint);font-size:12px;margin:14px 0 0}
+@media(max-width:760px){header{padding:10px 12px;gap:8px}main{padding:8px 12px}.filters{flex-wrap:wrap}.filters input{flex-basis:100%}.filters select{flex:1;max-width:48%}#dock{grid-template-columns:auto minmax(0,1fr);padding:8px 12px;gap:8px}audio{grid-column:1/-1}.side{grid-column:1/-1;justify-content:space-between}#keys{display:none}.clip{grid-template-columns:36px minmax(0,1fr) auto;gap:2px 10px;padding:9px 6px}}
+</style></head><body>
+<header><h1><b>ag</b>Fleet audio</h1><span id="count" role="status"></span><button id="theme" aria-label="Switch color theme">Light</button>
+<div class="filters"><input id="search" type="search" placeholder="Search title, label, agent or clip ID" aria-label="Search clips"><select id="host" aria-label="Filter node"><option value="">All nodes</option></select><select id="agent" aria-label="Filter agent"><option value="">All agents</option></select></div></header>
+<main><details id="nodes"><summary id="health"></summary><div id="hosts" class="hosts"></div></details>
+<ol id="list" role="listbox" aria-label="Shared audio clips" tabindex="0"></ol><div id="empty" hidden>No matching clips</div>
+<nav id="paging" aria-label="Pages"><button id="previous">← Previous</button><span id="page"></span><button id="nextpage">Next →</button></nav>
+<p id="keys">Space play/pause · j/k select · Enter play · n/p next/previous clip · ←/→ seek 5s · / search</p></main>
+<footer id="dock">
+  <div class="transport"><button id="back" aria-label="Previous clip" title="Previous clip (p)">⏮</button><button id="play" aria-label="Play" title="Play/pause (Space)">▶</button><button id="fwd" aria-label="Next clip" title="Next clip (n)">⏭</button></div>
+  <div class="np"><strong id="np-title">Nothing playing</strong><span id="np-meta">Pick a clip</span></div>
+  <audio id="player" controls preload="metadata"></audio>
+  <div class="side"><label><input type="checkbox" id="auto" checked> Auto-advance</label><a id="download" download hidden>Download</a></div>
+</footer>
+<script type="application/json" id="manifest">__MANIFEST__</script>
+<script>
+'use strict';
+const data=JSON.parse(document.getElementById('manifest').textContent),$=id=>document.getElementById(id);
+const text=(tag,value,className)=>{const el=document.createElement(tag);el.textContent=value;if(className)el.className=className;return el};
+const size=n=>n>=1048576?(n/1048576).toFixed(1)+' MiB':Math.max(1,Math.ceil(n/1024))+' KiB';
+const clock=ms=>{if(!Number.isFinite(ms))return'--:--';const t=Math.floor(ms/1000),h=Math.floor(t/3600),m=Math.floor(t%3600/60),s=String(t%60).padStart(2,'0');return h?`${h}:${String(m).padStart(2,'0')}:${s}`:ms<10000&&ms>0?(ms/1000).toFixed(1)+'s':`${m}:${s}`};
+const fmt=mime=>({'audio/mpeg':'mp3','audio/wav':'wav','audio/ogg':'ogg','audio/opus':'opus','audio/flac':'flac','audio/mp4':'m4a','audio/aac':'aac','audio/webm':'webm','audio/aiff':'aiff','audio/midi':'midi','audio/x-matroska':'mka'})[mime]||mime;
+const name=c=>c.title||c.label||c.id.split('/').pop();
+const player=$('player'),perPage=200;
+let filtered=[],page=0,selected=-1,current=null,durations=new Map();
+function options(id,values){for(const value of[...new Set(values)].sort()){const option=text('option',value);option.value=value;$(id).append(option)}}
+options('host',data.hosts.map(h=>h.host));options('agent',data.clips.map(c=>c.agent));
+const stale=data.hosts.filter(h=>h.state!=='synced'||h.invalid);
+$('health').textContent=`${data.hosts.length} nodes · ${data.hosts.filter(h=>h.state==='synced').length} synced · ${stale.length} cached or needs attention`;
+$('nodes').open=stale.length>0;
+for(const host of data.hosts){const row=text('div','','host'+(host.state==='synced'&&!host.invalid?'':' stale'));row.append(text('strong',host.host),text('small',`${host.clips} clips · ${host.state}${host.invalid?' · '+host.invalid+' invalid':''}`),text('small',host.last_sync_ms?'Last sync '+new Date(host.last_sync_ms).toLocaleString():'Not synced yet'));for(const warning of host.warnings)row.append(text('small',warning,'warning'));$('hosts').append(row)}
+function filter(){const q=$('search').value.toLocaleLowerCase();filtered=data.clips.filter(c=>(!$('host').value||c.host===$('host').value)&&(!$('agent').value||c.agent===$('agent').value)&&(!q||[c.title||'',c.label,c.agent,c.host,c.id,c.description||''].some(v=>v.toLocaleLowerCase().includes(q))));page=0;selected=filtered.length?0:-1;render()}
+function render(){
+  const list=$('list');list.replaceChildren();const begin=page*perPage;
+  filtered.slice(begin,begin+perPage).forEach((clip,offset)=>{
+    const index=begin+offset,li=text('li','','clip'+(current===clip?' current':''));li.setAttribute('role','option');li.setAttribute('aria-selected',String(index===selected));li.dataset.index=index;
+    const go=text('button',current===clip&&!player.paused?'‖':'▶','go');go.setAttribute('aria-label',(current===clip&&!player.paused?'Pause ':'Play ')+name(clip));go.onclick=e=>{e.stopPropagation();selected=index;current===clip?toggle():play(index)};
+    const meta=text('div','','meta');meta.append(text('span',clip.host,'node'),' · ',text('span',clip.agent,'agent'),` · ${clip.timestamp.replace('T',' ').replace(/\.\d+Z$/,'Z')} · ${fmt(clip.mime_type)} · ${size(clip.bytes)}`);
+    li.append(go,text('div',name(clip),'title'),text('div',clock(clip.duration_ms??durations.get(clip.id)),'dur'),meta);
+    if(clip.description)li.append(text('div',clip.description,'desc'));
+    if(!player.canPlayType(clip.mime_type))li.append(text('div',`This browser cannot play ${clip.mime_type}; download it or run: ag audio play ${clip.id}`,'unsupported'));
+    li.onclick=()=>{selected=index;play(index)};
+    list.append(li);
+  });
+  $('count').textContent=`${filtered.length.toLocaleString()} / ${data.clips.length.toLocaleString()} clips`;
+  $('empty').hidden=filtered.length>0;$('previous').disabled=page===0;$('nextpage').disabled=(page+1)*perPage>=filtered.length;
+  $('page').textContent=filtered.length?`${begin+1}–${Math.min(begin+perPage,filtered.length)} of ${filtered.length.toLocaleString()}`:'0 clips';
+  $('paging').hidden=filtered.length<=perPage;
+  $('back').disabled=!filtered.length;$('fwd').disabled=!filtered.length;
+}
+function reveal(){const el=document.querySelector(`.clip[data-index="${selected}"]`);el?.scrollIntoView({block:'nearest'})}
+function play(index){
+  const clip=filtered[index];if(!clip)return;
+  if(Math.floor(index/perPage)!==page){page=Math.floor(index/perPage)}
+  selected=index;current=clip;player.src=clip.src;
+  $('np-title').textContent=name(clip);$('np-meta').textContent=`${clip.host} · ${clip.agent} · ${fmt(clip.mime_type)} · ${size(clip.bytes)}`;
+  $('download').href=clip.src;$('download').setAttribute('download',clip.id.split('/').pop());$('download').hidden=false;
+  document.title=`▶ ${name(clip)} · ag audio`;
+  player.play().catch(()=>{});render();reveal();
+}
+function toggle(){if(!current){play(Math.max(0,selected));return}player.paused?player.play().catch(()=>{}):player.pause()}
+function step(delta){if(!filtered.length)return;const at=current?filtered.indexOf(current):selected;play(Math.max(0,Math.min(filtered.length-1,(at<0?0:at)+delta)))}
+player.onplay=player.onpause=()=>{$('play').textContent=player.paused?'▶':'‖';$('play').setAttribute('aria-label',player.paused?'Play':'Pause');if(player.paused)document.title='ag · Fleet audio';render()};
+player.onloadedmetadata=()=>{if(current&&Number.isFinite(player.duration)){durations.set(current.id,Math.round(player.duration*1000));render()}};
+player.onended=()=>{if($('auto').checked&&current){const at=filtered.indexOf(current);if(at>=0&&at+1<filtered.length)play(at+1)}};
+player.onerror=()=>{if(current)$('np-meta').textContent=`Cannot play ${current.mime_type} here — download it or run ag audio play ${current.id}`};
+$('play').onclick=toggle;$('back').onclick=()=>step(-1);$('fwd').onclick=()=>step(1);
+$('search').oninput=filter;$('host').onchange=filter;$('agent').onchange=filter;
+$('previous').onclick=()=>{page--;render();$('list').scrollIntoView()};$('nextpage').onclick=()=>{page++;render();$('list').scrollIntoView()};
+$('theme').onclick=()=>{document.body.classList.toggle('light');$('theme').textContent=document.body.classList.contains('light')?'Dark':'Light'};
+document.addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  if(e.target.matches('input,select')){if(e.key==='Escape')e.target.blur();return}
+  if(e.target===player&&[' ','ArrowLeft','ArrowRight'].includes(e.key))return;
+  const move=d=>{selected=Math.max(0,Math.min(filtered.length-1,selected+d));if(Math.floor(selected/perPage)!==page)page=Math.floor(selected/perPage);render();reveal()};
+  if(e.key===' '){toggle()}else if(e.key==='j'||e.key==='ArrowDown'){move(1)}else if(e.key==='k'||e.key==='ArrowUp'){move(-1)}
+  else if(e.key==='Enter'){play(selected)}else if(e.key==='n'){step(1)}else if(e.key==='p'){step(-1)}
+  else if(e.key==='ArrowRight'&&current){player.currentTime=Math.min(player.duration||Infinity,player.currentTime+5)}
+  else if(e.key==='ArrowLeft'&&current){player.currentTime=Math.max(0,player.currentTime-5)}
+  else if(e.key==='/'){$('search').focus()}else return;
+  e.preventDefault();
+});
+filter();
+</script></body></html>

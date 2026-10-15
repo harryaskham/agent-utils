@@ -69,7 +69,7 @@ impl Service {
         let mut hosts = self.hosts(selection)?;
         if hosts.len() != 1 {
             return Err(Error::Invalid(
-                "select exactly one --host (or --local) for image get/info".into(),
+                "select exactly one --host (or --local) for get/info/play".into(),
             ));
         }
         Ok(hosts.remove(0))
@@ -201,6 +201,16 @@ impl Service {
         })
     }
     pub fn image_list(&self, input: ListInput) -> Result<FleetListing<ImageRecord>> {
+        self.media_list(MediaKind::Image, input)
+    }
+    pub fn audio_list(&self, input: ListInput) -> Result<FleetListing<AudioRecord>> {
+        self.media_list(MediaKind::Audio, input)
+    }
+    pub fn media_list(
+        &self,
+        kind: MediaKind,
+        input: ListInput,
+    ) -> Result<FleetListing<MediaRecord>> {
         store::check_limit(input.limit)?;
         let hosts = self.hosts(&input.selection)?;
         self.runtime.block_on(async {
@@ -211,15 +221,17 @@ impl Service {
                 let agent = input.agent.clone();
                 jobs.spawn(async move {
                     let result = if host.local {
-                        match host.paths.images() {
+                        match media_root(kind, &host) {
                             Ok(path) => {
-                                blocking(move || store::image_list(&path, limit, agent.as_deref()))
-                                    .await
+                                blocking(move || {
+                                    store::media_list(&path, limit, agent.as_deref(), kind)
+                                })
+                                .await
                             }
                             Err(e) => Err(e),
                         }
                     } else {
-                        let mut args = image_args("image-list", &host, None);
+                        let mut args = media_args(kind, "list", &host, None);
                         args.extend(["--limit".into(), limit.to_string()]);
                         if let Some(agent) = agent {
                             args.extend(["--agent".into(), agent]);
@@ -233,37 +245,50 @@ impl Service {
         })
     }
     pub fn image_info(&self, input: ImageInput) -> Result<ImageRecord> {
+        self.media_info(MediaKind::Image, input)
+    }
+    pub fn audio_info(&self, input: AudioInput) -> Result<AudioRecord> {
+        self.media_info(MediaKind::Audio, input)
+    }
+    pub fn media_info(&self, kind: MediaKind, input: MediaInput) -> Result<MediaRecord> {
         let host = self.one_host(&input.selection)?;
         if host.local {
-            store::image_info(&host.paths.images()?, &input.id)
+            store::media_info(&media_root(kind, &host)?, &input.id, kind)
         } else {
             self.runtime.block_on(transport::query(
                 &self.config,
                 &host,
-                &image_args("image-info", &host, Some(input.id)),
+                &media_args(kind, "info", &host, Some(input.id)),
             ))
         }
     }
     pub fn image_bytes(&self, input: ImageInput) -> Result<Vec<u8>> {
-        let record = self.image_info(input.clone())?;
+        self.media_bytes(MediaKind::Image, input)
+    }
+    pub fn audio_bytes(&self, input: AudioInput) -> Result<Vec<u8>> {
+        self.media_bytes(MediaKind::Audio, input)
+    }
+    pub fn media_bytes(&self, kind: MediaKind, input: MediaInput) -> Result<Vec<u8>> {
+        let record = self.media_info(kind, input.clone())?;
         let host = self.one_host(&input.selection)?;
         let bytes = if host.local {
-            store::image_bytes(&host.paths.images()?, &input.id)?
+            store::media_bytes(&media_root(kind, &host)?, &input.id, kind)?
         } else {
             self.runtime.block_on(transport::capture(
                 &self.config,
                 &host,
-                &image_args("image-read", &host, Some(input.id)),
-                MAX_IMAGE_BYTES,
+                &media_args(kind, "read", &host, Some(input.id)),
+                kind.max_bytes(),
             ))?
         };
         use sha2::{Digest, Sha256};
         if bytes.len() as u64 != record.bytes
             || format!("{:x}", Sha256::digest(&bytes)) != record.sha256
         {
-            return Err(Error::Invalid(
-                "downloaded image checksum/size mismatch".into(),
-            ));
+            return Err(Error::Invalid(format!(
+                "downloaded {} checksum/size mismatch",
+                kind.name()
+            )));
         }
         Ok(bytes)
     }
@@ -374,9 +399,20 @@ pub async fn local_tail(
         tokio::select! { _ = cancel.cancelled() => return Ok(()), _ = tokio::time::sleep(Duration::from_millis(poll_ms)) => () }
     }
 }
-fn image_args(command: &str, host: &Host, id: Option<String>) -> Vec<String> {
-    let mut args = vec!["node".into(), command.into()];
-    if let Some(path) = &host.paths.image_dir {
+fn media_root(kind: MediaKind, host: &Host) -> Result<PathBuf> {
+    match kind {
+        MediaKind::Image => host.paths.images(),
+        MediaKind::Audio => host.paths.audio(),
+    }
+}
+/// Private peer protocol: `ag node image-list|audio-info|…` on the target.
+fn media_args(kind: MediaKind, verb: &str, host: &Host, id: Option<String>) -> Vec<String> {
+    let mut args = vec!["node".into(), format!("{}-{verb}", kind.name())];
+    let root = match kind {
+        MediaKind::Image => &host.paths.image_dir,
+        MediaKind::Audio => &host.paths.audio_dir,
+    };
+    if let Some(path) = root {
         args.extend(["--root".into(), path.clone()]);
     }
     if let Some(id) = id {
@@ -479,6 +515,10 @@ pub fn router() -> ToolRouter<Service> {
     router.add_typed_tool_with_output_schema("ag_image_pull", "Incrementally cache all registered images from selected/all enabled nodes via rsync and generate a private local HTML gallery. No browser launch. Requires confirmed=true for local cache writes. offline=true reads the existing cache without network. Node failures retain cached images and are explicit in the receipt.", Service::image_gallery);
     router.add_typed_tool_with_output_schema("ag_image_list", "List recent durable shared-image metadata across configured nodes. ≤1000 records per node; filter by exact agent name or archive directory.", Service::image_list);
     router.add_typed_tool_with_output_schema("ag_image_info", "Get one image's metadata from an explicitly selected node. Use id from ag_image_list; never resolves paths outside its archive.", Service::image_info);
+    router.add_typed_tool_with_output_schema("ag_audio_pull", "Incrementally cache all explicitly shared audio clips (audio_share) from selected/all enabled nodes via rsync and generate a private local HTML player. No browser launch or playback. Requires confirmed=true for local cache writes. offline=true reads the existing cache without network.", Service::audio_gallery);
+    router.add_typed_tool_with_output_schema("ag_audio_list", "List recent shared-audio clip metadata across configured nodes (title, description, duration when known). ≤1000 records per node; filter by exact agent name or archive directory. Not the speech/TTS feed.", Service::audio_list);
+    router.add_typed_tool_with_output_schema("ag_audio_info", "Get one shared-audio clip's metadata from an explicitly selected node. Use id from ag_audio_list.", Service::audio_info);
+    router.add_typed_tool_with_output_schema("ag_sync", "Run every media sync pathway at once (images and shared audio by default; kinds narrows) for selected/all enabled nodes, regenerating both local viewers. Requires confirmed=true. Per-pathway failures are reported without hiding the other pathway.", Service::sync);
     router.add_typed_tool_with_output_schema("ag_choices_list", "List pending agent elicitations (interactive_choice, async_choice and RPC dialogs) across the fleet from each node's Paratenic AHP SessionState.inputNeeded. Read-only. all=true includes stale and non-chat entries (tool confirmations/auth) with reasons.", Service::choices);
     router.add_typed_tool_with_output_schema("ag_choices_answer", "Answer one pending elicitation through Paratenic chat/inputCompleted. Requires confirmed=true after operator approval. Pass revision from ag_choices_list to refuse a changed request. state=indeterminate means no authoritative echo arrived; re-list instead of retrying.", Service::answer);
     router.add_typed_tool_with_output_schema("ag_doctor", "Read-only fleet health: SSH/ag reachability, Paratenic AHP catalogue and /status, speech feed recency and mute policy, gallery cache freshness. Bounded per node; failures are per check.", Service::doctor);

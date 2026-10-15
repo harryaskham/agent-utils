@@ -73,6 +73,7 @@ fn persistent_token_public_hostname_and_service_sigterm() {
                 .args([
                     "dash",
                     "--no-images",
+                    "--no-audio",
                     "--no-open",
                     "--bind",
                     "127.0.0.1:0",
@@ -191,6 +192,7 @@ fn token_symlinks_are_preserved_and_unsafe_files_fail_without_disclosure() {
                 "dash",
                 "--no-open",
                 "--no-images",
+                "--no-audio",
                 "--bind",
                 "127.0.0.1:0",
                 "--token-file",
