@@ -10,6 +10,9 @@
   },
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "pi-session": "scripts/pi-session.mjs"
+  },
   "files": [
     ".claude-plugin",
     "extensions",
@@ -93,7 +96,7 @@
       "./extensions/endless.js",
       "./extensions/after.js",
       "./extensions/self-compact.js",
-      "./extensions/portable-session.js",
+      "./extensions/session-fork.js",
       "./extensions/scrub.js",
       "./extensions/git-behind-warning.js",
       "./extensions/copilot-auth-refresh.js",
