@@ -1,6 +1,6 @@
 name: Deploy GitHub Pages
 
-# Shared self-hosted publisher (harryaskham.github.io publish-pages.yml):
+# Shared self-hosted gh-pages publisher (harryaskham.github.io publish-pages.yml):
 # deploys docs/ to a.skh.am/agent-utils/ whenever render inputs change on main.
 # Previously tag-only (bd-e9884a); tags were rejected by the github-pages
 # environment (main only) and the azure-ephemeral pool is retired, so the site
@@ -16,9 +16,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write # push gh-pages
+  pages: write    # request the Pages build
 
 jobs:
   pages:
