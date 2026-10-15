@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "scope": "Remove missing preview files without deleting source/history or weakening reload ownership",
+  "requirements": [
+    {"id":"MISSING-1","contract":"Prune before restore/preparation/navigation/status, including hidden restored galleries; repair count/index while preserving surviving selection.","evidence":["test/kitty-image-preview-missing.test.js"]},
+    {"id":"MISSING-2","contract":"Memory and file transfer, inline and side layouts: empty galleries hide widget/status/overlay, clear payload caches, stop animation/cycle and free only owned graphics.","evidence":["test/kitty-image-preview-missing.test.js","scripts/kitty-preview-reload-pty.py --prune"]},
+    {"id":"MISSING-3","contract":"Two-second nonoverlapping visible-gallery reconciliation, at most eight async stats, no render-path filesystem access, no idle stream/hidden-gallery polling; close cancels pending work before ctx invalidation.","evidence":["extensions/kitty-image-preview/files.js","test/kitty-image-preview-missing.test.js","test/kitty-image-preview-lifecycle.test.js"]},
+    {"id":"MISSING-4","contract":"ENOENT/ENOTDIR/non-file removal does not classify EACCES as deletion; valid symlinks remain; late probes cannot discard a replacement object/path.","evidence":["test/kitty-image-preview-missing.test.js"]},
+    {"id":"MISSING-5","contract":"Explicit share of a vanished selection returns no image, not a different gallery item. No source/history deletion.","evidence":["test/kitty-image-preview-missing.test.js"]}
+  ],
+  "real_boundary":"Pi 1.1.0 private PTYs: aboveEditor/belowEditor/rightOverlay, two reloads then delete visible fixture, scoped GPU free before inspection, empty/hidden state, same PID and restored terminal on clean exit.",
+  "deployment":"No live agent restarted; no operator gallery cleared. Source update takes effect when the extension is reloaded or started fresh."
+}

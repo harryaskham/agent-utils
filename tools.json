@@ -1,0 +1,507 @@
+{
+  "title": "Agent Utils tool inventory",
+  "description": "Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.",
+  "lastReviewed": "2026-06-25",
+  "publishing": {
+    "githubPagesPath": "Repository Settings → Pages → Source: GitHub Actions, workflow: .github/workflows/pages.yml on self-hosted runners",
+    "localPreview": "npm run docs:build && python3 -m http.server --directory docs 8000",
+    "validation": "npm run docs:check (workflow also validates on self-hosted runners before deployment)"
+  },
+  "sections": [
+    {
+      "name": "Cacophony first-party surfaces",
+      "summary": "Managed lifecycle, work tracking, validation, and operator coordination surfaces provided by caco.",
+      "tools": [
+        {
+          "name": "Beads",
+          "command": "caco bd",
+          "audience": "agents, controllers, operators",
+          "purpose": "Track tasks, bugs, epics, ownership, dependencies, and status.",
+          "commonActions": [
+            "show",
+            "list",
+            "search",
+            "create",
+            "claim",
+            "update"
+          ],
+          "sourceOfTruth": "Cacophony bead database"
+        },
+        {
+          "name": "Agent lifecycle",
+          "command": "caco agent",
+          "audience": "managed agents, controllers",
+          "purpose": "Report status, inspect diffs, reintegrate work, and complete or discard managed runs.",
+          "commonActions": [
+            "status",
+            "status set",
+            "diff",
+            "reintegrate",
+            "complete"
+          ],
+          "sourceOfTruth": "Cacophony daemon agent registry"
+        },
+        {
+          "name": "Messaging and speech",
+          "command": "caco msg",
+          "audience": "agents, operators",
+          "purpose": "Read inboxes, send coordination messages, broadcast ownership, and narrate progress via speech.",
+          "commonActions": [
+            "inbox",
+            "speak",
+            "send",
+            "broadcast"
+          ],
+          "sourceOfTruth": "Cacophony message bus"
+        },
+        {
+          "name": "Scratchpad notes",
+          "command": "caco scratch",
+          "audience": "agents, controllers",
+          "purpose": "Persist structured notes across restarts without ad-hoc temp files.",
+          "commonActions": [
+            "write",
+            "append",
+            "show",
+            "list",
+            "connect"
+          ],
+          "sourceOfTruth": "Cacophony scratchpad store"
+        },
+        {
+          "name": "Test queue",
+          "command": "caco test",
+          "audience": "agents, queue runners, operators",
+          "purpose": "Queue, inspect, and retrieve daemon-managed test jobs when queued execution is required.",
+          "commonActions": [
+            "run",
+            "show",
+            "logs",
+            "list",
+            "cancel"
+          ],
+          "sourceOfTruth": "Cacophony test daemon"
+        },
+        {
+          "name": "Build queue",
+          "command": "caco build",
+          "audience": "agents, queue runners, operators",
+          "purpose": "Queue, inspect, and retrieve daemon-managed build jobs when queued execution is required.",
+          "commonActions": [
+            "run",
+            "show",
+            "logs",
+            "list",
+            "cancel"
+          ],
+          "sourceOfTruth": "Cacophony build daemon"
+        },
+        {
+          "name": "Operator choices",
+          "command": "caco choices",
+          "audience": "agents, operators",
+          "purpose": "Present explicit choices when a real operator decision is needed and record the selected option.",
+          "commonActions": [
+            "present",
+            "current",
+            "show",
+            "list",
+            "resolve"
+          ],
+          "sourceOfTruth": "Cacophony choices store"
+        },
+        {
+          "name": "Managed cron",
+          "command": "caco cron",
+          "audience": "controllers, operators",
+          "purpose": "Run or inspect scheduled project tasks through Cacophony instead of system cron.",
+          "commonActions": [
+            "list",
+            "run"
+          ],
+          "sourceOfTruth": "Cacophony cron configuration"
+        },
+        {
+          "name": "Image generation",
+          "command": "caco image generate",
+          "audience": "agents, operators",
+          "purpose": "Generate configured project images and avatars, optionally postprocess and commit them.",
+          "commonActions": [
+            "generate --preset",
+            "generate --prompt",
+            "generate --commit"
+          ],
+          "sourceOfTruth": ".cacophony/generation.yaml in projects that enable image presets"
+        }
+      ]
+    },
+    {
+      "name": "Pi runtime and agent self-ops",
+      "summary": "Pi-native commands and skills that keep long-running managed agents healthy and recyclable.",
+      "tools": [
+        {
+          "name": "Pi recurring loop",
+          "command": "/loop",
+          "audience": "Pi agents, operators",
+          "purpose": "Schedule repeated prompts inside a Pi session for inbox checks, health sweeps, or reminders.",
+          "commonActions": [
+            "/loop 5m …",
+            "/loop status",
+            "/loop off"
+          ],
+          "sourceOfTruth": "Pi runtime loop extension"
+        },
+        {
+          "name": "Pi self-nudge",
+          "command": "pi-self-nudge skill",
+          "audience": "persistent Pi agents",
+          "purpose": "Perform periodic health, inbox, and small follow-up checks without relying on daemon cron.",
+          "commonActions": [
+            "verify wake path",
+            "check inbox",
+            "speak degraded autonomy if needed"
+          ],
+          "sourceOfTruth": ".pi-agent/skills/pi-self-nudge/SKILL.md in managed checkouts"
+        },
+        {
+          "name": "Pi self-ops",
+          "command": "/bead-claim, /self-idle, /pool-register",
+          "audience": "pool-eligible Pi workers",
+          "purpose": "Rotate workers through beads with handoff notes, compaction, idle registration, and pool eligibility.",
+          "commonActions": [
+            "/bead-claim",
+            "/bead-handoff-note",
+            "/self-idle",
+            "/pool-register"
+          ],
+          "sourceOfTruth": ".pi-agent/skills/pi-self-ops/SKILL.md in managed checkouts"
+        },
+        {
+          "name": "Pi package entry points",
+          "command": "pi install git:github.com/harryaskham/agent-utils@v1",
+          "audience": "Pi users, agents",
+          "purpose": "Install this repository as a Pi package that contributes prompt templates and extensions.",
+          "commonActions": [
+            "install package",
+            "load prompts",
+            "load extensions"
+          ],
+          "sourceOfTruth": "package.json pi.extensions and pi.prompts"
+        }
+      ]
+    },
+    {
+      "name": "Interactive and UI automation helpers",
+      "summary": "Tools for sessions that need a real terminal, screenshots, or desktop input automation.",
+      "tools": [
+        {
+          "name": "tmux-cli",
+          "command": "tmux-cli",
+          "audience": "agents",
+          "purpose": "Launch a real TTY pane, send commands reliably, wait for idle output, capture the pane, and clean it up.",
+          "commonActions": [
+            "launch",
+            "send",
+            "wait_idle",
+            "capture",
+            "kill"
+          ],
+          "sourceOfTruth": ".pi-agent/skills/tmux-cli/SKILL.md in managed checkouts"
+        },
+        {
+          "name": "Tendril MCP",
+          "command": "tendril_list, tendril_capture, tendril_run, tendril_listen",
+          "audience": "agents automating desktop UI",
+          "purpose": "List windows, capture screenshots, send keyboard or mouse actions, and observe UI events.",
+          "commonActions": [
+            "list windows",
+            "capture before action",
+            "run DSL actions",
+            "capture after action"
+          ],
+          "sourceOfTruth": "Tendril MCP server and managed tendril profile"
+        }
+      ]
+    },
+    {
+      "name": "Repo-local tools",
+      "summary": "Utilities provided directly by this repository and kept installable without project secrets.",
+      "tools": [
+        {
+          "name": "Live web search Pi extension",
+          "command": "search_web",
+          "audience": "Pi agents",
+          "purpose": "Search the live web through GitHub Copilot Responses API and return grounded answers with citations.",
+          "commonActions": [
+            "query current information",
+            "prefer for freshness-sensitive answers"
+          ],
+          "sourceOfTruth": "extensions/web-search.js"
+        },
+        {
+          "name": "Tendril share Pi extension",
+          "command": "tendril_pi_settings, tendril_pi_bridge_doctor, tendril_pi_list, tendril_pi_capture, tendril_pi_describe, tendril_pi_stream, /tendril list, /tendril window <id-or-name>, /tendril display <id-or-name>, /tendril describe window <id-or-name>, /tendril stream window <id-or-name>",
+          "audience": "Pi users and models sharing local, remote, or WSL-tunnelled visual context with image-capable models",
+          "purpose": "Let the user or model inspect Tendril bridge settings, list Tendril targets, capture window/display screenshots as model-visible PNG content with target-list context by default, request model-facing screenshot descriptions, send VLM-generated screenshot descriptions to the active model from slash commands, or start a low-rate screenshot stream.",
+          "commonActions": [
+            "report configured Tendril settings to the model",
+            "diagnose configured Tendril command, remote target, and WSL tunnel",
+            "probe target discovery through the configured bridge",
+            "list windows and displays",
+            "capture a window for the model",
+            "capture a display for the model",
+            "include current tendril list output by default, with includeList=false or --no-list opt-outs",
+            "use pathOnly=true or --path-only to omit image content when only a saved path is needed",
+            "describe a screenshot with a vision model",
+            "look up targets by id or name",
+            "stream low-resolution screenshots periodically",
+            "queue screenshot context as a follow-up while the agent is busy"
+          ],
+          "sourceOfTruth": "extensions/tendril-share.js"
+        },
+        {
+          "name": "Kitty image preview Pi extension",
+          "command": "kitty_image_preview_capture, kitty_image_preview_add, kitty_image_preview_show",
+          "audience": "Pi agents, operators using kitty-compatible terminals",
+          "purpose": "Display persistent terminal image previews from Pi using the kitty graphics protocol, with Tendril screenshot capture, series navigation, animation, tmux passthrough, Unicode placeholder anchoring, negative z-index direct placement, configurable widget placement, and fixed non-capturing right-side overlay placement.",
+          "commonActions": [
+            "capture and show a Tendril screenshot",
+            "add a PNG/APNG preview",
+            "add a folder as an image series",
+            "show next or previous image",
+            "animate a loaded series",
+            "hide or clear the preview widget"
+          ],
+          "sourceOfTruth": "extensions/kitty-image-preview.js and extensions/kitty-graphics.js"
+        },
+        {
+          "name": "Audio reel Pi extension",
+          "command": "audio_share, audio_reel, /audio-reel, /audio-play, /audio-output",
+          "audience": "Pi agents, operators",
+          "purpose": "Let agents deliberately share audio (file, base64 or raw PCM) into a terminal reel/player with keyboard and mouse transport, Pulse-by-default output routing and a durable archive synced by ag audio/ag sync. Never used for speech.",
+          "commonActions": [
+            "audio_share path=…",
+            "audio_share data=… pcm={…}",
+            "audio_reel action=play",
+            "/audio-reel",
+            "/audio-output sink=…"
+          ],
+          "sourceOfTruth": "extensions/audio-reel.js and docs/audio-reel.md"
+        },
+        {
+          "name": "Pi graphics theme + extension",
+          "command": "pi_graphics_render_prompt_enclosure, pi_graphics_render_message_border, pi_graphics_clear, /pi-graphics-status, /pi-graphics-demo",
+          "audience": "Pi agents, operators using kitty-compatible terminals",
+          "purpose": "Ship a Nord-flavoured Pi theme (themes/kitty-graphics.json) paired with an extension that renders graphical UI affordances (gradient prompt enclosures, translucent message/code borders) through the kitty graphics protocol and Unicode placeholder placement, with scoped image ownership for safe cleanup.",
+          "commonActions": [
+            "select theme",
+            "render gradient prompt rule",
+            "frame a tool/code block",
+            "scoped clear of owned images"
+          ],
+          "sourceOfTruth": "extensions/pi-graphics.js, extensions/pi-graphics/, themes/kitty-graphics.json"
+        },
+        {
+          "name": "Firecracker VM Pi extension",
+          "command": "firecracker_vm_start, firecracker_vm_status, firecracker_vm_list, firecracker_vm_screen, firecracker_vm_stop, /firecracker-vms",
+          "audience": "Pi agents orchestrating Tendril-controllable VM workloads",
+          "purpose": "Prepare and lifecycle-manage Firecracker microVM workspaces with config files, API sockets, serial-console logs, Tendril manifests, and declared browser/VNC/noVNC service endpoints for visible screen access.",
+          "commonActions": [
+            "prepare or spawn a VM",
+            "declare browser/noVNC screen endpoints",
+            "inspect serial console output",
+            "list VM lifecycle state",
+            "stop a VM"
+          ],
+          "sourceOfTruth": "extensions/firecracker-vm.js"
+        },
+        {
+          "name": "App automation Pi extension",
+          "command": "app_automation_list, app_automation_doctor, app_automation_overview, app_automation_work_briefing, app_automation_msdev_cdp_refresh, app_automation_plan, app_automation_run, app_automation_open_bundle_run_once, app_automation_refresh_start, app_automation_refresh_bundle_start, app_automation_refresh_bundle_run_once, app_automation_refresh_staleness, app_automation_refresh_stale_run_once, app_automation_refresh_status, app_automation_refresh_stop, app_automation_snapshots_list, app_automation_snapshots_digest, app_automation_snapshot_links, app_automation_snapshots_staleness, app_automation_snapshots_cleanup_plan, app_automation_snapshot_read, app_automation_status, /tendril-app",
+          "audience": "Pi agents driving API-less web apps through blessed Playwright/Tendril workflows",
+          "purpose": "Expose a deterministic catalog and conservative runner for app automation plans covering Slack, Markdown canvas sync, Calendar, Outlook, Teams, ms-dev CDP work-app refreshes, personal Google CLI/todo readiness checks, and stale-aware daily briefing generation before agents fall back to raw browser/UI automation; persisted snapshot links include freshness, sorting, app/kind/host/source/from counts, source context including page-title or sanitized-host fallback, and safe URL redaction.",
+          "commonActions": [
+            "list blessed and local app configs",
+            "diagnose catalog, Playwright setup, and Tendril bridge routing",
+            "optionally probe Tendril target discovery from app_automation_doctor",
+            "build compact stale-aware work briefing indexes for natural-language Slack, Outlook, Teams, Calendar questions, and operator-facing daily briefing drafts",
+            "check personal Google Workspace CLI auth and org todo readiness without storing Google tokens or exposing raw account secrets",
+            "refresh work-app snapshots through ms-dev Windows Chrome CDP using the PowerShell WSL escape route when local Playwright/Tendril cannot reach browser state, with dedicated apphost startup, FIFO cleanup for refresh-created tabs, and a Slack Desktop unread-count fallback that avoids message contents",
+            "summarize work-app refreshers and snapshots with optional overview link prefixed or bare query/source/from/time/host/kind/freshness filters, sorting, link limits, stale thresholds, and rendered aggregate matched/truncated/scanned counts across snapshot and app samples",
+            "generate updated daily briefing Markdown from tool-rendered snapshot health, briefing samples, focused sanitized links, personal readiness, and explicit stale/auth-required/ms-dev caveats",
+            "plan Slack notification snapshot",
+            "dry-run or execute allowlisted runner steps",
+            "plan Markdown-to-canvas sync",
+            "inspect canonical app automation state root",
+            "list/digest/query timestamped snapshot links with matched/truncated counts, freshness/app/kind/host/source/from counts, source/from/time context, rendered urlHost rows, and host filters with service aliases such as meet/gcal/teams/outlook/owa/m365/slack/zoom/github, exact-or-natural kind aliases such as mail/chat/meetings, optional newest/oldest/freshest/stalest/app/kind/host/source/from/time sorting, and clear empty-filter output",
+            "list/freshness-check/cleanup-plan/read persisted app snapshots",
+            "use flexible /tendril-app links filters with optional app selector, explicit limits, context/host filters, and stale thresholds, such as fresh kind:events source:calendar from:harry sort:newest stale-after:1440 limit:5 standup",
+            "start/inspect/stop periodic app refreshers",
+            "open Slack/Calendar/Outlook/Teams browser surfaces once",
+            "arm, run once, inspect per-action staleness, or stale-refresh the standard Slack/Calendar/Outlook/Teams refresh bundle"
+          ],
+          "sourceOfTruth": "extensions/app-automation.js, extensions/app-automation/catalog.js, docs/app-automation.md"
+        },
+        {
+          "name": "Web search prompt template",
+          "command": "/web-search",
+          "audience": "Pi users, agents",
+          "purpose": "Prompt template for web-search-assisted answers.",
+          "commonActions": [
+            "invoke prompt template"
+          ],
+          "sourceOfTruth": "prompts/web-search.md"
+        },
+        {
+          "name": "web-search MCP server",
+          "command": "web-search-mcp",
+          "audience": "MCP-compatible agents",
+          "purpose": "Expose web search as an MCP server packaged by the repository flake.",
+          "commonActions": [
+            "nix run .#web-search-mcp",
+            "nix build .#web-search-mcp"
+          ],
+          "sourceOfTruth": "web-search/src/web_search_mcp/server.py"
+        },
+        {
+          "name": "Nix package collator",
+          "command": "nix build .",
+          "audience": "operators, release automation",
+          "purpose": "Build the aggregate agent-utils package and expose repo tools as flake packages and apps.",
+          "commonActions": [
+            "nix build .",
+            "nix run .#web-search-mcp"
+          ],
+          "sourceOfTruth": "flake.nix"
+        },
+        {
+          "name": "GitHub Pages inventory generator",
+          "command": "npm run docs:build",
+          "audience": "maintainers",
+          "purpose": "Regenerate this static Pages site from docs/tools.json and verify it remains publishable from /docs.",
+          "commonActions": [
+            "npm run docs:build",
+            "npm run docs:check"
+          ],
+          "sourceOfTruth": "scripts/render-pages.mjs and docs/tools.json"
+        },
+        {
+          "name": "Model switch Pi extension",
+          "command": "/m",
+          "audience": "Pi agents, operators",
+          "purpose": "Switch to any model regardless of scoped-models, with Tab-completion over the full provider/model list; leaves built-in /model and /scoped-models (Ctrl+P cycling) untouched.",
+          "commonActions": [
+            "/m <provider/model>",
+            "/m (Tab to browse)",
+            "/m anthropic/claude-opus-4-7"
+          ],
+          "sourceOfTruth": "extensions/m.js"
+        },
+        {
+          "name": "User-input pipe Pi extension",
+          "command": "/pipe, /fix",
+          "audience": "operators",
+          "purpose": "Transform interactively submitted user text through any shell command on stdin, with preview/send-raw/cancel or automatic-send modes; runs before read-aloud so on-send TTS speaks exactly what reaches the model.",
+          "commonActions": [
+            "/pipe cmd=fix mode=on",
+            "/pipe cmd=\"tr a-z A-Z\" mode=auto",
+            "/fix on|off|auto"
+          ],
+          "sourceOfTruth": "extensions/pipe.js"
+        },
+        {
+          "name": "Effort and fast-model switch Pi extension",
+          "command": "/effort, /fast, self_set_effort",
+          "audience": "operators, Pi agents",
+          "purpose": "Shortcut Pi thinking-effort levels and configured fast-model variants; delegates every value (including adaptive) to Pi's thinking API without rewriting request payloads.",
+          "commonActions": [
+            "/effort high",
+            "/fast on",
+            "self_set_effort (operator-instructed)"
+          ],
+          "sourceOfTruth": "extensions/effort.js"
+        },
+        {
+          "name": "True-defaults persistence guard Pi extension",
+          "command": "/true-defaults",
+          "audience": "operators",
+          "purpose": "Persist immutable-by-convention model/provider/thinking defaults from settings.json agentUtils.trueDefaults back onto Pi's built-in defaults on startup and clean shutdown, while keeping --model/--thinking and managed PI_MODEL/PI_PROVIDER/PI_REASONING_EFFORT as per-process runtime overrides.",
+          "commonActions": [
+            "/true-defaults status",
+            "/true-defaults apply"
+          ],
+          "sourceOfTruth": "extensions/true-defaults.js"
+        },
+        {
+          "name": "Self-update and restart Pi extension",
+          "command": "/update, /reload-tools, /restart",
+          "audience": "operators, Pi agents",
+          "purpose": "Run pi update --extensions, reload the runtime, refresh active tools, and re-exec the Pi session in place to pick up newly installed runtime/tool injections.",
+          "commonActions": [
+            "/update",
+            "/reload-tools",
+            "/restart --dry-run"
+          ],
+          "sourceOfTruth": "extensions/pi-self-update.js"
+        },
+        {
+          "name": "Copilot auth refresh Pi extension",
+          "command": "/copilot-auth-refresh",
+          "audience": "Pi agents, operators",
+          "purpose": "Recover from GitHub Copilot OAuth stale-token errors by reloading auth storage and retrying Copilot auth resolution, queueing one follow-up retry so managed agents do not stop on a transient missing token.",
+          "commonActions": [
+            "/copilot-auth-refresh",
+            "automatic retry on missing Copilot token"
+          ],
+          "sourceOfTruth": "extensions/copilot-auth-refresh.js"
+        },
+        {
+          "name": "Compaction continue guard Pi extension",
+          "command": "(automatic)",
+          "audience": "Pi agents",
+          "purpose": "Keep the agent loop continuable after a context compaction when the rebuilt transcript would otherwise end on an assistant message that Pi core cannot continue from.",
+          "commonActions": [
+            "runs automatically after compaction"
+          ],
+          "sourceOfTruth": "extensions/compaction-continue-guard.js"
+        },
+        {
+          "name": "Checkout-behind warning Pi extension",
+          "command": "/git-behind",
+          "audience": "Pi agents, operators",
+          "purpose": "Throttled advisory that warns any Pi agent when its checkout falls significantly behind the origin default branch; a reusable, daemon-decoupled replacement for Cacophony's git-check mixin.",
+          "commonActions": [
+            "/git-behind status",
+            "/git-behind check",
+            "/git-behind on|off"
+          ],
+          "sourceOfTruth": "extensions/git-behind-warning.js"
+        },
+        {
+          "name": "Xvfb virtual-display Pi extension",
+          "command": "xvfb_ensure, xvfb_stop, xvfb_status",
+          "audience": "Pi agents",
+          "purpose": "Opt-in, guarded Xvfb virtual-display orchestration on headless Linux nodes so display-dependent tools can run; never spawns unprompted and refuses unless the node is genuinely headless.",
+          "commonActions": [
+            "xvfb_ensure",
+            "xvfb_status",
+            "xvfb_stop"
+          ],
+          "sourceOfTruth": "extensions/xvfb.js"
+        },
+        {
+          "name": "Android CLI / emulator Pi extension",
+          "command": "android_cli_doctor, android_emulator_screenshot, android_emulator_stream",
+          "audience": "Pi agents",
+          "purpose": "Wrap Google's Android command-line tools (adb, emulator, sdkmanager) so the model can diagnose/install the Android SDK and capture emulator or device screens.",
+          "commonActions": [
+            "android_cli_doctor",
+            "android_emulator_screenshot",
+            "android_emulator_stream"
+          ],
+          "sourceOfTruth": "extensions/android.js"
+        }
+      ]
+    }
+  ]
+}

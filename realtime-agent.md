@@ -1,0 +1,924 @@
+# Realtime Agent Pi extension
+
+The realtime extension in [`extensions/realtime-agent.js`](../extensions/realtime-agent.js) lets Pi use OpenAI Realtime models as a normal Pi provider while keeping audio input/output as a side channel. The goal is to preserve the usual Pi agent loop — tools, MCP, skills, approvals, history, compaction, and model switching — while adding live speech I/O for realtime conversations. Full realtime microphone turns are audio-native: the transcript can be displayed in the UI, but the model response is triggered from the committed audio item rather than by injecting transcript text as the user's prompt.
+
+## Install and prerequisites
+
+Install this repository as a Pi package, then reload or restart Pi:
+
+```bash
+pi install git:github.com/harryaskham/agent-utils@v1
+```
+
+Required API configuration:
+
+```bash
+export OPENAI_API_KEY=...
+# or
+export PI_RT_API_KEY=...
+```
+
+The default model is `gpt-realtime-2` and the provider/model id is:
+
+```text
+openai-realtime/gpt-realtime-2
+```
+
+## Pulse-first audio default
+
+`PI_RT_AUDIO_BACKEND` defaults to `pulse` intentionally. This is true even on macOS: Harry's normal voice setup often routes audio through Pulse with a phone as the sink/source.
+
+Useful Pulse environment variables:
+
+```bash
+export PULSE_SERVER=...
+export PULSE_SINK=...      # optional; default sink if omitted
+export PULSE_SOURCE=...    # optional; default source if omitted
+```
+
+At runtime, the unified `/rt` command also accepts env-style key/value arguments for new mic/playback processes:
+
+```text
+/rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=vsink_voice
+/rt source="source with spaces" backend=pulse
+```
+
+Order does not matter. Values may be quoted with shell-like single or double quotes. Empty runtime values unset the corresponding Pulse variable for future spawns. If a mic capture or playback process is already running, stop/cancel it and start again so the new Pulse environment is used.
+
+**Runtime value settings never persist.** `settings.json` is immutable startup
+policy. Connection/tuning commands such as `voice`, `speed`, `thresh`, `energy`,
+`model`, `baseUrl`, `trans`, Azure settings, local-STT settings, audio routing,
+and all other `/rt`, `/stt`, and `/ptt` `setting=value` forms affect only the
+current process. Precedence at startup remains env (`PI_RT_*` / `OPENAI_*` /
+`AZURE_*`) > settings > built-in default. To change a future startup, edit the
+corresponding `agentUtils` slice explicitly; commands and environment resolution
+never rewrite it.
+
+**Durable cascade + STT defaults (bd-b45224).** Alongside `agentUtils.realtime`, two sibling slices let you keep durable defaults in `settings.json` and drop the matching env vars:
+
+- `agentUtils.cascade` — `voice`, `model`, `baseUrl`, `ttsModel`, `provider`, `speakerProfileId`, `lang`, `speed`, `azure`. A `/cascade` arg wins; otherwise this slice supplies the cascade main defaults; otherwise the env/built-in default applies. So you can move `PI_CASCADE_VOICE` (and speaker/lang/azure) into `settings.json`.
+- `agentUtils.stt` — the shared local-VAD settings for both `/stt` and `/ptt`: `model`, `timeoutMs`, `energyThreshold`, `insertSilenceMs`, `commitSilenceMs`, `minTurnSpeechMs`, and `shortcutsEnabled`. It also retains the older Realtime compatibility fields `transcriptionModel`, `vadThreshold`, and `backend` below `agentUtils.realtime`. There is deliberately no duplicate `agentUtils.ptt` acoustic tree: PTT is a hold/release mode over the exact same capture, VAD, and batch-transcription pipeline. Env still wins and is never written back.
+
+You can override the backend for local-device testing:
+
+```bash
+export PI_RT_AUDIO_BACKEND=coreaudio   # macOS input via AVFoundation, output via ffplay/AudioToolbox paths
+export PI_RT_AUDIO_BACKEND=sox         # rec/play
+export PI_RT_AUDIO_BACKEND=ffplay      # ffplay output with sox/rec input fallback
+export PI_RT_RECORD_CMD='...'          # custom raw pcm16 24k mono stdout
+export PI_RT_PLAYBACK_CMD='...'        # custom raw pcm16 24k mono stdin
+```
+
+Run `/rt-doctor` inside Pi to see the resolved backend, Pulse variables, commands, API key presence, and troubleshooting hints.
+
+For a live one-shot connectivity test (no mic session), run `/rt probe`: it opens the realtime WebSocket, waits briefly for `session.created`, then closes — classifying the outcome as `connected`, `ga-only` (model needs the GA endpoint), `session-start-1006` (upstream closed before the session established — usually proxy GA-realtime routing), `auth`, or `config`. Handy for verifying a model/proxy/endpoint change without starting a call.
+
+## Quick-start configs
+
+Use these as copy/paste starting points, then run `/rt-doctor` before starting a call to confirm the resolved backend, devices, command availability, and API key status.
+
+### Pulse / phone routing
+
+This is Harry's normal path: Pi captures and plays raw 24 kHz mono PCM through Pulse, often with a phone or remote host as the actual microphone/speaker endpoint.
+
+```bash
+export OPENAI_API_KEY=...
+export PI_RT_AUDIO_BACKEND=pulse
+export PULSE_SERVER=sgu24:4713        # replace with your Pulse host
+export PULSE_SOURCE=source.bluetooth  # microphone/source; omit for Pulse default
+export PULSE_SINK=vsink_voice         # speaker/sink; omit for Pulse default
+```
+
+Start a full realtime conversation with server VAD:
+
+```text
+/rt backend=pulse server=sgu24:4713 source=source.bluetooth sink=vsink_voice summary=true chime=false start=vad
+```
+
+Expected behavior: `/rt-doctor` should show `backend=pulse`, non-empty Pulse routing, and available `parec`/`pacat` commands. When `/rt ... start=vad` runs, the `rt-audio`/realtime widget should show a connected session, mic bytes should increase while you speak, and playback should go to the configured Pulse sink.
+
+### Local macOS CoreAudio / AudioToolbox test
+
+Use this when you want to test with the Mac's local microphone and speaker instead of Pulse routing:
+
+```bash
+export OPENAI_API_KEY=...
+export PI_RT_AUDIO_BACKEND=coreaudio
+unset PULSE_SERVER PULSE_SOURCE PULSE_SINK
+```
+
+```text
+/rt backend=coreaudio start=ptt
+```
+
+Expected behavior: `/rt-devices` lists local AVFoundation input devices, `/rt-doctor` reports a local backend and available local capture/playback helpers, and PTT records from the current default input until you commit with Enter/Space/Esc.
+
+### Local sox/ffplay fallback
+
+Use this on machines where `rec`/`play` or `ffmpeg`/`ffplay` are already installed and Pulse is not desired:
+
+```bash
+export OPENAI_API_KEY=...
+export PI_RT_AUDIO_BACKEND=sox       # capture/play through rec/play
+# or: export PI_RT_AUDIO_BACKEND=ffplay  # ffplay output with rec/sox capture fallback
+```
+
+```text
+/rt backend=sox stt=ptt
+```
+
+Expected behavior: STT mode keeps your current text model selected, records from the local default input, and queues the completed transcript back into Pi as a normal follow-up message. If `/rt-doctor` reports a missing `rec`, `play`, `ffmpeg`, or `ffplay` binary, install that backend's toolchain or switch back to `backend=pulse`.
+
+## Recommended workflows
+
+### Full realtime conversation with server VAD
+
+```text
+/rt
+# explicit equivalent:
+/rt start vad
+```
+
+This switches to `openai-realtime/gpt-realtime-2`, enables audio output, opens the realtime WebSocket, and starts server-VAD microphone capture. Speak, then pause; the server commits/transcribes the speech, Pi receives it as a user message, and the normal Pi agent loop responds.
+
+Useful controls while running:
+
+```text
+/rt-cancel       discard current microphone input
+/rt-stop         stop/commit mic input; if no mic is active, close the WebSocket
+/rt-off          exit realtime, stop audio/mic, restore the previous Pi model when possible
+/rt-status       show compact realtime status
+/rt-doctor       show diagnostics and troubleshooting details
+```
+
+### Push-to-talk mode
+
+```text
+/rt ptt
+# explicit equivalent:
+/rt start ptt
+```
+
+PTT records until you commit. Press `Enter`, `Space`, or `Esc`, or run `/rt-stop`, to commit recorded audio. Press `Ctrl-C` or run `/rt-cancel` to discard.
+
+Use PTT when server VAD is over-eager, under-eager, or when background noise causes accidental turns.
+
+### Connect without listening
+
+```text
+/rt nolisten
+# explicit equivalent:
+/rt start nolisten
+```
+
+This switches to the realtime model and pre-warms the WebSocket without opening the microphone. It is useful for typed realtime turns or for checking connection/API setup before starting audio capture.
+
+Start listening later with:
+
+```text
+/rt mic vad
+/rt mic ptt
+# legacy aliases remain:
+/rt-listen vad
+/rt-listen ptt
+```
+
+### Speech-to-text into the current model
+
+The short commands use local VAD and batch transcription by default:
+
+```text
+/stt                 # always-listening local VAD
+/stt ptt             # local VAD, held until release
+/ptt                 # shorter alias for the same PTT mode
+/stt stop
+```
+
+They keep the current Pi model and never open a Realtime WebSocket. Full
+Realtime transcription remains available only through the explicit `/rt`
+surface:
+
+```text
+/rt stt vad
+/rt stt ptt
+```
+
+The prior `/stt` compatibility handler simply forwarded to bare `/rt stt`, whose
+legacy default is server VAD. That routing—not a dependency rollback—caused the
+incremental-editor regression in bd-24d679: using the convenient command silently
+selected the Realtime API instead of the already-implemented local two-timer
+controller. `/stt` and the old `/rt-stt` alias now both select local VAD.
+
+### Local-VAD speech-to-text (WebSocket-free)
+
+`/stt` captures audio locally, runs an energy VAD to segment speech, and
+transcribes each turn-so-far with a single first-party HTTP call: PCM is wrapped
+as WAV and POSTed as one file to `<base>/v1/audio/transcriptions` (the
+OpenAI-compatible endpoint on `OPENAI_BASE_URL`). Because local VAD already has
+the whole candidate turn, this one-shot request—which the extension fully
+controls with a bounded timeout and explicit errors—replaces the older opaque
+`stt --stdin` subprocess that could stall and hang "transcribing" forever
+(bd-adde03).
+
+There are two independent trailing-silence clocks. After the shorter insert
+silence, the whole turn-so-far is re-transcribed and replaces the provisional
+text in the editor. If speech resumes before the longer commit silence, both
+clocks reset; the next pause produces a new whole-turn draft. Only the longer
+commit silence sends the finished editor contents as a Pi user message. Explicit
+`/rt stt local-vad` remains supported, but `/stt` is the normal entry point.
+
+The transcription model is independent of the realtime `trans` model: it
+defaults to `mai-transcribe-2` and is overridden with `PI_RT_LOCAL_VAD_MODEL`
+(a realtime-only model such as `gpt-realtime-whisper` is not valid for the batch
+transcription endpoint). The request is bounded by `PI_RT_LOCAL_VAD_TIMEOUT_MS`
+(default 30000; `0` disables) so a stalled endpoint surfaces a clear error and
+returns to listening instead of hanging. `/rt doctor` shows the active local-vad
+model and thresholds.
+
+Transcripts are sent to the model **without** the untrusted-audio safety preamble
+by default (bd-678c58) — it is noise in a personal single-operator voice loop. Set
+`PI_RT_STT_UNTRUSTED_LABEL=1` (or `PI_RT_UNTRUSTED_TRANSCRIPT_LABEL=1`) to restore
+the wrapper if mic audio may be untrusted or multi-speaker.
+
+Partial transcripts stream **into the input editor** after each short speech
+pause (bd-0c008d), not just a status line. When speech resumes before the commit
+timeout, the next result replaces the previous draft with a re-transcription of
+the whole open turn. Manual edits are never clobbered by a later partial, and the
+committed turn sends the editor's current text (your edits included), then clears
+it.
+
+The energy threshold can be tuned **live** (without restarting) via `/rt energy=<0..1>`
+(higher = less sensitive), parallel to `/rt thresh=` for server VAD. While listening,
+the status widget reacts in real time: `🎤 listening…` the instant speech is detected,
+`✍️ transcribing…` while a batch runs, then your transcript firming up as you speak.
+
+Durable defaults live under `agentUtils.stt`; explicit setters such as
+`/stt model=mai-transcribe-2 insert=1000 commit=3000 energy=0.012`
+read-merge-write that slice and start local VAD. `/ptt` accepts the same setters
+but starts hold mode. PTT intentionally shares these settings rather than
+copying them into an `agentUtils.ptt` tree.
+
+Tuning knobs (all optional; env overrides the matching `agentUtils.stt` value):
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `PI_RT_LOCAL_VAD_MODEL` | `mai-transcribe-2` | batch transcription model (POSTed to `/v1/audio/transcriptions`) |
+| `PI_RT_LOCAL_VAD_TIMEOUT_MS` | `30000` | per-turn transcription timeout in ms (`0` disables) |
+| `PI_RT_LOCAL_VAD_USE_STT_CLI` | _(unset)_ | set `1` to fall back to the legacy `stt --stdin` subprocess instead of the direct HTTP call |
+| `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` | `0.012` | normalized RMS (0..1) at/above which a frame is speech |
+| `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` | `1000` | trailing silence (ms) that inserts a provisional partial |
+| `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS` | `3000` | trailing silence (ms) that finalizes/sends the turn |
+| `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS` | `200` | minimum speech (ms) before a turn can insert/commit |
+| `PI_RT_STT_SHORTCUTS_ENABLED` | `1` | Ctrl-Space toggles local PTT from Pi's editor (`0` disables the shortcut; `/ptt` still works) |
+
+```json
+{
+  "agentUtils": {
+    "stt": {
+      "model": "mai-transcribe-2",
+      "timeoutMs": 30000,
+      "energyThreshold": 0.012,
+      "insertSilenceMs": 1000,
+      "commitSilenceMs": 3000,
+      "minTurnSpeechMs": 200,
+      "shortcutsEnabled": true
+    }
+  }
+}
+```
+
+**Troubleshooting (first-run validation):**
+
+- *Nothing is transcribed.* The first transcription failure is surfaced as a
+  warning. With the default direct-HTTP path the common causes are an
+  unreachable/slow `/v1/audio/transcriptions` endpoint (bounded by
+  `PI_RT_LOCAL_VAD_TIMEOUT_MS`, then surfaced) or a bad `OPENAI_BASE_URL` /
+  `OPENAI_API_KEY`. Run `/rt doctor` to see the active local-vad model, thresholds,
+  and last error, and confirm `PI_RT_LOCAL_VAD_MODEL` resolves to a
+  batch-capable model (not a realtime-only model like `gpt-realtime-whisper`).
+- *Turns commit too early or too late.* Adjust `PI_RT_LOCAL_VAD_COMMIT_SILENCE_MS`
+  (trailing silence that finalizes/sends the turn) and
+  `PI_RT_LOCAL_VAD_INSERT_SILENCE_MS` (provisional-partial silence).
+- *Speech is missed, or ambient noise triggers turns.* Tune the energy threshold
+  live with `/rt energy=<0..1>` (lower to catch quieter speech, raise to reject
+  noise), or set `PI_RT_LOCAL_VAD_ENERGY_THRESHOLD` / `PI_RT_LOCAL_VAD_MIN_TURN_SPEECH_MS`
+  before starting.
+- *Stuck on `🎤 listening` and never commits.* It is hearing continuous audio
+  above the threshold, so it never sees the silence gap it needs to commit —
+  usually the threshold sits below your mic's noise floor. Raise it live with
+  `/rt energy=0.05` (or higher); a one-time hint also prompts you. If raising it
+  changes nothing, the capture may have died — `/stt stop` then `/stt`.
+- *The assistant's spoken reply is re-captured as a new turn (echo).* Only happens
+  if Pi replies are spoken aloud. With `force-agent-speech`, local-vad shares its
+  speaking signal and drops the mic while a reply plays (plus a short release tail),
+  so the echo is gated (bd-ddc391). On a slow TTS voice, raise `/rt energy=` if any
+  tail still leaks.
+
+### Read the input editor aloud (`/read`)
+
+`/read` is a persistent editor-to-speech mode using the shared native Azure/OpenAI/daemon providers. It never shells out to the `tts` CLI. Local output uses raw 24 kHz mono PCM and an interruptible player; `provider=daemon` can instead use server-owned playback. See [native speech providers](speech-providers.md) for authentication, field mapping and remote cancellation semantics.
+
+Start with the shared defaults:
+
+```text
+/read
+```
+
+Or configure the complete voice in one command:
+
+```text
+/read provider=azure lang=en-GB base_url=$AZURE_SPEECH_ENDPOINT api_key=$AZURE_SPEECH_API_KEY speed=1.6 style=hopeful styledegree=1.53 embedding=0daec43c-911f-4529-820a-16dab73630d3 voice=MAI-Voice-2.1-Flash
+```
+
+Exact `$NAME` and `${NAME}` values are resolved from the Pi process environment;
+API keys are never included in status output. Defaults are `provider=azure`,
+`voice=MAI-Voice-2.1-Flash`, `lang=en-GB`, `speed=2`, the embedding shown above,
+`delay=2000`, `on_delay=true`, and `on_send=true`. Use `value=none` to remove an
+optional wrapper or override, for example `style=none speed=none embedding=none`.
+A missing style omits `<mstts:express-as>`, a missing speed omits `<prosody>`, and
+a missing embedding omits `<mstts:ttsembedding>`; supplied voices are honored
+verbatim rather than rewritten to another Azure base model.
+
+Read-specific timing is durable under `agentUtils.read` (separate from the
+shared voice/playback fields in `agentUtils.tts`):
+
+```json
+{
+  "agentUtils": {
+    "read": {
+      "enabled": false,
+      "delayMs": 2000,
+      "speed": 1.6,
+      "onDelay": true,
+      "onSend": true
+    }
+  }
+}
+```
+
+Set the delay with `agentUtils.read.delayMs` or `/read delay=750`; set an
+independent read speech rate with `agentUtils.read.speed` or `/read speed=1.6`.
+Every `/read` setter—including `delayMs`, speed, `onDelay`, `onSend`, and
+`on|off`—is runtime-only. `agentUtils.read` defines immutable startup behavior
+and is never rewritten by a command. Env `PI_READ_DELAY_MS`,
+`PI_READ_SPEED`, `PI_READ_ON_DELAY`,
+`PI_READ_ON_SEND`, and `PI_READ_ENABLED` override settings.
+
+While the mode is active:
+
+- after the editor stops changing for `delay` milliseconds, the **whole current
+  buffer** is spoken;
+- another edit interrupts stale synthesis/playback and speaks the whole new
+  version after the next delay;
+- Enter speaks the whole submitted buffer again when `on_send=true`, even if the
+  delayed version already played;
+- `/read some words` remains a one-shot convenience and also enables the mode;
+- `/read status` reports redacted settings and `/read off` cancels timers,
+  synthesis, and playback.
+
+Playback defaults to `backend=pulse server=$PULSE_SERVER`, with `device` taken
+from `$PULSE_SINK` or Pulse's `@DEFAULT_SINK@` (currently `hw_output` in the
+operator setup). The raw-PCM `pacat` client and stream are both named `/read`, so the stream is easy
+to identify and route. A new version terminates the previous player before it
+starts. `backend=sox` and `backend=ffplay` remain available for local output.
+
+### Spoken replies (force-agent-speech)
+
+`force-agent-speech` closes the other half of the hands-free loop: with `/stt`
+turning your *speech* into turns, this speaks the assistant's *reply*
+aloud as a short precis (markdown/code stripped, truncated) so the conversation is
+heard, not just shown.
+
+It is opt-in and best-effort (it never blocks or breaks a turn):
+
+```text
+# enable for the session:
+export PI_FORCE_AGENT_SPEECH=1          # or true/on/yes
+export PI_FORCE_AGENT_SPEECH_MAX_CHARS=240   # optional precis length (default 240)
+# or toggle live:
+/force-speech on        # off | status | env (follow the env again)
+```
+
+The precis is spoken via `caco msg speak` (the TTS daemon). Tool-only turns with no
+text are skipped.
+
+> **Half-duplex (bd-ddc391):** force-agent-speech and local-vad share an in-process
+> speaking signal, so while a reply is being spoken (its estimated duration plus a
+> short release tail) local-vad drops the mic — the assistant's own voice is not
+> captured and transcribed as a phantom turn. The window is estimated from the precis
+> length (~15 chars/s); on a slow TTS voice you can still raise `/rt energy=` if any
+> tail leaks through.
+
+### Push-to-talk hold mode (`/ptt`)
+
+`/ptt` (also `/stt ptt` and `/rt stt local-vad-ptt`) is the push-to-talk variant
+of local VAD (bd-9e06ae): the complete raw hold is captured independently of
+energy classification, while VAD controls incremental preview/chunk boundaries.
+Even if no frame crosses the energy threshold, Space/Enter/Escape re-transcribes
+the whole raw hold on release. Even the longer per-segment commit silence does
+**not** send. Instead segments accumulate and the whole turn is controlled by a
+key when you finish:
+
+- **`Ctrl-Space` / `Enter` / `Space`** — send the accumulated turn now (the editor's text, honoring
+  any edits), then clear the editor.
+- **`Esc`** — early exit (bd-4daaf5): finalize the accrued transcript **into the
+  editor without sending**. The text stays there, fully editable; press `Enter` to
+  send it manually. Nothing is lost if you release before you meant to send.
+- **`Ctrl-C`** — cancel and discard the held transcript.
+- `/ptt stop` preserves the accumulated transcript in the editor and ends the mode;
+  `/ptt cancel` discards it.
+
+**Tap Ctrl-Space to start PTT; tap it again to finish and send.** This uses Pi's registered editor shortcut, not a focus-blind raw capture hook. Dialogs/selectors keep their own keys. Bare Space never starts capture. Legacy NUL and Kitty Ctrl-Space are supported; Kitty repeat/release events are ignored. Use taps rather than holding the chord (legacy terminals cannot distinguish auto-repeat from another press).
+
+Set `agentUtils.stt.shortcutsEnabled=false` or `PI_RT_STT_SHORTCUTS_ENABLED=0` to disable the shortcut; `/ptt` remains available. Ctrl-Space does not switch providers, change acoustic settings, start full Realtime, or take over an already active VAD/Realtime/cascade mode. Stop that mode first. If macOS intercepts Ctrl-Space for input-source switching, change the OS binding so the chord reaches the terminal.
+
+Validation: `python3 scripts/ptt-shortcut-pty.py` starts an isolated real Pi with fake capture/transcription; it verifies both key encodings, dialog isolation, repeat/release behavior, send/preserve/cancel and cleanup without microphones or provider calls.
+
+Because partials mirror into the editor throughout (see bd-0c008d above), you can
+edit at any point; a manual edit is never clobbered by a later partial, and whatever
+is in the editor is what sends. `hchat-ptt` may continue to launch the explicit
+compatibility mode (`/rt stt local-vad-ptt` + speak-replies).
+
+A color-coded state indicator (bd-081267) renders a truecolor bar under the input
+box and tracks the live state: **orange** while listening/recording, **magenta**
+while transcribing, a **yellow** flash when a transcription chunk completes, and a
+**green** flash when a turn is committed/sent. The status line also shows a live
+mic energy bar at a bounded refresh rate for sensitivity debugging in both
+`/stt` and `/ptt`. The percentage is a gain-scaled visible meter, while `raw=`
+and `energy(raw)=` use the actual normalized RMS scale consumed by VAD. For
+example, a 10% visual meter is roughly raw 0.008; energy 0.4 scales/clamps its
+marker to 100% and will reject ordinary speech. It needs a 24-bit-color terminal.
+
+### Shared native agent speech
+
+The shared native TTS dispatcher supports Azure, OpenAI-compatible and Tools daemon providers without a CLI subprocess. `/tts`, `/read`, narration, choices, cascade and speak-replies use it. `force-agent-speech` also honors an explicitly selected shared provider; with none configured it retains its historical `caco msg speak` path. The remaining Azure-specific settings below describe the unchanged default; see [native speech providers](speech-providers.md) for other selections.
+
+- Defaults come from the shared TTS library: `MAI-Voice-2.1-Flash`, embedding
+  `0daec43c-911f-4529-820a-16dab73630d3`, `en-GB`, and speed `2`.
+  Durable overrides come from `agentUtils.tts`; `PI_CASCADE_VOICE`,
+  `PI_CASCADE_SPEAKER`, `PI_CASCADE_LANG`, `PI_CASCADE_SPEED`, and `PI_TTS_*`
+  override that slice; the agent can override voice/speaker/lang/speed/style per
+  call. `PI_CASCADE_SPEAK_VOICE` overrides just the speak-tool voice.
+- `style` and `styledegree` add Azure `<mstts:express-as>` without changing the
+  selected voice. Azure credentials come from `AZURE_SPEECH_API_KEY` and
+  `AZURE_SPEECH_ENDPOINT` in the environment.
+
+Pair it with `/stt` so your speech becomes agent turns and the
+loaded Pi agent replies out loud in the configured voice with low latency — the
+Pi agent IS the cascade brain (bd-15beec).
+
+### Spoken replies, the fast way (`/rt speak-replies`, bd-095b3d)
+
+`speak-replies` is the low-latency completion of the hands-free loop: it auto-
+speaks the **real** Pi agent's replies through the shared native TTS provider, so `/stt` + `speak-replies`
+gives you a genuine voiced agent — your speech drives your actual agent (with your
+tools, MCP, and session history via `sendUserMessage`), and its reply is spoken
+back. Unlike `force-agent-speech` (which speaks a truncated precis via the TTS
+daemon by default), this speaks the full reply via the selected native provider.
+
+```text
+/rt speak-replies on        # off | on ; or env-style: /rt speak_replies=on
+/rt speak-thinking on       # opt-in: also voice a short reasoning/thinking gist (default off)
+```
+
+- `speak-thinking` voices only a **bounded gist** of the model's thinking (the
+  leading sentence(s), capped for listenability) — not the full raw reasoning
+  trace — and only when the loaded model/provider actually surfaces thinking
+  content in the turn (thinking-enabled models; nothing is spoken otherwise).
+
+- Off by default. Startup values live in `settings.json`
+  (`agentUtils.realtime.speakReplies` / `.speakThinking`) with env > settings >
+  default (`PI_RT_SPEAK_REPLIES` / `PI_RT_SPEAK_THINKING`). Runtime toggles and
+  env are never written back.
+- Voice/speaker/lang/speed/style and playback routing come from the shared
+  `agentUtils.tts` slice, with `PI_CASCADE_*` / `PI_TTS_*` / Pulse env overrides;
+  speed is applied as an Azure SSML `<prosody rate>` (speed 1.2 → `+20%`).
+- Fired on the `agent_end` event; tool-call-only / empty turns are skipped and a
+  reply is de-duplicated so it is never spoken twice. Requires audio enabled.
+
+**Architecture:** a single-agent voice loop (`n=1`) is just `stt local-vad` +
+`speak-replies` — both hit your real agent. `/cascade` is the multi-participant
+group-chat layer (`n>=2`, per-participant voices/models) built over the same
+native synthesis primitives.
+
+### Replay the latest spoken response
+
+```text
+/rt-play latest
+/rt-play rt-3
+```
+
+The extension caches recent response PCM clips in memory. `/rt-play latest` replays the most recent one; `/rt-play rt-N` replays a named clip shown in the `rt-audio` status line.
+
+## Cascade group chat (`/cascade`)
+
+`/cascade` is a multi-agent **voice group chat** (bd-7c6790): you speak once, then
+each participant takes one turn — in arbitrary order — and every agent hears you
+*and* everyone who already spoke that round, answering in its own synthesized
+voice. Speech output uses the same native Azure/OpenAI/daemon providers as `/read`, with no `tts` CLI hop. Daemon playback admission occurs in the ordered playback phase, not speculative synthesis.
+
+The widget shows the round live: a rolling **transcript** (`you: …`, then each
+agent), a **mic input-level meter** with a caret at the VAD speech threshold while
+listening, and the current speaker. It is **half-duplex** — while an agent speaks
+the mic is suppressed and the meter shows `muted (agent speaking)`, so agents do
+not capture their own playback. Synthesis is **pipelined**: each turn's TTS is
+synthesised concurrently while playback stays ordered, so a multi-agent round runs
+roughly twice as fast as strict sequential.
+
+```text
+/cascade say hello everyone            # drive one round from typed text (no mic)
+/cascade start n=3                     # live mic room: you + 2 auto peers
+/cascade start participants=var,cedar  # live mic room: you + named peers var, cedar
+/cascade stop                          # stop the mic
+/cascade reset                         # clear the conversation history
+/cascade status                        # show roster + state
+```
+
+Start-time arguments (env-style `key=value`):
+
+| Arg | Meaning |
+| --- | --- |
+| `n=<N>` | total participant count INCLUDING you-the-main (n=2 → main + 1 peer) |
+| `participants=a,b` | named peers beyond main (`var,cedar` or `var[voice=...,model=...]`) |
+| `order=fixed\|random\|round-robin` | turn order each round (default `random`) |
+| `voice=` / `model=` / `base_url=` | overrides for the main participant |
+| `azure=true` | compatibility no-op; default provider remains Azure |
+| `provider=azure\|openai\|daemon` | select native speech transport |
+| `daemon_url=` / `daemon_provider=` / `playback=` | daemon endpoint, upstream selection and server/local playback |
+| `tts_endpoint=` / `tts_instructions=` | speech endpoint/instructions, separate from the chat URL/persona |
+| `speaker=<profileId>` | Azure `mstts:ttsembedding` speaker profile id (personal/embedding voice) |
+| `lang=<locale>` | `xml:lang` for the SSML (e.g. `en-GB`) |
+| `pipeline=false` | disable concurrent-synthesis pipelining (also `PI_CASCADE_PIPELINE=0`); default on |
+| `maxhistory=<N>` | sliding-window conversation cap (default 48; also `PI_CASCADE_MAX_HISTORY`) |
+
+Per-participant overrides use a bracket form, e.g.
+`participants=var[voice=cedar,model=haiku];cedar[base_url=http://...]`.
+
+Defaults: cascade gives every agent the shared `MAI-Voice-2.1-Flash` voice and embedding
+unless overridden (so distinguish them by name/content, or pass distinct `voice=`). For
+the **peer chat model**, an unpinned peer (no `model=`) now runs through Pi's own
+inference engine on the model already loaded in Pi (bd-15beec) — so `n=1` behaves
+like talking to the loaded Pi model and never hits the proxy's "no healthy
+deployments" 400 for a stale default chat model. A peer that pins its own
+`model=` still uses the direct chat-completions path against that model (the
+chat-completions default is `gpt-5-mini`, override with `PI_CASCADE_MODEL`; it is
+also the fallback for every peer when no Pi model/auth is available). The `say`
+verb is the no-microphone way to try a round.
+
+### Native Azure Speech voices + embeddings
+
+With the default `provider=azure`, cascade synthesizes turns with the shared **direct Azure Speech REST** path (`POST <AZURE_SPEECH_ENDPOINT>/cognitiveservices/v1`). The historical
+`azure=true` argument is still accepted but is now redundant: there is no `tts`
+CLI fallback. Credentials come from `AZURE_SPEECH_API_KEY` and
+`AZURE_SPEECH_ENDPOINT` (the endpoint otherwise falls back to the eastus Speech
+URL), and keys are never logged.
+
+To use a personal/embedding voice, pass the desired voice name plus `speaker=`.
+The voice is preserved exactly as supplied and the speaker profile becomes an
+`<mstts:ttsembedding speakerProfileId=...>` wrapper:
+
+```text
+# one embedding voice, British English, a touch faster
+/cascade start n=1 voice=MAI-Voice-2.1-Flash speaker=0daec43c-... lang=en-GB speed=1.2
+
+# a two-voice room (give each a distinct voice)
+/cascade start n=2 participants="Ava[voice=en-US-AvaMultilingualNeural];Andrew[voice=en-US-AndrewMultilingualNeural]"
+```
+
+`speaker=` / `lang=` / `speed=` map to `<mstts:ttsembedding>`, `<lang
+xml:lang>`, and `<prosody rate>` respectively. `style=` plus `styledegree=` adds
+`<mstts:express-as>`. Every participant defaults to the native `azure` provider.
+
+> Latency note: synthesis is pipelined (concurrent native HTTP synthesis,
+> ordered playback), which roughly halves a multi-agent round; you can A/B it
+> with `/cascade start pipeline=false`. The fully audio-native realtime version
+> where agents hear each other as *audio* over parallel `/rt` websockets is
+> bd-07bb7f.
+
+## Status and diagnostics
+
+Compact status:
+
+```text
+/rt-status
+```
+
+Full diagnostics:
+
+```text
+/rt-status full
+/rt-doctor
+```
+
+Diagnostics include:
+
+- provider mode and API key presence
+- selected model and restore target
+- resolved record/playback commands
+- Pulse server/source/sink values
+- command availability for `parec`, `pacat`, `ffmpeg`, `ffplay`, and `rec`
+- current phase, mic bytes, mute window, and pending transcript count
+- VAD threshold/silence/prefix settings
+- last playback error/exit details
+- actionable hints for common setup issues
+
+### Troubleshooting: `gpt-realtime-2` rejected as "only available on the GA API"
+
+If a realtime connect through a LiteLLM-style proxy fails with
+`Model "gpt-realtime-2-..." is only available on the GA API` (`invalid_model`),
+the proxy is routing the realtime WebSocket through the **beta** realtime
+interface for a model that is **GA-only**. This is a proxy-side routing issue,
+not a client bug: it reproduces identically with and without the legacy
+`OpenAI-Beta: realtime=v1` header (this extension already drops that header by
+default; set `PI_RT_BETA_HEADER=1` only to restore it).
+
+Workaround until the proxy routes GA-realtime correctly: connect directly to the
+Azure realtime deployment instead of the proxy (the direct-Azure path, e.g.
+`/rt azure=true start=vad` against a `gpt-realtime-2` deployment). Direct-Azure
+uses the GA realtime interface and connects cleanly.
+
+Unified `/rt` controls:
+
+```text
+/rt start [vad|ptt|nolisten]   start realtime conversation mode
+/rt stop                       stop realtime and restore the previous model
+/rt mic [vad|ptt|off]          start or cancel microphone capture
+/rt listen [vad|ptt|continuous]
+                              start microphone capture using listen API modes
+/rt audio [on|off|toggle]      control audio output
+/rt stt [vad|ptt|local-vad|stop]  explicit Realtime STT, or local-vad compatibility mode
+/stt [vad|ptt|stop|status]     local-VAD batch STT (default mai-transcribe-2)
+/ptt [start|stop|cancel|status] local-VAD hold mode with incremental editor drafts
+/rt widget [show|hide]         show or hide the realtime widget
+/rt status [compact|full]      compact or full status
+/rt doctor                     diagnostics
+/rt probe                      one-shot connect probe (opens the WS, waits for session.created, then closes) classifying connected/ga-only/session-start-1006/auth/config — no mic session
+/rt voice <voice>              set realtime output voice
+/rt trans <model>              set realtime input transcription model
+/rt speed <0.25..1.5>          set spoken response speed (default 1.0)
+/rt backend <backend>          set audio backend for new mic/playback commands
+/rt reasoning <effort>         set reasoning effort: off|minimal|low|medium|high (default low on gpt-realtime-2.x)
+/rt commentary [thinking|text|hidden]
+                              how 2.x commentary preambles render (default thinking)
+/rt summary [true|false]       use compact summary context instead of full history (default false)
+/rt chime [true|false]         enable/disable VAD state chimes (default true)
+/rt backend=pulse source=...    env-style key/value form; supports base_url/server/source/sink/start/mic/stt/audio/widget/status/voice/trans/speed/reasoning/summary/chime/fork, plus the direct-Azure connection keys azure/model/endpoint/deployment/api_version/protocol (e.g. `/rt azure=true start=vad` connects direct-Azure to the preset gpt-realtime-2 GA deployment; api_version=none uses the GA path)
+/rt help                       show the unified command usage
+```
+
+`/rt voice`, `/rt trans`, `/rt speed`, `/rt backend`, `/rt reasoning`, `/rt summary`, and `/rt chime` without an argument print the current value plus supported options. Invalid values are reported as warnings and leave the previous setting unchanged. Voice names are normalized case-insensitively before validation, so `/rt voice Verse` selects `verse`. Transcription model names are passed through after normalizing the historical `whisper` alias to the default realtime transcription model. Speed must be between `0.25` and `1.5`; the extension retries without speed if the realtime server rejects the parameter. Typos in mode-bearing commands such as `/rt start <mode>`, `/rt mic <mode>`, `/rt listen <mode>`, `/rt stt <mode>`, `/rt audio <mode>`, `/rt widget <mode>`, and `/rt status <mode>` are also rejected instead of falling through to a default action. `/rt listen continuous` is accepted as a listen-mode alias for VAD, matching `pi.realtime.listen(ctx, "continuous")`. Unexpected extra arguments, such as `/rt start ptt typo`, are rejected before changing realtime state. Common voices include `marin`, `cedar`, `verse`, `alloy`, and `shimmer`; common backends include `pulse`, `audiotoolbox`, `coreaudio`, `sox`, `ffplay`, `ffmpeg`, and `auto`.
+
+Env-style `/rt` arguments normalize into the same shape used by the agent tool surface. Examples:
+
+```text
+/rt backend=pulse server=sgu24:4713 source=source.bluetooth summary=true start=vad
+/rt fork=true backend=pulse server=sgu24:4713 source=source.bluetooth summary=true chime=false start=vad
+/rt trans=gpt-whisper-realtime speed=1.15 start=vad
+/rt stt=ptt trans=gpt-realtime-whisper source="source.bluetooth"
+/rt summary=false
+/rt action=stop
+```
+
+Legacy aliases still work (`/rt`, `/rt ptt`, `/rt nolisten`, `/rt stt`, `/stt`, `/rt-stt`, `/rt-listen`, `/rt-stop`, `/rt-cancel`, `/rt-status`, `/rt-hide-status`, `/rt-off`, `/rt-reasoning`). `/stt` and `/rt-stt` now deliberately share the local-VAD path; they no longer forward to Realtime. Use explicit `/rt stt vad` or `/rt stt ptt` for WebSocket transcription. No-argument aliases such as `/rt-on`, `/rt-off`, `/rt-doctor`, and `/rt-hide-status` reject unexpected arguments instead of silently ignoring them.
+
+### Summary context mode
+
+`/rt summary=true` switches realtime history replay into compact-summary mode. The first realtime turn after enabling it puts the latest Pi compaction or branch summary into realtime session instructions plus the current turn, rather than replaying the full conversation history as user messages. If no saved Pi summary is present, the extension falls back to a bounded role-by-role summary of recent messages. Summary text is capped and marked as background context so it is not spoken aloud or answered directly. The default is `summary=false`, which preserves the previous full-history replay behavior.
+
+`/rt fork=true ...` forks from the current tree/session leaf before applying the remaining realtime parameters in the replacement session. It composes with other env-style options such as `summary=true`, Pulse routing, and `start=vad`, and uses `position: "at"` so the current tree position is cloned rather than continuing in-place.
+
+Compaction while realtime is active uses a local/simple extension compacter instead of the selected realtime model. Manual `/compact` and auto-compaction therefore keep realtime mode active, do not restore the previous text model, and do not send summarization traffic to `gpt-realtime-2`. The simple checkpoint preserves the previous summary, file lists, role counts, and bounded excerpts from the summarized span; Pi still keeps recent entries from `firstKeptEntryId` onward exactly as normal. If server VAD commits microphone audio during the short compaction window, the audio turn is deferred and automatically queued after Pi appends the compaction entry.
+
+When full-history mode is active, realtime estimates the outgoing system prompt, tools, and message history before opening the WebSocket. If the estimate exceeds the realtime model context window (128k tokens for `gpt-realtime-2`), the turn is aborted with an error telling the user to enable `summary=true`; this avoids silently overflowing the realtime provider context.
+
+## Pi control API
+
+The extension also exposes a unified control object at `pi.realtime` and emits it on `pi.events` as `realtime:controls` for future UI/extensions that should not reach into realtime session internals directly.
+
+## Agent tool workflow
+
+When the extension is loaded in a Pi runtime that supports dynamic tools, it registers `realtime_agent_control`. Agents can use this instead of asking the operator to type `/rt` commands. The tool accepts the same normalized fields as the env-style command parser:
+
+- lifecycle: `action`, `start`, `stt`, `mic`, `listen`, `status`
+- audio/config: `audio`, `backend`, `pulseServer`, `pulseSource`, `pulseSink`, `voice`, `trans`, `speed`, `reasoning`, `summary`, `chime`, `fork`, `widget`
+
+Examples:
+
+```json
+{ "backend": "pulse", "pulseServer": "sgu24:4713", "pulseSource": "source.bluetooth", "summary": true, "chime": false, "start": "vad" }
+{ "stt": "ptt", "pulseSource": "source.bluetooth", "trans": "gpt-realtime-whisper" }
+{ "start": "vad", "trans": "gpt-whisper-realtime", "speed": 1.15 }
+{ "action": "status", "status": "full" }
+{ "action": "stop" }
+```
+
+Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. Partial input transcription deltas are shown as pending `rt-transcript` UI status while speech is still in progress. Completed transcripts are shown as UI status/notification; full realtime never queues them as messages or forwards them as text input, while STT-only queues the completed transcript as a follow-up user message so it works even when the agent is busy.
+
+## Autoreconnect
+
+Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off`, `/rt stop`, or the tool equivalent disables reconnect. For VAD/continuous calls, the extension also watches the recorder process: if microphone capture exits unexpectedly while the realtime session is still connected, it clears stale mic state and restarts capture with bounded backoff. When a response contains a spoken preamble before a tool call, the extension flushes buffered audio before emitting the tool call so the preamble is heard before the tool result rather than after it.
+
+Tuning knobs:
+
+```bash
+export PI_RT_RECONNECT_MAX_ATTEMPTS=5
+export PI_RT_RECONNECT_BASE_DELAY_MS=1000
+```
+
+`/rt-status full` and `/rt-doctor` report the last disconnect reason, retry count, and next retry delay.
+
+Useful methods include:
+
+- `snapshot()` — current model, audio/STT flags, voice, backend, reasoning effort, previous model, last input mode, lifecycle state, and health fields. The nested `state` object includes `connection`, boolean `connected`/`connecting` flags, `phase`, `micMode`, `widgetVisible`, `lastInputMode`, and the derived user-facing `mode`; the nested `health` object includes last response/playback errors, last playback exit/start metadata, mic byte count, pending transcript count, and remaining mic mute time.
+- `usage()` / `help()` — canonical `/rt` usage text for UI/help surfaces.
+- `options()` / `supportedOptions()` — supported `voices`, `audioBackends`, `reasoningEfforts`, `startModes`, `micModes`, `sttModes`, `audioModes`, `widgetModes`, `statusModes`, and direct `listenModes` for building UI affordances.
+- `diagnostics()` and `statusLines()` — the same content used by `/rt-doctor` and `/rt-status`.
+- `showStatus(ctx)`, `hideStatus(ctx)`, `clearUi(ctx)` — widget/footer lifecycle controls.
+- `setAudio(enabled, ctx)`, `toggleAudio(ctx)`, `setSttOnly(enabled, ctx)`, `setVoice(voice, ctx)`, `setAudioBackend(backend, ctx)`, and `setReasoningEffort(effort, ctx)` — guarded state changes.
+- `listen(ctx, mode)`, `stopMic(ctx, { commit })`, `cancelMic(ctx)`, and `disable(ctx)` — microphone/session lifecycle helpers. Direct `listen()` calls validate `mode` against `vad`, `ptt`, and `continuous`.
+
+Widget controls:
+
+```text
+/rt widget hide  hide the realtime widget until explicitly shown again
+/rt widget show  show the realtime status/control panel again
+/rt stop         clear realtime widget and footer statuses
+```
+
+The realtime panel includes compact connection/mic/audio state, transcription model, voice, summary/chime status, VAD threshold and silence, Pulse routing, and quick command hints such as `/rt thresh=0.85` and `/rt audio toggle`.
+
+## Tuning server VAD
+
+Server VAD is used for `/rt` and `/rt-listen vad`.
+
+```bash
+export PI_RT_VAD_THRESHOLD=0.7          # default sensitivity threshold
+export PI_RT_VAD_SILENCE_MS=1100        # silence before server commits speech
+export PI_RT_VAD_PREFIX_PADDING_MS=300  # audio kept before detected speech
+```
+
+Raise the threshold if background noise triggers false starts. Lower it if quiet speech is missed. Increase silence duration if turns are cut off too quickly. Threshold can also be adjusted at runtime with `/rt thresh <0..1>` or env-style `/rt thresh=0.85`; the change is applied to new/current server VAD configuration without restarting Pi.
+
+Practical presets:
+
+| Scenario | Suggested config | When to use it |
+| --- | --- | --- |
+| Quiet room / close mic | `threshold=0.55 silence=800 prefix=250` | Faster turn-taking when speech is clear and false starts are rare. |
+| Default / mixed room | `threshold=0.7 silence=1100 prefix=300` | Balanced default for normal desk/phone routing. |
+| Noisy room / speakers leaking into mic | `threshold=0.85 silence=1400 prefix=400 chime=false` | Avoids background noise and playback leakage causing accidental commits; expect slower turn-end detection. |
+| Very soft speaker | `threshold=0.45 silence=1300 prefix=500` | Helps quiet speech get detected while keeping a longer silence window to avoid cutting the user off. |
+| Unreliable VAD | `start=ptt` or `stt=ptt` | Use push-to-talk when server VAD is repeatedly over-eager, under-eager, or the room is too noisy. |
+
+Examples:
+
+```text
+/rt backend=pulse start=vad thresh=0.55 silence=800 prefix=250
+/rt backend=pulse start=vad thresh=0.85 silence=1400 prefix=400 chime=false
+/rt backend=pulse start=ptt
+/rt stt=ptt trans=gpt-realtime-whisper
+```
+
+Troubleshooting quick checks:
+
+- If Pi commits before you finish a sentence, increase `silence` first; if background noise starts turns while nobody speaks, increase `threshold`.
+- If quiet speech never starts a turn, lower `threshold` and confirm `/rt-doctor` shows mic bytes increasing while you speak.
+- If playback from speakers triggers new mic turns, prefer headphones/Pulse echo control, raise `threshold`, set a longer `silence`, or use `ptt`.
+- If a turn appears stuck in transcription, run `/rt-cancel` to discard pending audio, then check `/rt-status full` or `/rt-doctor` for `micBytes`, `pendingTranscript`, and the resolved VAD values.
+
+`/rt-doctor` shows the resolved values so you can confirm what Pi is using.
+
+## Local realtime extension development
+
+For fast realtime-plugin iteration, link a local `agent-utils` checkout into Pi's auto-discovered extension directory:
+
+```text
+/rt-dev link /path/to/agent-utils
+/rt-dev reload /path/to/agent-utils
+/rt-dev status
+/rt-dev unlink
+```
+
+When no path is provided, `/rt-dev link` uses the current Pi working directory. The command creates a small local package under `~/.pi/agent/extensions/agent-utils-realtime-dev` (or `$PI_CODING_AGENT_DIR/extensions/...`) whose `pi.extensions` entry points at the checkout's `extensions/realtime-agent.js`. After linking, run `/rt-dev reload`, `/reload-tools`, or Pi's `/reload` to load the local source. `/rt-dev reload [checkout]` optionally links the checkout, disables any active realtime session, and calls Pi's extension reload without restarting the full Pi process. This avoids waiting for `pi update --extensions` from GitHub for every small edit. Use `/rt-dev unlink` followed by `/rt-dev reload`, `/reload-tools`, or `/reload` to return to the installed package source.
+
+## Device listing
+
+For macOS local-device experiments:
+
+```text
+/rt-devices
+```
+
+This lists AVFoundation input devices and AudioToolbox output hints. For the normal Pulse/phone path, prefer checking Pulse routing (`PULSE_SERVER`, `PULSE_SOURCE`, `PULSE_SINK`) and `/rt-doctor`.
+
+## Azure/direct mode
+
+The extension also supports direct Azure realtime endpoints:
+
+```bash
+export PI_RT_DIRECT_AZURE=1
+export PI_RT_AZURE_ENDPOINT=...
+export PI_RT_AZURE_API_KEY=...
+export PI_RT_AZURE_DEPLOYMENT=gpt-realtime-2
+export PI_RT_AZURE_API_VERSION=2025-04-01-preview
+export PI_RT_AZURE_PROTOCOL=v1
+```
+
+`PI_RT_AZURE_API_VERSION` defaults to `2025-04-01-preview`. Set it to **`none`**
+(or empty / `ga`) to omit `api-version` from the realtime URL entirely — required
+when the endpoint is a GA-only proxy (e.g. a LiteLLM front for a GA realtime model
+like `gpt-realtime-2`) that rejects the dated api-version with *"Model ... is only
+available on the GA API"*. Then reconnect realtime.
+
+Reasoning effort is sent by default (`low`) on the 2.x family, on both the proxy
+and direct-Azure paths. Override or disable it:
+
+```bash
+export PI_RT_REASONING_EFFORT=medium   # off|minimal|low|medium|high
+export PI_RT_SEND_REASONING=0          # never send response.reasoning
+```
+
+`response.reasoning` is only attached for models that support it (`gpt-realtime-2`
+and later point releases); `gpt-realtime` never receives it. If an endpoint
+rejects the parameter anyway, the extension retries the response once without it
+and latches `reasoningRejected` (shown as `reason:low!` in the status line).
+
+## GPT Realtime 2.x: reasoning, phases, and 256k context
+
+The `gpt-realtime-2` model id is a stable alias for the GPT Realtime 2.x family
+(currently 2.1). The id is unchanged; the capabilities the extension assumes are
+not:
+
+| Capability | Effect in Pi |
+| --- | --- |
+| Adjustable `reasoning.effort` | Default `low` (`/rt reasoning`, `PI_RT_REASONING_EFFORT`), sent on proxy and Azure paths |
+| Phased output items (`commentary` / `final_answer`) | Preambles render as a thinking block, the answer as normal text (`/rt commentary`) |
+| 256,000-token context window | Registered model window + the compaction/oversize-context math in `/rt status full` |
+
+### Do preambles actually reach Pi?
+
+Yes. A 2.x turn can contain several output items, each tagged with a phase:
+`commentary` (a promptable preamble such as *"let me think about that…"*, a tool
+announcement, or a silence filler emitted while the model reasons) and
+`final_answer` (what it settles on). Both are spoken; both arrive as transcript
+deltas on their own output item.
+
+Pi keys off `response.output_item.added.item.phase` and routes each item's
+transcript separately, so a preamble is never glued onto the front of the answer:
+
+```text
+/rt commentary thinking   # default: commentary -> Pi thinking block, answer -> text block
+/rt commentary text       # one merged transcript block (pre-2.x rendering)
+/rt commentary hidden     # preamble is spoken but not transcribed into history
+```
+
+Audio playback is identical in all three modes — `hidden` only drops the text.
+Untagged items (every pre-2.x model) are treated as `final_answer`, so older
+models render exactly as before. If the model is interrupted mid-thought it
+discards that chain of thought and starts a new turn; the interrupted turn is
+closed out as aborted rather than left hanging.
+
+### One response at a time (barge-in)
+
+The realtime server allows exactly one open response per conversation. Speaking
+over the assistant commits new mic audio while the previous response is still
+closing, so a naive `response.create` gets
+*"Conversation already has an active response in progress: resp_…"*. The
+extension serializes turns against that slot:
+
+- a new turn cancels the open response and waits for its `response.done` before
+  creating its own (bounded by `PI_RT_RESPONSE_SLOT_TIMEOUT_MS`, default 5000ms,
+  so a missing `response.done` can never wedge the session);
+- the superseded turn is closed out as aborted, and its trailing deltas are
+  dropped instead of leaking into the next turn's transcript;
+- if the busy error still arrives, the turn is *retried* rather than failed
+  (`PI_RT_RESPONSE_BUSY_MAX_RETRIES`, default 2), so the model transcript keeps
+  printing and the audio-turn latch clears;
+- a mic commit that lands while another audio turn is in flight is queued and
+  replayed when that turn settles, instead of being dropped.
+
+`/rt-doctor` shows the slot state:
+`response: inFlight:resp_… · busyRetries:0 · queuedAudioTurn:no · pendingAudioTurn:no · commentary:thinking`.
+
+## Troubleshooting quick reference
+
+- Run `/rt-doctor` first. It is designed to be safe without a live conversation.
+- If API connection fails, check `OPENAI_API_KEY` / `PI_RT_API_KEY`, or Azure equivalents.
+- If Pulse audio fails, check `PULSE_SERVER`, `PULSE_SOURCE`, `PULSE_SINK`, and whether `parec`/`pacat` are available.
+- If local macOS audio fails, try `/rt-devices`, `PI_RT_INPUT_DEVICE`, `PI_RT_OUTPUT_DEVICE`, or custom record/playback commands.
+- If VAD misses speech, lower `PI_RT_VAD_THRESHOLD` or increase mic gain.
+- If VAD commits too often, raise `PI_RT_VAD_THRESHOLD` or increase `PI_RT_VAD_SILENCE_MS`.
+- If transcription hangs, use `/rt-cancel` to discard or `/rt-listen ptt` for manual control.
+- If the widget is in the way, use `/rt-hide-status`; `/rt-status` shows it again.
+- If you see *"Conversation already has an active response in progress"*, the turn is now retried automatically; check `/rt-doctor`'s `response:` line for `busyRetries` and a stuck `inFlight` id.
+- If preambles read oddly mixed into answers, set `/rt commentary thinking` (default) or `/rt commentary hidden`.
+
+## Smoke test checklist
+
+1. `/rt-doctor` — confirm API key, backend, commands, and Pulse routing.
+2. `/rt nolisten` — verify the realtime WebSocket connects without opening the mic.
+3. Type `hello` — confirm a text realtime response.
+4. `/rt-listen ptt`, speak, then press Enter — confirm transcription appears as a user message.
+5. `/rt` — confirm full VAD conversation.
+6. Ask for a tool use, e.g. list files — confirm Pi tool calls still work.
+7. `/rt-play latest` — confirm replay works after an audio response.
+8. `/rt-off` — confirm previous model and UI are restored/cleared.

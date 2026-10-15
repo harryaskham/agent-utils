@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "scope": "Kitty preview session shutdown/reload lifetime; no global exception handler or Pi guard bypass",
+  "requirements": [
+    {"id": "RELOAD-1", "contract": "No timer scheduled by preview shutdown; tracked flash/hide/stream timers cancelled before ctx invalidation. Retired callbacks never touch old ctx or clear successor widgets.", "tests": ["test/kitty-image-preview-lifecycle.test.js"]},
+    {"id": "RELOAD-2", "contract": "Owned image-data frees stay scoped and synchronous, including hidden never-mounted galleries; no deferred free reaches a replacement generation.", "tests": ["test/kitty-image-preview-lifecycle.test.js", "scripts/kitty-preview-reload-pty.py"]},
+    {"id": "RELOAD-3", "contract": "Late runtime handoff, file preparation, cycle/animation error, overlay and capture/description callbacks are lifetime-gated; stream process and description cancellation is requested on teardown.", "tests": ["test/kitty-image-preview-lifecycle.test.js"]},
+    {"id": "RELOAD-4", "contract": "Actual Pi ctx invalidation and real process reload survive beyond old timer deadlines. TUI reload preserves process identity and releases scoped graphics/terminal state on exit.", "tests": ["test/kitty-image-preview-lifecycle.test.js", "test/kitty-preview-real-reload.test.js", "scripts/kitty-preview-reload-pty.py"]}
+  ],
+  "evidence": {
+    "negative": "Fake-clock regression reproduced stale ctx.ui at old kitty-image-preview.js:647 (inline) and :634 (side fallback).",
+    "rpc": "Isolated Pi 0.84.4: three reloads with owned data, inline/side placement and hide cleanup; no model or production state.",
+    "pty": "Isolated Pi 0.84.4: five real /reload commands for each aboveEditor/belowEditor/rightOverlay; same PID, scoped d=I emitted, clean exit and terminal restoration. Root implementation tested with the audio agent's test-only PTY harness."
+  },
+  "commands": [
+    "node --test test/kitty-image-preview-lifecycle.test.js",
+    "npm run test:preview-reload",
+    "npm run test:preview-reload-pty -- --placement aboveEditor",
+    "npm run test:preview-reload-pty -- --placement belowEditor",
+    "npm run test:preview-reload-pty -- --placement rightOverlay"
+  ],
+  "deployment": "No live update/reload/restart performed. An already-loaded old shutdown handler remains unsafe for the first reload; update package files, then start a fresh process and resume the saved session."
+}

@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "source": "isolated ag + Chromium",
+  "timing_ms": {
+    "samples": 12,
+    "p50": 182.70208300000013,
+    "p95": 287.2628749999999
+  },
+  "pageErrors": [],
+  "cleanExit": true,
+  "states": [
+    "dark",
+    "light",
+    "390x844",
+    "320x480",
+    "1440x420",
+    "filtered",
+    "paused",
+    "offline-reconnect",
+    "tab-reconnect",
+    "keyboard",
+    "hostile-text",
+    "auth-expired"
+  ]
+}
