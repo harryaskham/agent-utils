@@ -55,20 +55,26 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
 
   return function cacophonyRuntimeExtension(pi) {
     let registration = null;
-
-    const announce = (ctx, identity, restored = false) => {
-      const content = `Registered as Cacophony visiting agent ${identity.agentId} in project ${identity.project}${restored ? " (restored)" : ""}.`;
+    const announce = (ctx, identity, guidance = "") => {
+      const headline = `Registered as Cacophony visiting agent ${identity.agentId} in project ${identity.project}.`;
+      // Cacophony's rendered `visiting` profile explains how visiting works;
+      // the model receives it in full, the transcript shows one line.
+      const content = guidance ? `${headline}\n\n${guidance}` : headline;
       pi.sendMessage?.({
         customType: CACO_VISITOR_MESSAGE_TYPE,
         content,
         display: true,
-        details: { ...identity, visiting: true, restored },
+        details: { ...identity, visiting: true, guidance: Boolean(guidance) },
       }, { deliverAs: "nextTurn" });
-      try { ctx.ui?.notify?.(content, "info"); } catch {}
+      try { ctx.ui?.notify?.(headline, "info"); } catch {}
     };
 
     pi.registerMessageRenderer?.(CACO_VISITOR_MESSAGE_TYPE, (message, _options, theme) => ({
-      render(width) { return [theme.fg("dim", String(message.content || "").slice(0, width))]; },
+      render(width) {
+        const first = String(message.content || "").split("\n")[0];
+        const suffix = message.details?.guidance ? " · visiting guidance attached" : "";
+        return [theme.fg("dim", `${first}${suffix}`.slice(0, width))];
+      },
       invalidate() {},
     }));
 
@@ -128,7 +134,7 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
             throw new Error("refusing empty visiting-agent identity");
           }
           pi.appendEntry?.(CACO_VISITOR_ENTRY_TYPE, identity);
-          announce(ctx, identity, false);
+          announce(ctx, identity, String(response?.guidance?.text || "").trim());
           try { pi.events?.emit?.("agent-utils:cacophony-identity", { ...identity, visiting: true }); } catch {}
           return identity;
         })

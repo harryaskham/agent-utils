@@ -194,3 +194,44 @@ test("choice bridge consumes a visiting runtime identity and global disable over
     assert.equal(disabledBridge.config.enabled, false);
   });
 });
+
+test("registration injects Cacophony's visiting guidance into the context message", async () => {
+  clearCacophonyRuntimeIdentity();
+  const env = { CACO_PROJECT: "cacophony" };
+  const before = { ...env };
+  const h = harness();
+  const guidance = "## Visiting agent\n\nUse CACOPHONY_ACTOR=visiting-g; publish regular PRs.";
+  createCacophonyRuntimeExtension({
+    env,
+    settings: { agentUtils: { cacophony: { autoRegister: true } } },
+    execFileImpl(_command, _args, _options, callback) {
+      callback(null, JSON.stringify({ ok: true, data: { id: "visiting-g", project: "cacophony" }, guidance: { profile: "visiting", text: `${guidance}\n` } }), "");
+    },
+  })(h.pi);
+  await h.emit("session_start");
+  await settle();
+  const message = h.messages[0].message;
+  assert.match(message.content, /^Registered as Cacophony visiting agent visiting-g in project cacophony\.\n\n## Visiting agent/);
+  assert.ok(message.content.endsWith("publish regular PRs."), "guidance is passed through trimmed");
+  assert.equal(message.details.guidance, true);
+  assert.equal(h.notifications.at(-1).message, "Registered as Cacophony visiting agent visiting-g in project cacophony.");
+  assert.deepEqual(env, before, "guidance never changes the parent environment");
+  await h.emit("session_shutdown");
+});
+
+test("registration without guidance keeps the one-line message", async () => {
+  clearCacophonyRuntimeIdentity();
+  const h = harness();
+  createCacophonyRuntimeExtension({
+    env: { CACO_PROJECT: "cacophony" },
+    settings: { agentUtils: { cacophony: { autoRegister: true } } },
+    execFileImpl(_command, _args, _options, callback) {
+      callback(null, JSON.stringify({ ok: true, data: { id: "visiting-old", project: "cacophony" } }), "");
+    },
+  })(h.pi);
+  await h.emit("session_start");
+  await settle();
+  assert.equal(h.messages[0].message.content, "Registered as Cacophony visiting agent visiting-old in project cacophony.");
+  assert.equal(h.messages[0].message.details.guidance, false);
+  await h.emit("session_shutdown");
+});
