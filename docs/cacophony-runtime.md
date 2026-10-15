@@ -62,6 +62,8 @@ caco agent register --project <project> --json
 
 Only a receipt containing a non-empty durable agent ID and project is accepted. Success writes a custom session receipt, publishes the shared runtime identity, and adds one visible/context message explaining that the session is registered as a visiting agent. Failure leaves Pi functional and emits one bounded warning.
 
+When the receipt carries Cacophony's rendered `visiting` profile (`guidance.text`, Caco bd-ae0ff8), that message includes it in full: how identity, messages, beads and queues work for a visitor (including running `caco` with `CACOPHONY_ACTOR=<visiting id>`), that it owns its checkout and publishes regular pull requests, and that managed lifecycle commands are not for it. The transcript shows only the one-line headline, marked `visiting guidance attached`. Older Caco versions without `guidance` keep the one-line message.
+
 On reload or restart, the latest matching session receipt restores the runtime identity without rerunning the CLI or duplicating the registration message. `/caco-runtime` shows the current managed, visiting, disabled, in-progress, or unregistered state.
 
 ## Manual visiting-agent registration
