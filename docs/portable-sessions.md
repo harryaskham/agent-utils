@@ -1,136 +1,219 @@
-# Portable Pi sessions
+# Pi session forks
 
-The portable-session extension moves a **conversation branch** between Pi installations without assuming the same username, home directory, checkout root, model catalogue, or extension state exists on both hosts.
+`/session-fork` (inside Pi) and `pi-session fork` (CLI) share one engine for
+forking a conversation into another directory, worktree, or SSH host. Herdr can
+open the prepared destination, start Pi there, and optionally focus it.
 
-It provides two commands:
+**History is never translated or redacted.** The whole JSONL tree, including
+abandoned branches, provider signatures, images and unknown extension entries,
+is copied byte-for-byte after the header. A new header, session name and visible
+relocation message establish the new identity and environment. The source keeps
+running and is never edited, stopped, reset or stashed.
 
-```text
-/session-export <destination> [--redact] [--max-bytes N]
-/session-import <bundle> [--cwd PATH] [--session-dir PATH] [--max-bytes N]
-```
+This replaces the old `/session-export` and `/session-import` extension pair.
+Those commands and their bundle importer are removed; old bundles are not a v1
+input. Use an original Pi JSONL session. There is no automatic migration of old
+bundles and no claim that already-translated history can be repaired.
 
-The bundle is transport-neutral JSON. Copy it using a transport you already trust; the extension does not upload, sync, or publish bundles.
+## Quick start
 
-## Export
-
-Export the active branch to a new file:
-
-```text
-/session-export ~/handoff/feature.pi-session.json --redact
-```
-
-The command refuses to overwrite an existing destination. It writes via a same-directory temporary file and atomic link, with mode `0600`. The default maximum bundle size is 50 MiB; use `--max-bytes` to choose a different explicit bound.
-
-The manifest records:
-
-- bundle schema version and creation time;
-- origin host, session id, `HOME`, and working directory;
-- repository remote and commit when available;
-- active provider/model;
-- extension `customType` values encountered in the active branch;
-- inline image count and base64 byte total.
-
-Only the active branch is exported. Abandoned branches in the source JSONL tree are not copied.
-
-### Redaction is helpful, not exhaustive
-
-`--redact` masks common secret-bearing keys and recognizable bearer, GitHub, and `sk-...` token shapes. It reports the number of replacements. It is a conservative safety pass, **not proof that the transcript is secret-free**. Tool output, prose, screenshots, unusual credential formats, and encoded data can still contain sensitive material. Review a bundle before sending it off-host, and never commit private transcripts to a source repository merely because redaction was requested.
-
-Inline images remain in the bundle. Exports that exceed the configured size bound fail clearly; content is never silently dropped to make a bundle smaller.
-
-## Import
-
-Copy the bundle to the target host, enter the target checkout, then run:
+Inside the active Pi session:
 
 ```text
-/session-import ~/handoff/feature.pi-session.json
+/session-fork --name investigation --worktree investigation
+/session-fork --remote aurora --name investigation --herdr --focus
+/session-fork --remote aurora --repo ~/agent-utils --clone --name investigation
+/session-fork --cwd ~/another-existing-checkout --name continued
+/session-fork --help
 ```
 
-The current directory is the default target `cwd`. Override it explicitly when needed:
+The command waits until Pi is idle and captures the actual selected leaf. It
+leaves the active process in place; it does not switch your current Pi session.
+The new relocation message tells the destination model that old paths/processes
+and host-specific extension state describe the origin, not the current machine.
+It does not automatically submit a model prompt.
+
+From a shell:
+
+```sh
+pi-session fork --session <pi-session-id-or-jsonl-path> \
+  --remote aurora --name investigation --herdr --focus --json
+
+# In an unpublished source checkout (no installation needed):
+node scripts/pi-session.mjs fork --session /path/to/session.jsonl \
+  --cwd /path/to/existing-directory --name continued --json
+```
+
+The ID is a **Pi session ID**, not a Cacophony agent ID or a Herdr pane ID. Lookup
+uses the configured source session directory and Pi's default session tree;
+ambiguous prefixes fail. Exact paths are preferred for unusual storage layouts.
+The CLI snapshots the last persisted leaf, not an unsaved `/tree` navigation in
+a running Pi process. Use the slash command when that distinction matters.
+
+`--dry-run` resolves the source and destination without publishing a session,
+creating a worktree, cloning, or opening Herdr. It can still contact the SSH peer
+and run read-only Git inspection. Errors such as a missing repo explain the
+required explicit option.
+
+## Destination and Git behavior
+
+| Choice | Behavior |
+|---|---|
+| `--cwd PATH` | Reuse that existing directory; never checkout/reset it. A Git target must be clean and at the source commit (except the same local source cwd). |
+| No `--cwd`, Git source | Create a detached worktree at the captured source commit. |
+| `--worktree NAME` | Set its directory name; single path component only. |
+| No `--worktree` | Use a filesystem-safe form of the new session name. |
+| No `--name` | Source session name, otherwise source branch, otherwise generated fork name. |
+| `--repo PATH` | Explicit destination main repo; linked source worktrees resolve through Git's common directory. |
+| Remote repo default | Reuse the source main repo's HOME-relative path under the destination HOME. Repos outside HOME need explicit `--repo`. |
+| `--clone` | Permit cloning a missing repo from the recorded origin. No implicit clone, fetch from arbitrary refs, or push. |
+| Missing committed objects | Send a bounded Git bundle containing the exact captured commit, including unpushed linked-worktree commits. No temporary source ref is created. |
+| Dirty source | Refuse migration by default. `--dirty omit` explicitly leaves uncommitted/untracked files on the source and records that warning. An explicit same-local-`--cwd` fork shares those files and reports that instead. No patch or working-file transfer in v1. |
+| Existing worktree path | Refuse unless it belongs to a replay of this same request. Choose another name, or deliberately reuse it with `--cwd`. |
+
+Worktree roots default to `~/.pi/worktrees/<repo>/<name>`, or
+`~/.herdr/worktrees/<repo>/<name>` with `--herdr`. Override with
+`--worktree-root PATH`. Worktrees are **detached**; creating/moving development
+branches is a separate Git action. The main checkout is not switched. A newly
+cloned main repository is created with `--no-checkout`; the new worktree contains
+the files at the exact captured commit.
+
+For a non-Git HOME session, a remote fork defaults to the remote HOME. Other
+non-Git remote directories require `--cwd`. `~` is expanded on the destination;
+quote `~/...` in a **shell** command so your local shell does not expand it first.
+The Pi command parser does not run a shell or expand `$variables`.
+
+## SSH and installation
+
+Both ends need `pi-session`, Node 22+ and Git. SSH uses the operator's normal SSH
+config, host keys and identities, with batch authentication. It never disables
+host-key checking, copies credentials, installs software remotely, or puts a
+transcript in command-line arguments. A finite, versioned JSON request goes over
+stdin; a receipt comes back on stdout. Transcript/Git-bundle checksums are checked
+at the receiver. Do not add banners to noninteractive shell stdout.
+
+Use `--remote-command PATH` if the peer executable is not on PATH. It is a single
+executable path, **not a shell snippet**. For a source checkout on the other node:
+
+```sh
+pi-session fork --session <id> --remote aurora \
+  --remote-command '~/agent-utils/scripts/pi-session.mjs' --name investigation
+```
+
+Delivery surfaces:
+
+- Pi package: `extensions/session-fork.js` in the normal extension list.
+- npm bin: `pi-session` → `scripts/pi-session.mjs`.
+- Nix: `.#pi-session`, also in the Agent Utils CLI aggregate/overlay; runtime
+  Node, Git and OpenSSH are wrapped in. Pi and Herdr are optional external programs.
+
+A Pi package reload enables the slash command; it does **not** put npm bin links
+on the shell PATH. Use the Nix package/Collective installation or the source CLI.
+A build alone does not install or advance Collective's lock. Native Windows is
+not supported in this version; Linux/macOS/Android Unix environments are intended.
+
+## Herdr
+
+`--herdr` uses `worktree open` for a prepared worktree, or `workspace create` for
+an existing directory, always with `--no-focus`. It reads returned workspace and
+pane IDs, then calls `agent start ... --kind pi --pane <returned-id> -- --session
+<exact-file> --name <name>`. Herdr's successful start means interactive readiness,
+not completion of any model turn.
+
+`--herdr-session NAME` explicitly selects the **destination server session**;
+the default is `default`. Start that server yourself if it is not running. An
+SSH destination does not inherit the source's pane/server identity. Saved Herdr
+machine profiles are not resolved by this tool: `--remote` is an SSH alias.
+
+`--focus` is a separate opt-in. Before focus, the adapter checks the named live
+occupant, pane, terminal identity, and native session identity when Herdr supplies
+one. It does not assume pane handles survive server restarts. Focusing the remote
+server does not move a local client to that machine; attach the appropriate Herdr
+client yourself. No UI mode or desktop is changed behind your back.
+
+Herdr has no idempotency key on create/start. The adapter records admission before
+calling each. A lost response produces **indeterminate**, never a blind second
+workspace or Pi process. The session file and resume command remain valid even if
+Herdr is unavailable or blocked. Inspect the saved pane/agent with the named
+server before manually completing a failed launch. Retrying a completed request
+does not start or focus the same agent again.
+
+## Receipts, retries and recovery
+
+```sh
+pi-session status <request-id> --json
+pi-session retry <request-id> --json
+```
+
+Or inside Pi:
 
 ```text
-/session-import ~/handoff/feature.pi-session.json --cwd /Users/harry/src/agent-utils
+/session-fork status <request-id>
+/session-fork retry <request-id>
 ```
 
-The target directory must already exist. Import validates the bundle and session tree, allocates a new session id, rewrites the header `cwd`, and writes a new `0600` JSONL session without modifying the bundle or origin session. By default it uses Pi's per-cwd session placement. `--session-dir` preserves installations that intentionally use a shared custom session directory.
+A generated request ID is returned; pass `--request YOUR-ID` to choose one before
+starting. Once admitted, it binds the source snapshot, intent and new session ID.
+`retry` works even after the source session advances. Reusing a request ID with
+different options fails. `status` is read-only and checks the destination through
+the original transport. To inspect a remote incoming request without source state:
 
-After import, use normal Pi session discovery from the target cwd:
-
-```bash
-cd /Users/harry/src/agent-utils
-pi -c
+```sh
+pi-session status <request-id> --remote aurora --json
 ```
 
-The imported header includes `portableImport` provenance naming the origin host, origin session id, bundle version, import timestamp, and new local session id. It deliberately does not put a remote identifier into Pi's `parentSession` field, because that field denotes a local session-file path.
+The receipt provides `resume.onDestination` (exact `cd ... && pi --session ...`)
+and `resume.fromSource` (SSH form when applicable). These resume the existing fork,
+not a fresh copy. Do not manually launch concurrent writers to the same Pi session.
 
-## Path translation and compatibility report
+State is under `$PI_CODING_AGENT_DIR/session-forks/{outgoing,incoming}/<request>`
+(default `~/.pi/agent`). Private source snapshots/Git bundles are retained for retry;
+receipts never include transcript bodies. This is not a sync service and there is
+no automatic deletion. Delete a completed request's private outgoing/incoming
+journal directories only when no operation is running and retries are no longer
+needed; this does not remove the published session or worktree.
 
-Import applies only two declared prefix mappings:
+Session writes are `0600`, atomic, durable and no-clobber. Replays verify the
+published prefix, permitting new entries appended after resume. Changed/truncated
+prefixes are a conflict, not permission to overwrite. Per-request locks keep
+unrelated requests independent. A positively dead local PID's lock is quarantined
+with its owner evidence; live, foreign-host, permission-denied or ownerless locks
+are not removed. An ownerless lock after a crash during admission requires manual
+inspection. Herdr ambiguity remains indeterminate even after lock recovery.
 
-1. origin checkout `cwd` to target `cwd`;
-2. origin `HOME` to target `HOME`.
+JSON envelope: `{version:1, ok:true, result:...}` or
+`{version:1, ok:false, error:{code,message,details}}`. Exit codes: `0` success/readable
+status, `1` operation failure, `2` argument/source-path error, `3` indeterminate
+Herdr presentation after successful session publication. The internal `_peer`
+protocol returns logical errors as JSON with exit 0 so SSH transports preserve
+the structured error. There is no public arbitrary-command endpoint.
 
-Rewrites are path-boundary checked. Longer prefixes win, so a checkout mapping is applied before the broader home mapping. Strings inside messages, tool arguments, bash execution records, and extension-owned payloads use the same policy. Absolute paths outside those mappings are preserved verbatim and listed as unresolved; import never silently erases or guesses them.
+## Bounds and exclusions
 
-The compatibility report also warns when:
+- Session snapshot: 64 MiB. Git bundle: 128 MiB. Oversized data fails; never drops
+  images/history silently. Peer wire input is bounded and has a deadline.
+- Source must be saved Pi v3 JSONL with complete records, unique IDs and backward
+  parent references. Unsupported/newer versions fail, rather than being guessed.
+- No auth, MCP settings, packages, external attachment files, sockets, devices,
+  browser profiles, running processes, or dirty working files are migrated.
+- Destination Pi supplies its own tools, resources, auth and models. Preserved
+  unknown extension payloads are historical data; their owners must reinitialize
+  host-specific runtime state. History cannot make external resources portable.
+- This tool does not manufacture `/home/agents` symlinks or rewrite usernames.
 
-- the source provider/model is unavailable or cannot be verified locally;
-- an extension `customType` cannot be verified on the target.
+## Validation
 
-These are warnings rather than hard failures so conversation history remains recoverable. Selecting a usable local model after resume is an operator choice.
-
-## Extension-owned payload contract
-
-`custom` and `custom_message` entries survive round-trip structurally. Extension authors should treat their data as one of:
-
-- **portable:** ordinary JSON whose absolute path strings may use the declared prefix translations;
-- **host-specific:** device ids, Pulse routes, Tendril targets, kitty placements, daemon agent ids, process ids, sockets, state-root paths, or other values that require reinitialization on the target.
-
-Unknown custom types are preserved and reported. The importer does not invoke extension-specific migrations or discard unfamiliar state. Extensions must validate restored state and ignore or rebuild values that are not meaningful on the target host.
-
-## Deliberate exclusions
-
-A portable session bundle contains conversation/session data only. It does **not** include or migrate:
-
-- `auth.json`, API keys, cookies, or OAuth caches;
-- `models.json`, `models-store.json`, provider registrations, or model credentials;
-- MCP server configuration or authentication;
-- installed extensions, skills, prompts, themes, or package dependencies;
-- app-automation snapshots, browser profiles, Pulse devices, Tendril displays, or external state roots;
-- working-tree changes or uncommitted repository files.
-
-Install and authenticate required integrations separately on the target. Use the recorded repository commit to align source code before resuming when appropriate.
-
-## Delivery map
-
-The original feature `bd-24ed21` is delivered as four bounded slices:
-
-| Bead | Responsibility | Parent acceptance covered |
-|---|---|---|
-| `bd-38421f` | Versioned manifest, conservative prefix translation, unresolved-path report, provenance primitives | Header/known-prefix rewrite; report dangling paths; preserve custom entries |
-| `bd-d30dd1` | Active-branch export, optional redaction, image accounting and size bound | Self-contained export; optional secret pass; bounded image handling |
-| `bd-23f673` | Validated import, new local identity, Pi-compatible placement and compatibility warnings | Different-HOME/cwd resume; origin provenance; model/custom degradation |
-| `bd-fa3310` | This contract plus the cross-host end-to-end fixture | Documented extension payload contract; complete differing-host round trip |
-
-Remote daemon transfer and Cacophony-native transport remain optional layers above this bundle format; they are not required for a correct local export/import foundation.
-
-## Bundle schema
-
-Version 1 has this top-level shape:
-
-```json
-{
-  "manifest": {
-    "bundleVersion": 1,
-    "createdAt": "...",
-    "origin": { "sessionId": "...", "host": "...", "home": "...", "cwd": "..." },
-    "repository": { "remote": "...", "commit": "..." },
-    "model": { "provider": "...", "id": "..." },
-    "customTypes": []
-  },
-  "session": { "header": {}, "entries": [] },
-  "images": { "count": 0, "base64Bytes": 0 }
-}
+```sh
+node --test test/session-fork*.test.js
+PI_SESSION_TEST_PI_BIN=/absolute/path/to/pi \
+PI_SESSION_TEST_HERDR_BIN=/absolute/path/to/herdr \
+  node --test test/session-fork*.test.js
 ```
 
-Import rejects unsupported bundle versions, inconsistent origin/header identities, duplicate entry ids, dangling parents, invalid session versions, oversized input, destination collisions, and nonexistent target working directories.
+The opt-in tests start their own private Herdr server and real Pi processes with
+disposable HOME/config/runtime directories. They do not use operator accounts,
+credentials, live workspaces or provider calls. The SSH-adapter test crosses an
+actual shell/process/receiver boundary in two disposable homes via an SSH shim;
+it is not proof of cross-machine SSH authentication/network behavior.
+
+Contract and acceptance IDs: [design/session-fork.md](design/session-fork.md).

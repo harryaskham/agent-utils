@@ -73,7 +73,33 @@
             cargoBuildFlags = [ "-p" "skill-server" ];
             cargoTestFlags = [ "-p" "skill-server" ];
           };
+          piSession = pkgs.stdenvNoCC.mkDerivation {
+            pname = "pi-session";
+            version = "1.0.0";
+            src = ./.;
+            nativeBuildInputs = [ pkgs.nodejs_22 pkgs.git pkgs.openssh pkgs.makeWrapper ];
+            dontBuild = true;
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              export HOME=$(mktemp -d)
+              patchShebangs scripts/pi-session.mjs
+              node --test test/session-fork*.test.js
+              runHook postCheck
+            '';
+            installPhase = ''
+              mkdir -p $out/lib/pi-session/extensions/lib $out/lib/pi-session/scripts $out/bin
+              cp package.json $out/lib/pi-session/
+              cp -r extensions/lib/session-fork $out/lib/pi-session/extensions/lib/
+              cp scripts/pi-session.mjs $out/lib/pi-session/scripts/
+              makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/pi-session \
+                --add-flags "$out/lib/pi-session/scripts/pi-session.mjs" \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.openssh ]}
+            '';
+            meta.mainProgram = "pi-session";
+          };
           allPackages = [
+            piSession
             web-search.packages.${system}.web-search-mcp
             linear-extra.packages.${system}.linear-extra-mcp
             skillServer
@@ -87,6 +113,7 @@
           skillServerUnchecked = withoutChecks skillServer;
           agUnchecked = withoutChecks ag.packages.${system}.ag;
           uncheckedPackages = [
+            (withoutChecks piSession)
             webSearchUnchecked
             linearExtraUnchecked
             skillServerUnchecked
@@ -127,6 +154,8 @@
             paths = allPackages;
             pathsToLink = [ "/bin" ];
           };
+          pi-session = piSession;
+          pi-session-unchecked = withoutChecks piSession;
           ag = ag.packages.${system}.ag;
           ag-unchecked = agUnchecked;
           all = self.packages.${system}.default;
@@ -154,6 +183,7 @@
         packages = self.packages.${prev.system};
       in {
         agent-utils = packages.unchecked;
+        pi-session = packages.pi-session-unchecked;
         ag = packages.ag-unchecked;
         web-search-mcp = packages.web-search-mcp-unchecked;
         linear-extra-mcp = packages.linear-extra-mcp-unchecked;
@@ -170,6 +200,10 @@
         ag = {
           type = "app";
           program = "${self.packages.${system}.ag}/bin/ag";
+        };
+        pi-session = {
+          type = "app";
+          program = "${self.packages.${system}.pi-session}/bin/pi-session";
         };
         web-search-mcp = self.apps.${system}.default;
         linear-extra-mcp = {
@@ -191,6 +225,7 @@
       });
 
       checks = forAllSystems (system: {
+        pi-session = self.packages.${system}.pi-session;
         ag = ag.packages.${system}.ag;
         ag-dash-module = ag.checks.${system}.ag-dash-module;
       });
