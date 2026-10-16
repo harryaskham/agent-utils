@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { showInKittyImagePreview } from "./kitty-image-preview/runtime.js";
@@ -7,9 +6,21 @@ import {
   buildTendrilCommand,
   tendrilCommandSummary,
   tendrilBridgeConfig,
-  tendrilSourceMachine,
 } from "./tendril-command.js";
 import { headlessDisplaySummary } from "./lib/headless-display.js";
+import {
+  DEFAULT_TIMEOUT_MS,
+  PNG_MIME,
+  captureTendrilPngWith,
+  clampInteger,
+  listTargetsText,
+  parseJsonEnvelope,
+  resolveSourceMachine,
+  resolveTendrilTargetWith,
+  runTendrilJsonWith,
+  sanitizeFilenamePart,
+  sourceMachineLabel,
+} from "./lib/tendril-capture.js";
 import { runPiTextTurn, VISION_DESCRIBE_SYSTEM_PROMPT } from "./lib/pi-inference.js";
 import {
   agentSettingsPath,
@@ -20,38 +31,6 @@ import {
   resolveDescribeModel as resolveDescribeModelCore,
 } from "./lib/describe-model.js";
 
-// Label used when a capture/inference comes from the bridge on this host rather
-// than a --remote host, so source-machine attribution is always populated.
-const LOCAL_SOURCE_MACHINE = "local";
-
-// Resolve the source machine for a capture from the effective Tendril bridge
-// config. For remote captures (--remote <host> / AGENT_UTILS_TENDRIL_REMOTE)
-// this is the remote host; otherwise it is the local bridge. The returned
-// descriptor lets downstream inference results be associated with the machine
-// that produced the image, which is required to disambiguate multiple
-// concurrent remote captures.
-//
-// Delegates the actual bridge resolution to the shared tendrilSourceMachine()
-// helper in tendril-command.js so there is a single source of truth for "which
-// machine produced this capture". The shared helper returns
-// { machine, remote, isRemote, wslTunnel, source }; this adapts it to the
-// { host, remote, source } shape the tendril-share call sites and tests expect.
-function resolveSourceMachine(override, env = process.env) {
-  const resolved = tendrilSourceMachine(env, override || {});
-  return {
-    host: resolved.isRemote ? resolved.machine : LOCAL_SOURCE_MACHINE,
-    remote: resolved.isRemote,
-    source: resolved.source,
-  };
-}
-
-function sourceMachineLabel(sourceMachine) {
-  if (!sourceMachine) return LOCAL_SOURCE_MACHINE;
-  return sourceMachine.remote ? sourceMachine.host : LOCAL_SOURCE_MACHINE;
-}
-
-const DEFAULT_TIMEOUT_MS = 30_000;
-const PNG_MIME = "image/png";
 const DEFAULT_DESCRIBE_MODEL = "github-copilot/claude-opus-4.8";
 const FALLBACK_DESCRIBE_MODELS = Object.freeze([
   DEFAULT_DESCRIBE_MODEL,
@@ -98,49 +77,10 @@ export function setTendrilShareCompleteForTest(fn = null) {
   completeForDescribe = fn;
 }
 
-function clampInteger(value, fallback, min, max) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, Math.trunc(n)));
-}
-
-function sanitizeFilenamePart(value) {
-  return String(value || "target")
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80) || "target";
-}
-
-function timestampForFilename(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, "-");
-}
-
-function parseJsonEnvelope(stdout, commandName = "tendril") {
-  const trimmed = String(stdout || "").trim();
-  if (!trimmed) throw new Error(`${commandName} returned no JSON output.`);
-  try { return JSON.parse(trimmed); }
-  catch (error) {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
-    throw new Error(`${commandName} returned invalid JSON: ${error.message}`);
-  }
-}
+const piExec = (pi) => (command, args, options) => pi.exec(command, args, options);
 
 export async function runTendrilJson(pi, args, { signal, timeout = DEFAULT_TIMEOUT_MS, override } = {}) {
-  const tendril = buildTendrilCommand(args, process.env, override || {});
-  const result = await pi.exec(tendril.command, tendril.args, { signal, timeout });
-  if (result.code !== 0 && !String(result.stdout || "").trim()) {
-    const message = result.stderr || `tendril exited with code ${result.code}`;
-    throw new Error(`tendril ${args[0] || "command"} failed: ${message}`);
-  }
-  const envelope = parseJsonEnvelope(result.stdout, `tendril ${args[0] || ""}`);
-  if (result.code !== 0 || envelope.status === "error") {
-    const message = envelope.error?.message || result.stderr || `tendril exited with code ${result.code}`;
-    const code = envelope.error?.code ? ` (${envelope.error.code})` : "";
-    throw new Error(`tendril ${args[0] || "command"} failed${code}: ${message}`);
-  }
-  return envelope;
+  return runTendrilJsonWith(piExec(pi), args, { signal, timeout, override });
 }
 
 function classifyTendrilBridgeProbe(summary, probe) {
@@ -163,25 +103,6 @@ function getCaptureDir(ctx) {
     return path.join(path.dirname(sessionFile), "tendril-share-screenshots", sessionId);
   }
   return path.join(os.tmpdir(), "pi-tendril-share", `pid-${process.pid}`);
-}
-
-function targetLabel(target) {
-  return [target.title, target.name, target.app_name].filter(Boolean).join(" — ") || target.id || "unknown";
-}
-
-function targetSearchText(target) {
-  return [target.id, target.title, target.name, target.app_name].filter(Boolean).join(" ").toLowerCase();
-}
-
-function formatTarget(target) {
-  const caps = target.capabilities?.capture ? "capture" : "no-capture";
-  return `${target.kind || "?"} ${target.id || "?"} [${caps}] ${targetLabel(target)}`;
-}
-
-function listTargetsText(envelope) {
-  const targets = Array.isArray(envelope.data?.targets) ? envelope.data.targets : [];
-  if (!targets.length) return "Tendril targets: none";
-  return ["Tendril targets:", ...targets.map((target) => `- ${formatTarget(target)}`)].join("\n");
 }
 
 function parseShareFlags(tokens) {
@@ -320,26 +241,7 @@ function resolveVisionModel(ctx) {
 }
 
 async function resolveTendrilTarget(pi, { kind, target, override }, signal) {
-  if (!target) throw new Error(`Missing ${kind} target. Use /tendril ${kind} <id-or-name> [prompt].`);
-  const fallback = { kind, id: String(target), label: String(target), source: "explicit" };
-  let envelope;
-  try {
-    envelope = await runTendrilJson(pi, ["list", "--json"], { signal, timeout: DEFAULT_TIMEOUT_MS, override });
-  } catch {
-    return fallback;
-  }
-  const targets = (Array.isArray(envelope.data?.targets) ? envelope.data.targets : [])
-    .filter((candidate) => candidate.kind === kind && candidate.id && candidate.capabilities?.capture);
-  const needle = String(target).toLowerCase();
-  const exact = targets.find((candidate) => String(candidate.id).toLowerCase() === needle)
-    || targets.find((candidate) => targetLabel(candidate).toLowerCase() === needle);
-  if (exact) return { ...exact, id: String(exact.id), label: targetLabel(exact), source: "list" };
-  const matches = targets.filter((candidate) => targetSearchText(candidate).includes(needle));
-  if (matches.length === 1) return { ...matches[0], id: String(matches[0].id), label: targetLabel(matches[0]), source: "list" };
-  if (matches.length > 1) {
-    throw new Error(`Ambiguous Tendril ${kind} target "${target}". Matches: ${matches.map(formatTarget).join("; ")}`);
-  }
-  return fallback;
+  return resolveTendrilTargetWith(piExec(pi), { kind, target, override }, signal);
 }
 
 function emitCaptureHistory(pi, { action, kind, target, outputPath, queued, descriptionModel, sourceMachine }) {
@@ -389,29 +291,7 @@ async function buildShareMessageText(pi, signal, { baseText, captured, includeLi
 }
 
 async function capturePngTarget(pi, ctx, { kind, target, maxWidth, maxHeight, override }, signal) {
-  const resolved = await resolveTendrilTarget(pi, { kind, target, override }, signal);
-  const sourceMachine = resolveSourceMachine(override);
-  const dir = getCaptureDir(ctx);
-  await mkdir(dir, { recursive: true });
-  // Include the source-machine label in the filename so multiple concurrent
-  // remote captures (different hosts, same target id) cannot collide on disk.
-  const outputPath = path.join(
-    dir,
-    `${timestampForFilename()}-${sanitizeFilenamePart(sourceMachineLabel(sourceMachine))}-${sanitizeFilenamePart(kind)}-${sanitizeFilenamePart(resolved.id)}.png`,
-  );
-  const args = [
-    "capture",
-    "--json",
-    "--format", "png",
-    "--output", outputPath,
-    "--timeout-ms", String(clampInteger(process.env.TENDRIL_SHARE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 120_000)),
-    kind === "window" ? "--window" : "--display", String(resolved.id),
-  ];
-  if (maxWidth !== undefined) args.push("--max-width", String(maxWidth));
-  if (maxHeight !== undefined) args.push("--max-height", String(maxHeight));
-  const envelope = await runTendrilJson(pi, args, { signal, timeout: DEFAULT_TIMEOUT_MS + 5_000, override });
-  const data = await readFile(outputPath, "base64");
-  return { outputPath, envelope, data, target: resolved, sourceMachine };
+  return captureTendrilPngWith(piExec(pi), { dir: getCaptureDir(ctx), kind, target, maxWidth, maxHeight, override }, signal);
 }
 
 async function captureTarget(pi, ctx, { kind, target, id, prompt, includeList = true, pathOnly = false, override }, signal) {

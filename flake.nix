@@ -119,9 +119,10 @@
             skillServerUnchecked
             agUnchecked
           ];
-          # pi-daemon Durable extension modules (bd-832b7a). `$out/tts.mjs` is the
-          # module a pi-daemon profile lists under `extensions:`; it loads the
-          # shared agent-utils speech libraries from `$out/extensions`. Playback
+          # pi-daemon Durable extension modules (bd-832b7a, bd-647b05). `$out/tts.mjs`
+          # and `$out/media.mjs` are the modules a pi-daemon profile lists under
+          # `extensions:`; they load the shared agent-utils libraries from
+          # `$out/extensions`. Playback
           # binaries are recorded as absolute paths so the worker's PATH does not
           # need Pulse tools.
           durableExtensions = pkgs.runCommand "agent-utils-durable-extensions" {
@@ -135,10 +136,15 @@
               echo '{ "pacat": "${pkgs.pulseaudio}/bin/pacat" }' > $out/extensions/durable/runtime-paths.json
             ''}
             echo 'export * from "./extensions/durable/tts.mjs";' > $out/tts.mjs
-            # The module must load with nothing but Node built-ins.
+            # image_share, audio_share and tendril_capture (bd-647b05).
+            echo 'export * from "./extensions/durable/media.mjs";' > $out/media.mjs
+            # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
               if (typeof m.observe !== 'function' || typeof m.commands?.tts?.run !== 'function' || typeof m.commands?.narrate?.run !== 'function') process.exit(1);
+              const media = await import('$out/media.mjs');
+              const names = (media.extension?.tools ?? []).map((tool) => tool.name).join(',');
+              if (media.extension?.name !== 'agent-utils-media' || names !== 'image_share,audio_share,tendril_capture') process.exit(1);
             "
           '';
           uncheckedJoin = pkgs.symlinkJoin {

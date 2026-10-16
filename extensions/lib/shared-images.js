@@ -19,7 +19,7 @@ export function imageAgentDirectory(name) {
   return safe === raw ? safe : `${safe}-${digest(raw).slice(0, 12)}`;
 }
 
-function imageMime(bytes, declared, sourcePath = "") {
+export function sniffImageMime(bytes, declared, sourcePath = "") {
   if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return declared === "image/apng" ? declared : "image/png";
   if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "image/jpeg";
   if (/^GIF8[79]a$/.test(bytes.subarray(0, 6).toString())) return "image/gif";
@@ -31,7 +31,7 @@ function imageMime(bytes, declared, sourcePath = "") {
   throw new Error("Unsupported shared image media type");
 }
 
-async function readImage(path) {
+export async function readSharedImageFile(path) {
   if (!(await stat(path)).isFile()) throw new Error("Shared image source is not a regular file");
   const file = await open(path, "r");
   try {
@@ -66,14 +66,14 @@ export async function archiveSharedImage(image, provenance, { env = process.env,
     ? resolve(provenance.cwd || process.cwd(), image.path.startsWith("~") ? expandStatePath(image.path, env) : image.path.replace(/^@/, ""))
     : undefined;
   let bytes;
-  if (sourcePath) bytes = await readImage(sourcePath);
+  if (sourcePath) bytes = await readSharedImageFile(sourcePath);
   else {
     const data = image.data;
     if (typeof data !== "string" || data.length > Math.ceil(MAX_SHARED_IMAGE_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0) throw new Error("Invalid or oversized shared image base64");
     bytes = Buffer.from(data, "base64");
   }
   if (!bytes.length || bytes.length > MAX_SHARED_IMAGE_BYTES) throw new Error("Shared image must be 1 byte–64 MiB");
-  const mimeType = imageMime(bytes, image.mimeType || image.mediaType, sourcePath);
+  const mimeType = sniffImageMime(bytes, image.mimeType || image.mediaType, sourcePath);
   const sha256 = digest(bytes);
   const agentDirectory = imageAgentDirectory(provenance.agent);
   const shareId = digest(JSON.stringify([provenance.session, provenance.eventId, provenance.index, sha256]));
