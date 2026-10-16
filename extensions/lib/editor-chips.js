@@ -3,14 +3,16 @@ import { relative, resolve, sep } from "node:path";
 
 const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const DEFAULT_FIELDS = Object.freeze({
+  topLeft: [],
   topRight: ["model", "effort"],
   topCenter: [],
   bottomRight: ["mcp", "cost", "context"],
   bottomLeft: ["directory"],
   bottomCenter: ["branch", "diff"],
 });
-const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "cost", "context", "directory", "branch", "diff"]);
-const FIELD_ALIASES = Object.freeze({ cwd: "directory", thinking: "effort" });
+const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "cost", "context", "directory", "branch", "diff", "speech", "meter"]);
+const FIELD_ALIASES = Object.freeze({ cwd: "directory", thinking: "effort", stt: "speech", ptt: "speech", mic: "speech", recording: "speech", volume: "meter", level: "meter", db: "meter" });
+const METER_RAMP = "▁▂▃▄▅▆▇█";
 const POWERLINE = Object.freeze({ left: "", right: "", chevron: "", vertical: "▌" });
 
 function bool(value, fallback = false) {
@@ -37,6 +39,7 @@ export function resolveEditorChipsConfig(settings = {}, env = process.env) {
     : bool(envEnabled, false);
   return {
     enabled,
+    topLeft: fields(raw.topLeft, DEFAULT_FIELDS.topLeft),
     topRight: fields(raw.topRight, DEFAULT_FIELDS.topRight),
     topCenter: fields(raw.topCenter, DEFAULT_FIELDS.topCenter),
     bottomRight: fields(raw.bottomRight, DEFAULT_FIELDS.bottomRight),
@@ -44,11 +47,17 @@ export function resolveEditorChipsConfig(settings = {}, env = process.env) {
     bottomCenter: fields(raw.bottomCenter, DEFAULT_FIELDS.bottomCenter),
     editorPaddingX: Math.max(0, Math.min(8, Math.trunc(Number(raw.editorPaddingX ?? settings.editorPaddingX ?? 0) || 0))),
     hideFooter: bool(raw.hideFooter, true),
+    // Footer status keys moved out of the residual footer (e.g. "jev"). A
+    // hidden status that reports a failure is surfaced once as a warning.
+    hiddenStatuses: Array.isArray(raw.hiddenStatuses)
+      ? [...new Set(raw.hiddenStatuses.map((key) => String(key || "").trim()).filter(Boolean))].slice(0, 64)
+      : [],
   };
 }
 
 export function editorChipFieldSet(config) {
   return new Set([
+    ...(config?.topLeft || []),
     ...(config?.topRight || []),
     ...(config?.topCenter || []),
     ...(config?.bottomRight || []),
@@ -234,8 +243,54 @@ function chipFor(field, values, theme) {
         part(formatChipTokens(values.contextMax), p.grey, p.dark),
       ], { divider: "vertical" });
     }
+    case "speech": return speechChip(values.speech, p, values.speechCompact);
+    case "meter": return meterChip(values.speech, p, values.meterCompact);
     default: return "";
   }
+}
+
+// Speech state: grey dot when no voice mode is enabled; blue (Nord frost,
+// the theme's muted token) ready, red on
+// air, amber while transcribing/finishing, green after a successful send.
+// compact 1 drops the hint, 2 also drops the surface label (glyph only).
+const SPEECH_STYLE = Object.freeze({
+  armed: ["grey", "○"], listening: ["grey", "○"], "on-air": ["red", "●"], transcribing: ["yellow", "◐"],
+  sent: ["green", "✓"], muted: ["nord3", "◌"], error: ["red", "!"],
+});
+function speechChip(speech, p, compact = 0) {
+  if (!speech) return "";
+  if (speech.phase === "disabled") return renderParts([part("●", p.dark, p.grey)]);
+  const [color, glyph] = SPEECH_STYLE[speech.phase] || ["nord3", "●"];
+  const parts = [part(compact >= 2 ? glyph : `${glyph} ${speech.surface || "MIC"}`, p[color])];
+  if (speech.hint && compact < 1) parts.push(part(speech.hint, p.nord3));
+  return renderParts(parts, { divider: "rounded" });
+}
+
+// Input level, only while capturing: below the VAD threshold stays grey, speech
+// green, near clipping orange/red. A fixed-width dB label and transcription
+// glyph keep the rail from jittering as values change.
+function meterChip(speech, p, compact = 0) {
+  if (!speech?.meter) return "";
+  const cells = METER_RAMP.length;
+  const filled = Math.round(Math.max(0, Math.min(1, Number(speech.level) || 0)) * cells);
+  let bars = "";
+  for (let index = 0; index < cells; index += 1) {
+    if (index >= filled) { bars += `${fg(p.grey)}·`; continue; }
+    const position = (index + 1) / cells;
+    const color = position > 0.88 ? p.red : position > 0.7 ? p.orange : Number.isFinite(speech.threshold) && position <= speech.threshold ? p.grey : p.green;
+    bars += `${fg(color)}${METER_RAMP[index]}`;
+  }
+  const mark = speech.transcribing ? "✎" : " ";
+  if (compact >= 1) return renderParts([part(bars, p.dark), ...(speech.transcribing ? [part(mark, p.nord3)] : [])], { divider: "vertical" });
+  const db = Number.isFinite(speech.db) ? `${String(Math.max(-99, Math.round(speech.db))).padStart(3, " ")}dB` : "  -dB";
+  return renderParts([part(bars, p.dark), part(`${db} ${mark}`, p.nord3)], { divider: "vertical" });
+}
+
+/// One-line fallback for when no editor rail renders the speech fields.
+export function renderSpeechIndicatorLine({ speech, theme, separator = " " } = {}) {
+  if (!speech || speech.phase === "disabled") return "";
+  const p = palette(theme, "off", 0);
+  return [speechChip(speech, p), meterChip(speech, p)].filter(Boolean).join(separator);
 }
 
 function groupFor(fieldNames, values, theme, separator) {
@@ -258,15 +313,23 @@ function fitValues(width, config, initialValues, theme, separator) {
     const right = groupFor(rightFields, values, theme, separator);
     return visibleCells(left) + visibleCells(center) + visibleCells(right) + 2;
   };
-  const exceeds = () => Math.max(
-    totalWidth([], config.topCenter, config.topRight),
-    totalWidth(config.bottomLeft, config.bottomCenter, config.bottomRight),
-  ) > width;
+  const rows = [
+    [config.topLeft || [], config.topCenter, config.topRight],
+    [config.bottomLeft, config.bottomCenter, config.bottomRight],
+  ];
+  const exceeds = () => rows.some((row) => totalWidth(...row) > width);
+  // Only the row that actually carries a chip may compact it.
+  const exceedsFor = (field) => rows.some((row) => row.some((group) => group.includes(field)) && totalWidth(...row) > width);
   while (exceeds() && candidateIndex + 1 < candidates.length) {
     candidateIndex += 1;
     values.directory = candidates[candidateIndex];
   }
+  // Live speech keeps its state colour longest: shed its hint and the dB label
+  // before the branch name, and its surface label last.
+  if (values.speech && exceedsFor("speech")) values.speechCompact = 1;
+  if (values.speech && exceedsFor("meter")) values.meterCompact = 1;
   if (exceeds()) values.branchCollapsed = true;
+  if (values.speech && exceedsFor("speech")) values.speechCompact = 2;
   return values;
 }
 
@@ -299,7 +362,7 @@ export function buildEditorChipRails({ width, config, values, theme }) {
   const top = composeRailRow({
     width: safeWidth,
     padding,
-    left: "",
+    left: groupFor(config.topLeft || [], fittedValues, theme, separator),
     center: groupFor(config.topCenter, fittedValues, theme, separator),
     right: groupFor(config.topRight, fittedValues, theme, separator),
     theme,

@@ -40,7 +40,9 @@ export class SpeechInputStateMachine {
     if (this.mode === SPEECH_INPUT_MODES.PTT) {
       if (key === "\u0003") return { action: "cancel", consume: true };
       if (key === "\u001b") return { action: "preserve", consume: true };
-      if (key === "\r" || key === "\n" || key === " ") return { action: "commit-send", consume: true };
+      // Space is text: the operator can type alongside dictation. Ctrl-Space
+      // (Pi's editor shortcut) and Enter are the send gestures.
+      if (key === "\r" || key === "\n") return { action: "commit-send", consume: true };
       return { action: "pass", consume: false };
     }
 

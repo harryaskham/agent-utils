@@ -9,9 +9,11 @@ import {
   parseMcpCount,
   replaceEditorRails,
   resolveEditorChipsConfig,
+  renderSpeechIndicatorLine,
   stripAnsi,
   visibleCells,
 } from "../extensions/lib/editor-chips.js";
+import { SPEECH_INDICATOR_EVENT, SPEECH_INDICATOR_REQUEST } from "../extensions/lib/speech-indicator.js";
 
 const COLORS = {
   borderMuted: [76, 86, 106],
@@ -363,4 +365,110 @@ test("the core reports an unavailable host instead of mounting without CustomEdi
   await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true } } }, env: { HOME: "/tmp" } })(pi);
   await handlers.get("session_start")[0]({}, ctx);
   assert.match(notes.join("\n"), /could not mount: CustomEditor host API unavailable/);
+});
+
+const speechConfig = resolveEditorChipsConfig({ agentUtils: { editorChips: {
+  enabled: true, topLeft: ["stt"], bottomLeft: ["meter", "directory"], hiddenStatuses: ["jev", "jev", ""],
+} } }, {});
+
+test("speech and meter chips resolve into topLeft/bottomLeft with aliases and hidden statuses", () => {
+  assert.deepEqual(speechConfig.topLeft, ["speech"]);
+  assert.deepEqual(speechConfig.bottomLeft, ["meter", "directory"]);
+  assert.deepEqual(speechConfig.hiddenStatuses, ["jev"]);
+  assert.deepEqual(config.topLeft, [], "existing layouts gain no top-left chips");
+  assert.deepEqual(config.hiddenStatuses, []);
+});
+
+test("speech chip is a grey dot when disabled, coloured by phase, and the meter shows only while capturing", () => {
+  const disabled = buildEditorChipRails({ width: 200, config: speechConfig, values: values({ speech: { phase: "disabled" } }), theme });
+  assert.match(disabled.top, /\x1b\[38;2;129;161;193m\x1b\[48;2;52;58;72m ● /, "grey dot on dark Nord");
+  assert.doesNotMatch(stripAnsi(disabled.bottom), /dB/, "no meter unless capturing");
+  assert.ok(stripAnsi(disabled.top).indexOf("●") < stripAnsi(disabled.top).indexOf("github-copilot"), "speech sits top-left");
+
+  const live = { phase: "on-air", surface: "PTT", hint: "⌃␣ send", meter: true, level: 0.5, db: -23.6, threshold: 0.2, transcribing: true };
+  const rails = buildEditorChipRails({ width: 200, config: speechConfig, values: values({ speech: live }), theme });
+  assert.match(stripAnsi(rails.top), /● PTT \S? ⌃␣ send/u);
+  assert.match(rails.top, /\x1b\[48;2;191;97;106m ● PTT /, "on air is red");
+  assert.match(stripAnsi(rails.bottom), /▁▂▃▄····▌-24dB ✎/);
+  assert.equal(visibleCells(rails.top), 200);
+  assert.equal(visibleCells(rails.bottom), 200);
+  assert.ok(stripAnsi(rails.bottom).indexOf("▁") < stripAnsi(rails.bottom).indexOf("~/"), "meter sits bottom-left before the directory");
+
+  for (const [phase, rgb] of [["armed", "129;161;193"], ["listening", "129;161;193"], ["transcribing", "208;135;112"], ["sent", "163;190;140"], ["error", "191;97;106"]]) {
+    const line = renderSpeechIndicatorLine({ speech: { phase, surface: "STT" }, theme });
+    assert.match(line, new RegExp(`\\x1b\\[48;2;${rgb}m`), `${phase} colour`);
+  }
+  assert.equal(renderSpeechIndicatorLine({ speech: { phase: "disabled" }, theme }), "", "fallback line draws nothing when disabled");
+  const narrow = buildEditorChipRails({ width: 60, config: speechConfig, values: values({ speech: live }), theme });
+  assert.doesNotMatch(stripAnsi(narrow.top), /send/, "narrow rails shed the hint first");
+  assert.match(stripAnsi(narrow.top), /●/, "state glyph survives");
+  assert.doesNotMatch(stripAnsi(narrow.bottom), /dB/, "narrow meter drops its dB label");
+  assert.match(stripAnsi(narrow.bottom), /▁▂▃▄/);
+  const wideBottomOnly = buildEditorChipRails({ width: 120, config: { ...speechConfig, bottomRight: ["mcp", "cost", "context"], bottomCenter: ["branch", "diff"] }, values: values({ speech: live }), theme });
+  assert.match(stripAnsi(wideBottomOnly.top), /● PTT \S? ⌃␣ send/u, "bottom-row pressure never compacts the top-left speech chip");
+  const quiet = buildEditorChipRails({ width: 200, config: speechConfig, values: values({ speech: null }), theme });
+  assert.doesNotMatch(stripAnsi(quiet.top), /●/, "no producer: no dot");
+});
+
+test("editor chips consume speech indicator events and hide quiet footer statuses", async () => {
+  const handlers = new Map();
+  const bus = new Map();
+  const events = {
+    on(name, fn) { (bus.get(name) || bus.set(name, []).get(name)).push(fn); return () => bus.set(name, bus.get(name).filter((item) => item !== fn)); },
+    emit(name, payload) { for (const fn of [...(bus.get(name) || [])]) fn(payload); },
+  };
+  const tui = { renders: 0, requestRender() { this.renders += 1; } };
+  const statuses = new Map([["jev", "jev: ready"], ["other", "other: busy"]]);
+  const footerData = { getGitBranch: () => "main", getExtensionStatuses: () => statuses, onBranchChange: () => () => {} };
+  const notes = [];
+  let editorFactory, footer;
+  const base = { render: () => ["───", "editor", "───"], invalidate() {} };
+  const ctx = {
+    cwd: "/tmp/project",
+    model: { provider: "github-copilot", id: "gpt-5.6-sol", contextWindow: 1000 },
+    getContextUsage: () => ({ percent: 1, contextWindow: 1000 }),
+    sessionManager: { getEntries: () => [] },
+    ui: {
+      notify: (message, level) => notes.push([message, level]),
+      getEditorComponent: () => () => base,
+      setEditorComponent: (factory) => { editorFactory = factory; },
+      setFooter: (factory) => { footer = factory(tui, { ...theme, fg: (_token, text) => text }, footerData); },
+      setStatus() {},
+    },
+  };
+  const requests = [];
+  events.on(SPEECH_INDICATOR_REQUEST, () => requests.push(1));
+  const pi = {
+    events,
+    registerCommand() {},
+    on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+    getThinkingLevel: () => "low",
+    exec: async () => ({ code: 1, stdout: "" }),
+  };
+  await createEditorChipsExtension({
+    settings: { agentUtils: { editorChips: { enabled: true, topLeft: ["speech"], bottomLeft: ["meter"], hiddenStatuses: ["jev"] } } },
+    env: { HOME: "/tmp" },
+    host: { CustomEditor: class {} },
+  })(pi);
+  await handlers.get("session_start")[0]({}, ctx);
+  assert.equal(requests.length, 1, "mounting asks the producer for its current state");
+  let accepted = false;
+  events.emit(SPEECH_INDICATOR_EVENT, { version: 1, phase: "on-air", surface: "STT", meter: true, level: 0.4, db: -30, accept() { accepted = true; } });
+  assert.equal(accepted, true, "configured speech chip claims rendering");
+  assert.ok(tui.renders > 0, "state change requests a render");
+  const editor = editorFactory(tui, theme, {});
+  const rows = editor.render(120);
+  assert.match(stripAnsi(rows[0]), /● STT/);
+  assert.match(stripAnsi(rows.at(-1)), /-30dB/);
+
+  assert.deepEqual(footer.render(120).map(stripAnsi), ["other: busy"], "healthy jev status is hidden");
+  statuses.set("jev", "jev: unconfigured");
+  footer.render(120); footer.render(120);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(notes, [["jev: unconfigured", "warning"]], "hidden failure is reported exactly once");
+
+  for (const handler of handlers.get("session_shutdown")) await handler({}, ctx);
+  accepted = false;
+  events.emit(SPEECH_INDICATOR_EVENT, { version: 1, phase: "armed", surface: "PTT", accept() { accepted = true; } });
+  assert.equal(accepted, false, "shutdown unsubscribes");
 });

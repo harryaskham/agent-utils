@@ -111,7 +111,7 @@ unset PULSE_SERVER PULSE_SOURCE PULSE_SINK
 /rt backend=coreaudio start=ptt
 ```
 
-Expected behavior: `/rt-devices` lists local AVFoundation input devices, `/rt-doctor` reports a local backend and available local capture/playback helpers, and PTT records from the current default input until you commit with Enter/Space/Esc.
+Expected behavior: `/rt-devices` lists local AVFoundation input devices, `/rt-doctor` reports a local backend and available local capture/playback helpers, and PTT records from the current default input until you commit with Enter/Esc.
 
 ### Local sox/ffplay fallback
 
@@ -159,7 +159,7 @@ Useful controls while running:
 /rt start ptt
 ```
 
-PTT records until you commit. Press `Enter`, `Space`, or `Esc`, or run `/rt-stop`, to commit recorded audio. Press `Ctrl-C` or run `/rt-cancel` to discard.
+PTT records until you commit. Press `Enter` or `Esc`, or run `/rt-stop`, to commit recorded audio. `Space` types normally. Press `Ctrl-C` or run `/rt-cancel` to discard.
 
 Use PTT when server VAD is over-eager, under-eager, or when background noise causes accidental turns.
 
@@ -414,13 +414,13 @@ text are skipped.
 `/ptt` (also `/stt ptt` and `/rt stt local-vad-ptt`) is the push-to-talk variant
 of local VAD (bd-9e06ae): the complete raw hold is captured independently of
 energy classification, while VAD controls incremental preview/chunk boundaries.
-Even if no frame crosses the energy threshold, Space/Enter/Escape re-transcribes
+Even if no frame crosses the energy threshold, Ctrl-Space/Enter/Escape re-transcribes
 the whole raw hold on release. Even the longer per-segment commit silence does
 **not** send. Instead segments accumulate and the whole turn is controlled by a
 key when you finish:
 
-- **`Ctrl-Space` / `Enter` / `Space`** — send the accumulated turn now (the editor's text, honoring
-  any edits), then clear the editor.
+- **`Ctrl-Space` / `Enter`** — send the accumulated turn now (the editor's text, honoring
+  any edits), then clear the editor. **`Space` types a space**; it never sends.
 - **`Esc`** — early exit (bd-4daaf5): finalize the accrued transcript **into the
   editor without sending**. The text stays there, fully editable; press `Enter` to
   send it manually. Nothing is lost if you release before you meant to send.
@@ -428,11 +428,43 @@ key when you finish:
 - `/ptt stop` preserves the accumulated transcript in the editor and ends the mode;
   `/ptt cancel` discards it.
 
+`/ptt` *arms* push-to-talk: after a send or `Ctrl-C`, the indicator stays ready
+(`○ PTT ⌃␣ talk`) until `/ptt stop`, `/ptt cancel` or `/rt off`. A bare Ctrl-Space
+press without `/ptt` is one-shot: the indicator returns to its grey dot after the send.
+
+### Speech indicator
+
+`/ptt`, `/stt` and `/rt` microphone input share one indicator instead of a
+multi-line status panel. The transcript is not repeated there — it is already in
+the editor or sent.
+
+| Indicator | Meaning |
+|---|---|
+| grey `●` | no voice mode enabled |
+| blue `○ PTT ⌃␣ talk` / `○ STT` | armed PTT, or `/stt` waiting for speech |
+| red `● PTT ⌃␣ send` / `● STT` | on air: recording, or speech detected |
+| amber `◐ PTT sending` / `◐ STT` | transcribing or sending |
+| green `✓ PTT sent` | the turn was sent (brief) |
+| grey `◌ STT agent speaking` | input muted while the agent speaks |
+| red `! STT stt failed` | transcription failed; details arrive as a notification |
+
+While audio is captured, a separate meter shows the input level
+(`▁▂▃▄····`), dBFS and `✎` while a chunk is transcribing. Cells below the VAD
+energy threshold stay grey; speech is green and near-clipping turns orange/red.
+
+With [editor chips](editor-chips.md), place the fields with `"topLeft": ["speech"]`
+and `"bottomLeft": ["meter"]`. Without a chip consumer the same state renders as
+one ellipsized line below the editor, which disappears when no mode is active.
+
+![Speech indicator states on Nord editor rails at 120 columns](assets/speech-indicator/states-120.png)
+
+At narrow widths the hint and dB label drop first, then the surface label ([64 columns](assets/speech-indicator/states-64.png)).
+
 **Tap Ctrl-Space to start PTT; tap it again to finish and send.** This uses Pi's registered editor shortcut, not a focus-blind raw capture hook. Dialogs/selectors keep their own keys. Bare Space never starts capture. Legacy NUL and Kitty Ctrl-Space are supported; Kitty repeat/release events are ignored. Use taps rather than holding the chord (legacy terminals cannot distinguish auto-repeat from another press).
 
 Set `agentUtils.stt.shortcutsEnabled=false` or `PI_RT_STT_SHORTCUTS_ENABLED=0` to disable the shortcut; `/ptt` remains available. Ctrl-Space does not switch providers, change acoustic settings, start full Realtime, or take over an already active VAD/Realtime/cascade mode. Stop that mode first. If macOS intercepts Ctrl-Space for input-source switching, change the OS binding so the chord reaches the terminal.
 
-Validation: `python3 scripts/ptt-shortcut-pty.py` starts an isolated real Pi with fake capture/transcription; it verifies both key encodings, dialog isolation, repeat/release behavior, send/preserve/cancel and cleanup without microphones or provider calls.
+Validation: `python3 scripts/ptt-shortcut-pty.py` starts an isolated real Pi with fake capture/transcription; it verifies both key encodings, dialog isolation, repeat/release behavior, Space typing, send/preserve/cancel, the indicator line and cleanup without microphones or provider calls. `uv run --with pyte python3 scripts/ptt-shortcut-pty.py --chips` also mounts editor chips and checks the emulated screen: speech top-left, meter bottom-left, no fallback line, and the grey dot afterwards.
 
 Because partials mirror into the editor throughout (see bd-0c008d above), you can
 edit at any point; a manual edit is never clobbered by a later partial, and whatever

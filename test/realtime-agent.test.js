@@ -13,6 +13,7 @@ import realtimeAgentExtension, {
   eventDataToString,
 } from "../extensions/realtime-agent.js";
 import { EventEmitter } from "node:events";
+import { SPEECH_INDICATOR_EVENT } from "../extensions/lib/speech-indicator.js";
 import { parseEnvStyleArgs } from "../extensions/lib/env-args.js";
 import { INPUT_ACTION_EVENT, INPUT_ACTIONS } from "../extensions/lib/input-actions.js";
 
@@ -172,6 +173,13 @@ test("RealtimeStateController exposes an explicit realtime lifecycle", () => {
   state.setConnection("off");
   assert.equal(state.mode(), "off");
 });
+
+const speechIndicator = (h) => {
+  const event = h.emittedEvents.filter((entry) => entry.name === SPEECH_INDICATOR_EVENT).at(-1);
+  if (!event) return null;
+  const { accept: _accept, ...state } = event.payload;
+  return state;
+};
 
 function makeHarness({ models = new Map(), initialModel } = {}) {
   const commands = new Map();
@@ -731,19 +739,22 @@ test("/rt listen accepts the same continuous mode as direct controls", async () 
   // keyless CI runners instead of depending on an ambient OPENAI_API_KEY.
   process.env.PI_RT_API_KEY = "test-key";
   try {
-    const { pi, commands, handlers, notifications, ctx } = makeHarness();
+    const h = makeHarness();
+    const { pi, commands, handlers, notifications, ctx } = h;
     realtimeAgentExtension(pi);
     handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
     await commands.get("rt").handler("listen continuous", ctx);
     assert.equal(pi.realtime.snapshot().state.micMode, "vad");
     assert.match(notifications.at(-1).message, /VAD listening/);
+    assert.deepEqual([speechIndicator(h).surface, speechIndicator(h).phase, speechIndicator(h).meter], ["RT", "listening", true], "/rt mic shares the speech indicator");
 
     await commands.get("rt").handler("listen banana", ctx);
     assert.match(notifications.at(-1).message, /Unsupported realtime listen mode/);
     assert.equal(pi.realtime.snapshot().state.micMode, "vad");
 
     await pi.realtime.cancelMic(ctx);
+    assert.equal(speechIndicator(h).phase, "disabled", "mic off returns the indicator to its grey dot");
   } finally {
     if (originalRecordCmd === undefined) delete process.env.PI_RT_RECORD_CMD;
     else process.env.PI_RT_RECORD_CMD = originalRecordCmd;
@@ -1899,8 +1910,16 @@ test("/stt and /rt-stt default to local VAD + mai-transcribe-2 without opening R
     await h.commands.get("stt").handler("", h.ctx);
     assert.equal(captures.length, 1, "/stt starts local PCM capture");
     assert.equal(FakeWebSocket.instances.length, 0, "/stt does not open the Realtime WebSocket");
-    assert.match(String(h.widgets.get("realtime-status")?.[0]), /model=mai-transcribe-2/);
+    assert.deepEqual(
+      [speechIndicator(h).surface, speechIndicator(h).phase, speechIndicator(h).meter],
+      ["STT", "listening", true],
+      "/stt publishes one listening indicator",
+    );
+    assert.equal(h.widgets.has("realtime-status"), false, "local STT draws no multi-line status widget");
+    await h.commands.get("stt").handler("status", h.ctx);
+    assert.match(h.notifications.at(-1).message, /model=mai-transcribe-2/);
     await h.commands.get("stt").handler("stop", h.ctx);
+    assert.equal(speechIndicator(h).phase, "disabled", "/stt stop returns the indicator to its grey dot");
     assert.ok(captures[0].killed, "/stt stop kills local capture");
 
     await h.commands.get("rt-stt").handler("", h.ctx);
@@ -1937,17 +1956,22 @@ test("raw Space/Ctrl-Space never start capture; registered shortcut and commands
     assert.ok(spaceResults.every((r) => !r?.consume), "ordinary Space passes through");
     assert.ok(ctrlSpaceResults.every((r) => !r?.consume), "dialog Ctrl-Space passes through");
 
+    assert.equal(speechIndicator(h).phase, "disabled", "no voice mode: grey dot");
     await h.commands.get("ptt").handler("", h.ctx);
     await waitFor(() => captures.length === 1);
-    assert.match(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
+    assert.deepEqual([speechIndicator(h).surface, speechIndicator(h).phase, speechIndicator(h).hint], ["PTT", "on-air", "⌃␣ send"]);
+    assert.ok(h.sendTerminalInput(" ").every((r) => !r?.consume), "Space types during PTT");
+    assert.equal(captures[0].killed, undefined, "Space never finishes PTT");
     h.sendTerminalInput("\u0003");
     await waitFor(() => captures[0].killed);
+    assert.deepEqual([speechIndicator(h).phase, speechIndicator(h).hint], ["armed", "⌃␣ talk"], "/ptt stays armed after cancel");
 
     await h.commands.get("stt").handler("vad", h.ctx);
     await waitFor(() => captures.length === 2);
-    assert.doesNotMatch(String(h.widgets.get("realtime-status")?.[0]), /ptt-hold/);
+    assert.equal(speechIndicator(h).surface, "STT");
     await h.commands.get("stt").handler("stop", h.ctx);
     await waitFor(() => captures[1].killed);
+    assert.equal(speechIndicator(h).phase, "disabled", "stop disarms PTT and hides the mode");
   } finally {
     if (previous === undefined) delete process.env.PI_RT_STT_SHORTCUTS_ENABLED;
     else process.env.PI_RT_STT_SHORTCUTS_ENABLED = previous;
@@ -2070,7 +2094,7 @@ test("/ptt alias uses local VAD hold mode and never sends on the commit timeout"
     await waitFor(() => h.editorText.value === "held words", { timeoutMs: 2000 });
     assert.equal(h.sentUserMessages.length, 0, "PTT VAD commit chunks into the editor but does not send");
     assert.equal(FakeWebSocket.instances.length, 0, "/ptt uses no Realtime WebSocket");
-    h.sendTerminalInput(" ");
+    h.sendTerminalInput("\r");
     await waitFor(() => h.sentUserMessages.length === 1, { timeoutMs: 2000 });
     assert.match(h.sentUserMessages[0].content, /held words$/);
   } finally {
@@ -2101,7 +2125,7 @@ for (const action of ["cancel", "shutdown"]) {
       const pcm = Buffer.alloc(24000); // half a second, release before any VAD preview
       for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(8000, i);
       capture.stdout.emit("data", pcm);
-      h.sendTerminalInput(" ");
+      h.sendTerminalInput("\r");
       assert.ok(await waitFor(() => signal));
       assert.equal(capture.killed, true, "capture ended but its final transcription is still pending");
       if (action === "cancel") await h.commands.get("stt").handler("cancel", h.ctx);
@@ -2329,7 +2353,7 @@ test("local-vad-ptt Esc releases the held transcript to the editor without sendi
   }
 });
 
-test("local-vad drives the color-coded state indicator widget and clears it on stop (bd-081267)", async () => {
+test("local speech publishes one indicator with meter and a one-line fallback, cleared on stop", async () => {
   const captures = [];
   const captureFn = () => {
     const proc = new EventEmitter();
@@ -2352,23 +2376,45 @@ test("local-vad drives the color-coded state indicator widget and clears it on s
       if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
       return b;
     };
-    // Drive a turn; the indicator widget should carry a truecolor bar at some point.
     cap.stdout.emit("data", pcm(500, true));
-    for (let i = 0; i < 12; i++) cap.stdout.emit("data", pcm(100, false));
-    await waitFor(() => {
-      const w = h.widgets.get("realtime-ptt-indicator");
-      return Array.isArray(w) && String(w[0]).includes("38;2;") && String(w[0]).includes("▁");
-    }, { timeoutMs: 2000 });
-    await new Promise((resolve) => setTimeout(resolve, 170));
-    cap.stdout.emit("data", pcm(100, true));
-    const status = String(h.widgets.get("realtime-status")?.[0] || "");
-    assert.match(status, /mic .*meter=.*% raw=0\.\d+ energy\(raw\)=0\.\d+/, "live status disambiguates gain-scaled meter from raw RMS threshold");
-    // Stop tears the indicator down.
+    await waitFor(() => speechIndicator(h)?.phase === "on-air", { timeoutMs: 2000 });
+    const live = speechIndicator(h);
+    assert.equal(live.surface, "STT");
+    assert.ok(live.level > 0 && live.db > -30 && live.threshold > 0, "meter carries level, dBFS and VAD threshold");
+    // No editor-chip consumer accepted the state, so one belowEditor line draws it.
+    const factory = h.widgets.get("speech-indicator");
+    assert.equal(typeof factory, "function");
+    const component = factory({ requestRender() {} }, { getFgAnsi: () => "" });
+    const rows = component.render(24);
+    assert.equal(rows.length, 1, "fallback never wraps to multiple rows");
+    assert.match(rows[0], /STT/);
+    assert.match(rows[0], /…/, "narrow fallback ellipsizes");
+    assert.equal(h.widgets.has("realtime-ptt-indicator"), false);
+    assert.equal(h.widgets.has("realtime-status"), false);
     await h.commands.get("rt").handler("stt stop", h.ctx);
-    assert.equal(h.widgets.get("realtime-ptt-indicator"), undefined, "indicator cleared on stop");
+    // Stop flushes the captured turn; its send flashes green, then the
+    // indicator settles to the grey dot and the fallback line disappears.
+    assert.ok(["sent", "disabled"].includes(speechIndicator(h).phase));
+    if (speechIndicator(h).phase === "sent") assert.equal(speechIndicator(h).surface, "STT");
+    await waitFor(() => speechIndicator(h).phase === "disabled", { timeoutMs: 2000 });
+    assert.equal(h.widgets.has("speech-indicator"), false, "fallback cleared on stop");
   } finally {
     __setLocalVadHooksForTest({});
   }
+});
+
+test("an editor-chip consumer suppresses the fallback indicator line", async () => {
+  __setLocalVadHooksForTest({ capture: () => { const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => { p.killed = true; }; return p; }, transcribe: async () => "" });
+  const h = makeHarness();
+  try {
+    const seen = [];
+    h.pi.events.on(SPEECH_INDICATOR_EVENT, (state) => { state.accept(); seen.push(state.phase); });
+    realtimeAgentExtension(h.pi);
+    h.handlers.get("session_start")?.({}, h.ctx);
+    await h.commands.get("ptt").handler("", h.ctx);
+    assert.ok(seen.includes("on-air"));
+    assert.equal(h.widgets.has("speech-indicator"), false);
+  } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
 });
 
 test("/rt stt local-vad surfaces the first transcribe failure to the operator (bd-43512a)", async () => {

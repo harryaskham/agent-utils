@@ -3,8 +3,10 @@
 import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "../pi-graphics/ansi-width.js";
 import { getOrCreateEditorChromeRegistry } from "../pi-graphics/fullscreen-contract.js";
+import { subscribeSpeechIndicator } from "./speech-indicator.js";
 import {
   buildEditorChipRails,
+  editorChipFieldSet,
   parseMcpCount,
   prettyDirectory,
   replaceEditorRails,
@@ -27,9 +29,13 @@ function sanitizeStatus(text) {
   return String(text || "").replace(/[\r\n]+/g, " ").trim();
 }
 
+const STATUS_FAILURE = /\b(?:unconfigured|errors?|fail(?:ed|ure|ing)?|unavailable|invalid|blocked|denied)\b/i;
+
 export function createEditorChipsExtension({ settings, env = process.env, host } = {}) {
   const startupSettings = settings || readAgentSettings(agentSettingsPath()) || {};
   const config = resolveEditorChipsConfig(startupSettings, env);
+  const configuredFields = editorChipFieldSet(config);
+  const hiddenStatuses = new Set(config.hiddenStatuses);
 
   return function editorChipsExtension(pi) {
     if (!config.enabled) return;
@@ -60,6 +66,30 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       footerUi: null,
       timers: new Set(),
       stopped: false,
+      speech: null,
+      speechUnsubscribe: null,
+      statusCtx: null,
+      reportedStatusFailures: new Set(),
+    };
+
+    // Hidden footer statuses are quiet while healthy; a failure is shown once.
+    const reportHiddenFailure = (key, text) => {
+      const id = `${key}\0${text}`;
+      if (state.reportedStatusFailures.has(id) || !STATUS_FAILURE.test(text)) return;
+      state.reportedStatusFailures.add(id);
+      const ctx = state.statusCtx;
+      queueMicrotask(() => {
+        if (state.stopped || state.statusCtx !== ctx) return;
+        try { ctx?.ui?.notify?.(text, "warning"); } catch {}
+      });
+    };
+
+    const subscribeSpeech = () => {
+      if (state.speechUnsubscribe || (!configuredFields.has("speech") && !configuredFields.has("meter"))) return;
+      state.speechUnsubscribe = subscribeSpeechIndicator(pi, (speech) => {
+        state.speech = speech;
+        try { state.tui?.requestRender?.(); } catch {}
+      }, { accept: () => !state.stopped && Boolean(state.editorLease) && configuredFields.has("speech") });
     };
 
     const refreshGit = async (ctx) => {
@@ -102,6 +132,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         model: String(ctx.model?.id || "n/a"),
         effort: String(pi.getThinkingLevel?.() || ctx.thinkingLevel || "off").toLowerCase(),
         mcpCount: parseMcpCount(statuses),
+        speech: state.speech,
         cost: totals.cost,
         subscription: provider === "github-copilot" || provider === "kimi-coding",
         contextPct: Number.isFinite(contextPct) ? contextPct : 0,
@@ -118,6 +149,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       if (!config.hideFooter || typeof ctx.ui?.setFooter !== "function") return false;
       const factory = (tui, theme, footerData) => {
         state.footerData = footerData;
+        state.tui ||= tui;
         const unsubscribe = (() => {
           try { return footerData?.onBranchChange?.(() => tui.requestRender()); } catch { return null; }
         })();
@@ -128,8 +160,13 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
           render(width) {
             state.footerData = footerData;
             const statuses = (() => {
-              try { return [...(footerData?.getExtensionStatuses?.() || new Map()).values()]; } catch { return []; }
-            })().map(sanitizeStatus).filter((text) => text && !/(?:\bMCP\s*:?\s*\(?\s*\d+|🔌\s*MCP)/i.test(text));
+              try { return [...(footerData?.getExtensionStatuses?.() || new Map()).entries()]; } catch { return []; }
+            })().flatMap(([key, value]) => {
+              const text = sanitizeStatus(value);
+              if (!text) return [];
+              if (hiddenStatuses.has(key)) { reportHiddenFailure(key, text); return []; }
+              return [text];
+            }).filter((text) => !/(?:\bMCP\s*:?\s*\(?\s*\d+|🔌\s*MCP)/i.test(text));
             if (statuses.length === 0) return [];
             const line = theme.fg("dim", statuses.join(" "));
             return [clampRenderedLineToWidth(line, width)];
@@ -139,6 +176,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       factory.__agentUtilsEditorChipsFooter = true;
       state.footerFactory = factory;
       state.footerUi = ctx.ui;
+      state.statusCtx = ctx;
       if (!state.originalSetFooter) {
         const staleOriginal = ctx.ui.setFooter.__agentUtilsEditorChipsOriginal;
         if (typeof staleOriginal === "function") ctx.ui.setFooter = staleOriginal;
@@ -186,6 +224,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         },
       });
       installFooter(ctx);
+      subscribeSpeech();
       try { ctx.ui?.setStatus?.("editor-chips", undefined); } catch {}
       return Boolean(state.editorLease);
     };
@@ -234,6 +273,10 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         try { state.editorRegistry.release(state.editorLease); } catch {}
       }
       state.editorLease = null;
+      try { state.speechUnsubscribe?.(); } catch {}
+      state.speechUnsubscribe = null;
+      state.speech = null;
+      state.statusCtx = null;
       if (state.originalSetFooter && state.patchedSetFooter) {
         try { state.originalSetFooter(undefined); } catch {}
         if (state.footerUi?.setFooter === state.patchedSetFooter) state.footerUi.setFooter = state.originalSetFooterRaw;

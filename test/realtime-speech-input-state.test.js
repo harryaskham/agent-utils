@@ -30,11 +30,12 @@ test("Ctrl-Space reaches the registered shortcut instead of raw VAD/Realtime con
   }
 });
 
-test("PTT release keys map to send, preserve, and cancel actions", () => {
+test("PTT release keys map to send, preserve, and cancel actions; Space types", () => {
   const state = new SpeechInputStateMachine(SPEECH_INPUT_MODES.PTT);
-  for (const key of [" ", "\r", "\n"]) {
+  for (const key of ["\r", "\n"]) {
     assert.deepEqual(state.terminalAction(key), { action: "commit-send", consume: true });
   }
+  assert.deepEqual(state.terminalAction(" "), { action: "pass", consume: false });
   assert.deepEqual(state.terminalAction("\u001b"), { action: "preserve", consume: true });
   assert.deepEqual(state.terminalAction("\u0003"), { action: "cancel", consume: true });
   assert.deepEqual(state.terminalAction("x"), { action: "pass", consume: false });

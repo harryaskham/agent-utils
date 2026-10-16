@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Real Pi Ctrl-Space acceptance, isolated state and fake audio/provider.
-Usage: python3 scripts/ptt-shortcut-pty.py [--pi /path/to/pi] [--out /tmp/evidence]
+Usage: python3 scripts/ptt-shortcut-pty.py [--pi /path/to/pi] [--out /tmp/evidence] [--chips]
+--chips also mounts editor chips (speech top-left, meter bottom-left) and checks
+the emulated screen; it needs pyte: uv run --with pyte python3 scripts/ptt-shortcut-pty.py --chips
 """
 import argparse
 import fcntl
@@ -21,7 +23,10 @@ repo = pathlib.Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
 parser.add_argument('--pi', default=os.environ.get('PI_BIN') or shutil.which('pi'))
 parser.add_argument('--out')
+parser.add_argument('--chips', action='store_true')
 args = parser.parse_args()
+if args.chips:
+    import pyte
 if not args.pi:
     parser.error('pi must be available')
 out = pathlib.Path(args.out or tempfile.mkdtemp(prefix='ptt-shortcut-evidence-', dir='/tmp')).resolve()
@@ -31,6 +36,8 @@ with tempfile.TemporaryDirectory(prefix='ptt-shortcut-qa-', dir='/tmp') as folde
     config = root / 'config'
     config.mkdir()
     settings = {'packages': [], 'defaultProjectTrust': 'no', 'agentUtils': {'stt': {'model': 'fixture-model', 'shortcutsEnabled': True}}}
+    if args.chips:
+        settings['agentUtils']['editorChips'] = {'enabled': True, 'topLeft': ['speech'], 'topRight': ['model'], 'bottomLeft': ['meter'], 'bottomCenter': [], 'bottomRight': [], 'hiddenStatuses': ['jev']}
     (config / 'settings.json').write_text(json.dumps(settings))
     endpoint = str(root / 'qa.sock')
     master, slave = pty.openpty()
@@ -38,7 +45,10 @@ with tempfile.TemporaryDirectory(prefix='ptt-shortcut-qa-', dir='/tmp') as folde
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
     env = {k: os.environ[k] for k in ['PATH', 'TMPDIR', 'LANG'] if k in os.environ}
     env.update(HOME=str(root), TERM='xterm-256color', COLORTERM='truecolor', PI_OFFLINE='1', PI_TELEMETRY='0', DISABLE_PI_CACO='1', PI_DISABLE_AHP='1', PI_CODING_AGENT_DIR=str(config), PI_AGENT_UTILS_STATE_DIR=str(root / 'state'), PTT_QA_SOCKET=endpoint)
-    child = subprocess.Popen([args.pi, '--no-session', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-themes', '--tui-mode', 'regular', '-e', str(repo / 'test/fixtures/ptt-shortcut-extension.js')], cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
+    extensions = ['-e', str(repo / 'test/fixtures/ptt-shortcut-extension.js')]
+    if args.chips:
+        extensions += ['-e', str(repo / 'extensions/editor-chips.js')]
+    child = subprocess.Popen([args.pi, '--no-session', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-themes', '--tui-mode', 'regular', *extensions], cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     transcript = bytearray()
 
     def drain(delay=.03):
@@ -94,12 +104,18 @@ with tempfile.TemporaryDirectory(prefix='ptt-shortcut-qa-', dir='/tmp') as folde
                 pass
         raise AssertionError('state timeout: ' + str(last) + '\n' + transcript[-5000:].decode(errors='replace'))
 
+    def screen_rows():
+        screen = pyte.Screen(100, 30)
+        pyte.ByteStream(screen).feed(bytes(transcript))
+        return screen.display
+
     def key(data):
         os.write(master, data.encode())
         drain(.08)
 
     try:
-        state = wait(lambda s: s['ready'])
+        # A dev checkout's node_modules makes extension loading slower under load.
+        state = wait(lambda s: s['ready'], timeout=60)
         assert state['shortcuts'] == ['ctrl+space'], state
         assert state['captures'] == 0
         # Pi itself may persist startup migration/changelog metadata; compare
@@ -116,7 +132,20 @@ with tempfile.TemporaryDirectory(prefix='ptt-shortcut-qa-', dir='/tmp') as folde
         wait(lambda s: not s['modal'])
         key('\x00')
         wait(lambda s: s['active'] == 1 and s['captures'] == 1)
+        key(' ')
+        assert call()['active'] == 1 and not call()['sent'], 'Space types during PTT; it never sends'
+        drain(.3)
+        assert '● PTT'.encode() in transcript and '⌃␣ send'.encode() in transcript, 'one-line PTT indicator is visible'
         (out / 'ptt-recording.ansi').write_bytes(transcript)
+        if args.chips:
+            rows = screen_rows()
+            (out / 'ptt-recording-screen.txt').write_text('\n'.join(rows))
+            speech = [i for i, row in enumerate(rows) if '● PTT' in row]
+            assert len(speech) == 1, 'speech appears once, in the chip rail, with no fallback line'
+            top = speech[0]
+            assert rows[top].index('● PTT') < 4 and '⌃␣ send' in rows[top] and '─' in rows[top], rows[top]
+            meter = [i for i, row in enumerate(rows) if 'dB' in row and '▁' in row]
+            assert meter and meter[0] > top and rows[meter[0]].index('▁') < 6 and '─' in rows[meter[0]], rows
         call('modal')
         wait(lambda s: s['modal'])
         key('\x00')
@@ -144,6 +173,13 @@ with tempfile.TemporaryDirectory(prefix='ptt-shortcut-qa-', dir='/tmp') as folde
         key('\x03')
         state = wait(lambda s: s['active'] == 0)
         assert len(state['sent']) == 2, 'Ctrl-C must not send'
+        if args.chips:
+            drain(.4)
+            rows = screen_rows()
+            (out / 'final-screen.txt').write_text('\n'.join(rows))
+            rails = [row for row in rows if '────' in row]
+            assert rails and not any('PTT' in row or 'dB' in row for row in rails), 'shortcut-only PTT returns to the grey dot'
+            assert any(row.startswith('\ue0b6 ● \ue0b4─') for row in rails), rails
         settings_after = json.loads((config / 'settings.json').read_text())
         for field in ['agentUtils', 'defaultModel', 'defaultProvider']:
             assert settings_after.get(field) == settings_before.get(field), f'provider setting {field} changed'
@@ -159,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='ptt-shortcut-qa-', dir='/tmp') as folde
             if error.args[0] != 25:
                 raise
             assert all(code in transcript for code in [b'\x1b[?25h', b'\x1b[?2004l', b'\x1b[<u']), 'no terminal/keyboard restoration before hangup'
-        receipt = {'ok': True, 'legacyAndKitty': True, 'modalIsolation': True, 'repeatReleaseIgnored': True, 'escapePreserves': True, 'ctrlCCancels': True, 'providerSettingsUnchanged': True, 'cleanup': True, 'state': state}
+        receipt = {'ok': True, 'spaceTypes': True, 'indicatorLine': True, 'chips': args.chips, 'legacyAndKitty': True, 'modalIsolation': True, 'repeatReleaseIgnored': True, 'escapePreserves': True, 'ctrlCCancels': True, 'providerSettingsUnchanged': True, 'cleanup': True, 'state': state}
         (out / 'receipt.json').write_text(json.dumps(receipt, indent=2))
         print(json.dumps({'ok': True, 'evidence': str(out), 'cleanup': True}))
     finally:

@@ -1,0 +1,18 @@
+{
+  "feature": "Single speech indicator for /ptt, /stt and /rt as editor chips",
+  "requirements": [
+    "One status for all voice modes; no multi-line local-VAD widget and no repeated transcript",
+    "Speech state chip (configurable placement, user layout topLeft): grey dot when disabled, blue armed/listening, red on air, amber transcribing, green sent, grey muted, red error",
+    "Meter chip (user layout bottomLeft): level bars, dBFS and transcription mark only while capturing",
+    "Without a chip consumer the same state renders as one ellipsized belowEditor line, removed when disabled",
+    "Space types during PTT and /rt mic; Ctrl-Space or Enter sends; Esc keeps the draft; Ctrl-C cancels",
+    "/ptt arms PTT until /ptt stop; bare Ctrl-Space is one-shot",
+    "editorChips.hiddenStatuses hides quiet third-party statuses such as jev and surfaces failures once"
+  ],
+  "validation": {
+    "unit": ["test/speech-indicator.test.js", "test/editor-chips.test.js", "test/realtime-agent.test.js", "test/realtime-speech-input-state.test.js"],
+    "pty": ["npm run test:ptt-ui", "uv run --with pyte python3 scripts/ptt-shortcut-pty.py --chips"],
+    "visual": ["docs/assets/speech-indicator/states-120.png", "docs/assets/speech-indicator/states-64.png", "scripts/speech-indicator-review.mjs"],
+    "fullSuite": "1955 passed, 10 skipped, 0 failed (node --test --test-concurrency=4 test/*.test.js)"
+  }
+}
