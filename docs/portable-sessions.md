@@ -1,8 +1,9 @@
 # Pi session forks
 
 `/session-fork` (inside Pi) and `pi-session fork` (CLI) share one engine for
-forking a conversation into another directory, worktree, or SSH host. Herdr can
-open the prepared destination, start Pi there, and optionally focus it.
+forking a conversation into another directory, worktree, or SSH host, and for
+pulling a remote conversation into this machine. Herdr can open the prepared
+destination, start Pi there, and optionally focus it.
 
 **History is never translated or redacted.** The whole JSONL tree, including
 abandoned branches, provider signatures, images and unknown extension entries,
@@ -27,8 +28,10 @@ Inside the active Pi session:
 /session-fork --help
 ```
 
-The command waits until Pi is idle and captures the actual selected leaf. It
-leaves the active process in place; it does not switch your current Pi session.
+For a local source, the command waits until Pi is idle and captures its actual
+selected leaf. It leaves the active process in place; it does not switch your
+current Pi session. Pulling reads the remote source's last persisted leaf and
+does not require a saved local conversation or pause the remote Pi process.
 The new relocation message tells the destination model that old paths/processes
 and host-specific extension state describe the origin, not the current machine.
 It does not automatically submit a model prompt.
@@ -48,11 +51,49 @@ The ID is a **Pi session ID**, not a Cacophony agent ID or a Herdr pane ID. Look
 uses the configured source session directory and Pi's default session tree;
 ambiguous prefixes fail. Exact paths are preferred for unusual storage layouts.
 The CLI snapshots the last persisted leaf, not an unsaved `/tree` navigation in
-a running Pi process. Use the slash command when that distinction matters.
+a running Pi process. Use the slash command on the source when that distinction
+matters.
+
+## Pull from the destination
+
+On **node B**, pull a session that lives on **node A**:
+
+```sh
+pi-session pull --from node-a --session SESSION_ID \
+  --name investigation --herdr --focus
+
+# Equivalent spelling, using the same engine:
+pi-session fork --from node-a --session SESSION_ID --name investigation
+
+# Reuse an existing local directory at the matching Git commit:
+pi-session pull --from node-a --session SESSION_ID --cwd . --name continued
+```
+
+Inside any Pi on **B**, including an empty/in-memory session:
+
+```text
+/session-fork --from node-a --session SESSION_ID --name investigation --herdr --focus
+```
+
+- `--from` is the **source**; `--remote` is the **destination** for push mode.
+  They cannot be combined. Native `pi --fork` is unchanged.
+- Only B connects to A. A does not need SSH access back to B. The source helper
+  returns a frozen session snapshot and, when needed, a Git bundle; B performs
+  the ordinary local receiver/worktree/Herdr steps.
+- `--session` and `--source-session-dir` resolve on A. Quote source `~/...` paths
+  in shell commands so B's shell does not expand them first. All destination
+  options (`--cwd`, `--repo`, `--worktree-root`, `--session-dir`) resolve on B.
+- `--remote-command` selects the executable on A for pull, or on B for push.
+  The source CLI must include pull support; there is no automatic remote update.
+- The source session must be saved. Like CLI push, pull snapshots the last
+  persisted leaf, not an unsaved tree selection or in-flight process state.
+- Pull does not change the local Pi conversation used to issue the command.
+  Use the returned resume command or the newly opened Herdr agent.
 
 `--dry-run` resolves the source and destination without publishing a session,
-creating a worktree, cloning, or opening Herdr. It can still contact the SSH peer
-and run read-only Git inspection. Errors such as a missing repo explain the
+creating a worktree, cloning, or opening Herdr. Pull dry-run uses a read-only
+source inspection and creates no snapshot journals on either host. It can still
+contact the SSH peer and run read-only Git inspection. Errors such as a missing repo explain the
 required explicit option.
 
 ## Destination and Git behavior
@@ -65,7 +106,7 @@ required explicit option.
 | No `--worktree` | Use a filesystem-safe form of the new session name. |
 | No `--name` | Source session name, otherwise source branch, otherwise generated fork name. |
 | `--repo PATH` | Explicit destination main repo; linked source worktrees resolve through Git's common directory. |
-| Remote repo default | Reuse the source main repo's HOME-relative path under the destination HOME. Repos outside HOME need explicit `--repo`. |
+| Cross-host repo default | For push and pull, reuse the source main repo's HOME-relative path under the destination HOME. Repos outside HOME need explicit `--repo`. |
 | `--clone` | Permit cloning a missing repo from the recorded origin. No implicit clone, fetch from arbitrary refs, or push. |
 | Missing committed objects | Send a bounded Git bundle containing the exact captured commit, including unpushed linked-worktree commits. No temporary source ref is created. |
 | Dirty source | Refuse migration by default. `--dirty omit` explicitly leaves uncommitted/untracked files on the source and records that warning. An explicit same-local-`--cwd` fork shares those files and reports that instead. No patch or working-file transfer in v1. |
@@ -78,9 +119,10 @@ branches is a separate Git action. The main checkout is not switched. A newly
 cloned main repository is created with `--no-checkout`; the new worktree contains
 the files at the exact captured commit.
 
-For a non-Git HOME session, a remote fork defaults to the remote HOME. Other
-non-Git remote directories require `--cwd`. `~` is expanded on the destination;
-quote `~/...` in a **shell** command so your local shell does not expand it first.
+For a non-Git HOME session, cross-host push and pull default to the destination
+HOME. Other non-Git source directories require destination `--cwd`. Destination
+`~` paths expand there; source selectors on pull expand on the source. Quote
+`~/...` in shell commands when it must not expand on the initiating machine.
 The Pi command parser does not run a shell or expand `$variables`.
 
 ## SSH and installation
@@ -88,15 +130,20 @@ The Pi command parser does not run a shell or expand `$variables`.
 Both ends need `pi-session`, Node 22+ and Git. SSH uses the operator's normal SSH
 config, host keys and identities, with batch authentication. It never disables
 host-key checking, copies credentials, installs software remotely, or puts a
-transcript in command-line arguments. A finite, versioned JSON request goes over
-stdin; a receipt comes back on stdout. Transcript/Git-bundle checksums are checked
-at the receiver. Do not add banners to noninteractive shell stdout.
+transcript in command-line arguments. Versioned, bounded JSON requests/responses
+use stdin/stdout: history travels in the push request or pull response.
+Transcript/Git-bundle checksums and request/session identities are checked at the
+receiver. Do not add banners to noninteractive shell stdout.
 
 Use `--remote-command PATH` if the peer executable is not on PATH. It is a single
 executable path, **not a shell snippet**. For a source checkout on the other node:
 
 ```sh
 pi-session fork --session <id> --remote aurora \
+  --remote-command '~/agent-utils/scripts/pi-session.mjs' --name investigation
+
+# Run on the destination, using the source node's checkout as its helper:
+node scripts/pi-session.mjs pull --from node-a --session SESSION_ID \
   --remote-command '~/agent-utils/scripts/pi-session.mjs' --name investigation
 ```
 
@@ -123,7 +170,8 @@ not completion of any model turn.
 `--herdr-session NAME` explicitly selects the **destination server session**;
 the default is `default`. Start that server yourself if it is not running. An
 SSH destination does not inherit the source's pane/server identity. Saved Herdr
-machine profiles are not resolved by this tool: `--remote` is an SSH alias.
+machine profiles are not resolved by this tool: `--remote` and `--from` name SSH
+aliases. For pull, Herdr is controlled locally on the destination.
 
 `--focus` is a separate opt-in. Before focus, the adapter checks the named live
 occupant, pane, terminal identity, and native session identity when Herdr supplies
@@ -155,23 +203,45 @@ Or inside Pi:
 A generated request ID is returned; pass `--request YOUR-ID` to choose one before
 starting. Once admitted, it binds the source snapshot, intent and new session ID.
 `retry` works even after the source session advances. Reusing a request ID with
-different options fails. `status` is read-only and checks the destination through
-the original transport. To inspect a remote incoming request without source state:
+different options fails. Pull admits its intent before the first SSH request;
+`retry` also recovers a lost first snapshot response. Source snapshots are bound
+to both the request ID and allocated destination session ID. If preparation fails,
+`status` reports `pending`/`preparing` with the saved error rather than claiming
+the request is missing. Changing options requires a new request ID.
+
+`status` is read-only and checks the destination through the original transport.
+For pull, status and completed retries are local and work with the source offline.
+To inspect a remote incoming request without source state:
 
 ```sh
 pi-session status <request-id> --remote aurora --json
 ```
 
 The receipt provides `resume.onDestination` (exact `cd ... && pi --session ...`)
-and `resume.fromSource` (SSH form when applicable). These resume the existing fork,
+and `resume.fromInitiator` (SSH form for push, local for pull). Push receipts also
+retain the legacy `resume.fromSource` field. These resume the existing fork,
 not a fresh copy. Do not manually launch concurrent writers to the same Pi session.
 
-State is under `$PI_CODING_AGENT_DIR/session-forks/{outgoing,incoming}/<request>`
-(default `~/.pi/agent`). Private source snapshots/Git bundles are retained for retry;
-receipts never include transcript bodies. This is not a sync service and there is
-no automatic deletion. Delete a completed request's private outgoing/incoming
-journal directories only when no operation is running and retries are no longer
-needed; this does not remove the published session or worktree.
+State is under `$PI_CODING_AGENT_DIR/session-forks/` (default agent directory:
+`~/.pi/agent`). Private snapshots/Git bundles are retained for retry; receipts
+never include transcript bodies.
+
+| Direction | Initiator journal | Receiver journal | Source snapshot cache |
+|---|---|---|---|
+| Push A → B | A: `outgoing/<request>` | B: `incoming/<request>` | In A's outgoing journal |
+| Pull from A on B | B: `outgoing/<request>` | B: `incoming/<request>` | A: `exports/<request>` |
+
+`exports` is an internal pull cache, not the retired export bundle format. A
+failed/preparing pull may already have cached private history on both hosts.
+Snapshots are immutable once admitted; Git bundles are captured on first demand
+at that snapshot's exact commit and retained, so lost object responses can be
+retried without rereading the original repository. If the commit is unavailable
+before the first bundle capture, preparation fails rather than substituting HEAD.
+
+This is not a sync service and there is no automatic deletion. Delete completed
+request journal/cache directories only when no operation is running and retries
+are no longer needed; this does not remove the published session or worktree.
+After successful pull, the destination has everything needed for its own retries.
 
 Session writes are `0600`, atomic, durable and no-clobber. Replays verify the
 published prefix, permitting new entries appended after resume. Changed/truncated

@@ -14,6 +14,11 @@ export class ForkError extends Error {
 }
 export const fail = (code, message, details) => { throw new ForkError(code, message, details); };
 export const hash = data => createHash('sha256').update(data).digest('hex');
+export function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
 export const exists = path => access(path).then(() => true, () => false);
 export function localPath(value, cwd = process.cwd(), home = homedir()) {
   if (typeof value !== 'string' || !value || /[\0\r\n]/.test(value)) fail('path', 'Expected a nonempty path without NUL/newlines');

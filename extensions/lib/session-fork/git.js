@@ -31,11 +31,12 @@ export async function repository(cwd) {
 }
 export async function destinationPlan(request) {
   const o = request.options; const repo = request.repository;
+  const crossHost = !!(o.remote || o.from);
   const cwdBase = homedir();
   let repoPath;
   if (o.repo) repoPath = localPath(o.repo, cwdBase);
   else if (repo) {
-    if (!o.remote) repoPath = repo.root;
+    if (!crossHost) repoPath = repo.root;
     else if (repo.homeRelativeRoot !== null) repoPath = resolve(homedir(), repo.homeRelativeRoot);
     else if (!o.cwd) fail('destination-repo', 'Source repo is outside HOME; specify --repo on the destination');
   }
@@ -46,8 +47,8 @@ export async function destinationPlan(request) {
     cwd = join(worktreeRoot, slug(basename(repoPath)), o.worktree || slug(request.name));
   } else {
     if (o.worktree || o.repo || o.clone) fail('destination', 'Git worktree options require a Git source');
-    if (o.remote && request.origin.cwd !== request.origin.home) fail('destination', 'For a non-Git source outside HOME, specify destination --cwd');
-    cwd = o.remote ? homedir() : request.origin.cwd;
+    if (crossHost && request.origin.cwd !== request.origin.home) fail('destination', 'For a non-Git source outside HOME, specify destination --cwd');
+    cwd = crossHost ? homedir() : request.origin.cwd;
   }
   const makeWorktree = !o.cwd && !!repo;
   if (makeWorktree && repo.standardLayout === false) fail('git-layout', 'Separate-git-dir repositories need an explicit existing --cwd; automatic worktrees expect a normal Git common directory');
@@ -67,7 +68,7 @@ export async function destinationPlan(request) {
     if (repo) {
       const targetCommit = (await git(cwd, ['rev-parse', 'HEAD'])).stdout.trim();
       if (targetCommit !== repo.commit) fail('destination-commit', 'Existing destination cwd is at a different commit; use a new worktree or align it yourself');
-      const sameSource = !o.remote && await realpath(cwd) === await realpath(request.origin.cwd);
+      const sameSource = !crossHost && await realpath(cwd) === await realpath(request.origin.cwd);
       if (!sameSource && (await git(cwd, ['status', '--porcelain=v1', '--untracked-files=normal'])).stdout) fail('destination-dirty', 'Existing destination working tree is dirty; use another cwd');
       plan.hasCommit = true;
     }
@@ -90,6 +91,12 @@ export async function makeGitBundle(repo) {
     return { sha256: hash(bytes), data: bytes.toString('base64') };
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
+export function decodeGitBundle(bundle) {
+  if (!bundle || typeof bundle.data !== 'string' || bundle.data.length > Math.ceil(MAX_BUNDLE * 4 / 3) + 4 || !/^[a-f0-9]{64}$/.test(bundle.sha256 || '')) fail('integrity', 'Invalid Git bundle');
+  const bytes = Buffer.from(bundle.data, 'base64');
+  if (bytes.length > MAX_BUNDLE || hash(bytes) !== bundle.sha256) fail('integrity', 'Invalid Git bundle checksum');
+  return bytes;
+}
 export async function prepareGit(request, plan, dir, bundle) {
   if (!plan.makeWorktree) return;
   const repo = request.repository;
@@ -100,8 +107,7 @@ export async function prepareGit(request, plan, dir, bundle) {
   }
   if ((await git(plan.repo, ['cat-file', '-e', `${repo.commit}^{commit}`], { allowFailure: true })).code !== 0) {
     if (!bundle) fail('git-objects', 'Exact source commit is unavailable; retry with its saved Git bundle');
-    const bytes = Buffer.from(bundle.data, 'base64');
-    if (bytes.length > MAX_BUNDLE || hash(bytes) !== bundle.sha256) fail('integrity', 'Invalid Git bundle');
+    const bytes = decodeGitBundle(bundle);
     const path = join(dir, 'objects.bundle');
     if (!(await exists(path))) await atomicWrite(path, bytes);
     await git(plan.repo, ['bundle', 'verify', path]);

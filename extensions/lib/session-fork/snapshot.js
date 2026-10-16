@@ -28,6 +28,14 @@ export function parseSnapshot(bytes, leaf) {
   return { header, entries, leafId, tail: text.slice(firstNewline + 1), sha256: hash(bytes) };
 }
 
+export function decodeSnapshot(data, origin) {
+  if (typeof data !== 'string' || data.length > Math.ceil(MAX_SESSION * 4 / 3) + 4) fail('size', 'Invalid or oversized session snapshot');
+  const bytes = Buffer.from(data, 'base64');
+  const parsed = parseSnapshot(bytes, origin?.leafId);
+  if (parsed.sha256 !== origin?.sha256 || parsed.header.id !== origin?.sessionId) fail('integrity', 'Source snapshot checksum or identity mismatch');
+  return bytes;
+}
+
 export async function findSession(identifier, { cwd = process.cwd(), sourceSessionDir } = {}) {
   if (!identifier) fail('source', 'Specify --session <path|id> (Pi supplies its current session automatically)');
   const candidate = localPath(identifier, cwd);

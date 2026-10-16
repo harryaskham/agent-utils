@@ -4,7 +4,7 @@ import { HELP, formatReceipt, parseArgs } from './lib/session-fork/args.js';
 
 export default function sessionFork(pi) {
   pi.registerCommand('session-fork', {
-    description: 'Fork unchanged history locally or over SSH; optionally open it in Herdr',
+    description: 'Fork unchanged history here, push over SSH, or pull with --from; optionally open in Herdr',
     handler: async (args, ctx) => {
       try {
         const { action, options, id } = parseArgs(args, { extension: true });
@@ -12,7 +12,11 @@ export default function sessionFork(pi) {
         let result;
         if (action === 'status') result = await forkStatus(id, options);
         else if (action === 'retry') result = await retryFork(id);
-        else {
+        else if (options.from) {
+          // Pull is destination-side: do not substitute this Pi's identity or
+          // require a saved local conversation. The source reads its JSONL.
+          result = await forkSession(options, { sourceCwd: ctx.cwd });
+        } else {
           // A slash command can run during streaming. Snapshot only finalized,
           // saved history and the actual selected branch, never a partial turn.
           await ctx.waitForIdle();

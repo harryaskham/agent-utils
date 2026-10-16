@@ -19,6 +19,8 @@
     { "id": "SF-09", "evidence": ["test/session-fork.test.js", "test/session-fork-herdr-live.test.js"], "testPrefix": "SF-09" },
     { "id": "SF-10", "evidence": ["test/session-fork.test.js", "test/session-fork-integration.test.js"], "testPrefix": "SF-10" },
     { "id": "SF-11", "evidence": ["test/session-fork-integration.test.js", "test/session-fork-herdr-live.test.js"], "testPrefix": "SF-11", "limitation": "Opt-in native tests use isolated Linux Pi/Herdr processes; no live provider request, macOS, or Android validation." },
-    { "id": "SF-12", "evidence": ["package.json", "flake.nix", "scripts/pi-session.mjs"], "testPrefix": null }
+    { "id": "SF-12", "evidence": ["package.json", "flake.nix", "scripts/pi-session.mjs"], "testPrefix": null },
+    { "id": "SF-13", "evidence": ["test/session-fork-pull.test.js", "test/session-fork-herdr-live.test.js"], "testPrefix": "SF-13", "limitation": "Source-host transport uses a real shell/process SSH shim, not production SSH credentials." },
+    { "id": "SF-14", "evidence": ["test/session-fork-pull.test.js"], "testPrefix": "SF-14" }
   ]
 }

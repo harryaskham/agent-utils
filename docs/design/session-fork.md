@@ -50,11 +50,22 @@ input path. No domain-specific Paratenic API or capability is introduced.
   real Git/CLI and SSH protocol boundary tests use disposable homes/repos.
 - SF-12: npm bin and Nix package expose the same CLI. No imperative installation,
   live operator session manipulation, or implicit remote deployment.
+- SF-13: `pull --from HOST --session ID` (also `fork --from` and the Pi command)
+  runs on the destination and never requires reverse SSH. Source selectors resolve
+  remotely; destination paths, Git setup, publication and Herdr remain local.
+  Pull can be triggered from an empty Pi without changing that Pi's conversation.
+- SF-14: Admit a pull intent/new session ID before SSH. Source snapshots are cached
+  by request ID AND destination UUID; objects are bound to that snapshot checksum.
+  Lost snapshot/object replies replay frozen bytes, not advancing source history
+  or HEAD. Multi-megabyte responses remain bounded. Dry-run writes no journals.
+  Completed pull retry/status works without the source. Preparing status is explicit.
 
 ## State and failure semantics
 
-State under `$PI_CODING_AGENT_DIR/session-forks/{outgoing,incoming}/<request>` is
-owner-private. A request ID binds a fixed snapshot and intent. Receipts contain
+State under `$PI_CODING_AGENT_DIR/session-forks/` is owner-private. `outgoing`
+belongs to the initiator (source for push, destination for pull); `incoming`
+belongs to the destination. Pull adds an `exports` cache on the source. A request
+ID binds a fixed snapshot and intent; source exports also bind the new session UUID. Receipts contain
 paths/identity but never transcript bodies. Retry resolves transport uncertainty
 by querying/replaying the same receiver request. Session publication and Herdr
 presentation are separate outcomes. A Herdr timeout may have started a process;
