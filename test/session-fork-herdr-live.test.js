@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { run, quote } from '../extensions/lib/session-fork/io.js';
+import { installSourcePeer } from './lib/session-fork-peer.js';
 
 const pi = process.env.PI_SESSION_TEST_PI_BIN;
 const herdr = process.env.PI_SESSION_TEST_HERDR_BIN;
@@ -68,6 +69,18 @@ test('SF-09/11: isolated real Herdr workspace, Pi startup, focus and retry witho
     assert.equal(worktree.result.herdr.focused, undefined);
     const focus = JSON.parse((await command(['agent', 'get', envelope.result.herdr.agentName])).stdout);
     assert.equal(focus.result.agent.focused, true, 'opening the worktree must not steal focus');
+
+    const sourceHome = join(dir, 'remote-source'); await mkdir(sourceHome);
+    const sourceRows = (await readFile(source, 'utf8')).trim().split('\n').map(JSON.parse); sourceRows[0].cwd = sourceHome;
+    await writeFile(join(sourceHome, 'source.jsonl'), sourceRows.map(JSON.stringify).join('\n') + '\n');
+    await installSourcePeer({ binDir: bin, sourceHome, env, log: join(dir, 'pull-ssh.jsonl') });
+    const pulled = JSON.parse((await run(process.execPath, [join(root, 'scripts/pi-session.mjs'), 'pull', '--from', 'source-host', '--remote-command', join(root, 'scripts/pi-session.mjs'), '--session', '~/source.jsonl', '--cwd', home, '--name', 'native-pull', '--request', 'herdr-pull', '--herdr', '--herdr-session', name, '--focus', '--json'], { cwd: home, env, timeout: 60000 })).stdout);
+    assert.equal(pulled.result.direction, 'pull'); assert.equal(pulled.result.herdr.status, 'ready'); assert.equal(pulled.result.herdr.focused, true);
+    const pulledAgent = JSON.parse((await command(['agent', 'get', pulled.result.herdr.agentName])).stdout).result.agent;
+    assert.equal(pulledAgent.pane_id, pulled.result.herdr.paneId); assert.equal(pulledAgent.focused, true);
+    const replay = JSON.parse((await run(process.execPath, [join(root, 'scripts/pi-session.mjs'), 'retry', 'herdr-pull', '--json'], { cwd: home, env })).stdout);
+    assert.equal(replay.result.herdr.paneId, pulled.result.herdr.paneId);
+    assert.equal((await readFile(join(dir, 'pull-ssh.jsonl'), 'utf8')).trim().split('\n').length, 1, 'completed pull/Herdr retry must not reconnect to source');
   } finally {
     await command(['server', 'stop'], { allowFailure: true }).catch(() => {});
     const timer = setTimeout(() => { try { process.kill(-server.pid, 'SIGKILL'); } catch {} }, 5000);
