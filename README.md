@@ -377,27 +377,15 @@ npm run test:coverage:summary  # ranked report of the lowest-covered modules
 
 See [`docs/testing.md`](docs/testing.md) for the test conventions (pure-function extraction, render-smoke tests, injectable IO, determinism) and the coverage philosophy.
 
-## GitHub Pages tool inventory
+## Documentation site
 
-This repository includes a minimal GitHub Pages site in [`docs/`](docs/) with a concise inventory of the Cacophony, Pi, UI automation, and repo-local tools available to agents/operators.
-
-Publishing path:
-- GitHub Pages source: **Deploy from a branch**
-- Branch: `main`
-- Folder: `/docs`
-
-Update and validate the rendered page with:
+The site at https://a.skh.am/agent-utils/ is built from [`site/`](site/): hand-written pages whose
+shared regions and figures are filled in by `scripts/site/build.py`. Long-form guides stay in
+[`docs/`](docs/).
 
 ```bash
-npm run docs:build
-npm run docs:check
+npm run docs:build   # python3 scripts/site/build.py
+npm run docs:check   # python3 scripts/check-site.py (links, budgets, no private hosts)
 ```
 
-Preview locally with:
-
-```bash
-npm run docs:build
-python3 -m http.server --directory docs 8000
-```
-
-Then open <http://localhost:8000/>.
+Pushing `site/` to `main` publishes it through `.github/workflows/pages.yml`.

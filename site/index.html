@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- shell:head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Utils · the toolbox around a coding agent</title>
+<meta name="description" content="Agent Utils is a Pi package and a set of standalone tools that give coding agents a voice, eyes, hands and a fleet: speech in and out, images and screens, choices, session control, work apps and fleet-wide dashboards.">
+<meta name="theme-color" content="#1d1b17">
+<meta name="color-scheme" content="light">
+<meta property="og:title" content="Agent Utils · the toolbox around a coding agent">
+<meta property="og:description" content="Agent Utils is a Pi package and a set of standalone tools that give coding agents a voice, eyes, hands and a fleet: speech in and out, images and screens, choices, session control, work apps and fleet-wide dashboards.">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="assets/fonts/atkinson-next.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/atkinson-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+<!-- /shell:head -->
+</head>
+<body data-tape="sessions">
+<!-- shell:top -->
+<a class="skip" href="#main">Skip to content</a>
+<header class="bench"><div class="bench-in">
+  <a class="brand" href="index.html" aria-label="Agent Utils home"><span class="tape">agent utils</span><small>Pi package</small></a>
+  <nav class="nav" aria-label="Pages"><a href="index.html" aria-current="page">Overview</a><a href="speech.html">Speech</a><a href="screens.html">Screens</a><a href="sessions.html">Sessions</a><a href="fleet.html">Fleet & work</a><a href="reference.html">Reference</a></nav>
+</div></header>
+<!-- /shell:top -->
+<div class="page">
+<aside class="rail">
+<!-- shell:rail -->
+<nav aria-label="On this page"><p><span class="tape">on this page</span></p>
+<ol>
+<li><a href="#catalogue">The catalogue</a></li>
+<li><a href="#principles">How it is built</a></li>
+</ol></nav>
+<!-- /shell:rail -->
+</aside>
+<main id="main">
+<p class="kicker"><span class="tape web">overview</span></p>
+<h1 class="hero-h1">The toolbox around a coding agent.</h1>
+<p class="lede"><strong>Agent Utils</strong> is a Pi package and a handful of standalone tools that give a coding agent a <strong>voice</strong>, <strong>eyes</strong>, <strong>hands</strong> and a <strong>fleet</strong>. Speech goes in and out; images and screens get shared both ways; questions reach whichever device you are holding; sessions compact, resume, fork and update themselves; and one command shows every machine at once.</p>
+<ul class="counts">
+<li><b>42</b>Pi extensions</li>
+<li><b>5</b>standalone tools: <code class="nb">ag</code>, <code class="nb">pi-session</code>, <code class="nb">skill-search</code>, <code class="nb">web-search-mcp</code>, <code class="nb">linear-extra-mcp</code></li>
+<li><b>1</b>install: <code>pi install git:github.com/harryaskham/agent-utils@v1</code></li>
+</ul>
+
+<h2 id="catalogue">The catalogue</h2>
+<p>Every capability, by family. Each family has its own page.</p>
+
+<h3 id="cat-speech"><span class="tape speech">speech</span></h3>
+<ul class="tags">
+<li data-tape="speech"><b>/read</b><span>Read aloud what you send, as you send it.</span></li>
+<li data-tape="speech"><b>/tts · /narrate</b><span>Speak replies verbatim, or one-line summaries around tool batches.</span></li>
+<li data-tape="speech"><b>/stt · /ptt</b><span>Voice input with local voice detection or push-to-talk.</span></li>
+<li data-tape="speech"><b>/rt</b><span>A Realtime voice agent as a normal Pi provider.</span></li>
+<li data-tape="speech"><b>/tts-queue</b><span>One machine-wide playback queue for every session.</span></li>
+<li data-tape="speech"><b>/audio · audio_share</b><span>Named audio providers; an audio reel for clips agents share.</span></li>
+</ul>
+<p><a href="speech.html">Go to the Speech page</a></p>
+
+<h3 id="cat-screens"><span class="tape screens">screens</span></h3>
+<ul class="tags">
+<li data-tape="screens"><b>kitty_image_preview_*</b><span>A persistent image gallery in the terminal, using kitty graphics.</span></li>
+<li data-tape="screens"><b>shared images</b><span>Durable, checksummed archives of every image an agent shares.</span></li>
+<li data-tape="screens"><b>image 413 recovery</b><span>Halve an oversized image and retry, once, automatically.</span></li>
+<li data-tape="screens"><b>/gfx · /eink · chips</b><span>Editor chrome, themes and an e-ink mode for tablets.</span></li>
+<li data-tape="screens"><b>tendril_* · macOS</b><span>Desktop screenshots and window placement, shared into context.</span></li>
+<li data-tape="screens"><b>android_* · xvfb_* · firecracker_vm_*</b><span>Emulators, virtual displays and microVMs for agents to drive.</span></li>
+</ul>
+<p><a href="screens.html">Go to the Screens page</a></p>
+
+<h3 id="cat-sessions"><span class="tape sessions">sessions</span></h3>
+<ul class="tags">
+<li data-tape="sessions"><b>interactive_choice</b><span>Spoken, keyboard, voice and remote answers to one question.</span></li>
+<li data-tape="sessions"><b>async_choice</b><span>Ask without blocking; answers arrive as steering messages.</span></li>
+<li data-tape="sessions"><b>/compact-next · /endless · /after</b><span>Compact at the next safe point, keep going, or schedule a prompt.</span></li>
+<li data-tape="sessions"><b>/update · /restart</b><span>Update packages, reload tools, or re-exec the session in place.</span></li>
+<li data-tape="sessions"><b>/m · /effort · /true-defaults</b><span>Switch models and effort, with guarded self-selection for agents.</span></li>
+<li data-tape="sessions"><b>/session-fork · /nix devshell</b><span>Fork a session to another machine; enter a flake shell on demand.</span></li>
+</ul>
+<p><a href="sessions.html">Go to the Sessions page</a></p>
+
+<h3 id="cat-fleet"><span class="tape fleet">fleet &amp; work</span></h3>
+<ul class="tags">
+<li data-tape="fleet"><b>ag</b><span>Speech, images, audio, questions and health across every machine.</span></li>
+<li data-tape="fleet"><b>ag dash</b><span>All of it as one live local web page.</span></li>
+<li data-tape="web"><b>search_web</b><span>Live web search with citations, through Copilot's Responses API.</span></li>
+<li data-tape="web"><b>app_automation_* · slack_*</b><span>Snapshots of Slack, Outlook, Teams and calendars; native Slack tools.</span></li>
+<li data-tape="web"><b>skill-search</b><span>One meta-tool to discover skills and MCP servers on demand.</span></li>
+<li data-tape="web"><b>linear-extra</b><span>An MCP wrapper with drafts for Linear.</span></li>
+</ul>
+<p><a href="fleet.html">Go to the Fleet &amp; work page</a></p>
+
+<h2 id="principles">How it is built</h2>
+<dl class="defs">
+<dt>Opt in, fail safe</dt><dd>Speech, auto-updates, agent queue tools and display helpers are off until asked for, and guarded when on: a missing provider or display is a clear message, never a hang.</dd>
+<dt>Local first, fleet aware</dt><dd>Everything works in one Pi session on one machine. Durable archives on each machine then let <code class="nb">ag</code> give a fleet-wide view without a central server.</dd>
+<dt>Independent of the host</dt><dd>Every extension works on its own. When the Paratenic session host is present, the same features are also offered to its remote clients through the Agent Host Protocol, using one state machine for local and remote input.</dd>
+<dt>Agents and operators are different users</dt><dd>Operator commands are unrestricted; agent-callable tools such as model self-selection, speech mute and question answering are narrower or need confirmation.</dd>
+</dl>
+</main>
+</div>
+<!-- shell:foot -->
+<footer class="foot">
+  <span>Agent Utils · a Pi package and standalone tools</span>
+  <span>Type: Atkinson Hyperlegible Next and Mono, <a href="assets/fonts/LICENSE.txt">OFL 1.1</a></span>
+</footer>
+<!-- /shell:foot -->
+</body>
+</html>

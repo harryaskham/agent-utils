@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- shell:head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screens · images, terminals and desktops</title>
+<meta name="description" content="Agent Utils for images and screens: a kitty-graphics preview gallery, durable shared images, oversized-image recovery, editor chips and e-ink mode, desktop capture, Android emulators, Xvfb and Firecracker VMs.">
+<meta name="theme-color" content="#1d1b17">
+<meta name="color-scheme" content="light">
+<meta property="og:title" content="Screens · images, terminals and desktops">
+<meta property="og:description" content="Agent Utils for images and screens: a kitty-graphics preview gallery, durable shared images, oversized-image recovery, editor chips and e-ink mode, desktop capture, Android emulators, Xvfb and Firecracker VMs.">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="assets/fonts/atkinson-next.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/atkinson-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+<!-- /shell:head -->
+</head>
+<body data-tape="screens">
+<!-- shell:top -->
+<a class="skip" href="#main">Skip to content</a>
+<header class="bench"><div class="bench-in">
+  <a class="brand" href="index.html" aria-label="Agent Utils home"><span class="tape">agent utils</span><small>Pi package</small></a>
+  <nav class="nav" aria-label="Pages"><a href="index.html">Overview</a><a href="speech.html">Speech</a><a href="screens.html" aria-current="page">Screens</a><a href="sessions.html">Sessions</a><a href="fleet.html">Fleet & work</a><a href="reference.html">Reference</a></nav>
+</div></header>
+<!-- /shell:top -->
+<div class="page">
+<aside class="rail">
+<!-- shell:rail -->
+<nav aria-label="On this page"><p><span class="tape">on this page</span></p>
+<ol>
+<li><a href="#preview">A gallery in the terminal</a></li>
+<li><a href="#archives">Shared images and recovery</a></li>
+<li><a href="#desktops">Desktops, phones and VMs</a></li>
+<li><a href="#chrome">Editor chrome</a></li>
+</ol></nav>
+<!-- /shell:rail -->
+</aside>
+<main id="main">
+<p class="kicker"><span class="tape screens">screens</span></p>
+<h1>Images, terminals and desktops</h1>
+<p class="lede">Agents make and inspect a lot of pictures: screenshots, renders, diagrams, emulator frames. Agent Utils shows them inline in the terminal, keeps them in durable archives, puts them into the model's context only when asked, and gives agents displays, emulators and VMs of their own to look at.</p>
+
+<h2 id="preview">A gallery in the terminal</h2>
+<p>The kitty image preview is a persistent widget in the Pi session that draws images with the kitty graphics protocol: above or below the editor, or in a side panel sized to the image. Agents add images, folders or live screenshot streams; you page through them with <code class="nb">/image-next</code>, <code class="nb">/image-prev</code> and <code class="nb">/image-hide</code>.</p>
+<div class="table"><table>
+<thead><tr><th>Tool</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code class="nb">kitty_image_preview_add</code>, <code class="nb">_add_folder</code></td><td>Show an image, or a sorted series from a folder</td></tr>
+<tr><td><code class="nb">kitty_image_preview_capture</code></td><td>Take a desktop screenshot with Tendril and show it</td></tr>
+<tr><td><code>kitty_image_preview_stream_start</code></td><td class="wrap">A live, low-resolution screenshot stream using two temporary files, so frames never pile up on disk or in context</td></tr>
+<tr><td><code>kitty_image_preview_playwright_start</code></td><td class="wrap">Mirror a Playwright browser while the agent keeps working from the DOM alone</td></tr>
+<tr><td><code>kitty_image_preview_share_current</code></td><td>Put the selected image into the model's context, on purpose</td></tr>
+<tr><td><code class="nb">_show</code>, <code class="nb">_animate</code>, <code class="nb">_cycle</code>, <code class="nb">_status</code></td><td>Navigate, animate a series, cycle on a timer, inspect</td></tr>
+</tbody>
+</table></div>
+<p>It works through tmux, SSH and terminal multiplexers. Under tmux it uses Unicode placeholders, so images stay anchored to their cells and scroll with the pane. Each image's bytes are uploaded once, and redraws only re-place it. Cleanup deletes only the image ids it created, never every image on the terminal. Any still image can be described by a vision model with <code class="nb">describe: true</code>, as text metadata.</p>
+<div class="note"><b>Local by default</b>Previews, galleries and streams stay on your screen. An image enters the model's context, and the session's durable history, only through an explicit share. That keeps context small and private screens private.</div>
+
+<h2 id="archives">Shared images and recovery</h2>
+<ul>
+<li>Every image an agent shares is copied into a durable per-machine archive under <code class="nb">~/.local/state/agent-utils</code>, with a private sidecar recording its provenance and checksum, independent of any session. <code class="nb">ag image</code> gathers these archives across machines into one gallery (see <a href="fleet.html#ag">Fleet</a>).</li>
+<li>If a provider rejects the latest image with HTTP 413, the image is too large. Agent Utils makes an exact half-width, half-height copy, replaces just that attachment in future context with a note giving the path, and retries once.</li>
+</ul>
+
+<h2 id="desktops">Desktops, phones and VMs</h2>
+<div class="table"><table>
+<thead><tr><th>Tools</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code class="nb">tendril_pi_capture</code>, <code class="nb">_describe</code>, <code class="nb">_stream</code></td><td class="wrap">Capture any window or display through <a href="https://a.skh.am/tendril/">Tendril</a>, locally or on another machine, straight into context</td></tr>
+<tr><td><code class="nb">capture_macos_screenshot</code>, <code class="nb">open_macos_app</code></td><td class="wrap">On macOS: share a crosshair-selected screenshot, or open an app in the background on the display you are not using</td></tr>
+<tr><td><code class="nb">android_emulator_screenshot</code>, <code class="nb">_stream</code></td><td class="wrap">Show an emulator or device in Pi through adb; <code class="nb">android_cli_*</code> installs and updates the SDK, after confirmation</td></tr>
+<tr><td><code class="nb">xvfb_ensure</code>, <code class="nb">xvfb_stop</code>, <code class="nb">xvfb_status</code></td><td class="wrap">An opt-in virtual X display on a headless machine, refusing to override a real one and torn down with the session</td></tr>
+<tr><td><code class="nb">firecracker_vm_*</code></td><td class="wrap">Prepare, start, inspect and stop Firecracker microVMs that expose browsers or services for Tendril to drive</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="chrome">Editor chrome</h2>
+<p><code class="nb">/gfx</code> drives Pi's graphics effects and themes. Editor chips move the model, effort, MCP, cost, context, directory, branch and diff into Powerline-style chips around the editor, collapsing gracefully on narrow terminals. <code class="nb">/eink</code> switches a tablet or e-ink screen to a greyscale theme with static chrome and no animation, and <code class="nb">/eink off</code> puts everything back.</p>
+</main>
+</div>
+<!-- shell:foot -->
+<footer class="foot">
+  <span>Agent Utils · a Pi package and standalone tools</span>
+  <span>Type: Atkinson Hyperlegible Next and Mono, <a href="assets/fonts/LICENSE.txt">OFL 1.1</a></span>
+</footer>
+<!-- /shell:foot -->
+</body>
+</html>

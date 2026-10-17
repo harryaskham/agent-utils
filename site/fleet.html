@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- shell:head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet and work · ag, web search and work apps</title>
+<meta name="description" content="The ag CLI for fleet-wide speech, images, audio, choices and health; live web search; Slack, Outlook, Teams and calendar automation; Linear and skill discovery.">
+<meta name="theme-color" content="#1d1b17">
+<meta name="color-scheme" content="light">
+<meta property="og:title" content="Fleet and work · ag, web search and work apps">
+<meta property="og:description" content="The ag CLI for fleet-wide speech, images, audio, choices and health; live web search; Slack, Outlook, Teams and calendar automation; Linear and skill discovery.">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="assets/fonts/atkinson-next.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/atkinson-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+<!-- /shell:head -->
+</head>
+<body data-tape="fleet">
+<!-- shell:top -->
+<a class="skip" href="#main">Skip to content</a>
+<header class="bench"><div class="bench-in">
+  <a class="brand" href="index.html" aria-label="Agent Utils home"><span class="tape">agent utils</span><small>Pi package</small></a>
+  <nav class="nav" aria-label="Pages"><a href="index.html">Overview</a><a href="speech.html">Speech</a><a href="screens.html">Screens</a><a href="sessions.html">Sessions</a><a href="fleet.html" aria-current="page">Fleet & work</a><a href="reference.html">Reference</a></nav>
+</div></header>
+<!-- /shell:top -->
+<div class="page">
+<aside class="rail">
+<!-- shell:rail -->
+<nav aria-label="On this page"><p><span class="tape">on this page</span></p>
+<ol>
+<li><a href="#ag">ag</a></li>
+<li><a href="#web">Web search</a></li>
+<li><a href="#apps">Work apps</a></li>
+<li><a href="#discovery">Skill and tool discovery</a></li>
+</ol></nav>
+<!-- /shell:rail -->
+</aside>
+<main id="main">
+<p class="kicker"><span class="tape fleet">fleet &amp; work</span></p>
+<h1>Every machine at once, and the apps you work in</h1>
+<p class="lede">Agents run on many machines. <code class="nb">ag</code> gathers what they say, show and ask into one place without a central server, and a set of work tools lets them search the web and read the apps where work actually happens.</p>
+
+<h2 id="ag">ag</h2>
+<figure class="fig">
+<div class="fig-scroll">
+<!-- fig:agfan -->
+<svg class="f" viewBox="0 0 700 350" width="700" height="350" role="img" aria-labelledby="agfan-t agfan-d"><title id="agfan-t">ag across the fleet</title><desc id="agfan-d">On the left, one ag command on a laptop. It reaches every enabled node concurrently over SSH. Each node keeps durable local archives: a speech feed, shared images with checksum sidecars, shared audio, and a Paratenic host with pending questions. ag tails and mutes speech, pulls images and audio incrementally with rsync into a private local cache and gallery, lists and answers questions, and checks each node&#x27;s health. ag dash serves all of it as one live local web page.</desc><defs><marker id="agfan-a-speech" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-speech"/></marker><marker id="agfan-a-screens" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-screens"/></marker><marker id="agfan-a-sessions" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-sessions"/></marker><marker id="agfan-a-fleet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-fleet"/></marker><marker id="agfan-a-web" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-web"/></marker><marker id="agfan-a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-ink"/></marker></defs>
+<rect x="0" y="120" width="160" height="80" rx="8" class="b-fleet"/>
+<text x="12" y="149.0" class="f-t">ag</text>
+<text x="12" y="167.0" class="f-s">tts · image · audio</text>
+<text x="12" y="183.0" class="f-s">choices · doctor · dash</text>
+<path d="M162 160 C226.0 160 226.0 60 290 60" class="wire s-fleet" marker-end="url(#agfan-a-fleet)"/>
+<rect x="294" y="20" width="220" height="84" rx="6" class="b-plain"/>
+<text x="308" y="42" class="f-t">node a</text>
+<text x="308" y="62" class="f-s">speech feed · images</text>
+<text x="308" y="80" class="f-s">shared audio · Paratenic</text>
+<path d="M162 160 C226.0 160 226.0 160 290 160" class="wire s-fleet" marker-end="url(#agfan-a-fleet)"/>
+<rect x="294" y="120" width="220" height="84" rx="6" class="b-plain"/>
+<text x="308" y="142" class="f-t">node b</text>
+<text x="308" y="162" class="f-s">speech feed · images</text>
+<text x="308" y="180" class="f-s">shared audio · Paratenic</text>
+<path d="M162 160 C226.0 160 226.0 260 290 260" class="wire s-fleet" marker-end="url(#agfan-a-fleet)"/>
+<rect x="294" y="220" width="220" height="84" rx="6" class="b-plain"/>
+<text x="308" y="242" class="f-t">node c</text>
+<text x="308" y="262" class="f-s">speech feed · images</text>
+<text x="308" y="280" class="f-s">shared audio · Paratenic</text>
+<text x="80" y="222" class="f-xs" text-anchor="middle">SSH, concurrent</text>
+<rect x="560" y="120" width="140" height="80" rx="8" class="b-web"/>
+<text x="572" y="149.0" class="f-t">ag dash</text>
+<text x="572" y="167.0" class="f-s">one live page</text>
+<text x="572" y="183.0" class="f-s">on localhost</text>
+<path d="M120 230 L120 330 L630 330 L630 204" class="wire s-fleet dash" marker-end="url(#agfan-a-fleet)"/>
+<rect x="277.4" y="321" width="245.2" height="18" rx="3" class="labbg"/>
+<text x="400" y="334" class="f-xs" text-anchor="middle">local cache, gallery, player</text>
+</svg>
+<!-- /fig -->
+</div>
+<figcaption><b>No server, just archives.</b>Every machine keeps its own durable records; <code class="nb">ag</code> reads them all over SSH, concurrently, and caches what it pulls.</figcaption>
+</figure>
+<pre><code><span class="ln"><span class="p">ag --help</span></span><span class="ln"><span class="o">Agent speech,<wbr> images,<wbr> audio,<wbr> choices and health across your machines</span></span><span class="ln"><span class="o"></span></span><span class="ln"><span class="o">Commands:</span></span><span class="ln"><span class="o">  hosts        List configured nodes and effective storage paths</span></span><span class="ln"><span class="o">  tts          Read speech requests,<wbr> independently of playback success</span></span><span class="ln"><span class="o">  image        Open a fleet-wide image gallery (or list/pull/get registered images)</span></span><span class="ln"><span class="o">  audio        Open a fleet-wide player for explicitly shared audio (or list/pull/get/play clips)</span></span><span class="ln"><span class="o">  sync         Sync every media pathway (images and shared audio) and regenerate both viewers</span></span><span class="ln"><span class="o">  choices      Answer pending agent questions across the fleet (TUI; list/answer for scripts)</span></span><span class="ln"><span class="o">  doctor       Check each node: SSH/ag,<wbr> Paratenic AHP,<wbr> speech feed and gallery cache</span></span><span class="ln"><span class="o">  dash         Serve a live local web dashboard of choices,<wbr> health,<wbr> speech,<wbr> images and audio</span></span><span class="ln"><span class="o">  config       Manage canonical YAML configuration (symlinks preserved)</span></span><span class="ln"><span class="o">  mcp          Serve finite read/config and confirmed speech-control tools over MCP stdio</span></span><span class="ln"><span class="o">  tools        List typed MCP contracts without network access</span></span><span class="ln"><span class="o">  call         Invoke the same typed handler as MCP with JSON arguments</span></span><span class="ln"><span class="o">  completions  Generate shell completions without loading configuration</span></span></code></pre>
+<div class="table"><table>
+<thead><tr><th>Command</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code class="nb">ag tts tail</code></td><td>Follow every machine's speech feed live, or <code class="nb">--no-follow -n 10</code> for recent history</td></tr>
+<tr><td><code class="nb">ag tts mute</code>, <code class="nb">unmute</code>, <code class="nb">status</code></td><td>The <a href="speech.html#mute">speech mute policy</a>, fleet-wide or per machine</td></tr>
+<tr><td><code class="nb">ag image</code>, <code class="nb">ag audio</code></td><td class="wrap">Pull shared images or audio incrementally with rsync, then open a private local gallery or player; <code class="nb">--offline</code> uses the cache</td></tr>
+<tr><td><code class="nb">ag choices</code></td><td>Answer pending agent questions from every machine in one terminal UI</td></tr>
+<tr><td><code class="nb">ag doctor</code></td><td>Per machine: SSH and ag, the session host and its pending questions, speech recency, gallery cache</td></tr>
+<tr><td><code class="nb">ag dash</code></td><td>All of the above as one live local web page</td></tr>
+</tbody>
+</table></div>
+<p>Nodes come from <code class="nb">~/.config/ag/config.yaml</code> (or <code class="nb">$AG_CONFIG</code>); <code class="nb">--host</code> narrows to some, <code class="nb">--local</code> skips SSH entirely. Every command has a <code class="nb">--json</code> envelope, and <code class="nb">ag mcp</code> exposes 19 typed tools to agents. Read-only tools need nothing more; tools that change state, such as muting speech, answering questions or creating a config, require <code class="nb">confirmed=true</code>.</p>
+<pre class="light" data-label="the 19 contracts, from ag tools"><code><span class="ln">ag_tts_status  ag_tts_mute  ag_tts_unmute  ag_tts_list</span><span class="ln">ag_image_pull  ag_image_list  ag_image_info</span><span class="ln">ag_audio_pull  ag_audio_list  ag_audio_info  ag_sync</span><span class="ln">ag_choices_list  ag_choices_answer  ag_doctor  ag_hosts_list</span><span class="ln">config_status  config_validate  config_schema  config_init</span></code></pre>
+
+<h2 id="web">Web search</h2>
+<p><code class="nb">search_web</code> answers a question from live web results, with citations, through GitHub Copilot's Responses API, using Pi's own automatically refreshed Copilot token. It can also go through an OpenAI-compatible proxy. A <code class="nb">/web-search</code> prompt template wraps it, and a separate MCP server offers the same to other agents.</p>
+
+<h2 id="apps">Work apps</h2>
+<p>Many work apps have no usable API for an agent. App automation gives agents a catalogue of approved, high-level actions instead of raw browser scripting: open, snapshot and summarise Slack, Outlook mail and calendar, Teams and calendars, each with a deterministic plan that can be dry-run first.</p>
+<ol class="steps">
+<li><h3>Check the setup</h3><p><code class="nb">app_automation_doctor</code> checks the catalogue, browser tooling and bridges.</p></li>
+<li><h3>See what is stale</h3><p><code>app_automation_refresh_staleness</code> reports per-action freshness.</p></li>
+<li><h3>Refresh</h3><p>Through Playwright, Tendril, or a Windows devbox's browser over the Chrome DevTools protocol when that is where you are signed in. Snapshots are bounded and redacted; cookies and tokens are never stored.</p></li>
+<li><h3>Ask</h3><p><code class="nb">app_automation_work_briefing</code> builds a compact, staleness-aware index across all of them for questions such as "what needs me today?".</p></li>
+</ol>
+<p>Slack also has native <code class="nb">slack_*</code> tools that return compact results, with messages grouped by conversation and user names resolved once, and writes that require explicit confirmation.</p>
+
+<h2 id="discovery">Skill and tool discovery</h2>
+<p><code class="nb">skill-search</code> lets an agent find configured skills and host MCP servers without reloading anything, as one CLI and one MCP meta-tool:</p>
+<pre><code><span class="ln"><span class="p">skill-search list --json</span></span><span class="ln"><span class="p">skill-search web query latest Rust MCP crate</span></span><span class="ln"><span class="p">skill-search mcp stdio</span></span></code></pre>
+<p><code class="nb">linear-extra</code> wraps a Linear MCP server with draft support.</p>
+</main>
+</div>
+<!-- shell:foot -->
+<footer class="foot">
+  <span>Agent Utils · a Pi package and standalone tools</span>
+  <span>Type: Atkinson Hyperlegible Next and Mono, <a href="assets/fonts/LICENSE.txt">OFL 1.1</a></span>
+</footer>
+<!-- /shell:foot -->
+</body>
+</html>
