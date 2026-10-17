@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- shell:head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speech · talking to and listening to agents</title>
+<meta name="description" content="Agent Utils speech: read-aloud, spoken replies and narration, push-to-talk and voice-activated input, a Realtime voice agent, a machine-wide playback queue, audio providers, routing and a fleet speech feed.">
+<meta name="theme-color" content="#1d1b17">
+<meta name="color-scheme" content="light">
+<meta property="og:title" content="Speech · talking to and listening to agents">
+<meta property="og:description" content="Agent Utils speech: read-aloud, spoken replies and narration, push-to-talk and voice-activated input, a Realtime voice agent, a machine-wide playback queue, audio providers, routing and a fleet speech feed.">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="assets/fonts/atkinson-next.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/atkinson-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+<!-- /shell:head -->
+</head>
+<body data-tape="speech">
+<!-- shell:top -->
+<a class="skip" href="#main">Skip to content</a>
+<header class="bench"><div class="bench-in">
+  <a class="brand" href="index.html" aria-label="Agent Utils home"><span class="tape">agent utils</span><small>Pi package</small></a>
+  <nav class="nav" aria-label="Pages"><a href="index.html">Overview</a><a href="speech.html" aria-current="page">Speech</a><a href="screens.html">Screens</a><a href="sessions.html">Sessions</a><a href="fleet.html">Fleet & work</a><a href="reference.html">Reference</a></nav>
+</div></header>
+<!-- /shell:top -->
+<div class="page">
+<aside class="rail">
+<!-- shell:rail -->
+<nav aria-label="On this page"><p><span class="tape">on this page</span></p>
+<ol>
+<li><a href="#pipeline">From words to a speaker</a></li>
+<li><a href="#out">Speech out</a></li>
+<li><a href="#queue">One queue per machine</a></li>
+<li><a href="#in">Speech in</a></li>
+<li><a href="#mute">Muting, everywhere at once</a></li>
+<li><a href="#reel">Sharing audio</a></li>
+</ol></nav>
+<!-- /shell:rail -->
+</aside>
+<main id="main">
+<p class="kicker"><span class="tape speech">speech</span></p>
+<h1>Talk to the agent, and let it talk back</h1>
+<p class="lede">Agent Utils turns Pi into something you can use with the screen off: it reads what you send, speaks replies or narrates its work, takes dictation, holds full voice conversations, and coordinates all of that across sessions and machines so two agents never talk over each other.</p>
+
+<h2 id="pipeline">From words to a speaker</h2>
+<figure class="fig">
+<div class="fig-scroll">
+<!-- fig:speech -->
+<svg class="f" viewBox="0 0 700 400" width="700" height="400" role="img" aria-labelledby="speech-t speech-d"><title id="speech-t">From words to a speaker</title><desc id="speech-d">On the left, four sources of speech: read-aloud of what you send, verbatim spoken replies, one-line narration around tool batches, and spoken choices. Each goes to a configured audio provider, Azure, OpenAI, a speech daemon or a local command. Synthesised audio joins one machine-wide playback queue shared by every Pi session: a spool with atomic directory locks, one clip at a time with a two-second overlap. From the queue, audio plays through PulseAudio, where focus and solo routing can redirect it. Every request is also written to a durable speech feed that ag tts tail follows across the fleet. A mute policy per kind, with epochs, stops muted speech and keeps queued speech from replaying after an unmute.</desc><defs><marker id="speech-a-speech" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-speech"/></marker><marker id="speech-a-screens" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-screens"/></marker><marker id="speech-a-sessions" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-sessions"/></marker><marker id="speech-a-fleet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-fleet"/></marker><marker id="speech-a-web" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-web"/></marker><marker id="speech-a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-ink"/></marker></defs>
+<rect x="0" y="20" width="150" height="50" rx="8" class="b-speech"/>
+<text x="12" y="42.0" class="f-t">/read</text>
+<text x="12" y="60.0" class="f-s">what you send</text>
+<path d="M152 45 C174.0 45 174.0 135 196 135" class="wire s-speech" marker-end="url(#speech-a-speech)"/>
+<rect x="0" y="80" width="150" height="50" rx="8" class="b-speech"/>
+<text x="12" y="102.0" class="f-t">/tts</text>
+<text x="12" y="120.0" class="f-s">assistant replies</text>
+<path d="M152 105 C174.0 105 174.0 135 196 135" class="wire s-speech" marker-end="url(#speech-a-speech)"/>
+<rect x="0" y="140" width="150" height="50" rx="8" class="b-speech"/>
+<text x="12" y="162.0" class="f-t">/narrate</text>
+<text x="12" y="180.0" class="f-s">tool-batch lines</text>
+<path d="M152 165 C174.0 165 174.0 135 196 135" class="wire s-speech" marker-end="url(#speech-a-speech)"/>
+<rect x="0" y="200" width="150" height="50" rx="8" class="b-speech"/>
+<text x="12" y="222.0" class="f-t">choices</text>
+<text x="12" y="240.0" class="f-s">spoken questions</text>
+<path d="M152 225 C174.0 225 174.0 135 196 135" class="wire s-speech" marker-end="url(#speech-a-speech)"/>
+<rect x="200" y="96" width="140" height="78" rx="8" class="b-plain"/>
+<text x="212" y="124.0" class="f-t">provider</text>
+<text x="212" y="142.0" class="f-s">azure · openai</text>
+<text x="212" y="158.0" class="f-s">daemon · command</text>
+<path d="M342 135 L380 135" class="wire s-speech" marker-end="url(#speech-a-speech)"/>
+<rect x="384" y="70" width="150" height="130" rx="6" class="b-sessions"/>
+<text x="398" y="94" class="f-t">playback queue</text>
+<text x="398" y="114" class="f-s">machine-wide</text>
+<text x="398" y="132" class="f-s">atomic dir locks</text>
+<text x="398" y="150" class="f-s">1 at a time</text>
+<text x="398" y="168" class="f-s">2 s overlap</text>
+<text x="398" y="186" class="f-s">1 GiB spool cap</text>
+<path d="M536 110 C548.0 110 548.0 60 560 60" class="wire s-speech" marker-end="url(#speech-a-speech)"/>
+<rect x="562" y="30" width="138" height="60" rx="8" class="b-speech"/>
+<text x="574" y="49.0" class="f-t">PulseAudio</text>
+<text x="574" y="67.0" class="f-s">focus · solo</text>
+<text x="574" y="83.0" class="f-s">routing</text>
+<path d="M536 160 C548.0 160 548.0 200 560 200" class="wire s-fleet" marker-end="url(#speech-a-fleet)"/>
+<rect x="562" y="172" width="138" height="60" rx="8" class="b-fleet"/>
+<text x="574" y="191.0" class="f-t">speech feed</text>
+<text x="574" y="209.0" class="f-s">every request,</text>
+<text x="574" y="225.0" class="f-s">played or not</text>
+<rect x="200" y="290" width="334" height="92" rx="6" class="b-plain"/>
+<text x="214" y="314" class="f-t">mute policy, per kind</text>
+<text x="214" y="334" class="f-m">read · tts · narrate · choices</text>
+<text x="214" y="354" class="f-s">each mute advances an epoch;</text>
+<text x="214" y="372" class="f-s">queued speech from an old epoch never plays</text>
+<path d="M458 288 L458 204" class="wire s-ink dash" marker-end="url(#speech-a-ink)"/>
+</svg>
+<!-- /fig -->
+</div>
+<figcaption><b>The speech path.</b>Every voice surface shares the same providers, queue, routing, feed and mute policy, so they behave consistently and can be silenced together.</figcaption>
+</figure>
+
+<h2 id="out">Speech out</h2>
+<div class="table"><table>
+<thead><tr><th>Command</th><th>Speaks</th></tr></thead>
+<tbody>
+<tr><td><code class="nb">/read</code></td><td class="wrap">What you send, read from the editor as it is submitted. Text transformed by <code class="nb">/pipe</code> is spoken as finally sent.</td></tr>
+<tr><td><code class="nb">/tts</code></td><td class="wrap">Each finished assistant reply, verbatim. The agent never has to call a speak tool.</td></tr>
+<tr><td><code class="nb">/narrate</code></td><td class="wrap">One first-person line before and after each batch of tool calls, written by a small, cheap model. It never blocks tools, and its summaries are queued for your next real turn rather than starting one.</td></tr>
+<tr><td>spoken choices</td><td class="wrap">Questions and their options, read out when an agent asks (see <a href="sessions.html#choices">Sessions</a>).</td></tr>
+</tbody>
+</table></div>
+<p>Sessions under pi-daemon get the same <code class="nb">/tts</code>, <code class="nb">/narrate</code> and choice audio from a durable module, which follows the session's events on the daemon host whether or not a client is attached.</p>
+
+<h3 id="providers">Providers</h3>
+<p>Connections are configured once by name and selected per surface: Azure (with keys, or Entra tokens from an <code class="nb">az</code> broker), OpenAI, a speech daemon that can queue and play on a server, or any local command for text to speech.</p>
+<pre class="light" data-label="settings.json"><code><span class="ln">{</span><span class="ln">  "agentUtils": {</span><span class="ln">    "audio": {</span><span class="ln">      "providers": {</span><span class="ln">        "studio": { "type": "daemon",<wbr> … },<wbr></span><span class="ln">        "cloud":  { "type": "azure",<wbr> … }</span><span class="ln">      }</span><span class="ln">    }</span><span class="ln">  }</span><span class="ln">}</span></code></pre>
+
+<h2 id="queue">One queue per machine</h2>
+<p>Several Pi sessions on one machine would otherwise speak over one another. They share a playback queue with no daemon at all:</p>
+<ul>
+<li>synthesised audio and small metadata records are spooled under <code>~/.cache/agent-utils/tts-queue</code> (or <code class="nb">$PI_TTS_QUEUE_DIR</code>), and atomic directory locks coordinate independent processes;</li>
+<li>one clip plays at a time, starting two seconds before the previous one ends; bounded parallelism is optional;</li>
+<li>the spool is capped at 1 GiB, cancelled and oldest-waiting clips are cleaned up, and abandoned locks are recovered;</li>
+<li>synthesis and agent work never wait for playback.</li>
+</ul>
+<p><code class="nb">/tts focus</code> and <code class="nb">/tts solo</code> temporarily route a session's speech to a shared focus output or play it alone, with ownership-checked cleanup afterwards.</p>
+
+<h2 id="in">Speech in</h2>
+<div class="table"><table>
+<thead><tr><th>Command</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code class="nb">/stt</code></td><td class="wrap">Dictation with local voice detection: each turn is captured locally, wrapped as WAV and sent as one bounded HTTP request to an OpenAI-compatible transcription endpoint</td></tr>
+<tr><td><code class="nb">/ptt</code>, <kbd>Ctrl</kbd>+<kbd>Space</kbd></td><td>Push-to-talk, toggled from the editor</td></tr>
+<tr><td><code class="nb">/rt</code></td><td class="wrap">A full voice conversation with an OpenAI Realtime model, used as an ordinary Pi provider (<code>openai-realtime/gpt-realtime-2</code> by default), with audio as a side channel</td></tr>
+<tr><td><code class="nb">/cascade</code></td><td class="wrap">A voice group chat: you speak once, then each agent answers in turn, hearing you and everyone before it, in its own voice</td></tr>
+</tbody>
+</table></div>
+<p>Local voice detection replaced an older streaming subprocess that could hang on "transcribing" forever. Because the whole candidate turn is already in hand, one request with a timeout and explicit errors is enough. The <a href="https://github.com/harryaskham/agent-utils/blob/main/docs/realtime-agent.md">Realtime guide</a> covers routing to a phone, voice-detection tuning, replays and diagnostics.</p>
+
+<h2 id="mute">Muting, everywhere at once</h2>
+<p>Speech has four kinds (read, replies, narration and choices), and each can be muted on one machine or across the fleet without touching any session's settings:</p>
+<pre><code><span class="ln"><span class="p">ag tts mute</span>                     <span class="c"># all four kinds,<wbr> every enabled machine</span></span><span class="ln"><span class="p">ag tts mute --narrate --local</span>   <span class="c"># just narration,<wbr> just here</span></span><span class="ln"><span class="p">ag tts status</span></span><span class="ln"><span class="p">ag tts unmute</span></span></code></pre>
+<p>The policy lives in <code>~/.local/state/agent-utils/tts/mute.json</code>. Each mute advances that kind's <em>epoch</em>, and queued or in-flight speech carries the epoch it started with, so muting and quickly unmuting can never replay stale speech. Each kind keeps its own PulseAudio client name, so a mixer can control them separately too.</p>
+
+<h2 id="reel">Sharing audio</h2>
+<p>Speech is one pathway; deliberately shared audio is another. When an agent makes a song, proposes a sound or records a sample, <code class="nb">audio_share</code> puts it in a terminal audio reel in the session, with keyboard and mouse transport, and in a durable archive that <code class="nb">ag audio</code> gathers across machines. The reel never touches the speech queue, feed or mute policy, and speech never enters the reel.</p>
+<pre class="light" data-label="the reel, in the Pi session"><code><span class="ln">♪ ▶ 2/5 Bossa riff in E minor (take 3)            ━━━━━━━━━━━●──────────────── 1:23 / 3:45</span><span class="ln">  1 intro sting  [2 Bossa riff in E m…]  3 rain loop  4 UI click  vol 100% · /audio-reel</span></code></pre>
+</main>
+</div>
+<!-- shell:foot -->
+<footer class="foot">
+  <span>Agent Utils · a Pi package and standalone tools</span>
+  <span>Type: Atkinson Hyperlegible Next and Mono, <a href="assets/fonts/LICENSE.txt">OFL 1.1</a></span>
+</footer>
+<!-- /shell:foot -->
+</body>
+</html>
