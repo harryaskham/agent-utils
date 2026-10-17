@@ -9,9 +9,9 @@ on:
   push:
     branches: [main]
     paths:
-      - docs/**
-      - scripts/render-pages.mjs
-      - package.json
+      - site/**
+      - scripts/site/**
+      - scripts/check-site.py
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -23,5 +23,5 @@ jobs:
   pages:
     uses: harryaskham/harryaskham.github.io/.github/workflows/publish-pages.yml@main
     with:
-      path: docs
-      build: nix develop --command node scripts/render-pages.mjs --check
+      path: site
+      build: nix shell nixpkgs#python3 --command python3 scripts/check-site.py

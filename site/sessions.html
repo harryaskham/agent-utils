@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- shell:head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions · choices, control and continuity</title>
+<meta name="description" content="Agent Utils for running Pi sessions: spoken multi-input choices and async questions, deferred compaction, endless and delayed prompts, self-update and restart, model and effort control, session forks and devshells.">
+<meta name="theme-color" content="#1d1b17">
+<meta name="color-scheme" content="light">
+<meta property="og:title" content="Sessions · choices, control and continuity">
+<meta property="og:description" content="Agent Utils for running Pi sessions: spoken multi-input choices and async questions, deferred compaction, endless and delayed prompts, self-update and restart, model and effort control, session forks and devshells.">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="assets/fonts/atkinson-next.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/atkinson-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+<!-- /shell:head -->
+</head>
+<body data-tape="sessions">
+<!-- shell:top -->
+<a class="skip" href="#main">Skip to content</a>
+<header class="bench"><div class="bench-in">
+  <a class="brand" href="index.html" aria-label="Agent Utils home"><span class="tape">agent utils</span><small>Pi package</small></a>
+  <nav class="nav" aria-label="Pages"><a href="index.html">Overview</a><a href="speech.html">Speech</a><a href="screens.html">Screens</a><a href="sessions.html" aria-current="page">Sessions</a><a href="fleet.html">Fleet & work</a><a href="reference.html">Reference</a></nav>
+</div></header>
+<!-- /shell:top -->
+<div class="page">
+<aside class="rail">
+<!-- shell:rail -->
+<nav aria-label="On this page"><p><span class="tape">on this page</span></p>
+<ol>
+<li><a href="#choices">Asking questions</a></li>
+<li><a href="#unattended">Working unattended</a></li>
+<li><a href="#updates">Updating and restarting</a></li>
+<li><a href="#models">Models and effort</a></li>
+<li><a href="#fork">Moving a session</a></li>
+<li><a href="#shells">Shells and pipes</a></li>
+</ol></nav>
+<!-- /shell:rail -->
+</aside>
+<main id="main">
+<p class="kicker"><span class="tape sessions">sessions</span></p>
+<h1>Choices, control and continuity</h1>
+<p class="lede">Long-running agents need to ask questions without stalling, keep going without supervision, survive updates and restarts, and move between machines. These extensions handle the life of a session.</p>
+
+<h2 id="choices">Asking questions</h2>
+<p><code class="nb">interactive_choice</code> puts a bounded question in front of you and waits; <code class="nb">async_choice</code> posts one or many questions and lets the agent carry on. Both can be answered from almost anywhere.</p>
+<figure class="fig">
+<div class="fig-scroll">
+<!-- fig:choices -->
+<svg class="f" viewBox="0 0 700 340" width="700" height="340" role="img" aria-labelledby="choices-t choices-d"><title id="choices-t">One question, many ways to answer</title><desc id="choices-d">An agent asks a question with interactive_choice, which blocks, or async_choice, which returns at once. The question enters one choice state machine in Pi. Answers can come from many inputs: the keyboard with arrows, j and k, numbers and Enter; push-to-talk speech; an Omni keystroke cast from another device; a ring controller; any Agent Host Protocol client such as a phone app; and the agent orchestrator&#x27;s mobile decision queue. Whichever answers first settles the question exactly once, and the answer returns to the agent, as the tool result for a blocking choice or as a steering message for an async one.</desc><defs><marker id="choices-a-speech" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-speech"/></marker><marker id="choices-a-screens" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-screens"/></marker><marker id="choices-a-sessions" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-sessions"/></marker><marker id="choices-a-fleet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-fleet"/></marker><marker id="choices-a-web" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-web"/></marker><marker id="choices-a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="m-ink"/></marker></defs>
+<rect x="0" y="130" width="150" height="70" rx="8" class="b-sessions"/>
+<text x="12" y="154.0" class="f-t">agent</text>
+<text x="12" y="172.0" class="f-s">interactive_choice</text>
+<text x="12" y="188.0" class="f-s">async_choice</text>
+<path d="M152 165 L246 165" class="wire s-sessions" marker-end="url(#choices-a-sessions)"/>
+<rect x="250" y="110" width="180" height="110" rx="8" class="b-sessions"/>
+<text x="264" y="136" class="f-t">choice state</text>
+<text x="264" y="156" class="f-s">one per question</text>
+<text x="264" y="176" class="f-s">settles exactly once</text>
+<text x="264" y="196" class="f-s">survives reload</text>
+<rect x="520" y="10" width="180" height="46" rx="8" class="b-plain"/>
+<text x="532" y="30.0" class="f-t">keyboard</text>
+<text x="532" y="48.0" class="f-s">arrows · 1–9 · Enter</text>
+<path d="M518 33 C476.0 33 476.0 165 434 165" class="wire s-screens" marker-end="url(#choices-a-screens)"/>
+<rect x="520" y="64" width="180" height="46" rx="8" class="b-plain"/>
+<text x="532" y="84.0" class="f-t">push-to-talk</text>
+<text x="532" y="102.0" class="f-s">spoken answer</text>
+<path d="M518 87 C476.0 87 476.0 165 434 165" class="wire s-screens" marker-end="url(#choices-a-screens)"/>
+<rect x="520" y="118" width="180" height="46" rx="8" class="b-plain"/>
+<text x="532" y="138.0" class="f-t">Omni</text>
+<text x="532" y="156.0" class="f-s">cast from a device</text>
+<path d="M518 141 C476.0 141 476.0 165 434 165" class="wire s-screens" marker-end="url(#choices-a-screens)"/>
+<rect x="520" y="172" width="180" height="46" rx="8" class="b-plain"/>
+<text x="532" y="192.0" class="f-t">ring</text>
+<text x="532" y="210.0" class="f-s">gesture controller</text>
+<path d="M518 195 C476.0 195 476.0 165 434 165" class="wire s-screens" marker-end="url(#choices-a-screens)"/>
+<rect x="520" y="226" width="180" height="46" rx="8" class="b-plain"/>
+<text x="532" y="246.0" class="f-t">AHP clients</text>
+<text x="532" y="264.0" class="f-s">phone, web</text>
+<path d="M518 249 C476.0 249 476.0 165 434 165" class="wire s-screens" marker-end="url(#choices-a-screens)"/>
+<rect x="520" y="280" width="180" height="46" rx="8" class="b-plain"/>
+<text x="532" y="300.0" class="f-t">orchestrator</text>
+<text x="532" y="318.0" class="f-s">mobile decisions</text>
+<path d="M518 303 C476.0 303 476.0 165 434 165" class="wire s-screens" marker-end="url(#choices-a-screens)"/>
+<text x="0" y="240" class="f-xs">the answer returns as the tool result,</text>
+<text x="0" y="258" class="f-xs">or as a steering message for async</text>
+</svg>
+<!-- /fig -->
+</div>
+<figcaption><b>One question, many ways to answer.</b>Local and remote inputs feed the same state machine, so an answer from a phone and a keypress at the desk cannot both win.</figcaption>
+</figure>
+<div class="shots">
+<figure class="fig"><div class="fig-scroll"><img src="assets/shots/choice-dialog.png" width="698" height="564" alt="A terminal dialog asking which validation path should run before the release, with three numbered options, the first selected, and key hints for moving, choosing, typing a reply, push-to-talk and cancelling."></div><figcaption><b>A blocking choice.</b>Arrows or <kbd>j</kbd>/<kbd>k</kbd>, a number, Enter; <kbd>i</kbd> to type a reply; <kbd>Space</kbd> to speak one.</figcaption></figure>
+<figure class="fig"><div class="fig-scroll"><img src="assets/shots/choice-sidebar.png" width="980" height="560" alt="A Pi session with a question sidebar showing two pending questions; the first has thirteen options."></div><figcaption><b>Async questions.</b><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Q</kbd> or <code class="nb">/choices</code> opens the sidebar; each answer is injected back to the agent as a steering message.</figcaption></figure>
+</div>
+<ul>
+<li>Choices are spoken when speech is on, and can be answered by push-to-talk.</li>
+<li>An Omni keystroke cast from a phone or watch, or a ring controller, maps onto the same actions. Agent Utils only listens; it never owns those devices.</li>
+<li>Under the agent orchestrator, questions are mirrored to its mobile decision queue; with the Paratenic session host, any Agent Host Protocol client can answer. Whichever answers first settles the question exactly once.</li>
+<li>Async questions survive a reload, and obsolete ones can be withdrawn.</li>
+</ul>
+
+<h2 id="unattended">Working unattended</h2>
+<div class="table"><table>
+<thead><tr><th>Command</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code class="nb">/compact-next</code></td><td class="wrap">Compact at the next finished reply or tool batch instead of aborting work, then resume without a new prompt where possible</td></tr>
+<tr><td><code class="nb">/endless [delay=60]</code></td><td class="wrap">When the agent has fully settled, nudge it again after a delay, optionally compacting first; <code class="nb">/endless off</code> stops</td></tr>
+<tr><td><code>/after 20m <var>prompt</var></code></td><td class="wrap">Deliver a prompt or command once, later, from durable session entries that survive a restart; no cron or background jobs</td></tr>
+<tr><td><code class="nb">/git-behind</code></td><td>Warn any agent whose checkout falls well behind its default branch</td></tr>
+<tr><td>Copilot token refresh</td><td class="wrap">When a GitHub Copilot token goes missing mid-session, reload the stored credentials and retry the request once instead of stopping</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="updates">Updating and restarting</h2>
+<div class="table"><table>
+<thead><tr><th>Command</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code class="nb">/update</code></td><td class="wrap">Update Pi packages, reload the runtime and activate new tools</td></tr>
+<tr><td><code class="nb">/reload-tools</code></td><td class="wrap">Reload extensions and make every registered tool visible to the model</td></tr>
+<tr><td><code class="nb">/restart</code></td><td class="wrap">Re-exec Pi in place on the same session, keeping runtime flags but not the original prompt or <code class="nb">@file</code> arguments, so launch instructions are not replayed</td></tr>
+</tbody>
+</table></div>
+<p>Restart replaces the process rather than spawning a second Pi, so nothing competes for the terminal. Agents can request all three through tools; startup auto-update is opt-in.</p>
+
+<h2 id="models">Models and effort</h2>
+<p>Operators switch freely; agents are fenced in.</p>
+<div class="table"><table>
+<thead><tr><th>For</th><th>Command or tool</th><th>Boundary</th></tr></thead>
+<tbody>
+<tr><td>Operator</td><td><code>/m <var>provider/model</var></code>, <code class="nb">/effort</code>, <code class="nb">/fast</code></td><td class="wrap">The full model registry; <code class="nb">/fast</code> toggles a configured <code class="nb">-fast</code> sibling</td></tr>
+<tr><td>Agent</td><td><code class="nb">self_set_model</code>, <code class="nb">self_list_models</code></td><td class="wrap">Only models on a whitelist in <code class="nb">selfModelSelection.models</code>; a missing or empty list means no switches</td></tr>
+<tr><td>Agent</td><td><code class="nb">self_set_effort</code></td><td class="wrap">Only when the operator asked for it</td></tr>
+<tr><td>Both</td><td><code class="nb">/true-defaults</code></td><td class="wrap">Pins the persisted default model, provider and effort, so runtime switches never become the new defaults</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="fork">Moving a session</h2>
+<p><code class="nb">/session-fork</code> and the <code class="nb">pi-session</code> command copy a Pi session, history unchanged, to a worktree, another directory or another machine over SSH, set up Git at the exact commit and optionally open it in a terminal workspace:</p>
+<pre><code><span class="ln"><span class="p">pi-session fork --session <var>id</var> --remote <var>host</var> --herdr --focus</span></span><span class="ln"><span class="p">pi-session pull --from <var>host</var> --session <var>id</var></span>      <span class="c"># from the destination,<wbr> no reverse SSH</span></span><span class="ln"><span class="p">pi-session status <var>request-id</var></span></span></code></pre>
+<p>Each fork has a stable request id with a durable receipt, so an interrupted fork can be retried without duplicating it, and the copied history ends with a notice of where it moved.</p>
+
+<h2 id="shells">Shells and pipes</h2>
+<ul>
+<li><code class="nb">/nix devshell</code>, <code class="nb">nix_devshell_enable</code> and the one-shot <code class="nb">bash_devshell</code> route an agent's shell commands through a repository's flake shell only when needed, instead of loading it on every start.</li>
+<li><code>/pipe cmd=<var>command</var></code> passes what you type through a command before it is sent, with a preview to send, send raw or cancel; <code class="nb">/fix auto</code> is the shorthand for a text-fixing command.</li>
+<li>Settings under <code class="nb">agentUtils</code> can contain typed special forms (<code class="nb">$envPresent</code>, <code class="nb">$envBool</code>, <code class="nb">$boolCommand</code> and others) resolved in memory at start-up, without ever rewriting the file.</li>
+<li>Sessions register with the agent orchestrator when asked, and get its MCP tools through one child process with a scoped identity.</li>
+</ul>
+</main>
+</div>
+<!-- shell:foot -->
+<footer class="foot">
+  <span>Agent Utils · a Pi package and standalone tools</span>
+  <span>Type: Atkinson Hyperlegible Next and Mono, <a href="assets/fonts/LICENSE.txt">OFL 1.1</a></span>
+</footer>
+<!-- /shell:foot -->
+</body>
+</html>
