@@ -456,6 +456,19 @@
           "sourceOfTruth": "extensions/copilot-auth-refresh.js"
         },
         {
+          "name": "Deferred compaction Pi extension",
+          "command": "/compact-next",
+          "audience": "operators",
+          "purpose": "Queue one compaction at the next completed turn/tool-batch boundary without interrupting work, then resume without a prompt where supported or with a Continue checkpoint.",
+          "commonActions": [
+            "/compact-next",
+            "/compact-next resume=continue",
+            "/compact-next status",
+            "/compact-next cancel"
+          ],
+          "sourceOfTruth": "extensions/compact-next.js"
+        },
+        {
           "name": "Compaction continue guard Pi extension",
           "command": "(automatic)",
           "audience": "Pi agents",
