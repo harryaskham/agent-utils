@@ -25,7 +25,7 @@
         <p>Concise inventory of the first-party surfaces and repo-local tools that agents and operators use around this repository.</p>
         <div class="hero-stats" aria-label="Inventory summary">
           <span><strong>4</strong> sections</span>
-          <span><strong>36</strong> tools and surfaces</span>
+          <span><strong>37</strong> tools and surfaces</span>
           <span><strong>2026-06-25</strong> reviewed</span>
         </div>
       </div>
@@ -962,6 +962,33 @@
               <ul>
               <li><code>/copilot-auth-refresh</code></li>
               <li><code>automatic retry on missing Copilot token</code></li>
+              </ul>
+            </details>
+          </article>
+
+          <article class="tool-card" data-tool-card>
+            <div class="tool-card__header">
+              <h3>Deferred compaction Pi extension</h3>
+              <code>/compact-next</code>
+            </div>
+            <p>Queue one compaction at the next completed turn/tool-batch boundary without interrupting work, then resume without a prompt where supported or with a Continue checkpoint.</p>
+            <dl>
+              <div>
+                <dt>Audience</dt>
+                <dd>operators</dd>
+              </div>
+              <div>
+                <dt>Source of truth</dt>
+                <dd>extensions/compact-next.js</dd>
+              </div>
+            </dl>
+            <details>
+              <summary>Common actions</summary>
+              <ul>
+              <li><code>/compact-next</code></li>
+              <li><code>/compact-next resume=continue</code></li>
+              <li><code>/compact-next status</code></li>
+              <li><code>/compact-next cancel</code></li>
               </ul>
             </details>
           </article>
