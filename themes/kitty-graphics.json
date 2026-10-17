@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "kitty-graphics",
 	"vars": {
 		"void0": "#02030b",
@@ -20,7 +20,9 @@
 		"orange": "#ffb000",
 		"yellow": "#fff05a",
 		"green": "#00ff88",
-		"purple": "#d85cff"
+		"purple": "#d85cff",
+		"glowCyan": "#00aaff",
+		"glowAurora": "#ff4dff"
 	},
 	"colors": {
 		"accent": "frost1",
@@ -78,8 +80,6 @@
 	"export": {
 		"pageBg": "#02030b",
 		"cardBg": "#07101f",
-		"infoBg": "#0b1b34",
-		"glowCyan": "#00aaff",
-		"glowAurora": "#ff4dff"
+		"infoBg": "#0b1b34"
 	}
 }

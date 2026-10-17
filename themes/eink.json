@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://pi.dev/schemas/theme.schema.json",
   "name": "eink",
   "vars": {
     "ink0": "#111111",
@@ -11,7 +11,9 @@
     "ink6": "#999999",
     "ink7": "#b3b3b3",
     "paper0": "#f7f7f7",
-    "paper1": "#ffffff"
+    "paper1": "#ffffff",
+    "glowCyan": "ink3",
+    "glowAurora": "ink1"
   },
   "colors": {
     "accent": "ink1",
@@ -69,8 +71,6 @@
   "export": {
     "pageBg": "paper1",
     "cardBg": "paper0",
-    "infoBg": "paper0",
-    "glowCyan": "ink3",
-    "glowAurora": "ink1"
+    "infoBg": "paper0"
   }
 }

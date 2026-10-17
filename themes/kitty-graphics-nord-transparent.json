@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://pi.dev/schemas/theme.schema.json",
   "name": "kitty-graphics-nord-transparent",
   "vars": {
     "nord0": "#2e3440",
@@ -17,7 +17,9 @@
     "nord12": "#d08770",
     "nord13": "#ebcb8b",
     "nord14": "#a3be8c",
-    "nord15": "#b48ead"
+    "nord15": "#b48ead",
+    "glowCyan": "nord8",
+    "glowAurora": "nord15"
   },
   "colors": {
     "accent": "nord8",
@@ -75,8 +77,6 @@
   "export": {
     "pageBg": "#2e3440",
     "cardBg": "#3b4252",
-    "infoBg": "#434c5e",
-    "glowCyan": "#88c0d0",
-    "glowAurora": "#b48ead"
+    "infoBg": "#434c5e"
   }
 }

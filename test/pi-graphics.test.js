@@ -2400,8 +2400,8 @@ test("themes/kitty-graphics.json is visibly different from the default text them
   assert.ok(contrastRatio(resolve("text"), resolve("userMessageBg")) > 10, "message text must pop against the deep Nordic background");
   assert.ok(contrastRatio(resolve("toolTitle"), resolve("toolPendingBg")) > 12, "tool titles should glow against pending tool boxes");
   assert.ok(channelDistance(resolve("customMessageBg"), resolve("userMessageBg")) > 110, "custom/extension panels should not blend into user messages");
-  assert.equal(theme.export.glowCyan, "#00aaff");
-  assert.equal(theme.export.glowAurora, "#ff4dff");
+  assert.equal(theme.vars.glowCyan, "#00aaff");
+  assert.equal(theme.vars.glowAurora, "#ff4dff");
 });
 
 test("themes/kitty-graphics-nord.json uses only canonical Nord colors", async () => {
@@ -2414,14 +2414,18 @@ test("themes/kitty-graphics-nord.json uses only canonical Nord colors", async ()
     "#88c0d0", "#81a1c1", "#5e81ac", "#bf616a",
     "#d08770", "#ebcb8b", "#a3be8c", "#b48ead",
   ];
-  assert.deepEqual(Object.values(theme.vars).map((value) => String(value).toLowerCase()).sort(), [...nord].sort());
+  const literals = Object.entries(theme.vars).filter(([name]) => name.startsWith("nord"));
+  assert.deepEqual(literals.map(([, value]) => String(value).toLowerCase()).sort(), [...nord].sort());
+  for (const [name, value] of Object.entries(theme.vars)) {
+    if (!name.startsWith("nord")) assert.match(value, /^nord\d+$/, `${name} should alias one of the 16 Nord vars`);
+  }
   for (const [token, value] of Object.entries(theme.colors)) {
     assert.ok(value in theme.vars, `${token} should reference one of the 16 Nord vars`);
   }
   const resolve = (token) => parseColor(theme.vars[theme.colors[token]] ?? theme.colors[token]);
   assert.ok(contrastRatio(resolve("text"), resolve("userMessageBg")) > 8, "calm Nord text should still pop against rendered panel colors");
-  assert.equal(theme.export.glowCyan, "#88c0d0");
-  assert.equal(theme.export.glowAurora, "#b48ead");
+  assert.equal(theme.vars[theme.vars.glowCyan], "#88c0d0");
+  assert.equal(theme.vars[theme.vars.glowAurora], "#b48ead");
 });
 
 test("themes/eink.json is transparent greyscale for tablet terminals", async () => {
