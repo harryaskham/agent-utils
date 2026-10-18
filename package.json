@@ -107,7 +107,6 @@
       "./extensions/pi-self-update.js",
       "./extensions/effort.js",
       "./extensions/m.js",
-      "./extensions/true-defaults.js",
       "./extensions/tendril-share.js",
       "./extensions/app-automation.js",
       "./extensions/slack-mcp.js",

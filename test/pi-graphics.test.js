@@ -1626,7 +1626,7 @@ test("pi-graphics settings source maps minimal env", async () => {
   assert.match(source, /key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 96/);
   assert.match(source, /key: "model", token: "customMessageLabel", value: model, truncate: noEllipsisFooterText, min: Math\.max\(8, approximateVisibleCells\(model\)\), max: 96, priority: "primary"/);
   assert.match(source, /function configuredThinkingLevel\(\)/);
-  assert.match(source, /settings\.trueDefaultThinkingLevel \?\? settings\.trueDefaultEffort \?\? settings\.defaultThinkingLevel/);
+  assert.match(source, /resolvedAgentSettings\.defaultThinkingLevel \?\? settings\.defaultThinkingLevel/);
   assert.match(source, /function effectiveThinkingLevel\(ctx, pi\)/);
   assert.match(source, /if \(!runtime \|\| String\(runtime\)\.toLowerCase\(\) === "off"\) return configured \|\| runtime \|\| "off"/);
   assert.match(source, /value: effectiveThinkingLevel\(ctx, pi\)/);

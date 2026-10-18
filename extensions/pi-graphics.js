@@ -1448,11 +1448,7 @@ export default async function piGraphicsExtension(pi) {
   }
 
   function configuredThinkingLevel() {
-    const owned = resolvedAgentSettings.agentUtils || {};
-    const scoped = owned.trueDefaults || owned.piTrueDefaults || settings.trueDefaults || {};
-    return scoped.thinkingLevel ?? scoped.defaultThinkingLevel ?? scoped.effort ?? scoped.trueDefaultEffort ??
-      owned.trueDefaultThinkingLevel ?? owned.trueDefaultEffort ??
-      settings.trueDefaultThinkingLevel ?? settings.trueDefaultEffort ?? settings.defaultThinkingLevel;
+    return resolvedAgentSettings.defaultThinkingLevel ?? settings.defaultThinkingLevel;
   }
 
   function effectiveThinkingLevel(ctx, pi) {

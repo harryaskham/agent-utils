@@ -50,8 +50,7 @@ function readJson(path) {
 }
 
 // Merge agentUtils.gitBehindWarning from global (~/.pi/agent) then project
-// (.pi) settings.json, project overriding global. Mirrors the discovery
-// convention used by true-defaults.js.
+// (.pi) settings.json, project overriding global.
 function loadSettingsSlice({ env = process.env, cwd = process.cwd() } = {}) {
   const globalPath = join(expandHome(env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent")), "settings.json");
   const projectPath = join(cwd, ".pi", "settings.json");
