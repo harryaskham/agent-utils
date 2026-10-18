@@ -4,3 +4,5 @@
 result
 node_modules/
 /.cacophony/agent/
+__pycache__/
+*.pyc
