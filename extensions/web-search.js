@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 import {
   DEFAULT_MODEL,
@@ -29,7 +29,7 @@ function getConfig() {
 
 // Pure model-selection helpers (parseFallbackModels / modelCandidates /
 // isModelUnavailableError) live in ./web-search-models.js so they can be
-// unit-tested without importing this entrypoint's @sinclair/typebox dependency.
+// unit-tested without importing this entrypoint's typebox dependency.
 
 
 function extractTextAndCitations(responseBody) {
