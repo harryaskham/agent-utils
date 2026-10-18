@@ -32,7 +32,7 @@
 <nav aria-label="On this page"><p><span class="tape">on this page</span></p>
 <ol>
 <li><a href="#install">Install</a></li>
-<li><a href="#extensions">The 42 extensions</a></li>
+<li><a href="#extensions">The 41 extensions</a></li>
 <li><a href="#settings">Settings</a></li>
 <li><a href="#environment">Environment</a></li>
 <li><a href="#ahp">Working with a session host</a></li>
@@ -51,13 +51,13 @@
 <p>The standalone tools are flake packages:</p>
 <pre><code><span class="ln"><span class="p">nix build .#ag</span>              <span class="c"># fleet speech,<wbr> images,<wbr> audio,<wbr> questions and health</span></span><span class="ln"><span class="p">nix build .#pi-session</span>      <span class="c"># fork sessions between machines</span></span><span class="ln"><span class="p">nix build .#skill-search</span>    <span class="c"># skill and MCP discovery (also skill-server)</span></span><span class="ln"><span class="p">nix build .#durable-extensions</span>  <span class="c"># speech and media modules for pi-daemon sessions</span></span></code></pre>
 
-<h2 id="extensions">The 42 extensions</h2>
+<h2 id="extensions">The 41 extensions</h2>
 <div class="table"><table>
 <thead><tr><th>Family</th><th>Extensions</th></tr></thead>
 <tbody>
 <tr><td><span class="tape speech">speech</span></td><td class="wrap"><code class="nb">read-aloud</code> <code class="nb">tts-narration</code> <code class="nb">tts-queue</code> <code class="nb">audio-providers</code> <code class="nb">realtime-agent</code> <code class="nb">force-agent-speech</code> <code class="nb">audio-reel</code> <code class="nb">pipe</code></td></tr>
 <tr><td><span class="tape screens">screens</span></td><td class="wrap"><code class="nb">kitty-image-preview</code> <code class="nb">shared-images</code> <code class="nb">image-413-recovery</code> <code class="nb">pi-graphics</code> <code class="nb">editor-chips</code> <code class="nb">tendril-share</code> <code class="nb">macos-native</code> <code class="nb">android</code> <code class="nb">xvfb</code> <code class="nb">firecracker-vm</code></td></tr>
-<tr><td><span class="tape sessions">sessions</span></td><td class="wrap"><code class="nb">choice</code> <code class="nb">omni-input</code> <code class="nb">ring-input</code> <code class="nb">herdr-input-state</code> <code class="nb">compaction-continue-guard</code> <code class="nb">compact-next</code> <code class="nb">self-compact</code> <code class="nb">endless</code> <code class="nb">after</code> <code class="nb">session-fork</code> <code class="nb">scrub</code> <code class="nb">git-behind-warning</code> <code class="nb">copilot-auth-refresh</code> <code class="nb">copilot-model-identity</code> <code class="nb">pi-self-update</code> <code class="nb">effort</code> <code class="nb">m</code> <code class="nb">true-defaults</code> <code class="nb">nix-devshell</code> <code class="nb">cacophony-runtime</code> <code class="nb">cacophony-mcp</code></td></tr>
+<tr><td><span class="tape sessions">sessions</span></td><td class="wrap"><code class="nb">choice</code> <code class="nb">omni-input</code> <code class="nb">ring-input</code> <code class="nb">herdr-input-state</code> <code class="nb">compaction-continue-guard</code> <code class="nb">compact-next</code> <code class="nb">self-compact</code> <code class="nb">endless</code> <code class="nb">after</code> <code class="nb">session-fork</code> <code class="nb">scrub</code> <code class="nb">git-behind-warning</code> <code class="nb">copilot-auth-refresh</code> <code class="nb">copilot-model-identity</code> <code class="nb">pi-self-update</code> <code class="nb">effort</code> <code class="nb">m</code> <code class="nb">nix-devshell</code> <code class="nb">cacophony-runtime</code> <code class="nb">cacophony-mcp</code></td></tr>
 <tr><td><span class="tape web">work</span></td><td class="wrap"><code class="nb">web-search</code> <code class="nb">app-automation</code> <code class="nb">slack-mcp</code></td></tr>
 </tbody>
 </table></div>
@@ -68,7 +68,6 @@
 <thead><tr><th>Key</th><th>Configures</th></tr></thead>
 <tbody>
 <tr><td><code class="nb">agentUtils.audio.providers</code></td><td>Named speech providers for every voice surface</td></tr>
-<tr><td><code class="nb">agentUtils.trueDefaults</code></td><td>The model, provider and effort restored as persisted defaults</td></tr>
 <tr><td><code class="nb">selfModelSelection.models</code></td><td>Which models agents may switch to themselves</td></tr>
 <tr><td><code>agentUtils.cacophony.autoRegister</code></td><td>Whether unmanaged sessions register with the agent orchestrator</td></tr>
 <tr><td><code>agentUtils.globalShellExpansion.enabled</code></td><td>Typed special forms resolved in memory at start-up</td></tr>
