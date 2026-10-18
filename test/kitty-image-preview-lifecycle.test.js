@@ -8,6 +8,9 @@ import { createPreviewLifecycle } from "../extensions/kitty-image-preview/lifecy
 import { showInKittyImagePreview } from "../extensions/kitty-image-preview/runtime.js";
 import { getStreamDir } from "../extensions/kitty-image-preview/session-paths.js";
 import preview from "../extensions/kitty-image-preview.js";
+import { HOST_NOT_INSTALLED, optionalHostModule } from "./helpers/pi-host.js";
+
+const piSdk = await optionalHostModule("@earendil-works/pi-coding-agent");
 
 // Pi 0.84.4 guards the ctx.ui GETTER, not just UI methods. A non-null ctx and
 // ctx?.ui?.setWidget() are still invalid after session_shutdown has returned.
@@ -250,8 +253,8 @@ for (const [tool, interval] of [["animate", 50], ["cycle", 1000]]) {
   });
 }
 
-test("actual Pi ExtensionRunner invalidation leaves preview shutdown quiescent", async t => {
-  const { ExtensionRunner, createExtensionRuntime } = await import("@earendil-works/pi-coding-agent");
+test("actual Pi ExtensionRunner invalidation leaves preview shutdown quiescent", { skip: !piSdk && HOST_NOT_INSTALLED }, async t => {
+  const { ExtensionRunner, createExtensionRuntime } = piSdk;
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const h = createStrictMockPi(); preview(h.pi);
   const c = context();

@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import extension, { canonicalCopilotReply } from "../extensions/copilot-model-identity.js";
+import { HOST_NOT_INSTALLED, optionalHostModule } from "./helpers/pi-host.js";
+const piSdk = await optionalHostModule("@earendil-works/pi-coding-agent");
 const selected = { provider: "github-copilot", id: "claude-opus-5.5" };
 const reply = () => ({ role: "assistant", provider: "github-copilot", model: "claude-opus-5-5", api: "anthropic-messages", responseId: "fixture-response", content: [{ type: "thinking", thinking: "fixture", thinkingSignature: "unchanged-signature" }, { type: "text", text: "fixture" }], usage: { input: 1, output: 2 }, stopReason: "stop", timestamp: 1 });
 
@@ -20,8 +22,8 @@ test("new Copilot Opus reply keeps the selectable identity and every other field
   ]) assert.equal(canonicalCopilotReply(message, model), undefined);
 });
 
-test("actual Pi message_end runner and session projection round-trip to the Copilot catalogue id", async () => {
-  const { SessionManager, ExtensionRunner, createExtensionRuntime } = await import("@earendil-works/pi-coding-agent");
+test("actual Pi message_end runner and session projection round-trip to the Copilot catalogue id", { skip: !piSdk && HOST_NOT_INSTALLED }, async () => {
+  const { SessionManager, ExtensionRunner, createExtensionRuntime } = piSdk;
   const session = SessionManager.inMemory();session.appendModelChange(selected.provider, selected.id);
   session.appendMessage(reply());
   // Reproduce the upstream restore failure using metadata-only synthetic data.

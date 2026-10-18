@@ -80,9 +80,9 @@
 
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { isKeyRelease, isKeyRepeat } from "@earendil-works/pi-tui";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
+import { isKeyRelease, isKeyRepeat } from "./lib/kitty-key-events.js";
 import { isAssistantSpeaking, markAssistantSpeaking } from "./lib/half-duplex-state.js";
 import { withSpeechControl } from "./lib/speech-control.js";
 import { ToolSchema } from "./lib/tool-schema.js";

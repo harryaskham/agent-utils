@@ -40,10 +40,31 @@ function harness() {
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-test("installed Agent Utils layout owns a resolvable TypeScript-capable adapter dependency", async () => {
-  const require = createRequire(import.meta.url);
-  assert.match(require.resolve("pi-mcp-adapter"), /node_modules[\\/]pi-mcp-adapter[\\/]index\.ts$/);
-  assert.match(require.resolve("jiti"), /node_modules[\\/]jiti/);
+const requireFromTest = createRequire(import.meta.url);
+const installedLayout = ["pi-mcp-adapter", "jiti"].every((name) => {
+  try {
+    requireFromTest.resolve(name);
+    return true;
+  } catch (error) {
+    if (error?.code === "MODULE_NOT_FOUND") return false;
+    throw error;
+  }
+});
+
+test("Agent Utils ships the MCP adapter and its TypeScript loader as runtime dependencies", () => {
+  // Pi installs packages with --omit=dev, so both must be real dependencies.
+  const pkg = requireFromTest("../package.json");
+  assert.ok(pkg.dependencies?.["pi-mcp-adapter"], "pi-mcp-adapter must be a runtime dependency");
+  assert.ok(pkg.dependencies?.jiti, "jiti must be a runtime dependency");
+  assert.equal(pkg.devDependencies?.["pi-mcp-adapter"], undefined);
+  assert.equal(pkg.peerDependencies?.["pi-mcp-adapter"], undefined);
+});
+
+test("installed Agent Utils layout owns a resolvable TypeScript-capable adapter dependency", {
+  skip: !installedLayout && "dependencies not installed (bare node --test)",
+}, async () => {
+  assert.match(requireFromTest.resolve("pi-mcp-adapter"), /node_modules[\\/]pi-mcp-adapter[\\/]index\.ts$/);
+  assert.match(requireFromTest.resolve("jiti"), /node_modules[\\/]jiti/);
   const { createJiti } = await import("jiti");
   const adapter = await createJiti(import.meta.url).import("pi-mcp-adapter");
   assert.equal(typeof adapter.createMcpAdapter, "function");
