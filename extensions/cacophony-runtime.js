@@ -2,10 +2,12 @@ import { execFile } from "node:child_process";
 
 import { readAgentSettings, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import {
+  cacophonySessionId,
   clearCacophonyRuntimeIdentity,
   explicitCacophonyIdentity,
   getCacophonyRuntimeIdentity,
   isPiCacoDisabled,
+  ownCacophonyRuntimeSession,
   setCacophonyRuntimeIdentity,
 } from "./lib/cacophony-runtime.js";
 
@@ -26,6 +28,9 @@ export function resolveCacophonyRuntimeConfig(env = process.env, settings = {}) 
     command: String(env.CACO_BIN || persisted.command || "caco"),
     project: explicit.project,
     explicitAgentId: explicit.agentId,
+    // Explicit provenance supplied by the host/operator, NOT a managed Caco ID.
+    // Classic Pi ExtensionContext does not expose Pi-Daemon's logical ID.
+    runtimeAgentId: String(env.PI_CACO_RUNTIME_AGENT_ID || "").trim(),
   };
 }
 
@@ -39,22 +44,40 @@ function execJson(execFileImpl, command, args, cwd) {
   });
 }
 
-function restoreVisitor(entries, project) {
+function restoreVisitor(entries, project, sessionId, runtimeAgentId) {
   let latest = null;
   for (const entry of entries || []) {
     if (entry?.type !== "custom" || entry.customType !== CACO_VISITOR_ENTRY_TYPE) continue;
     const data = entry.data;
-    if (data?.status === "registered" && data.project === project && data.agentId) latest = data;
+    if (data?.status === "registered" && String(data.project || "").trim() &&
+        (!project || data.project === project) && String(data.agentId || "").trim() &&
+        data.sessionId === sessionId && (data.runtimeAgentId || "") === runtimeAgentId) latest = data;
   }
   return latest;
 }
 
 export function createCacophonyRuntimeExtension({ env = process.env, settings, settingsPath, execFileImpl = execFile } = {}) {
-  const startupSettings = settings || readAgentSettings(settingsPath || agentSettingsPath()) || {};
-  const config = resolveCacophonyRuntimeConfig(env, startupSettings);
-
   return function cacophonyRuntimeExtension(pi) {
+    // Resolve inside the factory: a Pi-Daemon module import can be shared, but
+    // each factory invocation runs in its own logical environment.
+    const startupSettings = settings || readAgentSettings(settingsPath || agentSettingsPath()) || {};
+    const config = resolveCacophonyRuntimeConfig(env, startupSettings);
+    let active = null;
     let registration = null;
+    const reset = () => {
+      if (active) clearCacophonyRuntimeIdentity(active.sessionId, active);
+      active = null;
+      registration = null;
+    };
+    const activate = (ctx) => {
+      const sessionId = cacophonySessionId(ctx);
+      if (active?.sessionId !== sessionId) {
+        reset();
+        active = { sessionId };
+        active.isCurrent = ownCacophonyRuntimeSession(sessionId, active);
+      }
+      return active;
+    };
     const announce = (ctx, identity, guidance = "") => {
       const headline = `Registered as Cacophony visiting agent ${identity.agentId} in project ${identity.project}.`;
       // Cacophony's rendered `visiting` profile explains how visiting works;
@@ -81,7 +104,8 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
     pi.registerCommand("caco-runtime", {
       description: "Show Agent Utils Cacophony identity/registration state.",
       handler: async (_args, ctx) => {
-        const identity = getCacophonyRuntimeIdentity(env);
+        activate(ctx);
+        const identity = getCacophonyRuntimeIdentity(env, ctx);
         const status = identity.disabled
           ? "disabled by DISABLE_PI_CACO"
           : identity.agentId
@@ -93,79 +117,92 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
       },
     });
 
-    const ensureRegistration = (ctx, { manual = false } = {}) => {
-      if (config.disabled) {
+    const ensureRegistration = (ctx, { manual = false, project: requestedProject } = {}) => {
+      const owner = activate(ctx);
+      if (config.disabled || isPiCacoDisabled(env)) {
         if (manual) ctx.ui?.notify?.("Cacophony integration disabled by DISABLE_PI_CACO; unset it to allow registration. To disable only boot registration, use PI_CACO_AUTO_REGISTER=0 instead.", "warning");
         return;
       }
-      if (config.explicitAgentId && config.project) {
-        setCacophonyRuntimeIdentity({ agentId: config.explicitAgentId, project: config.project, source: "environment", visiting: false });
-      }
-      const existing = getCacophonyRuntimeIdentity(env);
+      const existing = getCacophonyRuntimeIdentity(env, ctx);
       if (existing.agentId) {
         if (manual) ctx.ui?.notify?.(`Already registered as ${existing.agentId} in ${existing.project}.`, "info");
         return;
       }
-      if (!config.project) {
-        if (manual) ctx.ui?.notify?.("Cacophony registration requires CACO_PROJECT (or CACOPHONY_PROJECT).", "warning");
+      const project = requestedProject || config.project;
+      const sessionId = owner.sessionId;
+      if (!sessionId) {
+        if (manual || config.autoRegister) ctx.ui?.notify?.("Cacophony registration requires the current Pi sessionManager.getSessionId(); inherited session environment is not a safe fallback.", "warning");
         return;
       }
 
       let entries = [];
-      try { entries = ctx.sessionManager?.getBranch?.() || ctx.sessionManager?.getEntries?.() || []; } catch {}
-      const restored = restoreVisitor(entries, config.project);
+      try { entries = ctx.sessionManager?.getBranch?.() || []; } catch {}
+      const restored = restoreVisitor(entries, project, sessionId, config.runtimeAgentId);
       if (restored) {
-        setCacophonyRuntimeIdentity({ ...restored, source: "session", visiting: true });
+        setCacophonyRuntimeIdentity({ ...restored, source: "session", visiting: true }, sessionId, owner);
         if (manual) ctx.ui?.notify?.(`Restored visiting agent ${restored.agentId} in ${restored.project}.`, "info");
         return;
       }
+      if (!project) {
+        if (manual) ctx.ui?.notify?.("Cacophony registration requires CACO_PROJECT (or CACOPHONY_PROJECT), or /caco-agent-register project=<name>.", "warning");
+        return;
+      }
       if (!manual && !config.autoRegister) return;
+      if (registration) {
+        if (registration.project !== project && manual) ctx.ui?.notify?.(`Registration is already in progress for ${registration.project}; wait before choosing another project.`, "warning");
+        return registration.promise;
+      }
 
-      if (registration) return registration;
-
-      registration = execJson(execFileImpl, config.command, ["agent", "register", "--project", config.project, "--json"], ctx.cwd)
+      const pending = { project };
+      registration = pending;
+      const current = () => active === owner && owner.isCurrent() && registration === pending &&
+        cacophonySessionId(ctx) === sessionId && !isPiCacoDisabled(env);
+      const args = ["agent", "register", "--project", project, "--session-id", sessionId];
+      if (config.runtimeAgentId) args.push("--runtime-agent-id", config.runtimeAgentId);
+      args.push("--json");
+      pending.promise = execJson(execFileImpl, config.command, args, ctx.cwd)
         .then((response) => {
+          if (!current()) return null;
           const data = response?.data || response;
           const agentId = String(data?.id || data?.agent_id || data?.agentId || "").trim();
-          const project = String(data?.project || config.project || "").trim();
-          if (!agentId || !project) throw new Error("caco agent register returned no durable visiting-agent identity");
-          const identity = { version: 1, status: "registered", agentId, project, registeredAt: Date.now() };
-          if (!setCacophonyRuntimeIdentity({ ...identity, source: "registration", visiting: true })) {
-            throw new Error("refusing empty visiting-agent identity");
-          }
+          const registeredProject = String(data?.project || project).trim();
+          if (!agentId || registeredProject !== project) throw new Error("caco agent register returned no durable visiting-agent identity for the requested project");
+          if (data.session_id != null && data.session_id !== sessionId) throw new Error("caco agent register returned a different session identity");
+          if (data.runtime_agent_id != null && data.runtime_agent_id !== config.runtimeAgentId) throw new Error("caco agent register returned a different runtime identity");
+          const identity = { version: 2, status: "registered", agentId, project, sessionId, runtimeAgentId: config.runtimeAgentId, registeredAt: Date.now() };
+          if (!setCacophonyRuntimeIdentity({ ...identity, source: "registration", visiting: true }, sessionId, owner)) return null;
           pi.appendEntry?.(CACO_VISITOR_ENTRY_TYPE, identity);
           announce(ctx, identity, String(response?.guidance?.text || "").trim());
           try { pi.events?.emit?.("agent-utils:cacophony-identity", { ...identity, visiting: true }); } catch {}
           return identity;
         })
         .catch((error) => {
-          try { ctx.ui?.notify?.(`Cacophony visiting-agent registration failed: ${error?.message || String(error)}`, "warning"); } catch {}
+          if (current()) {
+            try { ctx.ui?.notify?.(`Cacophony visiting-agent registration failed: ${error?.message || String(error)}`, "warning"); } catch {}
+          }
           return null;
         })
-        .finally(() => { registration = null; });
-      return registration;
+        .finally(() => { if (registration === pending) registration = null; });
+      return pending.promise;
     };
 
     pi.registerCommand("caco-agent-register", {
-      description: "Register this session as a Cacophony visiting agent, even when auto-registration is off.",
+      description: "Register this session as a Cacophony visiting agent; optionally project=<name>.",
       handler: async (args, ctx) => {
-        if (args.trim()) {
-          ctx.ui?.notify?.("Usage: /caco-agent-register (uses CACO_PROJECT or CACOPHONY_PROJECT)", "warning");
+        const text = String(args || "").trim();
+        const match = /^project=([^\s=]+)$/.exec(text);
+        if (text && !match) {
+          ctx.ui?.notify?.("Usage: /caco-agent-register [project=<name>] (defaults to CACO_PROJECT or CACOPHONY_PROJECT)", "warning");
           return;
         }
-        await ensureRegistration(ctx, { manual: true });
+        await ensureRegistration(ctx, { manual: true, project: match?.[1] });
       },
     });
 
-    pi.on("session_start", (_event, ctx) => {
-      // Startup remains non-blocking; manual commands await the same single flight.
-      void ensureRegistration(ctx);
-    });
-
-    pi.on("session_shutdown", () => {
-      const identity = getCacophonyRuntimeIdentity(env);
-      if (identity.visiting) clearCacophonyRuntimeIdentity();
-    });
+    // Successful switches/new sessions/forks provide the fresh context. Do not
+    // clear on before_* events: another extension can cancel the transition.
+    pi.on("session_start", (_event, ctx) => { void ensureRegistration(ctx); });
+    pi.on("session_shutdown", reset);
   };
 }
 

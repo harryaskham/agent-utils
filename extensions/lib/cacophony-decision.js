@@ -20,8 +20,8 @@ function bool(value, fallback) {
   return fallback;
 }
 
-export function resolveCacophonyDecisionConfig(env = process.env, persisted = {}, syncPersisted = {}) {
-  const identity = getCacophonyRuntimeIdentity(env);
+export function resolveCacophonyDecisionConfig(env = process.env, persisted = {}, syncPersisted = {}, scope) {
+  const identity = getCacophonyRuntimeIdentity(env, scope);
   const discovered = Boolean(identity.agentId && identity.project);
   const pollRaw = env.PI_ASYNC_CHOICE_CACO_POLL_MS ?? persisted.pollMs ?? syncPersisted.pollMs ?? 3000;
   const pollMs = Number.isFinite(Number(pollRaw)) ? Math.max(500, Math.min(60_000, Math.trunc(Number(pollRaw)))) : 3000;
@@ -97,11 +97,12 @@ export function createCacophonyDecisionBridge({
   env = process.env,
   persisted = {},
   syncPersisted = {},
+  scope,
   execFileImpl = execFile,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 } = {}) {
-  const config = resolveCacophonyDecisionConfig(env, persisted, syncPersisted);
+  const config = resolveCacophonyDecisionConfig(env, persisted, syncPersisted, scope);
   const handles = new Map(); // decision id -> handle
   let timer = null;
   let polling = false;
@@ -110,7 +111,7 @@ export function createCacophonyDecisionBridge({
   let stopped = false;
 
   const refreshIdentity = () => {
-    Object.assign(config, resolveCacophonyDecisionConfig(env, persisted, syncPersisted));
+    Object.assign(config, resolveCacophonyDecisionConfig(env, persisted, syncPersisted, scope));
     return config;
   };
   const call = (args) => execJson(execFileImpl, config.command, [...args, "--json"]);

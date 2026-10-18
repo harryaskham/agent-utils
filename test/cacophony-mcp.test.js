@@ -30,7 +30,7 @@ function harness() {
   };
   const ctx = {
     ui: { notify(message, level) { notifications.push({ message, level }); } },
-    sessionManager: { getBranch: () => entries },
+    sessionManager: { getSessionId: () => "pi-session", getBranch: () => entries },
   };
   const fire = async (name, event = {}) => {
     for (const handler of handlers.get(name) || []) await handler(event, ctx);
@@ -157,7 +157,7 @@ test("visiting registration hands identity to MCP without mutating parent enviro
   clearCacophonyRuntimeIdentity();
 });
 
-test("disabled, identity-less, and no-tmux skipped sessions never register MCP", async () => {
+test("disabled, identity-less, and failed visiting sessions never register MCP", async () => {
   for (const scenario of [
     { env: { DISABLE_PI_CACO: "1", CACO_AGENT_ID: "a", CACO_PROJECT: "p" } },
     { env: {} },
@@ -166,7 +166,10 @@ test("disabled, identity-less, and no-tmux skipped sessions never register MCP",
     clearCacophonyRuntimeIdentity();
     const h = harness();
     let registrations = 0;
-    if (scenario.withRuntime) createCacophonyRuntimeExtension({ env: scenario.env, settings: {} })(h.pi);
+    if (scenario.withRuntime) createCacophonyRuntimeExtension({
+      env: scenario.env, settings: {},
+      execFileImpl(_command, _args, _options, callback) { callback(new Error("fixture CLI unavailable"), "", "fixture CLI unavailable"); },
+    })(h.pi);
     createCacophonyMcpExtension({ env: scenario.env, registerServer() { registrations += 1; return { async dispose() {} }; } })(h.pi);
     await h.fire("session_start");
     await settle();
@@ -188,12 +191,12 @@ test("identity changes replace one owned registration and duplicate events are d
     },
   })(h.pi);
   await h.fire("session_start");
-  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true });
-  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true });
+  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true }, h.ctx);
+  setCacophonyRuntimeIdentity({ agentId: "visitor-a", project: "p", visiting: true }, h.ctx);
   await settle();
   await settle();
   assert.equal(registrations.length, 1);
-  setCacophonyRuntimeIdentity({ agentId: "visitor-b", project: "p", visiting: true });
+  setCacophonyRuntimeIdentity({ agentId: "visitor-b", project: "p", visiting: true }, h.ctx);
   await settle();
   assert.equal(registrations.length, 2);
   assert.equal(disposals.length, 1);

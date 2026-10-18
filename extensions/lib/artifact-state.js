@@ -24,7 +24,7 @@ export function artifactIdentity(pi, ctx, env = process.env) {
   let session, name;
   try { session = ctx?.sessionManager?.getSessionId?.(); } catch {}
   try { name = pi?.getSessionName?.() || ctx?.sessionManager?.getSessionName?.(); } catch {}
-  const identity = getCacophonyRuntimeIdentity(env);
+  const identity = getCacophonyRuntimeIdentity(env, ctx);
   session = String(session || env.PI_SESSION_ID || `pid-${process.pid}`);
   return {
     agent: String(env.CACO_AGENT_NAME || env.CACO_SHORT_NAME || identity.agentId || name || `session-${session}`),

@@ -25,7 +25,7 @@ test("managed consumers resolve each logical session environment at use time", (
   clearCacophonyRuntimeIdentity();
   // A stale visiting fallback is deliberately present. A complete managed
   // identity from Pi-Daemon's session-scoped process.env must always dominate it.
-  assert.equal(setCacophonyRuntimeIdentity({ agentId: "visitor", project: "wrong", visiting: true }), true);
+  assert.equal(setCacophonyRuntimeIdentity({ agentId: "visitor", project: "wrong", visiting: true, sessionId: "stale" }), true);
 
   const identityA = getCacophonyRuntimeIdentity(sessionA);
   const identityB = getCacophonyRuntimeIdentity(sessionB);

@@ -111,11 +111,11 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
     const enqueueIdentity = (identity) => {
       if (!sessionCtx) return operation;
       const plan = buildCacophonyMcpRegistration(identity, env, sessionCtx.cwd);
-      if (!plan || stopped) return operation;
+      if (stopped) return operation;
       const requestedGeneration = ++generation;
       operation = operation.then(async () => {
         if (stopped || requestedGeneration !== generation) return;
-        if (registration && registrationKey === plan.identityKey) return;
+        if (plan && registration && registrationKey === plan.identityKey) return;
         if (registration?.compatAdapter) {
           warnOnce(new Error("Cacophony MCP identity changed; reload Pi to replace the compatibility adapter cleanly"));
           return;
@@ -125,8 +125,10 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
           registration = null;
           registrationKey = null;
         }
+        if (!plan) return;
         try {
           const register = registerServer || await loadRegister();
+          if (stopped || requestedGeneration !== generation) return;
           const next = register({ pi, name: plan.name, definition: plan.definition });
           if (!next || typeof next.dispose !== "function") throw new Error("pi-mcp-adapter returned no disposable registration");
           if (stopped || requestedGeneration !== generation) {
@@ -148,12 +150,18 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
       return operation;
     };
 
-    const unsubscribeIdentity = onCacophonyRuntimeIdentity((identity) => { void enqueueIdentity(identity); });
+    let unsubscribeIdentity = () => {};
+    const subscribeIdentity = () => {
+      unsubscribeIdentity();
+      unsubscribeIdentity = onCacophonyRuntimeIdentity(() => {
+        void enqueueIdentity(getCacophonyRuntimeIdentity(env, sessionCtx));
+      }, () => sessionCtx);
+    };
 
     pi.registerCommand?.("caco-mcp", {
       description: "Show transient Cacophony MCP registration state for this Pi session.",
       handler: async (_args, ctx) => {
-        const identity = getCacophonyRuntimeIdentity(env);
+        const identity = getCacophonyRuntimeIdentity(env, ctx);
         const status = isPiCacoDisabled(env)
           ? "disabled by DISABLE_PI_CACO"
           : registration
@@ -168,8 +176,8 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
     pi.on("session_start", (_event, ctx) => {
       sessionCtx = ctx;
       stopped = false;
-      if (isPiCacoDisabled(env)) return;
-      void enqueueIdentity(getCacophonyRuntimeIdentity(env));
+      subscribeIdentity();
+      void enqueueIdentity(getCacophonyRuntimeIdentity(env, ctx));
     });
 
     pi.on("session_shutdown", async () => {

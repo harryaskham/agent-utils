@@ -181,7 +181,9 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
     };
     if (choiceConfig.enabled) ensureSpeaker();
     let enablementGeneration = 0;
-    const cacoBridge = cacophonyBridge === false ? null : cacophonyBridge || createCacophonyChoiceBridge({ env, persisted: persistedChoice.cacophony || {}, setTimer, clearTimer });
+    let cacoCtx = null;
+    const cacoScope = () => cacoCtx;
+    const cacoBridge = cacophonyBridge === false ? null : cacophonyBridge || createCacophonyChoiceBridge({ env, scope: cacoScope, persisted: persistedChoice.cacophony || {}, setTimer, clearTimer });
     let active = null;
     let lastResult = null;
     let nextSessionId = 1;
@@ -538,6 +540,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
     // adapters with interactive_choice, but own many concurrent records.
     const decisions = decisionBridge === false ? null : decisionBridge || createCacophonyDecisionBridge({
       env,
+      scope: cacoScope,
       persisted: persistedChoice.async?.cacophony || {},
       syncPersisted: persistedChoice.cacophony || {},
       setTimer,
@@ -1054,6 +1057,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
     });
 
     pi.on("session_start", (_event, ctx) => {
+      cacoCtx = ctx;
       runtimeReady = true;
       try { if (choiceConfig.enabled) ensureSpeaker(ctx); } catch {}
       syncToolVisibility();

@@ -15,8 +15,8 @@ function bool(value, fallback) {
   return fallback;
 }
 
-export function resolveCacophonyChoiceConfig(env = process.env, persisted = {}) {
-  const identity = getCacophonyRuntimeIdentity(env);
+export function resolveCacophonyChoiceConfig(env = process.env, persisted = {}, scope) {
+  const identity = getCacophonyRuntimeIdentity(env, scope);
   const agentId = identity.agentId;
   const project = identity.project;
   const discovered = !!(agentId && project);
@@ -48,13 +48,14 @@ function execJson(execFileImpl, command, args) {
 export function createCacophonyChoiceBridge({
   env = process.env,
   persisted = {},
+  scope,
   execFileImpl = execFile,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 } = {}) {
-  const config = resolveCacophonyChoiceConfig(env, persisted);
+  const config = resolveCacophonyChoiceConfig(env, persisted, scope);
   const refreshIdentity = () => {
-    const identity = getCacophonyRuntimeIdentity(env);
+    const identity = getCacophonyRuntimeIdentity(env, scope);
     config.agentId = identity.agentId;
     config.project = identity.project;
     const discovered = Boolean(config.agentId && config.project);

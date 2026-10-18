@@ -13,7 +13,7 @@ import {
 } from "../extensions/lib/cacophony-runtime.js";
 import { createCacophonyChoiceBridge } from "../extensions/lib/cacophony-choice.js";
 
-function harness({ entries = [] } = {}) {
+function harness({ entries = [], sessionId = "pi-session" } = {}) {
   const commands = new Map();
   const handlers = new Map();
   const messages = [];
@@ -30,7 +30,7 @@ function harness({ entries = [] } = {}) {
   };
   const ctx = {
     cwd: "/projects/actual-project",
-    sessionManager: { getBranch: () => [...entries, ...appended] },
+    sessionManager: { getSessionId: () => sessionId, getBranch: () => [...entries, ...appended] },
     ui: { notify(message, level) { notifications.push({ message, level }); } },
   };
   const emit = async (name) => { for (const fn of handlers.get(name) || []) await fn({}, ctx); };
@@ -68,7 +68,7 @@ test("manual registration works with auto-registration off and deduplicates conc
   const restored = harness({ entries: h.appended });
   createCacophonyRuntimeExtension(options)(restored.pi);
   await restored.emit("session_start");
-  assert.equal(getCacophonyRuntimeIdentity(env).agentId, "visitor");
+  assert.equal(getCacophonyRuntimeIdentity(env, restored.ctx).agentId, "visitor");
   assert.equal(calls, 1);
   assert.equal(restored.messages.length, 0);
   await restored.emit("session_shutdown");
@@ -115,7 +115,7 @@ test("visiting registration supports non-tmux hosts and uses the session cwd", a
   await settle();
   await h.emit("session_start");
   assert.equal(calls, 1);
-  assert.equal(getCacophonyRuntimeIdentity({}).agentId, "herdr-visitor");
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "herdr-visitor");
   await h.emit("session_shutdown");
 });
 
@@ -129,7 +129,7 @@ test("successful registration publishes one durable runtime identity and context
     execFileImpl(command, args, _options, callback) {
       calls += 1;
       assert.equal(command, "caco-test");
-      assert.deepEqual(args, ["agent", "register", "--project", "agent-utils", "--json"]);
+      assert.deepEqual(args, ["agent", "register", "--project", "agent-utils", "--session-id", "pi-session", "--json"]);
       callback(null, JSON.stringify({ ok: true, data: { id: "visiting-1", project: "agent-utils" } }), "");
     },
   })(h.pi);
@@ -137,13 +137,13 @@ test("successful registration publishes one durable runtime identity and context
   await settle();
   assert.equal(calls, 1);
   assert.equal(h.appended[0].customType, CACO_VISITOR_ENTRY_TYPE);
-  assert.deepEqual(getCacophonyRuntimeIdentity({}), {
-    agentId: "visiting-1", project: "agent-utils", source: "registration", visiting: true, disabled: false,
+  assert.deepEqual(getCacophonyRuntimeIdentity({}, h.ctx), {
+    agentId: "visiting-1", project: "agent-utils", source: "registration", visiting: true, sessionId: "pi-session", disabled: false,
   });
   assert.match(h.messages[0].message.content, /visiting agent visiting-1/);
   assert.deepEqual(h.messages[0].options, { deliverAs: "nextTurn" });
   await h.emit("session_shutdown");
-  assert.equal(getCacophonyRuntimeIdentity({}).agentId, "", "visiting identity is session-scoped");
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "", "visiting identity is session-scoped");
 });
 
 test("session receipt restores registration without rerunning CLI or duplicating its message", async () => {
@@ -151,7 +151,7 @@ test("session receipt restores registration without rerunning CLI or duplicating
   let calls = 0;
   const entry = {
     type: "custom", customType: CACO_VISITOR_ENTRY_TYPE,
-    data: { version: 1, status: "registered", agentId: "visiting-restored", project: "agent-utils" },
+    data: { version: 2, status: "registered", agentId: "visiting-restored", project: "agent-utils", sessionId: "pi-session" },
   };
   const h = harness({ entries: [entry] });
   createCacophonyRuntimeExtension({
@@ -162,7 +162,7 @@ test("session receipt restores registration without rerunning CLI or duplicating
   await h.emit("session_start");
   assert.equal(calls, 0);
   assert.equal(h.messages.length, 0);
-  assert.equal(getCacophonyRuntimeIdentity({}).agentId, "visiting-restored");
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "visiting-restored");
 });
 
 test("malformed registration never invents an identity and warns once", async () => {
@@ -175,24 +175,28 @@ test("malformed registration never invents an identity and warns once", async ()
   })(h.pi);
   await h.emit("session_start");
   await settle();
-  assert.equal(getCacophonyRuntimeIdentity({}).agentId, "");
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "");
   assert.match(h.notifications[0].message, /returned no durable/);
 });
 
-test("choice bridge consumes a visiting runtime identity and global disable overrides it", () => {
+test("choice bridge consumes a visiting runtime identity and global disable overrides it", async () => {
   clearCacophonyRuntimeIdentity();
   const registered = harness();
   createCacophonyRuntimeExtension({
-    env: { CACO_PROJECT: "agent-utils", CACO_AGENT_ID: "managed" }, settings: {},
+    env: { CACO_PROJECT: "agent-utils", PI_CACO_AUTO_REGISTER: "1" }, settings: {},
+    execFileImpl(_command, _args, _options, callback) { callback(null, JSON.stringify({ id: "visitor", project: "agent-utils" }), ""); },
   })(registered.pi);
-  return registered.emit("session_start").then(() => {
-    const bridge = createCacophonyChoiceBridge({ env: {}, persisted: {} });
+  await registered.emit("session_start");
+  await settle();
+  {
+    const bridge = createCacophonyChoiceBridge({ env: {}, persisted: {}, scope: registered.ctx });
     assert.equal(bridge.config.enabled, true, "choice mirroring reads the shared runtime identity without process-env mutation");
     const managedBridge = createCacophonyChoiceBridge({ env: { CACO_AGENT_ID: "a", CACO_PROJECT: "p" } });
     assert.equal(managedBridge.config.enabled, true);
     const disabledBridge = createCacophonyChoiceBridge({ env: { DISABLE_PI_CACO: "1", CACO_AGENT_ID: "a", CACO_PROJECT: "p" } });
     assert.equal(disabledBridge.config.enabled, false);
-  });
+  }
+  await registered.emit("session_shutdown");
 });
 
 test("registration injects Cacophony's visiting guidance into the context message", async () => {
