@@ -1,0 +1,73 @@
+{
+  "evidence": "Hermetic extension contract with mocked CLI; not live Pi/Pi Daemon/Pocket4 acceptance",
+  "source": {
+    "extensionSha256": "56392ecd9ea38c359f83991fe0af4e0b2fafe2171e50a750821542c12c467e51",
+    "identityLibrarySha256": "b48f381a1b7ec25c9f2e8d58687fe0f214e06451bc0664bc42029356dea0ec47"
+  },
+  "results": [
+    {
+      "name": "explicit project without project environment",
+      "pass": false,
+      "observed": {
+        "registered": false,
+        "project": "",
+        "cliCalls": 0,
+        "notifications": [
+          {
+            "message": "Usage: /caco-agent-register (uses CACO_PROJECT or CACOPHONY_PROJECT)",
+            "level": "warning"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fork does not restore parent receipt",
+      "pass": false,
+      "observed": {
+        "agentId": "parent-visiting-identity",
+        "inheritedParentId": "parent-visiting-identity",
+        "cliCalls": 0
+      }
+    },
+    {
+      "name": "live session ID overrides inherited parent environment",
+      "pass": false,
+      "observed": {
+        "registrationArgs": [
+          "agent",
+          "register",
+          "--project",
+          "tools",
+          "--json"
+        ],
+        "expectedLiveSession": "actual-current-session"
+      }
+    },
+    {
+      "name": "four logical sessions in one checkout remain independent",
+      "pass": false,
+      "observed": {
+        "agentIds": [
+          "visiting-44f0aa1a5ef5",
+          "visiting-44f0aa1a5ef5",
+          "visiting-44f0aa1a5ef5",
+          "visiting-44f0aa1a5ef5"
+        ],
+        "distinctAgentIds": 1,
+        "cliCalls": 1,
+        "cwd": "/fixture/shared-tools-checkout"
+      }
+    },
+    {
+      "name": "repeated registration of one session is stable",
+      "pass": true,
+      "observed": {
+        "first": "visiting-44f0aa1a5ef5",
+        "repeated": "visiting-44f0aa1a5ef5",
+        "cliCalls": 1
+      }
+    }
+  ],
+  "passed": 1,
+  "failed": 4
+}
