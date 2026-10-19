@@ -113,7 +113,8 @@
       "./extensions/android.js",
       "./extensions/xvfb.js",
       "./extensions/nix-devshell.js",
-      "./extensions/macos-native.js"
+      "./extensions/macos-native.js",
+      "./extensions/cd.js"
     ],
     "prompts": [
       "./prompts"
