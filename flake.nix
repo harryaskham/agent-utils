@@ -140,6 +140,8 @@
             echo 'export * from "./extensions/durable/media.mjs";' > $out/media.mjs
             # An image budget for model requests (bd-cf6146).
             echo 'export * from "./extensions/durable/image-budget.mjs";' > $out/image-budget.mjs
+            # /loop as Durable background tasks.
+            echo 'export * from "./extensions/durable/loop.mjs";' > $out/loop.mjs
             # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
@@ -149,6 +151,8 @@
               if (media.extension?.name !== 'agent-utils-media' || names !== 'image_share,audio_share,tendril_capture') process.exit(1);
               const budget = await import('$out/image-budget.mjs');
               if (budget.extension?.name !== 'agent-utils-image-budget' || budget.extension.hooks?.[0]?.task !== 'pi.generation') process.exit(1);
+              const loop = await import('$out/loop.mjs');
+              if (loop.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.loop' || typeof loop.commands?.loop?.run !== 'function') process.exit(1);
             "
           '';
           uncheckedJoin = pkgs.symlinkJoin {
