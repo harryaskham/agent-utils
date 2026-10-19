@@ -1,4 +1,6 @@
 // Durable adaptor: /loop for pi-daemon sessions, a repeating prompt as a Durable background task.
+// Commands as the TUI /loop: /loop <interval> [--steer] <prompt> (several at once, numbered),
+// /loop list, /loop stop [id|all] (off and end too).
 //
 // List this file in a pi-daemon profile's `extensions:`. It exports the extension-module
 // contract's `extension` (the loop task) and `commands` (/loop); the behaviour lives in
