@@ -92,6 +92,42 @@ async function loadRegisterMcpServer() {
   return createScopedAdapterRegistrar(adapter);
 }
 
+/**
+ * Whether Pi's built-in MCP support serves this session: Pi offers pi.registerMcpServer and no
+ * extension (such as pi-mcp-adapter, which replaces the built-in support) owns `/mcp`.
+ */
+export function builtinMcpActive(pi) {
+  if (typeof pi?.registerMcpServer !== "function") return false;
+  try {
+    return !(pi.getCommands?.() || []).some((command) => command?.name === "mcp" && command?.source === "extension");
+  } catch {
+    return false;
+  }
+}
+
+/** The registration as a built-in MCP server (Pi's mcp.json shape), reached from codemode. */
+export function nativeMcpDefinition(definition, identityKey) {
+  return {
+    command: definition.command,
+    args: definition.args,
+    ...(definition.cwd ? { cwd: definition.cwd } : {}),
+    env: definition.env,
+    exposure: "codemode",
+    description: `Cacophony for ${identityKey}: beads, messages, agents and projects as this agent`,
+  };
+}
+
+/** Register with Pi's built-in MCP support; disposing unregisters. */
+export function registerNativeMcpServer({ pi, name, definition, identityKey }) {
+  pi.registerMcpServer(name, nativeMcpDefinition(definition, identityKey));
+  return {
+    native: true,
+    async dispose() {
+      try { pi.unregisterMcpServer?.(name); } catch {}
+    },
+  };
+}
+
 export function createCacophonyMcpExtension({ env = process.env, registerServer, loadRegister = loadRegisterMcpServer } = {}) {
   return function cacophonyMcpExtension(pi) {
     let sessionCtx = null;
@@ -127,9 +163,10 @@ export function createCacophonyMcpExtension({ env = process.env, registerServer,
         }
         if (!plan) return;
         try {
-          const register = registerServer || await loadRegister();
+          // Pi's own MCP support when it serves the session (no adapter installed), else the adapter.
+          const register = registerServer || (builtinMcpActive(pi) ? registerNativeMcpServer : await loadRegister());
           if (stopped || requestedGeneration !== generation) return;
-          const next = register({ pi, name: plan.name, definition: plan.definition });
+          const next = register({ pi, name: plan.name, definition: plan.definition, identityKey: plan.identityKey });
           if (!next || typeof next.dispose !== "function") throw new Error("pi-mcp-adapter returned no disposable registration");
           if (stopped || requestedGeneration !== generation) {
             await next.dispose();

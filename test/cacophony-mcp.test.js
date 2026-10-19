@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 import {
+  builtinMcpActive,
   createCacophonyMcpExtension,
   createScopedAdapterRegistrar,
   scopedAdapterPi,
@@ -254,4 +255,41 @@ test("Pi host packages use wildcard peers, with pinned copies only for developme
   for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"]) {
     assert.match(pkg.devDependencies?.[name] || "", /^\d+\.\d+\.\d+$/, `${name} stays pinned for standalone tests`);
   }
+});
+
+test("with Pi's built-in MCP support the identity registers natively; with the adapter it does not", async () => {
+  clearCacophonyRuntimeIdentity();
+  const h = harness();
+  h.ctx.cwd = "/projects/native";
+  const native = [];
+  const unregistered = [];
+  let adapterLoads = 0;
+  let commands = [];
+  h.pi.registerMcpServer = (name, config) => native.push({ name, config });
+  h.pi.unregisterMcpServer = (name) => unregistered.push(name);
+  h.pi.getCommands = () => commands;
+  createCacophonyMcpExtension({
+    env: { CACO_AGENT_ID: "managed-2", CACO_PROJECT: "agent-utils", CACO_BIN: "caco-test" },
+    loadRegister: async () => { adapterLoads += 1; return () => ({ async dispose() {} }); },
+  })(h.pi);
+  await h.fire("session_start");
+  await settle();
+  assert.equal(adapterLoads, 0, "the adapter is not loaded when Pi serves MCP itself");
+  assert.equal(native.length, 1);
+  assert.equal(native[0].name, "cacophony-runtime");
+  assert.deepEqual(native[0].config, {
+    command: "caco-test",
+    args: ["mcp", "stdio"],
+    cwd: "/projects/native",
+    env: { CACO_AGENT_ID: "managed-2", CACO_PROJECT: "agent-utils" },
+    exposure: "codemode",
+    description: "Cacophony for agent-utils:managed-2: beads, messages, agents and projects as this agent",
+  });
+  await h.fire("session_shutdown");
+  assert.deepEqual(unregistered, ["cacophony-runtime"]);
+
+  // An extension owning /mcp (pi-mcp-adapter) replaces the built-in support: the adapter path.
+  commands = [{ name: "mcp", source: "extension" }];
+  assert.equal(builtinMcpActive(h.pi), false);
+  assert.equal(builtinMcpActive({ getCommands: () => [] }), false, "no native API, no native registration");
 });
