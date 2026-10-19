@@ -138,6 +138,8 @@
             echo 'export * from "./extensions/durable/tts.mjs";' > $out/tts.mjs
             # image_share, audio_share and tendril_capture (bd-647b05).
             echo 'export * from "./extensions/durable/media.mjs";' > $out/media.mjs
+            # An image budget for model requests (bd-cf6146).
+            echo 'export * from "./extensions/durable/image-budget.mjs";' > $out/image-budget.mjs
             # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
@@ -145,6 +147,8 @@
               const media = await import('$out/media.mjs');
               const names = (media.extension?.tools ?? []).map((tool) => tool.name).join(',');
               if (media.extension?.name !== 'agent-utils-media' || names !== 'image_share,audio_share,tendril_capture') process.exit(1);
+              const budget = await import('$out/image-budget.mjs');
+              if (budget.extension?.name !== 'agent-utils-image-budget' || budget.extension.hooks?.[0]?.task !== 'pi.generation') process.exit(1);
             "
           '';
           uncheckedJoin = pkgs.symlinkJoin {
