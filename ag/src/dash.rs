@@ -107,7 +107,10 @@ pub struct Snapshot {
 
 struct Dash {
     config: Config,
+    /// One per node: doctor and speech.
     targets: Vec<(Host, Option<Endpoint>)>,
+    /// Nodes plus their pi-daemons: choices and answers.
+    choice_targets: Vec<(Host, Option<Endpoint>)>,
     endpoints: HashMap<String, Endpoint>,
     options: DashOptions,
     token: String,
@@ -299,7 +302,8 @@ fn refresh_choices(dash: &Shared) {
     lock(dash).choices_refreshing = true;
     let dash = dash.clone();
     tokio::spawn(async move {
-        let fleet = paratenic::fleet_choices(&dash.config, dash.targets.clone(), false).await;
+        let fleet =
+            paratenic::fleet_choices(&dash.config, dash.choice_targets.clone(), false).await;
         {
             let mut snapshot = lock(&dash);
             snapshot.choices = Some(fleet);
@@ -311,7 +315,12 @@ fn refresh_choices(dash: &Shared) {
 }
 
 async fn refresh_node(dash: &Shared, host: &str) {
-    let Some((h, e)) = dash.targets.iter().find(|(h, _)| h.name == host).cloned() else {
+    let Some((h, e)) = dash
+        .choice_targets
+        .iter()
+        .find(|(h, _)| h.name == host)
+        .cloned()
+    else {
         return;
     };
     let node = paratenic::node_choices(&dash.config, h, e, false).await;
@@ -978,7 +987,9 @@ pub async fn run(
     let public_url = public_origin
         .map(|u| u.origin().ascii_serialization())
         .unwrap_or_else(|| format!("http://{display_host}:{}", address.port()));
-    let endpoints = targets
+    let nodes: Vec<Host> = targets.iter().map(|(h, _)| h.clone()).collect();
+    let choice_targets = paratenic::choice_endpoints(&config, &nodes)?;
+    let endpoints = choice_targets
         .iter()
         .filter_map(|(h, e)| Some((h.name.clone(), e.clone()?)))
         .collect();
@@ -1008,6 +1019,7 @@ pub async fn run(
     let dash: Shared = Arc::new(Dash {
         config,
         targets,
+        choice_targets,
         endpoints,
         cookie: format!("ag_dash_{}", address.port()),
         secure_cookie,

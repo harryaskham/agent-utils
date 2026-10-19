@@ -1532,7 +1532,7 @@ fn execute(cli: Cli) -> Result<u8> {
                     if !(5..=3600).contains(&interval) {
                         return Err(Error::Invalid("--interval must be 5–3600 seconds".into()));
                     }
-                    let targets = service.paratenic_targets(&selection)?;
+                    let targets = service.choice_targets(&selection)?;
                     service.runtime.block_on(ag::choices_tui::run(
                         service.config.clone(),
                         targets,

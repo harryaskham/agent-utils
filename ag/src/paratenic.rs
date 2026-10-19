@@ -156,14 +156,7 @@ pub fn endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Option<En
             if !config.paratenic.enabled || p.enabled == Some(false) {
                 return Ok((host.clone(), None));
             }
-            let mut candidates = vec![];
-            if let Some(name) = &p.culture_host {
-                candidates.push(name.to_lowercase());
-            } else if host.local {
-                candidates.extend(local_names());
-            } else {
-                candidates.push(host.name.to_lowercase());
-            }
+            let candidates = culture_candidates(host);
             let imported = culture
                 .iter()
                 .find(|c| candidates.iter().any(|n| c.id.eq_ignore_ascii_case(n)));
@@ -202,6 +195,72 @@ pub fn endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Option<En
             ))
         })
         .collect()
+}
+
+/// Culture host ids that name this node.
+fn culture_candidates(host: &Host) -> Vec<String> {
+    if let Some(name) = &host.paratenic.culture_host {
+        vec![name.to_lowercase()]
+    } else if host.local {
+        local_names()
+    } else {
+        vec![host.name.to_lowercase()]
+    }
+}
+
+/// pi-daemon serves AHP beside Paratenic; Culture names it `<node>-pi-daemon`.
+pub const PI_DAEMON_SUFFIX: &str = "-pi-daemon";
+
+/// Endpoints to list and answer choices on: each node's Paratenic endpoint
+/// (as [`endpoints`]) plus, when Culture has one, the node's pi-daemon as a
+/// node of its own named `<node>-pi-daemon`. pi-daemon's `ask_user` questions
+/// are AHP `chatInput` entries like Paratenic's, so they list and answer the
+/// same way. Doctor, speech and media stay per node and use [`endpoints`].
+pub fn choice_endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Option<Endpoint>)>> {
+    let mut targets = endpoints(config, hosts)?;
+    if !config.paratenic.enabled || !config.paratenic.pi_daemon {
+        return Ok(targets);
+    }
+    let culture = culture_hosts(config)?;
+    for host in hosts {
+        let p = &host.paratenic;
+        if p.enabled == Some(false)
+            || p.pi_daemon == Some(false)
+            || host.name.ends_with(PI_DAEMON_SUFFIX)
+        {
+            continue;
+        }
+        let names: Vec<String> = culture_candidates(host)
+            .into_iter()
+            .map(|n| format!("{n}{PI_DAEMON_SUFFIX}"))
+            .collect();
+        let Some(c) = culture
+            .iter()
+            .find(|c| names.iter().any(|n| c.id.eq_ignore_ascii_case(n)))
+        else {
+            continue;
+        };
+        validate_url(&c.url, c.allow_plaintext_non_loopback)
+            .map_err(|e| Error::Config(format!("host {}{PI_DAEMON_SUFFIX}: {e}", host.name)))?;
+        let token_file = c
+            .token_file
+            .clone()
+            .or_else(|| config.paratenic.token_file.clone())
+            .map(|t| config::expand_home(&t))
+            .transpose()?;
+        let mut daemon = host.clone();
+        daemon.name = format!("{}{PI_DAEMON_SUFFIX}", host.name);
+        targets.push((
+            daemon,
+            Some(Endpoint {
+                url: c.url.clone(),
+                token_file,
+                allow_plaintext_non_loopback: c.allow_plaintext_non_loopback,
+                source: "culture".into(),
+            }),
+        ));
+    }
+    Ok(targets)
 }
 
 fn read_token(path: &PathBuf) -> Result<String> {
@@ -557,7 +616,11 @@ pub struct Choice {
     pub kind: String,
     /// Digest of the authoritative entry; answers are refused if it changed.
     pub revision: String,
+    /// Headline: the request message, or only its question when the message
+    /// is the question followed by context (Pi choices send `question\n\ncontext`).
     pub title: String,
+    /// Context to show under the title, when the request carried any beyond
+    /// the title (never a repeat of the title or of the question).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -592,6 +655,32 @@ pub struct QuestionOption {
 
 fn bounded(text: &str) -> String {
     text.chars().take(MAX_TEXT).collect()
+}
+
+/// Split a request message into (title, context). Pi choices send the
+/// question, a blank line and agent context as the request message, and the
+/// same question again as the single question's prompt; showing both repeats
+/// the question. When the message starts with the (only) question, the title
+/// is the question and the rest is context.
+fn headline(message: Option<&str>, questions: &[Question]) -> (String, Option<String>) {
+    let Some(message) = message.map(str::trim).filter(|m| !m.is_empty()) else {
+        return ("Input requested".into(), None);
+    };
+    if let [question] = questions {
+        let prompt = question.message.trim();
+        if !prompt.is_empty() {
+            if let Some(rest) = message.strip_prefix(prompt) {
+                let rest = rest.trim();
+                // Only at a boundary: "Ship it?" must not split "Ship it?!"
+                let boundary =
+                    rest.is_empty() || message[prompt.len()..].starts_with(char::is_whitespace);
+                if boundary {
+                    return (bounded(prompt), (!rest.is_empty()).then(|| bounded(rest)));
+                }
+            }
+        }
+    }
+    (bounded(message), None)
 }
 
 fn question_view(question: &ChatInputQuestion) -> Question {
@@ -706,25 +795,26 @@ pub fn choices_for(
                     .unwrap_or_else(|| fallback.into())
             };
             let (id, chat, kind, title, message, url, questions, request_id) = match entry {
-                SessionInputRequest::ChatInput(e) => (
-                    e.id.clone(),
-                    e.chat.clone(),
-                    "chatInput",
-                    e.request
-                        .message
-                        .as_deref()
-                        .map(bounded)
-                        .unwrap_or_else(|| "Input requested".into()),
-                    e.request.message.as_deref().map(bounded),
-                    e.request.url.clone(),
-                    e.request
+                SessionInputRequest::ChatInput(e) => {
+                    let questions: Vec<Question> = e
+                        .request
                         .questions
                         .iter()
                         .flatten()
                         .map(question_view)
-                        .collect(),
-                    e.request.id.clone(),
-                ),
+                        .collect();
+                    let (title, context) = headline(e.request.message.as_deref(), &questions);
+                    (
+                        e.id.clone(),
+                        e.chat.clone(),
+                        "chatInput",
+                        title,
+                        context,
+                        e.request.url.clone(),
+                        questions,
+                        e.request.id.clone(),
+                    )
+                }
                 SessionInputRequest::ToolConfirmation(e) => (
                     e.id.clone(),
                     e.chat.clone(),
@@ -1265,11 +1355,13 @@ pub async fn answer(
         } else {
             None
         };
-        // Observe our own echo on the chat channel before dispatching it.
+        // Observe our own echo on the chat channel before dispatching it. The
+        // snapshot is unused, so ask for the smallest one Paratenic accepts
+        // (view.turns must be positive; 0 is rejected with -32602).
         let mut events = connection.client.events();
         let (_, _chat) = connection
             .client
-            .subscribe_with_options(choice.chat.clone(), None, Some(SubscribeView { turns: Some(0) }))
+            .subscribe_with_options(choice.chat.clone(), None, Some(SubscribeView { turns: Some(1) }))
             .await
             .map_err(rpc)?;
         let client_seq = connection.lease.next()?;
@@ -1314,4 +1406,48 @@ pub async fn answer(
     .await;
     connection.close().await;
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn select(message: &str) -> Question {
+        Question {
+            id: "choice".into(),
+            kind: "single-select".into(),
+            title: None,
+            message: message.into(),
+            required: true,
+            allow_freeform: true,
+            options: vec![],
+        }
+    }
+
+    #[test]
+    fn pi_choice_message_splits_into_question_and_context() {
+        // agent-utils async choices: request message = question \n\n context,
+        // question prompt = question.
+        let q = "Can I run a 3-minute docked X11 GPU test now?";
+        let message = format!("{q}\n\nReleased .67 native tools are prepared on sgu24.");
+        let (title, context) = headline(Some(&message), &[select(q)]);
+        assert_eq!(title, q);
+        assert_eq!(
+            context.as_deref(),
+            Some("Released .67 native tools are prepared on sgu24.")
+        );
+    }
+
+    #[test]
+    fn identical_message_has_no_context_and_unrelated_message_is_kept() {
+        let (title, context) = headline(Some("Ship it?"), &[select("Ship it?")]);
+        assert_eq!((title.as_str(), context), ("Ship it?", None));
+        // Not at a word boundary: keep the message whole.
+        let (title, context) = headline(Some("Ship it?!"), &[select("Ship it?")]);
+        assert_eq!((title.as_str(), context), ("Ship it?!", None));
+        // Several questions: the message is the form's title.
+        let (title, context) = headline(Some("Deploy form"), &[select("Where?"), select("When?")]);
+        assert_eq!((title.as_str(), context), ("Deploy form", None));
+        assert_eq!(headline(None, &[]).0, "Input requested");
+    }
 }

@@ -79,6 +79,7 @@ paratenic:
   request_timeout_seconds: 15
   answer_timeout_seconds: 30
   parallelism: 8                               # session snapshots per node
+  pi_daemon: true                              # also each node's pi-daemon (see below)
 hosts:
   - name: ms-dev
     address: ms-dev
@@ -87,8 +88,17 @@ hosts:
       token_file: ~/.config/paratenic/token
       allow_plaintext_non_loopback: true       # ws:// off-loopback, e.g. inside a tailnet
       # culture_host: other-id                 # when the Culture id differs
+      # pi_daemon: false                       # skip this node's pi-daemon
       # enabled: false
 ```
+
+**pi-daemon agents.** pi-daemon serves AHP beside Paratenic, and its agents' `ask_user`
+questions are `chatInput` entries like Paratenic's. When Culture's config has a host
+`<node>-pi-daemon` (as Collective writes it), `ag choices`, `ag dash` and
+`ag_choices_answer` also query it, as a node of its own named `<node>-pi-daemon`;
+answer with `--node <node>-pi-daemon`. `ag doctor`, speech and media stay per node.
+pi-daemon's `ask_user` exists only in profiles that load a module re-exporting
+`InputExtension` (pi-daemon's docs/profiles); without it a session cannot ask.
 
 `ws://` away from loopback requires `allow_plaintext_non_loopback`, matching Culture. Token files may be managed symlinks; they are read per connection and never logged. `--local` resolves this machine's Culture host by hostname.
 
@@ -114,7 +124,7 @@ A node that answers neither SSH nor AHP collapses to one `offline` line. A node 
 
 `ag dash` serves one page with **Choices**, **Health**, **TTS**, **Images** and **Audio** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
 
-- choices are re-read from Paratenic whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
+- choices are re-read from Paratenic (and each node's pi-daemon) whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
 - health runs every `dash.refresh_seconds` and after each image pull;
 - TTS starts **one shared collector per dashboard process**, reusing `ag tts`'s local file readers and remote SSH cursor/reconnect path. It starts with 20 recent lines per selected host and follows continuously, even with no browser open. Each browser reads the shared stream over authenticated SSE—not another set of SSH tails. This is the **speech-request text feed**, not an audio player or proof that a request played;
 - the merged media sync (`ag sync`: images and shared audio) runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running; `--no-images` / `--no-audio` (`dash.audio`) serve that pathway's existing cache only. The Images and Audio tabs embed the same viewers as `ag image` / `ag audio`; `/audio/*` streams with HTTP ranges so clips can seek, and a sync never reloads the player while a clip is playing. See [fleet audio](../docs/ag-audio.md).

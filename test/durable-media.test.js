@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDurableMedia, durableEnvExec, normalizeBase64, DEFAULT_CAPTURE_MAX_WIDTH } from "../extensions/lib/durable-media.js";
@@ -113,9 +113,22 @@ test("image_share shares a file as details.media and writes the archive receipt"
   assert.deepEqual(readFileSync(receipts.stored[0].path), PNG);
   const meta = sidecar(receipts.stored[0]);
   assert.equal(meta.source.tool, "image_share");
-  assert.equal(meta.session, "conv-1");
+  assert.match(meta.session, new RegExp(`^${basename(cwd)}-[0-9a-f]{8}:conv-1$`));
   assert.equal(meta.host, "test-host");
   assert.equal(meta.source.path, join(cwd, "chart.png"));
+});
+
+test("without an agent name, shares are filed per session directory, not one session-1 folder", async () => {
+  const { cwd, env } = fixture();
+  delete env.CACO_AGENT_NAME;
+  writeFileSync(join(cwd, "chart.png"), PNG);
+  const media = createDurableMedia({ env });
+  // Every pi-daemon session's root chat is conversation "1".
+  const result = await tool(media, "image_share").execute({ path: "chart.png" }, { ...api(cwd), conversationId: "1" });
+  const meta = sidecar(result.details.sharedImages.stored[0]);
+  assert.equal(meta.agent, `pi-daemon-${basename(cwd)}`);
+  assert.match(meta.session, new RegExp(`^${basename(cwd)}-[0-9a-f]{8}:1$`));
+  assert.equal(meta.cwd, cwd);
 });
 
 test("image_share shares base64 and data: URLs, sniffing the type", async () => {

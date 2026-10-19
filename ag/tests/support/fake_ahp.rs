@@ -194,6 +194,12 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
             "listSessions" => Some(
                 json!({"items": fixture_sessions(demo, &answered).into_iter().map(|(s, _)| s).collect::<Vec<_>>()}),
             ),
+            // Paratenic rejects a non-positive snapshot view (server.rs subscribe).
+            "subscribe" if params["view"]["turns"].as_i64().is_some_and(|t| t <= 0) => {
+                let reply = json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "subscribe view.turns must be positive"}});
+                let _ = ws.send(Message::Text(reply.to_string().into())).await;
+                continue;
+            }
             "subscribe" => {
                 let channel = params["channel"].as_str().unwrap_or_default();
                 let state = fixture_sessions(demo, &answered)

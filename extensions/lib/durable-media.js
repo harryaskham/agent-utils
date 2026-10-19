@@ -156,7 +156,13 @@ export function createDurableMedia({
     const executionEnv = api.env;
     const cwd = executionEnv?.cwd || process.cwd();
     const conversation = String(api.conversationId || "conversation");
-    const identity = artifactIdentity(null, { cwd, sessionManager: { getSessionId: () => api.conversationId } }, env);
+    // pi-daemon does not tell a tool its session; every session's root chat is
+    // conversation "1". Name the session by its directory and conversation, and
+    // (without a configured agent name) the agent by its directory, so
+    // different sessions' shares do not all land in one `session-1` folder.
+    const place = path.basename(cwd) || "root";
+    const session = `${place}-${createHash("sha256").update(cwd).digest("hex").slice(0, 8)}:${conversation}`;
+    const identity = artifactIdentity(null, { cwd, sessionManager: { getSessionId: () => session, getSessionName: () => `pi-daemon-${place}` } }, env);
     const eventId = String(api.callId || `${conversation}:${Date.now()}`);
     return {
       cwd,

@@ -36,6 +36,9 @@ import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE, isAzureSpeechProvider, usesDa
 import { speechCredentialStatus } from "./tts-provider-config.js";
 import { createSpeechOutputRouting } from "./speech-output-routing.js";
 import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.js";
+import { appendTtsFeed } from "./tts-feed.js";
+import { ttsFeedEnabled } from "./privacy.js";
+import { artifactIdentity } from "./artifact-state.js";
 
 export const DURABLE_AUDIO_SETTINGS_KEY = "settings";
 export const DURABLE_AUDIO_LEDGER_KEY = "spoken";
@@ -201,6 +204,7 @@ export function createDurableAgentAudio({
   memoryState = new Map(),
   maxSessions = DURABLE_AUDIO_MAX_SESSIONS,
   log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
+  appendFeed = appendTtsFeed,
 } = {}) {
   const persistedTts = plainObject(persistedSettings.tts);
   const persistedNarrate = plainObject(persistedSettings.narrate);
@@ -337,9 +341,21 @@ export function createDurableAgentAudio({
     return tracked;
   };
 
+  // The node's speech feed (~/.local/state/agent-utils/tts/speech.jsonl), as
+  // interactive Pi writes it: `ag tts` and ag dash's TTS panel read it. One
+  // record per spoken line, written whether or not playback succeeds.
+  const recordFeed = (session, kind, text) => {
+    if (!ttsFeedEnabled(env)) return;
+    const identity = artifactIdentity(null, { sessionManager: { getSessionId: () => session.sessionId } }, env);
+    track(Promise.resolve()
+      .then(() => appendFeed({ ...identity, text, kind }, { env }))
+      .catch((error) => report(session, "tts feed", error)));
+  };
+
   const speak = (session, kind, text, overrides = {}) => {
     const body = String(text ?? "");
     if (disposed || !body.trim()) return;
+    recordFeed(session, kind === "tts" ? "tts" : "narrate", body);
     track(Promise.resolve()
       .then(() => session.speech.speak(body, { ...overrides, speechKind: kind, streamName: `/${kind}` }))
       .then((result) => { for (const warning of result?.warnings || []) report(session, `${kind} daemon`, new Error(warning)); })
@@ -348,6 +364,7 @@ export function createDurableAgentAudio({
 
   const speakChoice = (session, text) => {
     if (disposed || !String(text || "").trim()) return;
+    recordFeed(session, "choices", String(text));
     session.choices ||= choiceFactory({ sessionId: session.sessionId, env });
     try { session.choices.assignSession?.({ sessionManager: { getSessionId: () => session.sessionId } }); } catch {}
     track(Promise.resolve().then(() => session.choices.speak(text)).catch((error) => report(session, "choices", error)));

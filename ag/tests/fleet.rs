@@ -214,6 +214,63 @@ fn answer_dispatches_exact_chat_input_completed_and_reports_authoritative_echo()
 }
 
 #[test]
+fn pi_daemon_beside_paratenic_lists_and_answers_as_its_own_node() {
+    // Culture names a node's pi-daemon `<node>-pi-daemon`; its ask_user
+    // questions are chatInput entries like Paratenic's.
+    let (paratenic, paratenic_fake) = fake_host();
+    let (daemon, daemon_fake) = fake_host();
+    let fixture = Fixture::new(&[("alpha", url(paratenic))]);
+    let token = fixture.temp.path().join("token");
+    std::fs::write(
+        fixture.temp.path().join("no-culture.yaml"),
+        format!(
+            "hosts:\n- id: alpha-pi-daemon\n  url: ws://{daemon}/ahp\n  token_file: {}\n",
+            token.display()
+        ),
+    )
+    .unwrap();
+    let (code, listed) = fixture.json(&["--json", "choices", "list"]);
+    assert_eq!(code, 0, "{listed}");
+    let nodes = listed["data"]["nodes"].as_array().unwrap();
+    let names: Vec<&str> = nodes.iter().map(|n| n["host"].as_str().unwrap()).collect();
+    assert_eq!(names, ["alpha", "alpha-pi-daemon"]);
+    assert_eq!(nodes[1]["endpoint"], format!("ws://{daemon}/ahp"));
+    assert_eq!(listed["data"]["actionable"], 2);
+    let choice = &nodes[1]["agents"][0]["choices"][0];
+    assert_eq!(choice["host"], "alpha-pi-daemon");
+    let revision = choice["revision"].as_str().unwrap();
+
+    // The answer goes to the pi-daemon, not the node's Paratenic.
+    let (code, receipt) = fixture.json(&[
+        "--json",
+        "choices",
+        "answer",
+        "--node",
+        "alpha-pi-daemon",
+        "--session",
+        "ahp-session:/agent-a",
+        "--request",
+        "choice-1",
+        "--option",
+        "1",
+        "--revision",
+        revision,
+    ]);
+    assert_eq!(code, 0, "{receipt}");
+    assert_eq!(receipt["data"]["state"], "accepted");
+    assert_eq!(daemon_fake.lock().unwrap().dispatches.len(), 1);
+    assert!(paratenic_fake.lock().unwrap().dispatches.is_empty());
+
+    // Opting out keeps only the node.
+    let manager = ag::config::manager();
+    let mut config = ag::config::load(Some(&fixture.config)).unwrap();
+    config.paratenic.pi_daemon = false;
+    manager.save(&fixture.config, &config).unwrap();
+    let (_, listed) = fixture.json(&["--json", "choices", "list"]);
+    assert_eq!(listed["data"]["nodes"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn freeform_validation_revision_fence_rejection_and_read_only_chats() {
     let (address, fake) = fake_host();
     let fixture = Fixture::new(&[("alpha", url(address))]);

@@ -106,6 +106,15 @@ otherwise the tool names ("Running bash and read."). The line after a batch is
 Both pi-daemon's event shape (`message_end.entry.model`) and the coding agent's
 (`message_end.message`) are understood.
 
+## The speech feed
+
+Every line the module speaks (`tts`, `narrate` and `choices`) is also appended to
+the node's speech feed, `~/.local/state/agent-utils/tts/speech.jsonl`
+(`PI_TTS_FEED_PATH`), as interactive Pi does, whether or not it could be played.
+`ag tts` and ag dash's TTS panel read it. A record's `session` is the pi-daemon
+session id and its `agent` is `CACO_AGENT_NAME`, `CACO_SHORT_NAME` or
+`session-<id>`. `PI_INCOGNITO=1` or `PI_TTS_FEED_ENABLED=0` turns it off.
+
 ## Replays and state
 
 Each session keeps two keys in its module state:

@@ -112,6 +112,9 @@ pub struct HostParatenic {
     pub allow_plaintext_non_loopback: Option<bool>,
     /// Culture host id when it differs from this node name.
     pub culture_host: Option<String>,
+    /// Set false to skip this node's pi-daemon (Culture `<node>-pi-daemon`)
+    /// when listing and answering choices.
+    pub pi_daemon: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -128,6 +131,9 @@ pub struct ParatenicConfig {
     pub answer_timeout_seconds: u64,
     /// Concurrent session snapshots per node while listing choices.
     pub parallelism: usize,
+    /// Also list and answer `ask_user` questions of pi-daemon sessions: the
+    /// node's Culture host `<node>-pi-daemon`, shown as its own node.
+    pub pi_daemon: bool,
 }
 impl Default for ParatenicConfig {
     fn default() -> Self {
@@ -138,6 +144,7 @@ impl Default for ParatenicConfig {
             request_timeout_seconds: 15,
             answer_timeout_seconds: 30,
             parallelism: 8,
+            pi_daemon: true,
         }
     }
 }

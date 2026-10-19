@@ -132,9 +132,11 @@ Each file has a provenance sidecar written last. The result's `details.sharedIma
 media is still shared with the session.
 
 The agent name comes from the worker's environment (`CACO_AGENT_NAME`,
-`CACO_SHORT_NAME` or the Cacophony identity). pi-daemon does not tell a tool which
-session called it, so a receipt's `session` is the Durable conversation id and its
-`cwd` is the session's directory.
+`CACO_SHORT_NAME` or the Cacophony identity), else `pi-daemon-<directory name>`.
+pi-daemon does not tell a tool which session called it, and every session's root chat
+is conversation `1`, so a receipt's `session` is `<directory>-<hash of its path>:<conversation>`
+and its `cwd` is the session's directory. Sessions in different directories are filed
+apart; sessions sharing a directory share a folder.
 
 ## Testing
 

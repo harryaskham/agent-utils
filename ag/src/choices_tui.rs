@@ -917,6 +917,12 @@ impl App {
                 Style::new().add_modifier(Modifier::BOLD),
             ));
         }
+        if let Some(context) = &choice.message {
+            lines.push(Line::raw(""));
+            for text in wrap(context, width) {
+                lines.push(Line::styled(text, Style::new().add_modifier(Modifier::DIM)));
+            }
+        }
         if let Some(url) = &choice.url {
             lines.push(Line::styled(
                 fit(url, width),

@@ -455,11 +455,18 @@ impl Service {
     ) -> Result<Vec<(Host, Option<crate::paratenic::Endpoint>)>> {
         crate::paratenic::endpoints(&self.config, &self.hosts(selection)?)
     }
+    /// [`Self::paratenic_targets`] plus each node's pi-daemon (choices only).
+    pub fn choice_targets(
+        &self,
+        selection: &Selection,
+    ) -> Result<Vec<(Host, Option<crate::paratenic::Endpoint>)>> {
+        crate::paratenic::choice_endpoints(&self.config, &self.hosts(selection)?)
+    }
     pub fn choices(
         &self,
         input: crate::paratenic::ChoicesInput,
     ) -> Result<crate::paratenic::FleetChoices> {
-        let targets = self.paratenic_targets(&input.selection)?;
+        let targets = self.choice_targets(&input.selection)?;
         Ok(self.runtime.block_on(crate::paratenic::fleet_choices(
             &self.config,
             targets,
@@ -480,21 +487,27 @@ impl Service {
             .block_on(crate::paratenic::answer(&self.config, &endpoint, input))
     }
     pub fn endpoint_for(&self, host: &str) -> Result<crate::paratenic::Endpoint> {
-        let selection = Selection {
-            hosts: vec![host.to_owned()],
-            local: false,
+        // A choice's host is a node name or `<node>-pi-daemon` (that node's
+        // pi-daemon); either resolves through the node's choice targets.
+        let configured = |name: &str| self.config.hosts.iter().any(|h| h.name == name);
+        let node = match host.strip_suffix(crate::paratenic::PI_DAEMON_SUFFIX) {
+            Some(node) if !node.is_empty() && !configured(host) => node,
+            _ => host,
         };
-        let selection = if host == "local" && !self.config.hosts.iter().any(|h| h.name == "local") {
+        let selection = if node == "local" && !configured("local") {
             Selection {
                 hosts: vec![],
                 local: true,
             }
         } else {
-            selection
+            Selection {
+                hosts: vec![node.to_owned()],
+                local: false,
+            }
         };
-        self.paratenic_targets(&selection)?
+        self.choice_targets(&selection)?
             .into_iter()
-            .next()
+            .find(|(h, _)| h.name == host)
             .and_then(|(_, endpoint)| endpoint)
             .ok_or_else(|| Error::Config(format!("no Paratenic endpoint for host {host}")))
     }

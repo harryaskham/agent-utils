@@ -27,6 +27,7 @@ test.after(() => rmSync(tmp, { recursive: true, force: true }));
 const baseEnv = () => ({
   PATH: process.env.PATH,
   PI_TTS_MUTE_PATH: join(tmp, `mute-${Math.random().toString(36).slice(2)}.json`),
+  PI_TTS_FEED_PATH: join(tmp, `feed-${Math.random().toString(36).slice(2)}.jsonl`),
   PI_TTS_PROVIDER: "azure",
   AZURE_SPEECH_API_KEY: "fixture-key",
   AZURE_SPEECH_ENDPOINT: "https://example.invalid",
@@ -207,6 +208,34 @@ test("ask_user start speaks the question and its choices once", async () => {
   await host.command("s1", "/tts choices=off");
   await host.emit("s1", toolStart("q3", "ask_user", { question: "Quiet?" }));
   assert.equal(host.choiceLog.length, 2);
+});
+
+test("spoken lines reach the node's TTS feed that ag tts and ag dash read", async () => {
+  const env = { ...baseEnv(), CACO_NODE: "fixture-node" };
+  const host = fakeHost({ env });
+  await host.command("s1", "/tts on");
+  await host.command("s1", "/narrate on");
+  await host.emit("s1", assistantEnd([toolCall("t1", "bash", { command: "ls" })]));
+  await host.emit("s1", toolStart("t1", "bash"));
+  await host.emit("s1", toolStart("q1", "ask_user", { question: "Ship it?", choices: ["yes", "no"] }));
+  await host.emit("s1", assistantEnd([text("Shipped.")]));
+  const records = readFileSync(env.PI_TTS_FEED_PATH, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(records.map(({ kind }) => kind).sort(), ["choices", "narrate", "tts"]);
+  for (const record of records) {
+    assert.equal(record.version, 1);
+    assert.equal(record.session, "s1");
+    assert.equal(record.agent, "session-s1");
+    assert.equal(record.host, "fixture-node");
+  }
+  assert.equal(records.find((r) => r.kind === "tts").text, "Shipped.");
+  assert.match(records.find((r) => r.kind === "choices").text, /^Ship it\? Option 1: yes/);
+
+  // Incognito sessions never write the feed.
+  const quiet = { ...baseEnv(), PI_INCOGNITO: "1" };
+  const incognito = fakeHost({ env: quiet });
+  await incognito.command("s2", "/tts on");
+  await incognito.emit("s2", assistantEnd([text("Secret.")]));
+  assert.throws(() => readFileSync(quiet.PI_TTS_FEED_PATH), { code: "ENOENT" });
 });
 
 test("a replayed event is not re-spoken after a worker restart", async () => {

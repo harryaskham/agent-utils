@@ -216,6 +216,7 @@ function renderDetail(items,force){
   d.append(el('div',{class:'who'},el('b',{text:a.title}),el('span',{class:'host',text:c.host}),el('span',{class:'dim',text:a.provider})));
   if(a.cwd||a.project)d.append(el('div',{class:'cwd',text:a.cwd||a.project}));
   d.append(el('h2',{text:c.title}));
+  if(c.message)d.append(el('p',{class:'msg context',text:c.message}));
   if(c.url)d.append(el('a',{class:'url',href:c.url,target:'_blank',rel:'noopener noreferrer',text:c.url}));
   if(c.stale_reason)d.append(el('div',{class:'stale-note',text:c.stale_reason}));
   const instant=c.questions.length===1&&c.questions[0].kind==='single-select';
