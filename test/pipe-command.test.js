@@ -163,6 +163,45 @@ test("runPipeCommand sends text on stdin without shell interpolation and honors 
   assert.equal(output, "fixed hello");
 });
 
+test("runPipeCommand preserves multiline stdin/stdout across a real subprocess", { timeout: 10_000 }, async () => {
+  // Larger than a typical pipe buffer, with blank lines, literal shell syntax,
+  // Unicode, and no final newline: nothing may be split, interpolated, or lost.
+  const input = "Okay, for one, work on our Culture panes: a) before connection, it\n"
+    + "says not rolled out, but it is loading metadata.\n\n"
+    + "  café — $HOME $(printf wrong) `whoami` \\ path\n".repeat(2048)
+    + "Last line must survive.";
+  assert.equal(await runPipeCommand("cat", input, { timeoutMs: 5000 }), input);
+  assert.equal(await runPipeCommand("cat", "first\n\nlast\n\n", { timeoutMs: 5000 }), "first\n\nlast\n");
+});
+
+test("real multiline pipe output reaches preview and downstream handlers intact", { timeout: 10_000 }, async () => {
+  const input = "first line\n\n  second line with padding  \nlast line";
+  const output = input.toUpperCase();
+  for (const [mode, choice] of [["auto", "send"], ["on", "send"], ["on", "send raw"], ["on", "cancel"]]) {
+    const h = makeHarness({ runCommand: runPipeCommand, choice });
+    h.ctx.cwd = root;
+    await h.commands.get("pipe").handler(`cmd="tr a-z A-Z" mode=${mode}`, h.ctx);
+    const downstream = [];
+    h.handlers.get("input").push((event) => {
+      downstream.push(event.text);
+      return { action: "continue" };
+    });
+    const result = await dispatchInput(h.handlers, { text: input, source: "interactive" }, h.ctx);
+    if (mode === "on") {
+      assert.equal(h.selections[0].title, `/pipe output (tr a-z A-Z)\n\n${output}`);
+    }
+    if (choice === "cancel") {
+      assert.equal(result.result.action, "handled");
+      assert.equal(h.editor, input);
+      assert.deepEqual(downstream, []);
+    } else {
+      const expected = choice === "send raw" ? input : output;
+      assert.equal(result.event.text, expected);
+      assert.deepEqual(downstream, [expected]);
+    }
+  }
+});
+
 test("runPipeCommand surfaces bounded stderr for non-zero exits", async () => {
   await assert.rejects(
     runPipeCommand("bad", "input", {
