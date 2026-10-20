@@ -60,7 +60,7 @@ function stubSpeech(log, sessionId) {
 }
 
 /** A fake pi-daemon worker: one module instance over a durable store. */
-function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, withState = true, ...options } = {}) {
+function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, withState = true, modelRegistry, ...options } = {}) {
   const spoken = speech || [];
   const choiceLog = choices || [];
   const notifications = [];
@@ -77,6 +77,7 @@ function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, wi
     sessionId,
     conversationId: `${sessionId}-c1`,
     ...(withState ? { state: store.forSession(sessionId) } : {}),
+    ...(modelRegistry ? { modelRegistry } : {}),
   });
   return {
     audio,
@@ -91,6 +92,7 @@ function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, wi
       assert.equal(typeof command.description, "string");
       return command.run(args, { ...ctx(sessionId), notify: (text) => notifications.push({ sessionId, text }) });
     },
+    ctx,
     async emit(sessionId, event) {
       await audio.observe(Object.freeze(event), Object.freeze(ctx(sessionId)));
       await audio.idle();
@@ -167,6 +169,67 @@ test("/narrate speaks tool batches per phase mode", async () => {
   await host.emit("s1", toolStart("t4", "edit"));
   await host.emit("s1", toolEnd("t4", "edit"));
   assert.deepEqual(host.spoken.map(({ text }) => text), ["Finished edit."]);
+});
+
+test("/narrate infers its sentences with the host's models, as TUI narration does (bd-06d998)", async () => {
+  // pi-daemon passes observers info.modelRegistry (Pi's ctx.modelRegistry): find and complete.
+  const requests = [];
+  const reply = (value) => ({ role: "assistant", content: [{ type: "text", text: value }], stopReason: "stop" });
+  const modelRegistry = {
+    find: (provider, id) => (provider === "github-copilot" && id === "gpt-6-luna" ? { provider, id } : undefined),
+    async complete(model, context, options) {
+      const payload = JSON.parse(context.messages[0].content[0].text);
+      requests.push({ model: `${model.provider}/${model.id}`, payload, maxTokens: options.maxTokens });
+      return reply(payload.phase === "before" ? "I'm listing the tools folder to find the build script." : "The build script lives in tools/build.sh.");
+    },
+  };
+  const host = fakeHost({ modelRegistry });
+  await host.command("s1", "/narrate on");
+  await host.command("s1", "/narrate phases=both");
+  await host.emit("s1", assistantEnd([toolCall("t1", "bash", { command: "ls tools" })]));
+  await host.emit("s1", toolStart("t1", "bash", { command: "ls tools" }));
+  await host.emit("s1", { ...toolEnd("t1", "bash"), result: { content: [{ type: "text", text: "build.sh\nrelease.sh" }] } });
+  assert.deepEqual(host.spoken.map(({ text }) => text), ["I'm listing the tools folder to find the build script.", "The build script lives in tools/build.sh."]);
+  assert.equal(requests[0].model, "github-copilot/gpt-6-luna");
+  assert.deepEqual(requests[0].payload, { phase: "before", tools: [{ name: "bash", arguments: { command: "ls tools" } }] });
+  assert.equal(requests[1].payload.phase, "after");
+  assert.match(requests[1].payload.results[0].text, /build\.sh/);
+
+  // The main model's own preamble is spoken as is: no side completion for the before line.
+  host.spoken.length = 0;
+  requests.length = 0;
+  await host.emit("s1", assistantEnd([text("Let me check the tests first."), toolCall("t2", "bash")]));
+  await host.emit("s1", toolEnd("t2", "bash"));
+  assert.deepEqual(host.spoken.map(({ text }) => text), ["Let me check the tests first.", "The build script lives in tools/build.sh."]);
+  assert.deepEqual(requests.map((request) => request.payload.phase), ["after"]);
+
+  // A newer batch supersedes the side completion of an older one still running.
+  host.spoken.length = 0;
+  modelRegistry.complete = async (model, context, options) => {
+    const payload = JSON.parse(context.messages[0].content[0].text);
+    if (payload.tools?.[0]?.arguments?.command === "slow") {
+      await new Promise((resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+    }
+    return reply(payload.phase === "before" ? "I'm reading the fast file." : "Done.");
+  };
+  await host.command("s1", "/narrate phases=before");
+  await host.audio.observe(assistantEnd([toolCall("t3", "bash", { command: "slow" })]), host.ctx("s1"));
+  await host.emit("s1", assistantEnd([toolCall("t4", "read", { path: "fast" })]));
+  assert.deepEqual(host.spoken.map(({ text }) => text), ["I'm reading the fast file."]);
+
+  // A failing completion falls back to the deterministic line, and status reports it.
+  host.spoken.length = 0;
+  modelRegistry.complete = async () => { throw new Error("rate limited"); };
+  await host.emit("s1", assistantEnd([toolCall("t5", "bash")]));
+  assert.deepEqual(host.spoken.map(({ text }) => text), ["Running bash."]);
+  await host.command("s1", "/narrate status");
+  assert.match(host.notifications.at(-1).text, /narrate inference: rate limited/);
+
+  // /narrate model= picks the narration model.
+  await host.command("s1", "/narrate model=github-copilot/gpt-6-mini");
+  assert.match(host.notifications.at(-1).text, /model:github-copilot\/gpt-6-mini/);
+  await host.command("s1", "/narrate model=nonsense");
+  assert.match(host.notifications.at(-1).text, /model must be provider\/id/);
 });
 
 test("/narrate covers a tool whose assistant message was coalesced away", async () => {
@@ -288,15 +351,15 @@ test("settings round-trip through durable state and survive a restart", async ()
 
   const second = fakeHost({ store });
   await second.command("s1", "/narrate status");
-  assert.match(second.notifications.at(-1).text, /^narrate:on · phases:after · speed:tts · style:cheerful · styledegree:1.4 · reasoning-summaries:off/);
+  assert.match(second.notifications.at(-1).text, /^narrate:on · phases:after · model:github-copilot\/gpt-6-luna · speed:tts · style:cheerful · styledegree:1.4 · reasoning-summaries:off/);
   await second.emit("s1", assistantEnd([text("Restored.")]));
   assert.deepEqual(second.spoken.map(({ text }) => text), ["Agent: Restored."]);
 });
 
 test("command errors reply through notify and change nothing", async () => {
   const host = fakeHost();
-  await host.command("s1", "/narrate model=github-copilot/x");
-  assert.match(host.notifications.at(-1).text, /^\/narrate: model= is not available in Durable sessions/);
+  await host.command("s1", "/narrate text=on");
+  assert.match(host.notifications.at(-1).text, /^\/narrate: text= is not available in Durable sessions/);
   await host.command("s1", "/narrate phases=sideways");
   assert.match(host.notifications.at(-1).text, /phases must be before, after or both/);
   await host.command("s1", "/tts focus on");

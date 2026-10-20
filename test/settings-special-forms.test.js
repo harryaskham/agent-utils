@@ -72,10 +72,13 @@ test("$stringCommand supports direct commands and command-substitution value exp
   const checkout = join(mkdtempSync(join(tmpdir(), "au-string-command-")), "checkout");
   mkdirSync(join(checkout, "sub"), { recursive: true });
   spawnSync("git", ["init", "-q"], { cwd: checkout });
-  const result = runStringCommand(expression, { env: { ...process.env, CACO_NODE: "ms-mac" }, cwd: join(checkout, "sub") });
+  // The commands run in login shells, which re-source the NixOS and Home Manager profiles (and
+  // their CACO_NODE) unless those profiles' guards are set, as they are in a login session.
+  const env = { ...process.env, CACO_NODE: "ms-mac", __NIXOS_SET_ENVIRONMENT_DONE: "1", __HM_SESS_VARS_SOURCED: "1" };
+  const result = runStringCommand(expression, { env, cwd: join(checkout, "sub") });
   assert.equal(result.ok, true);
   assert.equal(result.value, "ms-mac checkout");
-  const noRepo = runStringCommand(expression, { env: { ...process.env, CACO_NODE: "ms-mac" }, cwd: tmpdir() });
+  const noRepo = runStringCommand(expression, { env, cwd: tmpdir() });
   assert.equal(noRepo.value, `ms-mac ${basename(tmpdir())}`, "falls back to the directory name outside a repo");
 });
 

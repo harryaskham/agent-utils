@@ -25,11 +25,15 @@ import {
   assistantPlainText,
   assistantReasoningSummary,
   assistantToolCalls,
+  buildNarrationRequest,
   createAgentSpeechController,
   normalizeNarrationText,
   resolveAgentTtsSettings,
   resolveNarrateSettings,
+  resolveNarrationModel,
+  toolResultText,
 } from "./tts-narration.js";
+import { runPiTextTurn } from "./pi-inference.js";
 import { createChoiceSpeaker, formatChoiceIntroduction } from "./choice.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy } from "./tts-identity.js";
 import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE, isAzureSpeechProvider, usesDaemonPlayback, createInterruptiblePcmPlayer } from "./tts.js";
@@ -52,7 +56,7 @@ const SECRET_KEY = /api_?key|token$|secret|password/i;
 const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
 const PROVIDER_SPECIFIC_KEYS = ["voice", "model", "lang", "speed", "embedding", "speaker", "speakerprofileid", "speaker_profile_id", "style", "styledegree", "style_degree", "endpoint", "base_url", "baseurl", "api_key", "apikey", "instructions", "pitch", "volume", "role"];
 const NARRATE_SPEECH_KEYS = new Set(["provider", "voice", "tts_model", "daemon_url", "daemon_provider", "daemon_sink", "token_file", "playback", "endpoint", "base_url", "lang", "embedding", "instructions", "role", "pitch", "volume", "timeout_ms", "pan", "interrupt", "auth", "az", "resource", "tenant", "subscription", "resource_id"]);
-const NARRATE_OWN_KEYS = new Set(["enabled", "on", "phases", "phase", "mode", "speed", "style", "styledegree", "style_degree", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]);
+const NARRATE_OWN_KEYS = new Set(["enabled", "on", "model", "phases", "phase", "mode", "speed", "style", "styledegree", "style_degree", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]);
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -104,6 +108,13 @@ export function eventAssistantMessage(event) {
   const model = Array.isArray(event?.entry?.model) ? event.entry.model : [];
   for (let i = model.length - 1; i >= 0; i -= 1) if (model[i]?.role === "assistant") return model[i];
   return null;
+}
+
+/** A tool_execution_end's result content, for both event shapes (Durable's `entry.model`). */
+export function eventToolResult(event) {
+  if (event?.result !== undefined) return event.result;
+  const model = Array.isArray(event?.entry?.model) ? event.entry.model : [];
+  return model.find((message) => message?.role === "toolResult") ?? null;
 }
 
 /** Whether a tool_execution_end reported an error, for both event shapes. */
@@ -205,6 +216,7 @@ export function createDurableAgentAudio({
   maxSessions = DURABLE_AUDIO_MAX_SESSIONS,
   log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
   appendFeed = appendTtsFeed,
+  runTextTurn = runPiTextTurn,
 } = {}) {
   const persistedTts = plainObject(persistedSettings.tts);
   const persistedNarrate = plainObject(persistedSettings.narrate);
@@ -233,7 +245,7 @@ export function createDurableAgentAudio({
     return {
       config: tts.config,
       tts: { enabled: tts.enabled, prefix: tts.prefix, suffix: tts.suffix, choices: optionalBool(env.PI_CHOICE_SPEECH_ENABLED, optionalBool(persistedChoice.speechEnabled, true)), speech: {} },
-      narrate: { enabled: narrate.enabled, phases, speed: narrate.speed, style: narrate.style, styleDegree: narrate.styleDegree, reasoningSummaries: narrate.reasoningSummaries, prefix: narrate.prefix, suffix: narrate.suffix },
+      narrate: { enabled: narrate.enabled, phases, model: narrate.model, speed: narrate.speed, style: narrate.style, styleDegree: narrate.styleDegree, reasoningSummaries: narrate.reasoningSummaries, prefix: narrate.prefix, suffix: narrate.suffix },
     };
   };
 
@@ -287,6 +299,10 @@ export function createDurableAgentAudio({
         choices: null,
         ledger: new Set(ledger.slice(-DURABLE_AUDIO_LEDGER_LIMIT)),
         batches: new Map(),
+        // Side completions narrating tool batches: a newer batch (or the final answer)
+        // supersedes older ones, as in TUI narration.
+        generation: 0,
+        inflight: new Set(),
         lastError: null,
         reported: new Set(),
       };
@@ -362,6 +378,37 @@ export function createDurableAgentAudio({
       .catch((error) => report(session, kind, error)));
   };
 
+  /**
+   * A sentence about a tool batch from a side completion with the narration model, as TUI
+   * narration makes (bd-06d998), when the host offers the profile's models (pi-daemon's
+   * `info.modelRegistry`). Empty when it cannot, failed or was superseded: callers fall back.
+   */
+  const inferNarration = async (session, ctx, phase, calls, results = []) => {
+    const registry = ctx?.modelRegistry;
+    if (!registry || typeof registry.find !== "function" || typeof registry.complete !== "function") return "";
+    let model;
+    try { model = resolveNarrationModel(registry, session.narrate.model); }
+    catch (error) { report(session, "narrate model", error); return ""; }
+    const controller = new AbortController();
+    session.inflight.add(controller);
+    try {
+      const request = buildNarrationRequest({ phase, calls, results });
+      const response = await runTextTurn(ctx, { model, ...request, signal: controller.signal, abortedMessage: "narration superseded" });
+      return controller.signal.aborted ? "" : normalizeNarrationText(response?.text, phase);
+    } catch (error) {
+      if (!controller.signal.aborted) report(session, "narrate inference", error);
+      return "";
+    } finally {
+      session.inflight.delete(controller);
+    }
+  };
+
+  const supersedeNarration = (session) => {
+    session.generation += 1;
+    for (const controller of session.inflight) { try { controller.abort(); } catch {} }
+    session.inflight.clear();
+  };
+
   const speakChoice = (session, text) => {
     if (disposed || !String(text || "").trim()) return;
     recordFeed(session, "choices", String(text));
@@ -383,16 +430,20 @@ export function createDurableAgentAudio({
     return graceMs >= 0 && Number.isFinite(timestamp) && timestamp > 0 && timestamp < loadedAt - graceMs;
   };
 
-  const onMessageEnd = async (session, event) => {
+  const onMessageEnd = async (session, event, ctx) => {
     const message = eventAssistantMessage(event);
     if (!message) return;
     const calls = assistantToolCalls(message);
     const text = assistantPlainText(message);
     const key = messageKey(event, message, text);
     const narratedCalls = calls.filter((call) => call.name !== ASK_USER_TOOL);
+    let batch;
     if (session.narrate.enabled && narratedCalls.length) {
-      const batch = { key, calls: narratedCalls, results: new Map() };
+      supersedeNarration(session);
+      batch = { key, calls: narratedCalls, results: new Map(), generation: session.generation, before: null };
       for (const call of narratedCalls) session.batches.set(call.id, batch);
+    } else if (session.narrate.enabled && text) {
+      supersedeNarration(session); // the final answer wins over stale narration
     }
     const speakTts = session.tts.enabled && text && !(session.narrate.enabled && narratedCalls.length);
     const narrateBefore = session.narrate.enabled && narratedCalls.length && phaseEnabled(session.narrate.phases, "before");
@@ -403,9 +454,22 @@ export function createDurableAgentAudio({
     if (!await claim(session, `message:${key}`)) return;
     if (speakTts) speak(session, "tts", affix(session.tts.prefix, text, session.tts.suffix));
     if (narrateBefore) {
+      // The main model's own words first (reasoning summary, preamble); else a side completion
+      // describes the batch; the deterministic sentence only when that is unavailable.
       const reasoning = session.narrate.reasoningSummaries ? normalizeNarrationText(assistantReasoningSummary(message), "before") : "";
-      const line = reasoning || normalizeNarrationText(text, "before") || describeToolBatch(narratedCalls.map((call) => call.name), "before");
-      speak(session, "narrate", affix(session.narrate.prefix, line, session.narrate.suffix), narrateOverrides(session));
+      const native = reasoning || normalizeNarrationText(text, "before");
+      if (native) {
+        speak(session, "narrate", affix(session.narrate.prefix, native, session.narrate.suffix), narrateOverrides(session));
+        return;
+      }
+      const fallback = describeToolBatch(narratedCalls.map((call) => call.name), "before");
+      const generation = session.generation;
+      // Never awaited: the observer holds the session's event stream.
+      const before = track(inferNarration(session, ctx, "before", narratedCalls).then((line) => {
+        if (generation !== session.generation) return;
+        speak(session, "narrate", affix(session.narrate.prefix, line || fallback, session.narrate.suffix), narrateOverrides(session));
+      }));
+      if (batch) batch.before = before;
     }
   };
 
@@ -426,18 +490,31 @@ export function createDurableAgentAudio({
     speak(session, "narrate", affix(session.narrate.prefix, describeToolBatch([name], "before"), session.narrate.suffix), narrateOverrides(session));
   };
 
-  const onToolEnd = async (session, event) => {
+  const onToolEnd = async (session, event, ctx) => {
     const id = String(event?.toolCallId ?? "");
     const batch = session.batches.get(id);
     if (!batch) return;
-    batch.results.set(id, { name: String(event?.toolName ?? batch.calls.find((call) => call.id === id)?.name ?? "tool"), failed: eventToolFailed(event) });
+    const failed = eventToolFailed(event);
+    batch.results.set(id, {
+      name: String(event?.toolName ?? batch.calls.find((call) => call.id === id)?.name ?? "tool"),
+      failed,
+      isError: failed,
+      text: toolResultText(eventToolResult(event)),
+    });
     if (batch.results.size < batch.calls.length) return;
     for (const call of batch.calls) session.batches.delete(call.id);
     if (!session.narrate.enabled || !phaseEnabled(session.narrate.phases, "after")) return;
     if (!await claim(session, `after:${batch.key}`)) return;
     const results = [...batch.results.values()];
-    const line = describeToolBatch(results.map((result) => result.name), "after", { failed: results.filter((result) => result.failed).map((result) => result.name) });
-    speak(session, "narrate", affix(session.narrate.prefix, line, session.narrate.suffix), narrateOverrides(session));
+    const fallback = describeToolBatch(results.map((result) => result.name), "after", { failed: results.filter((result) => result.failed).map((result) => result.name) });
+    const generation = batch.generation ?? session.generation;
+    // After the batch's before line, a side completion summarizes the outcome; never awaited.
+    track(Promise.resolve(batch.before).catch(() => {}).then(async () => {
+      if (generation !== session.generation) return;
+      const line = await inferNarration(session, ctx, "after", batch.calls, results);
+      if (generation !== session.generation) return;
+      speak(session, "narrate", affix(session.narrate.prefix, line || fallback, session.narrate.suffix), narrateOverrides(session));
+    }));
   };
 
   async function observe(event, ctx = {}) {
@@ -447,9 +524,9 @@ export function createDurableAgentAudio({
     let session;
     try { session = await loadSession(ctx); } catch (error) { log(`agent-utils durable audio: session load failed: ${error?.message || error}`); return; }
     if (!session.tts.enabled && !session.narrate.enabled && !(type === "tool_execution_start" && event.toolName === ASK_USER_TOOL && session.tts.choices)) return;
-    if (type === "message_end") return onMessageEnd(session, event);
+    if (type === "message_end") return onMessageEnd(session, event, ctx);
     if (type === "tool_execution_start") return onToolStart(session, event);
-    return onToolEnd(session, event);
+    return onToolEnd(session, event, ctx);
   }
 
   const optional = (value) => value == null || value === "" ? "none" : String(value);
@@ -484,13 +561,14 @@ export function createDurableAgentAudio({
   const narrateStatus = (session, { check = false } = {}) => [
     `narrate:${session.narrate.enabled ? "on" : "off"}`,
     `phases:${session.narrate.phases}`,
+    `model:${session.narrate.model || "default"}`,
     `speed:${session.narrate.speed ?? "tts"}`,
     `style:${session.narrate.style ?? "tts"}`,
     `styledegree:${session.narrate.styleDegree ?? "tts"}`,
     `reasoning-summaries:${session.narrate.reasoningSummaries ? "prefer" : "off"}`,
     `prefix:${session.narrate.prefix ? "set" : "none"}`,
     `suffix:${session.narrate.suffix ? "set" : "none"}`,
-    "lines:agent preamble or tool names",
+    "lines:agent preamble, else the narration model (when the host offers models), else tool names",
     scopeNote(session),
   ].join(" · ") + (check ? readinessNote(session) : "") + lastErrorNote(session);
 
@@ -558,6 +636,7 @@ export function createDurableAgentAudio({
       if (simple === "off") {
         session.narrate.enabled = false;
         session.batches.clear();
+        supersedeNarration(session);
         await saveSettings(session);
         await session.speech.interrupt({ kind: "narrate" });
         return reply(ctx, narrateStatus(session));
@@ -570,7 +649,7 @@ export function createDurableAgentAudio({
         if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
         const values = parsed.values;
         for (const key of Object.keys(values)) {
-          if (key === "model" || key === "text" || key === "text_enabled") throw new Error(`/narrate: ${key}= is not available in Durable sessions; narration speaks the agent's own preamble or reasoning summary, or the tool names`);
+          if (key === "text" || key === "text_enabled") throw new Error(`/narrate: ${key}= is not available in Durable sessions`);
           if (!NARRATE_SPEECH_KEYS.has(key) && !NARRATE_OWN_KEYS.has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
         }
         const next = { ...session.narrate };
@@ -580,6 +659,11 @@ export function createDurableAgentAudio({
           const speed = Number(values.speed);
           if (!Number.isFinite(speed) || speed <= 0) throw new Error("/narrate: speed must be greater than zero");
           next.speed = speed;
+        }
+        if (values.model !== undefined) {
+          const model = String(values.model).trim();
+          if (!/^[^/\s]+\/\S+$/.test(model)) throw new Error("/narrate: model must be provider/id");
+          next.model = model;
         }
         if (values.style !== undefined) next.style = String(values.style).trim() || undefined;
         const degreeRaw = values.styledegree ?? values.style_degree;

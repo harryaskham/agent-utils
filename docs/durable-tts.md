@@ -86,12 +86,20 @@ session's notification, which clients show and the model never sees.
 API keys are used but never stored; `api_key=$OPENAI_API_KEY` stores the
 reference.
 
-Narration differs from interactive Pi in one way: a Durable module has no model
-registry, so it does not ask a model to summarize tool work. The line before a
-batch is the agent's own reasoning summary or preamble when it wrote one, and
-otherwise the tool names ("Running bash and read."). The line after a batch is
-"Finished …" or "… failed.". Tool arguments and results are never read aloud.
-`model=`, `text=`, `/tts focus` and `/tts solo` are refused with an explanation.
+Narration works as in interactive Pi when the host offers the profile's models
+(pi-daemon 1.12+ passes observers `modelRegistry`).
+- **Before a batch:** the line is the agent's own reasoning summary or preamble when it wrote
+  one. Otherwise a side completion with the narration model (`model=provider/id`,
+  `PI_NARRATE_MODEL`, default `github-copilot/gpt-6-luna`) describes the batch from the tool
+  names and arguments.
+- **After a batch:** a side completion summarizes the outcome from the results.
+- **Supersession:** a newer batch, or the final answer, supersedes narration still running.
+- **Off the transcript:** side completions are never part of the conversation.
+- **Fallback:** without models, or when a completion fails, the line is the tool names
+  ("Running bash and read.", then "Finished …" or "… failed."); `/narrate status` shows the
+  last error.
+
+`text=`, `/tts focus` and `/tts solo` are refused with an explanation.
 
 ## Events
 
