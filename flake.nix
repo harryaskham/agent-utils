@@ -152,7 +152,8 @@
               const budget = await import('$out/image-budget.mjs');
               if (budget.extension?.name !== 'agent-utils-image-budget' || budget.extension.hooks?.[0]?.task !== 'pi.generation') process.exit(1);
               const loop = await import('$out/loop.mjs');
-              if (loop.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.loop' || typeof loop.commands?.loop?.run !== 'function') process.exit(1);
+              const loopTools = (loop.extension?.tools ?? []).map((tool) => tool.name).join(',');
+              if (loop.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.loop' || typeof loop.commands?.loop?.run !== 'function' || typeof loop.commands?.loops?.run !== 'function' || loopTools !== 'create_loop,list_loops,stop_loop') process.exit(1);
             "
           '';
           uncheckedJoin = pkgs.symlinkJoin {
