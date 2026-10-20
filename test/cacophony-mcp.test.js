@@ -243,7 +243,7 @@ test("adapter registration failure warns once and leaves Pi commands functional"
   await h.fire("session_shutdown");
 });
 
-test("Pi host packages use wildcard peers, with pinned copies only for development", async () => {
+test("Pi host packages are wildcard peers only, so production installs never resolve them", async () => {
   const pkg = JSON.parse(await import("node:fs").then((fs) => fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")));
   // Pi 1.x supplies these modules through its loader and suppresses peer installs.
   // Shipping physical runtime copies can bypass that loader and split host state.
@@ -252,9 +252,13 @@ test("Pi host packages use wildcard peers, with pinned copies only for developme
     assert.equal(pkg.optionalDependencies?.[name], undefined, `${name} must not be an optional runtime dependency`);
     assert.equal(pkg.peerDependencies?.[name], "*", `${name} must accept the running Pi host`);
   }
-  for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"]) {
-    assert.match(pkg.devDependencies?.[name] || "", /^\d+\.\d+\.\d+$/, `${name} stays pinned for standalone tests`);
+  // `npm install --omit=dev` still resolves devDependencies, so a host pin the
+  // operator's registry cannot serve would break `pi update --extensions`.
+  // Tests install the host with `npm run host:install` instead.
+  for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "@sinclair/typebox", "typebox"]) {
+    assert.equal(pkg.devDependencies?.[name], undefined, `${name} must not be a dev dependency`);
   }
+  assert.equal(pkg.scripts?.["host:install"], "node scripts/pi-host-install.mjs");
 });
 
 test("with Pi's built-in MCP support the identity registers natively; with the adapter it does not", async () => {

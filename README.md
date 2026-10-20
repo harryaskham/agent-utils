@@ -367,11 +367,14 @@ See the **Tendril share Pi extension** section above for the user-facing command
 The test suite uses the Node.js built-in test runner (`node:test`) over the files in [`test/`](test/). No external test framework or project secrets are required.
 
 ```bash
+npm run host:install     # optional: Pi host packages for tests that import them
 npm test                 # run the full suite
 npm run test:pi-isolated # real Pi RPC, --no-session/--no-extensions, explicit -e paths
 npm run test:coverage    # run the suite with a per-file coverage report
 npm run test:coverage:summary  # ranked report of the lowest-covered modules
 ```
+
+Pi host packages (`@earendil-works/pi-ai`, `pi-coding-agent`, `pi-tui`, `typebox`) are wildcard `peerDependencies` only. Pi installs git packages with `npm install --omit=dev`, and npm still resolves devDependencies, so a host pin that your registry cannot serve would break `pi update --extensions`. `npm run host:install` instead installs the version matching the running `pi --version` into `node_modules/.pi-host` and links it, falling back to the newest same-major release when a mirror lags. A plain `npm install` prunes those links; rerun `host:install` afterwards. Without them, host-dependent tests skip.
 
 `npm run test:pi-isolated` is an opt-in local integration guard that starts the real installed Pi binary in RPC mode with `--no-session --no-extensions --no-skills --no-prompt-templates --no-themes`, loads only explicit Agent Utils `-e` paths, and asserts their commands register without module/extension errors. It uses a temporary session directory and verifies that `--no-session` creates or modifies no JSONL files. The normal `npm test` run skips this comparatively slow host-runtime smoke.
 
