@@ -768,11 +768,22 @@ fn print_choices(fleet: &ag::paratenic::FleetChoices, color: bool) -> Result<u8>
             }
         }
         for agent in &node.agents {
+            // `[ms-dev · pi-daemon] title  personal · daemon`
+            let place = if node.source == "paratenic" || node.source.is_empty() {
+                format!("[{}]", node.host)
+            } else {
+                format!("[{} · {}]", node.node, node.source)
+            };
+            let what = if agent.kind.is_empty() || agent.kind == agent.provider {
+                agent.provider.clone()
+            } else {
+                format!("{} · {}", agent.provider, agent.kind)
+            };
             out.push_str(&format!(
                 "{} {} {}\n",
-                paint(color, "36", &format!("[{}]", node.host)),
+                paint(color, "36", &place),
                 paint(color, "1", &agent.title),
-                paint(color, "2", &agent.provider)
+                paint(color, "2", &what)
             ));
             for choice in &agent.choices {
                 let mark = if choice.actionable {
@@ -861,7 +872,7 @@ fn print_choices(fleet: &ag::paratenic::FleetChoices, color: bool) -> Result<u8>
         color,
         "2",
         &format!(
-            "{} waiting · {reached}/{configured} Paratenic hosts reached{}",
+            "{} waiting · {reached}/{configured} AHP hosts reached (Paratenic and pi-daemon){}",
             fleet.actionable,
             if missing.is_empty() {
                 String::new()

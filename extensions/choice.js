@@ -4,6 +4,7 @@
 // timeout, and keyboard controls; device adapters (such as ring-input.js) emit
 // the same semantic actions on CHOICE_INPUT_EVENT.
 
+import { randomUUID } from "node:crypto";
 import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
 import { ChoiceView, choiceViewKey, choicePanelRows } from "./lib/choice-layout.js";
 import { createChoicePreferenceStore } from "./lib/choice-preferences.js";
@@ -604,7 +605,9 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
       asyncChoices.yieldToSync();
       cancelActive();
       const state = new ChoiceStateMachine({ choices, initialIndex: params?.initialIndex, wrap: params?.wrap ?? choiceConfig.wrap });
-      const sessionId = `choice-${nextSessionId++}`;
+      // Unique across processes and nodes: AHP clients (ag, Culture) see the
+      // same question through Paratenic and pi-daemon and deduplicate by it.
+      const sessionId = `choice-${nextSessionId++}-${randomUUID().slice(0, 13)}`;
 
       const result = await new Promise((resolve) => {
         const record = {

@@ -184,14 +184,22 @@ impl App {
                 continue;
             }
             rows.push(Row::Node {
-                host: node.host.clone(),
+                host: if node.source == "paratenic" || node.source.is_empty() {
+                    node.host.clone()
+                } else {
+                    format!("{} · {}", node.node, node.source)
+                },
                 waiting,
                 error: node.error.clone(),
             });
             for (a, agent) in node.agents.iter().enumerate() {
                 rows.push(Row::Agent {
                     title: agent.title.clone(),
-                    provider: agent.provider.clone(),
+                    provider: if agent.kind.is_empty() || agent.kind == agent.provider {
+                        agent.provider.clone()
+                    } else {
+                        format!("{} · {}", agent.provider, agent.kind)
+                    },
                 });
                 for c in 0..agent.choices.len() {
                     rows.push(Row::Choice {
@@ -1327,6 +1335,8 @@ mod tests {
             nodes: vec![
                 NodeChoices {
                     host: "alpha".into(),
+                    node: "alpha".into(),
+                    source: "paratenic".into(),
                     state: "ok".into(),
                     error: None,
                     endpoint: None,
@@ -1337,6 +1347,7 @@ mod tests {
                         session: "ahp-session:/s".into(),
                         title: "agent-utils".into(),
                         provider: "pi".into(),
+                        kind: "tui".into(),
                         project: None,
                         cwd: Some("/work".into()),
                         modified_at: "t".into(),
@@ -1345,6 +1356,8 @@ mod tests {
                 },
                 NodeChoices {
                     host: "beta".into(),
+                    node: "beta".into(),
+                    source: "paratenic".into(),
                     state: "offline".into(),
                     error: Some("timed out".into()),
                     endpoint: None,

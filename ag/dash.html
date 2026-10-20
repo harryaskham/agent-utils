@@ -185,16 +185,17 @@ function render(){
 }
 function renderRail(items){
   const rail=$('rail');rail.replaceChildren();
-  const nodes=(data?.choices?.nodes||[]).slice().sort((a,b)=>(b.agents.length>0)-(a.agents.length>0)||(a.state==='error')-(b.state==='error')||a.host.localeCompare(b.host));
-  const offline=nodes.filter(n=>n.state==='offline').map(n=>n.host);
+  const nodes=(data?.choices?.nodes||[]).slice().sort((a,b)=>(b.agents.length>0)-(a.agents.length>0)||(a.state==='error')-(b.state==='error')||(a.node||a.host).localeCompare(b.node||b.host)||(a.source||'').localeCompare(b.source||''));
+  const label=n=>n.source&&n.source!=='paratenic'?`${n.node} · ${n.source}`:n.host;
+  const offline=nodes.filter(n=>n.state==='offline').map(label);
   let any=false;
   for(const n of nodes){
     if(!n.agents.length&&n.state!=='error')continue;any=true;
     const count=n.agents.reduce((s,a)=>s+a.choices.filter(c=>c.actionable).length,0);
-    rail.append(el('div',{class:'node'},n.host,el('span',{class:'n',text:n.state==='error'?'failing':String(count)})));
+    rail.append(el('div',{class:'node'},label(n),el('span',{class:'n',text:n.state==='error'?'failing':String(count)})));
     if(n.error)rail.append(el('div',{class:'node-error',text:n.error}));
     for(const a of n.agents){
-      rail.append(el('div',{class:'agent',title:a.title},a.title,el('small',{text:a.provider})));
+      rail.append(el('div',{class:'agent',title:a.title},a.title,el('small',{text:a.kind&&a.kind!==a.provider?`${a.provider} · ${a.kind}`:a.provider})));
       for(const c of a.choices){
         const k=keyOf(c);
         rail.append(el('button',{class:'item'+(c.actionable?'':' stale'),'aria-current':String(k===selected),title:c.title,onclick:()=>{selected=k;armed=null;renderRail(items);renderDetail(items)}},el('span',{class:'mark',text:c.actionable?'◆':'◇'}),el('span',{class:'t',text:c.title})));
@@ -213,7 +214,8 @@ function renderDetail(items,force){
   shown=sig;const d=$('detail');d.replaceChildren();
   if(!item){d.append(el('div',{class:'empty'},el('strong',{text:data?.choices?'No agent is waiting for you':'Querying the fleet…'}),data?.choices?`${data.choices.nodes.filter(n=>n.state==='ok').length} nodes reached · new questions appear here automatically`:''));return}
   const{agent:a,choice:c}=item;const draft=drafts[selected]??={answers:{},free:{}};
-  d.append(el('div',{class:'who'},el('b',{text:a.title}),el('span',{class:'host',text:c.host}),el('span',{class:'dim',text:a.provider})));
+  const where=c.host.replace(/-(pi-daemon|pi-bridge)$/,' · $1');
+  d.append(el('div',{class:'who'},el('b',{text:a.title}),el('span',{class:'host',text:where}),el('span',{class:'dim',text:a.kind&&a.kind!==a.provider?`${a.provider} · ${a.kind}`:a.provider})));
   if(a.cwd||a.project)d.append(el('div',{class:'cwd',text:a.cwd||a.project}));
   d.append(el('h2',{text:c.title}));
   if(c.message)d.append(el('p',{class:'msg context',text:c.message}));

@@ -6,6 +6,10 @@ import {
   AHP_AVAILABLE_EVENT,
   AHP_BRIDGE_SYMBOL,
   AHP_DISCOVERY_EVENT,
+  DURABLE_QUESTION_DONE_EVENT,
+  DURABLE_QUESTION_EVENT,
+  durableAnswer,
+  durableQuestion,
   ahpResolutionForResult,
   choiceAhpRequest,
   createAhpChoiceProvider,
@@ -205,4 +209,79 @@ test("global bridge symbol is optional and is never owned by Agent Utils", () =>
   } finally {
     if (previous !== undefined) globalThis[AHP_BRIDGE_SYMBOL] = previous;
   }
+});
+
+test("pending questions are published on pi-durable-adaptor's bus and its answer settles them", async () => {
+  const piEvents = events();
+  const paratenic = fakeBridge();
+  const completions = [];
+  const records = [record()];
+  const adapter = createAhpChoiceProvider({ pi: { events: piEvents }, env: {}, bridge: paratenic, listActive: () => records, complete: (value) => completions.push(value) });
+  // Already pending at start: published once, with the AHP request id.
+  const posted = piEvents.emitted.filter((event) => event.name === DURABLE_QUESTION_EVENT);
+  assert.equal(posted.length, 1);
+  const question = posted[0].value;
+  assert.equal(question.id, "request-opaque");
+  assert.equal(question.id, paratenic.calls.requested[0].requestId, "the same id on every surface, so clients deduplicate");
+  assert.equal(question.question, "Pick a region");
+  assert.deepEqual(question.choices, ["West", "East"]);
+  // A highlight move does not republish.
+  adapter.updated(records[0]);
+  adapter.requested(records[0]);
+  assert.equal(piEvents.emitted.filter((event) => event.name === DURABLE_QUESTION_EVENT).length, 1);
+
+  // Answered through pi-daemon's bridge by text: once, as the matching option.
+  question.answer("east");
+  question.answer("West");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(completions, [{ response: "accept", answer: { kind: "selected", value: "east-id" }, requestId: "request-opaque", source: "pi-durable" }]);
+  adapter.resolved(records[0], { status: "selected", choice: { id: "east-id" } });
+  assert.deepEqual(piEvents.emitted.filter((event) => event.name === DURABLE_QUESTION_DONE_EVENT).map((event) => event.value), [{ id: "request-opaque" }]);
+  assert.equal(paratenic.calls.resolved[0].resolution, "accept", "Paratenic is settled too");
+
+  // A cancel from a client declines; a question settled locally is withdrawn.
+  const second = { ...record(), sessionId: "request-two" };
+  records.push(second);
+  adapter.requested(second);
+  piEvents.emitted.filter((event) => event.name === DURABLE_QUESTION_EVENT).at(-1).value.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(completions.at(-1), { response: "decline", requestId: "request-two", source: "pi-durable" });
+  const third = { ...record(), sessionId: "request-three" };
+  records.push(third);
+  adapter.requested(third);
+  adapter.dispose();
+  const done = piEvents.emitted.filter((event) => event.name === DURABLE_QUESTION_DONE_EVENT).map((event) => event.value.id);
+  assert.ok(done.includes("request-two") && done.includes("request-three"), "dispose withdraws what is still published");
+});
+
+test("bus questions: free text when choices cannot be told apart by text; answers map by label", () => {
+  const free = durableQuestion({ ...record(), state: { index: 0, choices: [{ id: "a", label: "Same" }, { id: "b", label: "Same" }] } });
+  assert.equal(free.choices, undefined);
+  assert.deepEqual(durableAnswer(record(), "Somewhere else"), { kind: "text", value: "Somewhere else" });
+  assert.deepEqual(durableAnswer(record(), " west "), { kind: "selected", value: "west-id" });
+  assert.equal(durableQuestion({ ...record(), finished: true }), null);
+});
+
+test("incognito and PI_DISABLE_AHP publish nothing on the bus", () => {
+  for (const env of [{ PI_INCOGNITO: "1" }, { PI_DISABLE_AHP: "1" }]) {
+    const piEvents = events();
+    createAhpChoiceProvider({ pi: { events: piEvents }, env, listActive: () => [record()] });
+    assert.equal(piEvents.emitted.filter((event) => event.name === DURABLE_QUESTION_EVENT).length, 0);
+  }
+});
+
+test("interactive_choice publishes to pi-durable-adaptor's bus with a fleet-unique id and is answered from it", async () => {
+  const bridge = fakeBridge();
+  const h = choiceHarness(bridge);
+  const pending = h.tools.get("interactive_choice").execute("tool", { question: "Deploy now?", choices: [{ id: "yes-id", label: "Yes" }, { id: "no-id", label: "No" }] }, null, null, h.ctx);
+  const posted = h.pi.events.emitted.filter((event) => event.name === DURABLE_QUESTION_EVENT).map((event) => event.value);
+  assert.equal(posted.length, 1);
+  assert.match(posted[0].id, /^choice-\d+-[0-9a-f-]{13}$/, "unique across processes, not choice-1");
+  assert.equal(posted[0].id, bridge.calls.requested[0].requestId);
+  assert.deepEqual(posted[0].choices, ["Yes", "No"]);
+  posted[0].answer("No");
+  const result = await pending;
+  assert.equal(result.details.choice.id, "no-id");
+  assert.deepEqual(h.pi.events.emitted.filter((event) => event.name === DURABLE_QUESTION_DONE_EVENT).map((event) => event.value), [{ id: posted[0].id }]);
+  h.handlers.get("session_shutdown")?.();
 });

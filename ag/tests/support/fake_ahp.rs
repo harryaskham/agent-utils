@@ -25,6 +25,15 @@ pub struct Fake {
     pub reject: Option<String>,
     /// Pending requests removed once accepted.
     pub answered: Vec<String>,
+    /// Serve pi-daemon's sessions instead: a Durable session asking with
+    /// `ask_user`, and a TUI Pi (`tui-…`) whose question Paratenic also lists.
+    pub pi_daemon: bool,
+    /// With `pi_daemon`: serve only the Durable session (`Some(false)`, the
+    /// daemon's :7463) or only the TUI Pi (`Some(true)`, the bridge's :7464).
+    pub bridge: Option<bool>,
+    /// Refuse the WebSocket upgrade with this HTTP status (a bridge before
+    /// pi-daemon 1.11 answers 404 on /ahp).
+    pub refuse: Option<u16>,
 }
 
 pub fn select_request(id: &str, message: &str, freeform: bool) -> Value {
@@ -50,6 +59,39 @@ pub fn session(uri: &str, title: &str, status: u32, chat_mode: &str, inputs: Vec
         "defaultChat": format!("{uri}/chat"),
         "inputNeeded": inputs,
     })
+}
+
+/// pi-daemon `/ahp`: an `ask_user` question (single select over its choices,
+/// question id `answer`), and a TUI Pi it serves with Paratenic's `choice-1`.
+pub fn pi_daemon_sessions(answered: &[String], bridge: Option<bool>) -> Vec<(Value, Value)> {
+    let waiting = 24 | 1;
+    let mut rows = vec![];
+    let chat_input = |chat: &str, request: Value| json!({"kind": "chatInput", "id": request["id"].as_str().unwrap(), "chat": chat, "request": request});
+    let d = "ahp-session:/durable-1";
+    if bridge != Some(true) && !answered.iter().any(|r| r == "12") {
+        let ask = json!({"id": "12", "message": "Keep the chart?", "questions": [{"kind": "single-select", "id": "answer", "message": "Keep the chart?", "required": true, "allowFreeformInput": false, "options": [{"id": "Keep", "label": "Keep"}, {"id": "Discard", "label": "Discard"}]}]});
+        let chat = "ahp-chat:/durable-1/1";
+        let mut state = session(
+            d,
+            "chart review",
+            waiting,
+            "full",
+            vec![chat_input(chat, ask)],
+        );
+        state["chats"][0]["resource"] = chat.into();
+        rows.push((
+            json!({"resource": d, "provider": "personal", "title": "chart review", "status": waiting, "createdAt": "2026-10-11T09:00:00Z", "modifiedAt": "2026-10-11T10:07:00Z", "workingDirectories": ["file:///work/charts"]}),
+            state,
+        ));
+    }
+    let t = "ahp-session:/tui-0190-pi-session";
+    if bridge != Some(false) && !answered.iter().any(|r| r == "choice-1") {
+        rows.push((
+            json!({"resource": t, "provider": "tui", "title": "agent-utils", "status": waiting, "createdAt": "2026-10-11T09:00:00Z", "modifiedAt": "2026-10-11T10:05:00Z", "workingDirectories": ["file:///work/agent-utils"]}),
+            session(t, "agent-utils", waiting, "full", vec![json!({"kind": "chatInput", "id": "choice-1", "chat": format!("{t}/chat"), "request": select_request("choice-1", "Deploy the release?", true)})]),
+        ));
+    }
+    rows
 }
 
 pub fn fixture_sessions(demo: bool, answered: &[String]) -> Vec<(Value, Value)> {
@@ -158,7 +200,17 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        auth_state.lock().unwrap().auth.push(header.clone());
+        let refuse = {
+            let mut s = auth_state.lock().unwrap();
+            s.auth.push(header.clone());
+            s.refuse
+        };
+        if let Some(status) = refuse {
+            let mut refused = ErrorResponse::new(None);
+            *refused.status_mut() =
+                tokio_tungstenite::tungstenite::http::StatusCode::from_u16(status).unwrap();
+            return Err(refused);
+        }
         if header.as_deref() != Some(&format!("Bearer {TOKEN}")) {
             let mut denied = ErrorResponse::new(Some("unauthorized".into()));
             *denied.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED;
@@ -178,9 +230,16 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
         let method = frame["method"].as_str().unwrap_or_default().to_owned();
         let params = frame["params"].clone();
         let id = frame.get("id").cloned();
-        let (answered, demo) = {
+        let (answered, demo, pi_daemon, bridge) = {
             let s = state.lock().unwrap();
-            (s.answered.clone(), s.demo)
+            (s.answered.clone(), s.demo, s.pi_daemon, s.bridge)
+        };
+        let sessions = |answered: &[String]| {
+            if pi_daemon {
+                pi_daemon_sessions(answered, bridge)
+            } else {
+                fixture_sessions(demo, answered)
+            }
         };
         let result = match method.as_str() {
             "initialize" => {
@@ -192,7 +251,7 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
                 Some(json!({"protocolVersion": "0.8.0", "serverSeq": seq, "snapshots": []}))
             }
             "listSessions" => Some(
-                json!({"items": fixture_sessions(demo, &answered).into_iter().map(|(s, _)| s).collect::<Vec<_>>()}),
+                json!({"items": sessions(&answered).into_iter().map(|(s, _)| s).collect::<Vec<_>>()}),
             ),
             // Paratenic rejects a non-positive snapshot view (server.rs subscribe).
             "subscribe" if params["view"]["turns"].as_i64().is_some_and(|t| t <= 0) => {
@@ -202,7 +261,7 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
             }
             "subscribe" => {
                 let channel = params["channel"].as_str().unwrap_or_default();
-                let state = fixture_sessions(demo, &answered)
+                let state = sessions(&answered)
                     .into_iter()
                     .find(|(s, _)| s["resource"] == channel)
                     .map(|(_, st)| st);

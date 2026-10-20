@@ -214,13 +214,212 @@ fn answer_dispatches_exact_chat_input_completed_and_reports_authoritative_echo()
 }
 
 #[test]
-fn pi_daemon_beside_paratenic_lists_and_answers_as_its_own_node() {
-    // Culture names a node's pi-daemon `<node>-pi-daemon`; its ask_user
-    // questions are chatInput entries like Paratenic's.
+fn pi_daemon_sessions_join_the_node_deduplicated_and_answer_through_the_daemon() {
+    // A node's Paratenic lists a TUI Pi asking choice-1. Its pi-daemon /ahp
+    // lists a Durable session asking with ask_user and the same TUI Pi again
+    // (as tui-…), found through pi-client's client.hosts (bd-4fc36c).
     let (paratenic, paratenic_fake) = fake_host();
-    let (daemon, daemon_fake) = fake_host();
+    let (daemon, daemon_fake) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        pi_daemon: true,
+        ..Default::default()
+    });
     let fixture = Fixture::new(&[("alpha", url(paratenic))]);
     let token = fixture.temp.path().join("token");
+    let pi_settings = fixture.temp.path().join("pi-settings.json");
+    std::fs::write(
+        &pi_settings,
+        json!({
+            "theme": "anything",
+            "client": {
+                "tokenFile": token.display().to_string(),
+                "hosts": [{"name": "alpha", "url": format!("ws://{daemon}")}],
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let manager = ag::config::manager();
+    let mut config = ag::config::load(Some(&fixture.config)).unwrap();
+    config.paratenic.pi_settings = Some(pi_settings.display().to_string());
+    manager.save(&fixture.config, &config).unwrap();
+
+    let (code, listed) = fixture.json(&["--json", "choices", "list"]);
+    assert_eq!(code, 0, "{listed}");
+    let nodes = listed["data"]["nodes"].as_array().unwrap();
+    let rows: Vec<(&str, &str, &str)> = nodes
+        .iter()
+        .map(|n| {
+            (
+                n["host"].as_str().unwrap(),
+                n["node"].as_str().unwrap(),
+                n["source"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("alpha", "alpha", "paratenic"),
+            ("alpha-pi-daemon", "alpha", "pi-daemon")
+        ]
+    );
+    assert_eq!(
+        nodes[1]["endpoint"],
+        format!("ws://{daemon}/ahp"),
+        "pi-client URLs gain /ahp"
+    );
+    // The TUI Pi's question appears once (pi-daemon's copy); Paratenic keeps
+    // only what pi-daemon does not serve.
+    let daemon_agents = nodes[1]["agents"].as_array().unwrap();
+    let kinds: Vec<(&str, &str)> = daemon_agents
+        .iter()
+        .map(|a| {
+            (
+                a["kind"].as_str().unwrap(),
+                a["choices"][0]["request_id"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(kinds, [("daemon", "12"), ("tui", "choice-1")]);
+    let paratenic_ids: Vec<&str> = nodes[0]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|a| a["choices"].as_array().unwrap())
+        .map(|c| c["request_id"].as_str().unwrap())
+        .collect();
+    assert!(!paratenic_ids.contains(&"choice-1"), "{paratenic_ids:?}");
+    assert_eq!(listed["data"]["actionable"], 2);
+
+    // ask_user answers go to the daemon with its question id.
+    let ask = &daemon_agents[0]["choices"][0];
+    assert_eq!(ask["title"], "Keep the chart?");
+    let (code, receipt) = fixture.json(&[
+        "--json",
+        "choices",
+        "answer",
+        "--node",
+        "alpha-pi-daemon",
+        "--session",
+        "ahp-session:/durable-1",
+        "--request",
+        "12",
+        "--option",
+        "Discard",
+        "--revision",
+        ask["revision"].as_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{receipt}");
+    assert_eq!(receipt["data"]["state"], "accepted");
+    let dispatch = daemon_fake.lock().unwrap().dispatches[0].clone();
+    assert_eq!(dispatch["channel"], "ahp-chat:/durable-1/1");
+    assert_eq!(
+        dispatch["action"]["answers"]["answer"],
+        json!({"state": "submitted", "value": {"kind": "selected", "value": "Discard"}})
+    );
+    assert!(paratenic_fake.lock().unwrap().dispatches.is_empty());
+
+    // pi-daemon 1.11: the daemon serves only its Durable sessions; TUI Pis come
+    // from the bridge's /ahp, still deduplicated against Paratenic.
+    let (daemon_only, _) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        pi_daemon: true,
+        bridge: Some(false),
+        ..Default::default()
+    });
+    let (bridge, bridge_fake) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        pi_daemon: true,
+        bridge: Some(true),
+        ..Default::default()
+    });
+    std::fs::write(
+        &pi_settings,
+        json!({"client": {"tokenFile": token.display().to_string(), "hosts": [
+            {"name": "alpha", "url": format!("ws://{daemon_only}"), "bridge": format!("ws://{bridge}")},
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let (code, listed) = fixture.json(&["--json", "choices", "list"]);
+    assert_eq!(code, 0, "{listed}");
+    let nodes = listed["data"]["nodes"].as_array().unwrap();
+    let rows: Vec<(&str, &str)> = nodes
+        .iter()
+        .map(|n| (n["host"].as_str().unwrap(), n["source"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("alpha", "paratenic"),
+            ("alpha-pi-bridge", "pi-bridge"),
+            ("alpha-pi-daemon", "pi-daemon")
+        ]
+    );
+    assert_eq!(nodes[1]["endpoint"], format!("ws://{bridge}/ahp"));
+    assert_eq!(nodes[1]["agents"][0]["kind"], "tui");
+    assert_eq!(
+        nodes[1]["agents"][0]["choices"][0]["request_id"],
+        "choice-1"
+    );
+    assert_eq!(nodes[2]["agents"][0]["kind"], "daemon");
+    assert!(
+        nodes[0]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|a| a["choices"].as_array().unwrap())
+            .all(|c| c["request_id"] != "choice-1"),
+        "the TUI Pi's question is shown once, from the bridge"
+    );
+    let tui = &nodes[1]["agents"][0]["choices"][0];
+    let (code, receipt) = fixture.json(&[
+        "--json",
+        "choices",
+        "answer",
+        "--node",
+        "alpha-pi-bridge",
+        "--session",
+        "ahp-session:/tui-0190-pi-session",
+        "--request",
+        "choice-1",
+        "--option",
+        "Hold",
+        "--revision",
+        tui["revision"].as_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{receipt}");
+    assert_eq!(
+        bridge_fake.lock().unwrap().dispatches.len(),
+        1,
+        "answered through the bridge"
+    );
+
+    // A bridge before pi-daemon 1.11 has no /ahp (404): listed as unsupported,
+    // not a failure.
+    let (old_bridge, _) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        refuse: Some(404),
+        ..Default::default()
+    });
+    std::fs::write(
+        &pi_settings,
+        json!({"client": {"tokenFile": token.display().to_string(), "hosts": [
+            {"name": "alpha", "url": format!("ws://{daemon_only}"), "bridge": format!("ws://{old_bridge}")},
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let (code, listed) = fixture.json(&["--json", "choices", "list"]);
+    assert_eq!(code, 0, "an old bridge never fails the run: {listed}");
+    let old = listed["data"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["host"] == "alpha-pi-bridge")
+        .unwrap()
+        .clone();
+    assert_eq!(old["state"], "unsupported", "{old}");
+
+    // Without pi-client hosts, Culture's <node>-pi-daemon entry is used.
+    std::fs::write(&pi_settings, "{}").unwrap();
     std::fs::write(
         fixture.temp.path().join("no-culture.yaml"),
         format!(
@@ -229,45 +428,20 @@ fn pi_daemon_beside_paratenic_lists_and_answers_as_its_own_node() {
         ),
     )
     .unwrap();
-    let (code, listed) = fixture.json(&["--json", "choices", "list"]);
-    assert_eq!(code, 0, "{listed}");
-    let nodes = listed["data"]["nodes"].as_array().unwrap();
-    let names: Vec<&str> = nodes.iter().map(|n| n["host"].as_str().unwrap()).collect();
-    assert_eq!(names, ["alpha", "alpha-pi-daemon"]);
-    assert_eq!(nodes[1]["endpoint"], format!("ws://{daemon}/ahp"));
-    assert_eq!(listed["data"]["actionable"], 2);
-    let choice = &nodes[1]["agents"][0]["choices"][0];
-    assert_eq!(choice["host"], "alpha-pi-daemon");
-    let revision = choice["revision"].as_str().unwrap();
+    let (_, listed) = fixture.json(&["--json", "choices", "list"]);
+    assert_eq!(listed["data"]["nodes"][1]["host"], "alpha-pi-daemon");
 
-    // The answer goes to the pi-daemon, not the node's Paratenic.
-    let (code, receipt) = fixture.json(&[
-        "--json",
-        "choices",
-        "answer",
-        "--node",
-        "alpha-pi-daemon",
-        "--session",
-        "ahp-session:/agent-a",
-        "--request",
-        "choice-1",
-        "--option",
-        "1",
-        "--revision",
-        revision,
-    ]);
-    assert_eq!(code, 0, "{receipt}");
-    assert_eq!(receipt["data"]["state"], "accepted");
-    assert_eq!(daemon_fake.lock().unwrap().dispatches.len(), 1);
-    assert!(paratenic_fake.lock().unwrap().dispatches.is_empty());
-
-    // Opting out keeps only the node.
-    let manager = ag::config::manager();
+    // Opting out keeps only Paratenic, which then shows the TUI Pi itself.
     let mut config = ag::config::load(Some(&fixture.config)).unwrap();
     config.paratenic.pi_daemon = false;
     manager.save(&fixture.config, &config).unwrap();
     let (_, listed) = fixture.json(&["--json", "choices", "list"]);
-    assert_eq!(listed["data"]["nodes"].as_array().unwrap().len(), 1);
+    let nodes = listed["data"]["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(
+        nodes[0]["agents"][0]["choices"][0]["request_id"],
+        "choice-1"
+    );
 }
 
 #[test]

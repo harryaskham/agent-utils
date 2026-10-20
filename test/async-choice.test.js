@@ -13,6 +13,7 @@ import {
 import { createCacophonyDecisionBridge, decisionContext, decisionOutcome } from "../extensions/lib/cacophony-decision.js";
 import { ChoiceStateMachine, CHOICE_SESSION_EVENT, INPUT_ACTION_EVENT, INPUT_ACTIONS, normalizeChoices } from "../extensions/lib/choice.js";
 import { ChoiceView, choiceTextWidth } from "../extensions/lib/choice-layout.js";
+import { DURABLE_QUESTION_DONE_EVENT, DURABLE_QUESTION_EVENT } from "../extensions/lib/ahp-choice.js";
 
 process.env.PI_CHOICE_CACO_ENABLED = "0";
 
@@ -399,4 +400,24 @@ test("composite layout collapses the sidebar into a strip on narrow terminals an
     for (const line of out.lines) assert.ok(choiceTextWidth(line) <= width, `${width}: ${line}`);
     if (!out.layout.sidebar) assert.match(out.lines[0], /‹ 2\/2 › Beta/);
   }
+});
+
+test("async_choice questions reach pi-durable-adaptor's bus and its answer steers the agent", async () => {
+  // No Paratenic bridge: the TUI Pi is served only through pi-daemon (bd-4fc36c).
+  const h = harness({ ahpBridge: null });
+  const { details } = await h.post({ questions: [
+    { question: "Which database?", choices, key: "db" },
+    { question: "Which region?", choices: [{ label: "West" }, { label: "East" }], context: "Latency matters." },
+  ] });
+  const posted = h.events.emitted.filter((event) => event.name === DURABLE_QUESTION_EVENT).map((event) => event.value);
+  assert.deepEqual(posted.map((question) => question.id).sort(), [...details.ids].sort(), "each question is published under its id");
+  const region = posted.find((question) => question.question.startsWith("Which region?"));
+  assert.match(region.question, /Latency matters\./, "the context travels with the question");
+  assert.deepEqual(region.choices, ["West", "East"]);
+  region.answer("East");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const steer = h.sent.find((entry) => JSON.stringify(entry.message).includes("East"));
+  assert.ok(steer, "the answer is delivered to the agent");
+  assert.equal(steer.options.deliverAs, "steer");
+  assert.deepEqual(h.events.emitted.filter((event) => event.name === DURABLE_QUESTION_DONE_EVENT).map((event) => event.value.id), [region.id]);
 });

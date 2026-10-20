@@ -80,6 +80,7 @@ paratenic:
   answer_timeout_seconds: 30
   parallelism: 8                               # session snapshots per node
   pi_daemon: true                              # also each node's pi-daemon (see below)
+  # pi_settings: ~/.pi/agent/settings.json     # pi-client's client.hosts
 hosts:
   - name: ms-dev
     address: ms-dev
@@ -92,13 +93,32 @@ hosts:
       # enabled: false
 ```
 
-**pi-daemon agents.** pi-daemon serves AHP beside Paratenic, and its agents' `ask_user`
-questions are `chatInput` entries like Paratenic's. When Culture's config has a host
-`<node>-pi-daemon` (as Collective writes it), `ag choices`, `ag dash` and
-`ag_choices_answer` also query it, as a node of its own named `<node>-pi-daemon`;
-answer with `--node <node>-pi-daemon`. `ag doctor`, speech and media stay per node.
+**pi-daemon agents.** Each node's pi-daemon serves AHP beside Paratenic, and `ag choices`,
+`ag dash` and `ag_choices_answer` query it too:
+
+- **Durable sessions** (`ask_user`): the daemon's `/ahp` (`client.hosts[].url`, port 7463).
+- **TUI Pis**: the node bridge's `/ahp` (`client.hosts[].bridge`, port 7464; pi-daemon 1.11).
+  A bridge without it (older pi-daemon) is listed as `unsupported`, not as a failure.
+- **Where from:** pi-client's host list, `client.hosts[]` in `~/.pi/agent/settings.json`
+  (`$PI_CODING_AGENT_DIR`; `paratenic.pi_settings` overrides), with `/ahp` added to each URL.
+  The bearer is the host's `tokenFile`, else `client.tokenFile`. Without a Pi client entry,
+  Culture's `<node>-pi-daemon` host is used for the daemon.
+- **Shown as:** groups under the node, `ms-dev · pi-daemon` and `ms-dev · pi-bridge`, each agent
+  marked `daemon` or `tui`. Answer with `--node ms-dev-pi-daemon` or `--node ms-dev-pi-bridge`.
+  JSON rows carry `node` and `source` (`paratenic`, `pi-daemon` or `pi-bridge`).
+- **Duplicates:** a TUI Pi's question seen through both Paratenic and pi-daemon has one request
+  id (agent-utils choice ids are unique across processes); pi-daemon's copy is kept.
+- **Off:** `paratenic.pi_daemon: false`, or `pi_daemon: false` on one host.
+- `ag doctor`, speech and media stay per node.
+
 pi-daemon's `ask_user` exists only in profiles that load a module re-exporting
 `InputExtension` (pi-daemon's docs/profiles); without it a session cannot ask.
+
+TUI Pis publish `interactive_choice` and `async_choice` questions to pi-daemon's
+`pi-durable-adaptor` on Pi's event bus as well as to Paratenic:
+`pi-durable:question` `{ id, question, choices?, answer(text), cancel() }` when a question is
+pending, and `pi-durable:question-done` `{ id }` when it settles. The first answer from any
+surface wins.
 
 `ws://` away from loopback requires `allow_plaintext_non_loopback`, matching Culture. Token files may be managed symlinks; they are read per connection and never logged. `--local` resolves this machine's Culture host by hostname.
 

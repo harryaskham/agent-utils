@@ -487,13 +487,15 @@ impl Service {
             .block_on(crate::paratenic::answer(&self.config, &endpoint, input))
     }
     pub fn endpoint_for(&self, host: &str) -> Result<crate::paratenic::Endpoint> {
-        // A choice's host is a node name or `<node>-pi-daemon` (that node's
-        // pi-daemon); either resolves through the node's choice targets.
+        // A choice's host is a node name, `<node>-pi-daemon` (that node's
+        // pi-daemon) or `<node>-pi-bridge` (its TUI Pis, through the bridge);
+        // each resolves through the node's choice targets.
         let configured = |name: &str| self.config.hosts.iter().any(|h| h.name == name);
-        let node = match host.strip_suffix(crate::paratenic::PI_DAEMON_SUFFIX) {
-            Some(node) if !node.is_empty() && !configured(host) => node,
-            _ => host,
-        };
+        let node = crate::paratenic::ENDPOINT_SUFFIXES
+            .iter()
+            .find_map(|suffix| host.strip_suffix(suffix))
+            .filter(|node| !node.is_empty() && !configured(host))
+            .unwrap_or(host);
         let selection = if node == "local" && !configured("local") {
             Selection {
                 hosts: vec![],

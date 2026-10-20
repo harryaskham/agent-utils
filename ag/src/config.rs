@@ -131,9 +131,15 @@ pub struct ParatenicConfig {
     pub answer_timeout_seconds: u64,
     /// Concurrent session snapshots per node while listing choices.
     pub parallelism: usize,
-    /// Also list and answer `ask_user` questions of pi-daemon sessions: the
-    /// node's Culture host `<node>-pi-daemon`, shown as its own node.
+    /// Also list and answer the questions of each node's pi-daemon sessions
+    /// (`ask_user`, and TUI Pis it serves): Pi's `client.hosts` (pi-client's
+    /// host list in `~/.pi/agent/settings.json`), else Culture's
+    /// `<node>-pi-daemon` host.
     pub pi_daemon: bool,
+    /// Pi settings file holding `client.hosts` and `client.tokenFile`
+    /// (default `$PI_CODING_AGENT_DIR/settings.json`, else
+    /// `~/.pi/agent/settings.json`).
+    pub pi_settings: Option<String>,
 }
 impl Default for ParatenicConfig {
     fn default() -> Self {
@@ -145,6 +151,7 @@ impl Default for ParatenicConfig {
             answer_timeout_seconds: 30,
             parallelism: 8,
             pi_daemon: true,
+            pi_settings: None,
         }
     }
 }

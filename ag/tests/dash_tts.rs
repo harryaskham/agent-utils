@@ -224,13 +224,14 @@ fn speech(reader: &mut BufReader<TcpStream>, text: &str) -> String {
 #[test]
 fn one_collector_fans_out_replays_rotates_and_stops_with_open_sse() {
     let mut server = Server::new(&[]);
+    // Both failing nodes report independently: wait for each.
     let initial = server.wait(|v| {
+        let nodes = v["nodes"].as_array().unwrap();
         v["records"].as_array().is_some_and(|r| r.len() == 2)
-            && v["nodes"]
-                .as_array()
-                .unwrap()
+            && nodes.iter().any(|n| n["state"] == "error")
+            && nodes
                 .iter()
-                .any(|n| n["state"] == "error")
+                .any(|n| n["host"] == "down" && n["state"] == "offline")
     });
     assert_eq!(initial["subscribers"], 0);
     assert!(

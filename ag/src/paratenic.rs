@@ -106,6 +106,73 @@ struct CultureHost {
     allow_plaintext_non_loopback: bool,
 }
 
+/// pi-client's host list (`client` in Pi's settings.json): each node's
+/// pi-daemon, whose `/ahp` serves its Durable sessions (and TUI Pis).
+#[derive(Default, Deserialize)]
+struct PiSettingsFile {
+    #[serde(default)]
+    client: PiClientSettings,
+}
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PiClientSettings {
+    #[serde(default)]
+    hosts: Vec<PiClientHost>,
+    #[serde(default)]
+    token_file: Option<String>,
+}
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PiClientHost {
+    name: String,
+    url: String,
+    /// The node's `pi-daemon bridge` (TUI Pis), e.g. `ws://node:7464`.
+    #[serde(default)]
+    bridge: Option<String>,
+    #[serde(default)]
+    token_file: Option<String>,
+}
+
+fn pi_settings_path(config: &Config) -> Result<PathBuf> {
+    if let Some(path) = &config.paratenic.pi_settings {
+        return config::expand_home(path);
+    }
+    let dir = std::env::var_os("PI_CODING_AGENT_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".pi/agent")
+        });
+    Ok(dir.join("settings.json"))
+}
+
+/// pi-client's hosts and default token file; empty when Pi is not configured.
+fn pi_client_hosts(config: &Config) -> Result<(Vec<PiClientHost>, Option<String>)> {
+    let path = pi_settings_path(config)?;
+    let meta = match std::fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((vec![], None)),
+        Err(error) => return Err(error.into()),
+    };
+    if meta.len() > MAX_CULTURE_CONFIG_BYTES {
+        return Err(Error::Limit("Pi settings exceed 1 MiB".into()));
+    }
+    // Pi's settings hold much else; only `client` is read, and a file that
+    // does not parse is ignored rather than failing every choices query.
+    let file: PiSettingsFile = serde_json::from_slice(&std::fs::read(&path)?).unwrap_or_default();
+    Ok((file.client.hosts, file.client.token_file))
+}
+
+/// `ws://host:7463` → `ws://host:7463/ahp` (a URL already naming a path is kept).
+fn ahp_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(parsed) if parsed.path().is_empty() || parsed.path() == "/" => {
+            format!("{}/ahp", url.trim_end_matches('/'))
+        }
+        _ => url.to_owned(),
+    }
+}
+
 fn culture_hosts(config: &Config) -> Result<Vec<CultureHost>> {
     let path = match &config.paratenic.culture_config {
         Some(path) => config::expand_home(path)?,
@@ -210,41 +277,73 @@ fn culture_candidates(host: &Host) -> Vec<String> {
 
 /// pi-daemon serves AHP beside Paratenic; Culture names it `<node>-pi-daemon`.
 pub const PI_DAEMON_SUFFIX: &str = "-pi-daemon";
+/// The node's `pi-daemon bridge` serves its TUI Pis over AHP (pi-daemon 1.11).
+pub const PI_BRIDGE_SUFFIX: &str = "-pi-bridge";
+/// Targets that are a node's other AHP endpoints, not configured nodes.
+pub const ENDPOINT_SUFFIXES: [&str; 2] = [PI_DAEMON_SUFFIX, PI_BRIDGE_SUFFIX];
 
 /// Endpoints to list and answer choices on: each node's Paratenic endpoint
-/// (as [`endpoints`]) plus, when Culture has one, the node's pi-daemon as a
-/// node of its own named `<node>-pi-daemon`. pi-daemon's `ask_user` questions
-/// are AHP `chatInput` entries like Paratenic's, so they list and answer the
-/// same way. Doctor, speech and media stay per node and use [`endpoints`].
+/// (as [`endpoints`]) plus the node's pi-daemon `/ahp` as a target of its own
+/// named `<node>-pi-daemon` (answers route by that name). pi-daemon's
+/// `ask_user` questions, and the TUI Pis it serves, are AHP `chatInput`
+/// entries like Paratenic's, so they list and answer the same way. The daemon
+/// comes from pi-client's `client.hosts` (bearer: the host's `tokenFile`,
+/// else `client.tokenFile`), else from Culture's `<node>-pi-daemon` host.
+/// Doctor, speech and media stay per node and use [`endpoints`].
 pub fn choice_endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Option<Endpoint>)>> {
     let mut targets = endpoints(config, hosts)?;
     if !config.paratenic.enabled || !config.paratenic.pi_daemon {
         return Ok(targets);
     }
     let culture = culture_hosts(config)?;
+    let (pi_hosts, pi_token) = pi_client_hosts(config)?;
     for host in hosts {
         let p = &host.paratenic;
         if p.enabled == Some(false)
             || p.pi_daemon == Some(false)
-            || host.name.ends_with(PI_DAEMON_SUFFIX)
+            || ENDPOINT_SUFFIXES
+                .iter()
+                .any(|suffix| host.name.ends_with(suffix))
         {
             continue;
         }
-        let names: Vec<String> = culture_candidates(host)
-            .into_iter()
+        let candidates = culture_candidates(host);
+        let from_pi = pi_hosts
+            .iter()
+            .find(|h| candidates.iter().any(|n| h.name.eq_ignore_ascii_case(n)))
+            .map(|h| {
+                (
+                    ahp_url(&h.url),
+                    h.token_file.clone().or_else(|| pi_token.clone()),
+                    // pi-client's hosts are the operator's own tailnet daemons;
+                    // pi-client itself connects to them over ws://.
+                    true,
+                    "pi-client",
+                )
+            });
+        let names: Vec<String> = candidates
+            .iter()
             .map(|n| format!("{n}{PI_DAEMON_SUFFIX}"))
             .collect();
-        let Some(c) = culture
-            .iter()
-            .find(|c| names.iter().any(|n| c.id.eq_ignore_ascii_case(n)))
-        else {
+        let from_culture = || {
+            culture
+                .iter()
+                .find(|c| names.iter().any(|n| c.id.eq_ignore_ascii_case(n)))
+                .map(|c| {
+                    (
+                        c.url.clone(),
+                        c.token_file.clone(),
+                        c.allow_plaintext_non_loopback,
+                        "culture",
+                    )
+                })
+        };
+        let Some((url, token, plaintext, source)) = from_pi.or_else(from_culture) else {
             continue;
         };
-        validate_url(&c.url, c.allow_plaintext_non_loopback)
+        validate_url(&url, plaintext)
             .map_err(|e| Error::Config(format!("host {}{PI_DAEMON_SUFFIX}: {e}", host.name)))?;
-        let token_file = c
-            .token_file
-            .clone()
+        let token_file = token
             .or_else(|| config.paratenic.token_file.clone())
             .map(|t| config::expand_home(&t))
             .transpose()?;
@@ -253,12 +352,33 @@ pub fn choice_endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Op
         targets.push((
             daemon,
             Some(Endpoint {
-                url: c.url.clone(),
-                token_file,
-                allow_plaintext_non_loopback: c.allow_plaintext_non_loopback,
-                source: "culture".into(),
+                url,
+                token_file: token_file.clone(),
+                allow_plaintext_non_loopback: plaintext,
+                source: source.into(),
             }),
         ));
+        // The node's TUI Pis, through its pi-daemon bridge's /ahp (same bearer).
+        let bridge = pi_hosts
+            .iter()
+            .find(|h| candidates.iter().any(|n| h.name.eq_ignore_ascii_case(n)))
+            .and_then(|h| h.bridge.clone());
+        if let Some(bridge) = bridge {
+            let url = ahp_url(&bridge);
+            validate_url(&url, true)
+                .map_err(|e| Error::Config(format!("host {}{PI_BRIDGE_SUFFIX}: {e}", host.name)))?;
+            let mut tui = host.clone();
+            tui.name = format!("{}{PI_BRIDGE_SUFFIX}", host.name);
+            targets.push((
+                tui,
+                Some(Endpoint {
+                    url,
+                    token_file,
+                    allow_plaintext_non_loopback: true,
+                    source: "pi-client".into(),
+                }),
+            ));
+        }
     }
     Ok(targets)
 }
@@ -514,6 +634,12 @@ fn rpc(error: ahp::ClientError) -> Error {
 /// A node that is simply down is a fact, not a fault: classify connection-level
 /// failures (refused, timed out, unknown host, unreachable) so callers can show
 /// one quiet "offline" line instead of a raw transport error.
+/// The WebSocket upgrade was answered 404: the endpoint does not exist there.
+fn not_found(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("404") || m.contains("not found")
+}
+
 pub fn offline_reason(message: &str) -> Option<&'static str> {
     let m = message.to_ascii_lowercase();
     if m.contains("connection refused") {
@@ -577,7 +703,14 @@ pub struct FleetChoices {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct NodeChoices {
+    /// Where answers go: the node, or `<node>-pi-daemon` for its pi-daemon.
     pub host: String,
+    /// The node this endpoint belongs to (group by this).
+    #[serde(default)]
+    pub node: String,
+    /// paratenic | pi-daemon
+    #[serde(default)]
+    pub source: String,
     /// ok | offline | unconfigured | disabled | error
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -595,6 +728,10 @@ pub struct AgentChoices {
     pub session: String,
     pub title: String,
     pub provider: String,
+    /// daemon (a pi-daemon Durable session) | tui (a TUI Pi, through
+    /// Paratenic or pi-daemon's `tui-…` sessions)
+    #[serde(default)]
+    pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -925,8 +1062,11 @@ pub async fn node_choices(
     endpoint: Option<Endpoint>,
     all: bool,
 ) -> NodeChoices {
+    let (node, source) = node_and_source(&host.name);
     let empty = |state: &str, error: Option<String>, endpoint: Option<String>| NodeChoices {
         host: host.name.clone(),
+        node: node.clone(),
+        source: source.clone(),
         state: state.into(),
         error,
         endpoint,
@@ -958,6 +1098,8 @@ pub async fn node_choices(
     match tokio::time::timeout(timeout * 4, work).await {
         Ok(Ok((sessions, waiting, agents))) => NodeChoices {
             host: host.name.clone(),
+            node: node.clone(),
+            source: source.clone(),
             state: "ok".into(),
             error: None,
             endpoint: Some(endpoint.url.clone()),
@@ -970,6 +1112,12 @@ pub async fn node_choices(
             let text = error.to_string();
             match offline_reason(&text) {
                 Some(reason) => empty("offline", Some(reason.into()), Some(endpoint.url.clone())),
+                // A pi-daemon bridge before 1.11 has no /ahp: nothing to list, not a failure.
+                None if source == "pi-bridge" && not_found(&text) => empty(
+                    "unsupported",
+                    Some("this pi-daemon bridge has no /ahp (needs pi-daemon 1.11)".into()),
+                    Some(endpoint.url.clone()),
+                ),
                 None => empty("error", Some(text), Some(endpoint.url.clone())),
             }
         }
@@ -1012,10 +1160,16 @@ async fn collect_node(
             if !all {
                 choices.retain(|c| c.actionable);
             }
+            let daemon = host.ends_with(PI_DAEMON_SUFFIX)
+                && !summary
+                    .resource
+                    .trim_start_matches("ahp-session:/")
+                    .starts_with("tui-");
             (!choices.is_empty()).then(|| AgentChoices {
                 session: summary.resource.clone(),
                 title: bounded(&summary.title),
                 provider: summary.provider.clone(),
+                kind: if daemon { "daemon" } else { "tui" }.into(),
                 project: summary.project.as_ref().map(|p| bounded(&p.display_name)),
                 cwd: summary
                     .working_directories
@@ -1057,7 +1211,9 @@ pub async fn fleet_choices(
             nodes.push(node);
         }
     }
-    nodes.sort_by(|a, b| a.host.cmp(&b.host));
+    // A node's Paratenic and pi-daemon sit together.
+    nodes.sort_by(|a, b| a.node.cmp(&b.node).then(a.source.cmp(&b.source)));
+    dedupe(&mut nodes);
     FleetChoices {
         observed_at: now_rfc3339(),
         actionable: nodes
@@ -1067,6 +1223,46 @@ pub async fn fleet_choices(
             .filter(|c| c.actionable)
             .count(),
         nodes,
+    }
+}
+
+/// `ms-dev-pi-daemon` → (`ms-dev`, `pi-daemon`); `ms-dev-pi-bridge` →
+/// (`ms-dev`, `pi-bridge`); `ms-dev` → (`ms-dev`, `paratenic`).
+fn node_and_source(host: &str) -> (String, String) {
+    for (suffix, source) in [
+        (PI_DAEMON_SUFFIX, "pi-daemon"),
+        (PI_BRIDGE_SUFFIX, "pi-bridge"),
+    ] {
+        if let Some(node) = host.strip_suffix(suffix).filter(|node| !node.is_empty()) {
+            return (node.to_owned(), source.to_owned());
+        }
+    }
+    (host.to_owned(), "paratenic".to_owned())
+}
+
+/// A TUI Pi's question can be seen twice on one node: through Paratenic and
+/// through pi-daemon (its bridge, or the daemon, serves TUI Pis as
+/// `tui-<piSessionId>`). Both carry the same request id (agent-utils choice
+/// ids are unique), so keep pi-daemon's copy and drop Paratenic's. Agents left
+/// without choices go too.
+fn dedupe(nodes: &mut [NodeChoices]) {
+    let mut daemon: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    for node in nodes.iter().filter(|n| n.source != "paratenic") {
+        for choice in node.agents.iter().flat_map(|a| &a.choices) {
+            daemon.insert((node.node.clone(), choice.request_id.clone()));
+        }
+    }
+    if daemon.is_empty() {
+        return;
+    }
+    for node in nodes.iter_mut().filter(|n| n.source == "paratenic") {
+        for agent in &mut node.agents {
+            agent.choices.retain(|c| {
+                c.request_id.is_empty()
+                    || !daemon.contains(&(node.node.clone(), c.request_id.clone()))
+            });
+        }
+        node.agents.retain(|a| !a.choices.is_empty());
     }
 }
 
@@ -1436,6 +1632,36 @@ mod tests {
             context.as_deref(),
             Some("Released .67 native tools are prepared on sgu24.")
         );
+    }
+
+    #[test]
+    fn pi_client_urls_gain_the_ahp_path() {
+        assert_eq!(
+            ahp_url("ws://ms-dev.ts.net:7463"),
+            "ws://ms-dev.ts.net:7463/ahp"
+        );
+        assert_eq!(
+            ahp_url("ws://ms-dev.ts.net:7463/"),
+            "ws://ms-dev.ts.net:7463/ahp"
+        );
+        assert_eq!(
+            ahp_url("wss://proxy.example/agents/a/ahp"),
+            "wss://proxy.example/agents/a/ahp"
+        );
+        assert_eq!(
+            node_and_source("ms-dev-pi-daemon"),
+            ("ms-dev".into(), "pi-daemon".into())
+        );
+        assert_eq!(
+            node_and_source("ms-dev"),
+            ("ms-dev".into(), "paratenic".into())
+        );
+        assert_eq!(
+            node_and_source("ms-dev-pi-bridge"),
+            ("ms-dev".into(), "pi-bridge".into())
+        );
+        assert!(not_found("HTTP error: 404 Not Found"));
+        assert!(!not_found("HTTP error: 401 Unauthorized"));
     }
 
     #[test]

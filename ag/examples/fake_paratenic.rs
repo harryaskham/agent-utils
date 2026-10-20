@@ -17,9 +17,17 @@ fn main() {
             format!("ws://{address}/ahp")
         })
         .collect();
+    // `--pi-daemon`: also a pi-daemon host (an ask_user question and a TUI Pi).
+    let pi_daemon = std::env::args().any(|a| a == "--pi-daemon").then(|| {
+        let (address, _) = fake_ahp::fake_host_with(fake_ahp::Fake {
+            pi_daemon: true,
+            ..Default::default()
+        });
+        format!("ws://{address}")
+    });
     println!(
         "{}",
-        serde_json::json!({"urls": urls, "token": fake_ahp::TOKEN})
+        serde_json::json!({"urls": urls, "pi_daemon": pi_daemon, "token": fake_ahp::TOKEN})
     );
     loop {
         std::thread::park();
