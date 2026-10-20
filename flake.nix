@@ -142,6 +142,8 @@
             echo 'export * from "./extensions/durable/image-budget.mjs";' > $out/image-budget.mjs
             # /loop as Durable background tasks.
             echo 'export * from "./extensions/durable/loop.mjs";' > $out/loop.mjs
+            # Cacophony visiting registration (needs pi-daemon's per-session environment).
+            echo 'export * from "./extensions/durable/cacophony.mjs";' > $out/cacophony.mjs
             # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
@@ -152,6 +154,8 @@
               const budget = await import('$out/image-budget.mjs');
               if (budget.extension?.name !== 'agent-utils-image-budget' || budget.extension.hooks?.[0]?.task !== 'pi.generation') process.exit(1);
               const loop = await import('$out/loop.mjs');
+              const caco = await import('$out/cacophony.mjs');
+              if (caco.extension?.sections?.[0]?.key !== 'cacophony' || typeof caco.commands?.['caco-agent-register']?.run !== 'function' || typeof caco.observe !== 'function') process.exit(1);
               const loopTools = (loop.extension?.tools ?? []).map((tool) => tool.name).join(',');
               if (loop.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.loop' || typeof loop.commands?.loop?.run !== 'function' || typeof loop.commands?.loops?.run !== 'function' || loopTools !== 'create_loop,list_loops,stop_loop') process.exit(1);
             "
