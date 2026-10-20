@@ -108,6 +108,15 @@ test("/loop and /loops run several numbered loops, list them and stop one or all
   await loops.run("", ctx);
   assert.equal(notices.at(-1), "No active loops.");
 
+  // A loop started before the registry existed is adopted with its number, then listed and stopped.
+  store.tasks.push({ record: { id: "t-old", kind: LOOP_TASK, conversationId: "c1", input: { number: 12, prompt: "old loop", intervalSecs: 1800, deliverAs: "followUp", startedAt: clock } } });
+  await loops.run("", ctx);
+  assert.equal(notices.at(-1), '#12: every 30m — "old loop" (running 0s)');
+  await loop.run("5m next one", ctx);
+  assert.match(notices.at(-1), /^Loop #13 started/);
+  await loop.run("stop 12", ctx);
+  assert.equal(notices.at(-1), "Loop #12 stopped.");
+
   await loop.run("soon do things", ctx);
   assert.equal(notices.at(-1), 'Invalid interval "soon". Use e.g. 30s, 5m, 1h.');
   await loop.run("", ctx);

@@ -253,11 +253,30 @@ export function loopOperations({ task, now = () => Date.now() }) {
         return targets.map((loop) => loop.number);
       });
     },
-    /** Drop entries whose task is no longer live (it ended without cleaning up). */
-    async prune(commit, liveTaskIds) {
+    /**
+     * Match the registry to the live loop tasks: drop entries whose task is gone (it ended without
+     * cleaning up), and adopt live loops it does not know (started before the registry existed),
+     * keeping their numbers.
+     */
+    async reconcile(commit, liveTasks) {
       return commit(async (tx) => {
         const doc = await tx.doc(LOOPS_DOC);
-        for (const [number, entry] of Object.entries(doc.loops ?? {})) if (!liveTaskIds.has(entry.taskId)) delete doc.loops[number];
+        const ids = new Set(liveTasks.map((entry) => String(entry.id)));
+        for (const [number, entry] of Object.entries(doc.loops ?? {})) if (!ids.has(entry.taskId)) delete doc.loops[number];
+        const known = new Set(Object.values(doc.loops ?? {}).map((entry) => entry.taskId));
+        for (const entry of liveTasks) {
+          const input = entry.input ?? {};
+          if (known.has(String(entry.id)) || !Number.isInteger(input.number) || doc.loops[String(input.number)] !== undefined) continue;
+          doc.loops[String(input.number)] = {
+            taskId: String(entry.id),
+            prompt: String(input.prompt ?? ""),
+            intervalSecs: Number(input.intervalSecs) || 0,
+            deliverAs: input.deliverAs === "steer" ? "steer" : "followUp",
+            startedAt: Number(input.startedAt) || now(),
+            conversationId: entry.conversationId,
+          };
+          doc.last = Math.max(Number(doc.last) || 0, input.number);
+        }
       });
     },
   };
@@ -285,11 +304,13 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
     ctx.notify("/loop needs pi-daemon 1.10 or later (module commands with the Durable harness).");
     return false;
   };
-  // A command can see the live tasks: entries whose task ended without cleaning up go first.
+  // A command can see the live tasks: the registry is matched to them first.
   const prune = async (ctx) => {
     if (typeof ctx.harness.inspect !== "function") return;
-    const tasks = (await ctx.harness.inspect(ctx.context)).tasks.filter((entry) => entry.record.kind === LOOP_TASK);
-    await ops.prune(commitOf(ctx), new Set(tasks.map((entry) => String(entry.record.id))));
+    const tasks = (await ctx.harness.inspect(ctx.context)).tasks
+      .filter((entry) => entry.record.kind === LOOP_TASK && !entry.record.abortRequested)
+      .map((entry) => ({ id: entry.record.id, input: entry.record.input, conversationId: entry.record.conversationId }));
+    await ops.reconcile(commitOf(ctx), tasks);
   };
   const list = async (ctx) => {
     await prune(ctx);
