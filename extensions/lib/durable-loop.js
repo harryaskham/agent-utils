@@ -17,7 +17,7 @@
 export const LOOP_TASK = "agent-utils.loop";
 export const DEFAULT_MIN_INTERVAL_SECS = 30;
 
-const USAGE = "Usage: /loop <interval> [--steer] <prompt> | /loop list | /loop stop [id|all] (off and end too); e.g. /loop 5m Check the inbox";
+const USAGE = "Usage: /loop <interval> [--steer] <prompt> | /loop list (or /loops) | /loop stop [id|all] (off and end too); e.g. /loop 5m Check the inbox";
 
 /** `5m`, `1h30m`, `90s`, `1d`, or a bare number of minutes (as the TUI /loop), as seconds (at least `minSecs`), or null. */
 export function parseIntervalSpec(value, minSecs = DEFAULT_MIN_INTERVAL_SECS) {
@@ -89,7 +89,46 @@ export function sleep(ms, signal) {
  * The loop task (a Durable task definition as a plain object). Input: `{ prompt, intervalSecs,
  * deliverAs, firstAt }`; checkpoint: `{ phase: "wait", nextAt, fired, lastAt? }`.
  */
+/**
+ * The session's loops (a Durable session document): the number counter and each live loop, so
+ * the /loop command and the agent's create_loop/list_loops/stop_loop tools share numbers, and a
+ * stop reaches the loop's task (it watches the document). A plain token object, as Durable's
+ * defineDoc returns.
+ */
+export const LOOPS_DOC = {
+  definition: {
+    kind: "agent-utils.loops",
+    version: 1,
+    scope: "session",
+    initial: () => ({ last: 0, loops: {} }),
+  },
+};
+
+/** At most this many loops are live in one session. */
+export const MAX_LOOPS = 32;
+
+function stoppedIn(doc, number) {
+  return doc?.loops?.[String(number)]?.stopped === true;
+}
+
+/** Remove a loop's registry entry (in a transaction). */
+async function forget(tx, number) {
+  if (number === undefined) return;
+  const doc = await tx.doc(LOOPS_DOC);
+  delete doc.loops[String(number)];
+}
+
+/**
+ * The loop task (a Durable task definition as a plain object). Input: `{ number, prompt,
+ * intervalSecs, deliverAs, firstAt, startedAt }`; checkpoint: `{ phase: "wait", nextAt, fired,
+ * lastAt? }`. A stop in the registry wakes it at once and ends it without delivering.
+ */
 export function createLoopTask({ now = () => Date.now(), wait = sleep, timeZone } = {}) {
+  const finish = (runtime, task, context, outcome) =>
+    runtime.commit(async (tx) => {
+      await forget(tx, task.input.number);
+      return { status: "terminal", outcome };
+    }, context);
   return {
     definition: {
       name: LOOP_TASK,
@@ -97,9 +136,36 @@ export function createLoopTask({ now = () => Date.now(), wait = sleep, timeZone 
       initial: (input) => ({ phase: "wait", nextAt: input.firstAt, fired: 0 }),
       phases: {
         async wait(task, runtime, context) {
-          const { prompt, intervalSecs, deliverAs } = task.input;
+          const { number, prompt, intervalSecs, deliverAs } = task.input;
           const checkpoint = task.state.checkpoint;
-          await wait(checkpoint.nextAt - now(), runtime.signal);
+          // Sleep until the tick, or until the registry says this loop stopped.
+          const watch = typeof runtime.watchDoc === "function" ? await runtime.watchDoc(LOOPS_DOC, context).catch(() => undefined) : undefined;
+          let stopped = stoppedIn(watch?.value, number);
+          if (!stopped) {
+            const wake = new AbortController();
+            const onAbort = () => wake.abort(runtime.signal.reason);
+            runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
+            watch?.start(async (value) => {
+              if (stoppedIn(value, number)) {
+                stopped = true;
+                wake.abort();
+              }
+            });
+            try {
+              await wait(checkpoint.nextAt - now(), wake.signal);
+            } catch (error) {
+              if (!stopped) throw error;
+            } finally {
+              runtime.signal?.removeEventListener?.("abort", onAbort);
+              await watch?.stop().catch(() => undefined);
+            }
+          } else {
+            await watch?.stop().catch(() => undefined);
+          }
+          if (stopped) {
+            await finish(runtime, task, context, { status: "completed", result: { stopped: true } });
+            return;
+          }
           const conversation = await runtime.conversation(runtime.conversationId, context);
           if (conversation !== undefined) {
             const content = `${timestampPrefix(new Date(now()), timeZone)} ${prompt}`;
@@ -128,8 +194,8 @@ export function createLoopTask({ now = () => Date.now(), wait = sleep, timeZone 
           );
         },
       },
-      async abort(_task, runtime, context) {
-        await runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted", reason: "loop stopped" } }), context);
+      async abort(task, runtime, context) {
+        await finish(runtime, task, context, { status: "aborted", reason: "loop stopped" });
       },
     },
   };
@@ -147,62 +213,108 @@ function formatRunning(ms) {
   return `${Math.max(0, Math.floor(ms / 1000))}s`;
 }
 
-/** The `/loop` command over a module command context with `harness` (pi-daemon ≥ 1.10). */
+/**
+ * Loop operations over a Durable commit (a module command's harness, or a tool's api): start,
+ * list and stop, sharing the session's registry.
+ */
+export function loopOperations({ task, now = () => Date.now() }) {
+  const live = (doc) =>
+    Object.entries(doc.loops ?? {})
+      .filter(([, entry]) => entry.stopped !== true)
+      .map(([number, entry]) => ({ number: Number(number), ...entry }))
+      .sort((a, b) => a.number - b.number);
+  return {
+    async start(commit, conversationId, { prompt, intervalSecs, deliverAs }) {
+      return commit(async (tx) => {
+        const doc = await tx.doc(LOOPS_DOC);
+        if (live(doc).length >= MAX_LOOPS) throw new Error(`at most ${MAX_LOOPS} loops run at once; stop one first`);
+        const number = (Number(doc.last) || 0) + 1;
+        const at = now();
+        // Like the TUI /loop, the first prompt goes at once.
+        const taskId = await tx.createTask(
+          task,
+          { number, prompt, intervalSecs, deliverAs, firstAt: at, startedAt: at },
+          { ownership: { kind: "conversation" }, conversationId, background: true },
+        );
+        doc.last = number;
+        doc.loops[String(number)] = { taskId: String(taskId), prompt, intervalSecs, deliverAs, startedAt: at, conversationId };
+        return number;
+      });
+    },
+    async list(commit) {
+      return commit(async (tx) => live(await tx.doc(LOOPS_DOC)));
+    },
+    /** Stop one loop (by number) or all; the numbers stopped. */
+    async stop(commit, which) {
+      return commit(async (tx) => {
+        const doc = await tx.doc(LOOPS_DOC);
+        const targets = live(doc).filter((loop) => which === "all" || loop.number === which);
+        for (const loop of targets) doc.loops[String(loop.number)].stopped = true;
+        return targets.map((loop) => loop.number);
+      });
+    },
+    /** Drop entries whose task is no longer live (it ended without cleaning up). */
+    async prune(commit, liveTaskIds) {
+      return commit(async (tx) => {
+        const doc = await tx.doc(LOOPS_DOC);
+        for (const [number, entry] of Object.entries(doc.loops ?? {})) if (!liveTaskIds.has(entry.taskId)) delete doc.loops[number];
+      });
+    },
+  };
+}
+
+function describeLoop(loop, now) {
+  return `#${loop.number}: every ${formatInterval(loop.intervalSecs)}${loop.deliverAs === "steer" ? " (steer)" : ""} — "${summarize(loop.prompt)}" (running ${formatRunning(now - (loop.startedAt ?? now))})`;
+}
+
+function listText(loops, now) {
+  return loops.length === 0 ? "No active loops." : loops.map((loop) => describeLoop(loop, now)).join("\n");
+}
+
+function stopText(stopped, which) {
+  if (which === "all") return stopped.length > 0 ? `Stopped ${stopped.length} loop(s).` : "No active loops to stop.";
+  return stopped.length > 0 ? `Loop #${which} stopped.` : `No loop #${which} found.`;
+}
+
+/** The `/loop` and `/loops` commands over a module command context with `harness` (pi-daemon ≥ 1.10). */
 export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEFAULT_MIN_INTERVAL_SECS, defaultDelivery = "followUp" } = {}) {
-  // This session's loops, by number.
-  const loopsOf = async (ctx) =>
-    (await ctx.harness.inspect(ctx.context)).tasks
-      .filter((entry) => entry.record.kind === LOOP_TASK && !entry.record.abortRequested)
-      .sort((a, b) => (a.record.input.number ?? 0) - (b.record.input.number ?? 0));
-  const stop = async (ctx, loops) => {
-    for (const loop of loops) await ctx.harness.abortTask(loop.record.id, ctx.context);
+  const ops = loopOperations({ task, now });
+  const commitOf = (ctx) => (change) => ctx.harness.commit(change, ctx.context);
+  const ready = (ctx) => {
+    if (typeof ctx.harness?.commit === "function") return true;
+    ctx.notify("/loop needs pi-daemon 1.10 or later (module commands with the Durable harness).");
+    return false;
+  };
+  // A command can see the live tasks: entries whose task ended without cleaning up go first.
+  const prune = async (ctx) => {
+    if (typeof ctx.harness.inspect !== "function") return;
+    const tasks = (await ctx.harness.inspect(ctx.context)).tasks.filter((entry) => entry.record.kind === LOOP_TASK);
+    await ops.prune(commitOf(ctx), new Set(tasks.map((entry) => String(entry.record.id))));
+  };
+  const list = async (ctx) => {
+    await prune(ctx);
+    ctx.notify(listText(await ops.list(commitOf(ctx)), now()));
   };
 
   return {
     loop: {
-      description: "Run a prompt on a recurring interval: /loop <interval> <prompt>, /loop list, /loop stop [id|all] (off, end)",
+      description: "Run a prompt on a recurring interval: /loop <interval> <prompt>, /loop list (or /loops), /loop stop [id|all] (off, end)",
       async run(args, ctx) {
-        if (typeof ctx.harness?.inspect !== "function") {
-          ctx.notify("/loop needs pi-daemon 1.10 or later (module commands with the Durable harness).");
-          return;
-        }
+        if (!ready(ctx)) return;
         const parts = String(args ?? "").trim().split(/\s+/).filter(Boolean);
         const verb = (parts[0] ?? "").toLowerCase();
-
-        if (verb === "list" || verb === "status") {
-          const loops = await loopsOf(ctx);
-          ctx.notify(
-            loops.length === 0
-              ? "No active loops."
-              : loops
-                  .map((loop) => {
-                    const { number, intervalSecs, prompt, startedAt, deliverAs } = loop.record.input;
-                    return `#${number}: every ${formatInterval(intervalSecs)}${deliverAs === "steer" ? " (steer)" : ""} — "${summarize(prompt)}" (running ${formatRunning(now() - (startedAt ?? now()))})`;
-                  })
-                  .join("\n"),
-          );
-          return;
-        }
-
+        if (verb === "list" || verb === "status") return list(ctx);
         if (verb === "stop" || verb === "off" || verb === "end") {
-          const target = (parts[1] ?? "all").toLowerCase();
-          const loops = await loopsOf(ctx);
-          if (target === "all") {
-            await stop(ctx, loops);
-            ctx.notify(loops.length > 0 ? `Stopped ${loops.length} loop(s).` : "No active loops to stop.");
-            return;
-          }
-          const number = Number.parseInt(target.replace(/^#/, ""), 10);
-          if (!Number.isInteger(number) || String(number) !== target.replace(/^#/, "")) {
+          const target = (parts[1] ?? "all").toLowerCase().replace(/^#/, "");
+          const which = target === "all" ? "all" : Number.parseInt(target, 10);
+          if (which !== "all" && (!Number.isInteger(which) || String(which) !== target)) {
             ctx.notify(`Invalid loop id "${parts[1]}".`);
             return;
           }
-          const found = loops.filter((loop) => loop.record.input.number === number);
-          await stop(ctx, found);
-          ctx.notify(found.length > 0 ? `Loop #${number} stopped.` : `No loop #${number} found.`);
+          await prune(ctx);
+          ctx.notify(stopText(await ops.stop(commitOf(ctx), which), which));
           return;
         }
-
         const intervalSecs = parseIntervalSpec(parts[0], minSecs);
         let words = parts.slice(1);
         let deliverAs = defaultDelivery === "steer" ? "steer" : "followUp";
@@ -219,18 +331,77 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
           ctx.notify(`Invalid interval "${parts[0]}". Use e.g. 30s, 5m, 1h.`);
           return;
         }
-        // Numbers count up per session, as the TUI /loop's do.
-        const number = (Number(await ctx.state.get("lastLoop")) || 0) + 1;
-        await ctx.state.set("lastLoop", number);
-        const at = now();
-        // Like the TUI /loop, the first prompt goes at once.
-        await ctx.harness.commit(
-          (tx) =>
-            tx.createTask(task, { number, prompt, intervalSecs, deliverAs, firstAt: at, startedAt: at }, { ownership: { kind: "conversation" }, conversationId: ctx.conversationId, background: true }),
-          ctx.context,
-        );
+        await prune(ctx);
+        const number = await ops.start(commitOf(ctx), ctx.conversationId, { prompt, intervalSecs, deliverAs });
         ctx.notify(`Loop #${number} started: "${summarize(prompt)}" every ${formatInterval(intervalSecs)}${deliverAs === "steer" ? " (steer while busy)" : ""}. Stop with /loop stop ${number}`);
       },
     },
+    loops: {
+      description: "List this session's loops (as /loop list)",
+      async run(_args, ctx) {
+        if (!ready(ctx)) return;
+        await list(ctx);
+      },
+    },
   };
+}
+
+/** The agent's own loop tools, as in TUI Pi: create_loop, list_loops, stop_loop. */
+export function createLoopTools({ task, now = () => Date.now(), minSecs = DEFAULT_MIN_INTERVAL_SECS, defaultDelivery = "followUp" } = {}) {
+  const ops = loopOperations({ task, now });
+  const text = (value, details) => ({ content: [{ type: "text", text: value }], ...(details === undefined ? {} : { details }) });
+  const commitOf = (api, context) => (change) => api.commit(change, context);
+  return [
+    {
+      name: "create_loop",
+      description:
+        "Create a recurring loop that sends a prompt to this conversation at a fixed interval (the first at once). It runs as a durable background task, survives restarts and is listed and stopped by number.",
+      parameters: {
+        type: "object",
+        properties: {
+          interval: { type: "string", description: 'Repeat interval like "30s", "5m", "1h" or "1h30m" (a bare number is minutes).' },
+          prompt: { type: "string", description: "Prompt to send on each interval." },
+          steer: { type: "boolean", description: "While the agent is busy, steer it at once instead of waiting until its work ends." },
+        },
+        required: ["interval", "prompt"],
+        additionalProperties: false,
+      },
+      async execute(args, api, context) {
+        const intervalSecs = parseIntervalSpec(args.interval, minSecs);
+        if (intervalSecs === null) return { ...text(`Invalid interval "${args.interval}". Use e.g. 30s, 5m, 1h.`), isError: true };
+        const prompt = String(args.prompt ?? "").trim();
+        if (prompt === "") return { ...text("Loop prompt cannot be empty."), isError: true };
+        const deliverAs = args.steer === true ? "steer" : args.steer === false ? "followUp" : defaultDelivery === "steer" ? "steer" : "followUp";
+        const number = await ops.start(commitOf(api, context), api.conversationId, { prompt, intervalSecs, deliverAs });
+        return text(`Loop #${number} started: "${summarize(prompt)}" every ${formatInterval(intervalSecs)}. Stop with stop_loop {"id": ${number}}.`, { id: number, intervalSecs, deliverAs });
+      },
+    },
+    {
+      name: "list_loops",
+      description: "List this session's active loops with their ids, intervals, prompts and how long they have run.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      async execute(_args, api, context) {
+        const loops = await ops.list(commitOf(api, context));
+        return text(listText(loops, now()), { loops: loops.map(({ number, intervalSecs, prompt, deliverAs, startedAt }) => ({ id: number, intervalSecs, prompt, deliverAs, startedAt })) });
+      },
+    },
+    {
+      name: "stop_loop",
+      description: "Stop one loop by id, or every loop with all: true.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "number", description: "Loop id to stop. Omit when stopping all loops." },
+          all: { type: "boolean", description: "Stop all active loops instead of a single loop." },
+        },
+        additionalProperties: false,
+      },
+      async execute(args, api, context) {
+        const which = args.all === true || args.id === undefined ? "all" : Number(args.id);
+        if (which !== "all" && !Number.isInteger(which)) return { ...text(`Invalid loop id "${args.id}".`), isError: true };
+        const stopped = await ops.stop(commitOf(api, context), which);
+        return text(stopText(stopped, which), { stopped });
+      },
+    },
+  ];
 }
