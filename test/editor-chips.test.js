@@ -486,7 +486,8 @@ test("what the editor writes into its borders becomes chips, and top and bottom 
   const theme = { fg: (_color, text) => text, getFgAnsi: () => "" };
   const rails = buildEditorChipRails({ width: 120, config, theme, values: { model: "m", provider: "p", effort: "high", directory: "~/x", working: info.working, scrollDown: info.scrollDown } });
   const replaced = replaceEditorRails(lines, lines, rails).map((line) => stripAnsi(line));
-  assert.match(replaced[0], /⠸ Working \(escape to interrupt\)/, "the working chip, top-left");
+  assert.match(replaced[0], /⠸/, "the working chip, top-left: its spinner");
+  assert.doesNotMatch(replaced[0], /Working|escape/, "the spinner alone, no text");
   assert.match(replaced[0], /m/);
   assert.match(replaced[3], /↓ 23 more/, "the scroll chip in the bottom row");
   assert.match(replaced[3], /~\/x/, "the bottom chips stay in the bottom row");
@@ -496,4 +497,12 @@ test("what the editor writes into its borders becomes chips, and top and bottom 
   const placed = resolveEditorChipsConfig({ editorChips: { enabled: true, bottomLeft: ["working", "directory"] } }, {});
   assert.deepEqual(placed.bottomLeft, ["working", "directory"]);
   assert.equal(placed.topLeft.includes("working"), false);
+});
+
+test("the working chip is the spinner alone, coloured by activity", async () => {
+  const { workingActivity } = await import("../extensions/lib/editor-chips.js");
+  assert.deepEqual(workingActivity("⠸ Working (escape to interrupt)"), { glyph: "⠸", kind: "working" });
+  assert.deepEqual(workingActivity("⠼ Compacting context"), { glyph: "⠼", kind: "compacting" });
+  assert.deepEqual(workingActivity("⠋ Retrying (attempt 2)"), { glyph: "⠋", kind: "retrying" });
+  assert.equal(workingActivity(""), undefined);
 });

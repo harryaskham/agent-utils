@@ -261,13 +261,29 @@ function chipFor(field, values, theme) {
       ], { divider: "vertical" });
     }
     // The editor's own border labels: its working status (pi-client), and how much is scrolled off.
-    case "working": return values.working ? renderParts([part(values.working, p.effort)]) : "";
+    case "working": return workingChip(values.working, p);
     case "scrollUp": return values.scrollUp > 0 ? renderParts([part(`↑ ${values.scrollUp} more`, p.nord3)]) : "";
     case "scrollDown": return values.scrollDown > 0 ? renderParts([part(`↓ ${values.scrollDown} more`, p.nord3)]) : "";
     case "speech": return speechChip(values.speech, p, values.speechCompact);
     case "meter": return meterChip(values.speech, p, values.meterCompact);
     default: return "";
   }
+}
+
+// The editor's working status as its spinner alone, coloured by activity as pi-client's sidebar
+// colours sessions: working yellow, compacting blue, retrying orange.
+export function workingActivity(label) {
+  const text = String(label || "");
+  if (!text.trim()) return undefined;
+  const glyph = [...text.trim()][0];
+  const kind = /compact/i.test(text) ? "compacting" : /retr/i.test(text) ? "retrying" : "working";
+  return { glyph, kind };
+}
+const WORKING_COLOR = Object.freeze({ working: "yellow", compacting: "blue", retrying: "orange" });
+function workingChip(label, p) {
+  const activity = workingActivity(label);
+  if (!activity) return "";
+  return renderParts([part(activity.glyph, p[WORKING_COLOR[activity.kind]], p.dark)]);
 }
 
 // Speech state: grey dot when no voice mode is enabled; blue (Nord frost,
