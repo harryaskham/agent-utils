@@ -41,12 +41,12 @@ function durable() {
 test("async_choice posts non-blocking questions on background tasks; status and cancel read and settle them", async () => {
   const store = durable();
   const tools = Object.fromEntries(createChoiceTools({ now: () => 5 }).map((tool) => [tool.name, tool]));
-  const api = { conversationId: 1, env: { env: { CACO_AGENT_ID: "a1", CACO_PROJECT: "p" } }, commit: (change) => store.commit(change) };
+  const api = { conversationId: 1, commit: (change) => store.commit(change) };
   const posted = await tools.async_choice.execute({ questions: [{ question: "Ship it?", key: "ship", choices: [{ label: "yes" }, { label: "no" }] }, { question: "Rename?", choices: [{ label: "a" }, { label: "b" }] }] }, api, {});
   assert.match(posted.content[0].text, /^Posted 2 async questions \(2 pending\)/);
-  assert.deepEqual(store.tasks.map((task) => [task.name, task.options.background, task.input.identity]), [
-    [ASYNC_TASK, true, { agentId: "a1", project: "p" }],
-    [ASYNC_TASK, true, { agentId: "a1", project: "p" }],
+  assert.deepEqual(store.tasks.map((task) => [task.name, task.options.background, task.input.key]), [
+    [ASYNC_TASK, true, "ship"],
+    [ASYNC_TASK, true, undefined],
   ]);
   const [first, second] = posted.details.ids;
   assert.deepEqual(store.question(Number(first)), { status: "pending", question: "Ship it?", choices: ["yes", "no"], blocking: false });
@@ -80,4 +80,33 @@ test("the async task steers the conversation with the answer and records it", as
   assert.deepEqual(submitted.map((submission) => [submission.content, submission.whenBusy, submission.requestId]), [['[async_choice answer] ship: "Ship it?" → yes (id 12)', "steer", "async-choice:12"]]);
   assert.equal((await store.tx.doc(ASYNC_DOC)).records["12"].status, "answered");
   assert.equal(commits.at(-1).status, "terminal");
+});
+
+/** A Durable execution environment running commands with `vars` as its environment. */
+function execEnvWith(vars) {
+  return {
+    async exec(command, options, context) {
+      const { execFile } = await import("node:child_process");
+      return new Promise((resolve) =>
+        execFile(command[0], command.slice(1), { env: { PATH: process.env.PATH, ...vars }, timeout: options?.timeout }, (error, stdout, stderr) => {
+          if (stdout) options?.onOutput?.(stdout, context, { stream: "stdout" });
+          if (stderr) options?.onOutput?.(stderr, context, { stream: "stderr" });
+          resolve({ ok: true, value: { exitCode: error ? (typeof error.code === "number" ? error.code : 1) : 0 } });
+        }),
+      );
+    },
+  };
+}
+
+test("the Cacophony mirror takes the session's identity and caco, never the worker's", async () => {
+  const { sessionIdentity, execFileVia } = await import("../extensions/lib/durable-choice.js");
+  assert.deepEqual(await sessionIdentity(execEnvWith({ CACO_AGENT_ID: "a1", CACO_PROJECT: "p" }), {}), { agentId: "a1", project: "p" });
+  assert.deepEqual(await sessionIdentity(execEnvWith({ CACO_AGENT_ID: "a1", CACO_PROJECT: "p", CACO_BIN: "/x/caco" }), {}), { agentId: "a1", project: "p", bin: "/x/caco" });
+  assert.equal(await sessionIdentity(execEnvWith({ CACO_AGENT_ID: "a1" }), {}), undefined, "no project: no mirror");
+  assert.equal(await sessionIdentity(execEnvWith({ CACO_AGENT_ID: "a1", CACO_PROJECT: "p", DISABLE_PI_CACO: "1" }), {}), undefined);
+  assert.equal(await sessionIdentity(execEnvWith({ CACO_AGENT_ID: "a1", CACO_PROJECT: "p", PI_INCOGNITO: "true" }), {}), undefined);
+  // execFile through the environment: stdout, and a failing command's error.
+  const run = (command, args) => new Promise((resolve) => execFileVia(execEnvWith({ GREETING: "hi" }), {})(command, args, {}, (error, stdout) => resolve({ error: error?.message, stdout })));
+  assert.deepEqual(await run("sh", ["-c", "printf %s \"$GREETING\""]), { error: undefined, stdout: "hi" });
+  assert.match((await run("sh", ["-c", "echo nope >&2; exit 3"])).error, /nope/);
 });

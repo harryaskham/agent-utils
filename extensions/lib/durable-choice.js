@@ -7,6 +7,13 @@
 // Clients see both through pi-daemon (pi-client's question and /choices, AHP input requests),
 // and the answers survive restarts. async_choice_status and async_choice_cancel read and settle
 // the session's record of async questions. Plain objects only: no pi-durable import.
+//
+// Cacophony: each async question is also filed as an operator decision (`caco decision`), as the
+// TUI's async choices are, from its task in the worker, so it needs no client open. `caco` runs
+// through the session's execution environment, with the session's Cacophony identity (a managed
+// agent's, or a visiting registration's overrides). The first answer wins, from either side.
+import { createCacophonyChoiceBridge } from "./cacophony-choice.js";
+import { createCacophonyDecisionBridge } from "./cacophony-decision.js";
 
 /** pi-daemon's question document (src/input.ts): any task may carry one. */
 export const INPUT_DOC = {
@@ -130,6 +137,120 @@ const CHOICE_SCHEMA = {
   required: ["label"],
 };
 
+/** Node's `execFile`, through a Durable execution environment: the command runs with the session's environment. */
+export function execFileVia(execEnv, context) {
+  return (command, args, options, callback) => {
+    let stdout = "";
+    let stderr = "";
+    const onOutput = (text, _context, info) => {
+      if (info?.stream === "stderr") stderr += text;
+      else stdout += text;
+    };
+    void Promise.resolve(execEnv.exec([command, ...args], { timeout: options?.timeout ?? 30_000, onOutput }, context)).then(
+      (result) => {
+        if (!result?.ok) return callback(new Error(String(result?.error?.message ?? result?.error ?? "exec failed")), stdout, stderr);
+        if (result.value.exitCode !== 0) return callback(Object.assign(new Error(stderr.trim() || `${command} exited ${result.value.exitCode}`), { code: result.value.exitCode }), stdout, stderr);
+        callback(null, stdout, stderr);
+      },
+      (error) => callback(error, stdout, stderr),
+    );
+  };
+}
+
+/**
+ * The session's Cacophony identity as its tools see it (and the caco its environment names, if
+ * any); undefined without one, or with Cacophony off for the session.
+ */
+export async function sessionIdentity(execEnv, context) {
+  const script = 'printf "%s\\n%s\\n%s\\n%s\\n%s" "${CACO_AGENT_ID:-${CACOPHONY_AGENT_ID:-}}" "${CACO_PROJECT:-${CACOPHONY_PROJECT:-}}" "${DISABLE_PI_CACO:-}" "${PI_INCOGNITO:-}" "${CACO_BIN:-}"';
+  const output = await new Promise((resolve) => execFileVia(execEnv, context)("sh", ["-c", script], { timeout: 10_000 }, (error, stdout) => resolve(error ? "" : stdout)));
+  const [agentId = "", project = "", disabled = "", incognito = "", bin = ""] = String(output).split("\n");
+  if (!agentId.trim() || !project.trim() || /^(1|true|yes|on)$/i.test(disabled.trim()) || /^(1|true|yes|on)$/i.test(incognito.trim())) return undefined;
+  return { agentId: agentId.trim(), project: project.trim(), ...(bin.trim() ? { bin: bin.trim() } : {}) };
+}
+
+/** The bridge's environment: the session's identity and caco, and only the choice settings of the worker's. */
+function bridgeEnv(identity) {
+  const tuning = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^PI_(ASYNC_)?CHOICE_/.test(name)));
+  return { ...tuning, CACO_AGENT_ID: identity.agentId, CACO_PROJECT: identity.project, ...(identity.bin ? { CACO_BIN: identity.bin } : {}) };
+}
+
+/**
+ * Mirror an async question to Cacophony's decision queue from its task: file it (or re-attach
+ * after a restart), and settle the question with a Cacophony answer. Undefined without a
+ * Cacophony identity.
+ */
+async function mirrorToCacophony(runtime, task, context) {
+  const execEnv = await Promise.resolve(runtime.env?.(context)).catch(() => undefined);
+  if (execEnv === undefined) return undefined;
+  const identity = await sessionIdentity(execEnv, context);
+  if (identity === undefined) return undefined;
+  // The session's caco (its PATH, or its CACO_BIN): never the worker's, which may name another.
+  const bridge = createCacophonyDecisionBridge({ env: bridgeEnv(identity), execFileImpl: execFileVia(execEnv, context) });
+  const choices = task.input.choices.map((choice, index) => ({ index, label: choice.label, headline: choice.shown, ...(choice.summary ? { summary: choice.summary } : {}) }));
+  // A Cacophony answer settles the question; the task goes on as with any answer.
+  const onResolution = (outcome) =>
+    void runtime
+      .commit(async (tx) => {
+        const doc = await tx.doc(INPUT_DOC, runtime.taskId);
+        if (doc.status !== "pending") return undefined;
+        if (outcome.status === "selected" && task.input.choices[outcome.index]) Object.assign(doc, { status: "answered", answer: task.input.choices[outcome.index].shown });
+        else if (outcome.status === "freeform") Object.assign(doc, { status: "answered", answer: String(outcome.text) });
+        else doc.status = "cancelled";
+        return undefined;
+      }, context)
+      .catch(() => undefined);
+  const known = await runtime.memo?.("cacophonyDecision", context).catch?.(() => undefined);
+  const started = known
+    ? bridge.attach({ decisionId: known, choices, onResolution })
+    : bridge.start({
+        asyncId: String(runtime.taskId),
+        question: task.input.question,
+        context: task.input.context ?? "",
+        choices,
+        onDecisionId: (id) => void runtime.memo?.("cacophonyDecision", id, context)?.catch?.(() => undefined),
+        onResolution,
+      });
+  if (!started) {
+    bridge.dispose();
+    return undefined;
+  }
+  return {
+    // A local answer resolves the Cacophony decision too; after a Cacophony answer the bridge has
+    // already stopped, and this does nothing.
+    settle: (result) => Promise.resolve(started.settleLocal(result)).catch(() => undefined),
+    dispose: () => bridge.dispose(),
+  };
+}
+
+/**
+ * Mirror an interactive choice to Cacophony's choices surface from its tool call, through the
+ * call's execution environment; a Cacophony answer settles the question. Undefined without a
+ * Cacophony identity. (After a restart mid-question a new Cacophony choice is filed.)
+ */
+async function mirrorChoice(api, choices, question, context) {
+  const execEnv = api.env;
+  if (execEnv === undefined) return undefined;
+  const identity = await sessionIdentity(execEnv, context);
+  if (identity === undefined) return undefined;
+  const bridge = createCacophonyChoiceBridge({ env: bridgeEnv(identity), execFileImpl: execFileVia(execEnv, context) });
+  return bridge.start({
+    question,
+    choices: choices.map((choice, index) => ({ index, label: choice.label, headline: choice.shown, ...(choice.summary ? { summary: choice.summary } : {}) })),
+    onResolution: (outcome) =>
+      void api
+        .commit(async (tx) => {
+          const doc = await tx.doc(INPUT_DOC, api.taskId);
+          if (doc.status !== "pending") return undefined;
+          if (outcome.status === "selected" && choices[outcome.index]) Object.assign(doc, { status: "answered", answer: choices[outcome.index].shown });
+          else if (outcome.status === "freeform") Object.assign(doc, { status: "answered", answer: String(outcome.text) });
+          else doc.status = "cancelled";
+          return undefined;
+        }, context)
+        .catch(() => undefined),
+  }) ?? undefined;
+}
+
 /** The async question task (a Durable task definition as a plain object). */
 export function createAsyncChoiceTask() {
   const finish = (runtime, task, context, record) =>
@@ -147,8 +268,20 @@ export function createAsyncChoiceTask() {
       phases: {
         async wait(task, runtime, context) {
           const { question, choices, key } = task.input;
-          const settled = await waitForAnswer(runtime, (change) => runtime.commit(change, context), runtime.taskId, context, { signal: runtime.signal });
+          const mirror = await mirrorToCacophony(runtime, task, context).catch(() => undefined);
+          let settled;
+          try {
+            settled = await waitForAnswer(runtime, (change) => runtime.commit(change, context), runtime.taskId, context, { signal: runtime.signal });
+          } catch (error) {
+            mirror?.dispose();
+            throw error;
+          }
           const result = choiceResult(choices, settled);
+          if (mirror) {
+            // Settle the Cacophony decision to match (bounded): resolved with the answer, or discarded.
+            await Promise.race([mirror.settle(result.status === "timeout" ? { status: "cancelled" } : result), new Promise((resolve) => setTimeout(resolve, 15_000))]);
+            mirror.dispose();
+          }
           if (result.status === "selected" || result.status === "freeform") {
             // The answer reaches the agent as a steering message, as the TUI's async choices do.
             const conversation = await runtime.conversation(runtime.conversationId, context);
@@ -197,22 +330,35 @@ export function createChoiceTools({ asyncTask = createAsyncChoiceTask(), now = (
         return { ...text(`interactive_choice: ${error.message}`), isError: true };
       }
       const recorded = await api.commit((tx) => recordQuestion(tx, api.taskId, { question: args.question, choices, context: questionContext(args.context, choices) }), context);
-      const settled =
-        recorded.status === "pending"
-          ? await waitForAnswer(api, (change) => api.commit(change, context), api.taskId, context, { timeoutMs: Number(args.timeoutMs) || 0, signal: context?.abortSignal })
-          : recorded;
+      if (recorded.status !== "pending") {
+        const result = choiceResult(choices, recorded);
+        return text(resultText(result), result);
+      }
+      // Cacophony's choices surface mirrors it (from the worker: no client needed); first answer wins.
+      const mirror = await mirrorChoice(api, choices, args.question, context).catch(() => undefined);
+      let settled;
+      try {
+        settled = await waitForAnswer(api, (change) => api.commit(change, context), api.taskId, context, { timeoutMs: Number(args.timeoutMs) || 0, signal: context?.abortSignal });
+      } finally {
+        if (mirror && settled === undefined) mirror.stop({ discard: true });
+      }
       const result = choiceResult(choices, settled);
+      if (mirror) {
+        await Promise.race([Promise.resolve(mirror.settleLocal(result.status === "timeout" ? { status: "cancelled" } : result)).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 15_000))]);
+        mirror.stop();
+      }
       return text(resultText(result), result);
     },
   };
 
-  const askOne = async (tx, conversationId, item, identity) => {
+  const askOne = async (tx, conversationId, item) => {
     const choices = normalizeChoices(item.choices);
     const question = clip(item.question, MAX_TEXT);
     if (!question) throw new Error("a question needs text");
     const key = item.key ? clip(item.key, 120) : undefined;
     // Task-scoped documents are addressed by the task's (numeric) id; the records keep it as text.
-    const taskId = await tx.createTask(asyncTask, { question, choices, ...(key ? { key } : {}), ...(identity ? { identity } : {}) }, { ownership: { kind: "conversation" }, conversationId, background: true });
+    const background = clip(item.context, MAX_TEXT);
+    const taskId = await tx.createTask(asyncTask, { question, choices, ...(key ? { key } : {}), ...(background ? { context: background } : {}) }, { ownership: { kind: "conversation" }, conversationId, background: true });
     await recordQuestion(tx, taskId, { question, choices, context: questionContext(item.context, choices), blocking: false });
     const doc = await tx.doc(ASYNC_DOC);
     const id = String(taskId);
@@ -256,16 +402,12 @@ export function createChoiceTools({ asyncTask = createAsyncChoiceTask(), now = (
     async execute(args, api, context) {
       const items = Array.isArray(args.questions) && args.questions.length > 0 ? args.questions.slice(0, MAX_ASYNC_PER_CALL) : args.question ? [args] : [];
       if (items.length === 0) return { ...text("async_choice: give question and choices, or questions"), isError: true };
-      // The Cacophony identity this session's tools run with goes with each question (its bridge
-      // files the question as a decision).
-      const env = api.env?.env ?? {};
-      const identity = env.CACO_AGENT_ID && env.CACO_PROJECT ? { agentId: String(env.CACO_AGENT_ID), project: String(env.CACO_PROJECT) } : undefined;
       try {
         const posted = await api.commit(async (tx) => {
           const doc = await tx.doc(ASYNC_DOC);
           if (pending(doc).length + items.length > MAX_ASYNC_PENDING) throw new Error(`at most ${MAX_ASYNC_PENDING} async questions may wait at once`);
           const created = [];
-          for (const item of items) created.push({ ...(await askOne(tx, api.conversationId, item, identity)) });
+          for (const item of items) created.push({ ...(await askOne(tx, api.conversationId, item)) });
           return { created, pendingCount: pending(doc).length };
         }, context);
         const lines = posted.created.map((record) => `- ${record.id}${record.key ? ` [key=${record.key}]` : ""}: ${record.question}`);
