@@ -64,7 +64,8 @@ by importing the extension module itself.
 | `kitty-image-preview.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `audio-reel.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 | `pi-graphics.js` | `lib/tool-schema.js` shim (`as Type`) | Yes — the `@earendil-works/pi-coding-agent` Component import is lazified inside the async activation factory (bd-e1a23d), so the module top level is dependency-free |
-| `web-search.js` | `@sinclair/typebox` directly | No |
+| `web-search.js` | `lib/tool-schema.js` shim (`as Type`) | Yes (also loaded by the Durable `tools.mjs`) |
+| `macos-native.js` | `lib/tool-schema.js` shim (`as Type`) | Yes |
 
 Rule of thumb: **if you want a new extension unit-tested at import level, use the
 shim, not typebox.** If an extension genuinely needs full TypeBox (or a host

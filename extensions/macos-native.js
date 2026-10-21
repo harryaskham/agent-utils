@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { Type } from "typebox";
+import { ToolSchema as Type } from "./lib/tool-schema.js";
 import { captureMacosInteractiveScreenshot, openMacosAppOnAlternateDisplay } from "./lib/macos-native.js";
 
 function result(text, details) {

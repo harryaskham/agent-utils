@@ -144,6 +144,8 @@
             echo 'export * from "./extensions/durable/loop.mjs";' > $out/loop.mjs
             # Cacophony visiting registration (needs pi-daemon's per-session environment).
             echo 'export * from "./extensions/durable/cacophony.mjs";' > $out/cacophony.mjs
+            # agent-utils' TUI tool extensions (search_web, xvfb, firecracker, app-automation, android, slack).
+            echo 'export * from "./extensions/durable/tools.mjs";' > $out/tools.mjs
             # interactive_choice and async_choice on pi-daemon's questions (pi-daemon 1.13).
             echo 'export * from "./extensions/durable/choice.mjs";' > $out/choice.mjs
             # The modules must load with nothing but Node built-ins.
@@ -156,6 +158,8 @@
               const budget = await import('$out/image-budget.mjs');
               if (budget.extension?.name !== 'agent-utils-image-budget' || budget.extension.hooks?.[0]?.task !== 'pi.generation') process.exit(1);
               const loop = await import('$out/loop.mjs');
+              const tuiTools = await import('$out/tools.mjs');
+              if (!tuiTools.extension?.tools?.some((tool) => tool.name === 'search_web')) process.exit(1);
               const caco = await import('$out/cacophony.mjs');
               const choice = await import('$out/choice.mjs');
               const choiceTools = (choice.extension?.tools ?? []).map((tool) => tool.name).join(',');

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { ToolSchema as Type } from "./lib/tool-schema.js";
 
 import {
   DEFAULT_MODEL,
