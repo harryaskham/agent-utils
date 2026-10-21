@@ -49,9 +49,9 @@ export function resolveConfig(env = process.env, settings = readCacophonySetting
   };
 }
 
-function execJson(execFileImpl, command, args) {
+function execJson(execFileImpl, command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFileImpl(command, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    execFileImpl(command, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024, ...options }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(String(stderr || stdout || error.message).trim().split("\n")[0].slice(0, 300)));
         return;
@@ -66,11 +66,14 @@ function execJson(execFileImpl, command, args) {
 }
 
 /** Register a pi-daemon session as a visiting agent; the identity and guidance. */
-export async function registerVisiting({ config, project, sessionId, execFileImpl = execFile, now = () => Date.now() }) {
-  const args = ["agent", "register", "--project", project, "--session-id", sessionId];
+export async function registerVisiting({ config, project, sessionId, cwd, execFileImpl = execFile, now = () => Date.now() }) {
+  // The visitor's checkout is the session's directory (bd-8c8f5f): never the pi-daemon worker's,
+  // whose directory (the home directory) contains managed agents' checkouts.
+  if (!cwd) throw new Error("the session's directory is unknown (pi-daemon passes it to modules from 1.13)");
+  const args = ["agent", "register", "--project", project, "--session-id", sessionId, "--checkout-root", cwd];
   if (config.runtimeAgentId) args.push("--runtime-agent-id", config.runtimeAgentId);
   args.push("--json");
-  const response = await execJson(execFileImpl, config.command, args);
+  const response = await execJson(execFileImpl, config.command, args, { cwd });
   const data = response?.data || response;
   const agentId = String(data?.id || data?.agent_id || data?.agentId || "").trim();
   const registeredProject = String(data?.project || project).trim();
@@ -111,11 +114,11 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
   const pending = new Map();
 
   /** Register (once at a time per session), keep the identity and set the session's variables. */
-  const register = (sessionId, state, sessionEnv, project) => {
+  const register = (sessionId, state, sessionEnv, project, cwd) => {
     const running = pending.get(sessionId);
     if (running) return running;
     const work = (async () => {
-      const identity = await registerVisiting({ config, project, sessionId, execFileImpl, now });
+      const identity = await registerVisiting({ config, project, sessionId, cwd, execFileImpl, now });
       await state.set("identity", identity);
       await sessionEnv.set({ CACO_AGENT_ID: identity.agentId, CACO_PROJECT: identity.project });
       return identity;
@@ -143,7 +146,7 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
           const project = match?.[1] || config.project;
           if (!project) return ctx.notify("No project: /caco-agent-register project=<name>, or set CACO_PROJECT or agentUtils.cacophony.project.");
           try {
-            const identity = await register(ctx.sessionId, ctx.state, ctx.env, project);
+            const identity = await register(ctx.sessionId, ctx.state, ctx.env, project, ctx.cwd);
             ctx.notify(`Registered as Cacophony visiting agent ${identity.agentId} in project ${identity.project}.`);
           } catch (error) {
             ctx.notify(`Cacophony visiting-agent registration failed: ${error.message}`);
@@ -166,7 +169,7 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
       if (event.type !== "agent_start" || config.disabled || !config.autoRegister || !config.project) return;
       if (typeof info.env?.set !== "function") return;
       if ((await info.state.get("identity"))?.agentId || (await preset(info.env))) return;
-      await register(info.sessionId, info.state, info.env, config.project).catch(() => undefined);
+      await register(info.sessionId, info.state, info.env, config.project, info.cwd).catch(() => undefined);
     },
   };
 }

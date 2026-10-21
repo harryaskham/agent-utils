@@ -7,8 +7,10 @@ import { MODULE, MODULE_STATE_DOC, createCacophonyModule, identitySection } from
 /** A fake `caco agent register --json`, recording its calls. */
 function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate through beads.", fail } = {}) {
   const calls = [];
-  const execFileImpl = (command, args, _options, callback) => {
+  const cwds = [];
+  const execFileImpl = (command, args, options, callback) => {
     calls.push([command, ...args]);
+    cwds.push(options?.cwd);
     const project = args[args.indexOf("--project") + 1];
     const sessionId = args[args.indexOf("--session-id") + 1];
     setImmediate(() =>
@@ -17,11 +19,11 @@ function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate 
         : callback(null, JSON.stringify({ data: { id, project, session_id: sessionId }, guidance: { text: guidance } }), ""),
     );
   };
-  return { calls, execFileImpl };
+  return { calls, cwds, execFileImpl };
 }
 
 /** A module command / observer context: module state and the session's variables. */
-function sessionContext(sessionId = "s1", vars = {}) {
+function sessionContext(sessionId = "s1", vars = {}, cwd = "/work/project") {
   const values = new Map();
   const env = { ...vars };
   const notices = [];
@@ -30,6 +32,7 @@ function sessionContext(sessionId = "s1", vars = {}) {
     env,
     ctx: {
       sessionId,
+      ...(cwd === null ? {} : { cwd }),
       notify: (text) => notices.push(text),
       state: { get: async (key) => values.get(key), set: async (key, value) => void values.set(key, value) },
       env: {
@@ -42,12 +45,23 @@ function sessionContext(sessionId = "s1", vars = {}) {
   };
 }
 
+test("without the session's directory (an older pi-daemon) registration is refused, not run elsewhere", async () => {
+  const caco = fakeCaco();
+  const module = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl: caco.execFileImpl });
+  const { ctx, notices } = sessionContext("pd-session-9", {}, null);
+  await module.commands["caco-agent-register"].run("project=agent-utils", ctx);
+  assert.deepEqual(caco.calls, []);
+  assert.match(notices.at(-1), /registration failed: the session's directory is unknown/);
+});
+
 test("/caco-agent-register registers the session, keeps its identity and sets its variables", async () => {
   const caco = fakeCaco();
   const module = createCacophonyModule({ env: { CACO_BIN: "/opt/caco", HOME: "/nonexistent" }, settings: {}, execFileImpl: caco.execFileImpl, now: () => 5 });
   const { ctx, notices, env } = sessionContext("pd-session-1");
   await module.commands["caco-agent-register"].run("project=agent-utils", ctx);
-  assert.deepEqual(caco.calls, [["/opt/caco", "agent", "register", "--project", "agent-utils", "--session-id", "pd-session-1", "--json"]]);
+  // From the session's directory, which is the visitor's checkout (bd-8c8f5f).
+  assert.deepEqual(caco.calls, [["/opt/caco", "agent", "register", "--project", "agent-utils", "--session-id", "pd-session-1", "--checkout-root", "/work/project", "--json"]]);
+  assert.deepEqual(caco.cwds, ["/work/project"]);
   assert.equal(notices.at(-1), "Registered as Cacophony visiting agent visiting-abc in project agent-utils.");
   assert.deepEqual(env, { CACO_AGENT_ID: "visiting-abc", CACO_PROJECT: "agent-utils" });
   assert.deepEqual(await ctx.state.get("identity"), {
@@ -93,7 +107,7 @@ test("with auto-registration, a session's first run registers it once; managed s
   const caco = fakeCaco({ id: "visiting-auto" });
   const module = createCacophonyModule({ env: { PI_CACO_AUTO_REGISTER: "1", CACO_PROJECT: "home", HOME: "/nonexistent" }, settings: {}, execFileImpl: caco.execFileImpl });
   const { ctx, env } = sessionContext("pd-auto");
-  const info = { sessionId: ctx.sessionId, state: ctx.state, env: ctx.env };
+  const info = { sessionId: ctx.sessionId, state: ctx.state, env: ctx.env, cwd: ctx.cwd };
   await Promise.all([module.observe({ type: "agent_start" }, info), module.observe({ type: "agent_start" }, info)]);
   await module.observe({ type: "agent_start" }, info);
   assert.equal(caco.calls.length, 1, "registered once");
