@@ -10,7 +10,12 @@ const DEFAULT_FIELDS = Object.freeze({
   bottomLeft: ["directory"],
   bottomCenter: ["branch", "diff"],
 });
-const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "cost", "context", "directory", "branch", "diff", "speech", "meter"]);
+const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "cost", "context", "directory", "branch", "diff", "speech", "meter", "working", "scrollUp", "scrollDown"]);
+// What the editor itself writes into its borders (pi-client's embedded working status, the
+// "↑ N more" / "↓ N more" scroll markers) becomes chips; unless placed explicitly, they go here.
+const BORDER_FIELDS = Object.freeze([["working", "topLeft", "start"], ["scrollUp", "topRight", "end"], ["scrollDown", "bottomRight", "end"]]);
+const BORDER_RE = /^[─━═]/;
+const SCROLL_RE = /([↑↓])\s*(\d+)\s*more/;
 const FIELD_ALIASES = Object.freeze({ cwd: "directory", thinking: "effort", stt: "speech", ptt: "speech", mic: "speech", recording: "speech", volume: "meter", level: "meter", db: "meter" });
 const METER_RAMP = "▁▂▃▄▅▆▇█";
 const POWERLINE = Object.freeze({ left: "", right: "", chevron: "", vertical: "▌" });
@@ -32,6 +37,17 @@ function fields(value, fallback) {
 }
 
 export function resolveEditorChipsConfig(settings = {}, env = process.env) {
+  const config = resolveConfiguredChips(settings, env);
+  // The editor's own border labels always have a chip: where configured, else their default place.
+  const placed = editorChipFieldSet(config);
+  for (const [field, group, at] of BORDER_FIELDS) {
+    if (placed.has(field)) continue;
+    config[group] = at === "start" ? [field, ...config[group]] : [...config[group], field];
+  }
+  return config;
+}
+
+function resolveConfiguredChips(settings, env) {
   const raw = settings?.agentUtils?.editorChips || settings?.editorChips || {};
   const envEnabled = String(env.PI_EDITOR_CHIPS_ENABLED ?? "").trim();
   const enabled = envEnabled === ""
@@ -49,6 +65,7 @@ export function resolveEditorChipsConfig(settings = {}, env = process.env) {
     hideFooter: bool(raw.hideFooter, true),
     // Footer status keys moved out of the residual footer (e.g. "jev"). A
     // hidden status that reports a failure is surfaced once as a warning.
+    // (BORDER_FIELDS are added below unless placed.)
     hiddenStatuses: Array.isArray(raw.hiddenStatuses)
       ? [...new Set(raw.hiddenStatuses.map((key) => String(key || "").trim()).filter(Boolean))].slice(0, 64)
       : [],
@@ -243,6 +260,10 @@ function chipFor(field, values, theme) {
         part(formatChipTokens(values.contextMax), p.grey, p.dark),
       ], { divider: "vertical" });
     }
+    // The editor's own border labels: its working status (pi-client), and how much is scrolled off.
+    case "working": return values.working ? renderParts([part(values.working, p.effort)]) : "";
+    case "scrollUp": return values.scrollUp > 0 ? renderParts([part(`↑ ${values.scrollUp} more`, p.nord3)]) : "";
+    case "scrollDown": return values.scrollDown > 0 ? renderParts([part(`↓ ${values.scrollDown} more`, p.nord3)]) : "";
     case "speech": return speechChip(values.speech, p, values.speechCompact);
     case "meter": return meterChip(values.speech, p, values.meterCompact);
     default: return "";
@@ -380,12 +401,48 @@ export function buildEditorChipRails({ width, config, values, theme }) {
   return { top: top.line, bottom: bottom.line, values: fittedValues, overlapping: top.overlapping || bottom.overlapping };
 }
 
+/**
+ * The editor's border rows and what it wrote into them: its first and last rows when they are
+ * borders (they start with a rule, labelled or not), the working status embedded in the top one
+ * (its plain text), and the scroll markers ("↑ N more", "↓ N more").
+ */
+export function editorBorderInfo(lines) {
+  const info = { top: undefined, bottom: undefined, working: "", scrollUp: 0, scrollDown: 0 };
+  if (!Array.isArray(lines) || lines.length === 0) return info;
+  const isBorder = (line) => BORDER_RE.test(stripAnsi(line).trimStart());
+  const label = (line) => stripAnsi(line).replace(/^[\s─━═]+|[\s─━═]+$/g, "").replace(/[─━═]{2,}/g, " ").trim();
+  if (isBorder(lines[0])) info.top = 0;
+  if (lines.length > 1 && isBorder(lines[lines.length - 1])) info.bottom = lines.length - 1;
+  for (const [index, key] of [[info.top, "up"], [info.bottom, "down"]]) {
+    if (index === undefined) continue;
+    let text = label(lines[index]);
+    const scroll = SCROLL_RE.exec(text);
+    if (scroll) {
+      if (scroll[1] === "↑") info.scrollUp = Number(scroll[2]);
+      else info.scrollDown = Number(scroll[2]);
+      text = text.replace(SCROLL_RE, "").trim();
+    }
+    if (key === "up" && text) info.working = text;
+  }
+  return info;
+}
+
 export function replaceEditorRails(baseLines, renderedLines, rails) {
   if (!Array.isArray(baseLines) || !Array.isArray(renderedLines)) return renderedLines;
-  const indices = [];
-  for (let index = 0; index < baseLines.length; index += 1) {
-    const plain = stripAnsi(baseLines[index]).trim();
-    if (plain && /^[\s─━═]+$/.test(plain)) indices.push(index);
+  // The editor's first and last rows, labelled or not; else every bare rule row, as before.
+  const borders = editorBorderInfo(baseLines);
+  const indices = [borders.top, borders.bottom].filter((index) => index !== undefined);
+  if (indices.length === 0) {
+    for (let index = 0; index < baseLines.length; index += 1) {
+      const plain = stripAnsi(baseLines[index]).trim();
+      if (plain && /^[\s─━═]+$/.test(plain)) indices.push(index);
+    }
+  }
+  if (indices.length === 1 && borders.top === undefined && borders.bottom !== undefined) {
+    // Only a bottom rule: the bottom chips go there, the top ones have no row.
+    const next = [...renderedLines];
+    next[indices[0]] = rails.bottom;
+    return next;
   }
   // Custom editors may replace Pi's textual dash rails with graphics/placeholder
   // rows. They still preserve the editor contract that the first and last rows

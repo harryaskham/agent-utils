@@ -61,9 +61,10 @@ const config = resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: 
 
 test("editor chip settings resolve the requested immutable startup layout", () => {
   assert.equal(config.enabled, true);
-  assert.deepEqual(config.topRight, ["model", "effort"]);
+  // The editor's own border labels (working status, scroll markers) join, where not placed.
+  assert.deepEqual(config.topRight, ["model", "effort", "scrollUp"]);
   assert.deepEqual(config.topCenter, []);
-  assert.deepEqual(config.bottomRight, ["mcp", "cost", "context"]);
+  assert.deepEqual(config.bottomRight, ["mcp", "cost", "context", "scrollDown"]);
   assert.deepEqual(config.bottomLeft, ["directory"]);
   assert.deepEqual(config.bottomCenter, ["branch", "diff"]);
   assert.equal(config.hideFooter, true);
@@ -372,10 +373,10 @@ const speechConfig = resolveEditorChipsConfig({ agentUtils: { editorChips: {
 } } }, {});
 
 test("speech and meter chips resolve into topLeft/bottomLeft with aliases and hidden statuses", () => {
-  assert.deepEqual(speechConfig.topLeft, ["speech"]);
+  assert.deepEqual(speechConfig.topLeft, ["working", "speech"]);
   assert.deepEqual(speechConfig.bottomLeft, ["meter", "directory"]);
   assert.deepEqual(speechConfig.hiddenStatuses, ["jev"]);
-  assert.deepEqual(config.topLeft, [], "existing layouts gain no top-left chips");
+  assert.deepEqual(config.topLeft, ["working"], "existing layouts gain only the working chip top-left");
   assert.deepEqual(config.hiddenStatuses, []);
 });
 
@@ -471,4 +472,28 @@ test("editor chips consume speech indicator events and hide quiet footer statuse
   accepted = false;
   events.emit(SPEECH_INDICATOR_EVENT, { version: 1, phase: "armed", surface: "PTT", accept() { accepted = true; } });
   assert.equal(accepted, false, "shutdown unsubscribes");
+});
+
+test("what the editor writes into its borders becomes chips, and top and bottom chips keep their rows", async () => {
+  const { buildEditorChipRails, editorBorderInfo, replaceEditorRails, resolveEditorChipsConfig, stripAnsi } = await import("../extensions/lib/editor-chips.js");
+  // pi-client's editor while working: its status in the top border, a scroll marker in the bottom.
+  const lines = ["── ⠸ Working (escape to interrupt) ───────────────", "first line", "second line", "─── ↓ 23 more ──────────────────"];
+  const info = editorBorderInfo(lines);
+  assert.deepEqual(info, { top: 0, bottom: 3, working: "⠸ Working (escape to interrupt)", scrollUp: 0, scrollDown: 23 });
+  assert.deepEqual(editorBorderInfo(["─── ↑ 4 more ───", "x", "──────"]), { top: 0, bottom: 2, working: "", scrollUp: 4, scrollDown: 0 });
+
+  const config = resolveEditorChipsConfig({ editorChips: { enabled: true } }, {});
+  const theme = { fg: (_color, text) => text, getFgAnsi: () => "" };
+  const rails = buildEditorChipRails({ width: 120, config, theme, values: { model: "m", provider: "p", effort: "high", directory: "~/x", working: info.working, scrollDown: info.scrollDown } });
+  const replaced = replaceEditorRails(lines, lines, rails).map((line) => stripAnsi(line));
+  assert.match(replaced[0], /⠸ Working \(escape to interrupt\)/, "the working chip, top-left");
+  assert.match(replaced[0], /m/);
+  assert.match(replaced[3], /↓ 23 more/, "the scroll chip in the bottom row");
+  assert.match(replaced[3], /~\/x/, "the bottom chips stay in the bottom row");
+  assert.deepEqual(replaced.slice(1, 3), ["first line", "second line"]);
+
+  // Placed explicitly, a border field stays where it was put.
+  const placed = resolveEditorChipsConfig({ editorChips: { enabled: true, bottomLeft: ["working", "directory"] } }, {});
+  assert.deepEqual(placed.bottomLeft, ["working", "directory"]);
+  assert.equal(placed.topLeft.includes("working"), false);
 });

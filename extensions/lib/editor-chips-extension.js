@@ -6,11 +6,13 @@ import { getOrCreateEditorChromeRegistry } from "../pi-graphics/fullscreen-contr
 import { subscribeSpeechIndicator } from "./speech-indicator.js";
 import {
   buildEditorChipRails,
+  editorBorderInfo,
   editorChipFieldSet,
   parseMcpCount,
   prettyDirectory,
   replaceEditorRails,
   resolveEditorChipsConfig,
+  stripAnsi,
   summarizeUsage,
 } from "./editor-chips.js";
 
@@ -216,7 +218,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
             base.__agentUtilsEditorChipsRender = originalRender;
             base.render = (width) => {
               const baseLines = originalRender(width);
-              const rails = buildEditorChipRails({ width, config, values: valuesFor(ctx), theme });
+              // What the editor wrote into its borders (working status, scroll markers) moves into chips.
+              const borders = editorBorderInfo(baseLines);
+              const indicator = base.embedWorkingStatus ? base.workingStatusIndicator : undefined;
+              const working = indicator ? stripAnsi(String(indicator.renderInBorder?.(Math.max(1, width - 5)) ?? "")).trim() || borders.working : borders.working;
+              const rails = buildEditorChipRails({ width, config, values: { ...valuesFor(ctx), working, scrollUp: borders.scrollUp, scrollDown: borders.scrollDown }, theme });
               return clampRenderedRowsToWidth(replaceEditorRails(baseLines, baseLines, rails), width);
             };
           }
