@@ -164,6 +164,8 @@
               const choice = await import('$out/choice.mjs');
               const choiceTools = (choice.extension?.tools ?? []).map((tool) => tool.name).join(',');
               if (choice.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.async-choice' || choiceTools !== 'interactive_choice,async_choice,async_choice_status,async_choice_cancel') process.exit(1);
+              const choiceClient = await import('$out/extensions/durable/choice-client.js');
+              if (typeof choiceClient.default !== 'function') process.exit(1);
               if (caco.extension?.sections?.[0]?.key !== 'cacophony' || typeof caco.commands?.['caco-agent-register']?.run !== 'function' || typeof caco.observe !== 'function') process.exit(1);
               const loopTools = (loop.extension?.tools ?? []).map((tool) => tool.name).join(',');
               if (loop.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.loop' || typeof loop.commands?.loop?.run !== 'function' || typeof loop.commands?.loops?.run !== 'function' || loopTools !== 'create_loop,list_loops,stop_loop') process.exit(1);
