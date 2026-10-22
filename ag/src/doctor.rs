@@ -680,12 +680,13 @@ pub async fn report(config: &Config, targets: Vec<(Host, NodeEndpoints)>) -> Doc
                     }
                 }
                 let mut checks = vec![link.remove(0)];
-                // Explicitly disabled sources stay out of the card.
-                checks.extend(
-                    [daemon, bridge, paratenic]
-                        .into_iter()
-                        .filter(|c| !(c.status == Status::Skip && c.summary == "disabled")),
-                );
+                // Disabled sources stay out of the card, as does Paratenic where
+                // nothing configures it (it is optional and being retired).
+                checks.extend([daemon, bridge, paratenic].into_iter().filter(|c| {
+                    !(c.status == Status::Skip
+                        && (c.summary == "disabled"
+                            || (c.name == "paratenic" && c.summary.starts_with("not configured"))))
+                }));
                 checks.extend(link);
                 checks.push(images);
                 checks.push(audio);

@@ -143,7 +143,7 @@ One concurrent, bounded, read-only pass per node:
 | `ssh` / `local` | `ag` reachability over SSH (or this machine) |
 | `pi-daemon` | The daemon's `/ahp` session catalogue (sessions, waiting) and its unauthenticated `/readyz` (version, draining) |
 | `pi-bridge` | The bridge's `/ahp` (TUI Pis, waiting) and `/readyz`; a bridge without `/ahp` (pi-daemon < 1.11) is a warning naming the fix |
-| `paratenic` | Optional. AHP connect + session catalogue (sessions, live and stale input-needed, backends offline) and the plaintext `/status` probe when available (uptime, providers, lock contention); omitted when disabled |
+| `paratenic` | Optional. AHP connect + session catalogue (sessions, live and stale input-needed, backends offline) and the plaintext `/status` probe when available (uptime, providers, lock contention); omitted when disabled or not configured |
 | `speech` | Most recent durable speech request and any muted kinds |
 | `images` | Last successful gallery sync from the local cache (no network) |
 | `audio` | Last successful shared-audio sync from the local cache (no network) |

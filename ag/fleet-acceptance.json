@@ -111,7 +111,7 @@
     },
     {
       "id": "DOCTOR-2",
-      "contract": "ag doctor adds pi-daemon and pi-bridge rows (AHP catalogue: sessions/TUI Pis and waiting; unauthenticated /readyz: version, draining). A bridge without /ahp is a warning naming pi-daemon >= 1.11. Paratenic is optional: omitted when disabled, shown as '○ … optional' when not running while pi-daemon serves the node; stale Paratenic input-needed sessions (backend gone) are counted apart. A node is offline only when neither SSH nor any AHP host answers.",
+      "contract": "ag doctor adds pi-daemon and pi-bridge rows (AHP catalogue: sessions/TUI Pis and waiting; unauthenticated /readyz: version, draining). A bridge without /ahp is a warning naming pi-daemon >= 1.11. Paratenic is optional: omitted when disabled or not configured, shown as '○ … optional' when not running while pi-daemon serves the node; stale Paratenic input-needed sessions (backend gone) are counted apart. A node is offline only when neither SSH nor any AHP host answers.",
       "tests": [
         "ag/tests/fleet.rs::pi_daemon_and_bridge_work_and_report_health_without_paratenic",
         "ag/tests/fleet.rs::doctor_reports_paratenic_catalogue_and_collapses_offline_nodes"
