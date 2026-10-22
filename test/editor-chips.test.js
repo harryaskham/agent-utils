@@ -506,3 +506,56 @@ test("the working chip is the spinner alone, coloured by activity", async () => 
   assert.deepEqual(workingActivity("⠋ Retrying (attempt 2)"), { glyph: "⠋", kind: "retrying" });
   assert.equal(workingActivity(""), undefined);
 });
+
+test("each pane's git chip is its own directory's, not the focused pane's (pi-client splits)", async () => {
+  const handlers = new Map();
+  const tui = { requestRender() {} };
+  let editorFactory;
+  // pi-client's live ctx: its cwd is the pane being drawn.
+  let drawing = "/work/a";
+  const ctx = {
+    mode: "tui",
+    get cwd() { return drawing; },
+    model: { provider: "openai", id: "gpt", contextWindow: 100_000 },
+    thinkingLevel: "off",
+    getContextUsage: () => ({ percent: 1, contextWindow: 100_000 }),
+    sessionManager: { getEntries: () => [] },
+    ui: {
+      getEditorComponent: () => () => ({ render: () => ["top", "editor", "bottom"], handleInput() {}, invalidate() {} }),
+      setEditorComponent: (factory) => { editorFactory = factory; },
+    },
+  };
+  const branches = { "/work/a": "main", "/work/b": "feature/b" };
+  const execs = [];
+  const pi = {
+    registerCommand() {},
+    on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+    getThinkingLevel: () => "off",
+    exec: async (_command, args, options) => {
+      execs.push(options?.cwd);
+      return args[0] === "branch" ? { code: 0, stdout: `${branches[options.cwd]}\n` } : { code: 0, stdout: "" };
+    },
+  };
+  await createEditorChipsExtension({
+    settings: { agentUtils: { editorChips: { enabled: true, bottomCenter: ["branch"] } } },
+    env: { HOME: "/home/u" },
+    host: { CustomEditor: class {} },
+  })(pi);
+  await handlers.get("session_start")[0]({}, ctx);
+  const editor = editorFactory(tui, { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t }, {});
+  const draw = async (cwd) => {
+    drawing = cwd;
+    editor.render(160);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return stripAnsi(editor.render(160).join("\n"));
+  };
+  assert.match(await draw("/work/a"), /main/);
+  const b = await draw("/work/b");
+  assert.match(b, /feature\/b/);
+  assert.doesNotMatch(b, /\bmain\b/);
+  // Drawing a again shows a's branch, from its own cache: b's refresh did not replace it.
+  const a = await draw("/work/a");
+  assert.match(a, /main/);
+  assert.doesNotMatch(a, /feature\/b/);
+  assert.ok(execs.includes("/work/a") && execs.includes("/work/b"), "git ran in each pane's directory");
+});

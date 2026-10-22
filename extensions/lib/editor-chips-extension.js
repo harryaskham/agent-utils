@@ -33,6 +33,11 @@ function sanitizeStatus(text) {
 
 const STATUS_FAILURE = /\b(?:unconfigured|errors?|fail(?:ed|ure|ing)?|unavailable|invalid|blocked|denied)\b/i;
 
+/** How old a directory's git branch and diff may be before it is read again. */
+const GIT_STALE_MS = 15_000;
+/** Directories whose git is remembered at once. */
+const GIT_DIRECTORIES = 64;
+
 export function createEditorChipsExtension({ settings, env = process.env, host } = {}) {
   const startupSettings = settings || readAgentSettings(agentSettingsPath()) || {};
   const config = resolveEditorChipsConfig(startupSettings, env);
@@ -52,13 +57,12 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     const loadCustomEditor = async () => CustomEditor;
 
     const state = {
-      branch: "",
-      inGitRepo: false,
-      additions: 0,
-      deletions: 0,
+      // Git's branch and diff per directory: pi-client draws several sessions at once (each
+      // pane's chips are its own directory's), TUI Pi one.
+      git: new Map(),
+      refreshingGit: new Set(),
       footerData: null,
       tui: null,
-      refreshingGit: false,
       editorRegistry: null,
       editorLease: null,
       footerFactory: null,
@@ -94,27 +98,40 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       }, { accept: () => !state.stopped && Boolean(state.editorLease) && configuredFields.has("speech") });
     };
 
+    // The directory a ctx is in now: read before any await, as pi-client's ctx follows the pane
+    // being drawn.
+    const cwdOf = (ctx) => {
+      try { return String(ctx?.cwd || process.cwd()); } catch { return process.cwd(); }
+    };
+
     const refreshGit = async (ctx) => {
-      if (state.refreshingGit) return;
-      state.refreshingGit = true;
+      const cwd = cwdOf(ctx);
+      if (state.refreshingGit.has(cwd)) return;
+      state.refreshingGit.add(cwd);
+      const previous = state.git.get(cwd);
       try {
         const [branch, diff] = await Promise.all([
-          pi.exec("git", ["branch", "--show-current"], { timeout: 4000 }),
-          pi.exec("git", ["diff", "--numstat", "HEAD", "--"], { timeout: 4000 }),
+          pi.exec("git", ["branch", "--show-current"], { timeout: 4000, cwd }),
+          pi.exec("git", ["diff", "--numstat", "HEAD", "--"], { timeout: 4000, cwd }),
         ]);
-        state.inGitRepo = branch?.code === 0 && Boolean(String(branch.stdout || "").trim());
-        state.branch = state.inGitRepo ? String(branch.stdout || "").trim() : "";
-        if (state.inGitRepo && diff?.code === 0) Object.assign(state, parseNumstat(diff.stdout));
-        else Object.assign(state, { additions: 0, deletions: 0 });
+        const inGitRepo = branch?.code === 0 && Boolean(String(branch.stdout || "").trim());
+        const counts = inGitRepo && diff?.code === 0 ? parseNumstat(diff.stdout) : { additions: 0, deletions: 0 };
+        state.git.set(cwd, { at: Date.now(), inGitRepo, branch: inGitRepo ? String(branch.stdout || "").trim() : "", ...counts });
       } catch {
-        // Non-git cwd or a transient command failure leaves the last stable data.
+        // A non-git directory, one not on this machine, or a transient failure: the last stable
+        // data, else none, until it is stale again.
+        state.git.set(cwd, { ...(previous || { inGitRepo: false, branch: "", additions: 0, deletions: 0 }), at: Date.now() });
       } finally {
-        state.refreshingGit = false;
+        state.refreshingGit.delete(cwd);
+        while (state.git.size > GIT_DIRECTORIES) state.git.delete(state.git.keys().next().value);
         try { state.tui?.requestRender?.(); } catch {}
       }
     };
 
     const valuesFor = (ctx) => {
+      // This ctx's directory's git, refreshed when missing or stale.
+      const git = state.git.get(cwdOf(ctx));
+      if (!git || Date.now() - git.at > GIT_STALE_MS) void refreshGit(ctx);
       let footerBranch = "";
       let statuses = new Map();
       try { footerBranch = state.footerData?.getGitBranch?.() || ""; } catch {}
@@ -140,10 +157,10 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         contextPct: Number.isFinite(contextPct) ? contextPct : 0,
         contextMax: Number.isFinite(contextMax) ? contextMax : 0,
         directory: prettyDirectory(ctx.cwd || process.cwd(), env.HOME || env.USERPROFILE),
-        branch: footerBranch || state.branch,
-        inGitRepo: state.inGitRepo || Boolean(footerBranch),
-        additions: state.additions,
-        deletions: state.deletions,
+        branch: footerBranch || git?.branch || "",
+        inGitRepo: Boolean(git?.inGitRepo) || Boolean(footerBranch),
+        additions: git?.additions || 0,
+        deletions: git?.deletions || 0,
       };
     };
 
