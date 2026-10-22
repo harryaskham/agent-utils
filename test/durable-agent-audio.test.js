@@ -432,3 +432,34 @@ test("the adaptor module imports no Pi TUI API and exports the module contract",
   assert.equal(result.observe, "function");
   assert.match(result.note, /^tts:off/);
 });
+
+test("each session gets its own pool voice and stereo pan, over a configured default voice (as TUI /tts)", async () => {
+  const { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy } = await import("../extensions/lib/tts-identity.js");
+  const configs = new Map();
+  const controllers = new Map();
+  const persisted = { provider: "azure", voice: "configured-voice", embedding: "configured-embedding" };
+  const host = fakeHost({
+    persistedSettings: { tts: persisted },
+    createSpeech: ({ sessionId, config }) => {
+      configs.set(sessionId, config);
+      const controller = stubSpeech([], sessionId);
+      controller.setConfig(config);
+      controllers.set(sessionId, controller);
+      return controller;
+    },
+  });
+  const policy = resolveSessionSpeechPolicy(persisted, baseEnv());
+  for (const sessionId of ["session-a", "session-b"]) {
+    await host.command(sessionId, "/tts on");
+    const config = configs.get(sessionId);
+    const assignment = resolveSessionSpeechAssignment(sessionId, policy);
+    assert.equal(config.voice, assignment.voice, `${sessionId} speaks with its pool voice`);
+    assert.equal(config.embedding, null, "the configured embedding belongs to the configured voice");
+    assert.equal(config.pan, assignment.pan);
+    assert.equal(config.panSource, "session");
+  }
+  assert.notEqual(configs.get("session-a").pan, configs.get("session-b").pan);
+  // A voice chosen for the session itself still wins.
+  await host.command("session-c", "/tts voice=en-GB-SoniaNeural");
+  assert.equal(controllers.get("session-c").getConfig().voice, "en-GB-SoniaNeural");
+});

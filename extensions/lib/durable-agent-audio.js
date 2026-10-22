@@ -319,7 +319,9 @@ export function createDurableAgentAudio({
     const explicitVoice = ["voice", "embedding", "speaker", "speakerprofileid", "speaker_profile_id"].some((key) => Object.hasOwn(speechValues, key));
     return {
       ...config,
-      ...(isAzureSpeechProvider(config.provider) && assignment.voice && !explicitVoice && !persistedTts.voice && !env.PI_TTS_VOICE ? { voice: assignment.voice, embedding: null } : {}),
+      // As TUI /tts: the session's pool voice over the configured default (settings or
+      // PI_TTS_VOICE), so concurrent sessions sound apart; a voice chosen for the session wins.
+      ...(isAzureSpeechProvider(config.provider) && assignment.voice && !explicitVoice ? { voice: assignment.voice, embedding: null } : {}),
       pan: config.pan !== undefined ? config.pan : assignment.pan,
       panSource: config.pan !== undefined ? config.panSource || "explicit" : "session",
     };

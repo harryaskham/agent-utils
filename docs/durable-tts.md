@@ -66,6 +66,13 @@ Everything an operator sets lives in the worker's environment and Pi's
 Commands change only the session they run in. Each replies through the
 session's notification, which clients show and the model never sees.
 
+Each session sounds apart, as in TUI Pi: with the Azure provider, a session's
+`/tts`, `/narrate` and spoken choices take one voice from the pool
+(`agentUtils.tts.voices`, `PI_TTS_VOICES`) and one stereo position
+(`agentUtils.tts.panRange`, `PI_TTS_PAN_MIN`/`PI_TTS_PAN_MAX`), both from a
+hash of the pi-daemon session id, over the configured default voice. A voice
+chosen for the session (`/tts voice=…`, `/tts harry`) wins.
+
 ```text
 /tts                    # on
 /tts off                # off, and stop this session's /tts speech
