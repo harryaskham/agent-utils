@@ -54,6 +54,21 @@ test("without the session's directory (an older pi-daemon) registration is refus
   assert.match(notices.at(-1), /registration failed: the session's directory is unknown/);
 });
 
+test("a session migrated from TUI Pi keeps its visiting agent's identity from its variables (bd-737651)", async () => {
+  const caco = fakeCaco();
+  const module = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl: caco.execFileImpl, now: () => 9 });
+  const { ctx, notices } = sessionContext("pd-migrated", { CACO_AGENT_ID: "visiting-tui", CACO_PROJECT: "pi-daemon" });
+  await module.observe({ type: "agent_start" }, { sessionId: ctx.sessionId, state: ctx.state, env: ctx.env, cwd: ctx.cwd });
+  assert.deepEqual(caco.calls, [], "no registration: it already is the agent");
+  assert.deepEqual(await ctx.state.get("identity"), { agentId: "visiting-tui", project: "pi-daemon", sessionId: "pd-migrated", registeredAt: 9, guidance: "", inherited: true });
+  await module.commands["caco-runtime"].run("", ctx);
+  assert.equal(notices.at(-1), "visiting visiting-tui in pi-daemon (carried over by /migrate)");
+  // A managed agent's identity in the environment is not taken as a visitor's.
+  const managed = sessionContext("pd-managed-2", { CACO_AGENT_ID: "cluster-ctrl", CACO_PROJECT: "cacophony" });
+  await module.observe({ type: "agent_start" }, { sessionId: "pd-managed-2", state: managed.ctx.state, env: managed.ctx.env });
+  assert.equal(await managed.ctx.state.get("identity"), undefined);
+});
+
 test("/caco-agent-register registers the session, keeps its identity and sets its variables", async () => {
   const caco = fakeCaco();
   const module = createCacophonyModule({ env: { CACO_BIN: "/opt/caco", HOME: "/nonexistent" }, settings: {}, execFileImpl: caco.execFileImpl, now: () => 5 });

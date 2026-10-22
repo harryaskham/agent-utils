@@ -101,6 +101,14 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
       invalidate() {},
     }));
 
+    // pi-daemon's /migrate (bd-737651): the migrated session keeps this session's identity.
+    pi.events?.on?.("pi-durable:migrate", (event) => {
+      if (!active || typeof event?.carry !== "function") return;
+      const identity = getCacophonyRuntimeIdentity(env, active.sessionId);
+      if (identity.disabled || !identity.agentId || !identity.project) return;
+      event.carry({ CACO_AGENT_ID: identity.agentId, CACO_PROJECT: identity.project });
+    });
+
     pi.registerCommand("caco-runtime", {
       description: "Show Agent Utils Cacophony identity/registration state.",
       handler: async (_args, ctx) => {

@@ -158,7 +158,13 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
         async run(_args, ctx) {
           const identity = await ctx.state.get("identity");
           const vars = (await ctx.env?.get?.()) ?? {};
-          if (identity?.agentId) return ctx.notify(`visiting ${identity.agentId} in ${identity.project} (registered ${new Date(identity.registeredAt).toISOString()})`);
+          if (identity?.agentId) {
+            return ctx.notify(
+              identity.inherited
+                ? `visiting ${identity.agentId} in ${identity.project} (carried over by /migrate)`
+                : `visiting ${identity.agentId} in ${identity.project} (registered ${new Date(identity.registeredAt).toISOString()})`,
+            );
+          }
           if (vars.CACO_AGENT_ID) return ctx.notify(`managed ${vars.CACO_AGENT_ID} in ${vars.CACO_PROJECT ?? "?"} (environment)`);
           ctx.notify(config.disabled ? "disabled" : `not registered${config.autoRegister ? " (registers on the next run)" : "; /caco-agent-register"}`);
         },
@@ -166,8 +172,20 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
     },
     /** Auto-registration on a session's first run. */
     async observe(event, info) {
-      if (event.type !== "agent_start" || config.disabled || !config.autoRegister || !config.project) return;
+      if (event.type !== "agent_start" || config.disabled) return;
       if (typeof info.env?.set !== "function") return;
+      // A session migrated from TUI Pi carries its visiting agent's identity in its variables
+      // (pi-daemon's /migrate, bd-737651): it is that agent, as if registered here.
+      if (!(await info.state.get("identity"))?.agentId) {
+        const vars = (await info.env.get?.()) ?? {};
+        const agentId = String(vars.CACO_AGENT_ID || "").trim();
+        const project = String(vars.CACO_PROJECT || "").trim();
+        if (agentId.startsWith("visiting-") && project) {
+          await info.state.set("identity", { agentId, project, sessionId: info.sessionId, registeredAt: now(), guidance: "", inherited: true });
+          return;
+        }
+      }
+      if (!config.autoRegister || !config.project) return;
       if ((await info.state.get("identity"))?.agentId || (await preset(info.env))) return;
       await register(info.sessionId, info.state, info.env, config.project, info.cwd).catch(() => undefined);
     },

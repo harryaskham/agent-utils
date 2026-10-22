@@ -20,13 +20,17 @@ function harness({ entries = [], sessionId = "pi-session" } = {}) {
   const appended = [];
   const notifications = [];
   const events = [];
+  const bus = new Map();
   const pi = {
     registerCommand(name, def) { commands.set(name, def); },
     registerMessageRenderer() {},
     on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
     appendEntry(type, data) { appended.push({ type: "custom", customType: type, data }); },
     sendMessage(message, options) { messages.push({ message, options }); },
-    events: { emit(name, payload) { events.push({ name, payload }); } },
+    events: {
+      emit(name, payload) { events.push({ name, payload }); for (const fn of bus.get(name) || []) fn(payload); },
+      on(name, fn) { const list = bus.get(name) || []; list.push(fn); bus.set(name, list); return () => {}; },
+    },
   };
   const ctx = {
     cwd: "/projects/actual-project",
@@ -38,6 +42,25 @@ function harness({ entries = [], sessionId = "pi-session" } = {}) {
 }
 
 const settle = async () => { await Promise.resolve(); await new Promise((resolve) => setImmediate(resolve)); };
+
+test("/migrate into pi-daemon carries the registered visitor's identity (bd-737651)", async () => {
+  clearCacophonyRuntimeIdentity();
+  const env = { CACO_PROJECT: "p", TMUX: "yes", PI_CACO_AUTO_REGISTER: "0" };
+  const h = harness({ sessionId: "pi-migrating" });
+  const options = {
+    env, settings: {},
+    execFileImpl(_command, _args, _options, callback) { setImmediate(() => callback(null, JSON.stringify({ id: "visiting-tui", project: "p" }), "")); },
+  };
+  createCacophonyRuntimeExtension(options)(h.pi);
+  await h.emit("session_start");
+  const carried = {};
+  const migrate = () => h.pi.events.emit("pi-durable:migrate", { carry: (vars) => Object.assign(carried, vars) });
+  migrate();
+  assert.deepEqual(carried, {}, "nothing to carry before registration");
+  await h.commands.get("caco-agent-register").handler("", h.ctx);
+  migrate();
+  assert.deepEqual(carried, { CACO_AGENT_ID: "visiting-tui", CACO_PROJECT: "p" });
+});
 
 test("manual registration works with auto-registration off and deduplicates concurrent requests and reload", async () => {
   clearCacophonyRuntimeIdentity();
